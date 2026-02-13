@@ -2,13 +2,21 @@
   "name": "qatoto-backend",
   "version": "0.1.0",
   "description": "Qatoto Backend",
-  "main": "index.ts",
-  "type": "module",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
   "keywords": [],
-  "author": "Vidyesh Churi",
   "license": "MIT",
+  "author": "Vidyesh Churi",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.32.0",
+    "oxlint": "^1.47.0"
+  },
   "packageManager": "pnpm@10.29.3"
 }
