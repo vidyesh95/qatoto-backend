@@ -1,7 +1,7 @@
 {
   "name": "qatoto-backend",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.1.0",
+  "description": "Qatoto Backend",
   "main": "index.ts",
   "type": "module",
   "scripts": {
