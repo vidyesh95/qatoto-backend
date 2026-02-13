@@ -4,7 +4,7 @@ Thank you for your interest in contributing! We want to make contributing to thi
 
 ## Code of Conduct
 
-By participating in this project, you agree to abide by our Code of Conduct. (Link to your Code of Conduct if available, or just follow standard professional behavior).
+By participating in this project, you agree to abide by our [Code of Conduct](https://github.com/vidyesh95/qatoto-backend/tree/main?tab=coc-ov-file).
 
 ## How Can I Contribute?
 
@@ -18,6 +18,18 @@ By participating in this project, you agree to abide by our Code of Conduct. (Li
 
 - Open a GitHub Issue with the "enhancement" label.
 - Explain why this enhancement would be useful.
+
+### Commit Messages
+
+- Use Conventional Commits format.
+- Use imperative mood.
+- Use present tense.
+- Use lowercase.
+
+    Example:
+- feat: Add user authentication
+- fix: Resolve login bug
+- docs: Update README
 
 ### Pull Requests
 
