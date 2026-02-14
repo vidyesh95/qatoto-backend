@@ -5,8 +5,8 @@
         "moduleResolution": "NodeNext",
         "baseUrl": ".",
         "paths": {
-            "*": [
-                "node_modules/*"
+            "$src/*": [
+                "src/*"
             ]
         },
         "outDir": "./dist",
