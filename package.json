@@ -6,6 +6,10 @@
   "license": "MIT",
   "author": "Vidyesh Churi",
   "type": "module",
+  "imports": {
+    "#src/*.js": "./dist/*.js",
+    "#src/*": "./dist/*.js"
+  },
   "main": "index.ts",
   "packageManager": "pnpm@10.29.3",
   "scripts": {

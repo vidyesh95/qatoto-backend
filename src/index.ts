@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import debugLib from 'debug';
-import app from '$src/app.js';
+import app from '#src/app.js';
 import http from 'http';
 
 dotenv.config();

@@ -5,7 +5,7 @@
         "moduleResolution": "NodeNext",
         "baseUrl": ".",
         "paths": {
-            "$src/*": [
+            "#src/*": [
                 "src/*"
             ]
         },
