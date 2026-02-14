@@ -28,7 +28,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 /** 
  * error handler 
  */
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     // set locals, only providing error in development
     const error = req.app.get('env') === 'development' ? err : {};
 
