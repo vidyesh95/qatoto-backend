@@ -18,12 +18,16 @@ app.get('/', (req, res) => {
     res.send('Hello World!');
 });
 
-// catch 404 and forward to error handler
+/** 
+ * catch 404 and forward to error handler 
+ */
 app.use((req: Request, res: Response, next: NextFunction) => {
     next(createError(404));
 });
 
-// error handler
+/** 
+ * error handler 
+ */
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     // set locals, only providing error in development
     const error = req.app.get('env') === 'development' ? err : {};
