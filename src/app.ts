@@ -6,6 +6,9 @@ import logger from "morgan";
 import cookieParser from "cookie-parser";
 import createError from "http-errors";
 
+import indexRouter from "#src/routes/index.js";
+import usersRouter from "#src/routes/users.js";
+
 const app = express();
 
 app.use(helmet());
@@ -15,9 +18,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
-app.get('/', (req, res) => {
-    res.send('Hello World!');
-});
+app.use('/', indexRouter);
+app.use('/users', usersRouter);
 
 /** 
  * catch 404 and forward to error handler 
