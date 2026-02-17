@@ -1,48 +1,51 @@
 import express from "express";
-import type { Request, Response, NextFunction } from "express";
 import helmet from "helmet";
 import cors from "cors";
 import logger from "morgan";
 import cookieParser from "cookie-parser";
-import createError from "http-errors";
 
+import { config } from "#src/config/index.js";
+import { requestId } from "#src/middleware/request-id.js";
+import { notFoundHandler } from "#src/middleware/not-found.js";
+import { errorHandler } from "#src/middleware/error-handler.js";
 import indexRouter from "#src/routes/index.js";
-import usersRouter from "#src/routes/users.js";
+import usersRouter from "#src/routes/users.routes.js";
 
 const app = express();
 
+// Trust first proxy (nginx, load balancer, etc.)
+app.set("trust proxy", 1);
+
+// Security headers
 app.use(helmet());
-app.use(cors());
-app.use(logger('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+
+// CORS — restricted to known frontend origin
+app.use(
+  cors({
+    origin: config.FRONTEND_URL,
+    credentials: true,
+  }),
+);
+
+// Request tracing
+app.use(requestId);
+
+// Logging
+app.use(logger("dev"));
+
+// Body parsing with size limits to prevent payload abuse
+app.use(express.json({ limit: "10kb" }));
+app.use(express.urlencoded({ extended: false, limit: "10kb" }));
+
+// Cookie parsing
 app.use(cookieParser());
 
-app.use('/', indexRouter);
-app.use('/users', usersRouter);
+// --- Routes ---
+app.use("/", indexRouter);
+app.use("/users", usersRouter);
 
-/** 
- * catch 404 and forward to error handler 
- */
-app.use((req: Request, res: Response, next: NextFunction) => {
-    next(createError(404));
-});
-
-/** 
- * error handler 
- */
-app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
-    // set locals, only providing error in development
-    const error = req.app.get('env') === 'development' ? err : {};
-
-    // set the statuscode (default to 500)
-    const statusCode = err.status || 500;
-
-    // render the error page
-    res.status(statusCode).json({
-        message: err.message,
-        error: error
-    });
-});
+// --- Error handling ---
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 export default app;
