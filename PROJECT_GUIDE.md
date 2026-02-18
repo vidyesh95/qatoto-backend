@@ -51,7 +51,7 @@ Here's what it does, in order:
 PORT=8000
 DATABASE_URL=postgres://user:password@localhost:5432/qatotodb
 NODE_ENV=development
-BETTER_AUTH_SECRET=BETTER_AUTH_SECRET_HERE
+BETTER_AUTH_SECRET=your-secret-here-min-16-chars
 FRONTEND_URL=http://localhost:3000
 ```
 
