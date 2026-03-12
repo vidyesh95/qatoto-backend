@@ -24,7 +24,7 @@
     "lint:fix": "oxlint --fix"
   },
   "dependencies": {
-    "better-auth": "^1.5.4",
+    "better-auth": "^1.5.5",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "debug": "^4.4.3",
@@ -45,16 +45,16 @@
     "@types/express": "^5.0.6",
     "@types/http-errors": "^2.0.5",
     "@types/morgan": "^1.9.10",
-    "@types/node": "^25.4.0",
+    "@types/node": "^25.5.0",
     "@types/pg": "^8.18.0",
     "@types/supertest": "^6.0.3",
     "@types/swagger-ui-express": "^4.1.8",
-    "oxfmt": "^0.37.0",
-    "oxlint": "^1.52.0",
+    "oxfmt": "^0.40.0",
+    "oxlint": "^1.55.0",
     "supertest": "^7.2.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.0"
   },
   "engines": {
     "node": ">=24.0.0"
