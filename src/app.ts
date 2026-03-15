@@ -4,12 +4,15 @@ import cors from "cors";
 import logger from "morgan";
 import cookieParser from "cookie-parser";
 
+import { toNodeHandler } from "better-auth/node";
+
 import { config } from "#src/config/index.js";
 import { requestId } from "#src/middleware/request-id.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { errorHandler } from "#src/middleware/error-handler.js";
 import indexRouter from "#src/routes/index.js";
 import usersRouter from "#src/routes/users.routes.js";
+import { auth } from "#src/lib/auth.js";
 
 const app = express();
 
@@ -41,6 +44,7 @@ app.use(express.urlencoded({ extended: false, limit: "10kb" }));
 app.use(cookieParser());
 
 // --- Routes ---
+app.all("/api/auth/*", toNodeHandler(auth.handler));
 app.use("/", indexRouter);
 app.use("/users", usersRouter);
 

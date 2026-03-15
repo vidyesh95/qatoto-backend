@@ -1,12 +1,10 @@
 import { betterAuth } from "better-auth";
 import { anonymous } from "better-auth/plugins"
-import { Pool } from "pg";
+import { pool } from "#src/db/index.js";
 
 export const auth = betterAuth({
-    database: new Pool({
-        // connection options
-    }),
+    database: pool,
     plugins: [
         anonymous()
     ]
-})
+});
