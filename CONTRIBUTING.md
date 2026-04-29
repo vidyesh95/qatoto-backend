@@ -4,7 +4,7 @@ Thank you for your interest in contributing! We want to make contributing to thi
 
 ## Code of Conduct
 
-By participating in this project, you agree to abide by our [Code of Conduct](https://github.com/vidyesh95/qatoto-backend/tree/main?tab=coc-ov-file).
+By participating in this project, you agree to abide by our [Code of Conduct](https://github.com/vidyesh95/qatoto-backend/blob/main/CODE_OF_CONDUCT.md).
 
 ## How Can I Contribute?
 
