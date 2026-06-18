@@ -8,6 +8,24 @@ This document is the architectural guide, operational manual, and system prompt 
 
 ---
 
+## 0. Domain Model — What Qatoto Does
+
+Qatoto is a **concept-to-consumer foundry**: it takes a raw idea and supplies the team, funding, inspiration, and logistics to ship it. Code you write belongs to one of these subsystems. Use these names in modules, services, and routes.
+
+| Subsystem | What it does | Core entities |
+| --------- | ------------ | ------------- |
+| **Incubation / Team Formation** | Innovator posts a vision; algorithm matches CTOs, engineers, hobbyists who trade skills for **equity or future rewards**. Team builds an MVP in the platform's collaborative workspace. | `ProjectIdea`, `ContributorProfile`, `EquityGrant`, `TeamInvite` |
+| **Daily Update Protocol** | Members submit daily video/transcript logs. AI analyzes for bottlenecks and workflow gaps, and keeps an immutable **Proof of Effort** record. | `DailyUpdateLog`, `ProofOfEffortRecord`, `WorkflowInsight` |
+| **Funding** | Equity crowdfunding and investor matching. Investors see granular verified progress, lowering risk. | `InvestorProfile`, `FundingRound`, `ShareAllocation`, `CrowdfundPledge` |
+| **Financial Governance** | Neutral escrow + auditor. Compensation computed from logged effort (research/promotion/dev). Fund allocation tracked against AI-verified updates to prevent fraud. | `EscrowAccount`, `EffortBasedCompensation`, `FundAllocationLedger` |
+| **Market & Civic Intelligence** | **Knowledge Hub** (where demand is highest) + **Opportunity Map** (user-reported infrastructure gaps → heat map of problems to solve). | `DemandSignal`, `ProblemReport`, `OpportunityMapPin` |
+| **Creative Engine** | **Anime section** and **Project Immortal** moonshot research as non-linear inspiration sources for real products. | `InspirationSource`, `ResearchProject` |
+| **B2B Logistics & Storefront** | Post-build: storefront, shipping, international compliance, support, marketing suite. | `Product`, `Storefront`, `Shipment`, `ComplianceCheck`, `MarketingCampaign` |
+
+**Money, equity, and effort are the high-stakes invariants.** Anything touching `ShareAllocation`, `EscrowAccount`, `FundAllocationLedger`, or `EffortBasedCompensation` is security-critical — apply Section 1.1 (zero-trust) and Section 3.3 (`Result` over thrown errors) without exception.
+
+---
+
 ## How to read this document
 
 Sections 1–2 are **mandates** — non-negotiable rules. Section 3 is the **pattern library** — copy these shapes. Section 4 is the **review checklist** — run it before declaring any change done.
