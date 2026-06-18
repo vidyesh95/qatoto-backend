@@ -18,13 +18,18 @@
   "rules": {
     "no-alert": "error",
     "no-underscore-dangle": ["error", { "allow": ["__filename", "__dirname"] }],
-    "no-console": "error",
+    "no-console": ["error", { "allow": ["warn", "error"] }],
     "no-plusplus": "off",
     "oxc/approx-constant": "warn",
     "eslint/prefer-const": ["error", { "destructuring": "any" }],
-    "typescript/no-explicit-any": "error"
+    "typescript/no-explicit-any": "error",
+    "import/no-unassigned-import": ["warn", { "allow": ["**/dotenv/config"] }]
   },
   "overrides": [
+    {
+      "files": ["src/index.ts", "src/db/index.ts"],
+      "rules": { "no-console": "off" }
+    },
     {
       "files": ["**/*.test.ts", "**/*.spec.ts", "tests/**"],
       "plugins": ["vitest"],

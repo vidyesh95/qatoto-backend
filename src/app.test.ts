@@ -14,8 +14,11 @@ vi.stubEnv("FRONTEND_URL", "http://localhost:3000");
 
 // Mock the database module to avoid real DB connections
 vi.mock("#src/db/index.js", () => ({
-  pool: { query: vi.fn(), end: vi.fn() },
-  query: vi.fn(),
+  pool: {
+    query: vi.fn<(...args: unknown[]) => unknown>(),
+    end: vi.fn<() => unknown>(),
+  },
+  query: vi.fn<(...args: unknown[]) => unknown>(),
 }));
 
 describe("App Routes", () => {

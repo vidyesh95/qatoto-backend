@@ -1,8 +1,6 @@
-import pg from "pg";
+import { Pool } from "pg";
 
 import { config } from "#src/config/index.js";
-
-const { Pool } = pg;
 
 export const pool = new Pool({
   connectionString: config.DATABASE_URL,

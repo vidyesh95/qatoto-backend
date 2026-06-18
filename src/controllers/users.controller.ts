@@ -23,7 +23,8 @@ export async function getUsers(req: Request, res: Response): Promise<void> {
  * Get a single user by ID.
  */
 export async function getUserById(req: Request, res: Response): Promise<void> {
-  const id = req.params.id as string;
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
   const user = await usersService.getUserById(id);
 
   if (!user) {

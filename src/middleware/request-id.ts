@@ -7,7 +7,8 @@ import type { Request, Response, NextFunction } from "express";
  * Useful for tracing requests through logs.
  */
 export function requestId(req: Request, res: Response, next: NextFunction): void {
-  const id = (req.headers["x-request-id"] as string) || randomUUID();
+  const header = req.headers["x-request-id"];
+  const id = (Array.isArray(header) ? header[0] : header) || randomUUID();
   res.setHeader("X-Request-Id", id);
   next();
 }
