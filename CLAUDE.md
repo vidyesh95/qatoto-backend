@@ -12,15 +12,15 @@ This document is the architectural guide, operational manual, and system prompt 
 
 Qatoto is a **concept-to-consumer foundry**: it takes a raw idea and supplies the team, funding, inspiration, and logistics to ship it. Code you write belongs to one of these subsystems. Use these names in modules, services, and routes.
 
-| Subsystem | What it does | Core entities |
-| --------- | ------------ | ------------- |
-| **Incubation / Team Formation** | Innovator posts a vision; algorithm matches CTOs, engineers, hobbyists who trade skills for **equity or future rewards**. Team builds an MVP in the platform's collaborative workspace. | `ProjectIdea`, `ContributorProfile`, `EquityGrant`, `TeamInvite` |
-| **Daily Update Protocol** | Members submit daily video/transcript logs. AI analyzes for bottlenecks and workflow gaps, and keeps an immutable **Proof of Effort** record. | `DailyUpdateLog`, `ProofOfEffortRecord`, `WorkflowInsight` |
-| **Funding** | Equity crowdfunding and investor matching. Investors see granular verified progress, lowering risk. | `InvestorProfile`, `FundingRound`, `ShareAllocation`, `CrowdfundPledge` |
-| **Financial Governance** | Neutral escrow + auditor. Compensation computed from logged effort (research/promotion/dev). Fund allocation tracked against AI-verified updates to prevent fraud. | `EscrowAccount`, `EffortBasedCompensation`, `FundAllocationLedger` |
-| **Market & Civic Intelligence** | **Knowledge Hub** (where demand is highest) + **Opportunity Map** (user-reported infrastructure gaps → heat map of problems to solve). | `DemandSignal`, `ProblemReport`, `OpportunityMapPin` |
-| **Creative Engine** | **Anime section** and **Project Immortal** moonshot research as non-linear inspiration sources for real products. | `InspirationSource`, `ResearchProject` |
-| **B2B Logistics & Storefront** | Post-build: storefront, shipping, international compliance, support, marketing suite. | `Product`, `Storefront`, `Shipment`, `ComplianceCheck`, `MarketingCampaign` |
+| Subsystem                       | What it does                                                                                                                                                                            | Core entities                                                               |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **Incubation / Team Formation** | Innovator posts a vision; algorithm matches CTOs, engineers, hobbyists who trade skills for **equity or future rewards**. Team builds an MVP in the platform's collaborative workspace. | `ProjectIdea`, `ContributorProfile`, `EquityGrant`, `TeamInvite`            |
+| **Daily Update Protocol**       | Members submit daily video/transcript logs. AI analyzes for bottlenecks and workflow gaps, and keeps an immutable **Proof of Effort** record.                                           | `DailyUpdateLog`, `ProofOfEffortRecord`, `WorkflowInsight`                  |
+| **Funding**                     | Equity crowdfunding and investor matching. Investors see granular verified progress, lowering risk.                                                                                     | `InvestorProfile`, `FundingRound`, `ShareAllocation`, `CrowdfundPledge`     |
+| **Financial Governance**        | Neutral escrow + auditor. Compensation computed from logged effort (research/promotion/dev). Fund allocation tracked against AI-verified updates to prevent fraud.                      | `EscrowAccount`, `EffortBasedCompensation`, `FundAllocationLedger`          |
+| **Market & Civic Intelligence** | **Knowledge Hub** (where demand is highest) + **Opportunity Map** (user-reported infrastructure gaps → heat map of problems to solve).                                                  | `DemandSignal`, `ProblemReport`, `OpportunityMapPin`                        |
+| **Creative Engine**             | **Anime section** and **Project Immortal** moonshot research as non-linear inspiration sources for real products.                                                                       | `InspirationSource`, `ResearchProject`                                      |
+| **B2B Logistics & Storefront**  | Post-build: storefront, shipping, international compliance, support, marketing suite.                                                                                                   | `Product`, `Storefront`, `Shipment`, `ComplianceCheck`, `MarketingCampaign` |
 
 **Money, equity, and effort are the high-stakes invariants.** Anything touching `ShareAllocation`, `EscrowAccount`, `FundAllocationLedger`, or `EffortBasedCompensation` is security-critical — apply Section 1.1 (zero-trust) and Section 3.3 (`Result` over thrown errors) without exception.
 
@@ -43,7 +43,7 @@ The Next.js frontend runs entirely in the user's browser. Treat it as **untruste
 Therefore the Express backend independently, on every request:
 
 - Authenticates the caller.
-- Enforces granular role-based access control (RBAC) — verify the caller is *authorized for this specific resource*, not merely logged in.
+- Enforces granular role-based access control (RBAC) — verify the caller is _authorized for this specific resource_, not merely logged in.
 - Parses and validates every payload shape before any domain logic runs.
 - Enforces all data-integrity invariants server-side.
 
@@ -53,7 +53,7 @@ Never trust a value because the frontend "should have" validated it. Re-derive a
 
 Every variable, function, parameter, type, and class name must state a real domain concept.
 
-- **Banned:** cryptic or single-letter names — `a`, `b`, `p`, `t`, `val`, `data`, `tmp`. *(Exception: the standard Express `next` parameter in handler signatures.)*
+- **Banned:** cryptic or single-letter names — `a`, `b`, `p`, `t`, `val`, `data`, `tmp`. _(Exception: the standard Express `next` parameter in handler signatures.)_
 - **Required:** explicit compound names — `targetInvestorProfileId`, `calculateEscrowServiceFee`, `projectFeasibilitySurveyResult`, `allocatedEquitySharesCount`.
 
 Names are documentation. A reader should understand intent without chasing the definition.
@@ -68,7 +68,7 @@ Four guiding habits:
 
 1. **Parse, don't validate.** Raw untrusted data never reaches business logic. Parse it into a typed domain model at the controller boundary with Zod.
 2. **Make illegal states unrepresentable.** Use discriminated unions, not bags of optional flags.
-3. **Explicit failure paths.** Expected operational failures (entity not found, payment declined) are *return values*, not thrown exceptions. Reserve `throw` for unrecoverable programmer/environment errors.
+3. **Explicit failure paths.** Expected operational failures (entity not found, payment declined) are _return values_, not thrown exceptions. Reserve `throw` for unrecoverable programmer/environment errors.
 4. **Immutable by default.** Treat domain entities as read-only; produce new objects instead of mutating in place.
 
 ---
@@ -80,45 +80,39 @@ Four guiding habits:
 Never write `req.body as SomeType`. Parse every `body`, `params`, and `query` with Zod via `safeParse`. Use `.strict()` to reject unknown keys (or `.strip()` to silently drop them — choose deliberately).
 
 ```typescript
-import { Request, Response, NextFunction } from 'express';
-import { z } from 'zod';
+import { Request, Response, NextFunction } from "express";
+import { z } from "zod";
 
 // Strict domain primitive
-export const ProductIdSchema = z
-  .string()
-  .regex(/^prd_[a-zA-Z0-9]+$/, 'Invalid Product ID format');
+export const ProductIdSchema = z.string().regex(/^prd_[a-zA-Z0-9]+$/, "Invalid Product ID format");
 export type ProductId = z.infer<typeof ProductIdSchema>;
 
 export const CreateProductSchema = z
-  .object({
-    name: z.string().min(1),
-    price: z.number().positive(),
-  })
-  .strict(); // reject unexpected properties
+    .object({
+        name: z.string().min(1),
+        price: z.number().positive(),
+    })
+    .strict(); // reject unexpected properties
 export type CreateProductInput = z.infer<typeof CreateProductSchema>;
 
-export const handleCreateProduct = async (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) => {
-  const parsedRequest = CreateProductSchema.safeParse(req.body);
+export const handleCreateProduct = async (req: Request, res: Response, next: NextFunction) => {
+    const parsedRequest = CreateProductSchema.safeParse(req.body);
 
-  if (!parsedRequest.success) {
-    return res.status(422).json({
-      status: 'error',
-      errors: parsedRequest.error.flatten().fieldErrors,
-    });
-  }
+    if (!parsedRequest.success) {
+        return res.status(422).json({
+            status: "error",
+            errors: parsedRequest.error.flatten().fieldErrors,
+        });
+    }
 
-  // parsedRequest.data is now fully trusted and typed.
-  const createResult = await ProductService.create(parsedRequest.data);
+    // parsedRequest.data is now fully trusted and typed.
+    const createResult = await ProductService.create(parsedRequest.data);
 
-  if (!createResult.success) {
-    return res.status(409).json({ status: 'error', error: createResult.error });
-  }
+    if (!createResult.success) {
+        return res.status(409).json({ status: "error", error: createResult.error });
+    }
 
-  return res.status(201).json(createResult.value);
+    return res.status(201).json(createResult.value);
 };
 ```
 
@@ -130,31 +124,31 @@ Rules:
 
 ### 3.2 Impossible States — Discriminated Unions
 
-Do not model a process with independent optional flags (`isLoading?`, `error?`, `data?`) — that permits contradictory states (data *and* error at once). Use one string-literal `status` discriminant, and enforce exhaustiveness with `never`.
+Do not model a process with independent optional flags (`isLoading?`, `error?`, `data?`) — that permits contradictory states (data _and_ error at once). Use one string-literal `status` discriminant, and enforce exhaustiveness with `never`.
 
 ```typescript
 type CheckoutState =
-  | { status: 'empty' }
-  | { status: 'processing'; cartId: string }
-  | { status: 'failed'; cartId: string; reason: string }
-  | { status: 'completed'; cartId: string; receiptId: string; total: number };
+    | { status: "empty" }
+    | { status: "processing"; cartId: string }
+    | { status: "failed"; cartId: string; reason: string }
+    | { status: "completed"; cartId: string; receiptId: string; total: number };
 
 function getStatusMessage(state: CheckoutState): string {
-  switch (state.status) {
-    case 'empty':
-      return 'No items in cart.';
-    case 'processing':
-      return `Processing checkout for cart ${state.cartId}`;
-    case 'failed':
-      return `Checkout failed: ${state.reason}`;
-    case 'completed':
-      return `Success! Receipt: ${state.receiptId}`;
-    default: {
-      // Adding a new status without handling it breaks the build here.
-      const _exhaustiveCheck: never = state;
-      throw new Error(`Unhandled checkout state: ${JSON.stringify(_exhaustiveCheck)}`);
+    switch (state.status) {
+        case "empty":
+            return "No items in cart.";
+        case "processing":
+            return `Processing checkout for cart ${state.cartId}`;
+        case "failed":
+            return `Checkout failed: ${state.reason}`;
+        case "completed":
+            return `Success! Receipt: ${state.receiptId}`;
+        default: {
+            // Adding a new status without handling it breaks the build here.
+            const _exhaustiveCheck: never = state;
+            throw new Error(`Unhandled checkout state: ${JSON.stringify(_exhaustiveCheck)}`);
+        }
     }
-  }
 }
 ```
 
@@ -163,30 +157,28 @@ function getStatusMessage(state: CheckoutState): string {
 Predictable domain failures return a `Result` union. Both branches must be handled at the call site.
 
 ```typescript
-export type Result<T, E = Error> =
-  | { success: true; value: T }
-  | { success: false; error: E };
+export type Result<T, E = Error> = { success: true; value: T } | { success: false; error: E };
 
 type PaymentError =
-  | { type: 'INSUFFICIENT_FUNDS'; balance: number }
-  | { type: 'CARD_EXPIRED'; expiryDate: string }
-  | { type: 'GATEWAY_TIMEOUT' };
+    | { type: "INSUFFICIENT_FUNDS"; balance: number }
+    | { type: "CARD_EXPIRED"; expiryDate: string }
+    | { type: "GATEWAY_TIMEOUT" };
 
 export async function processPayment(
-  userId: string,
-  amount: number,
+    userId: string,
+    amount: number,
 ): Promise<Result<{ chargeId: string }, PaymentError>> {
-  const account = await db.findAccount(userId);
+    const account = await db.findAccount(userId);
 
-  if (account.balance < amount) {
-    return {
-      success: false,
-      error: { type: 'INSUFFICIENT_FUNDS', balance: account.balance },
-    };
-  }
+    if (account.balance < amount) {
+        return {
+            success: false,
+            error: { type: "INSUFFICIENT_FUNDS", balance: account.balance },
+        };
+    }
 
-  // ... execute charge ...
-  return { success: true, value: { chargeId: 'ch_12345' } };
+    // ... execute charge ...
+    return { success: true, value: { chargeId: "ch_12345" } };
 }
 ```
 
@@ -198,9 +190,9 @@ Mark entity properties and function inputs `readonly`. State transitions return 
 
 ```typescript
 interface UserProfile {
-  readonly id: string;
-  readonly email: string;
-  readonly permissions: readonly string[];
+    readonly id: string;
+    readonly email: string;
+    readonly permissions: readonly string[];
 }
 
 // WRONG — mutates the input
@@ -208,10 +200,10 @@ interface UserProfile {
 
 // RIGHT — returns a modified clone
 function grantAdmin(user: UserProfile): UserProfile {
-  return {
-    ...user,
-    permissions: [...user.permissions, 'admin'],
-  };
+    return {
+        ...user,
+        permissions: [...user.permissions, "admin"],
+    };
 }
 ```
 
