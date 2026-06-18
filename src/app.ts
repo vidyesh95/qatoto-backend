@@ -1,18 +1,17 @@
+import { toNodeHandler } from "better-auth/node";
+import cookieParser from "cookie-parser";
+import cors from "cors";
 import express from "express";
 import helmet from "helmet";
-import cors from "cors";
 import logger from "morgan";
-import cookieParser from "cookie-parser";
-
-import { toNodeHandler } from "better-auth/node";
 
 import { config } from "#src/config/index.js";
-import { requestId } from "#src/middleware/request-id.js";
-import { notFoundHandler } from "#src/middleware/not-found.js";
+import { auth } from "#src/lib/auth.js";
 import { errorHandler } from "#src/middleware/error-handler.js";
+import { notFoundHandler } from "#src/middleware/not-found.js";
+import { requestId } from "#src/middleware/request-id.js";
 import indexRouter from "#src/routes/index.js";
 import usersRouter from "#src/routes/users.routes.js";
-import { auth } from "#src/lib/auth.js";
 
 const app = express();
 

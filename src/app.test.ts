@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
 import express from "express";
 import request from "supertest";
+import { describe, it, expect, vi, beforeAll } from "vitest";
 
 // Mock dotenv/config
 vi.mock("dotenv/config", () => ({}));

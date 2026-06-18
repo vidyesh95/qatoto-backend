@@ -1,0 +1,34 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "promise"],
+  "env": {
+    "node": true,
+    "es2024": true
+  },
+  "ignorePatterns": ["dist", "node_modules", ".agent", ".agents"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "pedantic": "off"
+  },
+  "options": {
+    "typeAware": true,
+    "maxWarnings": 10
+  },
+  "rules": {
+    "no-alert": "error",
+    "no-underscore-dangle": ["error", { "allow": ["__filename", "__dirname"] }],
+    "no-console": "error",
+    "no-plusplus": "off",
+    "oxc/approx-constant": "warn",
+    "eslint/prefer-const": ["error", { "destructuring": "any" }],
+    "typescript/no-explicit-any": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.spec.ts", "tests/**"],
+      "plugins": ["vitest"],
+      "env": { "vitest": true }
+    }
+  ]
+}

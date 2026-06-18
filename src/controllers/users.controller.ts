@@ -1,15 +1,13 @@
 import type { Request, Response } from "express";
-import type { ApiResponse } from "#src/types/index.js";
+
 import * as usersService from "#src/services/users.service.js";
+import type { ApiResponse } from "#src/types/index.js";
 
 /**
  * GET /users
  * List all users.
  */
-export async function getUsers(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function getUsers(req: Request, res: Response): Promise<void> {
   const users = await usersService.getAllUsers();
   const response: ApiResponse = {
     status: "success",
@@ -24,10 +22,7 @@ export async function getUsers(
  * GET /users/:id
  * Get a single user by ID.
  */
-export async function getUserById(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function getUserById(req: Request, res: Response): Promise<void> {
   const id = req.params.id as string;
   const user = await usersService.getUserById(id);
 

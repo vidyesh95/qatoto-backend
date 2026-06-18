@@ -65,9 +65,9 @@ The `.env.example` file is the template — it **IS** committed so teammates kno
 
 ```typescript
 const envSchema = z.object({
-  PORT: z.coerce.number().default(8000),
-  DATABASE_URL: z.string().url(),
-  // ...
+    PORT: z.coerce.number().default(8000),
+    DATABASE_URL: z.string().url(),
+    // ...
 });
 export const config = envSchema.parse(process.env);
 ```
@@ -133,8 +133,8 @@ Middleware are functions that run between receiving a request and sending a resp
 
 ```typescript
 function myMiddleware(req: Request, res: Response, next: NextFunction) {
-  // Do something with the request
-  next(); // ← Pass to the NEXT middleware/route. If you don't call this, the request hangs!
+    // Do something with the request
+    next(); // ← Pass to the NEXT middleware/route. If you don't call this, the request hangs!
 }
 ```
 
@@ -181,12 +181,12 @@ Controllers are the waiters. They:
 ```typescript
 // controllers/users.controller.ts
 export async function getUsers(req: Request, res: Response) {
-  const users = await usersService.getAllUsers(); // Ask the kitchen
-  res.status(200).json({
-    // Serve the food
-    status: "success",
-    data: users,
-  });
+    const users = await usersService.getAllUsers(); // Ask the kitchen
+    res.status(200).json({
+        // Serve the food
+        status: "success",
+        data: users,
+    });
 }
 ```
 
@@ -201,8 +201,8 @@ Services are the kitchen. This is where the actual business logic lives — data
 ```typescript
 // services/users.service.ts
 export async function getAllUsers() {
-  const result = await query("SELECT id, email FROM users LIMIT 100");
-  return result.rows;
+    const result = await query("SELECT id, email FROM users LIMIT 100");
+    return result.rows;
 }
 ```
 
@@ -232,10 +232,10 @@ Shared TypeScript interfaces that define the shape of your API responses:
 
 ```typescript
 interface ApiResponse<T> {
-  status: "success" | "error";
-  statusCode: number;
-  message: string;
-  data?: T;
+    status: "success" | "error";
+    statusCode: number;
+    message: string;
+    data?: T;
 }
 ```
 

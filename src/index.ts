@@ -1,7 +1,8 @@
 import "dotenv/config";
+import http from "http";
 
 import debugLib from "debug";
-import http from "http";
+
 import app from "#src/app.js";
 import { config } from "#src/config/index.js";
 import { pool } from "#src/db/index.js";

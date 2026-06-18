@@ -1,19 +1,20 @@
 # Authentication Architecture: Guest to Authenticated User Flow
 
-This repository utilizes a **Shadow Account (Lazy Registration)** pattern to handle guest users. 
+This repository utilizes a **Shadow Account (Lazy Registration)** pattern to handle guest users.
 
 This architecture allows users to interact with the application (e.g., adding items to a cart, setting preferences) before creating an account. Once they sign in using Google OAuth or an Email Magic Link, all their guest data is seamlessly merged into their new permanent account.
 
 ## System Flow
 
 The system operates across three main phases:
+
 1. **First Visit:** Generating a secure, `HttpOnly` guest session cookie.
 2. **Anonymous Collection:** Linking user actions to the temporary guest ID.
 3. **Login & Merge:** Converting the guest session into a permanent Better Auth session and migrating database records.
 
 ## Sequence Diagram
 
-```mermaid
+````mermaid
 sequenceDiagram
     participant Browser as Browser (Client)
     participant NextJS as Next.js Frontend (SSR)
@@ -54,8 +55,8 @@ Here is what is set up in this repository:
 2. **`src/app.ts`**: The server routes all requests starting with `/api/auth/*` to Better Auth.
 
 > [!WARNING]
-> Because we enabled the `anonymous` plugin, Better Auth needs to add a new `isAnonymous` column to the `user` table in your database. 
-> 
+> Because we enabled the `anonymous` plugin, Better Auth needs to add a new `isAnonymous` column to the `user` table in your database.
+>
 > You MUST run the migration before continuing:
 > ```bash
 > pnpm dlx @better-auth/cli migrate
@@ -71,39 +72,39 @@ To connect your separate Next.js frontend to this backend, you need to set up th
 On your frontend project, install the client library:
 ```bash
 pnpm add better-auth
-```
+````
 
 ### 2. Create the Auth Client
+
 Create a file (e.g., `lib/auth-client.ts`) to configure the client:
 
 ```typescript
-import { createAuthClient } from "better-auth/react" // or /vue, /svelte depending on your framework
-import { anonymousClient } from "better-auth/client/plugins"
+import { createAuthClient } from "better-auth/react"; // or /vue, /svelte depending on your framework
+import { anonymousClient } from "better-auth/client/plugins";
 
 export const authClient = createAuthClient({
     // Important: Point this to your Express backend URL
-    baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000", 
-    plugins: [
-        anonymousClient()
-    ]
-})
+    baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
+    plugins: [anonymousClient()],
+});
 ```
 
 ### 3. Handle the Initial Visit (creating the Guest Cookie)
+
 In a global component or hook, check if the user has a session. If they don't, trigger the anonymous sign-in process safely.
 
 ```typescript
 import { useEffect } from "react";
-import { authClient } from "@/lib/auth-client"
+import { authClient } from "@/lib/auth-client";
 
 export function useGuestSession() {
     useEffect(() => {
         async function checkSession() {
             // Check if they are already a guest or logged in
             const { data: session } = await authClient.useSession();
-            
+
             if (!session) {
-                // If they have no session at all, make them a guest! 
+                // If they have no session at all, make them a guest!
                 // This creates the shadow account and sets the secure cookie.
                 await authClient.signIn.anonymous();
             }
@@ -114,6 +115,7 @@ export function useGuestSession() {
 ```
 
 ### 4. Upgrade to a Real User
+
 When the user clicks "Sign Up" and enters their details, just call the normal `signUp` method. Because the browser has the guest cookie, Better Auth handles the migration perfectly.
 
 ```typescript
@@ -122,30 +124,31 @@ const handleSignUp = async (email, password, name) => {
     const { data, error } = await authClient.signUp.email({
         email: email,
         password: password,
-        name: name
+        name: name,
     });
-    
+
     if (error) {
         console.error("Sign up failed", error);
     } else {
         console.log("Success! Guest account was converted.");
     }
-}
+};
 ```
 
 ### 5. Fetching the Active User
+
 Anytime you need to know who the user is (their ID, their email, or if they are anonymous), you can fetch the session:
 
 ```typescript
-const { data: session } = authClient.useSession()
+const { data: session } = authClient.useSession();
 
 // Output looks like:
 // {
-//   user: { 
-//     id: 'temp-uuid', 
+//   user: {
+//     id: 'temp-uuid',
 //     isAnonymous: true,  // <-- You can use this to show "Sign up to save progress" banners!
-//     name: '...', 
-//     email: '...' 
+//     name: '...',
+//     email: '...'
 //   },
 //   session: { ... }
 // }
@@ -155,13 +158,13 @@ const { data: session } = authClient.useSession()
 
 ## 🧹 Database Maintenance
 
-Because guests might visit once and never return, your database will eventually accumulate temporary accounts. 
+Because guests might visit once and never return, your database will eventually accumulate temporary accounts.
 
 In the future, you should set up a server CRON job or pgAgent task to run this SQL periodically to keep your database clean:
 
 ```sql
 -- Delete inactive un-merged guest accounts older than 30 days
-DELETE FROM "user" 
-WHERE "isAnonymous" = true 
+DELETE FROM "user"
+WHERE "isAnonymous" = true
 AND "updatedAt" < NOW() - INTERVAL '30 days';
 ```

@@ -27,6 +27,7 @@ By participating in this project, you agree to abide by our [Code of Conduct](ht
 - Use lowercase.
 
     Example:
+
 - feat: Add user authentication
 - fix: Resolve login bug
 - docs: Update README
