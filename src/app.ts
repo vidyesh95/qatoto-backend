@@ -43,7 +43,7 @@ app.use(express.urlencoded({ extended: false, limit: "10kb" }));
 app.use(cookieParser());
 
 // --- Routes ---
-app.all("/api/auth/*", toNodeHandler(auth.handler));
+app.all("/api/auth/*splat", toNodeHandler(auth.handler));
 app.use("/", indexRouter);
 app.use("/users", usersRouter);
 
