@@ -49,6 +49,7 @@
     "@types/pg": "^8.20.0",
     "@types/supertest": "^6.0.3",
     "@types/swagger-ui-express": "^4.1.8",
+    "fallow": "^2.96.0",
     "oxfmt": "^0.41.0",
     "oxlint": "^1.70.0",
     "oxlint-tsgolint": "^0.23.0",
