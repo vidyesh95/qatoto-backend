@@ -7,7 +7,7 @@
 > **Goal:** ship working auth (signup, login, logout, session, password reset) that
 > the Next.js + TanStack Query frontend can call.
 > **Stack decision:** we use **Better Auth** (the auth engine) + **Drizzle ORM** (the
-> database layer) + **SQLite** (the database file). Better Auth does the
+> database layer) + **PostgreSQL** (the database). Better Auth does the
 > security-sensitive work — password hashing, sessions, cookies, OTP — so you don't
 > hand-roll crypto. You learn its config and how to wire it, not how to reinvent it.
 
@@ -64,15 +64,15 @@ answer to "is this user logged in?" comes from Better Auth's session (the
 
 ## 2. The stack (kept deliberately small)
 
-| Concern          | Pick                            | Why this one                                                                                           |
-| ---------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Server framework | **Express 5**                   | The thing you're learning. Minimal, huge community.                                                    |
-| Language         | **TypeScript**                  | Same language as the frontend — shared types, fewer bugs. Run with `tsx` (no build step in dev).       |
-| Auth engine      | **Better Auth**                 | Handles password hashing, sessions, cookies, OTP, CSRF. Don't roll your own crypto.                    |
-| Database ORM     | **Drizzle ORM**                 | Type-safe queries + migrations. Better Auth generates its tables as a Drizzle schema for you.          |
-| Database         | **SQLite** via `better-sqlite3` | A file on disk. No DB server to install. Drizzle lets you swap to Postgres later by changing one line. |
-| OTP delivery     | **`console.log` in dev**        | Don't sign up for an email provider yet. Better Auth hands you the code in a callback — print it.      |
-| CORS             | **cors**                        | Lets the browser on `:3000` call the API on `:4000`.                                                   |
+| Concern          | Pick                     | Why this one                                                                                       |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------- |
+| Server framework | **Express 5**            | The thing you're learning. Minimal, huge community.                                                |
+| Language         | **TypeScript**           | Same language as the frontend — shared types, fewer bugs. Run with `tsx` (no build step in dev).   |
+| Auth engine      | **Better Auth**          | Handles password hashing, sessions, cookies, OTP, CSRF. Don't roll your own crypto.                |
+| Database ORM     | **Drizzle ORM**          | Type-safe queries + migrations. Better Auth generates its tables as a Drizzle schema for you.      |
+| Database         | **PostgreSQL** via `pg`  | Strict types, same engine as prod. Run locally via Docker or Neon free tier — no SQLite surprises. |
+| OTP delivery     | **`console.log` in dev** | Don't sign up for an email provider yet. Better Auth hands you the code in a callback — print it.  |
+| CORS             | **cors**                 | Lets the browser on `:3000` call the API on `:4000`.                                               |
 
 **What you are NOT installing (Better Auth does it):** no `bcrypt` (we use
 `@node-rs/argon2` — napi-rs native bindings, faster and stronger than scrypt), no
@@ -84,11 +84,22 @@ Install (after `npm init`):
 
 ```bash
 # runtime dependencies
-npm install express better-auth better-sqlite3 drizzle-orm cors @node-rs/argon2
+npm install express better-auth pg drizzle-orm cors @node-rs/argon2
 
 # dev tooling: TypeScript, a zero-config TS runner, Drizzle's CLI, and type definitions
 npm install -D typescript tsx drizzle-kit \
-  @types/node @types/express @types/better-sqlite3 @types/cors
+  @types/node @types/express @types/pg @types/cors
+```
+
+You also need a running Postgres. Pick one:
+
+```bash
+# Option A — Docker (local container)
+docker run --name qatoto-pg -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=qatoto -p 5432:5432 -d postgres:16
+
+# Option B — Neon (https://neon.tech) free serverless Postgres, no Docker.
+#            Copy its connection string straight into DATABASE_URL.
 ```
 
 `package.json` (`"type": "module"`) scripts:
@@ -125,14 +136,14 @@ qatoto-backend/
 ├── src/
 │   ├── index.ts            # creates the Express app, mounts Better Auth + your routes, starts the server
 │   ├── auth.ts             # the Better Auth instance (config: db adapter, email+password, OTP plugin)
-│   ├── db.ts               # opens the SQLite file, wraps it with Drizzle
+│   ├── db.ts               # opens the Postgres connection pool, wraps it with Drizzle
 │   ├── auth-schema.ts       # GENERATED by `npx @better-auth/cli generate` — don't hand-edit
 │   ├── require-auth.ts     # middleware for YOUR routes: reads the Better Auth session, attaches req.user
 │   └── routes.ts           # your own non-auth routes + the one custom "set initial password" endpoint (§5)
-├── drizzle.config.ts       # tells drizzle-kit where the schema + sqlite file are
+├── drizzle.config.ts       # tells drizzle-kit where the schema + DATABASE_URL are
 ├── tsconfig.json
-├── .env                    # BETTER_AUTH_SECRET, BETTER_AUTH_URL, etc. NEVER commit this
-├── .gitignore              # node_modules, dist/, *.sqlite, .env
+├── .env                    # BETTER_AUTH_SECRET, BETTER_AUTH_URL, DATABASE_URL. NEVER commit this
+├── .gitignore              # node_modules, dist/, .env
 └── package.json
 ```
 
@@ -145,7 +156,7 @@ run the CLI and it generates the Drizzle schema for you:
 
 ```bash
 npm run db:generate   # reads auth.ts → writes src/auth-schema.ts (Drizzle table definitions)
-npm run db:migrate    # drizzle-kit turns that schema into SQL and applies it to sqlite.db
+npm run db:migrate    # drizzle-kit turns that schema into SQL and applies it to your Postgres DB
 ```
 
 With email+password + the email-OTP plugin enabled, Better Auth generates roughly these
@@ -179,7 +190,7 @@ import { hash, verify } from "@node-rs/argon2";
 import { db } from "./db";
 
 export const auth = betterAuth({
-    database: drizzleAdapter(db, { provider: "sqlite" }),
+    database: drizzleAdapter(db, { provider: "pg" }),
 
     // email + password sign-in. Passwords hashed with argon2id via @node-rs/argon2 (native bindings).
     emailAndPassword: {
@@ -206,17 +217,20 @@ export const auth = betterAuth({
 ### 5b. The database — `src/db.ts`
 
 ```ts
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import * as schema from "./auth-schema";
 
-const sqlite = new Database(process.env.DATABASE_FILE ?? "sqlite.db");
-export const db = drizzle(sqlite, { schema });
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const db = drizzle(pool, { schema });
 ```
 
-> To move to Postgres at deploy time you change the driver import here and
-> `provider: "pg"` in `auth.ts` — the rest of your code doesn't change. That's the
-> payoff for using an ORM instead of raw SQL strings.
+> A `Pool` reuses open connections instead of dialing a fresh one per request. The
+> driver import here + `provider: "pg"` in `auth.ts` are the only Postgres-specific
+> lines — swapping providers later means changing just these. That's the payoff for
+> using an ORM instead of raw SQL strings.
 
 ### 5c. Mounting on Express — `src/index.ts`
 
@@ -505,8 +519,8 @@ Each step is a small, runnable win. Don't skip ahead.
 0. **Check tools.** `node --version` (you have v26). Install nothing else yet.
 1. **Hello server.** `npm init`, install Express + TypeScript (`tsx`), write a trivial
    route, run with `tsx`, open it. → **Lesson 01**
-2. **Database + Drizzle.** Add `better-sqlite3` + `drizzle-orm`, write `db.ts`, write a
-   `drizzle.config.ts`.
+2. **Database + Drizzle.** Start Postgres (Docker or Neon), add `pg` + `drizzle-orm`,
+   write `db.ts`, write a `drizzle.config.ts`.
 3. **Better Auth, email+password only.** Write `auth.ts` (just `emailAndPassword`), mount
    it in `index.ts` (§5c), run `db:generate` + `db:migrate`, hit `/api/auth/ok`.
 4. **Password login + session.** Test `sign-in/email`, then `requireAuth` (§7) on a dummy
@@ -525,7 +539,7 @@ Each step is a small, runnable win. Don't skip ahead.
 - Google / Apple OAuth (`socialProviders` in `auth.ts`)
 - Real email delivery (nodemailer, Resend, or Postmark) inside `sendVerificationOTP`
 - Rate limiting (Better Auth has built-in rate-limit options — turn them up for prod)
-- Move SQLite → Postgres (change the Drizzle driver + `provider`)
+- Managed Postgres + connection pooling for prod (e.g. Neon, RDS, Supabase)
 
 ---
 
@@ -537,6 +551,7 @@ config/env correctly.
 - [ ] Server re-validates **every** request — the UI's steps prove nothing (§0).
 - [ ] `BETTER_AUTH_SECRET` is set in `.env` (a long random string) and **git-ignored**.
 - [ ] `BETTER_AUTH_URL` matches the API origin (`http://localhost:4000` in dev).
+- [ ] `DATABASE_URL` points at your Postgres and is **git-ignored** (it holds the DB password).
 - [ ] Passwords are hashed with **argon2id** (`@node-rs/argon2`) — never stored or returned in plaintext.
 - [ ] OTPs are hashed, expiring, single-use (Better Auth's `verification` table) — don't disable that.
 - [ ] Session lives in Better Auth's **httpOnly** cookie, never in `localStorage`.
