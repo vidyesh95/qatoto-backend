@@ -30,6 +30,7 @@
     "lint:fix": "oxlint --fix"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.0.2",
     "better-auth": "^1.6.19",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
