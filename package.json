@@ -8,14 +8,20 @@
   "type": "module",
   "main": "dist/index.js",
   "imports": {
-    "#src/*.js": "./dist/*.js",
-    "#src/*": "./dist/*.js"
+    "#src/*.js": {
+      "development": "./src/*.ts",
+      "default": "./dist/*.js"
+    },
+    "#src/*": {
+      "development": "./src/*.ts",
+      "default": "./dist/*.js"
+    }
   },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch --conditions=development src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "fmt": "oxfmt",
