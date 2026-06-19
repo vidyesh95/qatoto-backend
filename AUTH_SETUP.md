@@ -6,7 +6,7 @@ the _how_ (commands + files to ship working signup, login, logout, session, pass
 reset).
 
 **Stack:** Express 5 · TypeScript (`tsx`) · Better Auth · Drizzle ORM · SQLite
-(`better-sqlite3`). Better Auth owns the security-sensitive work (scrypt hashing,
+(`better-sqlite3`). Better Auth owns the security-sensitive work (argon2id hashing via `@node-rs/argon2`,
 sessions, httpOnly cookies, OTP). You wire its config — you don't roll crypto.
 
 ---
@@ -41,14 +41,14 @@ for its own endpoints.
 npm init -y
 
 # runtime
-npm install express better-auth better-sqlite3 drizzle-orm cors
+npm install express better-auth better-sqlite3 drizzle-orm cors @node-rs/argon2
 
 # dev tooling: TypeScript, zero-config TS runner, Drizzle CLI, type defs
 npm install -D typescript tsx drizzle-kit \
   @types/node @types/express @types/better-sqlite3 @types/cors
 ```
 
-**NOT installed** (Better Auth does it): no `bcrypt` (scrypt by default), no
+**NOT installed separately** (handled here): no `bcrypt` (we use `@node-rs/argon2` — napi-rs native bindings, faster and stronger than scrypt), no
 `cookie-parser` (Better Auth reads/writes its own signed cookies), no hand-rolled
 sessions or OTP table (Better Auth owns those — see §6).
 
@@ -128,15 +128,20 @@ export const db = drizzle(sqlite, { schema });
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { emailOTP } from "better-auth/plugins";
+import { hash, verify } from "@node-rs/argon2";
 import { db } from "./db";
 
 export const auth = betterAuth({
     database: drizzleAdapter(db, { provider: "sqlite" }),
 
-    // email + password sign-in. Better Auth hashes with scrypt; enforce min length here too.
+    // email + password sign-in. Passwords hashed with argon2id via @node-rs/argon2 (native bindings).
     emailAndPassword: {
         enabled: true,
         minPasswordLength: 8,
+        password: {
+            hash: (password) => hash(password),
+            verify: ({ hash: passwordHash, password }) => verify(passwordHash, password),
+        },
     },
 
     // the OTP plugin powers both signup-verification and forgot-password.
@@ -196,7 +201,7 @@ With email+password + email-OTP enabled, Better Auth generates roughly:
 | Table          | Holds                                                                |
 | -------------- | -------------------------------------------------------------------- |
 | `user`         | id, email, name, emailVerified, createdAt. **No raw password here.** |
-| `account`      | the password hash (scrypt) and any OAuth links, keyed to a user.     |
+| `account`      | the password hash (argon2id) and any OAuth links, keyed to a user.   |
 | `session`      | one row per logged-in session — the cookie holds only a reference.   |
 | `verification` | short-lived OTP records — hashed, expiring, single-use.              |
 
@@ -460,7 +465,7 @@ Better Auth handles most by default — your job: don't undo them, set config/en
 - [ ] Server re-validates **every** request — the UI's steps prove nothing (§0).
 - [ ] `BETTER_AUTH_SECRET` set in `.env` (long random) and **git-ignored**.
 - [ ] `BETTER_AUTH_URL` matches the API origin (`http://localhost:4000` in dev).
-- [ ] Passwords hashed by Better Auth (**scrypt**) — never stored or returned plaintext.
+- [ ] Passwords hashed with **argon2id** (`@node-rs/argon2`) — never stored or returned plaintext.
 - [ ] OTPs hashed, expiring, single-use (`verification` table) — don't disable that.
 - [ ] Session in Better Auth's **httpOnly** cookie, never `localStorage`.
 - [ ] Login errors stay **generic** — don't reveal whether the email exists.
