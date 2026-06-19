@@ -61,7 +61,7 @@ Build email + password + OTP first; add OAuth later (§9).
 | Server framework    | **Express 5**                                          | The thing you're learning. Minimal, huge community.                                                                          |
 | Language            | **TypeScript**                                         | Same language as the frontend — shared types, fewer bugs. Run it with `tsx` (executes `.ts` directly, no build step in dev). |
 | Database            | **SQLite** via `better-sqlite3`                        | A file on disk. No DB server to install or run. Swap to Postgres when you deploy.                                            |
-| Password hashing    | **bcrypt** (`bcrypt`)                                  | The well-trodden default. Never store raw passwords.                                                                         |
+| Password hashing    | **Argon2** (`@node-rs/argon2`)                         | Modern memory-hard KDF (PHC winner). Native binding, ships own types. Never store raw passwords.                             |
 | Cookie reading      | **cookie-parser**                                      | Tiny helper to read the session cookie.                                                                                      |
 | CORS                | **cors**                                               | Lets the browser on `:3000` call the API on `:4000`.                                                                         |
 | Sessions            | **hand-rolled** (a `sessions` table + a random cookie) | ~20 lines, no magic. You'll understand exactly what a session is.                                                            |
@@ -71,11 +71,12 @@ Install (once you've run `npm init`):
 
 ```bash
 # runtime dependencies
-npm install express better-sqlite3 bcrypt cookie-parser cors
+npm install express better-sqlite3 @node-rs/argon2 cookie-parser cors
 
 # dev tooling: TypeScript, a zero-config TS runner, and type definitions
+# (@node-rs/argon2 bundles its own types — no @types package needed)
 npm install -D typescript tsx @types/node @types/express \
-  @types/better-sqlite3 @types/bcrypt @types/cookie-parser @types/cors
+  @types/better-sqlite3 @types/cookie-parser @types/cors
 ```
 
 Then create a `tsconfig.json` (`npx tsc --init` gives you a sensible default) and add
@@ -138,7 +139,7 @@ Create these once when the server boots (in `db.js`). Plain SQL — you'll read 
 CREATE TABLE IF NOT EXISTS users (
   id            TEXT PRIMARY KEY,                       -- crypto.randomUUID()
   email         TEXT UNIQUE NOT NULL,                   -- one account per email
-  password_hash TEXT NOT NULL,                          -- bcrypt hash, NEVER the raw password
+  password_hash TEXT NOT NULL,                          -- argon2 hash, NEVER the raw password
   display_name  TEXT,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -217,7 +218,7 @@ A `user` object is always: `{ "id", "email", "displayName", "createdAt" }`.
 
 ```text
 1. UI step 1: POST /auth/otp/send { email, purpose: "signup" }
-   → server makes a 6-digit code, stores bcrypt(code) + expiry + purpose,
+   → server makes a 6-digit code, stores argon2(code) + expiry + purpose,
      console.log("OTP for a@b.com: 482913"), returns { data: { sent: true } }
 
 2. UI step 2: POST /auth/otp/verify { email, otp, purpose: "signup" }
@@ -226,7 +227,7 @@ A `user` object is always: `{ "id", "email", "displayName", "createdAt" }`.
 
 3. UI step 3: POST /auth/signup { email, otp, password }
    → server RE-checks the OTP, checks email not taken, checks password length,
-     bcrypt-hashes the password, INSERTs the user, DELETEs the OTP,
+     argon2-hashes the password, INSERTs the user, DELETEs the OTP,
      creates a session row, sets the httpOnly session cookie,
      returns 201 { data: { user } }
 
@@ -377,9 +378,9 @@ Each step is a small, runnable win. Don't skip ahead; each one builds on the las
 2. **Database.** Add `better-sqlite3`, create the three tables on boot (§4).
 3. **Send OTP.** `POST /auth/otp/send` — generate a 6-digit code, store its hash,
    `console.log` it. (No real email yet.)
-4. **Signup.** `POST /auth/signup` — re-verify OTP, `bcrypt` the password, insert the
+4. **Signup.** `POST /auth/signup` — re-verify OTP, `argon2.hash` the password, insert the
    user, create a session, set the cookie.
-5. **Login.** `POST /auth/login` — look up user, `bcrypt.compare`, create session.
+5. **Login.** `POST /auth/login` — look up user, `argon2.verify`, create session.
 6. **Who am I.** `requireAuth` middleware + `GET /auth/me`.
 7. **Logout.** `POST /auth/logout` — delete session, clear cookie.
 8. **Forgot password.** `POST /auth/password/reset` — reuse OTP with `purpose: "reset"`.
@@ -398,7 +399,7 @@ Each step is a small, runnable win. Don't skip ahead; each one builds on the las
 ## 10. Security checklist (pin this above your desk)
 
 - [ ] Server re-validates **every** request — the UI's steps prove nothing (§0).
-- [ ] Passwords are **bcrypt-hashed**, never stored or returned in plaintext.
+- [ ] Passwords are **argon2-hashed**, never stored or returned in plaintext.
 - [ ] OTPs are **hashed, expiring, single-use**, with an attempt limit.
 - [ ] Session lives in an **httpOnly** cookie, never in `localStorage`.
 - [ ] Login errors are **generic** ("invalid email or password") — don't reveal which.
