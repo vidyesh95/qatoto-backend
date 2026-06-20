@@ -1,11 +1,21 @@
+import { readFileSync } from "node:fs";
+
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
 import { config } from "#src/config/index.js";
 import * as schema from "#src/db/schema.js";
 
+const ssl = config.DATABASE_CA_CERT_PATH
+  ? {
+      rejectUnauthorized: true,
+      ca: readFileSync(config.DATABASE_CA_CERT_PATH).toString(),
+    }
+  : undefined;
+
 export const pool = new Pool({
   connectionString: config.DATABASE_URL,
+  ssl,
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
