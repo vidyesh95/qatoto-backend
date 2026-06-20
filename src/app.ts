@@ -36,7 +36,12 @@ app.use(requestId);
 // Logging
 app.use(logger("dev"));
 
-// Body parsing with size limits to prevent payload abuse
+// Better Auth handler — MUST mount before express.json(); it parses its own
+// request bodies off the raw stream. A body parser ahead of it consumes the
+// stream and breaks every auth POST (sign-in, OTP, reset). See BACKEND_STRUCTURE §5c.
+app.all("/api/auth/*splat", toNodeHandler(auth.handler));
+
+// Body parsing with size limits to prevent payload abuse — for YOUR routes only.
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: false, limit: "10kb" }));
 
@@ -44,7 +49,6 @@ app.use(express.urlencoded({ extended: false, limit: "10kb" }));
 app.use(cookieParser());
 
 // --- Routes ---
-app.all("/api/auth/*splat", toNodeHandler(auth.handler));
 app.use("/", indexRouter);
 app.use("/", authRouter);
 app.use("/users", usersRouter);
