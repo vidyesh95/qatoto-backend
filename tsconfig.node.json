@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    /* Type-checks tooling/config files (not app code). Emits only .d.ts into a
+       gitignored temp dir — `tsc` (non-build) never triggers this; it exists to
+       satisfy the project-reference contract so the editor types these files. */
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "outDir": "./node_modules/.tmp/tsconfig-node",
+    "emitDeclarationOnly": true,
+
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["drizzle.config.ts", "vitest.config.ts"]
+}
