@@ -1,6 +1,8 @@
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 
 import { config } from "#src/config/index.js";
+import * as schema from "#src/db/schema.js";
 
 export const pool = new Pool({
   connectionString: config.DATABASE_URL,
@@ -8,6 +10,8 @@ export const pool = new Pool({
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });
+
+export const db = drizzle(pool, { schema });
 
 pool.on("error", (err) => {
   console.error("Unexpected error on idle database client", err);

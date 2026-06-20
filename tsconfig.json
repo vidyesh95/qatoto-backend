@@ -8,6 +8,7 @@
     /* Modules — Node ESM with package.json "imports" subpaths (#src/*) */
     "module": "NodeNext",
     "moduleResolution": "nodenext",
+    "customConditions": ["development"],
     "resolveJsonModule": true,
 
     /* Emit — tsc builds src/ -> dist/ */
