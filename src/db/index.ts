@@ -13,8 +13,16 @@ const ssl = config.DATABASE_CA_CERT_PATH
     }
   : undefined;
 
+// When we supply our own CA, drop any `sslmode` from the connection string.
+// pg-connection-string treats `sslmode=require` as `verify-full` and builds its
+// own ssl config that overrides our `ssl` object, breaking CA verification with
+// SELF_SIGNED_CERT_IN_CHAIN. Our explicit `ssl` is the single source of truth.
+const connectionString = ssl
+  ? config.DATABASE_URL.replace(/([?&])sslmode=[^&]*&?/, "$1").replace(/[?&]$/, "")
+  : config.DATABASE_URL;
+
 export const pool = new Pool({
-  connectionString: config.DATABASE_URL,
+  connectionString,
   ssl,
   max: 20,
   idleTimeoutMillis: 30000,

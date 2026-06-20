@@ -10,6 +10,7 @@ import { auth } from "#src/lib/auth.js";
 import { errorHandler } from "#src/middleware/error-handler.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
+import authRouter from "#src/routes/auth.routes.js";
 import indexRouter from "#src/routes/index.js";
 import usersRouter from "#src/routes/users.routes.js";
 
@@ -45,6 +46,7 @@ app.use(cookieParser());
 // --- Routes ---
 app.all("/api/auth/*splat", toNodeHandler(auth.handler));
 app.use("/", indexRouter);
+app.use("/", authRouter);
 app.use("/users", usersRouter);
 
 // --- Error handling ---

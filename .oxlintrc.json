@@ -27,7 +27,7 @@
   },
   "overrides": [
     {
-      "files": ["src/index.ts", "src/db/index.ts"],
+      "files": ["src/index.ts", "src/db/index.ts", "src/lib/auth.ts"],
       "rules": { "no-console": "off" }
     },
     {

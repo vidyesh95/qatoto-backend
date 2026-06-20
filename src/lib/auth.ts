@@ -1,7 +1,7 @@
 import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { anonymous } from "better-auth/plugins";
+import { anonymous, emailOTP } from "better-auth/plugins";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
@@ -13,10 +13,22 @@ export const auth = betterAuth({
   trustedOrigins: [config.FRONTEND_URL],
   emailAndPassword: {
     enabled: true,
+    minPasswordLength: 8,
     password: {
       hash: (password) => hash(password),
       verify: ({ hash: passwordHash, password }) => verify(passwordHash, password),
     },
   },
-  plugins: [anonymous()],
+  plugins: [
+    anonymous(),
+    emailOTP({
+      // Dev: print the code to the server log. Wire a real email provider here for prod.
+      sendVerificationOTP({ email, otp, type }) {
+        if (config.NODE_ENV === "development") {
+          console.log(`OTP for ${email} (${type}): ${otp}`);
+        }
+        return Promise.resolve();
+      },
+    }),
+  ],
 });
