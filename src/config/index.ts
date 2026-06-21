@@ -7,6 +7,8 @@ const envSchema = z.object({
   DATABASE_CA_CERT_PATH: z.string().optional(),
   BETTER_AUTH_SECRET: z.string().min(16),
   FRONTEND_URL: z.url(),
+  GOOGLE_CLIENT_ID: z.string().min(1),
+  GOOGLE_CLIENT_SECRET: z.string().min(1),
 });
 
 export const config = envSchema.parse(process.env);

@@ -19,6 +19,12 @@ export const auth = betterAuth({
       verify: ({ hash: passwordHash, password }) => verify(passwordHash, password),
     },
   },
+  socialProviders: {
+    google: {
+      clientId: config.GOOGLE_CLIENT_ID,
+      clientSecret: config.GOOGLE_CLIENT_SECRET,
+    },
+  },
   plugins: [
     anonymous(),
     emailOTP({
