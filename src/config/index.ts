@@ -9,6 +9,8 @@ const envSchema = z.object({
   FRONTEND_URL: z.url(),
   GOOGLE_CLIENT_ID: z.string().min(1),
   GOOGLE_CLIENT_SECRET: z.string().min(1),
+  GITHUB_CLIENT_ID: z.string().min(1),
+  GITHUB_CLIENT_SECRET: z.string().min(1),
 });
 
 export const config = envSchema.parse(process.env);

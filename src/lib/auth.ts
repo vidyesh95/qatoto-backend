@@ -24,6 +24,10 @@ export const auth = betterAuth({
       clientId: config.GOOGLE_CLIENT_ID,
       clientSecret: config.GOOGLE_CLIENT_SECRET,
     },
+    github: {
+      clientId: config.GITHUB_CLIENT_ID,
+      clientSecret: config.GITHUB_CLIENT_SECRET,
+    },
   },
   plugins: [
     anonymous(),
