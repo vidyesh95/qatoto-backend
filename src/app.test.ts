@@ -10,7 +10,12 @@ vi.stubEnv("PORT", "3000");
 vi.stubEnv("NODE_ENV", "test");
 vi.stubEnv("DATABASE_URL", "postgres://user:password@localhost:5432/testdb");
 vi.stubEnv("BETTER_AUTH_SECRET", "test-secret-key-minimum-16-chars");
+vi.stubEnv("BETTER_AUTH_URL", "http://localhost:8000");
 vi.stubEnv("FRONTEND_URL", "http://localhost:3000");
+vi.stubEnv("GOOGLE_CLIENT_ID", "test-google-client-id");
+vi.stubEnv("GOOGLE_CLIENT_SECRET", "test-google-client-secret");
+vi.stubEnv("GITHUB_CLIENT_ID", "test-github-client-id");
+vi.stubEnv("GITHUB_CLIENT_SECRET", "test-github-client-secret");
 
 // Mock the database module to avoid real DB connections
 vi.mock("#src/db/index.js", () => ({
@@ -18,6 +23,7 @@ vi.mock("#src/db/index.js", () => ({
     query: vi.fn<(...args: unknown[]) => unknown>(),
     end: vi.fn<() => unknown>(),
   },
+  db: {},
   query: vi.fn<(...args: unknown[]) => unknown>(),
 }));
 

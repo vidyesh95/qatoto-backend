@@ -9,7 +9,7 @@ import { db } from "#src/db/index.js";
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg" }),
   secret: config.BETTER_AUTH_SECRET,
-  baseURL: `http://localhost:${config.PORT}`,
+  baseURL: config.BETTER_AUTH_URL,
   trustedOrigins: [config.FRONTEND_URL],
   emailAndPassword: {
     enabled: true,
