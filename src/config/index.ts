@@ -12,6 +12,9 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().min(1),
   GITHUB_CLIENT_ID: z.string().min(1),
   GITHUB_CLIENT_SECRET: z.string().min(1),
+  BREVO_API_KEY: z.string().min(1).optional(),
+  BREVO_SENDER_EMAIL: z.email().optional(),
+  BREVO_SENDER_NAME: z.string().min(1).default("Qatoto"),
 });
 
 export const config = envSchema.parse(process.env);

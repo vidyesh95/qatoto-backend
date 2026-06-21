@@ -5,6 +5,7 @@ import { anonymous, emailOTP } from "better-auth/plugins";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
+import { sendTransactionalEmail } from "#src/lib/email.js";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg" }),
@@ -32,12 +33,30 @@ export const auth = betterAuth({
   plugins: [
     anonymous(),
     emailOTP({
-      // Dev: print the code to the server log. Wire a real email provider here for prod.
-      sendVerificationOTP({ email, otp, type }) {
+      async sendVerificationOTP({ email, otp, type }) {
+        // Dev: print the code to the server log so you can test without a provider.
         if (config.NODE_ENV === "development") {
           console.log(`OTP for ${email} (${type}): ${otp}`);
         }
-        return Promise.resolve();
+
+        const subject =
+          type === "forget-password"
+            ? "Reset your Qatoto password"
+            : "Your Qatoto verification code";
+        const sendResult = await sendTransactionalEmail({
+          toEmail: email,
+          subject,
+          htmlContent: `<p>Your Qatoto verification code is <strong>${otp}</strong>.</p><p>It expires shortly. If you did not request this, ignore this email.</p>`,
+          textContent: `Your Qatoto verification code is ${otp}. It expires shortly. If you did not request this, ignore this email.`,
+        });
+
+        if (!sendResult.success) {
+          // NOT_CONFIGURED in dev is expected (code already logged above); fail loudly otherwise.
+          if (sendResult.error.type === "NOT_CONFIGURED" && config.NODE_ENV === "development") {
+            return;
+          }
+          throw new Error(`Failed to send OTP email: ${JSON.stringify(sendResult.error)}`);
+        }
       },
     }),
   ],
