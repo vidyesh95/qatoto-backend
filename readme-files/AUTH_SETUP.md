@@ -447,8 +447,23 @@ Each step is a small, runnable win.
 
 - Google / Apple OAuth (`socialProviders` in `auth.ts`).
 - Real email delivery (nodemailer, Resend, Postmark) inside `sendVerificationOTP`.
-- Rate limiting (Better Auth has built-in options — turn up for prod).
 - Managed Postgres + connection pooling for prod (e.g. Neon, RDS, Supabase).
+- **Shared rate-limit store for prod.** Rate limiting is already DONE (see below), but
+  both limiters use an **in-memory** store — per-process only. Multi-instance / serverless
+  deploys let attackers round-robin instances, so move to a shared store: the Express
+  limiters → `rate-limit-redis`; Better Auth → `rateLimit.storage: "database"` (adds a
+  `rateLimit` table — re-run `db:generate` + `db:migrate`) or `"secondary-storage"`.
+
+### Already done: OTP / auth rate limiting
+
+Two layers (Better Auth's limiter does **not** cover `auth.api` server-side calls):
+
+- **Express limiters** ([src/middleware/rate-limit.ts](../src/middleware/rate-limit.ts)) on the
+  custom routes: `/signup/start` is capped **per-IP (8/15min)** and **per-email (4/15min)**
+  (stops OTP spam + inbox-bombing); `/signup/complete` is capped **per-IP (12/15min)**.
+- **Better Auth `rateLimit`** ([src/lib/auth.ts](../src/lib/auth.ts)) on its own endpoints —
+  `send-verification-otp` 3/60s, `sign-in/email-otp` 5/60s, `reset-password` 5/60s,
+  `sign-in/email` 5/10s. Enabled in all envs (BA defaults to prod-only).
 
 ---
 
@@ -476,5 +491,6 @@ Better Auth handles most by default — your job: don't undo them, set config/en
 - [ ] Login errors stay **generic** — don't reveal whether the email exists.
 - [ ] Body shape validated on **your** endpoints (`/signup/start`, `/signup/complete`) before any action.
 - [ ] Account created **only** by `/signup/complete` (OTP + password atomic); `disableSignUp: true` blocks OTP-only orphans.
+- [ ] OTP / login endpoints are **rate limited** — Express per-IP + per-email on `/signup/*`, Better Auth `rateLimit` on its own routes. (Prod: move to a shared store.)
 - [ ] CORS names the **exact** frontend origin, never `*`, with `credentials: true`.
 - [ ] Better Auth handler mounted **before** `express.json()` (§5c).

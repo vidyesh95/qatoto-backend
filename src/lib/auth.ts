@@ -12,6 +12,24 @@ export const auth = betterAuth({
   secret: config.BETTER_AUTH_SECRET,
   baseURL: config.BETTER_AUTH_URL,
   trustedOrigins: [config.FRONTEND_URL],
+  // Guards Better Auth's OWN HTTP endpoints (the frontend hits these directly for
+  // forgot-password and password login). Note: our /signup/* routes call auth.api
+  // server-side, which this does NOT cover — those are rate limited in Express
+  // (see src/middleware/rate-limit.ts). Enabled in all envs, not just production.
+  rateLimit: {
+    enabled: true,
+    window: 60,
+    max: 100,
+    customRules: {
+      // OTP send (forgot-password): tight cap so an inbox can't be flooded.
+      "/email-otp/send-verification-otp": { window: 60, max: 3 },
+      // OTP code verification: limit brute-force guessing across codes.
+      "/sign-in/email-otp": { window: 60, max: 5 },
+      "/email-otp/reset-password": { window: 60, max: 5 },
+      // Password login: limit credential stuffing.
+      "/sign-in/email": { window: 10, max: 5 },
+    },
+  },
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 8,
