@@ -17,7 +17,9 @@ sessions, httpOnly cookies, OTP). You wire its config — you don't roll crypto.
 open DevTools and forge any request. So the server re-checks every request itself:
 
 - The 3-step signup UI (email → OTP → password) is **just UX**. The server re-verifies
-  the OTP before trusting the email — never assume "step 2 happened".
+  the OTP before trusting the email — never assume "step 2 happened". The account is
+  created **only** once the OTP is verified **and** a password is set, in one atomic
+  server call — verifying an OTP alone never mints an account.
 - Never trust a client-sent user id, role, price, quantity, or country. Derive the user
   from the session cookie, never from the request body.
 - Validate the **shape** of every request body on any endpoint **you** write. Better
@@ -161,6 +163,9 @@ export const auth = betterAuth({
     // the OTP plugin powers both signup-verification and forgot-password.
     plugins: [
         emailOTP({
+            // Never let an OTP alone create a user — account creation is owned by
+            // POST /signup/complete (OTP + password together). No password-less orphans.
+            disableSignUp: true,
             // dev: print the code. Wire a real email provider here later (§11).
             async sendVerificationOTP({ email, otp, type }) {
                 console.log(`OTP for ${email} (${type}): ${otp}`);
@@ -232,74 +237,54 @@ You don't write these — the §5b config creates them.
 | Method & path                                    | Body                              | Purpose                                                                                            |
 | ------------------------------------------------ | --------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `POST /api/auth/email-otp/send-verification-otp` | `{ email, type }`                 | Generate + "send" a 6-digit OTP. `type`: `"sign-in"`, `"email-verification"`, `"forget-password"`. |
-| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                  | Verify OTP. **Creates the user if new** + signs them in.                                           |
+| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                  | OTP login for **existing** users. `disableSignUp: true` → never creates a user (no orphans).       |
 | `POST /api/auth/email-otp/reset-password`        | `{ email, otp, password }`        | Forgot-password: verify a `forget-password` OTP, set the new password.                             |
 | `POST /api/auth/sign-in/email`                   | `{ email, password, rememberMe }` | Password login. `rememberMe` controls cookie lifetime. Wrong email/password → same generic error.  |
 | `POST /api/auth/sign-out`                        | — (reads cookie)                  | Ends the session, clears the cookie.                                                               |
 | `GET  /api/auth/get-session`                     | — (reads cookie)                  | The real "am I logged in?" check. Returns session + user, or null.                                 |
 
-### 7b. The one endpoint YOU write — `src/routes.ts`
+### 7b. The two endpoints YOU write — `src/routes/auth.routes.ts`
 
-Better Auth **cannot verify an OTP for a user that doesn't exist yet** (`USER_NOT_FOUND`).
-So OTP-gated signup is two phases: the OTP call creates the verified user (no password),
-then this endpoint sets their first password.
+Account creation is deferred to the very end so a half-finished signup never leaves a
+row behind. Two public endpoints, and **only the second one creates a user**:
+
+| Method & path           | Body                             | Creates a user?                                                    |
+| ----------------------- | -------------------------------- | ------------------------------------------------------------------ |
+| `POST /signup/start`    | `{ email }`                      | No — just sends the OTP. Generic 200 (no email-exists probe).      |
+| `POST /signup/complete` | `{ email, otp, password, name?}` | **Yes — and only here.** Verifies OTP, then creates user+password. |
 
 ```ts
-// src/routes.ts — mounted after express.json(), behind requireAuth (§8)
-import { auth } from "./auth";
-import { fromNodeHeaders } from "better-auth/node";
-
-// POST /set-initial-password  { password }
-router.post("/set-initial-password", requireAuth, async (req, res) => {
-    const password = req.body?.password;
-    if (typeof password !== "string" || password.length < 8) {
-        return res.status(400).json({
-            error: { code: "WEAK_PASSWORD", message: "Password must be at least 8 characters." },
-        });
-    }
-
-    // GUARD: setPassword is for credential-less accounts only — calling it on a user who
-    // ALREADY has a password errors. Check first; no-op if already set up.
-    const accounts = await auth.api.listUserAccounts({ headers: fromNodeHeaders(req.headers) });
-    const hasPassword = accounts.some((account) => account.providerId === "credential");
-    if (hasPassword) {
-        return res.json({ data: { ok: true, alreadySet: true } });
-    }
-
-    // setPassword does NOT require a current password — what we want for the OTP-created user.
-    await auth.api.setPassword({
-        body: { newPassword: password },
-        headers: fromNodeHeaders(req.headers), // proves WHICH user, from the session cookie
-    });
-    res.json({ data: { ok: true } });
+// /signup/complete (src/controllers/auth.controller.ts) — the ONLY place a user is born.
+// 1. Verify the OTP first. No user exists yet — invalid/expired code creates nothing.
+await auth.api.checkVerificationOTP({ body: { email, otp, type: "sign-in" } });
+// 2. OTP good → NOW create the account + password atomically, and open the session.
+const { headers } = await auth.api.signUpEmail({
+    body: { email, password, name },
+    returnHeaders: true, // forward the session Set-Cookie to the Express response
 });
+// 3. The OTP proved email ownership → mark verified.
+await db.update(user).set({ emailVerified: true }).where(eq(user.email, email));
 ```
 
-> Validate the body shape here (§0) — your endpoint, your re-check. The `hasPassword`
-> guard makes it **idempotent**: calling it twice is safe.
+> Validate the body shape (§0) — your endpoint, your re-check. `password` is required by
+> the schema, so a request without a password is rejected at the boundary and **no
+> account is created**.
 
-#### The orphan edge case — self-heals
+#### No orphans — by construction
 
-If a user does email + OTP (**creates the verified user**) then closes the browser
-**before** setting a password, they have a verified email and no password. Not stuck:
-`sign-in/email-otp` is "create if new, otherwise just sign in", so a second attempt
-recovers:
+Because `disableSignUp: true` blocks `sign-in/email-otp` from ever minting a user, and the
+only creation path (`/signup/complete`) demands the password in the same call as the OTP:
 
 ```text
-Visit 1:  send-otp → sign-in/email-otp (CREATES verified user, no password) → browser closed.
-Visit 2:  same email → send-otp → sign-in/email-otp → user EXISTS → just SIGNS IN.
-          → /set-initial-password → password lands. ✅ recovered.
+send-otp → /signup/complete { email, otp, password }
+   ├─ bad OTP        → 401, nothing created.
+   ├─ missing pass   → 422 at the schema, nothing created.
+   └─ both present   → user + password created, verified, session opened. ✅
 ```
 
-Two rules make this work (both encoded above + §9):
-
-1. The signup UI must **NOT** pre-block "email already registered" — that would trap the
-   orphan forever.
-2. `/set-initial-password` must **no-op** when a password already exists (the
-   `hasPassword` guard).
-
-**Security:** an orphan is not a hole — only someone with a fresh OTP to that inbox can
-claim it, and with no password there's no password-login surface to attack.
+There is no "verified-but-password-less" state to recover from — a user either exists
+fully or not at all. A second `/signup/complete` for an email that already has an account
+returns **409** ("sign in instead"), it does not duplicate or orphan anything.
 
 ---
 
@@ -355,14 +340,14 @@ The frontend keeps its 3-step UI; the calls map onto Better Auth:
 
 ```text
 1. UI step 1 (enter email):
-   POST /api/auth/email-otp/send-verification-otp { email, type: "sign-in" }
-   → stores a hashed, expiring OTP and console.log("OTP for a@b.com (sign-in): 482913").
+   POST /signup/start { email }
+   → forwards to send-verification-otp; stores a hashed, expiring OTP and
+     console.log("OTP for a@b.com (sign-in): 482913"). NO user created.
 
-2. UI step 2 (enter OTP) + step 3 (set password) — on final submit, two calls in order:
-   a. POST /api/auth/sign-in/email-otp { email, otp }
-      → verifies OTP, CREATES the user (emailVerified=true) if new, sets the session cookie.
-   b. POST /set-initial-password { password }   (your endpoint, §7b; cookie rides along)
-      → sets their first password for next-time email+password login.
+2. UI step 2 (enter OTP) + step 3 (set password) — on final submit, ONE call:
+   POST /signup/complete { email, otp, password }   (your endpoint, §7b)
+   → verifies the OTP, then CREATES the user (emailVerified=true) WITH the password
+     in one atomic step, and sets the session cookie. Bad OTP or no password → no user.
 
 3. Frontend: useSession() → navbar shows logged-in state.
 ```
@@ -407,15 +392,20 @@ const isLoggedIn = !!session;
 // Login
 await signIn.email({ email, password, rememberMe });
 
-// Signup (two-phase, §9)
-await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" }); // step 1
-await signIn.emailOtp({ email, otp }); // step 2
-await fetch("http://localhost:8000/set-initial-password", {
-    // step 3 (your endpoint)
+// Signup (§9) — account is created only by the final call, OTP + password together.
+await fetch("http://localhost:8000/signup/start", {
+    // step 1: send the code (creates no account)
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ email }),
+});
+await fetch("http://localhost:8000/signup/complete", {
+    // step 2 + 3: verify OTP AND set password → account created, session opened
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ email, otp, password }),
 });
 
 // Forgot password
@@ -427,7 +417,7 @@ await signOut();
 ```
 
 > The client sends cookies for its own calls automatically. For your **own** endpoints
-> (like `/set-initial-password`) you still pass `credentials: "include"` on the raw fetch.
+> (like `/signup/start` and `/signup/complete`) you still pass `credentials: "include"` on the raw fetch.
 
 ---
 
@@ -445,8 +435,8 @@ Each step is a small, runnable win.
    protected route + `get-session`.
 5. **OTP plugin.** Add `emailOTP` to `auth.ts`, re-generate schema, watch the code print
    on `send-verification-otp`.
-6. **OTP signup.** Wire the two-phase flow (§9): `sign-in/email-otp` +
-   `/set-initial-password`.
+6. **OTP signup.** Wire the flow (§9): `/signup/start` → `/signup/complete` (the only
+   user-creating call). Set `disableSignUp: true` on the OTP plugin.
 7. **Logout.** `sign-out`.
 8. **Forgot password.** `send-verification-otp` (`forget-password`) +
    `email-otp/reset-password`.
@@ -484,6 +474,7 @@ Better Auth handles most by default — your job: don't undo them, set config/en
 - [ ] OTPs hashed, expiring, single-use (`verification` table) — don't disable that.
 - [ ] Session in Better Auth's **httpOnly** cookie, never `localStorage`.
 - [ ] Login errors stay **generic** — don't reveal whether the email exists.
-- [ ] Body shape validated on **your** endpoints (`/set-initial-password`) before any action.
+- [ ] Body shape validated on **your** endpoints (`/signup/start`, `/signup/complete`) before any action.
+- [ ] Account created **only** by `/signup/complete` (OTP + password atomic); `disableSignUp: true` blocks OTP-only orphans.
 - [ ] CORS names the **exact** frontend origin, never `*`, with `credentials: true`.
 - [ ] Better Auth handler mounted **before** `express.json()` (§5c).

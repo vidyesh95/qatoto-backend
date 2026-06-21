@@ -1,0 +1,14 @@
+{
+  /* Type-checks one-off operational scripts in scripts/ (run via tsx, never built
+     into dist/). Extends the app config so #src/* subpath imports resolve to the TS
+     source via "customConditions": ["development"]. Non-composite, no emit — exists
+     purely so the editor and `tsc -p tsconfig.scripts.json` type these files. */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "incremental": false
+  },
+  "include": ["scripts/**/*.ts", "src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+}

@@ -33,6 +33,11 @@ export const auth = betterAuth({
   plugins: [
     anonymous(),
     emailOTP({
+      // Never auto-create a user from `sign-in/email-otp`. Account creation is
+      // owned solely by POST /signup/complete, which requires BOTH a verified OTP
+      // AND a password in one atomic step — so verifying an OTP alone never leaves
+      // a password-less orphan user behind.
+      disableSignUp: true,
       async sendVerificationOTP({ email, otp, type }) {
         // Dev: print the code to the server log so you can test without a provider.
         if (config.NODE_ENV === "development") {

@@ -6,11 +6,17 @@ import { requireAuth } from "#src/middleware/require-auth.js";
 const router = express.Router();
 
 /**
- * POST /set-initial-password
- * Phase 2 of OTP signup — set the first password for a credential-less user.
- * Behind requireAuth: the session cookie proves which user.
+ * POST /signup/start
+ * Phase 1 of signup — send a verification code. Creates NO account (public).
  */
-router.post("/set-initial-password", requireAuth, authController.setInitialPassword);
+router.post("/signup/start", authController.startSignup);
+
+/**
+ * POST /signup/complete
+ * Phase 2 of signup — the only place an account is created: verifies the OTP and
+ * sets the password atomically, then opens the session (public).
+ */
+router.post("/signup/complete", authController.completeSignup);
 
 /**
  * GET /me
