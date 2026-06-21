@@ -184,7 +184,7 @@ import { auth } from "./auth";
 const app = express();
 
 // 1. CORS first — name the exact frontend origin, allow credentials (cookies).
-app.use(cors({ origin: "https://localhost:3000", credentials: true }));
+app.use(cors({ origin: "http://localhost:3000", credentials: true }));
 
 // 2. Better Auth catch-all. Express 5 splat syntax: "*splat".
 app.all("/api/auth/*splat", toNodeHandler(auth));
@@ -194,10 +194,10 @@ app.use(express.json());
 
 // 4. Your own routes go here (see routes.ts).
 
-app.listen(4000, () => console.log("API on http://localhost:4000"));
+app.listen(8000, () => console.log("API on http://localhost:8000"));
 ```
 
-Sanity check: `GET http://localhost:4000/api/auth/ok` should respond.
+Sanity check: `GET http://localhost:8000/api/auth/ok` should respond.
 
 ---
 
@@ -376,7 +376,7 @@ The frontend keeps its 3-step UI; the calls map onto Better Auth:
 
 ## 10. Connecting the frontend (CORS + client)
 
-Browser runs the frontend on `https://localhost:3000`, API on `http://localhost:4000`.
+Browser runs the frontend on `http://localhost:3000`, API on `http://localhost:8000`.
 Different port = different origin → the browser blocks the call unless the server opts in.
 
 - **CORS** (server): name the exact origin (not `*`), allow credentials — set in §5c.
@@ -392,7 +392,7 @@ import { createAuthClient } from "better-auth/react";
 import { emailOTPClient } from "better-auth/client/plugins";
 
 export const authClient = createAuthClient({
-    baseURL: "http://localhost:4000", // the API origin; cookies sent automatically
+    baseURL: "http://localhost:8000", // the API origin; cookies sent automatically
     plugins: [emailOTPClient()],
 });
 
@@ -410,7 +410,7 @@ await signIn.email({ email, password, rememberMe });
 // Signup (two-phase, §9)
 await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" }); // step 1
 await signIn.emailOtp({ email, otp }); // step 2
-await fetch("http://localhost:4000/set-initial-password", {
+await fetch("http://localhost:8000/set-initial-password", {
     // step 3 (your endpoint)
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -466,7 +466,7 @@ Each step is a small, runnable win.
 
 ```bash
 BETTER_AUTH_SECRET=<a long random string>   # git-ignored
-BETTER_AUTH_URL=http://localhost:4000        # matches the API origin in dev
+BETTER_AUTH_URL=http://localhost:8000        # matches the API origin in dev
 DATABASE_URL=postgresql://postgres:password@localhost:5432/qatoto   # Docker example; use Neon's string if cloud
 ```
 
@@ -478,7 +478,7 @@ Better Auth handles most by default — your job: don't undo them, set config/en
 
 - [ ] Server re-validates **every** request — the UI's steps prove nothing (§0).
 - [ ] `BETTER_AUTH_SECRET` set in `.env` (long random) and **git-ignored**.
-- [ ] `BETTER_AUTH_URL` matches the API origin (`http://localhost:4000` in dev).
+- [ ] `BETTER_AUTH_URL` matches the API origin (`http://localhost:8000` in dev).
 - [ ] `DATABASE_URL` points at your Postgres and is **git-ignored** (it holds the DB password).
 - [ ] Passwords hashed with **argon2id** (`@node-rs/argon2`) — never stored or returned plaintext.
 - [ ] OTPs hashed, expiring, single-use (`verification` table) — don't disable that.
