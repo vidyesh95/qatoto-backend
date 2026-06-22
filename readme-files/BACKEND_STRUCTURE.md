@@ -1,200 +1,213 @@
 # BACKEND_STRUCTURE.md — Qatoto Auth API
 
-> This document lives in the **frontend** repo because it defines the contract the
-> frontend depends on. When you create the backend repo, copy this file there too.
+> This document describes the auth contract the Next.js + TanStack Query frontend
+> depends on, and how it is wired on the server.
 >
-> **Audience:** you, new to programming, building the Express backend.
-> **Goal:** ship working auth (signup, login, logout, session, password reset) that
-> the Next.js + TanStack Query frontend can call.
-> **Stack decision:** we use **Better Auth** (the auth engine) + **Drizzle ORM** (the
-> database layer) + **PostgreSQL** (the database). Better Auth does the
-> security-sensitive work — password hashing, sessions, cookies, OTP — so you don't
-> hand-roll crypto. You learn its config and how to wire it, not how to reinvent it.
+> **Goal:** working auth — OTP-gated signup, password login, OAuth (Google/GitHub),
+> passkeys, logout, session, password reset — with **one user per email** (providers
+> link onto the same account instead of duplicating it).
+> **Stack:** **Better Auth** (auth engine) + **Drizzle ORM** (DB layer) +
+> **PostgreSQL**. Better Auth does the security-sensitive work — argon2id password
+> hashing, sessions, cookies, OTP, CSRF, WebAuthn/passkeys — so we don't hand-roll
+> crypto. We own its config, our `/signup/*` endpoints, and our route guards.
 
 ---
 
 ## 0. The one rule that governs everything
 
 **The frontend is a hostile, untrusted presentation layer. The backend is the only
-source of truth.** (This is the NON-NEGOTIABLE principle from the frontend's
-`CLAUDE.md` — the same rule applies on the server, from the other side.)
+source of truth.** (Same NON-NEGOTIABLE principle as `CLAUDE.md` §1.1, from the
+server side.)
 
-Anyone can open DevTools, read your client JS, and forge any request to your API.
-So the backend must **re-check every single thing**, every request, by itself:
+Anyone can open DevTools, read the client JS, and forge any request. So the backend
+**re-checks every single thing**, every request, by itself:
 
-- The 3-step signup UI (email → OTP → password) is **just UX**. The server must re-verify
-  the OTP before it trusts the email — never assume "step 2 happened". The account is
+- The 3-step signup UI (email → OTP → password) is **just UX**. The server re-verifies
+  the OTP before it trusts the email — never assume "step 2 happened". An account is
   created **only** once the OTP is verified **and** a password is set, in one atomic
-  server call — verifying an OTP alone never creates an account (no passwordless orphans).
-- Never trust a client-sent user id, role, price, quantity, or country. Derive or
-  re-verify them on the server. Better Auth derives the user from the session cookie,
-  never from the request body.
-- Validate the **shape** of every request body on any endpoint **you** write. Better
-  Auth validates its own endpoints; your custom routes are your responsibility.
+  server call (`POST /signup/complete`) — verifying an OTP alone never creates an
+  account (no passwordless orphans).
+- Never trust a client-sent user id, role, price, quantity, or country. Better Auth
+  derives the user from the **session cookie**, never from the request body.
+- Validate the **shape** of every request body on any endpoint **you** write (Zod
+  `.safeParse()`, `422` on failure). Better Auth validates its own endpoints; your
+  custom routes are your responsibility.
 
-Using a library does **not** relax this rule — it just means the library is doing the
-re-checks for its own endpoints. If you remember nothing else from this file, remember §0.
-
----
-
-## 1. What the frontend already expects
-
-Read these to see the exact flows you must support:
-
-- Sign up (3 steps): [sign-up.tsx](src/components/auth/sign-up.tsx)
-  `email → send OTP → verify 6-digit OTP → set password (min 8) + "remember me"`
-- Sign in (OAuth landing + link to password): [sign-in.tsx](src/components/auth/sign-in.tsx)
-- Sign in with password: [sign-in-with-password.tsx](src/components/auth/sign-in-with-password.tsx)
-  `email + password + "remember me"`
-- Forgot password (3 steps, same OTP shape): [forgot-password.tsx](src/components/auth/forgot-password.tsx)
-  `email → send OTP → verify OTP → set new password`
-
-Today the frontend fakes login with a `localStorage` flag called
-`qatoto_authenticated` (set in [sign-in.tsx:11](src/components/auth/sign-in.tsx#L11),
-read in [navbar.tsx:50](src/components/home/layout/navbar.tsx#L50), cleared on logout
-in [account-menu.tsx:105](src/components/home/account/account-menu.tsx#L105)).
-
-That flag is a **temporary UI hint, not real auth**. Once the backend exists, the real
-answer to "is this user logged in?" comes from Better Auth's session (the
-`GET /api/auth/get-session` endpoint, or the `useSession()` hook — see §6).
-`localStorage` is the wrong place for a real session — see §7.
-
-**Google / Apple OAuth is out of scope for now.** Better Auth makes it a later add
-(`socialProviders` in the config). Build email + password + OTP first; add OAuth in §9.
+Using a library does **not** relax this rule — it means the library does the re-checks
+for its own endpoints. If you remember nothing else from this file, remember §0.
 
 ---
 
-## 2. The stack (kept deliberately small)
+## 1. What the frontend expects
 
-| Concern          | Pick                     | Why this one                                                                                       |
-| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------- |
-| Server framework | **Express 5**            | The thing you're learning. Minimal, huge community.                                                |
-| Language         | **TypeScript**           | Same language as the frontend — shared types, fewer bugs. Run with `tsx` (no build step in dev).   |
-| Auth engine      | **Better Auth**          | Handles password hashing, sessions, cookies, OTP, CSRF. Don't roll your own crypto.                |
-| Database ORM     | **Drizzle ORM**          | Type-safe queries + migrations. Better Auth generates its tables as a Drizzle schema for you.      |
-| Database         | **PostgreSQL** via `pg`  | Strict types, same engine as prod. Run locally via Docker or Neon free tier — no SQLite surprises. |
-| OTP delivery     | **`console.log` in dev** | Don't sign up for an email provider yet. Better Auth hands you the code in a callback — print it.  |
-| CORS             | **cors**                 | Lets the browser on `:3000` call the API on `:8000`.                                               |
+Flows the backend supports:
 
-**What you are NOT installing (Better Auth does it):** no `bcrypt` (we use
-`@node-rs/argon2` — napi-rs native bindings, faster and stronger than scrypt), no
-`cookie-parser` (Better Auth reads/writes its
-own signed cookies), no hand-rolled `sessions` table or OTP table (Better Auth owns
-those — see §4).
+- **Sign up (3 steps):** `email → send OTP → verify 6-digit OTP → set password (min 8)`.
+- **Sign in with password:** `email + password + "remember me"`.
+- **Sign in with OAuth:** Google / GitHub (now **live**, see §5).
+- **Sign in with passkey:** WebAuthn (now **live**; registration requires an existing
+  session — no passkey-first onboarding).
+- **Forgot password (3 steps):** `email → send OTP (type forget-password) → verify OTP → set new password`.
 
-Install (after `npm init`):
+The real answer to "is this user logged in?" comes from Better Auth's session
+(`GET /api/auth/get-session`, or the `useSession()` hook — see §8). `localStorage` is
+the wrong place for a real session — see §7.
+
+**One user = one email.** A person who first signs in with Google and later adds a
+password (or vice-versa) ends up as **one** account, not two — Better Auth's account
+linking attaches the new provider onto the existing user. See §5e / §6.
+
+---
+
+## 2. The stack
+
+| Concern          | Pick                           | Why this one                                                                                  |
+| ---------------- | ------------------------------ | --------------------------------------------------------------------------------------------- |
+| Server framework | **Express 5**                  | Minimal, huge community. Run with `tsx` (no build step in dev).                               |
+| Language         | **TypeScript** (strict)        | Same language as the frontend — shared types, fewer bugs.                                     |
+| Auth engine      | **Better Auth** (`^1.6`)       | Password hashing, sessions, cookies, OTP, CSRF, OAuth, WebAuthn. Don't roll your own crypto.  |
+| Database ORM     | **Drizzle ORM**                | Type-safe queries + migrations. The auth tables live in `src/db/schema.ts`.                   |
+| Database         | **PostgreSQL** via `pg`        | Strict types, same engine as prod. `UNIQUE(email)` enforces one-user-per-email at the DB.     |
+| Passkeys         | **`@better-auth/passkey`**     | WebAuthn relying-party + ceremony handling.                                                   |
+| OTP / OAuth      | **`emailOTP` + social config** | OTP for signup/reset; Google + GitHub OAuth.                                                  |
+| Anonymous        | **`anonymous` plugin**         | Pre-auth guest sessions that can later upgrade to a real account.                             |
+| Email delivery   | **Brevo** (`src/lib/email.ts`) | Real transactional email. In dev the OTP is **also** `console.log`'d so you can test offline. |
+| Security headers | **helmet**                     | Sensible default response headers.                                                            |
+| Cookies          | **cookie-parser**              | Parses cookies for your own routes (Better Auth reads/writes its own signed cookies).         |
+| CORS             | **cors**                       | Lets the browser on the frontend origin call the API, with credentials.                       |
+
+**Still NOT hand-rolled:** no `bcrypt` (argon2id via `@node-rs/argon2`), no hand-written
+sessions / OTP / passkey tables (Better Auth owns those — see §4).
+
+Runtime deps (from `package.json`):
 
 ```bash
-# runtime dependencies
-npm install express better-auth pg drizzle-orm cors @node-rs/argon2
-
-# dev tooling: TypeScript, a zero-config TS runner, Drizzle's CLI, and type definitions
-npm install -D typescript tsx drizzle-kit \
-  @types/node @types/express @types/pg @types/cors
+express better-auth @better-auth/passkey @node-rs/argon2 \
+  drizzle-orm pg cors helmet cookie-parser dotenv \
+  express-rate-limit http-errors morgan debug
 ```
 
-You also need a running Postgres. Pick one:
-
-```bash
-# Option A — Docker (local container)
-docker run --name qatoto-pg -e POSTGRES_PASSWORD=password \
-  -e POSTGRES_DB=qatoto -p 5432:5432 -d postgres:16
-
-# Option B — Neon (https://neon.tech) free serverless Postgres, no Docker.
-#            Copy its connection string straight into DATABASE_URL.
-```
-
-`package.json` (`"type": "module"`) scripts:
+`package.json` (`"type": "module"`) scripts that matter:
 
 ```jsonc
 {
-    "type": "module",
     "scripts": {
-        "dev": "tsx watch src/index.ts", // auto-restarts on save, runs TS directly — no build step
-        "build": "tsc", // compile to plain JS when you deploy
+        "dev": "tsx watch --conditions=development src/index.ts", // auto-restart, TS direct
+        "build": "tsc",
         "start": "node dist/index.js",
-        "db:generate": "npx @better-auth/cli generate", // writes the Drizzle schema from your auth config
-        "db:migrate": "drizzle-kit generate && drizzle-kit migrate", // create + apply the SQL migration
+        "db:generate": "drizzle-kit generate", // schema → SQL migration
+        "db:migrate": "drizzle-kit migrate", // apply migration
+        "db:cleanup-orphans": "tsx --conditions=development scripts/cleanup-orphan-signups.ts",
+        "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p tsconfig.test.json",
+        "test": "vitest run",
     },
 }
 ```
 
-Also create `tsconfig.json` (`npx tsc --init`) and a `.env` (see §10).
-
-> **Why a library instead of hand-rolling sessions?** Hand-rolling teaches you the
-> mechanics, but it also means _you_ own every bug in password hashing, cookie flags,
-> OTP expiry, and CSRF — the exact places a mistake becomes a breach. Better Auth ships
-> those correct by default. You'll still see what it does: read §7 and the generated
-> schema in §4, and you'll understand a session as well as if you'd written it.
+> Schema note: the Drizzle tables in `src/db/schema.ts` are committed to the repo (not
+> regenerated from auth config on every change). When you add/remove a Better Auth plugin
+> that needs columns, update `schema.ts` and run `db:generate` + `db:migrate`.
 
 ---
 
 ## 3. Folder structure
 
-Keep it flat. Split later if a file gets big.
-
 ```text
 qatoto-backend/
 ├── src/
-│   ├── index.ts            # creates the Express app, mounts Better Auth + your routes, starts the server
-│   ├── auth.ts             # the Better Auth instance (config: db adapter, email+password, OTP plugin)
-│   ├── db.ts               # opens the Postgres connection pool, wraps it with Drizzle
-│   ├── auth-schema.ts       # GENERATED by `npx @better-auth/cli generate` — don't hand-edit
-│   ├── require-auth.ts     # middleware for YOUR routes: reads the Better Auth session, attaches req.user
-│   └── routes.ts           # your own non-auth routes + the custom /signup/start + /signup/complete endpoints (§5)
-├── drizzle.config.ts       # tells drizzle-kit where the schema + DATABASE_URL are
-├── tsconfig.json
-├── .env                    # BETTER_AUTH_SECRET, BETTER_AUTH_URL, DATABASE_URL. NEVER commit this
-├── .gitignore              # node_modules, dist/, .env
-└── package.json
+│   ├── index.ts                       # loads env, starts the HTTP server
+│   ├── app.ts                         # builds the Express app: helmet, cors, Better Auth mount, routes
+│   ├── config/index.ts                # Zod-parsed env (DATABASE_URL, BETTER_AUTH_*, OAuth, Brevo...)
+│   ├── lib/
+│   │   ├── auth.ts                     # the Better Auth instance (adapter, email+pw, OTP, OAuth, passkey, anonymous)
+│   │   └── email.ts                    # Brevo transactional email (Result-typed)
+│   ├── db/
+│   │   ├── index.ts                    # Postgres pool + Drizzle
+│   │   └── schema.ts                   # user / session / account / verification / passkey tables
+│   ├── controllers/auth.controller.ts  # /signup/start, /signup/complete, /me handlers
+│   ├── middleware/
+│   │   ├── require-auth.ts             # session guard for YOUR routes → req.user
+│   │   ├── rate-limit.ts               # Express limiters on /signup/*
+│   │   ├── validate.ts, request-id.ts, error-handler.ts, not-found.ts
+│   ├── routes/
+│   │   ├── index.ts                    # / and /health
+│   │   ├── auth.routes.ts              # /signup/start, /signup/complete, /me
+│   │   └── users.routes.ts
+│   ├── services/  types/
+├── scripts/cleanup-orphan-signups.ts  # one-time orphan cleanup (see §5e)
+├── drizzle.config.ts
+└── .env                               # NEVER commit
 ```
 
 ---
 
 ## 4. The data (Better Auth owns the schema)
 
-**You do not hand-write SQL tables.** You describe what you want in `auth.ts` (§5), then
-run the CLI and it generates the Drizzle schema for you:
+Tables in `src/db/schema.ts`:
 
-```bash
-npm run db:generate   # reads auth.ts → writes src/auth-schema.ts (Drizzle table definitions)
-npm run db:migrate    # drizzle-kit turns that schema into SQL and applies it to your Postgres DB
-```
+| Table          | What it holds                                                                                                                                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user`         | id, name, **`email` (UNIQUE)**, emailVerified, image, `isAnonymous`, timestamps. **No raw password here.**                                                                                                                                        |
+| `account`      | one row **per provider** for a user: `providerId` (`credential` / `google` / `github`), the argon2id `password` hash for credential rows, OAuth tokens for the rest. Account linking = multiple `account` rows pointing at the **same** `userId`. |
+| `session`      | one row per logged-in session — the cookie holds only an opaque token; everything else stays server-side.                                                                                                                                         |
+| `verification` | short-lived OTP / verification records (hashed, expiring, single-use).                                                                                                                                                                            |
+| `passkey`      | WebAuthn credentials (publicKey, counter, deviceType, transports…) keyed to a user.                                                                                                                                                               |
 
-With email+password + the email-OTP plugin enabled, Better Auth generates roughly these
-tables (you'll see them in `auth-schema.ts`):
+The `UNIQUE(email)` on `user` is the structural guarantee behind "one user = one email":
+a second provider reporting the same verified email links onto the existing row rather
+than inserting a duplicate.
 
-| Table          | What it holds                                                                                       |
-| -------------- | --------------------------------------------------------------------------------------------------- |
-| `user`         | id, email, name, emailVerified, createdAt — the registered person. **No raw password here.**        |
-| `account`      | the password hash (argon2id via `@node-rs/argon2`) and any OAuth provider links, keyed to a user.   |
-| `session`      | one row per logged-in session — the cookie holds a reference, everything else stays server-side.    |
-| `verification` | short-lived OTP / verification records (the email-OTP plugin stores codes here, hashed + expiring). |
+Protections still hold: OTPs hashed/expiring/single-use; password hashed (argon2id),
+never stored or returned in plaintext; session cookie carries only an opaque reference.
 
-The same protections from the hand-rolled version still hold — Better Auth just enforces
-them for you: OTPs are hashed, expiring, and single-use; the password is hashed, never
-stored or returned in plaintext; the session cookie carries only an opaque reference.
-
-Re-run `npm run db:generate && npm run db:migrate` whenever you change `auth.ts` in a way
-that adds fields or plugins.
+Re-run `npm run db:generate && npm run db:migrate` after a schema change.
 
 ---
 
 ## 5. The setup + the API
 
-### 5a. The Better Auth instance — `src/auth.ts`
+### 5a. The Better Auth instance — `src/lib/auth.ts`
 
 ```ts
+import { passkey } from "@better-auth/passkey";
+import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { emailOTP } from "better-auth/plugins";
-import { hash, verify } from "@node-rs/argon2";
-import { db } from "./db";
+import { anonymous, emailOTP } from "better-auth/plugins";
+import { config } from "#src/config/index.js";
+import { db } from "#src/db/index.js";
+import { sendTransactionalEmail } from "#src/lib/email.js";
 
 export const auth = betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
+    secret: config.BETTER_AUTH_SECRET,
+    baseURL: config.BETTER_AUTH_URL,
+    trustedOrigins: [config.FRONTEND_URL],
 
-    // email + password sign-in. Passwords hashed with argon2id via @node-rs/argon2 (native bindings).
+    // Rate limits Better Auth's OWN HTTP endpoints (forgot-password, password login,
+    // OTP). Does NOT cover our server-side auth.api calls in /signup/* — those are
+    // limited in Express (src/middleware/rate-limit.ts). Enabled in ALL envs.
+    rateLimit: {
+        enabled: true,
+        window: 60,
+        max: 100,
+        customRules: {
+            "/email-otp/send-verification-otp": { window: 60, max: 3 },
+            "/sign-in/email-otp": { window: 60, max: 5 },
+            "/email-otp/reset-password": { window: 60, max: 5 },
+            "/sign-in/email": { window: 10, max: 5 },
+        },
+    },
+
+    // One user = one email. A provider reporting a VERIFIED matching email links onto
+    // the existing user instead of minting a second row. google/github are trusted
+    // (first-party OAuth). "email-password" is deliberately NOT trusted — a credential
+    // signup must prove the email via OTP (our /signup/complete) before it can ride onto
+    // an existing OAuth account, else account-takeover via unverified password signup.
+    account: {
+        accountLinking: { enabled: true, trustedProviders: ["google", "github"] },
+    },
+
     emailAndPassword: {
         enabled: true,
         minPasswordLength: 8,
@@ -204,373 +217,339 @@ export const auth = betterAuth({
         },
     },
 
-    // the OTP plugin powers both signup-verification and forgot-password.
+    socialProviders: {
+        google: { clientId: config.GOOGLE_CLIENT_ID, clientSecret: config.GOOGLE_CLIENT_SECRET },
+        github: { clientId: config.GITHUB_CLIENT_ID, clientSecret: config.GITHUB_CLIENT_SECRET },
+    },
+
     plugins: [
+        anonymous(),
+        passkey({
+            // WebAuthn relying-party identity derives from the FRONTEND origin (the ceremony
+            // runs in the user's browser there), NOT the API origin.
+            rpID: new URL(config.FRONTEND_URL).hostname,
+            rpName: "Qatoto",
+            origin: new URL(config.FRONTEND_URL).origin,
+            // requireSession: account creation is owned solely by /signup/complete. No
+            // passkey-first onboarding (would mint orphan users), mirroring emailOTP below.
+            registration: { requireSession: true, extensions: { credProps: true } },
+            authentication: { extensions: { credProps: true } },
+        }),
         emailOTP({
-            // Never let an OTP alone create a user — account creation is owned by
-            // POST /signup/complete (OTP + password together). No passwordless orphans.
+            // OTP alone NEVER creates a user. Account creation is owned by /signup/complete
+            // (verified OTP + password, atomic) → no passwordless orphans.
             disableSignUp: true,
-            // in dev: print the code. Wire a real email provider here later (§9).
             async sendVerificationOTP({ email, otp, type }) {
-                console.log(`OTP for ${email} (${type}): ${otp}`);
+                if (config.NODE_ENV === "development")
+                    console.log(`OTP for ${email} (${type}): ${otp}`);
+                const subject =
+                    type === "forget-password"
+                        ? "Reset your Qatoto password"
+                        : "Your Qatoto verification code";
+                const sendResult = await sendTransactionalEmail({
+                    toEmail: email,
+                    subject /* html+text */,
+                });
+                if (!sendResult.success) {
+                    // NOT_CONFIGURED in dev is fine (code already logged); fail loudly otherwise.
+                    if (
+                        sendResult.error.type === "NOT_CONFIGURED" &&
+                        config.NODE_ENV === "development"
+                    )
+                        return;
+                    throw new Error(
+                        `Failed to send OTP email: ${JSON.stringify(sendResult.error)}`,
+                    );
+                }
             },
         }),
     ],
 });
 ```
 
-### 5b. The database — `src/db.ts`
+### 5b. The database — `src/db/index.ts`
 
 ```ts
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import * as schema from "./auth-schema";
+import * as schema from "#src/db/schema.js";
+import { config } from "#src/config/index.js";
 
-if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({ connectionString: config.DATABASE_URL });
 export const db = drizzle(pool, { schema });
 ```
 
 > A `Pool` reuses open connections instead of dialing a fresh one per request. The
-> driver import here + `provider: "pg"` in `auth.ts` are the only Postgres-specific
-> lines — swapping providers later means changing just these. That's the payoff for
-> using an ORM instead of raw SQL strings.
+> driver import + `provider: "pg"` in `auth.ts` are the only Postgres-specific lines.
 
-### 5c. Mounting on Express — `src/index.ts`
+### 5c. Mounting on Express — `src/app.ts`
 
-**Order matters.** The Better Auth handler must be mounted **before** `express.json()`,
-because it parses its own request bodies. Put `express.json()` after it, for your own routes.
+**Order matters.** The Better Auth handler mounts **before** `express.json()`, because
+it parses its own request bodies off the raw stream. A body parser ahead of it consumes
+the stream and breaks every auth POST.
 
 ```ts
-import express from "express";
-import cors from "cors";
-import { toNodeHandler } from "better-auth/node";
-import { auth } from "./auth";
-
 const app = express();
+app.set("trust proxy", 1); // behind nginx / load balancer
+app.use(helmet()); // security headers
+app.use(cors({ origin: config.FRONTEND_URL, credentials: true })); // exact origin, allow cookies
+app.use(requestId); // request tracing
+app.use(logger("dev")); // morgan
 
-// 1. CORS first — name the exact frontend origin, allow credentials (cookies).
-app.use(cors({ origin: "http://localhost:3000", credentials: true }));
+// Better Auth catch-all — BEFORE express.json(). Express 5 splat syntax "*splat".
+app.all("/api/auth/*splat", toNodeHandler(auth.handler));
 
-// 2. Better Auth catch-all. Note the Express 5 splat syntax: "*splat".
-app.all("/api/auth/*splat", toNodeHandler(auth));
+app.use(express.json({ limit: "10kb" })); // YOUR routes only
+app.use(express.urlencoded({ extended: false, limit: "10kb" }));
+app.use(cookieParser());
 
-// 3. JSON body parser AFTER Better Auth, for your own routes.
-app.use(express.json());
+app.use("/", indexRouter); // /, /health
+app.use("/", authRouter); // /signup/start, /signup/complete, /me
+app.use("/users", usersRouter);
 
-// 4. Your own routes go here (see routes.ts).
-
-app.listen(8000, () => console.log("API on http://localhost:8000"));
+app.use(notFoundHandler);
+app.use(errorHandler);
 ```
 
-Sanity check after this step: `GET http://localhost:8000/api/auth/ok` should respond.
+`src/index.ts` loads env, then `app.listen(config.PORT)`.
 
 ### 5d. The endpoints Better Auth gives you (free, under `/api/auth`)
 
 You don't write these — enabling the config above creates them.
 
-| Method & path                                    | Body                              | Purpose                                                                                                             |
-| ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/email-otp/send-verification-otp` | `{ email, type }`                 | Generate + "send" a 6-digit OTP. `type`: `"sign-in"`, `"email-verification"`, or `"forget-password"`.               |
-| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                  | OTP login for **existing** users. With `disableSignUp: true` it never creates a user (no orphans). Signup uses §5e. |
-| `POST /api/auth/email-otp/reset-password`        | `{ email, otp, password }`        | Forgot-password: verify a `forget-password` OTP and set the new password.                                           |
-| `POST /api/auth/sign-in/email`                   | `{ email, password, rememberMe }` | Password login. `rememberMe` controls cookie lifetime. Wrong email or password → same generic error.                |
-| `POST /api/auth/sign-out`                        | — (reads cookie)                  | Ends the session, clears the cookie.                                                                                |
-| `GET  /api/auth/get-session`                     | — (reads cookie)                  | The real "am I logged in?" check. Returns the session + user, or null.                                              |
+| Method & path                                    | Body                              | Purpose                                                                                          |
+| ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `POST /api/auth/email-otp/send-verification-otp` | `{ email, type }`                 | Generate + send a 6-digit OTP. `type`: `"sign-in"`, `"email-verification"`, `"forget-password"`. |
+| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                  | OTP login for **existing** users. `disableSignUp: true` → never creates a user. Signup uses §5e. |
+| `POST /api/auth/email-otp/reset-password`        | `{ email, otp, password }`        | Forgot-password: verify a `forget-password` OTP, set new password.                               |
+| `POST /api/auth/sign-in/email`                   | `{ email, password, rememberMe }` | Password login. Wrong email or password → same generic error.                                    |
+| `GET  /api/auth/sign-in/social` (+ callback)     | provider redirect                 | Google / GitHub OAuth. Verified-email match → links onto the existing user (one account).        |
+| `POST /api/auth/passkey/*`                       | WebAuthn ceremony                 | Register / authenticate passkeys. Registration requires an existing session.                     |
+| `POST /api/auth/sign-in/anonymous`               | —                                 | Guest session (anonymous plugin), upgradable to a real account later.                            |
+| `POST /api/auth/sign-out`                        | — (reads cookie)                  | Ends the session, clears the cookie.                                                             |
+| `GET  /api/auth/get-session`                     | — (reads cookie)                  | The real "am I logged in?" check. Returns session + user, or null.                               |
 
-### 5e. The two endpoints YOU write — OTP-gated signup, account created at the end
+### 5e. The two endpoints YOU write — `src/controllers/auth.controller.ts`
 
-Account creation is deferred to the very last step so a half-finished signup never leaves
-a row behind. Two **public** endpoints, and **only the second one creates a user**:
+OTP-gated signup, account created at the end so a half-finished signup leaves no row.
+Both are **public** (no session yet) and validated with Zod `.strict()` (`422` on failure).
 
-| Method & path           | Body                              | Creates a user?                                                       |
-| ----------------------- | --------------------------------- | --------------------------------------------------------------------- |
-| `POST /signup/start`    | `{ email }`                       | No — just sends the OTP. Generic 200 (can't probe which emails exist) |
-| `POST /signup/complete` | `{ email, otp, password, name? }` | **Yes — and only here.** Verifies the OTP, then creates user+password |
+| Method & path           | Body                              | Creates a user?                                                   |
+| ----------------------- | --------------------------------- | ----------------------------------------------------------------- |
+| `POST /signup/start`    | `{ email }`                       | No — sends the OTP. Generic 200 (can't probe which emails exist). |
+| `POST /signup/complete` | `{ email, otp, password, name? }` | Resolves to exactly **one** user via three paths (below).         |
+| `GET  /me`              | — (session cookie)                | Returns `req.user` (requires auth).                               |
 
-```ts
-// src/controllers/auth.controller.ts — both mounted after express.json(), PUBLIC (no session yet).
-import { APIError } from "better-auth/api";
-import { eq } from "drizzle-orm";
-import { db } from "#src/db/index.js";
-import { user } from "#src/db/schema.js";
-import { auth } from "#src/lib/auth.js";
+`/signup/complete` looks up the email, then takes one of **three** paths:
 
-// POST /signup/start  { email } — sends the code. Creates NO account.
-await auth.api.sendVerificationOTP({ body: { email, type: "sign-in" } });
-
-// POST /signup/complete  { email, otp, password, name? } — the ONLY place a user is born.
-// 1. Verify the OTP first. No user exists yet — a bad/expired code creates nothing.
-await auth.api.checkVerificationOTP({ body: { email, otp, type: "sign-in" } });
-// 2. OTP good → NOW create the account + password atomically, and open the session.
-const { headers } = await auth.api.signUpEmail({
-    body: { email, password, name },
-    returnHeaders: true, // forward the session Set-Cookie onto the Express response
-});
-// 3. The OTP proved email ownership → mark verified.
-await db.update(user).set({ emailVerified: true }).where(eq(user.email, email));
+```text
+POST /signup/complete { email, otp, password, name? }
+ ├─ Path A — no user yet:
+ │    checkVerificationOTP → (valid) signUpEmail → mark emailVerified → session.   → 201 created
+ │    bad/expired OTP → 401, nothing created.  missing password → 422 at boundary.
+ │
+ ├─ Path B — user exists AND already has a `credential` account row:
+ │    genuine re-signup → 409 ("sign in instead"). Nothing duplicated.
+ │
+ └─ Path C — user exists but is OAuth-only (no credential row):
+      signInEmailOTP (proves ownership + mints a session for THIS user)
+        → setPassword (session-scoped: replays that session) attaches the password
+          to the SAME user — no second row.                                        → 201 linked
+      bad/expired OTP → 401.
 ```
 
-> Validate the body shape here (`§0`) — these are your endpoints, so the re-checks are
-> yours (Zod `.strict()`, `422` on failure). `password` is **required** by the schema, so a
-> request without one is rejected at the boundary and **no account is created**. Wrap the
-> Better Auth calls and map their `APIError` to HTTP: a bad OTP → `401`, an email that
-> already has a full account → `409` ("sign in instead").
+Path C is what makes "signed up with Google, later set a password" collapse into one
+account. `setPassword` is session-scoped, so the controller replays the freshly minted
+session cookie (`setCookiesToCookieHeader` → `Headers({ cookie })`) into the `auth.api`
+call. Errors are mapped from Better Auth's `APIError`: bad OTP → `401`, email already
+fully registered / race on `signUpEmail` → `409`.
 
 #### No orphans — by construction
 
-Because `disableSignUp: true` blocks `sign-in/email-otp` from ever minting a user, and the
-only creation path (`/signup/complete`) demands the password in the **same call** as the OTP,
-there is no "verified-but-passwordless" state to recover from:
+`disableSignUp: true` blocks `sign-in/email-otp` from minting a user, `passkey`
+registration requires a session, and `/signup/complete` demands the password in the same
+call as the OTP. So there is no "verified-but-passwordless" state.
 
-```text
-send-otp → /signup/complete { email, otp, password }
-   ├─ bad / expired OTP  → 401, nothing created.
-   ├─ missing password   → 422 at the Zod boundary, nothing created.
-   └─ both present        → user + credential created, verified, session opened. ✅
-```
-
-A second `/signup/complete` for an email that already has an account returns **409**
-("sign in instead") — it never duplicates or orphans anything. The signup UI may surface
-that 409 as "email already registered, please sign in."
-
-> **Migrating from the old two-phase flow:** any passwordless orphan rows left by the
-> previous `sign-in/email-otp`-creates-the-user design are now stranded (can't log in, and
-> `/signup/complete` 409s). Run the one-time cleanup to find/remove them:
+> **Migrating from the old flow:** passwordless orphan rows from the previous
+> `sign-in/email-otp`-creates-the-user design are stranded. One-time cleanup:
 > `npm run db:cleanup-orphans` (dry run) → `npm run db:cleanup-orphans -- --delete`
 > (see [scripts/cleanup-orphan-signups.ts](../scripts/cleanup-orphan-signups.ts)).
 
 ---
 
-## 6. How a request flows (signup, end to end)
+## 6. How a request flows
 
-The frontend keeps its 3-step UI; the calls map onto Better Auth like this:
+**Signup (3-step UI):**
 
 ```text
-1. UI step 1 (enter email):
+1. UI step 1 (email):
    POST /signup/start { email }
-   → your endpoint forwards to Better Auth's send-verification-otp; it stores a hashed,
-     expiring OTP and console.log("OTP for a@b.com (sign-in): 482913"). NO user created.
+   → forwards to send-verification-otp; stores a hashed, expiring OTP; sends email
+     (dev: also console.log("OTP for a@b.com (sign-in): 482913")). NO user created.
 
-2. UI step 2 (enter 6-digit OTP)  +  3. UI step 3 (set password):
-   On final submit, fire ONE call:
+2. UI steps 2+3 (OTP + password), ONE final call:
+   POST /signup/complete { email, otp, password }
+   → Path A creates the user (emailVerified = true) WITH the password atomically and
+     sets the httpOnly session cookie. Bad OTP → 401, no user; missing password → 422.
 
-   POST /signup/complete { email, otp, password }   (your endpoint, §5e)
-   → verifies the OTP, then CREATES the user (emailVerified = true) WITH the password in
-     one atomic step, and sets the httpOnly session cookie. The user is now logged in.
-     A bad OTP → 401 and no user; a missing password → 422 and no user.
-
-4. Frontend: useSession() (or invalidate the ['auth','me'] query) → navbar shows logged-in state.
+3. Frontend: useSession() → navbar shows logged-in state.
 ```
 
-> **If the user bails before submitting the final step** (no `/signup/complete` call), no
-> account exists at all — they simply start over. There is no orphan to recover, because the
-> OTP alone never created anything (`disableSignUp: true`, §5e).
+If the user bails before the final call, no account exists — nothing to recover.
 
-- **Login** (`sign-in-with-password.tsx`): one call, `POST /api/auth/sign-in/email`
-  `{ email, password, rememberMe }`.
-- **Forgot password** (`forgot-password.tsx`, 3 steps): step 1 →
-  `send-verification-otp { email, type: "forget-password" }`; final step →
-  `email-otp/reset-password { email, otp, password }`. No custom endpoint needed.
+**Login:** `POST /api/auth/sign-in/email { email, password, rememberMe }`.
 
-> **Why a custom `/signup/complete` instead of Better Auth's `sign-in/email-otp`?** The
-> built-in OTP sign-in creates the user the moment the code is verified — before a password
-> exists — which is exactly the orphan we want to avoid. So we disable that auto-signup and
-> own one endpoint that verifies the OTP **and** sets the password together. This is §0 in
-> action: the OTP is the gate, and the server enforces "account only when fully signed up."
+**OAuth:** `sign-in/social` (Google/GitHub). If the verified email already exists, the
+provider links onto that user — **one** account, not a duplicate (§5a `accountLinking`).
+
+**Add a password to an OAuth-only account:** run `/signup/complete` for that email →
+**Path C** attaches the credential to the same user.
+
+**Passkey:** register only while signed in (`requireSession: true`); authenticate via
+`passkey/*`.
+
+**Forgot password:** step 1 → `send-verification-otp { email, type: "forget-password" }`;
+final → `email-otp/reset-password { email, otp, password }`. No custom endpoint.
 
 ---
 
-## 7. Sessions & cookies (Better Auth handles the security heart)
+## 7. Sessions & cookies
 
-When the user logs in, finishes OTP signup, or resets their password, **Better Auth sets
-the session cookie for you** — httpOnly, `secure` in production, `sameSite: "lax"`, signed,
-with an expiry it manages. `rememberMe` on password login extends the lifetime. You don't
-write `res.cookie(...)` and you don't generate session ids.
+On login, OTP signup, OAuth, passkey, or password reset, **Better Auth sets the session
+cookie** — httpOnly, `secure` in production, `sameSite: "lax"`, signed, server-managed
+expiry. `rememberMe` extends lifetime. You don't write `res.cookie(...)` or generate
+session ids.
 
-For **your own** protected routes, ask Better Auth who the user is instead of querying the
-DB yourself:
+For **your own** protected routes, ask Better Auth who the user is — `src/middleware/require-auth.ts`:
 
 ```ts
-// src/require-auth.ts
-import type { Request, Response, NextFunction } from "express";
-import { auth } from "./auth";
-import { fromNodeHeaders } from "better-auth/node";
-
-export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+export async function requireAuth(req, res, next): Promise<void> {
     const session = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
     if (!session) {
-        return res
-            .status(401)
-            .json({ error: { code: "UNAUTHENTICATED", message: "Please sign in." } });
+        res.status(401).json({ status: "error", statusCode: 401, message: "Please sign in." });
+        return;
     }
-    req.user = session.user; // typed by Better Auth
+    req.user = {
+        id: session.user.id,
+        email: session.user.email,
+        name: session.user.name,
+        emailVerified: session.user.emailVerified,
+    };
     next();
 }
 ```
 
-To teach TypeScript about `req.user`, add `src/types/express.d.ts`:
+`req.user` is declared via a global Express augmentation (`src/types`). Zero-trust: the
+session is re-derived server-side on every request — the frontend cannot assert identity.
 
-```ts
-import "express";
-
-declare global {
-    namespace Express {
-        interface Request {
-            user?: { id: string; email: string; name: string | null; emailVerified: boolean };
-        }
-    }
-}
-```
-
-**Why a cookie and not `localStorage`?** The current frontend stores its fake flag in
-`localStorage`. For a _real_ token that's dangerous: any malicious script on the page can
-read `localStorage` and steal the session (XSS). Better Auth uses an **httpOnly** cookie —
-invisible to page JavaScript; the browser attaches it automatically. So: real session →
-httpOnly cookie (Better Auth's default). The `localStorage` flag stays only as an optional
-cosmetic hint, if at all.
+**Why a cookie, not `localStorage`?** A real token in `localStorage` is XSS-stealable by
+any script on the page. Better Auth's httpOnly cookie is invisible to page JS and
+attached automatically by the browser.
 
 ---
 
 ## 8. Connecting to the frontend (CORS + the Better Auth client)
 
-The browser runs the frontend on `http://localhost:3000` and your
-API on `http://localhost:8000`. Different port = **different origin**, so the browser
-blocks the call unless the server opts in.
+Frontend and API run on different origins, so the browser blocks the call unless the
+server opts in.
 
-- **CORS** (server) decides whether the browser is _allowed_ to call. Name the exact
-  origin (not `*`) and allow credentials — already set in §5c:
-  `cors({ origin: "http://localhost:3000", credentials: true })`.
-- **`sameSite: "lax"`** (Better Auth's cookie default) lets the cookie ride along on
-  `localhost → localhost` in dev. In production, put the API on a subdomain like
-  `api.qatoto.com` so it stays same-site with `qatoto.com`.
+- **CORS** (server): name the exact origin (`config.FRONTEND_URL`, never `*`) and allow
+  credentials — set in §5c.
+- **`sameSite: "lax"`** (cookie default) rides along on `localhost → localhost` in dev.
+  In prod, put the API on a subdomain (`api.qatoto.com`) to stay same-site with `qatoto.com`.
 
-### Frontend side — use the Better Auth React client
-
-Better Auth ships a typed client that replaces the manual `localStorage` flag and most
-hand-written fetches. Install `better-auth` in the frontend and create the client once:
+Frontend client (typed, sends cookies automatically):
 
 ```ts
 // src/lib/auth-client.ts (frontend)
 import { createAuthClient } from "better-auth/react";
 import { emailOTPClient } from "better-auth/client/plugins";
+import { passkeyClient } from "@better-auth/passkey/client";
 
 export const authClient = createAuthClient({
-    baseURL: "http://localhost:8000", // the API origin; cookies are sent automatically
-    plugins: [emailOTPClient()],
+    baseURL: "http://localhost:8000",
+    plugins: [emailOTPClient(), passkeyClient()],
 });
-
 export const { useSession, signIn, signOut } = authClient;
 ```
 
-Then:
-
 ```ts
-// "Am I logged in?" — one hook, used everywhere (replaces the localStorage flag)
-const { data: session, isPending } = useSession();
-const isLoggedIn = !!session;
+const { data: session } = useSession(); // "am I logged in?"
+await signIn.email({ email, password, rememberMe }); // password login
+await signIn.social({ provider: "google" }); // OAuth
+await authClient.passkey.addPasskey(); // register passkey (needs session)
 
-// Login
-await signIn.email({ email, password, rememberMe });
-
-// Signup (§6) — the account is created only by the final call (OTP + password together)
+// Signup — your endpoints; pass credentials: "include" on the raw fetch
 await fetch("http://localhost:8000/signup/start", {
-    // step 1: send the code (creates no account)
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ email }),
+    credentials: "include" /* {email} */,
 });
 await fetch("http://localhost:8000/signup/complete", {
-    // step 2 + 3: verify OTP AND set password → account created, session opened
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ email, otp, password }),
+    credentials: "include" /* {email,otp,password} */,
 });
 
 // Forgot password
 await authClient.emailOtp.sendVerificationOtp({ email, type: "forget-password" });
 await authClient.emailOtp.resetPassword({ email, otp, password });
 
-// Logout
 await signOut();
 ```
 
-> The Better Auth client sends cookies for its own calls automatically. For your **own**
-> endpoints (like `/signup/start` and `/signup/complete`) you still pass `credentials: "include"` on the
-> raw `fetch`, exactly as before. You can keep using TanStack Query to wrap these
-> mutations if you prefer its caching/invalidation — `useSession()` already covers the
-> "am I logged in?" read, so the manual `['auth','me']` query is no longer required.
-
 ---
 
-## 9. Build order — do them in THIS order
+## 9. Status / build order
 
-Each step is a small, runnable win. Don't skip ahead.
+Done and live:
 
-0. **Check tools.** `node --version` (you have v26). Install nothing else yet.
-1. **Hello server.** `npm init`, install Express + TypeScript (`tsx`), write a trivial
-   route, run with `tsx`, open it. → **Lesson 01**
-2. **Database + Drizzle.** Start Postgres (Docker or Neon), add `pg` + `drizzle-orm`,
-   write `db.ts`, write a `drizzle.config.ts`.
-3. **Better Auth, email+password only.** Write `auth.ts` (just `emailAndPassword`), mount
-   it in `index.ts` (§5c), run `db:generate` + `db:migrate`, hit `/api/auth/ok`.
-4. **Password login + session.** Test `sign-in/email`, then `requireAuth` (§7) on a dummy
-   protected route + `get-session`.
-5. **OTP plugin.** Add `emailOTP` to `auth.ts`, re-generate the schema, watch the code
-   print to your terminal on `send-verification-otp`.
-6. **OTP signup.** Wire the flow (§6): `/signup/start` → `/signup/complete` (the only
-   user-creating call). Set `disableSignUp: true` on the OTP plugin.
-7. **Logout.** `sign-out`.
-8. **Forgot password.** `send-verification-otp` (`forget-password`) + `email-otp/reset-password`.
-9. **Wire the frontend.** Add `cors`, create the `authClient` (§8), swap the `localStorage`
-   flag for `useSession()`.
+0. Hello server, DB + Drizzle, Better Auth (email+password), password login + session.
+1. OTP plugin + OTP-gated signup (`/signup/start` → `/signup/complete`).
+2. Logout, forgot-password.
+3. **OAuth** (Google + GitHub) with account linking (one user = one email).
+4. **Passkeys** (`@better-auth/passkey`, `requireSession`).
+5. **Anonymous** guest sessions.
+6. **Real email** via Brevo (`src/lib/email.ts`); dev still console.log's the OTP.
+7. **Rate limiting** (below).
 
-### Later (explicitly NOT now)
+### Later (NOT now)
 
-- Google / Apple OAuth (`socialProviders` in `auth.ts`)
-- Real email delivery (nodemailer, Resend, or Postmark) inside `sendVerificationOTP`
-- Managed Postgres + connection pooling for prod (e.g. Neon, RDS, Supabase)
-- **Shared rate-limit store for prod.** Rate limiting is already DONE (see below), but
-  both limiters use an **in-memory** store — per-process only. Multi-instance / serverless
-  deploys let attackers round-robin instances, so move to a shared store: the Express
-  limiters → `rate-limit-redis`; Better Auth → `rateLimit.storage: "database"` (adds a
-  `rateLimit` table) or `"secondary-storage"`.
+- Managed Postgres + pooling for prod (Neon, RDS, Supabase).
+- **Shared rate-limit store for prod.** Both limiters are **in-memory** (per-process).
+  Multi-instance/serverless lets attackers round-robin instances → move to a shared
+  store: Express limiters → `rate-limit-redis`; Better Auth → `rateLimit.storage:
+"database"` (adds a `rateLimit` table) or `"secondary-storage"`.
 
-### Already done: OTP / auth rate limiting
+### Rate limiting (done)
 
-Two layers (Better Auth's limiter does **not** cover `auth.api` server-side calls, so the
+Two layers (Better Auth's limiter does **not** cover server-side `auth.api` calls, so the
 custom routes need their own):
 
-- **Express limiters** (`src/middleware/rate-limit.ts`) on the custom routes: `/signup/start`
-  is capped **per-IP (8/15min)** and **per-email (4/15min)** — stops OTP spam + inbox-bombing;
-  `/signup/complete` is capped **per-IP (12/15min)**. 429 returns the standard ApiResponse
-  envelope with `retryAfterSeconds`.
-- **Better Auth `rateLimit`** (`src/auth.ts`) on its own endpoints — `send-verification-otp`
-  3/60s, `sign-in/email-otp` 5/60s, `reset-password` 5/60s, `sign-in/email` 5/10s. Enabled
-  in all envs (BA defaults to prod-only).
+- **Express limiters** (`src/middleware/rate-limit.ts`): `/signup/start` capped
+  **per-IP** and **per-email** (stops OTP spam + inbox-bombing); `/signup/complete`
+  capped **per-IP**. 429 returns the standard ApiResponse envelope with `retryAfterSeconds`.
+- **Better Auth `rateLimit`** (`src/lib/auth.ts`): `send-verification-otp` 3/60s,
+  `sign-in/email-otp` 5/60s, `reset-password` 5/60s, `sign-in/email` 5/10s. Enabled in
+  all envs.
 
 ---
 
-## 10. Security checklist (pin this above your desk)
-
-Better Auth handles most of these by default — your job is to not undo them and to set the
-config/env correctly.
+## 10. Security checklist
 
 - [ ] Server re-validates **every** request — the UI's steps prove nothing (§0).
-- [ ] `BETTER_AUTH_SECRET` is set in `.env` (a long random string) and **git-ignored**.
-- [ ] `BETTER_AUTH_URL` matches the API origin (`http://localhost:8000` in dev).
-- [ ] `DATABASE_URL` points at your Postgres and is **git-ignored** (it holds the DB password).
-- [ ] Passwords are hashed with **argon2id** (`@node-rs/argon2`) — never stored or returned in plaintext.
-- [ ] OTPs are hashed, expiring, single-use (Better Auth's `verification` table) — don't disable that.
+- [ ] `BETTER_AUTH_SECRET` (≥16 chars), `DATABASE_URL`, OAuth secrets, `BREVO_API_KEY`
+      are in `.env` and **git-ignored**. Env is Zod-parsed (`src/config/index.ts`).
+- [ ] `BETTER_AUTH_URL` = API origin; `FRONTEND_URL` = exact frontend origin.
+- [ ] Passwords hashed with **argon2id** (`@node-rs/argon2`) — never stored/returned plaintext.
+- [ ] OTPs hashed, expiring, single-use (`verification` table) — don't disable that.
 - [ ] Session lives in Better Auth's **httpOnly** cookie, never in `localStorage`.
-- [ ] Login errors stay **generic** — don't add code that reveals whether the email exists.
-- [ ] Body shape is validated on **your** endpoints (`/signup/start`, `/signup/complete`) before any action.
-- [ ] Account is created **only** by `/signup/complete` (OTP + password atomic); `disableSignUp: true` blocks OTP-only orphans.
-- [ ] OTP / login endpoints are **rate limited** — Express per-IP + per-email on `/signup/*`, Better Auth `rateLimit` on its own routes. (Prod: move to a shared store.)
+- [ ] Login errors stay **generic** — never reveal whether an email exists.
+- [ ] Body shape validated on **your** endpoints (`/signup/*`) before any action.
+- [ ] Account created **only** by `/signup/complete` (OTP + password atomic);
+      `disableSignUp: true` + passkey `requireSession: true` block orphan creation.
+- [ ] **One user = one email**: `UNIQUE(email)` + account linking; `email-password` is
+      NOT a trusted linker (must prove email via OTP first — Path C).
+- [ ] OTP / login endpoints **rate limited** — Express per-IP + per-email on `/signup/*`,
+      Better Auth `rateLimit` on its own routes. (Prod: move to a shared store.)
+- [ ] Passkey `rpID`/`origin` derive from the **frontend** origin, not the API.
 - [ ] CORS names the **exact** frontend origin, never `*`, with `credentials: true`.
-- [ ] The Better Auth handler is mounted **before** `express.json()` (§5c).
-
----
+- [ ] Better Auth handler mounted **before** `express.json()` (§5c); helmet on.
