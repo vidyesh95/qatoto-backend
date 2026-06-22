@@ -1,8 +1,8 @@
+import { passkey } from "@better-auth/passkey";
 import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { anonymous, emailOTP } from "better-auth/plugins";
-import { passkey } from "@better-auth/passkey"
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
@@ -52,19 +52,21 @@ export const auth = betterAuth({
   plugins: [
     anonymous(),
     passkey({
+      // WebAuthn relying-party identity. The ceremony runs in the user's browser
+      // at FRONTEND_URL, so rpID/origin derive from there (NOT the API origin).
+      // rpID must be the frontend's registrable domain; origin must match exactly.
+      rpID: new URL(config.FRONTEND_URL).hostname,
+      rpName: "Qatoto",
+      origin: new URL(config.FRONTEND_URL).origin,
       registration: {
-        // Default: true. Set false for passkey-first onboarding.
-        requireSession: false,
-        // Required if requireSession is false and no session exists.
-        // resolveUser: async ({ ctx, context }) => {
-        //   // Validate context (e.g., a signed token), then create or load a user.
-        //   return { id: "user-id", name: "user@example.com" }
-        // },
-        // Optional server-defined extensions
+        // Require an authenticated session to register a passkey. Account creation
+        // is owned solely by POST /signup/complete (verified OTP + password); we do
+        // NOT allow passkey-first onboarding, which would mint orphan users and
+        // bypass that flow (mirrors emailOTP `disableSignUp: true`).
+        requireSession: true,
         extensions: { credProps: true },
       },
       authentication: {
-        // Optional server-defined extensions
         extensions: { credProps: true },
       },
     }),
