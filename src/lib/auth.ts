@@ -47,6 +47,11 @@ export const auth = betterAuth({
     accountLinking: {
       enabled: true,
       trustedProviders: ["google", "github"],
+      // Backfill the user's profile from the provider when an account links.
+      // Default leaves the existing row untouched, so an email-first user keeps
+      // name=null/image=null even after Google reports both. This syncs `name`
+      // and `image` on link; `email`/`emailVerified` are never rebound by it.
+      updateUserInfoOnLink: true,
     },
   },
   emailAndPassword: {
