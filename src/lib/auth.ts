@@ -2,6 +2,7 @@ import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { anonymous, emailOTP } from "better-auth/plugins";
+import { passkey } from "@better-auth/passkey"
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
@@ -50,6 +51,23 @@ export const auth = betterAuth({
   },
   plugins: [
     anonymous(),
+    passkey({
+      registration: {
+        // Default: true. Set false for passkey-first onboarding.
+        requireSession: false,
+        // Required if requireSession is false and no session exists.
+        // resolveUser: async ({ ctx, context }) => {
+        //   // Validate context (e.g., a signed token), then create or load a user.
+        //   return { id: "user-id", name: "user@example.com" }
+        // },
+        // Optional server-defined extensions
+        extensions: { credProps: true },
+      },
+      authentication: {
+        // Optional server-defined extensions
+        extensions: { credProps: true },
+      },
+    }),
     emailOTP({
       // Never auto-create a user from `sign-in/email-otp`. Account creation is
       // owned solely by POST /signup/complete, which requires BOTH a verified OTP
