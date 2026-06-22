@@ -1,0 +1,15 @@
+{
+  /* Type-checks the Vitest test suites in src/ (run via vitest, never built into
+     dist/). Extends the app config so #src/* subpath imports resolve to the TS
+     source via "customConditions": ["development"]. Non-composite, no emit — exists
+     purely so the editor and `tsc -p tsconfig.test.json` type these files. The app
+     build (tsconfig.json) deliberately excludes *.test.ts to keep tests out of dist. */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "incremental": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
