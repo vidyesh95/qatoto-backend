@@ -1,8 +1,6 @@
 import { config } from "#src/config/index.js";
 
-export type Result<T, E = Error> =
-  | { success: true; value: T }
-  | { success: false; error: E };
+export type Result<T, E = Error> = { success: true; value: T } | { success: false; error: E };
 
 type SendEmailError =
   | { type: "NOT_CONFIGURED" }

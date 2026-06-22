@@ -1,5 +1,5 @@
-import request from "supertest";
 import type { Express } from "express";
+import request from "supertest";
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
 /**
@@ -50,7 +50,9 @@ vi.mock("#src/lib/auth.js", () => ({
     api: {
       sendVerificationOTP: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
       checkVerificationOTP: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
-      signUpEmail: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({ headers: { getSetCookie: (): string[] => [] } }),
+      signUpEmail: vi
+        .fn<(...args: unknown[]) => unknown>()
+        .mockResolvedValue({ headers: { getSetCookie: (): string[] => [] } }),
       getSession: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(null),
     },
   },
@@ -135,8 +137,7 @@ describe("rate limiting (e2e via real app)", () => {
       });
 
       // standardHeaders: true → draft RateLimit headers present; legacyHeaders: false → no X-RateLimit-*.
-      const hasStandardHeader =
-        "ratelimit-limit" in blocked.headers || "ratelimit" in blocked.headers;
+      const hasStandardHeader = "ratelimit-limit" in blocked.headers || "ratelimit" in blocked.headers;
       expect(hasStandardHeader).toBe(true);
       expect(blocked.headers["x-ratelimit-limit"]).toBeUndefined();
 

@@ -17,14 +17,18 @@
  *   npm run db:cleanup-orphans -- --delete  # actually deletes them (FK cascades sessions)
  */
 import "dotenv/config";
-
 import { and, eq, isNull, notExists, or, sql } from "drizzle-orm";
 
 import { db, pool } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 
 const orphanPredicate = and(
-  notExists(db.select({ exists: sql`1` }).from(account).where(eq(account.userId, user.id))),
+  notExists(
+    db
+      .select({ exists: sql`1` })
+      .from(account)
+      .where(eq(account.userId, user.id)),
+  ),
   or(isNull(user.isAnonymous), eq(user.isAnonymous, false)),
 );
 
@@ -48,7 +52,9 @@ async function main(): Promise<void> {
 
   console.log(`Found ${orphans.length} orphan user(s) (verified email, no account/password):`);
   for (const orphan of orphans) {
-    console.log(`  ${orphan.id}  ${orphan.email}  verified=${orphan.emailVerified}  created=${orphan.createdAt.toISOString()}`);
+    console.log(
+      `  ${orphan.id}  ${orphan.email}  verified=${orphan.emailVerified}  created=${orphan.createdAt.toISOString()}`,
+    );
   }
 
   if (!shouldDelete) {

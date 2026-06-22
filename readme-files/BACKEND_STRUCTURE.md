@@ -270,14 +270,14 @@ Sanity check after this step: `GET http://localhost:8000/api/auth/ok` should res
 
 You don't write these — enabling the config above creates them.
 
-| Method & path                                    | Body                              | Purpose                                                                                                              |
-| ------------------------------------------------ | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/email-otp/send-verification-otp` | `{ email, type }`                 | Generate + "send" a 6-digit OTP. `type`: `"sign-in"`, `"email-verification"`, or `"forget-password"`.                |
-| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                  | OTP login for **existing** users. With `disableSignUp: true` it never creates a user (no orphans). Signup uses §5e.  |
-| `POST /api/auth/email-otp/reset-password`        | `{ email, otp, password }`        | Forgot-password: verify a `forget-password` OTP and set the new password.                                            |
-| `POST /api/auth/sign-in/email`                   | `{ email, password, rememberMe }` | Password login. `rememberMe` controls cookie lifetime. Wrong email or password → same generic error.                 |
-| `POST /api/auth/sign-out`                        | — (reads cookie)                  | Ends the session, clears the cookie.                                                                                 |
-| `GET  /api/auth/get-session`                     | — (reads cookie)                  | The real "am I logged in?" check. Returns the session + user, or null.                                               |
+| Method & path                                    | Body                              | Purpose                                                                                                             |
+| ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/email-otp/send-verification-otp` | `{ email, type }`                 | Generate + "send" a 6-digit OTP. `type`: `"sign-in"`, `"email-verification"`, or `"forget-password"`.               |
+| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                  | OTP login for **existing** users. With `disableSignUp: true` it never creates a user (no orphans). Signup uses §5e. |
+| `POST /api/auth/email-otp/reset-password`        | `{ email, otp, password }`        | Forgot-password: verify a `forget-password` OTP and set the new password.                                           |
+| `POST /api/auth/sign-in/email`                   | `{ email, password, rememberMe }` | Password login. `rememberMe` controls cookie lifetime. Wrong email or password → same generic error.                |
+| `POST /api/auth/sign-out`                        | — (reads cookie)                  | Ends the session, clears the cookie.                                                                                |
+| `GET  /api/auth/get-session`                     | — (reads cookie)                  | The real "am I logged in?" check. Returns the session + user, or null.                                              |
 
 ### 5e. The two endpoints YOU write — OTP-gated signup, account created at the end
 

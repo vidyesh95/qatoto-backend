@@ -15,7 +15,12 @@ const router = express.Router();
  * Phase 1 of signup — send a verification code. Creates NO account (public).
  * Rate limited per-IP and per-email to stop OTP spam / email-bombing.
  */
-router.post("/signup/start", otpRequestIpLimiter, otpRequestEmailLimiter, authController.startSignup);
+router.post(
+  "/signup/start",
+  otpRequestIpLimiter,
+  otpRequestEmailLimiter,
+  authController.startSignup,
+);
 
 /**
  * POST /signup/complete

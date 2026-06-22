@@ -32,7 +32,10 @@ const CompleteSignupSchema = z
 /**
  * Emit a 422 validation-failure envelope from a Zod parse error.
  */
-function respondValidationFailed(res: Response, fieldErrors: Record<string, string[] | undefined>): void {
+function respondValidationFailed(
+  res: Response,
+  fieldErrors: Record<string, string[] | undefined>,
+): void {
   res.status(422).json({
     status: "error",
     statusCode: 422,

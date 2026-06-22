@@ -1,5 +1,5 @@
-import { rateLimit, type Options } from "express-rate-limit";
 import type { Request, Response } from "express";
+import { rateLimit, type Options } from "express-rate-limit";
 
 import type { ApiResponse } from "#src/types/index.js";
 
@@ -23,7 +23,8 @@ const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
  */
 function rateLimitExceededHandler(_req: Request, res: Response): void {
   const retryAfterHeader = res.getHeader("Retry-After");
-  const retryAfterSeconds = typeof retryAfterHeader === "string" ? Number(retryAfterHeader) : undefined;
+  const retryAfterSeconds =
+    typeof retryAfterHeader === "string" ? Number(retryAfterHeader) : undefined;
 
   const response: ApiResponse<{ retryAfterSeconds?: number }> = {
     status: "error",
