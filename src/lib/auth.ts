@@ -31,6 +31,24 @@ export const auth = betterAuth({
       "/sign-in/email": { window: 10, max: 5 },
     },
   },
+  account: {
+    // One user = one email. Linking is on by default, but we make it explicit:
+    // when a provider reports a VERIFIED email matching an existing user, the new
+    // provider is attached to that same user instead of minting a second row
+    // (which the UNIQUE email constraint would reject anyway).
+    //
+    // trustedProviders forces linking for google/github even in the rare case a
+    // provider omits the verified flag — safe because both are first-party OAuth
+    // we control the client config for. We deliberately do NOT trust
+    // "email-password": a credential signup must prove the email (OTP) before it
+    // can ride onto an existing OAuth account, which our /signup/complete already
+    // enforces. Trusting it blindly would open account-takeover via unverified
+    // password signup.
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ["google", "github"],
+    },
+  },
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 8,
