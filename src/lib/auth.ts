@@ -47,11 +47,15 @@ export const auth = betterAuth({
     accountLinking: {
       enabled: true,
       trustedProviders: ["google", "github"],
-      // Backfill the user's profile from the provider when an account links.
-      // Default leaves the existing row untouched, so an email-first user keeps
-      // name=null/image=null even after Google reports both. This syncs `name`
-      // and `image` on link; `email`/`emailVerified` are never rebound by it.
-      updateUserInfoOnLink: true,
+      // Do NOT let a newly linked provider overwrite the local user row. With
+      // this on, linking a 2nd provider copies that provider's name/image onto
+      // the user — which would clobber a name the user set themselves via
+      // PATCH /users/me (see user.nameSetByUser). OAuth still seeds `name` at
+      // first sign-in (user creation), so a brand-new OAuth user is unaffected;
+      // only the link-time overwrite is suppressed. The cost is that an
+      // email-first user's placeholder name is no longer auto-upgraded from the
+      // provider on link — they set it explicitly instead.
+      updateUserInfoOnLink: false,
     },
   },
   emailAndPassword: {

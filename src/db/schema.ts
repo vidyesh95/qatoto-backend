@@ -4,6 +4,10 @@ import { pgTable, text, timestamp, boolean, integer, index } from "drizzle-orm/p
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
+  // True once the user explicitly set their own name (PATCH /users/me). OAuth
+  // seeds `name` at first sign-in; this flag marks it as user-owned so account
+  // linking never overwrites it. See src/lib/auth.ts accountLinking.
+  nameSetByUser: boolean("name_set_by_user").default(false).notNull(),
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").default(false).notNull(),
   image: text("image"),

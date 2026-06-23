@@ -1,10 +1,11 @@
 /**
  * One-time backfill of `user.name` / `user.image` from already-linked OAuth providers.
  *
- * `updateUserInfoOnLink` (src/lib/auth.ts) only syncs the profile on a NEW link, so
- * users whose google/github account was linked BEFORE that flag was enabled still carry
- * `image = null` and the email-prefix fallback name. This script reads the provider
- * profile already sitting in the `account` row and copies `name` + `image` onto the user:
+ * OAuth seeds the profile only at user creation (link-time sync is OFF — see
+ * `updateUserInfoOnLink` in src/lib/auth.ts), so users whose google/github account was
+ * linked to an already-existing row still carry `image = null` and the email-prefix
+ * fallback name. This script reads the provider profile already sitting in the `account`
+ * row and copies `name` + `image` onto the user:
  *
  *   - google → decode the stored `id_token` (a Google-signed JWT) → `name`, `picture`.
  *   - github → call https://api.github.com/user with the stored `access_token`
@@ -45,9 +46,7 @@ const GitHubUserSchema = z.object({
 
 type ProviderProfile = { readonly name?: string; readonly image?: string };
 
-type Result<T, E = string> =
-  | { success: true; value: T }
-  | { success: false; error: E };
+type Result<T, E = string> = { success: true; value: T } | { success: false; error: E };
 
 /**
  * Decode (without signature verification) the payload of a JWT id_token. The token was
@@ -115,7 +114,7 @@ async function main(): Promise<void> {
   // Only users still missing a picture are candidates — `name` is notNull so it always
   // has at least the email-prefix fallback; image=null is the reliable "never synced" mark.
   const candidates = await db
-    .select({ id: user.id, email: user.email, name: user.name })
+    .select({ id: user.id, email: user.email, name: user.name, nameSetByUser: user.nameSetByUser })
     .from(user)
     .where(isNull(user.image));
 
@@ -179,7 +178,10 @@ async function main(): Promise<void> {
     }
 
     const emailPrefixFallback = candidate.email.split("@")[0];
-    const nameIsStillFallback = candidate.name === emailPrefixFallback;
+    // Only touch the name if the user never set it themselves AND it's still the
+    // email-prefix placeholder (covers the edge where a user deliberately sets
+    // their name to exactly that prefix — the flag wins).
+    const nameIsStillFallback = !candidate.nameSetByUser && candidate.name === emailPrefixFallback;
 
     const nextImage = profileResult.value.image;
     const nextName =
