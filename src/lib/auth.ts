@@ -3,9 +3,11 @@ import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { anonymous, emailOTP } from "better-auth/plugins";
+import { eq } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
+import { user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
 
 export const auth = betterAuth({
@@ -29,6 +31,24 @@ export const auth = betterAuth({
       "/email-otp/reset-password": { window: 60, max: 5 },
       // Password login: limit credential stuffing.
       "/sign-in/email": { window: 10, max: 5 },
+    },
+  },
+  databaseHooks: {
+    user: {
+      create: {
+        // OAuth (google/github) seeds `image` from the provider profile at first
+        // sign-in. Stamp imageSource = "oauth" so the photo is marked
+        // provider-owned: a later OAuth sign-in or DELETE /users/me/photo may
+        // replace it, but PATCH /users/me/photo flips it to "user" — a lock that
+        // OAuth then never overrides (updateUserInfoOnLink is off below). Users
+        // created without an image (email/password, anonymous) keep imageSource
+        // NULL. Mirrors the nameSetByUser mechanism for the display name.
+        after: async (createdUser) => {
+          if (createdUser.image) {
+            await db.update(user).set({ imageSource: "oauth" }).where(eq(user.id, createdUser.id));
+          }
+        },
+      },
     },
   },
   account: {

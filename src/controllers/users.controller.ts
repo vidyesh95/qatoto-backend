@@ -121,3 +121,156 @@ export async function updateMyProfile(req: Request, res: Response): Promise<void
   };
   res.status(200).json(response);
 }
+
+/**
+ * PATCH /users/me/photo  (multipart/form-data, field `photo`)
+ * Set the authenticated caller's profile photo. The id comes from the session
+ * (req.user), never the body — a caller can only set their own photo (§1.1).
+ * `uploadAvatarPhoto` middleware has already buffered + size-capped the file;
+ * the service re-validates the actual image bytes server-side.
+ */
+export async function updateMyPhoto(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    });
+    return;
+  }
+
+  if (!req.file) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "A photo file is required (multipart field 'photo').",
+    });
+    return;
+  }
+
+  const updateResult = await usersService.updateUserPhoto(req.user.id, req.file.buffer);
+
+  if (!updateResult.success) {
+    switch (updateResult.error.type) {
+      case "NOT_AN_IMAGE":
+        res.status(422).json({
+          status: "error",
+          statusCode: 422,
+          message: "The uploaded file is not a valid image.",
+        });
+        return;
+      case "UNSUPPORTED_FORMAT":
+        res.status(422).json({
+          status: "error",
+          statusCode: 422,
+          message: "Photo must be a JPEG, PNG or WebP image.",
+        });
+        return;
+      case "DIMENSIONS_TOO_SMALL":
+        res.status(422).json({
+          status: "error",
+          statusCode: 422,
+          message: "Photo must be at least 64×64 pixels.",
+        });
+        return;
+      case "DIMENSIONS_TOO_LARGE":
+        res.status(422).json({
+          status: "error",
+          statusCode: 422,
+          message: "Photo dimensions are too large.",
+        });
+        return;
+      case "NOT_CONFIGURED":
+        res.status(503).json({
+          status: "error",
+          statusCode: 503,
+          message: "Photo uploads are not available right now.",
+        });
+        return;
+      case "UPLOAD_FAILED":
+      case "DELETE_FAILED":
+        res.status(502).json({
+          status: "error",
+          statusCode: 502,
+          message: "Could not store the photo. Please try again.",
+        });
+        return;
+      case "USER_NOT_FOUND":
+        res.status(404).json({
+          status: "error",
+          statusCode: 404,
+          message: "Your account no longer exists.",
+        });
+        return;
+      default: {
+        const exhaustiveCheck: never = updateResult.error;
+        throw new Error(`Unhandled photo update error: ${JSON.stringify(exhaustiveCheck)}`);
+      }
+    }
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Photo updated successfully",
+    data: updateResult.value,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * DELETE /users/me/photo
+ * Remove the caller's photo (Cloudinary asset + DB fields) and reset to the
+ * no-photo placeholder. Clearing imageSource re-allows OAuth to seed a picture.
+ */
+export async function deleteMyPhoto(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    });
+    return;
+  }
+
+  const deleteResult = await usersService.deleteUserPhoto(req.user.id);
+
+  if (!deleteResult.success) {
+    switch (deleteResult.error.type) {
+      case "NOT_CONFIGURED":
+        res.status(503).json({
+          status: "error",
+          statusCode: 503,
+          message: "Photo uploads are not available right now.",
+        });
+        return;
+      case "UPLOAD_FAILED":
+      case "DELETE_FAILED":
+        res.status(502).json({
+          status: "error",
+          statusCode: 502,
+          message: "Could not remove the photo. Please try again.",
+        });
+        return;
+      case "USER_NOT_FOUND":
+        res.status(404).json({
+          status: "error",
+          statusCode: 404,
+          message: "Your account no longer exists.",
+        });
+        return;
+      default: {
+        const exhaustiveCheck: never = deleteResult.error;
+        throw new Error(`Unhandled photo delete error: ${JSON.stringify(exhaustiveCheck)}`);
+      }
+    }
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Photo removed successfully",
+    data: deleteResult.value,
+  };
+  res.status(200).json(response);
+}

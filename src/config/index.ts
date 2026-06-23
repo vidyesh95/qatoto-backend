@@ -15,6 +15,11 @@ const envSchema = z.object({
   BREVO_API_KEY: z.string().min(1).optional(),
   BREVO_SENDER_EMAIL: z.email().optional(),
   BREVO_SENDER_NAME: z.string().min(1).default("Qatoto"),
+  // Cloudinary credentials for avatar uploads. Optional like Brevo: absent in
+  // dev means the photo endpoints return NOT_CONFIGURED instead of crashing boot.
+  CLOUDINARY_CLOUD_NAME: z.string().min(1).optional(),
+  CLOUDINARY_API_KEY: z.string().min(1).optional(),
+  CLOUDINARY_API_SECRET: z.string().min(1).optional(),
 });
 
 export const config = envSchema.parse(process.env);

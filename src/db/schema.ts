@@ -1,5 +1,11 @@
 import { relations } from "drizzle-orm";
-import { pgTable, text, timestamp, boolean, integer, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, integer, index, pgEnum } from "drizzle-orm/pg-core";
+
+// Provenance of `user.image`. "oauth" = seeded from a Google/GitHub profile;
+// "user" = the user uploaded their own photo (PATCH /users/me/photo). NULL = no
+// image. "user" is a lock: OAuth must never overwrite a user-owned photo, exactly
+// like nameSetByUser guards the display name. See src/lib/auth.ts databaseHooks.
+export const imageSourceEnum = pgEnum("image_source", ["oauth", "user"]);
 
 export const user = pgTable("user", {
   id: text("id").primaryKey(),
@@ -11,6 +17,8 @@ export const user = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").default(false).notNull(),
   image: text("image"),
+  // Who owns `image` — see imageSourceEnum. NULL until an image is set.
+  imageSource: imageSourceEnum("image_source"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at")
     .defaultNow()

@@ -13,7 +13,7 @@ const caCertPath = process.env.DATABASE_CA_CERT_PATH;
 // drizzle-kit take the `{ ...credentials, ssl }` branch and honor our CA.
 const databaseCredentials = caCertPath
   ? (() => {
-      const parsedUrl = new URL(process.env.DATABASE_URL!);
+      const parsedUrl = new URL(process.env.DATABASE_URL);
       return {
         host: parsedUrl.hostname,
         port: parsedUrl.port ? Number(parsedUrl.port) : 5432,
