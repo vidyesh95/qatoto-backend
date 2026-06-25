@@ -110,6 +110,8 @@ function computeRateLimitWindow(
 export interface HandleMetadata {
   readonly handle: string | null;
   readonly maxChanges: number;
+  /** Length of the rolling rate-limit window, in days (display copy only). */
+  readonly windowDays: number;
   readonly changesRemaining: number;
   readonly isChangeLocked: boolean;
   readonly cooldownResetAt: Date | null;
@@ -164,6 +166,7 @@ export async function getHandleMetadata(
     value: {
       handle: userRow.handle,
       maxChanges: MAX_HANDLE_CHANGES_PER_WINDOW,
+      windowDays: HANDLE_WINDOW_DAYS,
       changesRemaining: window.changesRemaining,
       isChangeLocked: window.isChangeLocked,
       cooldownResetAt: window.cooldownResetAt,
