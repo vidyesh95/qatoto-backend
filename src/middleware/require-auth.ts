@@ -27,6 +27,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     email: session.user.email,
     name: session.user.name,
     emailVerified: session.user.emailVerified,
+    handle: session.user.handle ?? null,
   };
   next();
 }

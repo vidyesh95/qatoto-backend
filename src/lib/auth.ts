@@ -9,12 +9,23 @@ import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
+import { assignPlaceholderHandle } from "#src/services/handle.service.js";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg" }),
   secret: config.BETTER_AUTH_SECRET,
   baseURL: config.BETTER_AUTH_URL,
   trustedOrigins: [config.FRONTEND_URL],
+  user: {
+    // Expose the user's handle on the session so session.user.handle drives
+    // menu/avatar display (the frontend mirrors this via inferAdditionalFields).
+    // input:false — the handle is NEVER client-writable through Better Auth's own
+    // update/signup paths; it is owned solely by PATCH /users/me/handle, which
+    // runs the rate-limit + reservation transaction (src/services/handle.service.ts).
+    additionalFields: {
+      handle: { type: "string", required: false, input: false },
+    },
+  },
   // Guards Better Auth's OWN HTTP endpoints (the frontend hits these directly for
   // forgot-password and password login). Note: our /signup/* routes call auth.api
   // server-side, which this does NOT cover — those are rate limited in Express
@@ -46,6 +57,22 @@ export const auth = betterAuth({
         after: async (createdUser) => {
           if (createdUser.image) {
             await db.update(user).set({ imageSource: "oauth" }).where(eq(user.id, createdUser.id));
+          }
+
+          // Seed a unique randomized temporary handle from the user's name/email
+          // (e.g. user_vidyesh_7a9f). Done here so every signup path — Google,
+          // GitHub, email/password — gets one. A failure must NOT abort account
+          // creation, so we log and move on; the user can still set a handle via
+          // PATCH /users/me/handle, and getHandleMetadata tolerates a null handle.
+          const placeholderResult = await assignPlaceholderHandle(
+            createdUser.id,
+            createdUser.name,
+            createdUser.email,
+          );
+          if (!placeholderResult.success) {
+            console.error(
+              `Failed to assign placeholder handle to user ${createdUser.id}: ${placeholderResult.error.type}`,
+            );
           }
         },
       },

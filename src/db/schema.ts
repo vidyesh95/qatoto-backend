@@ -19,6 +19,21 @@ export const user = pgTable("user", {
   image: text("image"),
   // Who owns `image` — see imageSourceEnum. NULL until an image is set.
   imageSource: imageSourceEnum("image_source"),
+  // The user's current active handle (stored normalized: lowercased, no leading
+  // "@"). UNIQUE so two users can never hold the same handle; NULL until claimed
+  // (Postgres UNIQUE permits many NULLs). The leading "@" is a display concern the
+  // client adds — never stored here. Exposed on the session via Better Auth
+  // additionalFields (src/lib/auth.ts) so session.user.handle drives menu/avatar.
+  handle: text("handle").unique(),
+  // Timestamp of the last successful handle change. NULL until first change.
+  handleUpdatedAt: timestamp("handle_updated_at"),
+  // Rate-limit bookkeeping: how many changes the user has made inside the CURRENT
+  // 14-day window, and when that window opened. A change consumes one; at
+  // MAX_HANDLE_CHANGES_PER_WINDOW the user is locked until windowStartedAt + 14d.
+  // See src/services/handle.service.ts (computeRateLimitWindow). The server is the
+  // sole authority for this (CLAUDE.md §1.1) — the client only previews the lock.
+  handleChangeCount: integer("handle_change_count").default(0).notNull(),
+  handleWindowStartedAt: timestamp("handle_window_started_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at")
     .defaultNow()
@@ -106,10 +121,41 @@ export const passkey = pgTable(
   (table) => [index("passkey_userId_idx").on(table.userId)],
 );
 
+// A handle a user PREVIOUSLY held, parked for 14 days after they changed away
+// from it. While the row exists with expires_at > NOW() it is (a) blocked from
+// anyone else claiming it and (b) revertable by its owner (Case 2). Once
+// expires_at < NOW() the hold is dead: it reads as available to everyone and is
+// lazy-deleted on the next touch (plus a daily cron sweep). reserved_handle is
+// the PK — it is the normalized handle string, so the table can hold at most one
+// reservation per handle, mirroring user.handle's UNIQUE.
+export const handleReservation = pgTable(
+  "handle_reservations",
+  {
+    reservedHandle: text("reserved_handle").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("handle_reservations_userId_idx").on(table.userId),
+    index("handle_reservations_expiresAt_idx").on(table.expiresAt),
+  ],
+);
+
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),
   accounts: many(account),
   passkeys: many(passkey),
+  handleReservations: many(handleReservation),
+}));
+
+export const handleReservationRelations = relations(handleReservation, ({ one }) => ({
+  user: one(user, {
+    fields: [handleReservation.userId],
+    references: [user.id],
+  }),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({

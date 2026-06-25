@@ -12,6 +12,8 @@ declare namespace Express {
       readonly email: string;
       readonly name: string;
       readonly emailVerified: boolean;
+      // Current active handle (normalized, no leading "@"); null until claimed.
+      readonly handle: string | null;
     };
   }
 }

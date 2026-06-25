@@ -28,6 +28,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:cleanup-orphans": "tsx --conditions=development scripts/cleanup-orphan-signups.ts",
+    "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",
+    "db:backfill-handles": "tsx --conditions=development scripts/backfill-handles.ts",
     "db:backfill-oauth-profile": "tsx --conditions=development scripts/backfill-oauth-profile.ts",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",

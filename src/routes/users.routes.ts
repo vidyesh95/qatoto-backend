@@ -1,5 +1,6 @@
 import express from "express";
 
+import * as handleController from "#src/controllers/handle.controller.js";
 import * as usersController from "#src/controllers/users.controller.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadAvatarPhoto } from "#src/middleware/upload-avatar.js";
@@ -32,6 +33,21 @@ router.patch("/me/photo", requireAuth, uploadAvatarPhoto, usersController.update
  * Remove the caller's own profile photo and reset to the placeholder state.
  */
 router.delete("/me/photo", requireAuth, usersController.deleteMyPhoto);
+
+/**
+ * GET /users/me/handle
+ * Panel bootstrap: the caller's current handle plus rate-limit + revert metadata.
+ * Auth required; the user id comes from the session, never the request. Declared
+ * before `/:id` so "me" is never swallowed as an id param.
+ */
+router.get("/me/handle", requireAuth, handleController.getMyHandle);
+
+/**
+ * PATCH /users/me/handle
+ * Authoritative set/revert of the caller's handle (full server-side transaction).
+ * Auth required; id from the session.
+ */
+router.patch("/me/handle", requireAuth, handleController.updateMyHandle);
 
 /**
  * GET /users/:id

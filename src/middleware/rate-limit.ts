@@ -73,3 +73,29 @@ export const signupCompleteIpLimiter = rateLimit({
   ...sharedOptions,
   limit: 12,
 });
+
+const ONE_MINUTE_MS = 60 * 1000;
+
+/**
+ * Authenticated-user key for per-account buckets. `requireAuth` runs before this
+ * limiter and sets `req.user`, so the id is always present on the routes that use
+ * it; the empty-string fallback only guards against misordering.
+ */
+function userKey(req: Request): string {
+  return req.user?.id ?? "";
+}
+
+/**
+ * GET /handles/availability — Tier-1 live check. Debounced typing (300–500ms)
+ * still fires many calls per session, so cap each user at 60 probes/min. Keyed by
+ * user id (not IP) so one user behind a shared NAT can't starve another, and a
+ * single user can't hammer the cheap SELECT unbounded.
+ */
+export const handleAvailabilityLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
