@@ -27,7 +27,13 @@
   },
   "overrides": [
     {
-      "files": ["src/index.ts", "src/db/index.ts", "src/lib/auth.ts", "scripts/**/*.ts"],
+      "files": [
+        "src/index.ts",
+        "src/db/index.ts",
+        "src/lib/auth.ts",
+        "src/services/recovery-otp.service.ts",
+        "scripts/**/*.ts"
+      ],
       "rules": { "no-console": "off" }
     },
     {

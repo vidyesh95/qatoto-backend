@@ -1,5 +1,14 @@
 import { relations } from "drizzle-orm";
-import { pgTable, text, timestamp, boolean, integer, index, pgEnum } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  timestamp,
+  boolean,
+  integer,
+  index,
+  pgEnum,
+  primaryKey,
+} from "drizzle-orm/pg-core";
 
 // Provenance of `user.image`. "oauth" = seeded from a Google/GitHub profile;
 // "user" = the user uploaded their own photo (PATCH /users/me/photo). NULL = no
@@ -34,6 +43,22 @@ export const user = pgTable("user", {
   // sole authority for this (CLAUDE.md §1.1) — the client only previews the lock.
   handleChangeCount: integer("handle_change_count").default(0).notNull(),
   handleWindowStartedAt: timestamp("handle_window_started_at"),
+  // The user's BACKUP "account recovery" email — a SECOND address, distinct from
+  // the primary login `email` above. It is NOT a login identifier: you cannot sign
+  // in with it, and it is deliberately NOT UNIQUE (unlike `email`/`handle`). A
+  // recovery email is a backup, not an identity — a shared family/admin inbox is a
+  // legitimate case, and a UNIQUE index would also leak (an enumeration oracle:
+  // "this address is already in use"). The real anti-abuse guard is that you can
+  // only store an address you can read mail at — ownership is proven by an OTP sent
+  // to it (recovery_email_otp below). Stored normalized (trimmed, lowercased).
+  recoveryEmail: text("recovery_email"),
+  // True only once the user proved they can read mail at `recoveryEmail` (via the
+  // OTP). Reset to false on any change; flips true only after re-verification —
+  // exactly how emailVerified guards the primary email. An UNVERIFIED recovery
+  // email must NEVER be usable to recover the account (see recovery flow).
+  recoveryEmailVerified: boolean("recovery_email_verified").default(false).notNull(),
+  // Timestamp of the last successful recovery-email change. NULL until first set.
+  recoveryEmailUpdatedAt: timestamp("recovery_email_updated_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at")
     .defaultNow()
@@ -144,11 +169,52 @@ export const handleReservation = pgTable(
   ],
 );
 
+// A short-lived, single-use OTP proving the user can read mail at a candidate
+// recovery address. We CANNOT reuse Better Auth's own OTP endpoints for this:
+// with `disableSignUp: true` (src/lib/auth.ts), sendVerificationOTP silently
+// no-ops and checkVerificationOTP throws USER_NOT_FOUND for any email that isn't
+// already a user — and a recovery address is, by definition, not a login email.
+// So we own this OTP end-to-end, mirroring the verification table's contract:
+// hashed (argon2 — never plaintext), expiring, single-use, attempt-capped.
+//
+// One pending challenge per user PER PURPOSE: the composite PK (userId, purpose)
+// means a re-request for the same purpose overwrites the old row. `purpose` is
+// 'verify_address' (Half 1: prove a NEW backup address) or 'reset_password'
+// (Half 2: recover the account via the already-verified backup address).
+export const recoveryEmailOtp = pgTable(
+  "recovery_email_otp",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    purpose: text("purpose").notNull(),
+    // The address the code was sent to. For 'verify_address' this is the NEW
+    // candidate (not yet stored on user); for 'reset_password' it's the already
+    // verified user.recoveryEmail. Kept so verify can persist exactly what was proven.
+    candidateEmail: text("candidate_email").notNull(),
+    otpHash: text("otp_hash").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    // Brute-force budget for the 6-digit code (10^6 space). Mirrors Better Auth's
+    // own per-OTP `allowedAttempts` (default 3): the row is destroyed once exceeded.
+    attempts: integer("attempts").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.purpose] })],
+);
+
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),
   accounts: many(account),
   passkeys: many(passkey),
   handleReservations: many(handleReservation),
+  recoveryEmailOtps: many(recoveryEmailOtp),
+}));
+
+export const recoveryEmailOtpRelations = relations(recoveryEmailOtp, ({ one }) => ({
+  user: one(user, {
+    fields: [recoveryEmailOtp.userId],
+    references: [user.id],
+  }),
 }));
 
 export const handleReservationRelations = relations(handleReservation, ({ one }) => ({
