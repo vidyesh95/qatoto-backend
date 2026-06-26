@@ -219,6 +219,35 @@ export async function updateMyPhoto(req: Request, res: Response): Promise<void> 
 }
 
 /**
+ * GET /users/me/linked-accounts
+ * List the caller's linked providers (credential / google / github) with the
+ * email each is linked as. The user id AND email come from the server-derived
+ * session (req.user, set by requireAuth) — never the request — so a caller can
+ * only ever read their own linked accounts (CLAUDE.md §1.1). Tokens are never
+ * returned.
+ */
+export async function getLinkedAccounts(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    });
+    return;
+  }
+
+  const linkedAccounts = await usersService.getLinkedAccounts(req.user.id, req.user.email);
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Linked accounts retrieved successfully",
+    data: linkedAccounts,
+  };
+  res.status(200).json(response);
+}
+
+/**
  * DELETE /users/me/photo
  * Remove the caller's photo (Cloudinary asset + DB fields) and reset to the
  * no-photo placeholder. Clearing imageSource re-allows OAuth to seed a picture.

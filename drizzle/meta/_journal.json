@@ -43,6 +43,13 @@
       "when": 1782466351760,
       "tag": "0005_outgoing_wilson_fisk",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782493074925,
+      "tag": "0006_petite_krista_starr",
+      "breakpoints": true
     }
   ]
 }

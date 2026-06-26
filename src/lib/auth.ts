@@ -11,6 +11,7 @@ import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
+import { fetchGitHubPrimaryEmail, readGoogleProfileFromIdToken } from "#src/lib/oauth-profile.js";
 import { assignPlaceholderHandle } from "#src/services/handle.service.js";
 
 /**
@@ -102,6 +103,55 @@ export const auth = betterAuth({
             console.error(
               `Failed to assign placeholder handle to user ${createdUser.id}: ${placeholderResult.error.type}`,
             );
+          }
+        },
+      },
+    },
+    account: {
+      create: {
+        // Write-once capture of the provider's email onto the account row, so the
+        // settings panel can show which address each "Connected" provider is linked
+        // as (GET /users/me/linked-accounts). We do it in `after` with an explicit
+        // drizzle UPDATE — exactly like imageSource above — because `account.email`
+        // is our own column, not one Better Auth knows about, so returning it from a
+        // `before` hook would be dropped on insert.
+        //
+        // Only OAuth rows are touched: credential ("email-password") accounts have
+        // no provider email and resolve theirs from user.email at read time. Google
+        // carries a verified email in the stored id_token (no network call); GitHub
+        // keeps it in no token, so we call /user/emails with the access token.
+        //
+        // A failure here must NEVER abort account creation/linking — the email is a
+        // nice-to-have the backfill can fill in later. So we log and move on,
+        // mirroring the placeholder-handle seeding above.
+        after: async (createdAccount) => {
+          let resolvedEmail: string | null = null;
+
+          if (createdAccount.providerId === "google" && createdAccount.idToken) {
+            const googleProfile = readGoogleProfileFromIdToken(createdAccount.idToken);
+            if (googleProfile.success && googleProfile.value.email) {
+              resolvedEmail = googleProfile.value.email;
+            } else if (!googleProfile.success) {
+              console.error(
+                `Failed to read google email for account ${createdAccount.id}: ${googleProfile.error}`,
+              );
+            }
+          } else if (createdAccount.providerId === "github" && createdAccount.accessToken) {
+            const githubEmail = await fetchGitHubPrimaryEmail(createdAccount.accessToken);
+            if (githubEmail.success) {
+              resolvedEmail = githubEmail.value;
+            } else {
+              console.error(
+                `Failed to fetch github email for account ${createdAccount.id}: ${githubEmail.error}`,
+              );
+            }
+          }
+
+          if (resolvedEmail) {
+            await db
+              .update(account)
+              .set({ email: resolvedEmail })
+              .where(eq(account.id, createdAccount.id));
           }
         },
       },

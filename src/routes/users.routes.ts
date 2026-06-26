@@ -100,6 +100,15 @@ router.post("/me/recovery-email/verify", requireAuth, recoveryEmailController.ve
 router.delete("/me/recovery-email", requireAuth, recoveryEmailController.deleteRecoveryEmail);
 
 /**
+ * GET /users/me/linked-accounts
+ * The caller's linked providers (credential / google / github) and the email each
+ * is linked as — drives the "Connected" rows in the settings panel. Auth required;
+ * id + email come from the session, never the request. Declared before `/:id` so
+ * "me" is never swallowed as an id param.
+ */
+router.get("/me/linked-accounts", requireAuth, usersController.getLinkedAccounts);
+
+/**
  * GET /users/:id
  * Get a single user by ID.
  */

@@ -1,116 +1,48 @@
 /**
- * One-time backfill of `user.name` / `user.image` from already-linked OAuth providers.
+ * One-time backfill from already-linked OAuth providers. Two independent passes:
  *
- * OAuth seeds the profile only at user creation (link-time sync is OFF — see
- * `updateUserInfoOnLink` in src/lib/auth.ts), so users whose google/github account was
- * linked to an already-existing row still carry `image = null` and the email-prefix
- * fallback name. This script reads the provider profile already sitting in the `account`
- * row and copies `name` + `image` onto the user:
+ *   1. user.name / user.image — OAuth seeds the profile only at user creation
+ *      (link-time sync is OFF — see `updateUserInfoOnLink` in src/lib/auth.ts), so
+ *      users whose google/github account was linked to an already-existing row
+ *      still carry `image = null` and the email-prefix fallback name.
  *
- *   - google → decode the stored `id_token` (a Google-signed JWT) → `name`, `picture`.
- *   - github → call https://api.github.com/user with the stored `access_token`
- *              → `name` (falls back to `login`), `avatar_url`.
+ *   2. account.email — the `account.email` column (added later) is only populated
+ *      by the account.create hook going forward, so accounts linked before it
+ *      shipped have `email = null`. This pass fills them from the same sources.
+ *
+ * Provider sources (shared with the runtime hook via src/lib/oauth-profile.ts):
+ *   - google → decode the stored `id_token` (a Google-signed JWT) → name, picture,
+ *              verified email.
+ *   - github → GET https://api.github.com/user (name, avatar) and GET
+ *              /user/emails (primary verified email) with the stored access_token.
  *
  * Conservative writes:
  *   - `image` is set ONLY when currently null (never overwrites an existing picture).
  *   - `name`  is overwritten ONLY when it still equals the email-prefix fallback
  *     (`email.split("@")[0]`) — a deliberately-chosen name is left untouched.
- *
- * The id_token is trusted because it came from Google over TLS during the original OAuth
- * ceremony and is stored in our own DB; we decode (not re-verify) its payload. Both
- * provider payloads are parsed with Zod before use (untrusted-shape discipline).
+ *   - `account.email` is set ONLY when currently null (write-once, never clobbered).
  *
  * Usage:
  *   npm run db:backfill-oauth-profile             # DRY RUN — prints planned updates
  *   npm run db:backfill-oauth-profile -- --apply  # actually writes the rows
  */
 import "dotenv/config";
-import { eq, inArray, isNull } from "drizzle-orm";
-import { z } from "zod";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import { db, pool } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
-
-/** Claims we read out of a Google id_token. Everything optional — never assume shape. */
-const GoogleIdTokenClaimsSchema = z.object({
-  name: z.string().min(1).optional(),
-  picture: z.string().url().optional(),
-});
-
-/** Subset of GET https://api.github.com/user we use. `name` can be null on GitHub. */
-const GitHubUserSchema = z.object({
-  name: z.string().min(1).nullable().optional(),
-  login: z.string().min(1),
-  avatar_url: z.string().url(),
-});
-
-type ProviderProfile = { readonly name?: string; readonly image?: string };
-
-type Result<T, E = string> = { success: true; value: T } | { success: false; error: E };
+import {
+  fetchGitHubPrimaryEmail,
+  fetchGitHubProfile,
+  readGoogleProfileFromIdToken,
+  type ProviderProfile,
+} from "#src/lib/oauth-profile.js";
+import type { Result } from "#src/types/index.js";
 
 /**
- * Decode (without signature verification) the payload of a JWT id_token. The token was
- * issued by Google during OAuth and persisted by us, so the trust boundary is our DB,
- * not this decode. Returns the parsed claims or a reason string.
+ * Pass 1 — backfill user.name / user.image from the provider profile.
  */
-function readGoogleProfileFromIdToken(idToken: string): Result<ProviderProfile> {
-  const segments = idToken.split(".");
-  if (segments.length !== 3) {
-    return { success: false, error: "id_token is not a well-formed JWT" };
-  }
-
-  let claimsJson: unknown;
-  try {
-    const payloadJson = Buffer.from(segments[1], "base64url").toString("utf8");
-    claimsJson = JSON.parse(payloadJson);
-  } catch {
-    return { success: false, error: "id_token payload is not valid base64url JSON" };
-  }
-
-  const parsed = GoogleIdTokenClaimsSchema.safeParse(claimsJson);
-  if (!parsed.success) {
-    return { success: false, error: "id_token claims failed validation" };
-  }
-
-  return { success: true, value: { name: parsed.data.name, image: parsed.data.picture } };
-}
-
-/**
- * Fetch the GitHub profile for a stored access token. The token may be expired/revoked,
- * so any non-200 (or shape mismatch) is a soft failure the caller skips over.
- */
-async function fetchGitHubProfile(accessToken: string): Promise<Result<ProviderProfile>> {
-  let response: Response;
-  try {
-    response = await fetch("https://api.github.com/user", {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "qatoto-backfill",
-      },
-    });
-  } catch {
-    return { success: false, error: "GitHub request failed (network)" };
-  }
-
-  if (!response.ok) {
-    return { success: false, error: `GitHub returned ${response.status}` };
-  }
-
-  const parsed = GitHubUserSchema.safeParse(await response.json());
-  if (!parsed.success) {
-    return { success: false, error: "GitHub response failed validation" };
-  }
-
-  return {
-    success: true,
-    value: { name: parsed.data.name ?? parsed.data.login, image: parsed.data.avatar_url },
-  };
-}
-
-async function main(): Promise<void> {
-  const shouldApply = process.argv.includes("--apply");
-
+async function backfillUserProfiles(shouldApply: boolean): Promise<void> {
   // Only users still missing a picture are candidates — `name` is notNull so it always
   // has at least the email-prefix fallback; image=null is the reliable "never synced" mark.
   const candidates = await db
@@ -119,7 +51,7 @@ async function main(): Promise<void> {
     .where(isNull(user.image));
 
   if (candidates.length === 0) {
-    console.log("No users with a missing profile picture. Nothing to do.");
+    console.log("Profile pass: no users with a missing profile picture. Nothing to do.");
     return;
   }
 
@@ -154,7 +86,7 @@ async function main(): Promise<void> {
     const google = linkedAccounts.find((linked) => linked.providerId === "google");
     const github = linkedAccounts.find((linked) => linked.providerId === "github");
 
-    let profileResult: Result<ProviderProfile> | null = null;
+    let profileResult: Result<ProviderProfile, string> | null = null;
     let sourceProvider = "";
 
     if (google?.idToken) {
@@ -209,10 +141,87 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `\n${shouldApply ? "Updated" : "Would update"} ${updatedCount} user(s); skipped ${skippedCount}.`,
+    `Profile pass: ${shouldApply ? "updated" : "would update"} ${updatedCount} user(s); skipped ${skippedCount}.`,
   );
+}
+
+/**
+ * Pass 2 — backfill account.email for google/github accounts still missing it.
+ */
+async function backfillAccountEmails(shouldApply: boolean): Promise<void> {
+  const candidates = await db
+    .select({
+      id: account.id,
+      providerId: account.providerId,
+      idToken: account.idToken,
+      accessToken: account.accessToken,
+    })
+    .from(account)
+    .where(and(isNull(account.email), inArray(account.providerId, ["google", "github"])));
+
+  if (candidates.length === 0) {
+    console.log("Email pass: no google/github accounts missing an email. Nothing to do.");
+    return;
+  }
+
+  let updatedCount = 0;
+  let skippedCount = 0;
+
+  for (const candidate of candidates) {
+    let emailResult: Result<string, string> | null = null;
+
+    if (candidate.providerId === "google" && candidate.idToken) {
+      const googleProfile = readGoogleProfileFromIdToken(candidate.idToken);
+      emailResult = googleProfile.success
+        ? googleProfile.value.email
+          ? { success: true, value: googleProfile.value.email }
+          : { success: false, error: "id_token had no verified email" }
+        : { success: false, error: googleProfile.error };
+    } else if (candidate.providerId === "github" && candidate.accessToken) {
+      emailResult = await fetchGitHubPrimaryEmail(candidate.accessToken);
+    }
+
+    if (!emailResult) {
+      skippedCount += 1;
+      console.log(`  SKIP  account ${candidate.id} (${candidate.providerId}) — no usable token`);
+      continue;
+    }
+
+    if (!emailResult.success) {
+      skippedCount += 1;
+      console.log(
+        `  SKIP  account ${candidate.id} (${candidate.providerId}) — ${emailResult.error}`,
+      );
+      continue;
+    }
+
+    console.log(
+      `  ${shouldApply ? "SET " : "PLAN"}  account ${candidate.id} (${candidate.providerId})  ` +
+        `email="${emailResult.value}"`,
+    );
+
+    if (shouldApply) {
+      await db
+        .update(account)
+        .set({ email: emailResult.value })
+        .where(eq(account.id, candidate.id));
+    }
+    updatedCount += 1;
+  }
+
+  console.log(
+    `Email pass: ${shouldApply ? "updated" : "would update"} ${updatedCount} account(s); skipped ${skippedCount}.`,
+  );
+}
+
+async function main(): Promise<void> {
+  const shouldApply = process.argv.includes("--apply");
+
+  await backfillUserProfiles(shouldApply);
+  await backfillAccountEmails(shouldApply);
+
   if (!shouldApply) {
-    console.log("DRY RUN — nothing written. Re-run with `-- --apply` to persist.");
+    console.log("\nDRY RUN — nothing written. Re-run with `-- --apply` to persist.");
   }
 }
 

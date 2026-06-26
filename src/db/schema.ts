@@ -102,6 +102,16 @@ export const account = pgTable(
     refreshTokenExpiresAt: timestamp("refresh_token_expires_at"),
     scope: text("scope"),
     password: text("password"),
+    // The email this provider knows the user by — the address shown next to each
+    // "Connected" provider in the settings panel. NULL on purpose: credential rows
+    // resolve their email from user.email (never stored here, so it can't drift),
+    // and pre-existing OAuth rows stay NULL until the backfill (or a fresh sign-in)
+    // populates them. Write-once at account creation from the provider profile
+    // (Google id_token email claim / GitHub primary verified email) — see the
+    // account.create hook in src/lib/auth.ts. NOT a login identifier and
+    // deliberately NOT unique: two providers can legitimately report the same
+    // address. Never expose alongside tokens. See GET /users/me/linked-accounts.
+    email: text("email"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .$onUpdate(() => /* @__PURE__ */ new Date())

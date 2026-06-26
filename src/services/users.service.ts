@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 
 import { query } from "#src/db/index.js";
 import { db } from "#src/db/index.js";
-import { user } from "#src/db/schema.js";
+import { account, user } from "#src/db/schema.js";
 import { deleteUserAvatar, uploadUserAvatar, type CloudinaryError } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeAvatar, type AvatarValidationError } from "#src/lib/image.js";
 import type { Result } from "#src/types/index.js";
@@ -110,6 +110,45 @@ export async function updateUserName(
   }
 
   return { success: true, value: updatedUser };
+}
+
+/**
+ * One linked provider as shown in the settings panel: which provider, and the
+ * email that provider knows the user by. `email` is null when we have not yet
+ * resolved one (an old OAuth row the backfill has not reached, or a provider that
+ * exposed no usable address). Tokens and the raw provider accountId are
+ * deliberately absent — the UI never needs them (CLAUDE.md §1.1).
+ */
+export interface LinkedAccount {
+  readonly providerId: string;
+  readonly email: string | null;
+}
+
+/**
+ * List the caller's linked providers with each one's resolved email, for
+ * GET /users/me/linked-accounts. `userId` and `userEmail` MUST come from the
+ * server-derived session (CLAUDE.md §1.1) — never client input — so a caller can
+ * only ever read their OWN linked accounts.
+ *
+ * The credential ("email-password") account has no provider email of its own; its
+ * address IS the user's primary login email, so we resolve it from `userEmail`
+ * (the session value) rather than the column — that can never drift from the real
+ * login email. OAuth rows return their stored `account.email`.
+ */
+export async function getLinkedAccounts(
+  userId: string,
+  userEmail: string,
+): Promise<readonly LinkedAccount[]> {
+  const rows = await db
+    .select({ providerId: account.providerId, email: account.email })
+    .from(account)
+    .where(eq(account.userId, userId))
+    .orderBy(asc(account.createdAt));
+
+  return rows.map((row) => ({
+    providerId: row.providerId,
+    email: row.providerId === "credential" ? userEmail : row.email,
+  }));
 }
 
 /**
