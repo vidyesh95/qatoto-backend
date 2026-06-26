@@ -2,12 +2,14 @@ import { passkey } from "@better-auth/passkey";
 import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { anonymous, emailOTP } from "better-auth/plugins";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
+import { z } from "zod";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
-import { user } from "#src/db/schema.js";
+import { account, user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
 import { assignPlaceholderHandle } from "#src/services/handle.service.js";
 
@@ -104,6 +106,64 @@ export const auth = betterAuth({
       // provider on link — they set it explicitly instead.
       updateUserInfoOnLink: false,
     },
+  },
+  hooks: {
+    // Server-side guard on Better Auth's own POST /unlink-account. Its built-in
+    // protection only blocks unlinking the LAST remaining account (allowUnlinkingAll
+    // is off, the default) — it does NOT protect the user's ORIGINAL provider, the
+    // one the account was first created with. We forbid unlinking that one outright:
+    // it owns the user's verified email/identity, and dropping it while a later-linked
+    // provider remains would strand the account behind a credential the user never
+    // intended to be primary. Frontend hides the button (UX only, per CLAUDE.md §1.1);
+    // a hostile client can still POST the raw request, so the check lives here.
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== "/unlink-account") {
+        return;
+      }
+
+      // Defer auth failures to the endpoint's own session check — no session means
+      // the unlink would be rejected there anyway; we only add the original-provider
+      // rule on top of an authenticated caller.
+      const session = await getSessionFromCtx(ctx);
+      if (!session) {
+        return;
+      }
+
+      const UnlinkAccountBodySchema = z
+        .object({
+          providerId: z.string().min(1),
+          accountId: z.string().min(1).optional(),
+        })
+        .strip();
+      const parsedBody = UnlinkAccountBodySchema.safeParse(ctx.body);
+      if (!parsedBody.success) {
+        // Let Better Auth's own validation produce the canonical error shape.
+        return;
+      }
+
+      // The original provider is the user's earliest-created account row.
+      const userAccountsOldestFirst = await db
+        .select()
+        .from(account)
+        .where(eq(account.userId, session.user.id))
+        .orderBy(asc(account.createdAt));
+      const originalAccount = userAccountsOldestFirst[0];
+      if (!originalAccount) {
+        return;
+      }
+
+      // When accountId is supplied the request targets one specific row; otherwise it
+      // targets every account under providerId — which sweeps up the original if its
+      // provider matches. Reject either way when the original account is in scope.
+      const requestTargetsOriginalAccount = parsedBody.data.accountId
+        ? originalAccount.accountId === parsedBody.data.accountId
+        : originalAccount.providerId === parsedBody.data.providerId;
+      if (requestTargetsOriginalAccount) {
+        throw new APIError("FORBIDDEN", {
+          message: "The original sign-in provider cannot be unlinked.",
+        });
+      }
+    }),
   },
   emailAndPassword: {
     enabled: true,
