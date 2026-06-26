@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 import { APIError } from "better-auth/api";
 import { and, eq } from "drizzle-orm";
 import type { Request, Response } from "express";
@@ -5,7 +7,7 @@ import { z } from "zod";
 
 import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
-import { auth } from "#src/lib/auth.js";
+import { auth, sendSignupOtp } from "#src/lib/auth.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**
@@ -28,6 +30,20 @@ const CompleteSignupSchema = z
     name: z.string().min(1).optional(),
   })
   .strict();
+
+/**
+ * Constant-time string equality. Length mismatch short-circuits to false (the
+ * lengths are not secret); equal lengths are compared without early-out so a
+ * guessed OTP can't be narrowed by response timing.
+ */
+function timingSafeStringEqual(expected: string, provided: string): boolean {
+  const expectedBytes = Buffer.from(expected, "utf8");
+  const providedBytes = Buffer.from(provided, "utf8");
+  if (expectedBytes.length !== providedBytes.length) {
+    return false;
+  }
+  return timingSafeEqual(expectedBytes, providedBytes);
+}
 
 /**
  * Emit a 422 validation-failure envelope from a Zod parse error.
@@ -61,9 +77,16 @@ export async function startSignup(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  await auth.api.sendVerificationOTP({
-    body: { email: parsedBody.data.email, type: "sign-in" },
-  });
+  // Mint + send the code ourselves (see sendSignupOtp): Better Auth's own send
+  // endpoint no-ops for brand-new emails under `disableSignUp: true`. A send failure
+  // is logged for ops but NEVER surfaced to the caller — the generic 200 below must
+  // not become a probe for which emails exist or whether delivery succeeded.
+  const sendResult = await sendSignupOtp(parsedBody.data.email);
+  if (!sendResult.success) {
+    console.error(
+      `Failed to send signup OTP to ${parsedBody.data.email}: ${JSON.stringify(sendResult.error)}`,
+    );
+  }
 
   const response: ApiResponse<{ ok: true }> = {
     status: "success",
@@ -113,19 +136,21 @@ export async function completeSignup(req: Request, res: Response): Promise<void>
 
   // ── Path A: no user yet — verify ownership, then create the account. ──────────
   if (!existingUser) {
-    // Verify the code BEFORE any account exists. Invalid/expired → no user created.
-    try {
-      await auth.api.checkVerificationOTP({ body: { email, otp, type: "sign-in" } });
-    } catch (error) {
-      if (error instanceof APIError) {
-        res.status(401).json({
-          status: "error",
-          statusCode: 401,
-          message: "Invalid or expired verification code.",
-        });
-        return;
-      }
-      throw error;
+    // Verify the code BEFORE any account exists. Better Auth's checkVerificationOTP
+    // requires the user to already exist (it 404s otherwise), which a brand-new
+    // signup does not — so we read the stored code via the server-only
+    // getVerificationOTP (no user required, still enforces expiry) and compare it
+    // ourselves in constant time. Invalid/expired → no user created.
+    const storedVerification = await auth.api.getVerificationOTP({
+      query: { email, type: "sign-in" },
+    });
+    if (storedVerification.otp === null || !timingSafeStringEqual(storedVerification.otp, otp)) {
+      res.status(401).json({
+        status: "error",
+        statusCode: 401,
+        message: "Invalid or expired verification code.",
+      });
+      return;
     }
 
     // OTP is valid — now (and only now) create the account with its password.

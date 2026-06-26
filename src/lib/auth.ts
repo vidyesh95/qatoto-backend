@@ -13,6 +13,33 @@ import { account, user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
 import { assignPlaceholderHandle } from "#src/services/handle.service.js";
 
+/**
+ * Build and send the OTP email for any flow (signup sign-in OTP or forget-password).
+ * In development it also logs the code so the flow can be tested without a provider.
+ * Returns the send Result; each caller decides how to treat a failure.
+ */
+async function sendOtpEmail(params: {
+  readonly email: string;
+  readonly otp: string;
+  readonly type: string;
+}): Promise<Awaited<ReturnType<typeof sendTransactionalEmail>>> {
+  if (config.NODE_ENV === "development") {
+    console.log(`OTP for ${params.email} (${params.type}): ${params.otp}`);
+  }
+
+  const subject =
+    params.type === "forget-password"
+      ? "Reset your Qatoto password"
+      : "Your Qatoto verification code";
+
+  return sendTransactionalEmail({
+    toEmail: params.email,
+    subject,
+    htmlContent: `<p>Your Qatoto verification code is <strong>${params.otp}</strong>.</p><p>It expires shortly. If you did not request this, ignore this email.</p>`,
+    textContent: `Your Qatoto verification code is ${params.otp}. It expires shortly. If you did not request this, ignore this email.`,
+  });
+}
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg" }),
   secret: config.BETTER_AUTH_SECRET,
@@ -220,21 +247,7 @@ export const auth = betterAuth({
       // a password-less orphan user behind.
       disableSignUp: true,
       async sendVerificationOTP({ email, otp, type }) {
-        // Dev: print the code to the server log so you can test without a provider.
-        if (config.NODE_ENV === "development") {
-          console.log(`OTP for ${email} (${type}): ${otp}`);
-        }
-
-        const subject =
-          type === "forget-password"
-            ? "Reset your Qatoto password"
-            : "Your Qatoto verification code";
-        const sendResult = await sendTransactionalEmail({
-          toEmail: email,
-          subject,
-          htmlContent: `<p>Your Qatoto verification code is <strong>${otp}</strong>.</p><p>It expires shortly. If you did not request this, ignore this email.</p>`,
-          textContent: `Your Qatoto verification code is ${otp}. It expires shortly. If you did not request this, ignore this email.`,
-        });
+        const sendResult = await sendOtpEmail({ email, otp, type });
 
         if (!sendResult.success) {
           // NOT_CONFIGURED in dev is expected (code already logged above); fail loudly otherwise.
@@ -247,3 +260,30 @@ export const auth = betterAuth({
     }),
   ],
 });
+
+/**
+ * Generate and send the signup verification OTP for a (possibly brand-new) email.
+ *
+ * Better Auth's public `/email-otp/send-verification-otp` silently refuses to send a
+ * `sign-in` OTP to a non-existent user while `disableSignUp: true` — which would make
+ * every first-time signup receive no code. We keep `disableSignUp: true` (so the public
+ * `/sign-in/email-otp` route can never mint an orphan, password-less account) and instead
+ * mint the code via the server-only `createVerificationOTP`, then send it ourselves. The
+ * code is stored under the same `sign-in` identifier that POST /signup/complete later
+ * checks with `checkVerificationOTP`, so verification is unchanged.
+ */
+export async function sendSignupOtp(
+  email: string,
+): Promise<Awaited<ReturnType<typeof sendTransactionalEmail>>> {
+  const generatedOtp = await auth.api.createVerificationOTP({
+    body: { email, type: "sign-in" },
+  });
+
+  if (typeof generatedOtp !== "string" || generatedOtp.length === 0) {
+    // createVerificationOTP is contracted to return the freshly minted code; a
+    // missing/empty value means Better Auth's internals changed under us.
+    throw new Error("createVerificationOTP returned no OTP code");
+  }
+
+  return sendOtpEmail({ email, otp: generatedOtp, type: "sign-in" });
+}
