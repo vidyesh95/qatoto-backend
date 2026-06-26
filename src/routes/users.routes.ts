@@ -1,9 +1,7 @@
 import express from "express";
 
 import * as handleController from "#src/controllers/handle.controller.js";
-import * as recoveryEmailController from "#src/controllers/recovery-email.controller.js";
 import * as usersController from "#src/controllers/users.controller.js";
-import { recoveryEmailOtpLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadAvatarPhoto } from "#src/middleware/upload-avatar.js";
 
@@ -50,54 +48,6 @@ router.get("/me/handle", requireAuth, handleController.getMyHandle);
  * Auth required; id from the session.
  */
 router.patch("/me/handle", requireAuth, handleController.updateMyHandle);
-
-/**
- * Recovery-email routes — the caller's BACKUP address, set/changed only with
- * step-up auth (a plain session is not enough). All session-guarded; id from the
- * session, never the body. Declared before `/:id` so "me" is never an id param.
- */
-
-/**
- * GET /users/me/recovery-email
- * Settings-panel bootstrap: current recovery email + verification state.
- */
-router.get("/me/recovery-email", requireAuth, recoveryEmailController.getMyRecoveryEmail);
-
-/**
- * POST /users/me/recovery-email/step-up-challenge
- * Mail a step-up code to the caller's PRIMARY email (the path OAuth-only users
- * use, having no password). Rate-limited per-user alongside /start.
- */
-router.post(
-  "/me/recovery-email/step-up-challenge",
-  requireAuth,
-  recoveryEmailOtpLimiter,
-  recoveryEmailController.sendStepUpChallenge,
-);
-
-/**
- * POST /users/me/recovery-email/start
- * Step 1: email an ownership-proving code to a NEW candidate recovery address.
- * Rate-limited per-user to stop inbox-bombing.
- */
-router.post(
-  "/me/recovery-email/start",
-  requireAuth,
-  recoveryEmailOtpLimiter,
-  recoveryEmailController.startRecoveryEmail,
-);
-
-/**
- * POST /users/me/recovery-email/verify
- * Step 2: step-up proof + candidate code → store the recovery email as verified.
- */
-router.post("/me/recovery-email/verify", requireAuth, recoveryEmailController.verifyRecoveryEmail);
-
-/**
- * DELETE /users/me/recovery-email
- * Remove the recovery email (step-up gated).
- */
-router.delete("/me/recovery-email", requireAuth, recoveryEmailController.deleteRecoveryEmail);
 
 /**
  * GET /users/me/linked-accounts

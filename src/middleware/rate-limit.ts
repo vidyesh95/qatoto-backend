@@ -45,16 +45,6 @@ function emailKey(req: Request): string {
   return typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 }
 
-/**
- * Lowercased, trimmed `recoveryEmail` from the body — the per-recovery-email bucket
- * key for the public /recovery/* routes (whose body field is `recoveryEmail`, not
- * `email`). Same anti-bomb intent as {@link emailKey}.
- */
-function recoveryEmailKey(req: Request): string {
-  const rawEmail: unknown = req.body?.recoveryEmail;
-  return typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
-}
-
 const sharedOptions = {
   windowMs: FIFTEEN_MINUTES_MS,
   standardHeaders: true,
@@ -108,39 +98,4 @@ export const handleAvailabilityLimiter = rateLimit({
   legacyHeaders: false,
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
-});
-
-/**
- * Recovery-email feature limiters. Like the signup routes, these call `auth.api`
- * server-side and/or send mail directly, which Better Auth's own limiter does NOT
- * cover — so these Express limiters are the real anti-bomb guard on the inboxes.
- */
-
-/**
- * POST /users/me/recovery-email/start — cap OTP-sends to a candidate backup
- * address. Session-guarded (requireAuth runs first), so keyed per-user.
- */
-export const recoveryEmailOtpLimiter = rateLimit({
-  ...sharedOptions,
-  limit: 4,
-  keyGenerator: userKey,
-});
-
-/** POST /recovery/start — at most 8 reset-code sends per IP per 15 min. */
-export const recoveryStartIpLimiter = rateLimit({
-  ...sharedOptions,
-  limit: 8,
-});
-
-/** POST /recovery/start — at most 4 reset-code sends per recovery email per 15 min. */
-export const recoveryStartEmailLimiter = rateLimit({
-  ...sharedOptions,
-  limit: 4,
-  keyGenerator: recoveryEmailKey,
-});
-
-/** POST /recovery/complete — at most 12 verify+reset attempts per IP per 15 min. */
-export const recoveryCompleteIpLimiter = rateLimit({
-  ...sharedOptions,
-  limit: 12,
 });

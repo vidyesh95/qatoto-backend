@@ -18,19 +18,11 @@ export interface PublicUser {
   readonly image: string | null;
   readonly imageSource: "oauth" | "user" | null;
   readonly emailVerified: boolean;
-  // The owner's backup recovery email and its verification state. These are
-  // OWNER-ONLY: they ride on the `/users/me*` responses (all session-guarded, id
-  // from req.user) and must NEVER appear on the public GET /users or
-  // GET /users/:id — those use deliberately narrow raw SELECTs (see below).
-  readonly recoveryEmail: string | null;
-  readonly recoveryEmailVerified: boolean;
-  readonly recoveryEmailUpdatedAt: Date | null;
 }
 
 /**
  * Columns that make up a {@link PublicUser}. Shared by every `.returning(...)`
- * so the read-back shape can't drift between mutations. Exported so the
- * recovery-email service returns the exact same owner-facing shape.
+ * so the read-back shape can't drift between mutations.
  */
 export const PUBLIC_USER_COLUMNS = {
   id: user.id,
@@ -39,9 +31,6 @@ export const PUBLIC_USER_COLUMNS = {
   image: user.image,
   imageSource: user.imageSource,
   emailVerified: user.emailVerified,
-  recoveryEmail: user.recoveryEmail,
-  recoveryEmailVerified: user.recoveryEmailVerified,
-  recoveryEmailUpdatedAt: user.recoveryEmailUpdatedAt,
 } as const;
 
 /**
@@ -67,9 +56,9 @@ export type DeleteUserPhotoError = CloudinaryError | { type: "USER_NOT_FOUND"; u
  * Fetch all users from the database. Public, cross-user read.
  *
  * SECURITY: the SELECT list is deliberately narrow (id, email, created_at). Do
- * NOT widen it to `SELECT *` or add the recovery_email columns — recovery email
- * is owner-only and would leak here. New owner-only fields belong on PublicUser
- * (returned by the session-guarded /users/me* routes), never on this list.
+ * NOT widen it to `SELECT *` or add owner-only columns — they would leak here.
+ * New owner-only fields belong on PublicUser (returned by the session-guarded
+ * /users/me* routes), never on this list.
  */
 export async function getAllUsers() {
   const result = await query('SELECT id, email, created_at FROM "user" LIMIT 100');
@@ -79,8 +68,8 @@ export async function getAllUsers() {
 /**
  * Fetch a single user by ID. Public, cross-user read.
  *
- * SECURITY: same narrow-SELECT invariant as {@link getAllUsers} — never add the
- * recovery_email columns (or any owner-only field) to this projection.
+ * SECURITY: same narrow-SELECT invariant as {@link getAllUsers} — never add any
+ * owner-only field to this projection.
  */
 export async function getUserById(id: string) {
   const result = await query('SELECT id, email, created_at FROM "user" WHERE id = $1', [id]);
