@@ -877,7 +877,7 @@ custom routes need their own):
       `disableSignUp: true` + passkey `requireSession: true` block orphan creation.
 - [ ] **One user = one email**: `UNIQUE(email)` + account linking; `email-password` is
       NOT a trusted linker (must prove email via OTP first — Path C). `updateUserInfoOnLink:
-    false` so a link can't overwrite a user-set name/photo. **Original provider can't be
+  false` so a link can't overwrite a user-set name/photo. **Original provider can't be
       unlinked** (`hooks.before`).
 - [ ] **Handle is server-owned:** `input:false` on the session field (Better Auth can't
       write it); normalization + regex (3–30, `[a-z0-9._-]`) + 2/14-day rate limit +

@@ -108,13 +108,13 @@ and these scripts:
 }
 ```
 
-| Script        | Does                                                                                  |
-| ------------- | ------------------------------------------------------------------------------------- |
-| `dev`         | Auto-restarts on save, runs TS directly via `tsx` — no build step.                    |
-| `build`       | `tsc` → plain JS in `dist/` for deploy.                                                |
-| `db:generate` | Diffs the **hand-maintained** `src/db/schema.ts` into a SQL migration (drizzle-kit).  |
-| `db:migrate`  | Applies pending migrations to Postgres.                                                |
-| `db:backfill-*` / `db:cleanup-*` | One-off / cron maintenance scripts — see §11 and BACKEND_STRUCTURE §5g. |
+| Script                           | Does                                                                                 |
+| -------------------------------- | ------------------------------------------------------------------------------------ |
+| `dev`                            | Auto-restarts on save, runs TS directly via `tsx` — no build step.                   |
+| `build`                          | `tsc` → plain JS in `dist/` for deploy.                                              |
+| `db:generate`                    | Diffs the **hand-maintained** `src/db/schema.ts` into a SQL migration (drizzle-kit). |
+| `db:migrate`                     | Applies pending migrations to Postgres.                                              |
+| `db:backfill-*` / `db:cleanup-*` | One-off / cron maintenance scripts — see §11 and BACKEND_STRUCTURE §5g.              |
 
 > **Changed from the old flow:** the schema is **not** generated from `auth.ts` by the
 > Better Auth CLI anymore. `src/db/schema.ts` is committed and edited by hand; `db:generate`
@@ -184,8 +184,12 @@ const connectionString = ssl
     : config.DATABASE_URL;
 
 export const pool = new Pool({
-    connectionString, ssl, max: 20,
-    idleTimeoutMillis: 10000, connectionTimeoutMillis: 10000, keepAlive: true,
+    connectionString,
+    ssl,
+    max: 20,
+    idleTimeoutMillis: 10000,
+    connectionTimeoutMillis: 10000,
+    keepAlive: true,
 });
 export const db = drizzle(pool, { schema });
 pool.on("error", (err) => console.error("Unexpected error on idle database client", err));
@@ -220,23 +224,47 @@ export const auth = betterAuth({
     user: { additionalFields: { handle: { type: "string", required: false, input: false } } },
 
     // Guards Better Auth's OWN endpoints (NOT our /signup/* auth.api calls — see §11).
-    rateLimit: { enabled: true, window: 60, max: 100, customRules: { /* see BACKEND_STRUCTURE §5a */ } },
+    rateLimit: {
+        enabled: true,
+        window: 60,
+        max: 100,
+        customRules: {
+            /* see BACKEND_STRUCTURE §5a */
+        },
+    },
 
     // On every new user: stamp imageSource if OAuth seeded an image, then seed a placeholder handle.
-    databaseHooks: { user: { create: { after: async (u) => {
-        if (u.image) { /* set imageSource = "oauth" */ }
-        await assignPlaceholderHandle(u.id, u.name, u.email); // failure logged, not fatal
-    } } } },
+    databaseHooks: {
+        user: {
+            create: {
+                after: async (u) => {
+                    if (u.image) {
+                        /* set imageSource = "oauth" */
+                    }
+                    await assignPlaceholderHandle(u.id, u.name, u.email); // failure logged, not fatal
+                },
+            },
+        },
+    },
 
     // One user = one email. google/github trusted; email-password NOT (must prove via OTP).
     // updateUserInfoOnLink:false → a link never overwrites a user-set name/photo.
-    account: { accountLinking: { enabled: true, trustedProviders: ["google", "github"], updateUserInfoOnLink: false } },
+    account: {
+        accountLinking: {
+            enabled: true,
+            trustedProviders: ["google", "github"],
+            updateUserInfoOnLink: false,
+        },
+    },
 
     // hooks.before guard forbids unlinking the ORIGINAL (earliest-created) provider. (§7a)
-    hooks: { /* before: createAuthMiddleware(... /unlink-account ...) */ },
+    hooks: {
+        /* before: createAuthMiddleware(... /unlink-account ...) */
+    },
 
     emailAndPassword: {
-        enabled: true, minPasswordLength: 8,
+        enabled: true,
+        minPasswordLength: 8,
         password: { hash: (p) => hash(p), verify: ({ hash: h, password }) => verify(h, password) },
     },
     socialProviders: {
@@ -246,7 +274,8 @@ export const auth = betterAuth({
     plugins: [
         anonymous(),
         passkey({
-            rpID: new URL(config.FRONTEND_URL).hostname, rpName: "Qatoto",
+            rpID: new URL(config.FRONTEND_URL).hostname,
+            rpName: "Qatoto",
             origin: new URL(config.FRONTEND_URL).origin,
             registration: { requireSession: true, extensions: { credProps: true } }, // no passkey-first onboarding
             authentication: { extensions: { credProps: true } },
@@ -254,7 +283,8 @@ export const auth = betterAuth({
         emailOTP({
             disableSignUp: true, // OTP alone NEVER creates a user
             async sendVerificationOTP({ email, otp, type }) {
-                if (config.NODE_ENV === "development") console.log(`OTP for ${email} (${type}): ${otp}`);
+                if (config.NODE_ENV === "development")
+                    console.log(`OTP for ${email} (${type}): ${otp}`);
                 // ...send via Brevo (src/lib/email.ts); NOT_CONFIGURED tolerated in dev, else throw.
             },
         }),
@@ -280,7 +310,7 @@ import { auth } from "#src/lib/auth.js";
 // ... requestId, error/not-found handlers, routers ...
 
 const app = express();
-app.set("trust proxy", 1);                                   // behind nginx / LB
+app.set("trust proxy", 1); // behind nginx / LB
 app.use(helmet());
 app.use(cors({ origin: config.FRONTEND_URL, credentials: true })); // exact origin, allow cookies
 app.use(requestId);
@@ -289,13 +319,13 @@ app.use(logger("dev"));
 // Better Auth catch-all — BEFORE express.json(). NOTE: toNodeHandler(auth.handler).
 app.all("/api/auth/*splat", toNodeHandler(auth.handler));
 
-app.use(express.json({ limit: "10kb" }));                    // YOUR routes only
+app.use(express.json({ limit: "10kb" })); // YOUR routes only
 app.use(express.urlencoded({ extended: false, limit: "10kb" }));
 app.use(cookieParser());
 
-app.use("/", indexRouter);    // /, /health
-app.use("/", authRouter);     // /signup/start, /signup/complete, /me
-app.use("/users", usersRouter);   // PATCH /users/me, /users/me/photo, /users/me/handle, ...
+app.use("/", indexRouter); // /, /health
+app.use("/", authRouter); // /signup/start, /signup/complete, /me
+app.use("/users", usersRouter); // PATCH /users/me, /users/me/photo, /users/me/handle, ...
 app.use("/handles", handlesRouter); // /handles/availability
 
 app.use(notFoundHandler);
@@ -321,14 +351,14 @@ pnpm db:migrate    # applies pending migrations to Postgres
 
 Tables (auth-owned + the identity columns/table we own):
 
-| Table                  | Holds                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------- |
-| `user`                 | id, email (**UNIQUE**), name, emailVerified, `image`, `imageSource`, **`handle` (UNIQUE)**, name/handle bookkeeping, timestamps. **No raw password here.** |
-| `account`              | the argon2id password hash (credential rows) + OAuth tokens; one row per provider, same `userId`. |
-| `session`              | one row per logged-in session — the cookie holds only an opaque reference.                         |
-| `verification`         | short-lived OTP records — hashed, expiring, single-use.                                            |
-| `passkey`              | WebAuthn credentials keyed to a user.                                                              |
-| `handle_reservations`  | a previously-held handle parked 14 days (revert window). See BACKEND_STRUCTURE §5g.                |
+| Table                 | Holds                                                                                                                                                      |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user`                | id, email (**UNIQUE**), name, emailVerified, `image`, `imageSource`, **`handle` (UNIQUE)**, name/handle bookkeeping, timestamps. **No raw password here.** |
+| `account`             | the argon2id password hash (credential rows) + OAuth tokens; one row per provider, same `userId`.                                                          |
+| `session`             | one row per logged-in session — the cookie holds only an opaque reference.                                                                                 |
+| `verification`        | short-lived OTP records — hashed, expiring, single-use.                                                                                                    |
+| `passkey`             | WebAuthn credentials keyed to a user.                                                                                                                      |
+| `handle_reservations` | a previously-held handle parked 14 days (revert window). See BACKEND_STRUCTURE §5g.                                                                        |
 
 > **Migrations gotcha (TLS):** `drizzle-kit migrate` does **not** read the app pool. With
 > a CA-cert managed DB it can fail **silently** if you hand it the CA-cert connection URL.
@@ -343,28 +373,28 @@ Tables (auth-owned + the identity columns/table we own):
 
 You don't write these — the §5b config creates them.
 
-| Method & path                                    | Body                              | Purpose                                                                                            |
-| ------------------------------------------------ | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `POST /api/auth/email-otp/send-verification-otp` | `{ email, type }`                 | Generate + send a 6-digit OTP. `type`: `"sign-in"`, `"email-verification"`, `"forget-password"`.   |
-| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                  | OTP login for **existing** users. `disableSignUp: true` → never creates a user (no orphans).       |
-| `POST /api/auth/email-otp/reset-password`        | `{ email, otp, password }`        | Forgot-password: verify a `forget-password` OTP, set the new password.                              |
-| `POST /api/auth/sign-in/email`                   | `{ email, password, rememberMe }` | Password login. `rememberMe` controls cookie lifetime. Wrong email/password → same generic error.  |
-| `GET  /api/auth/sign-in/social` (+ callback)     | provider redirect                 | Google / GitHub OAuth. Verified-email match → links onto the existing user (one account).          |
-| `POST /api/auth/passkey/*`                        | WebAuthn ceremony                 | Register / authenticate passkeys. Registration requires an existing session.                       |
-| `POST /api/auth/sign-in/anonymous`               | —                                 | Guest session (anonymous plugin), upgradable later.                                                |
-| `POST /api/auth/unlink-account`                  | `{ providerId, accountId? }`      | Unlink a provider — but a `hooks.before` guard **forbids unlinking the original provider** (403).  |
-| `POST /api/auth/sign-out`                        | — (reads cookie)                  | Ends the session, clears the cookie.                                                               |
-| `GET  /api/auth/get-session`                     | — (reads cookie)                  | The real "am I logged in?" check. Returns session + user (incl. `handle`), or null.                |
+| Method & path                                    | Body                              | Purpose                                                                                           |
+| ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/email-otp/send-verification-otp` | `{ email, type }`                 | Generate + send a 6-digit OTP. `type`: `"sign-in"`, `"email-verification"`, `"forget-password"`.  |
+| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                  | OTP login for **existing** users. `disableSignUp: true` → never creates a user (no orphans).      |
+| `POST /api/auth/email-otp/reset-password`        | `{ email, otp, password }`        | Forgot-password: verify a `forget-password` OTP, set the new password.                            |
+| `POST /api/auth/sign-in/email`                   | `{ email, password, rememberMe }` | Password login. `rememberMe` controls cookie lifetime. Wrong email/password → same generic error. |
+| `GET  /api/auth/sign-in/social` (+ callback)     | provider redirect                 | Google / GitHub OAuth. Verified-email match → links onto the existing user (one account).         |
+| `POST /api/auth/passkey/*`                       | WebAuthn ceremony                 | Register / authenticate passkeys. Registration requires an existing session.                      |
+| `POST /api/auth/sign-in/anonymous`               | —                                 | Guest session (anonymous plugin), upgradable later.                                               |
+| `POST /api/auth/unlink-account`                  | `{ providerId, accountId? }`      | Unlink a provider — but a `hooks.before` guard **forbids unlinking the original provider** (403). |
+| `POST /api/auth/sign-out`                        | — (reads cookie)                  | Ends the session, clears the cookie.                                                              |
+| `GET  /api/auth/get-session`                     | — (reads cookie)                  | The real "am I logged in?" check. Returns session + user (incl. `handle`), or null.               |
 
 ### 7b. The signup endpoints YOU write — `src/controllers/auth.controller.ts`
 
 Account creation is deferred to the very end so a half-finished signup never leaves a
 row. Both public; bodies validated with Zod `.strict()` (`422` on failure).
 
-| Method & path           | Body                              | Creates a user?                                              |
-| ----------------------- | --------------------------------- | ------------------------------------------------------------ |
-| `POST /signup/start`    | `{ email }`                       | No — just sends the OTP. Generic 200 (no email-exists probe). |
-| `POST /signup/complete` | `{ email, otp, password, name? }` | Resolves to exactly **one** user via three paths (below).    |
+| Method & path           | Body                              | Creates a user?                                                    |
+| ----------------------- | --------------------------------- | ------------------------------------------------------------------ |
+| `POST /signup/start`    | `{ email }`                       | No — just sends the OTP. Generic 200 (no email-exists probe).      |
+| `POST /signup/complete` | `{ email, otp, password, name? }` | Resolves to exactly **one** user via three paths (below).          |
 | `GET  /me`              | — (session cookie)                | Returns `req.user` (`{ id, email, name, emailVerified, handle }`). |
 
 `/signup/complete` looks up the email and takes one path:
@@ -387,14 +417,14 @@ account. There is no verified-but-passwordless state — `disableSignUp:true` + 
 Session-guarded (`requireAuth`); the id comes from the session, never the body. Full
 detail in **BACKEND_STRUCTURE §5f (profile/photo)** and **§5g (handle)**.
 
-| Method & path             | Input                                | Purpose                                                                       |
-| ------------------------- | ------------------------------------ | ----------------------------------------------------------------------------- |
-| `PATCH  /users/me`        | `{ fullName }`                       | Set display name (`nameSetByUser` lock vs OAuth overwrite).                    |
-| `PATCH  /users/me/photo`  | `multipart`, field **`photo`**       | multer (5 MB) → sharp validate/normalize → Cloudinary → `image` + `imageSource:"user"`. |
-| `DELETE /users/me/photo`  | —                                    | Remove the Cloudinary asset, clear `image`/`imageSource`.                     |
-| `GET    /users/me/handle` | — (session)                          | Panel bootstrap: handle + rate-limit + revert metadata.                       |
-| `PATCH  /users/me/handle` | `{ handle }`                         | Authoritative set/revert in one atomic transaction (2 changes / 14 days).     |
-| `GET    /handles/availability` | `?handle=<raw>`                 | Tier-1 live availability probe (rate-limited 60/min/user).                    |
+| Method & path                  | Input                          | Purpose                                                                                 |
+| ------------------------------ | ------------------------------ | --------------------------------------------------------------------------------------- |
+| `PATCH  /users/me`             | `{ fullName }`                 | Set display name (`nameSetByUser` lock vs OAuth overwrite).                             |
+| `PATCH  /users/me/photo`       | `multipart`, field **`photo`** | multer (5 MB) → sharp validate/normalize → Cloudinary → `image` + `imageSource:"user"`. |
+| `DELETE /users/me/photo`       | —                              | Remove the Cloudinary asset, clear `image`/`imageSource`.                               |
+| `GET    /users/me/handle`      | — (session)                    | Panel bootstrap: handle + rate-limit + revert metadata.                                 |
+| `PATCH  /users/me/handle`      | `{ handle }`                   | Authoritative set/revert in one atomic transaction (2 changes / 14 days).               |
+| `GET    /handles/availability` | `?handle=<raw>`                | Tier-1 live availability probe (rate-limited 60/min/user).                              |
 
 ---
 
@@ -502,26 +532,47 @@ import { passkeyClient } from "@better-auth/passkey/client";
 
 export const authClient = createAuthClient({
     baseURL: "http://localhost:8000",
-    plugins: [emailOTPClient(), passkeyClient(), inferAdditionalFields({ user: { handle: { type: "string" } } })],
+    plugins: [
+        emailOTPClient(),
+        passkeyClient(),
+        inferAdditionalFields({ user: { handle: { type: "string" } } }),
+    ],
 });
 export const { useSession, signIn, signOut } = authClient;
 ```
 
 ```ts
-const { data: session } = useSession();              // session.user.handle available
+const { data: session } = useSession(); // session.user.handle available
 await signIn.email({ email, password, rememberMe }); // login
-await signIn.social({ provider: "google" });         // OAuth
-await authClient.passkey.addPasskey();               // register passkey (needs session)
+await signIn.social({ provider: "google" }); // OAuth
+await authClient.passkey.addPasskey(); // register passkey (needs session)
 
 // Signup — your endpoints; pass credentials: "include" on the raw fetch
-await fetch("http://localhost:8000/signup/start",    { method: "POST", credentials: "include" /* {email} */ });
-await fetch("http://localhost:8000/signup/complete", { method: "POST", credentials: "include" /* {email,otp,password} */ });
+await fetch("http://localhost:8000/signup/start", {
+    method: "POST",
+    credentials: "include" /* {email} */,
+});
+await fetch("http://localhost:8000/signup/complete", {
+    method: "POST",
+    credentials: "include" /* {email,otp,password} */,
+});
 
 // Identity (all need credentials: "include")
-await fetch("http://localhost:8000/users/me",        { method: "PATCH", credentials: "include" /* {fullName} */ });
-await fetch("http://localhost:8000/users/me/handle", { method: "PATCH", credentials: "include" /* {handle} */ });
-const form = new FormData(); form.append("photo", file); // DO NOT set Content-Type — browser sets the boundary
-await fetch("http://localhost:8000/users/me/photo",  { method: "PATCH", body: form, credentials: "include" });
+await fetch("http://localhost:8000/users/me", {
+    method: "PATCH",
+    credentials: "include" /* {fullName} */,
+});
+await fetch("http://localhost:8000/users/me/handle", {
+    method: "PATCH",
+    credentials: "include" /* {handle} */,
+});
+const form = new FormData();
+form.append("photo", file); // DO NOT set Content-Type — browser sets the boundary
+await fetch("http://localhost:8000/users/me/photo", {
+    method: "PATCH",
+    body: form,
+    credentials: "include",
+});
 
 // Forgot password
 await authClient.emailOtp.sendVerificationOtp({ email, type: "forget-password" });
@@ -566,7 +617,7 @@ Each step is a small, runnable win.
 - **Shared rate-limit store for prod.** Both limiters are **in-memory** (per-process).
   Multi-instance / serverless lets attackers round-robin instances → move to a shared
   store: Express limiters → `rate-limit-redis`; Better Auth → `rateLimit.storage:
-  "database"` (adds a `rateLimit` table) or `"secondary-storage"`.
+"database"` (adds a `rateLimit` table) or `"secondary-storage"`.
 - **Lock down `GET /users` / `GET /users/:id`** — currently public list/read endpoints.
 
 ### Already done: OTP / auth rate limiting
