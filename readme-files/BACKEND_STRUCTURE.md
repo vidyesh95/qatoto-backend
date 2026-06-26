@@ -304,6 +304,12 @@ export const auth = betterAuth({
     // One user = one email. google/github are trusted (first-party OAuth). "email-password"
     // is deliberately NOT trusted — a credential signup must prove the email via OTP (our
     // /signup/complete, Path C) before it can ride onto an existing OAuth account.
+    // allowDifferentEmails:true → a signed-in user may link a trusted provider whose email
+    // differs from their account email (personal-email signup linking a work-email GitHub)
+    // and still be ONE user. The active session is the trust anchor — you must already BE
+    // the user to attach a different-email provider, so this never auto-merges two separate
+    // accounts at fresh sign-in; it only relaxes the same-email requirement on the
+    // authenticated link flow, and only for trustedProviders.
     // updateUserInfoOnLink:false → linking a 2nd provider must NOT overwrite the local
     // name/image (would clobber a user-set name/photo). OAuth still seeds name/image at
     // FIRST sign-in (user creation); only the link-time overwrite is suppressed.
@@ -311,6 +317,7 @@ export const auth = betterAuth({
         accountLinking: {
             enabled: true,
             trustedProviders: ["google", "github"],
+            allowDifferentEmails: true,
             updateUserInfoOnLink: false,
         },
     },
@@ -672,7 +679,11 @@ If the user bails before the final call, no account exists — nothing to recove
 provider links onto that user — **one** account, not a duplicate (§5a `accountLinking`).
 A brand-new OAuth user is seeded `name`/`image` (with `imageSource: "oauth"`) and a
 placeholder handle at creation; a **link** onto an existing user does NOT overwrite their
-name/photo (`updateUserInfoOnLink: false`).
+name/photo (`updateUserInfoOnLink: false`). With `allowDifferentEmails: true`, a
+**signed-in** user can also link a trusted provider whose email **differs** from their
+account email (e.g. a personal-email account linking a work-email GitHub) and stay one
+user — the session is the trust anchor (you must already be the user to link), so this
+never auto-merges two separate accounts at a fresh, sessionless sign-in.
 
 **Add a password to an OAuth-only account:** run `/signup/complete` for that email →
 **Path C** attaches the credential to the same user.
@@ -877,8 +888,10 @@ custom routes need their own):
       `disableSignUp: true` + passkey `requireSession: true` block orphan creation.
 - [ ] **One user = one email**: `UNIQUE(email)` + account linking; `email-password` is
       NOT a trusted linker (must prove email via OTP first — Path C). `updateUserInfoOnLink:
-  false` so a link can't overwrite a user-set name/photo. **Original provider can't be
-      unlinked** (`hooks.before`).
+false` so a link can't overwrite a user-set name/photo. `allowDifferentEmails: true`
+      lets a **signed-in** user link a trusted provider on a different email (session is the
+      trust anchor; trustedProviders only — never auto-merges at sessionless sign-in).
+      **Original provider can't be unlinked** (`hooks.before`).
 - [ ] **Handle is server-owned:** `input:false` on the session field (Better Auth can't
       write it); normalization + regex (3–30, `[a-z0-9._-]`) + 2/14-day rate limit +
       reservation logic enforced server-side in one atomic transaction; `UNIQUE(handle)`

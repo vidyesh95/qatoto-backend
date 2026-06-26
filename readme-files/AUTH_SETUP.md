@@ -248,11 +248,14 @@ export const auth = betterAuth({
     },
 
     // One user = one email. google/github trusted; email-password NOT (must prove via OTP).
+    // allowDifferentEmails:true → a signed-in user may link a trusted provider on a DIFFERENT
+    // email and stay one user (session is the trust anchor; never auto-merges at sign-in).
     // updateUserInfoOnLink:false → a link never overwrites a user-set name/photo.
     account: {
         accountLinking: {
             enabled: true,
             trustedProviders: ["google", "github"],
+            allowDifferentEmails: true,
             updateUserInfoOnLink: false,
         },
     },
@@ -501,7 +504,9 @@ JS; the browser attaches it automatically.
 
 - **Login:** `POST /api/auth/sign-in/email { email, password, rememberMe }`.
 - **OAuth:** `sign-in/social` (Google/GitHub) — verified-email match links onto the
-  existing user; a link never overwrites a user-set name/photo.
+  existing user; a link never overwrites a user-set name/photo. `allowDifferentEmails:
+true` also lets a **signed-in** user link a trusted provider on a different email
+  (session is the trust anchor — no sessionless auto-merge).
 - **Forgot password:** `send-verification-otp { email, type: "forget-password" }` →
   `email-otp/reset-password { email, otp, password }`. No custom endpoint needed.
 - **Identity:** `PATCH /users/me` (name), `PATCH`/`DELETE /users/me/photo`, handle via
@@ -683,8 +688,9 @@ Better Auth handles most by default — your job: don't undo them, set config/en
 - [ ] Account created **only** by `/signup/complete` (OTP + password atomic);
       `disableSignUp: true` + passkey `requireSession: true` block orphans.
 - [ ] **One user = one email:** `UNIQUE(email)` + account linking; `email-password` NOT a
-      trusted linker (prove email via OTP — Path C). `updateUserInfoOnLink:false`; original
-      provider can't be unlinked.
+      trusted linker (prove email via OTP — Path C). `updateUserInfoOnLink:false`;
+      `allowDifferentEmails:true` (signed-in different-email link, trustedProviders only, no
+      sessionless auto-merge); original provider can't be unlinked.
 - [ ] **Handle server-owned** (`input:false`); normalization + regex + 2/14-day limit +
       reservations enforced server-side; `UNIQUE(handle)` is the race guard.
 - [ ] **Photo server-validated** (sharp re-decode/re-encode, strip EXIF, bound dimensions,

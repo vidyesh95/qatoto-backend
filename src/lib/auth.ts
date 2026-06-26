@@ -96,6 +96,15 @@ export const auth = betterAuth({
     accountLinking: {
       enabled: true,
       trustedProviders: ["google", "github"],
+      // Let a signed-in user link a trusted provider whose email differs from
+      // their account email (e.g. signed up with a personal email, links a
+      // GitHub that uses a work email) — still ONE user, not a duplicate. The
+      // active session is the trust anchor: you must already BE the user to
+      // attach a different-email provider onto yourself, so this does not
+      // auto-merge two separate accounts at fresh sign-in. Scoped to
+      // trustedProviders (first-party Google/GitHub) only; "email-password"
+      // stays untrusted (must prove the email via OTP — /signup/complete).
+      allowDifferentEmails: true,
       // Do NOT let a newly linked provider overwrite the local user row. With
       // this on, linking a 2nd provider copies that provider's name/image onto
       // the user — which would clobber a name the user set themselves via
