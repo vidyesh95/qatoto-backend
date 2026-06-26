@@ -2,7 +2,8 @@
   /* Type-checks one-off operational scripts in scripts/ (run via tsx, never built
      into dist/). Extends the app config so #src/* subpath imports resolve to the TS
      source via "customConditions": ["development"]. Non-composite, no emit — exists
-     purely so the editor and `tsc -p tsconfig.scripts.json` type these files. */
+     purely so `tsc -p tsconfig.scripts.json` (CI typecheck) type-checks these files.
+     The editor picks up scripts/ via scripts/tsconfig.json instead. */
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,

@@ -1,0 +1,13 @@
+{
+  /* Editor-only config. The TS language server auto-discovers the nearest file
+     literally named "tsconfig.json", so files in scripts/ resolve #src/* subpath
+     imports here (via the inherited "customConditions": ["development"]). CI still
+     type-checks scripts/ through ../tsconfig.scripts.json (see package.json). */
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "incremental": false
+  },
+  "include": ["**/*.ts"]
+}
