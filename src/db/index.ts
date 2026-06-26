@@ -25,15 +25,24 @@ export const pool = new Pool({
   connectionString,
   ssl,
   max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  // Recycle idle connections before the Aiven server reaps them out from under
+  // us. A reaped idle socket surfaces later as a "read ETIMEDOUT" / "Connection
+  // terminated unexpectedly" on the next checkout, so keep idle time short.
+  idleTimeoutMillis: 10000,
+  // Cross-region TLS handshake to Aiven can exceed 5s under load.
+  connectionTimeoutMillis: 10000,
+  // Send TCP keepalives so dead connections are detected and dropped early
+  // instead of failing on first reuse.
+  keepAlive: true,
 });
 
 export const db = drizzle(pool, { schema });
 
+// Idle clients dropped by the remote server (Aiven idle reaping, network NAT
+// timeouts) emit 'error' here. The pool has already discarded the broken
+// client, so this is a recoverable event — log it, never exit the process.
 pool.on("error", (err) => {
   console.error("Unexpected error on idle database client", err);
-  process.exit(1);
 });
 
 /**
