@@ -263,10 +263,12 @@ export const auth = betterAuth({
     google: {
       clientId: config.GOOGLE_CLIENT_ID,
       clientSecret: config.GOOGLE_CLIENT_SECRET,
+      prompt: "select_account",
     },
     github: {
       clientId: config.GITHUB_CLIENT_ID,
       clientSecret: config.GITHUB_CLIENT_SECRET,
+      prompt: "select_account",
     },
   },
   plugins: [
