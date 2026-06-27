@@ -3,7 +3,7 @@ import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
-import { anonymous, emailOTP } from "better-auth/plugins";
+import { anonymous, emailOTP, multiSession } from "better-auth/plugins";
 import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 
@@ -316,6 +316,12 @@ export const auth = betterAuth({
         }
       },
     }),
+    // Lets one browser hold several signed-in sessions at once (the account
+    // switcher). On each sign-in an extra signed `_multi-<token>` cookie is
+    // written; `setActive` swaps which one is the active session, `revoke`
+    // drops one, and `sign-out` clears them all. Reuses the existing `session`
+    // table — no schema change. Cap at 5 concurrent accounts (the default).
+    multiSession({ maximumSessions: 5 }),
   ],
 });
 
