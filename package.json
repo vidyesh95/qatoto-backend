@@ -31,6 +31,7 @@
     "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",
     "db:backfill-handles": "tsx --conditions=development scripts/backfill-handles.ts",
     "db:backfill-oauth-profile": "tsx --conditions=development scripts/backfill-oauth-profile.ts",
+    "db:merge-duplicate-user": "tsx --conditions=development scripts/merge-duplicate-user.ts",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",

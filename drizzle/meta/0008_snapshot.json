@@ -1,6 +1,6 @@
 {
-  "id": "758f1b3c-0eb7-4a0d-b3e3-565ea689df98",
-  "prevId": "868c2166-455f-4a55-95bf-c26464e03b6b",
+  "id": "bc4fc7a0-4c3e-4a0c-ba3b-6014b8bc8f20",
+  "prevId": "758f1b3c-0eb7-4a0d-b3e3-565ea689df98",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -76,7 +76,7 @@
         },
         "email": {
           "name": "email",
-          "type": "text",
+          "type": "citext",
           "primaryKey": false,
           "notNull": false
         },
@@ -432,7 +432,7 @@
         },
         "email": {
           "name": "email",
-          "type": "text",
+          "type": "citext",
           "primaryKey": false,
           "notNull": true
         },

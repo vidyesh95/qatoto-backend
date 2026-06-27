@@ -15,7 +15,10 @@ import type { ApiResponse } from "#src/types/index.js";
  */
 const StartSignupSchema = z
   .object({
-    email: z.email("A valid email is required."),
+    // Lowercase so the stored/looked-up address is canonical. citext makes the DB
+    // comparison case-insensitive anyway (src/db/schema.ts); this keeps the value
+    // itself clean across the credential signup path.
+    email: z.email("A valid email is required.").transform((value) => value.toLowerCase()),
   })
   .strict();
 
@@ -24,7 +27,7 @@ const StartSignupSchema = z
  */
 const CompleteSignupSchema = z
   .object({
-    email: z.email("A valid email is required."),
+    email: z.email("A valid email is required.").transform((value) => value.toLowerCase()),
     otp: z.string().min(1, "Verification code is required."),
     password: z.string().min(8, "Password must be at least 8 characters."),
     name: z.string().min(1).optional(),

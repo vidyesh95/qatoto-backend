@@ -7,7 +7,20 @@ import {
   integer,
   index,
   pgEnum,
+  customType,
 } from "drizzle-orm/pg-core";
+
+// Case-insensitive text (Postgres `citext`). Used for the email columns so that
+// equality AND the UNIQUE constraint compare case-insensitively: two providers
+// reporting the same address in different case (Google "User@x.com", GitHub
+// "user@x.com") resolve to ONE user via Better Auth's email lookup instead of
+// minting a duplicate row. Requires the `citext` extension, created in the
+// migration that introduces this type. See src/lib/auth.ts accountLinking.
+const citext = customType<{ data: string }>({
+  dataType() {
+    return "citext";
+  },
+});
 
 // Provenance of `user.image`. "oauth" = seeded from a Google/GitHub profile;
 // "user" = the user uploaded their own photo (PATCH /users/me/photo). NULL = no
@@ -22,7 +35,9 @@ export const user = pgTable("user", {
   // seeds `name` at first sign-in; this flag marks it as user-owned so account
   // linking never overwrites it. See src/lib/auth.ts accountLinking.
   nameSetByUser: boolean("name_set_by_user").default(false).notNull(),
-  email: text("email").notNull().unique(),
+  // citext (case-insensitive) + UNIQUE: one email = one user, regardless of the
+  // case a provider reports it in. See the `citext` type note above.
+  email: citext("email").notNull().unique(),
   emailVerified: boolean("email_verified").default(false).notNull(),
   image: text("image"),
   // Who owns `image` — see imageSourceEnum. NULL until an image is set.
@@ -94,7 +109,8 @@ export const account = pgTable(
     // account.create hook in src/lib/auth.ts. NOT a login identifier and
     // deliberately NOT unique: two providers can legitimately report the same
     // address. Never expose alongside tokens. See GET /users/me/linked-accounts.
-    email: text("email"),
+    // citext to match user.email's case-insensitive semantics.
+    email: citext("email"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .$onUpdate(() => /* @__PURE__ */ new Date())

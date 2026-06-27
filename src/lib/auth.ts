@@ -264,11 +264,17 @@ export const auth = betterAuth({
       clientId: config.GOOGLE_CLIENT_ID,
       clientSecret: config.GOOGLE_CLIENT_SECRET,
       prompt: "select_account",
+      // Store the email lowercased so a brand-new user row is created with a
+      // canonical address. citext already makes the linking lookup and UNIQUE
+      // constraint case-insensitive (src/db/schema.ts) — this just keeps the
+      // stored value clean so it never drifts by provider casing.
+      mapProfileToUser: (profile) => ({ email: profile.email?.toLowerCase() }),
     },
     github: {
       clientId: config.GITHUB_CLIENT_ID,
       clientSecret: config.GITHUB_CLIENT_SECRET,
       prompt: "select_account",
+      mapProfileToUser: (profile) => ({ email: profile.email?.toLowerCase() }),
     },
   },
   plugins: [
