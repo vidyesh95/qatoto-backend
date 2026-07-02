@@ -31,7 +31,6 @@
         "src/index.ts",
         "src/db/index.ts",
         "src/lib/auth.ts",
-        "src/services/recovery-otp.service.ts",
         "scripts/**/*.ts"
       ],
       "rules": { "no-console": "off" }
