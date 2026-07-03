@@ -46,9 +46,7 @@ describe("requestId middleware", () => {
   it("echoes an incoming x-request-id header verbatim", async () => {
     const clientSuppliedRequestId = "client-supplied-id-123";
 
-    const probeResponse = await request(buildProbeApp())
-      .get("/probe")
-      .set("X-Request-Id", clientSuppliedRequestId);
+    const probeResponse = await request(buildProbeApp()).get("/probe").set("X-Request-Id", clientSuppliedRequestId);
 
     expect(probeResponse.headers["x-request-id"]).toBe(clientSuppliedRequestId);
   });

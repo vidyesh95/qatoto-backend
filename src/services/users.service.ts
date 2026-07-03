@@ -71,7 +71,9 @@ export interface PublicUserListRow {
  * /users/me* routes), never on this list.
  */
 export async function getAllUsers(): Promise<readonly PublicUserListRow[]> {
-  const result = await query<PublicUserListRow>('SELECT id, email, created_at FROM "user" LIMIT 100');
+  const result = await query<PublicUserListRow>(
+    'SELECT id, email, created_at FROM "user" LIMIT 100',
+  );
   return result.rows;
 }
 
@@ -82,7 +84,10 @@ export async function getAllUsers(): Promise<readonly PublicUserListRow[]> {
  * owner-only field to this projection.
  */
 export async function getUserById(id: string): Promise<PublicUserListRow | null> {
-  const result = await query<PublicUserListRow>('SELECT id, email, created_at FROM "user" WHERE id = $1', [id]);
+  const result = await query<PublicUserListRow>(
+    'SELECT id, email, created_at FROM "user" WHERE id = $1',
+    [id],
+  );
   return result.rows[0] || null;
 }
 

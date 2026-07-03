@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 // touches neither, so stub both modules out rather than requiring a configured
 // test environment.
 vi.mock("#src/db/index.js", () => ({ db: {} }));
-vi.mock("#src/lib/auth.js", () => ({ auth: {}, sendSignupOtp: vi.fn() }));
+vi.mock("#src/lib/auth.js", () => ({ auth: {}, sendSignupOtp: vi.fn<() => Promise<void>>() }));
 
 const { getCurrentUser } = await import("#src/controllers/auth.controller.js");
 
@@ -25,6 +25,7 @@ const AUTHENTICATED_USER = {
  * never reads, and constructing real ones would require an HTTP server.
  */
 function createRequestStub(sessionUser: Request["user"]): Request {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   return { user: sessionUser } as unknown as Request;
 }
 
@@ -33,8 +34,11 @@ function createResponseStub(): {
   readonly statusSpy: ReturnType<typeof vi.fn>;
   readonly jsonSpy: ReturnType<typeof vi.fn>;
 } {
-  const jsonSpy = vi.fn();
-  const statusSpy = vi.fn(() => ({ json: jsonSpy }));
+  const jsonSpy = vi.fn<(body: unknown) => void>();
+  const statusSpy = vi.fn<(code: number) => { readonly json: typeof jsonSpy }>(() => ({
+    json: jsonSpy,
+  }));
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   const response = { status: statusSpy, json: jsonSpy } as unknown as Response;
   return { response, statusSpy, jsonSpy };
 }

@@ -45,9 +45,7 @@ vi.mock("#src/db/index.js", () => {
 // Stub the Better Auth surface the controllers touch. The limiters sit in front of
 // these, so the happy path returns 2xx without any DB / email / network call.
 vi.mock("#src/lib/auth.js", () => ({
-  sendSignupOtp: vi
-    .fn<(...args: unknown[]) => unknown>()
-    .mockResolvedValue({ success: true, value: undefined }),
+  sendSignupOtp: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({ success: true, value: undefined }),
   auth: {
     handler: vi.fn<(...args: unknown[]) => unknown>(),
     api: {

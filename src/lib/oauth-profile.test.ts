@@ -4,9 +4,7 @@ import { readGoogleProfileFromIdToken } from "#src/lib/oauth-profile.js";
 
 /** Build a structurally valid JWT whose payload is the given claims object. */
 function buildIdToken(claims: unknown): string {
-  const headerSegment = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString(
-    "base64url",
-  );
+  const headerSegment = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
   const payloadSegment = Buffer.from(JSON.stringify(claims)).toString("base64url");
   return `${headerSegment}.${payloadSegment}.fake-signature`;
 }
@@ -104,20 +102,18 @@ describe("readGoogleProfileFromIdToken", () => {
       const decodeResult = readGoogleProfileFromIdToken(
         buildIdToken({ email: "attacker@example.com", email_verified: false }),
       );
-      expect(decodeResult.success).toBe(true);
-      if (decodeResult.success) {
-        expect(decodeResult.value.email).toBeUndefined();
-      }
+      expect(decodeResult).toEqual({
+        success: true,
+        value: expect.objectContaining({ email: undefined }),
+      });
     });
 
     it("drops the email when email_verified is absent", () => {
-      const decodeResult = readGoogleProfileFromIdToken(
-        buildIdToken({ email: "someone@example.com" }),
-      );
-      expect(decodeResult.success).toBe(true);
-      if (decodeResult.success) {
-        expect(decodeResult.value.email).toBeUndefined();
-      }
+      const decodeResult = readGoogleProfileFromIdToken(buildIdToken({ email: "someone@example.com" }));
+      expect(decodeResult).toEqual({
+        success: true,
+        value: expect.objectContaining({ email: undefined }),
+      });
     });
 
     it("succeeds with an empty claims object, yielding no profile fields", () => {
