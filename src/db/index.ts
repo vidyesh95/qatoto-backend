@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { Pool, type QueryResult, type QueryResultRow } from "pg";
 
 import { config } from "#src/config/index.js";
 import * as schema from "#src/db/schema.js";
@@ -48,9 +48,12 @@ pool.on("error", (err) => {
 /**
  * Helper to run a single query against the pool.
  */
-export async function query(text: string, params?: unknown[]) {
+export async function query<Row extends QueryResultRow = QueryResultRow>(
+  text: string,
+  params?: unknown[],
+): Promise<QueryResult<Row>> {
   const start = Date.now();
-  const result = await pool.query(text, params);
+  const result = await pool.query<Row>(text, params);
   const duration = Date.now() - start;
 
   if (config.NODE_ENV === "development") {

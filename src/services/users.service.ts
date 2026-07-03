@@ -53,6 +53,16 @@ export type UpdateUserPhotoError =
 export type DeleteUserPhotoError = CloudinaryError | { type: "USER_NOT_FOUND"; userId: string };
 
 /**
+ * A user row as exposed by the public, cross-user list/get reads. Mirrors the
+ * deliberately narrow SELECT list below — it carries NO owner-only columns.
+ */
+export interface PublicUserListRow {
+  readonly id: string;
+  readonly email: string;
+  readonly created_at: Date; // pg `timestamp` column → Date at runtime
+}
+
+/**
  * Fetch all users from the database. Public, cross-user read.
  *
  * SECURITY: the SELECT list is deliberately narrow (id, email, created_at). Do
@@ -60,8 +70,8 @@ export type DeleteUserPhotoError = CloudinaryError | { type: "USER_NOT_FOUND"; u
  * New owner-only fields belong on PublicUser (returned by the session-guarded
  * /users/me* routes), never on this list.
  */
-export async function getAllUsers() {
-  const result = await query('SELECT id, email, created_at FROM "user" LIMIT 100');
+export async function getAllUsers(): Promise<readonly PublicUserListRow[]> {
+  const result = await query<PublicUserListRow>('SELECT id, email, created_at FROM "user" LIMIT 100');
   return result.rows;
 }
 
@@ -71,8 +81,8 @@ export async function getAllUsers() {
  * SECURITY: same narrow-SELECT invariant as {@link getAllUsers} — never add any
  * owner-only field to this projection.
  */
-export async function getUserById(id: string) {
-  const result = await query('SELECT id, email, created_at FROM "user" WHERE id = $1', [id]);
+export async function getUserById(id: string): Promise<PublicUserListRow | null> {
+  const result = await query<PublicUserListRow>('SELECT id, email, created_at FROM "user" WHERE id = $1', [id]);
   return result.rows[0] || null;
 }
 
