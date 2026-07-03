@@ -123,6 +123,42 @@ export async function updateMyProfile(req: Request, res: Response): Promise<void
 }
 
 /**
+ * Map a photo mutation failure to its HTTP status + client message. Shared by
+ * updateMyPhoto and deleteMyPhoto; `storageAction` distinguishes the 502 wording
+ * ("store" on upload, "remove" on delete). Exhaustive over UpdateUserPhotoError —
+ * DeleteUserPhotoError is a subset, so it type-checks for both callers.
+ */
+function mapPhotoErrorToResponse(
+  error: usersService.UpdateUserPhotoError,
+  storageAction: "store" | "remove",
+): { readonly statusCode: number; readonly message: string } {
+  switch (error.type) {
+    case "NOT_AN_IMAGE":
+      return { statusCode: 422, message: "The uploaded file is not a valid image." };
+    case "UNSUPPORTED_FORMAT":
+      return { statusCode: 422, message: "Photo must be a JPEG, PNG or WebP image." };
+    case "DIMENSIONS_TOO_SMALL":
+      return { statusCode: 422, message: "Photo must be at least 64x64 pixels." };
+    case "DIMENSIONS_TOO_LARGE":
+      return { statusCode: 422, message: "Photo dimensions are too large." };
+    case "NOT_CONFIGURED":
+      return { statusCode: 503, message: "Photo uploads are not available right now." };
+    case "UPLOAD_FAILED":
+    case "DELETE_FAILED":
+      return {
+        statusCode: 502,
+        message: `Could not ${storageAction} the photo. Please try again.`,
+      };
+    case "USER_NOT_FOUND":
+      return { statusCode: 404, message: "Your account no longer exists." };
+    default: {
+      const exhaustiveCheck: never = error;
+      throw new Error(`Unhandled photo error: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
  * PATCH /users/me/photo  (multipart/form-data, field `photo`)
  * Set the authenticated caller's profile photo. The id comes from the session
  * (req.user), never the body — a caller can only set their own photo (§1.1).
@@ -151,62 +187,9 @@ export async function updateMyPhoto(req: Request, res: Response): Promise<void> 
   const updateResult = await usersService.updateUserPhoto(req.user.id, req.file.buffer);
 
   if (!updateResult.success) {
-    switch (updateResult.error.type) {
-      case "NOT_AN_IMAGE":
-        res.status(422).json({
-          status: "error",
-          statusCode: 422,
-          message: "The uploaded file is not a valid image.",
-        });
-        return;
-      case "UNSUPPORTED_FORMAT":
-        res.status(422).json({
-          status: "error",
-          statusCode: 422,
-          message: "Photo must be a JPEG, PNG or WebP image.",
-        });
-        return;
-      case "DIMENSIONS_TOO_SMALL":
-        res.status(422).json({
-          status: "error",
-          statusCode: 422,
-          message: "Photo must be at least 64×64 pixels.",
-        });
-        return;
-      case "DIMENSIONS_TOO_LARGE":
-        res.status(422).json({
-          status: "error",
-          statusCode: 422,
-          message: "Photo dimensions are too large.",
-        });
-        return;
-      case "NOT_CONFIGURED":
-        res.status(503).json({
-          status: "error",
-          statusCode: 503,
-          message: "Photo uploads are not available right now.",
-        });
-        return;
-      case "UPLOAD_FAILED":
-      case "DELETE_FAILED":
-        res.status(502).json({
-          status: "error",
-          statusCode: 502,
-          message: "Could not store the photo. Please try again.",
-        });
-        return;
-      case "USER_NOT_FOUND":
-        res.status(404).json({
-          status: "error",
-          statusCode: 404,
-          message: "Your account no longer exists.",
-        });
-        return;
-      default: {
-        const exhaustiveCheck: never = updateResult.error;
-        throw new Error(`Unhandled photo update error: ${JSON.stringify(exhaustiveCheck)}`);
-      }
-    }
+    const { statusCode, message } = mapPhotoErrorToResponse(updateResult.error, "store");
+    res.status(statusCode).json({ status: "error", statusCode, message });
+    return;
   }
 
   const response: ApiResponse = {
@@ -265,34 +248,9 @@ export async function deleteMyPhoto(req: Request, res: Response): Promise<void> 
   const deleteResult = await usersService.deleteUserPhoto(req.user.id);
 
   if (!deleteResult.success) {
-    switch (deleteResult.error.type) {
-      case "NOT_CONFIGURED":
-        res.status(503).json({
-          status: "error",
-          statusCode: 503,
-          message: "Photo uploads are not available right now.",
-        });
-        return;
-      case "UPLOAD_FAILED":
-      case "DELETE_FAILED":
-        res.status(502).json({
-          status: "error",
-          statusCode: 502,
-          message: "Could not remove the photo. Please try again.",
-        });
-        return;
-      case "USER_NOT_FOUND":
-        res.status(404).json({
-          status: "error",
-          statusCode: 404,
-          message: "Your account no longer exists.",
-        });
-        return;
-      default: {
-        const exhaustiveCheck: never = deleteResult.error;
-        throw new Error(`Unhandled photo delete error: ${JSON.stringify(exhaustiveCheck)}`);
-      }
-    }
+    const { statusCode, message } = mapPhotoErrorToResponse(deleteResult.error, "remove");
+    res.status(statusCode).json({ status: "error", statusCode, message });
+    return;
   }
 
   const response: ApiResponse = {
