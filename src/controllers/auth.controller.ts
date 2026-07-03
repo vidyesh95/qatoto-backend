@@ -8,7 +8,7 @@ import { z } from "zod";
 import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { auth, sendSignupOtp } from "#src/lib/auth.js";
-import type { ApiResponse } from "#src/types/index.js";
+import type { ApiResponse, Result } from "#src/types/index.js";
 
 /**
  * Body for POST /signup/start. `.strict()` rejects unknown keys.
@@ -137,64 +137,98 @@ export async function completeSignup(req: Request, res: Response): Promise<void>
 
   const [existingUser] = await db.select().from(user).where(eq(user.email, email)).limit(1);
 
-  // ── Path A: no user yet — verify ownership, then create the account. ──────────
-  if (!existingUser) {
-    // Verify the code BEFORE any account exists. Better Auth's checkVerificationOTP
-    // requires the user to already exist (it 404s otherwise), which a brand-new
-    // signup does not — so we read the stored code via the server-only
-    // getVerificationOTP (no user required, still enforces expiry) and compare it
-    // ourselves in constant time. Invalid/expired → no user created.
-    const storedVerification = await auth.api.getVerificationOTP({
-      query: { email, type: "sign-in" },
-    });
-    if (storedVerification.otp === null || !timingSafeStringEqual(storedVerification.otp, otp)) {
-      res.status(401).json({
-        status: "error",
-        statusCode: 401,
-        message: "Invalid or expired verification code.",
-      });
-      return;
-    }
+  const outcome = existingUser
+    ? await linkPasswordOrReject({ email, otp, password, existingUser })
+    : await createNewUserAccount({ email, otp, password, displayName });
 
-    // OTP is valid — now (and only now) create the account with its password.
-    let sessionSetCookies: string[];
-    try {
-      const { headers: authHeaders } = await auth.api.signUpEmail({
-        body: { email, password, name: displayName },
-        returnHeaders: true,
-      });
-      sessionSetCookies = authHeaders.getSetCookie();
-    } catch (error) {
-      if (error instanceof APIError) {
-        // Lost a race: the email was claimed between the lookup and signUpEmail.
-        res.status(409).json({
-          status: "error",
-          statusCode: 409,
-          message: "An account with this email already exists. Please sign in instead.",
-        });
-        return;
-      }
-      throw error;
-    }
+  respondSignup(res, outcome);
+}
 
-    // The OTP proved email ownership, so the account is verified from the start.
-    await db.update(user).set({ emailVerified: true }).where(eq(user.email, email));
+/**
+ * A resolved signup: either a 201 (with the session cookies to replay) or a
+ * predictable operational failure (bad OTP → 401, email already claimed → 409).
+ * Path helpers return this instead of touching `res` — response writing lives
+ * only in `respondSignup`.
+ */
+type SignupSuccess = { readonly message: string; readonly setCookies: readonly string[] };
+type SignupFailure = { readonly statusCode: 401 | 409; readonly message: string };
+type SignupOutcome = Result<SignupSuccess, SignupFailure>;
 
-    if (sessionSetCookies.length > 0) {
-      res.setHeader("set-cookie", sessionSetCookies);
-    }
+/**
+ * Path A — brand-new email. Verify OTP ownership before any account exists, then
+ * create the user + credential and mark the email verified.
+ *
+ * Better Auth's checkVerificationOTP requires the user to already exist (404s
+ * otherwise), which a brand-new signup does not — so we read the stored code via
+ * the server-only getVerificationOTP (no user required, still enforces expiry)
+ * and compare it ourselves in constant time. Invalid/expired → no user created.
+ */
+async function createNewUserAccount(input: {
+  readonly email: string;
+  readonly otp: string;
+  readonly password: string;
+  readonly displayName: string;
+}): Promise<SignupOutcome> {
+  const { email, otp, password, displayName } = input;
 
-    const createdResponse: ApiResponse<{ ok: true }> = {
-      status: "success",
-      statusCode: 201,
-      message: "Account created successfully.",
-      data: { ok: true },
+  const storedVerification = await auth.api.getVerificationOTP({
+    query: { email, type: "sign-in" },
+  });
+  if (storedVerification.otp === null || !timingSafeStringEqual(storedVerification.otp, otp)) {
+    return {
+      success: false,
+      error: { statusCode: 401, message: "Invalid or expired verification code." },
     };
-    res.status(201).json(createdResponse);
-    return;
   }
 
-  // ── Path B: user exists. If they already have a password, this is a re-signup. ─
+  // OTP is valid — now (and only now) create the account with its password.
+  let sessionSetCookies: string[];
+  try {
+    const { headers: authHeaders } = await auth.api.signUpEmail({
+      body: { email, password, name: displayName },
+      returnHeaders: true,
+    });
+    sessionSetCookies = authHeaders.getSetCookie();
+  } catch (error) {
+    if (error instanceof APIError) {
+      // Lost a race: the email was claimed between the lookup and signUpEmail.
+      return {
+        success: false,
+        error: {
+          statusCode: 409,
+          message: "An account with this email already exists. Please sign in instead.",
+        },
+      };
+    }
+    throw error;
+  }
+
+  // The OTP proved email ownership, so the account is verified from the start.
+  await db.update(user).set({ emailVerified: true }).where(eq(user.email, email));
+
+  return {
+    success: true,
+    value: { message: "Account created successfully.", setCookies: sessionSetCookies },
+  };
+}
+
+/**
+ * Paths B & C — the email already resolves to a user.
+ *
+ *  - Path B: that user already has a `credential` account → genuine re-signup →
+ *            409; the caller should sign in or use forgot-password.
+ *  - Path C: OAuth-only user adding a password — sign in via OTP (proves ownership
+ *            AND mints a session for this exact user), then attach the password to
+ *            that same user with setPassword. No new user row.
+ */
+async function linkPasswordOrReject(input: {
+  readonly email: string;
+  readonly otp: string;
+  readonly password: string;
+  readonly existingUser: typeof user.$inferSelect;
+}): Promise<SignupOutcome> {
+  const { email, otp, password, existingUser } = input;
+
   const [credentialAccount] = await db
     .select()
     .from(account)
@@ -202,17 +236,15 @@ export async function completeSignup(req: Request, res: Response): Promise<void>
     .limit(1);
 
   if (credentialAccount) {
-    res.status(409).json({
-      status: "error",
-      statusCode: 409,
-      message: "An account with this email already exists. Please sign in instead.",
-    });
-    return;
+    return {
+      success: false,
+      error: {
+        statusCode: 409,
+        message: "An account with this email already exists. Please sign in instead.",
+      },
+    };
   }
 
-  // ── Path C: existing OAuth-only user adding a password — link, do not duplicate.
-  // Sign in via OTP (proves ownership AND mints a session for this exact user),
-  // then attach the password to that same user with setPassword.
   let sessionSetCookies: string[];
   try {
     const { headers: signInHeaders } = await auth.api.signInEmailOTP({
@@ -222,12 +254,10 @@ export async function completeSignup(req: Request, res: Response): Promise<void>
     sessionSetCookies = signInHeaders.getSetCookie();
   } catch (error) {
     if (error instanceof APIError) {
-      res.status(401).json({
-        status: "error",
-        statusCode: 401,
-        message: "Invalid or expired verification code.",
-      });
-      return;
+      return {
+        success: false,
+        error: { statusCode: 401, message: "Invalid or expired verification code." },
+      };
     }
     throw error;
   }
@@ -239,17 +269,40 @@ export async function completeSignup(req: Request, res: Response): Promise<void>
     headers: new Headers({ cookie: setCookiesToCookieHeader(sessionSetCookies) }),
   });
 
-  if (sessionSetCookies.length > 0) {
-    res.setHeader("set-cookie", sessionSetCookies);
+  return {
+    success: true,
+    value: {
+      message: "Password added to your existing account. You're signed in.",
+      setCookies: sessionSetCookies,
+    },
+  };
+}
+
+/**
+ * Map a resolved `SignupOutcome` onto the HTTP response — the single place the
+ * signup paths touch `res`. Success is always a 201 (+ any session cookies).
+ */
+function respondSignup(res: Response, outcome: SignupOutcome): void {
+  if (!outcome.success) {
+    res.status(outcome.error.statusCode).json({
+      status: "error",
+      statusCode: outcome.error.statusCode,
+      message: outcome.error.message,
+    });
+    return;
   }
 
-  const linkedResponse: ApiResponse<{ ok: true }> = {
+  if (outcome.value.setCookies.length > 0) {
+    res.setHeader("set-cookie", [...outcome.value.setCookies]);
+  }
+
+  const body: ApiResponse<{ ok: true }> = {
     status: "success",
     statusCode: 201,
-    message: "Password added to your existing account. You're signed in.",
+    message: outcome.value.message,
     data: { ok: true },
   };
-  res.status(201).json(linkedResponse);
+  res.status(201).json(body);
 }
 
 /**
