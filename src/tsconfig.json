@@ -6,14 +6,21 @@
 
      The root ../tsconfig.json excludes test files (to keep them out of the dist/
      build), which left them in an inferred project where the editor reported
-     phantom errors. Unlike the root, this config includes them. CI still type-checks
-     app code through ../tsconfig.json and tests through ../tsconfig.test.json
-     (see package.json); this file is never built. */
+     phantom errors. Unlike the root, this config includes them.
+
+     `exclude` MUST be redeclared here: `extends` inherits the base's exclude, and
+     the base excludes the src test files — inheriting that would drop the very test
+     files this config exists to bind, sending them back to the inferred project.
+     Overriding it (node_modules + dist only) keeps the tests in the project.
+
+     CI still type-checks app code through ../tsconfig.json and tests through
+     ../tsconfig.test.json (see package.json); this file is never built. */
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": "..",
     "incremental": false
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["../node_modules", "../dist"]
 }
