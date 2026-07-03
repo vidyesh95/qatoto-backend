@@ -59,6 +59,51 @@ describe("normalizeHandle", () => {
   it("preserves internal whitespace (validation is the regex's job)", () => {
     expect(normalizeHandle("vid yesh")).toBe("vid yesh");
   });
+
+  describe("whitespace variants", () => {
+    it("trims each ASCII whitespace character individually", () => {
+      expect(normalizeHandle("\tvidyesh\t")).toBe("vidyesh"); // tab
+      expect(normalizeHandle("\nvidyesh\n")).toBe("vidyesh"); // line feed
+      expect(normalizeHandle("\rvidyesh\r")).toBe("vidyesh"); // carriage return
+      expect(normalizeHandle("\vvidyesh\v")).toBe("vidyesh"); // vertical tab
+      expect(normalizeHandle("\fvidyesh\f")).toBe("vidyesh"); // form feed
+    });
+
+    it("trims CRLF sequences", () => {
+      expect(normalizeHandle("\r\nvidyesh\r\n")).toBe("vidyesh");
+    });
+
+    it("trims Unicode whitespace characters", () => {
+      // \u escapes keep the invisible characters visible to reviewers.
+      expect(normalizeHandle("\u00A0vidyesh\u00A0")).toBe("vidyesh"); // no-break space
+      expect(normalizeHandle("\u2003vidyesh\u2003")).toBe("vidyesh"); // em space
+      expect(normalizeHandle("\u3000vidyesh\u3000")).toBe("vidyesh"); // ideographic space
+      expect(normalizeHandle("\u2028vidyesh\u2028")).toBe("vidyesh"); // line separator
+      expect(normalizeHandle("\u2029vidyesh\u2029")).toBe("vidyesh"); // paragraph separator
+      expect(normalizeHandle("\uFEFFvidyesh\uFEFF")).toBe("vidyesh"); // BOM / ZWNBSP — WhiteSpace per spec
+    });
+
+    it("trims a mix of whitespace types composed with @-strip and lowercasing", () => {
+      expect(normalizeHandle("\t \n @Vidyesh\r\n ")).toBe("vidyesh");
+    });
+
+    it("normalizes whitespace-only input of any type to an empty string", () => {
+      expect(normalizeHandle("\t\n\r")).toBe("");
+      expect(normalizeHandle("\u00A0\u3000")).toBe("");
+    });
+
+    it("does not trim a zero-width space (not WhiteSpace per spec) — the regex rejects it later", () => {
+      // Documents current behavior: U+200B passes through untouched rather than
+      // being silently stripped; validateHandle's charset regex is the gate.
+      expect(normalizeHandle("\u200Bvidyesh")).toBe("\u200Bvidyesh");
+    });
+
+    it("preserves internal whitespace of every type (trim only touches the ends)", () => {
+      expect(normalizeHandle("vid\tyesh")).toBe("vid\tyesh");
+      expect(normalizeHandle("vid\nyesh")).toBe("vid\nyesh");
+      expect(normalizeHandle("vid\u2003yesh")).toBe("vid\u2003yesh");
+    });
+  });
 });
 
 describe("validateHandle — length edge cases", () => {
