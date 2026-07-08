@@ -228,9 +228,7 @@ export const auth = betterAuth({
         enabled: true,
         window: 60,
         max: 100,
-        customRules: {
-            /* see BACKEND_STRUCTURE §5a */
-        },
+        customRules: {/* see BACKEND_STRUCTURE §5a */},
     },
 
     // On every new user: stamp imageSource if OAuth seeded an image, then seed a placeholder handle.
@@ -261,9 +259,7 @@ export const auth = betterAuth({
     },
 
     // hooks.before guard forbids unlinking the ORIGINAL (earliest-created) provider. (§7a)
-    hooks: {
-        /* before: createAuthMiddleware(... /unlink-account ...) */
-    },
+    hooks: {/* before: createAuthMiddleware(... /unlink-account ...) */},
 
     emailAndPassword: {
         enabled: true,
