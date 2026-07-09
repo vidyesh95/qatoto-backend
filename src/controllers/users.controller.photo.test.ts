@@ -59,7 +59,7 @@ const UPDATE_CASES: ReadonlyArray<{
   {
     error: { type: "DIMENSIONS_TOO_SMALL", width: 10, height: 10 },
     statusCode: 422,
-    message: "Photo must be at least 64×64 pixels.",
+    message: "Photo must be at least 64x64 pixels.",
   },
   {
     error: { type: "DIMENSIONS_TOO_LARGE", width: 99999, height: 99999 },
