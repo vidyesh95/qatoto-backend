@@ -453,7 +453,8 @@ export const auth = betterAuth({
             // requireSession: account creation is owned solely by /signup/complete. No
             // passkey-first onboarding (would mint orphan users), mirroring emailOTP below.
             registration: { requireSession: true, extensions: { credProps: true } },
-            authentication: { extensions: { credProps: true } },
+            // credProps is registration-only; sending it during authentication makes
+            // Chrome throw NotSupportedError before any prompt appears.
         }),
         emailOTP({
             // OTP alone NEVER creates a user. Account creation is owned by /signup/complete

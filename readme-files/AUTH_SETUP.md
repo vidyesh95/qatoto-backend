@@ -277,7 +277,8 @@ export const auth = betterAuth({
             rpName: "Qatoto",
             origin: new URL(config.FRONTEND_URL).origin,
             registration: { requireSession: true, extensions: { credProps: true } }, // no passkey-first onboarding
-            authentication: { extensions: { credProps: true } },
+            // credProps is registration-only; sending it during authentication makes
+            // Chrome throw NotSupportedError before any prompt appears.
         }),
         emailOTP({
             disableSignUp: true, // OTP alone NEVER creates a user

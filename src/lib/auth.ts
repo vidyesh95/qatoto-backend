@@ -294,9 +294,9 @@ export const auth = betterAuth({
         requireSession: true,
         extensions: { credProps: true },
       },
-      authentication: {
-        extensions: { credProps: true },
-      },
+      // No `authentication.extensions` here: credProps is a REGISTRATION-only
+      // WebAuthn extension. Sending it in the get() (authentication) options
+      // makes Chrome throw NotSupportedError before showing any prompt.
     }),
     emailOTP({
       // Never auto-create a user from `sign-in/email-otp`. Account creation is
