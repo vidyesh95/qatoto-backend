@@ -1,13 +1,17 @@
 # BACKEND_STRUCTURE.md — Qatoto Auth & Identity API
 
-> This document describes the auth + identity contract the Next.js + TanStack Query
-> frontend depends on, and how it is wired on the server.
+> This document describes the auth + identity contract the Next.js frontend depends
+> on, and how it is wired on the server. (TanStack Query is installed on the frontend
+> but not wired yet — data access is currently raw `fetch()` plus Better Auth's
+> `useSession()`.)
 >
 > **Goal:** working auth — OTP-gated signup, password login, OAuth (Google/GitHub),
-> passkeys, logout, session, password reset — with **one user per email** (providers
-> link onto the same account instead of duplicating it). On top of auth it owns the
-> user's **identity surface**: a unique **handle** (username), a **display name**, and
-> a **profile photo** (avatar).
+> passkeys, logout, session, multi-session account switching, password reset — with
+> **one user per email** (providers link onto the same account instead of duplicating
+> it; `email` is Postgres **citext**, so the uniqueness is case-insensitive). On top
+> of auth it owns the user's **identity surface**: a unique **handle** (username), a
+> **display name**, a **profile photo** (avatar), and the list of **linked provider
+> accounts** (`GET /users/me/linked-accounts`).
 > **Stack:** **Better Auth** (auth engine) + **Drizzle ORM** (DB layer) +
 > **PostgreSQL** + **Cloudinary** (avatar storage) + **sharp** (image validation).
 > Better Auth does the security-sensitive auth work — argon2id password hashing,
@@ -68,15 +72,33 @@ Flows the backend supports:
 - **Claim / change handle:** live availability probe (`GET /handles/availability`) plus
   an authoritative set/revert (`PATCH /users/me/handle`), with a panel bootstrap
   (`GET /users/me/handle`). Every new user is auto-seeded a placeholder handle on signup.
+- **Switch accounts (multi-session):** `authClient.multiSession.listDeviceSessions()` /
+  `.setActive()` / `.revoke()` — one browser can hold up to **5** concurrent signed-in
+  sessions (see §7).
+- **Change password while signed in:** `POST /api/auth/change-password` (Better Auth
+  built-in; the frontend's change-password panel calls it directly).
+- **Link another provider to the signed-in account:** `authClient.linkSocial`
+  (Google/GitHub — §5a `accountLinking`).
+- **List linked accounts:** `GET /users/me/linked-accounts` →
+  `{ providerId, email }[]` (which address each provider knows the user by; §5f).
+
+> **Frontend-ahead-of-backend gap — phone number:** the frontend already ships
+> `phoneNumberClient()` and a phone-number panel calling
+> `authClient.phoneNumber.sendOtp / .verify`, and its `inferAdditionalFields` declares
+> `phoneNumber` / `phoneNumberVerified`. The backend does **not** enable Better Auth's
+> `phoneNumber` plugin yet (no plugin in `src/lib/auth.ts`, no columns in `schema.ts`)
+> — those calls fail until it lands. Treat phone auth as **planned**, not live.
 
 The real answer to "is this user logged in?" comes from Better Auth's session
 (`GET /api/auth/get-session`, or the `useSession()` hook — see §8). `localStorage` is
 the wrong place for a real session — see §7. The session also carries the user's
 **handle** (via `additionalFields`), so the navbar/avatar menu reads it directly.
 
-**One user = one email.** A person who first signs in with Google and later adds a
-password (or vice-versa) ends up as **one** account, not two — Better Auth's account
-linking attaches the new provider onto the existing user. See §5a / §6.
+**One user, one canonical email.** A person who first signs in with Google and later adds
+a password (or vice-versa) ends up as **one** account, not two — Better Auth's account
+linking attaches the new provider onto the existing user. `user.email` stays unique, but a
+signed-in user may also link a trusted provider (Google/GitHub) whose email **differs** from
+that canonical email (`allowDifferentEmails: true`) and remain one user. See §5a / §6.
 
 ---
 
@@ -96,6 +118,7 @@ linking attaches the new provider onto the existing user. See §5a / §6.
 | Image processing | **sharp** (`src/lib/image.ts`)                 | Decodes uploads to prove they're real images, bounds dimensions, re-encodes to webp + strips EXIF. |
 | File uploads     | **multer** (`src/middleware/upload-avatar.ts`) | In-memory multipart parse for the `photo` field, 5 MB cap, first-pass mimetype gate.               |
 | Email delivery   | **Brevo** (`src/lib/email.ts`)                 | Real transactional email. In dev the OTP is **also** `console.log`'d so you can test offline.      |
+| Validation       | **zod**                                        | Env parsing (`src/config/index.ts`), provider payloads (`oauth-profile.ts`), request bodies.       |
 | Security headers | **helmet**                                     | Sensible default response headers.                                                                 |
 | Cookies          | **cookie-parser**                              | Parses cookies for your own routes (Better Auth reads/writes its own signed cookies).              |
 | CORS             | **cors**                                       | Lets the browser on the frontend origin call the API, with credentials.                            |
@@ -107,10 +130,13 @@ Runtime deps (from `package.json`):
 
 ```bash
 express better-auth @better-auth/passkey @node-rs/argon2 \
-  drizzle-orm pg cors helmet cookie-parser dotenv \
+  drizzle-orm pg cors helmet cookie-parser dotenv zod \
   cloudinary multer sharp \
   express-rate-limit http-errors morgan debug
 ```
+
+> `redoc-express` and `swagger-ui-express` are also in `package.json` but **no code
+> imports them yet** (API-docs serving not wired) — future use or candidates for removal.
 
 `package.json` (`"type": "module"`) scripts that matter:
 
@@ -122,14 +148,17 @@ express better-auth @better-auth/passkey @node-rs/argon2 \
         "start": "node dist/index.js",
         "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p tsconfig.test.json",
         "test": "vitest run",
+        "test:watch": "vitest",
+        "test:coverage": "vitest run --coverage",
         "db:generate": "drizzle-kit generate", // schema → SQL migration
         "db:migrate": "drizzle-kit migrate", // apply migration
         "db:cleanup-orphans": "tsx --conditions=development scripts/cleanup-orphan-signups.ts",
         "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",
         "db:backfill-handles": "tsx --conditions=development scripts/backfill-handles.ts",
         "db:backfill-oauth-profile": "tsx --conditions=development scripts/backfill-oauth-profile.ts",
-        "fmt": "oxfmt", // formatting via oxfmt
-        "lint": "oxlint", // linting via oxlint
+        "db:merge-duplicate-user": "tsx --conditions=development scripts/merge-duplicate-user.ts",
+        "fmt": "oxfmt", // formatting via oxfmt (+ fmt:check for CI)
+        "lint": "oxlint", // linting via oxlint (+ lint:fix)
     },
 }
 ```
@@ -150,10 +179,11 @@ qatoto-backend/
 │   ├── app.ts                            # builds the Express app: helmet, cors, Better Auth mount, routes
 │   ├── config/index.ts                   # Zod-parsed env (DATABASE_URL, BETTER_AUTH_*, OAuth, Brevo, Cloudinary, DATABASE_CA_CERT_PATH)
 │   ├── lib/
-│   │   ├── auth.ts                        # the Better Auth instance (adapter, email+pw, OTP, OAuth, passkey, anonymous, hooks)
+│   │   ├── auth.ts                        # the Better Auth instance (adapter, email+pw, OTP, OAuth, passkey, anonymous, multiSession, hooks) + sendSignupOtp
 │   │   ├── email.ts                       # Brevo transactional email (Result-typed)
 │   │   ├── cloudinary.ts                  # avatar upload/delete (Result-typed; deterministic per-user public id)
-│   │   └── image.ts                       # sharp avatar validation + normalization (Result-typed)
+│   │   ├── image.ts                       # sharp avatar validation + normalization (Result-typed)
+│   │   └── oauth-profile.ts               # name/image/verified-email from stored OAuth artifacts (Google id_token decode, GitHub /user + /user/emails); Zod-parsed, Result-typed; shared by the account-create hook + backfill script
 │   ├── db/
 │   │   ├── index.ts                       # Postgres pool (SSL/CA, keepAlive) + Drizzle + query() helper
 │   │   └── schema.ts                      # user / session / account / verification / passkey / handle_reservations tables
@@ -175,14 +205,21 @@ qatoto-backend/
 │   │   ├── users.service.ts               # updateUserName / updateUserPhoto / deleteUserPhoto (PublicUser)
 │   │   └── handle.service.ts              # handle validation, availability, set/revert txn, placeholder seeding
 │   ├── types/
+│   │   ├── index.ts                       # shared ApiResponse / Result types
+│   │   └── express.d.ts                   # global req.user augmentation (incl. handle)
 ├── scripts/
 │   ├── cleanup-orphan-signups.ts          # one-time orphan cleanup (see §5e)
 │   ├── cleanup-expired-handle-reservations.ts  # daily cron: purge dead reservations (§5g)
 │   ├── backfill-handles.ts                # one-off: seed placeholder handles for pre-hook users (§5g)
-│   └── backfill-oauth-profile.ts          # one-off: copy name/image from already-linked OAuth (§5g)
+│   ├── backfill-oauth-profile.ts          # one-off: copy name/image + account.email from already-linked OAuth (§5g)
+│   └── merge-duplicate-user.ts            # one-time: fold a pre-citext case-duplicate user into the kept one (§4)
 ├── drizzle.config.ts
 └── .env                                   # NEVER commit
 ```
+
+Vitest unit tests live **beside the code** as `src/**/*.test.ts` (controllers, middleware,
+services, lib, app) with `vitest.config.ts` at the root; `typecheck` covers them via
+`tsconfig.test.json` and the scripts via `tsconfig.scripts.json`.
 
 ---
 
@@ -190,14 +227,14 @@ qatoto-backend/
 
 Tables in `src/db/schema.ts`:
 
-| Table                 | What it holds                                                                                                                                                                                                                                              |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user`                | id, `name` (notNull), `nameSetByUser`, **`email` (UNIQUE)**, emailVerified, `image`, `imageSource`, **`handle` (UNIQUE, nullable)**, `handleUpdatedAt`, `handleChangeCount`, `handleWindowStartedAt`, `isAnonymous`, timestamps. **No raw password here.** |
-| `account`             | one row **per provider** for a user: `providerId` (`credential` / `google` / `github`), the argon2id `password` hash for credential rows, OAuth tokens for the rest. Account linking = multiple `account` rows pointing at the **same** `userId`.          |
-| `session`             | one row per logged-in session — the cookie holds only an opaque token; everything else stays server-side. Indexed on `userId`.                                                                                                                             |
-| `verification`        | short-lived OTP / verification records (hashed, expiring, single-use).                                                                                                                                                                                     |
-| `passkey`             | WebAuthn credentials (publicKey, counter, deviceType, transports…) keyed to a user.                                                                                                                                                                        |
-| `handle_reservations` | a handle a user **previously** held, parked for 14 days. PK is `reserved_handle` (the normalized string → one reservation per handle); also `userId` (FK, cascade), `expiresAt`, `createdAt`. Indexed on `userId` and `expiresAt`. See §5g.                |
+| Table                 | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `user`                | id, `name` (notNull), `nameSetByUser`, **`email` (UNIQUE, citext)**, emailVerified, `image`, `imageSource`, **`handle` (UNIQUE, nullable)**, `handleUpdatedAt`, `handleChangeCount`, `handleWindowStartedAt`, `isAnonymous`, timestamps. **No raw password here.**                                                                                                                                                                                                                                                                                                                   |
+| `account`             | one row **per provider** for a user: `providerId` (`credential` / `google` / `github`), the argon2id `password` hash for credential rows, OAuth tokens for the rest, plus **`email` (citext, nullable)** — the address this provider knows the user by, written once at account creation from the provider profile (Google id_token claim / GitHub primary verified email); NULL for credential rows (resolved from `user.email`); deliberately **not** unique; powers `GET /users/me/linked-accounts`. Account linking = multiple `account` rows pointing at the **same** `userId`. |
+| `session`             | one row per logged-in session — the cookie holds only an opaque token; everything else stays server-side. Indexed on `userId`. The multiSession plugin (§7) reuses this table — no extra schema.                                                                                                                                                                                                                                                                                                                                                                                     |
+| `verification`        | short-lived OTP / verification records (expiring, single-use, rate-limited). Stored **plain**, not hashed — Better Auth's default (`storeOTP: "plain"`), and Path A of `/signup/complete` depends on it (§5e reads the stored code via `getVerificationOTP` for a constant-time compare).                                                                                                                                                                                                                                                                                            |
+| `passkey`             | WebAuthn credentials (publicKey, counter, deviceType, transports…) keyed to a user.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `handle_reservations` | a handle a user **previously** held, parked for 14 days. PK is `reserved_handle` (the normalized string → one reservation per handle); also `userId` (FK, cascade), `expiresAt`, `createdAt`. Indexed on `userId` and `expiresAt`. See §5g.                                                                                                                                                                                                                                                                                                                                          |
 
 **Identity columns on `user`** (we own these; Better Auth owns the rest):
 
@@ -216,15 +253,31 @@ Tables in `src/db/schema.ts`:
   bookkeeping for the 2-changes-per-14-days window (§5g). The server is the sole
   authority; the client only previews the lock.
 
-The `UNIQUE(email)` on `user` is the structural guarantee behind "one user = one email":
-a second provider reporting the same verified email links onto the existing row rather
-than inserting a duplicate. `UNIQUE(handle)` is the equivalent guarantee for handles and
-the final race-guard behind the SELECT-based availability checks.
+The `UNIQUE(email)` on `user` is the structural guarantee that each user has one canonical
+email: a second provider reporting the same verified email links onto the existing row
+rather than inserting a duplicate. Both `user.email` and `account.email` are Postgres
+**`citext`** (a custom Drizzle type; the migration creates the `citext` extension), so
+equality **and** the UNIQUE constraint compare case-insensitively — Google `User@x.com`
+and GitHub `user@x.com` resolve to **one** user instead of minting a duplicate.
+(`socialProviders.mapProfileToUser` additionally lowercases the stored value, §5a.)
+Pre-citext case-duplicates are folded together with the one-time
+`pnpm db:merge-duplicate-user` script: discover with `-- --email=<addr>`, dry-run with
+`-- --keep=<id> --remove=<id>`, write with `--apply` — it re-points the duplicate's
+`account` rows at the kept user inside one transaction, then deletes the duplicate (FK
+cascades remove its sessions/passkeys/reservations). **Run it before the citext
+migration (drizzle/0008)** or the ALTER collides.
+A signed-in user may additionally link a trusted provider
+whose email differs (`allowDifferentEmails: true`, §5a) — that does not add a `user` row or a
+second canonical email, it just attaches another `account` row to the same `userId`.
+`UNIQUE(handle)` is the equivalent guarantee for handles and the final race-guard behind the
+SELECT-based availability checks.
 
-Protections still hold: OTPs hashed/expiring/single-use; password hashed (argon2id),
+Protections still hold: OTPs expiring/single-use/rate-limited (stored plain by design —
+see the `verification` row above; `storeOTP: "hashed"` is the hardening knob, but Path A's
+constant-time compare requires the plaintext read); password hashed (argon2id),
 never stored or returned in plaintext; session cookie carries only an opaque reference.
 
-Re-run `npm run db:generate && npm run db:migrate` after a schema change.
+Re-run `pnpm db:generate && pnpm db:migrate` after a schema change.
 
 ---
 
@@ -238,7 +291,8 @@ import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
-import { anonymous, emailOTP } from "better-auth/plugins";
+import { anonymous, emailOTP, multiSession } from "better-auth/plugins";
+import { fetchGitHubPrimaryEmail, readGoogleProfileFromIdToken } from "#src/lib/oauth-profile.js";
 import { assignPlaceholderHandle } from "#src/services/handle.service.js";
 
 export const auth = betterAuth({
@@ -276,6 +330,13 @@ export const auth = betterAuth({
     // image, stamp imageSource = "oauth" (marks it provider-owned). Then seed a unique
     // randomized placeholder handle (e.g. user_vidyesh_7a9f) so every signup path lands
     // with a handle. A handle-seed failure is logged, NOT fatal — account creation wins.
+    //
+    // On every NEW account row (OAuth link or first sign-in): write-once capture of the
+    // provider's email onto account.email — google ← decode of the stored id_token,
+    // github ← live GET /user/emails with the access token (src/lib/oauth-profile.ts;
+    // Zod-parsed, VERIFIED emails only). Credential accounts are skipped (resolve from
+    // user.email). Failures are logged, never fatal — the backfill script fills gaps.
+    // Consumed by GET /users/me/linked-accounts (§5f).
     databaseHooks: {
         user: {
             create: {
@@ -299,11 +360,22 @@ export const auth = betterAuth({
                 },
             },
         },
+        account: {
+            create: {
+                after: async (createdAccount) => {
+                    // skip "credential"; google → readGoogleProfileFromIdToken(idToken),
+                    // github → fetchGitHubPrimaryEmail(accessToken); on success:
+                    //   db.update(account).set({ email: providerEmail }) — write-once
+                },
+            },
+        },
     },
 
-    // One user = one email. google/github are trusted (first-party OAuth). "email-password"
-    // is deliberately NOT trusted — a credential signup must prove the email via OTP (our
-    // /signup/complete, Path C) before it can ride onto an existing OAuth account.
+    // One canonical email per user (user.email is UNIQUE), but a signed-in user may attach
+    // trusted providers reporting a DIFFERENT email. google/github are trusted (first-party
+    // OAuth). "email-password" is deliberately NOT trusted — a credential signup must prove
+    // the email via OTP (our /signup/complete, Path C) before it can ride onto an existing
+    // OAuth account.
     // allowDifferentEmails:true → a signed-in user may link a trusted provider whose email
     // differs from their account email (personal-email signup linking a work-email GitHub)
     // and still be ONE user. The active session is the trust anchor — you must already BE
@@ -347,13 +419,31 @@ export const auth = betterAuth({
         },
     },
 
+    // prompt:"select_account" → always show the provider's account chooser.
+    // mapProfileToUser lowercases the incoming email so new user rows are stored
+    // canonical (citext already makes linking/UNIQUE case-insensitive; this keeps
+    // the stored value clean).
     socialProviders: {
-        google: { clientId: config.GOOGLE_CLIENT_ID, clientSecret: config.GOOGLE_CLIENT_SECRET },
-        github: { clientId: config.GITHUB_CLIENT_ID, clientSecret: config.GITHUB_CLIENT_SECRET },
+        google: {
+            clientId: config.GOOGLE_CLIENT_ID,
+            clientSecret: config.GOOGLE_CLIENT_SECRET,
+            prompt: "select_account",
+            mapProfileToUser: (profile) => ({ email: profile.email?.toLowerCase() }),
+        },
+        github: {
+            clientId: config.GITHUB_CLIENT_ID,
+            clientSecret: config.GITHUB_CLIENT_SECRET,
+            prompt: "select_account",
+            mapProfileToUser: (profile) => ({ email: profile.email?.toLowerCase() }),
+        },
     },
 
     plugins: [
         anonymous(),
+        // One browser, several signed-in accounts (the account switcher): each sign-in
+        // writes an extra signed `_multi-<token>` cookie; setActive swaps the active
+        // session, revoke drops one, sign-out clears all. Reuses the session table.
+        multiSession({ maximumSessions: 5 }),
         passkey({
             // WebAuthn relying-party identity derives from the FRONTEND origin (the ceremony
             // runs in the user's browser there), NOT the API origin.
@@ -396,6 +486,14 @@ export const auth = betterAuth({
     ],
 });
 ```
+
+`auth.ts` also exports **`sendSignupOtp(email)`**: it mints the code server-side via
+`auth.api.createVerificationOTP({ type: "sign-in" })` and sends it through the shared
+`sendOtpEmail` helper (the same dev-log / subject / `NOT_CONFIGURED` behavior shown in
+the `emailOTP` block). It exists because, under `disableSignUp: true`, Better Auth's
+public `/email-otp/send-verification-otp` **silently no-ops** for a sign-in OTP to an
+email with no user yet — first-time signups would never receive a code. `POST
+/signup/start` sends through this helper, not the public endpoint (§5e).
 
 ### 5b. The database — `src/db/index.ts`
 
@@ -482,18 +580,21 @@ app.use(errorHandler);
 
 You don't write these — enabling the config above creates them.
 
-| Method & path                                    | Body                              | Purpose                                                                                          |
-| ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `POST /api/auth/email-otp/send-verification-otp` | `{ email, type }`                 | Generate + send a 6-digit OTP. `type`: `"sign-in"`, `"email-verification"`, `"forget-password"`. |
-| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                  | OTP login for **existing** users. `disableSignUp: true` → never creates a user. Signup uses §5e. |
-| `POST /api/auth/email-otp/reset-password`        | `{ email, otp, password }`        | Forgot-password: verify a `forget-password` OTP, set new password.                               |
-| `POST /api/auth/sign-in/email`                   | `{ email, password, rememberMe }` | Password login. Wrong email or password → same generic error.                                    |
-| `GET  /api/auth/sign-in/social` (+ callback)     | provider redirect                 | Google / GitHub OAuth. Verified-email match → links onto the existing user (one account).        |
-| `POST /api/auth/passkey/*`                       | WebAuthn ceremony                 | Register / authenticate passkeys. Registration requires an existing session.                     |
-| `POST /api/auth/sign-in/anonymous`               | —                                 | Guest session (anonymous plugin), upgradable to a real account later.                            |
-| `POST /api/auth/unlink-account`                  | `{ providerId, accountId? }`      | Unlink a provider — but our `hooks.before` **forbids unlinking the original provider** (§5a).    |
-| `POST /api/auth/sign-out`                        | — (reads cookie)                  | Ends the session, clears the cookie.                                                             |
-| `GET  /api/auth/get-session`                     | — (reads cookie)                  | The real "am I logged in?" check. Returns session + user (incl. `handle`), or null.              |
+| Method & path                                    | Body                                                     | Purpose                                                                                           |
+| ------------------------------------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `POST /api/auth/email-otp/send-verification-otp` | `{ email, type }`                                        | Generate + send a 6-digit OTP. `type`: `"sign-in"`, `"email-verification"`, `"forget-password"`.  |
+| `POST /api/auth/sign-in/email-otp`               | `{ email, otp }`                                         | OTP login for **existing** users. `disableSignUp: true` → never creates a user. Signup uses §5e.  |
+| `POST /api/auth/email-otp/reset-password`        | `{ email, otp, password }`                               | Forgot-password: verify a `forget-password` OTP, set new password.                                |
+| `POST /api/auth/sign-in/email`                   | `{ email, password, rememberMe }`                        | Password login. Wrong email or password → same generic error.                                     |
+| `GET  /api/auth/sign-in/social` (+ callback)     | provider redirect                                        | Google / GitHub OAuth. Verified-email match → links onto the existing user (one account).         |
+| `POST /api/auth/passkey/*`                       | WebAuthn ceremony                                        | Register / authenticate passkeys. Registration requires an existing session.                      |
+| `POST /api/auth/sign-in/anonymous`               | —                                                        | Guest session (anonymous plugin), upgradable to a real account later.                             |
+| `POST /api/auth/change-password`                 | `{ currentPassword, newPassword, revokeOtherSessions? }` | Change password while signed in (the frontend's change-password panel uses it).                   |
+| `POST /api/auth/link-social`                     | `{ provider, callbackURL? }`                             | Link Google/GitHub onto the **signed-in** user (`authClient.linkSocial`) — see §5a linking rules. |
+| `/api/auth/multi-session/*`                      | list-device-sessions / set-active / revoke               | Account switcher (multiSession plugin, §7): up to 5 concurrent sessions per browser.              |
+| `POST /api/auth/unlink-account`                  | `{ providerId, accountId? }`                             | Unlink a provider — but our `hooks.before` **forbids unlinking the original provider** (§5a).     |
+| `POST /api/auth/sign-out`                        | — (reads cookie)                                         | Ends the **active** session (multiSession: clears all its cookies on full sign-out).              |
+| `GET  /api/auth/get-session`                     | — (reads cookie)                                         | The real "am I logged in?" check. Returns session + user (incl. `handle`), or null.               |
 
 ### 5e. The signup endpoints YOU write — `src/controllers/auth.controller.ts`
 
@@ -511,8 +612,12 @@ Both are **public** (no session yet) and validated with Zod `.strict()` (`422` o
 ```text
 POST /signup/complete { email, otp, password, name? }
  ├─ Path A — no user yet:
- │    checkVerificationOTP → (valid) signUpEmail → mark emailVerified → session.   → 201 created
+ │    getVerificationOTP → constant-time compare → (valid) signUpEmail
+ │      → mark emailVerified → session.                                            → 201 created
  │    bad/expired OTP → 401, nothing created.  missing password → 422 at boundary.
+ │    (checkVerificationOTP 404s for non-existent users, so Path A reads the stored
+ │     code via the server-only getVerificationOTP and compares with a timing-safe
+ │     equality check — this is why OTPs are stored plain, §4.)
  │
  ├─ Path B — user exists AND already has a `credential` account row:
  │    genuine re-signup → 409 ("sign in instead"). Nothing duplicated.
@@ -527,8 +632,13 @@ POST /signup/complete { email, otp, password, name? }
 Path C is what makes "signed up with Google, later set a password" collapse into one
 account. `setPassword` is session-scoped, so the controller replays the freshly minted
 session cookie (`setCookiesToCookieHeader` → `Headers({ cookie })`) into the `auth.api`
-call. Errors are mapped from Better Auth's `APIError`: bad OTP → `401`, email already
-fully registered / race on `signUpEmail` → `409`.
+call. Error mapping: Path A's bad OTP → `401` comes from the **local constant-time
+check**; Better Auth `APIError` mapping covers the `signUpEmail` race → `409` (Path A)
+and bad OTP → `401` from `signInEmailOTP` (Path C); Path B's `409` is a plain DB lookup.
+
+`POST /signup/start` sends the OTP via the exported `sendSignupOtp` helper (§5a), **not**
+the public `send-verification-otp` endpoint — that endpoint silently no-ops for emails
+with no user while `disableSignUp: true`.
 
 #### No orphans — by construction
 
@@ -538,24 +648,26 @@ call as the OTP. So there is no "verified-but-passwordless" state.
 
 > **Migrating from the old flow:** passwordless orphan rows from the previous
 > `sign-in/email-otp`-creates-the-user design are stranded. One-time cleanup:
-> `npm run db:cleanup-orphans` (dry run) → `npm run db:cleanup-orphans -- --delete`
+> `pnpm db:cleanup-orphans` (dry run) → `pnpm db:cleanup-orphans -- --delete`
 > (see [scripts/cleanup-orphan-signups.ts](../scripts/cleanup-orphan-signups.ts)).
 
 ### 5f. The profile endpoints YOU write — `src/controllers/users.controller.ts`
 
-Display name and profile photo. All `/users/me*` routes are session-guarded by
-`requireAuth`; the user id comes from `req.user`, never the body, so a caller can only
-change **themselves** (§0). `/me`-prefixed routes are declared **before** `/:id` so
-"me" is never swallowed as an id param. Success returns the `PublicUser`
-(`{ id, name, email, image, imageSource, emailVerified }`) the frontend reads back.
+Display name, profile photo, and linked accounts. All `/users/me*` routes are
+session-guarded by `requireAuth`; the user id comes from `req.user`, never the body, so
+a caller can only change **themselves** (§0). `/me`-prefixed routes are declared
+**before** `/:id` so "me" is never swallowed as an id param. Mutations return the
+`PublicUser` (`{ id, name, email, image, imageSource, emailVerified }`) the frontend
+reads back.
 
-| Method & path            | Body / input                             | Behavior & statuses                                                                                          |
-| ------------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `GET    /users`          | —                                        | List up to 100 users (raw `query`). **Currently public.**                                                    |
-| `GET    /users/:id`      | —                                        | One user by id, or `404`. **Currently public.**                                                              |
-| `PATCH  /users/me`       | `{ fullName }` (`.strict()`)             | Set display name → marks `nameSetByUser: true`. `200` PublicUser · `422` validation · `404` user gone.       |
-| `PATCH  /users/me/photo` | `multipart/form-data`, field **`photo`** | Validate+normalize bytes, upload to Cloudinary, stamp `imageSource: "user"`. Statuses below.                 |
-| `DELETE /users/me/photo` | —                                        | Delete the Cloudinary asset, clear `image` + `imageSource` (re-allows OAuth re-seed). `200` · `503/502/404`. |
+| Method & path                      | Body / input                             | Behavior & statuses                                                                                                                                                                                                    |
+| ---------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET    /users`                    | —                                        | List up to 100 users (raw `query`). **Currently public.**                                                                                                                                                              |
+| `GET    /users/:id`                | —                                        | One user by id, or `404`. **Currently public.**                                                                                                                                                                        |
+| `GET    /users/me/linked-accounts` | — (session)                              | The caller's linked providers as `{ providerId, email }[]`, ordered by `account.createdAt`. The credential row's email resolves from the session's login email; **tokens and provider accountIds are never returned.** |
+| `PATCH  /users/me`                 | `{ fullName }` (`.strict()`)             | Set display name → marks `nameSetByUser: true`. `200` PublicUser · `422` validation · `404` user gone.                                                                                                                 |
+| `PATCH  /users/me/photo`           | `multipart/form-data`, field **`photo`** | Validate+normalize bytes, upload to Cloudinary, stamp `imageSource: "user"`. Statuses below.                                                                                                                           |
+| `DELETE /users/me/photo`           | —                                        | Delete the Cloudinary asset, clear `image` + `imageSource` (re-allows OAuth re-seed). `200` · `503/502/404`.                                                                                                           |
 
 `PATCH /users/me`'s `fullName` is parsed by `FullNameSchema`: trimmed, 1–100 chars,
 Unicode-aware regex `^[\p{L}\p{M}][\p{L}\p{M} '.-]*$` (must start with a letter/mark, so
@@ -564,17 +676,18 @@ seeded.
 
 `PATCH /users/me/photo` status map (from the service's typed `Result` errors):
 
-| Service error                             | HTTP  | Meaning                                 |
-| ----------------------------------------- | ----- | --------------------------------------- |
-| missing `req.file`                        | `422` | No `photo` field on the multipart body. |
-| `NOT_AN_IMAGE`                            | `422` | Bytes don't decode as a raster image.   |
-| `UNSUPPORTED_FORMAT`                      | `422` | Not JPEG/PNG/WebP.                      |
-| `DIMENSIONS_TOO_SMALL`                    | `422` | Smaller than 64×64.                     |
-| `DIMENSIONS_TOO_LARGE`                    | `422` | Larger than 8192 on a side.             |
-| `NOT_CONFIGURED`                          | `503` | Cloudinary creds absent.                |
-| `UPLOAD_FAILED` / `DELETE_FAILED`         | `502` | Storage provider error.                 |
-| `USER_NOT_FOUND`                          | `404` | Row vanished mid-request.               |
-| (size cap, in `upload-avatar` middleware) | `413` | File exceeds the 5 MB limit.            |
+| Service error                             | HTTP  | Meaning                                                                |
+| ----------------------------------------- | ----- | ---------------------------------------------------------------------- |
+| missing `req.file`                        | `422` | No `photo` field on the multipart body.                                |
+| `NOT_AN_IMAGE`                            | `422` | Bytes don't decode as a raster image.                                  |
+| `UNSUPPORTED_FORMAT`                      | `422` | Not JPEG/PNG/WebP.                                                     |
+| `DIMENSIONS_TOO_SMALL`                    | `422` | Smaller than 64×64.                                                    |
+| `DIMENSIONS_TOO_LARGE`                    | `422` | Larger than 8192 on a side.                                            |
+| `NOT_CONFIGURED`                          | `503` | Cloudinary creds absent.                                               |
+| `UPLOAD_FAILED` / `DELETE_FAILED`         | `502` | Storage provider error.                                                |
+| `USER_NOT_FOUND`                          | `404` | Row vanished mid-request.                                              |
+| (size cap, in `upload-avatar` middleware) | `413` | File exceeds the 5 MB limit.                                           |
+| (mimetype gate / other multer errors)     | `422` | Non-image content-type, or malformed multipart (wrong field, >1 file). |
 
 **The avatar pipeline** (`upload-avatar.ts` → `image.ts` → `cloudinary.ts`):
 
@@ -606,11 +719,13 @@ the session field) and governed by a **two-tier** design:
 - **Tier 2 — `PATCH /users/me/handle { handle }`** (in `users.routes.ts`): the
   **authoritative** set/revert and the real trust boundary. The body handle is
   re-normalized, regex-validated, rate-limited, and availability-re-checked **inside one
-  atomic transaction** (`SELECT … FOR UPDATE` on the user row + target reservation). The
-  case (claim vs revert) is decided **server-side** from ownership — the client never picks it.
-- **`GET /users/me/handle`**: panel bootstrap — current handle plus rate-limit state
-  (`changesRemaining`, `isChangeLocked`, `cooldownResetAt`) and a one-tap revert
-  affordance (`revertableHandle`, `revertableExpiresAt`).
+  atomic transaction** (`SELECT … FOR UPDATE` on the caller's user row + the target
+  reservation + any conflicting user row). The case (claim vs revert) is decided
+  **server-side** from reservation ownership — the client never picks it.
+- **`GET /users/me/handle`**: panel bootstrap — current handle plus policy + rate-limit
+  state (`maxChanges`, `windowDays`, `changesRemaining`, `isChangeLocked`,
+  `cooldownResetAt`) and a one-tap revert affordance (`revertableHandle`,
+  `revertableExpiresAt`).
 
 | Method & path                 | Input                      | Behavior & statuses                                                                                     |
 | ----------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -640,15 +755,20 @@ the session field) and governed by a **two-tier** design:
   every new user a unique randomized handle (`user_<base>_<4hex>`, e.g. `user_vidyesh_7a9f`,
   or `user_<8 digits>` with no usable name/email). Stored as the active handle **without**
   consuming the rate-limit window. Idempotent (`WHERE handle IS NULL`), never clobbers.
-- **`npm run db:backfill-handles`** — one-off: seed placeholder handles for users who
+- **`pnpm db:backfill-handles`** — one-off: seed placeholder handles for users who
   predate the hook (`handle IS NULL`). Dry-run by default; `-- --apply` to write.
-- **`npm run db:backfill-oauth-profile`** — one-off: copy `name`/`image` from an
-  already-linked OAuth account (Google `id_token` decode / GitHub `/user` API) onto users
-  who linked before `updateUserInfoOnLink` mattered. Conservative: `image` only when null,
-  `name` only when it's still the email-prefix fallback. Dry-run by default; `-- --apply`.
-- **`npm run db:cleanup-handle-reservations`** — daily off-peak cron: hard-delete dead
+- **`pnpm db:backfill-oauth-profile`** — one-off, two independent passes over already-linked
+  OAuth accounts, both via the shared `src/lib/oauth-profile.ts` (Google `id_token` decode /
+  GitHub `/user` + `/user/emails`): (1) copy `name`/`image` onto users who linked before
+  `updateUserInfoOnLink` mattered — conservative: `image` only when null, `name` only when
+  it's still the email-prefix fallback and `nameSetByUser` is false; (2) fill `account.email`
+  where it's still NULL (write-once, verified provider emails only) for rows that predate
+  the account-create hook (§5a). Dry-run by default; `-- --apply`.
+- **`pnpm db:cleanup-handle-reservations`** — daily off-peak cron: hard-delete dead
   reservations (`purgeExpiredHandleReservations`). Pure housekeeping — lazy reads already
   treat expired holds as available.
+
+(The fourth one-off, `pnpm db:merge-duplicate-user`, belongs to the citext email work — §4.)
 
 ---
 
@@ -659,14 +779,17 @@ the session field) and governed by a **two-tier** design:
 ```text
 1. UI step 1 (email):
    POST /signup/start { email }
-   → forwards to send-verification-otp; stores a hashed, expiring OTP; sends email
-     (dev: also console.log("OTP for a@b.com (sign-in): 482913")). NO user created.
+   → sendSignupOtp mints the code server-side (auth.api.createVerificationOTP) and emails
+     it (dev: also console.log("OTP for a@b.com (sign-in): 482913")). The public
+     send-verification-otp endpoint is NOT used — it silently no-ops for emails with no
+     user while disableSignUp: true (§5a). Generic 200 either way; NO user created.
 
 2. UI steps 2+3 (OTP + password), ONE final call:
    POST /signup/complete { email, otp, password }
-   → Path A creates the user (emailVerified = true) WITH the password atomically, seeds a
-     placeholder handle + stamps imageSource (user-create hook), and sets the httpOnly
-     session cookie. Bad OTP → 401, no user; missing password → 422.
+   → Path A verifies the OTP (getVerificationOTP + constant-time compare), creates the
+     user WITH the password atomically (emailVerified = true), seeds a placeholder handle
+     + stamps imageSource (user-create hook), and sets the httpOnly session cookie.
+     Bad OTP → 401, no user; missing password → 422.
 
 3. Frontend: useSession() → navbar shows logged-in state (incl. session.user.handle).
 ```
@@ -675,18 +798,36 @@ If the user bails before the final call, no account exists — nothing to recove
 
 **Login:** `POST /api/auth/sign-in/email { email, password, rememberMe }`.
 
-**OAuth:** `sign-in/social` (Google/GitHub). If the verified email already exists, the
-provider links onto that user — **one** account, not a duplicate (§5a `accountLinking`).
-A brand-new OAuth user is seeded `name`/`image` (with `imageSource: "oauth"`) and a
-placeholder handle at creation; a **link** onto an existing user does NOT overwrite their
-name/photo (`updateUserInfoOnLink: false`). With `allowDifferentEmails: true`, a
-**signed-in** user can also link a trusted provider whose email **differs** from their
-account email (e.g. a personal-email account linking a work-email GitHub) and stay one
-user — the session is the trust anchor (you must already be the user to link), so this
-never auto-merges two separate accounts at a fresh, sessionless sign-in.
+**OAuth:** `sign-in/social` (Google/GitHub, `prompt: "select_account"`). If the verified
+email already exists — compared **case-insensitively** (citext; `mapProfileToUser` also
+lowercases what's stored) — the provider links onto that user: **one** account, not a
+duplicate (§5a `accountLinking`). A brand-new OAuth user is seeded `name`/`image` (with
+`imageSource: "oauth"`) and a placeholder handle at creation; a **link** onto an existing
+user does NOT overwrite their name/photo (`updateUserInfoOnLink: false`). Either way the
+account-create hook stamps the provider's verified email onto `account.email` (write-once,
+§5a). With `allowDifferentEmails: true`, a **signed-in** user can also link a trusted
+provider whose email **differs** from their account email (e.g. a personal-email account
+linking a work-email GitHub) and stay one user — the session is the trust anchor (you must
+already be the user to link), so this never auto-merges two separate accounts at a fresh,
+sessionless sign-in.
+
+**Link another provider (signed in):** `authClient.linkSocial({ provider: "github" })` →
+`POST /api/auth/link-social` → provider redirect → new `account` row on the same `userId`.
+The original provider still can't be unlinked afterwards (§5a `hooks.before`).
+
+**List linked accounts:** `GET /users/me/linked-accounts` → `{ providerId, email }[]`
+(oldest first; the credential row shows the session's login email — §5f).
 
 **Add a password to an OAuth-only account:** run `/signup/complete` for that email →
 **Path C** attaches the credential to the same user.
+
+**Change password (signed in):** `POST /api/auth/change-password { currentPassword,
+newPassword, revokeOtherSessions? }` — Better Auth built-in; no custom endpoint.
+
+**Switch accounts (multi-session):** sign in again with any method → the new session is
+**added** (up to 5) instead of replacing the current one. The account-switcher UI drives
+`authClient.multiSession.listDeviceSessions()` / `.setActive()` / `.revoke()`; a full
+`sign-out` clears them all (§7).
 
 **Passkey:** register only while signed in (`requireSession: true`); authenticate via
 `passkey/*`.
@@ -718,6 +859,15 @@ expiry. `rememberMe` extends lifetime. You don't write `res.cookie(...)` or gene
 session ids. The session **user** also carries `handle` (via `additionalFields`), so the
 client reads `session.user.handle` directly for the navbar/avatar menu.
 
+**Multi-session (the account switcher).** The `multiSession({ maximumSessions: 5 })`
+plugin (§5a) lets one browser hold several signed-in accounts at once: each sign-in
+writes an **additional** signed `_multi-<token>` cookie next to the active-session cookie
+instead of overwriting it. `multi-session/list-device-sessions` enumerates them,
+`set-active` swaps which one is the live session (the one `get-session`, `requireAuth`,
+and every `/users/me*` route resolve), `revoke` drops a single one, and a full
+`sign-out` clears them all. Each entry is still an ordinary row in the `session` table —
+same opaque-token model, no extra schema — and the 5-session cap is enforced server-side.
+
 For **your own** protected routes, ask Better Auth who the user is — `src/middleware/require-auth.ts`:
 
 ```ts
@@ -739,8 +889,9 @@ export async function requireAuth(req, res, next): Promise<void> {
 ```
 
 `req.user` is declared via a global Express augmentation (`src/types/express.d.ts`) and
-now includes `handle`. Zero-trust: the session is re-derived server-side on every request
-— the frontend cannot assert identity.
+includes `handle`. Zero-trust: the session is re-derived server-side on every request —
+the frontend cannot assert identity. Under multi-session, `getSession` always resolves
+the **active** session, so `req.user` is whichever account the switcher last activated.
 
 **Why a cookie, not `localStorage`?** A real token in `localStorage` is XSS-stealable by
 any script on the page. Better Auth's httpOnly cookie is invisible to page JS and
@@ -759,12 +910,19 @@ server opts in.
   In prod, put the API on a subdomain (`api.qatoto.com`) to stay same-site with `qatoto.com`.
 
 Frontend client (typed, sends cookies automatically). Add `inferAdditionalFields` so the
-client type includes `session.user.handle`:
+client type includes `session.user.handle`, and `multiSessionClient` for the account
+switcher. (The frontend also already ships `phoneNumberClient()` — that's the
+frontend-ahead gap from §1; those calls fail until the backend enables the `phoneNumber`
+plugin.)
 
 ```ts
 // src/lib/auth-client.ts (frontend)
 import { createAuthClient } from "better-auth/react";
-import { emailOTPClient, inferAdditionalFields } from "better-auth/client/plugins";
+import {
+    emailOTPClient,
+    inferAdditionalFields,
+    multiSessionClient,
+} from "better-auth/client/plugins";
 import { passkeyClient } from "@better-auth/passkey/client";
 
 export const authClient = createAuthClient({
@@ -772,6 +930,7 @@ export const authClient = createAuthClient({
     plugins: [
         emailOTPClient(),
         passkeyClient(),
+        multiSessionClient(),
         inferAdditionalFields({ user: { handle: { type: "string" } } }),
     ],
 });
@@ -783,6 +942,13 @@ const { data: session } = useSession(); // "am I logged in?" → session.user.ha
 await signIn.email({ email, password, rememberMe }); // password login
 await signIn.social({ provider: "google" }); // OAuth
 await authClient.passkey.addPasskey(); // register passkey (needs session)
+await authClient.linkSocial({ provider: "github" }); // link a 2nd provider (needs session)
+await authClient.changePassword({ currentPassword, newPassword, revokeOtherSessions: true });
+
+// Account switcher (multi-session)
+const deviceSessions = await authClient.multiSession.listDeviceSessions();
+await authClient.multiSession.setActive({ sessionToken });
+await authClient.multiSession.revoke({ sessionToken });
 
 // Signup — your endpoints; pass credentials: "include" on the raw fetch
 await fetch("http://localhost:8000/signup/start", {
@@ -804,6 +970,7 @@ await fetch("http://localhost:8000/users/me/handle", {
     credentials: "include" /* {handle} */,
 });
 await fetch(`http://localhost:8000/handles/availability?handle=${h}`, { credentials: "include" });
+await fetch("http://localhost:8000/users/me/linked-accounts", { credentials: "include" });
 
 // Profile photo — multipart, DO NOT set Content-Type (the browser sets the boundary)
 const form = new FormData();
@@ -839,20 +1006,35 @@ Done and live:
 7. **Rate limiting** (below).
 8. **Display name** (`PATCH /users/me`, `nameSetByUser` lock).
 9. **Profile photo / avatar** (`PATCH`/`DELETE /users/me/photo`) — multer → sharp
-   validate/normalize → Cloudinary; `imageSource` lock; `DATABASE`/Cloudinary creds optional.
+   validate/normalize → Cloudinary; `imageSource` lock; Cloudinary creds optional.
 10. **Handles** — placeholder seeding on signup, Tier-1 availability + Tier-2 atomic
     set/revert, 2-changes/14-days rate limit, 14-day revert reservations + daily cron.
-11. **Backfill scripts** — placeholder handles, OAuth name/image profile.
+11. **Backfill scripts** — placeholder handles, OAuth name/image profile + `account.email`.
+12. **Multi-session** account switcher (`multiSession`, up to 5 concurrent sessions — §7).
+13. **Linked accounts** — `account.email` write-once capture (account-create hook +
+    `src/lib/oauth-profile.ts`) and `GET /users/me/linked-accounts` (§5f).
+14. **Case-insensitive email** — `citext` on `user.email` / `account.email`
+    (drizzle/0008), `mapProfileToUser` lowercasing, `prompt: "select_account"`, and the
+    one-time `db:merge-duplicate-user` fold-in script (§4).
+15. **Change password** — Better Auth built-in `POST /api/auth/change-password`, wired
+    to the frontend panel.
+16. **Unit tests** — vitest, co-located `src/**/*.test.ts` (app, config, middleware,
+    controllers, services, lib); `typecheck` spans app + scripts + tests.
 
 ### Later (NOT now)
 
+- **Phone number auth.** The frontend already ships the client + panel (§1); the backend
+  still needs Better Auth's `phoneNumber` plugin, schema columns, and an SMS sender.
 - Managed Postgres + pooling for prod (Neon, RDS, Supabase). _(Current pool already
   hardened for Aiven: CA-cert TLS, idle recycling, keepAlive — see §5b.)_
 - **Shared rate-limit store for prod.** All limiters are **in-memory** (per-process).
   Multi-instance/serverless lets attackers round-robin instances → move to a shared
   store: Express limiters → `rate-limit-redis`; Better Auth → `rateLimit.storage:
 "database"` (adds a `rateLimit` table) or `"secondary-storage"`.
-- **Lock down `GET /users` / `GET /users/:id`** — currently public list/read endpoints.
+- **Lock down `GET /users` / `GET /users/:id`** — currently public list/read endpoints
+  (they expose `id`, `email`, `created_at`).
+- **API docs serving** — `redoc-express` / `swagger-ui-express` are installed but not
+  imported anywhere yet (§2).
 
 ### Rate limiting (done)
 
@@ -861,8 +1043,9 @@ custom routes need their own):
 
 - **Express limiters** (`src/middleware/rate-limit.ts`): `/signup/start` capped
   **per-IP** (8/15min) **and per-email** (4/15min) (stops OTP spam + inbox-bombing);
-  `/signup/complete` capped **per-IP** (12/15min); `/handles/availability` capped
-  **per-user** (60/min). 429 returns the standard ApiResponse envelope with `retryAfterSeconds`.
+  `/signup/complete` capped **per-IP** (12/15min) — on top of Better Auth's per-OTP
+  attempt cap; `/handles/availability` capped **per-user** (60/min). 429 returns the
+  standard ApiResponse envelope with `retryAfterSeconds`.
 - **Better Auth `rateLimit`** (`src/lib/auth.ts`): `send-verification-otp` 3/60s,
   `sign-in/email-otp` 5/60s, `reset-password` 5/60s, `sign-in/email` 5/10s. Enabled in
   all envs.
@@ -879,19 +1062,29 @@ custom routes need their own):
       (`src/config/index.ts`). Brevo + Cloudinary creds are optional → `NOT_CONFIGURED`.
 - [ ] `BETTER_AUTH_URL` = API origin; `FRONTEND_URL` = exact frontend origin.
 - [ ] Passwords hashed with **argon2id** (`@node-rs/argon2`) — never stored/returned plaintext.
-- [ ] OTPs hashed, expiring, single-use (`verification` table) — don't disable that.
-- [ ] Session lives in Better Auth's **httpOnly** cookie, never in `localStorage`.
-- [ ] Login errors stay **generic** — never reveal whether an email exists.
+- [ ] OTPs expiring, single-use, attempt-capped (`verification` table). Stored **plain**
+      by design (§4) — Path A's constant-time compare reads the stored code; revisit
+      `storeOTP: "hashed"` if that path ever changes.
+- [ ] Session lives in Better Auth's **httpOnly** cookies, never in `localStorage` —
+      multi-session just adds more httpOnly cookies (one per account, max 5), never
+      page-JS state.
+- [ ] Login errors stay **generic** — never reveal whether an email exists
+      (`/signup/start` answers the same `200` whether or not the email can sign up).
 - [ ] Body/query shape validated on **your** endpoints before any action; id always from
       `req.user` (session), never the body — a caller can only change themselves.
 - [ ] Account created **only** by `/signup/complete` (OTP + password atomic);
       `disableSignUp: true` + passkey `requireSession: true` block orphan creation.
-- [ ] **One user = one email**: `UNIQUE(email)` + account linking; `email-password` is
-      NOT a trusted linker (must prove email via OTP first — Path C). `updateUserInfoOnLink:
-false` so a link can't overwrite a user-set name/photo. `allowDifferentEmails: true`
-      lets a **signed-in** user link a trusted provider on a different email (session is the
-      trust anchor; trustedProviders only — never auto-merges at sessionless sign-in).
-      **Original provider can't be unlinked** (`hooks.before`).
+- [ ] **One user = one canonical email**: `UNIQUE(email)` (citext → case-insensitive) +
+      account linking; `email-password` is NOT a trusted linker (must prove email via OTP
+      first — Path C). `updateUserInfoOnLink: false` so a link can't overwrite a user-set
+      name/photo. `allowDifferentEmails: true` lets a **signed-in** user link a trusted
+      provider on a different email (session is the trust anchor; trustedProviders only —
+      never auto-merges at sessionless sign-in). **Original provider can't be unlinked**
+      (`hooks.before`).
+- [ ] **Linked-accounts surface leaks nothing sensitive:** `GET /users/me/linked-accounts`
+      returns only `{ providerId, email }` — OAuth tokens and provider `accountId`s are
+      never selected; `account.email` is written once, from **verified** provider emails
+      only.
 - [ ] **Handle is server-owned:** `input:false` on the session field (Better Auth can't
       write it); normalization + regex (3–30, `[a-z0-9._-]`) + 2/14-day rate limit +
       reservation logic enforced server-side in one atomic transaction; `UNIQUE(handle)`
