@@ -788,8 +788,8 @@ the session field) and governed by a **two-tier** design:
    POST /signup/complete { email, otp, password }
    → Path A verifies the OTP (getVerificationOTP + constant-time compare), creates the
      user WITH the password atomically (emailVerified = true), seeds a placeholder handle
-     + stamps imageSource (user-create hook), and sets the httpOnly session cookie.
-     Bad OTP → 401, no user; missing password → 422.
+     (user-create hook; imageSource stays NULL — no provider image to stamp), and sets
+     the httpOnly session cookie. Bad OTP → 401, no user; missing password → 422.
 
 3. Frontend: useSession() → navbar shows logged-in state (incl. session.user.handle).
 ```
