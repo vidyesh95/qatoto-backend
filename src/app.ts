@@ -11,6 +11,7 @@ import { errorHandler } from "#src/middleware/error-handler.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import authRouter from "#src/routes/auth.routes.js";
+import docsRouter from "#src/routes/docs.routes.js";
 import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
 import usersRouter from "#src/routes/users.routes.js";
@@ -54,6 +55,7 @@ app.use("/", indexRouter);
 app.use("/", authRouter);
 app.use("/users", usersRouter);
 app.use("/handles", handlesRouter);
+app.use("/", docsRouter);
 
 // --- Error handling ---
 app.use(notFoundHandler);
