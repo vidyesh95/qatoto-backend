@@ -9,7 +9,7 @@ import type { Result } from "#src/types/index.js";
  * image, reject decompression bombs and out-of-range dimensions, then RE-ENCODE —
  * which strips EXIF/metadata and any non-image payload smuggled in the container.
  *
- * Shared by two callers with different output profiles: avatars (webp @ 1024px)
+ * Shared by two callers with different output profiles: avatars (avif @ 1024px)
  * and product listing images (avif @ 1600px). Everything but the output box and
  * codec is identical, so the validation core lives in
  * {@link validateAndNormalizeImage} and the two entry points just pass options.
@@ -128,7 +128,7 @@ export async function validateAndNormalizeImage(
 }
 
 /**
- * Validate + normalize an avatar: webp, downscaled into a 1024px box. Thin
+ * Validate + normalize an avatar: avif, downscaled into a 1024px box. Thin
  * wrapper over {@link validateAndNormalizeImage} so the avatar route is
  * unchanged.
  */
@@ -137,6 +137,6 @@ export async function validateAndNormalizeAvatar(
 ): Promise<Result<NormalizedImage, ImageValidationError>> {
   return validateAndNormalizeImage(rawImageBytes, {
     outputMaxDimensionPx: AVATAR_OUTPUT_MAX_DIMENSION_PX,
-    outputFormat: "webp",
+    outputFormat: "avif",
   });
 }
