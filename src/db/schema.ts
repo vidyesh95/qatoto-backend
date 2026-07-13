@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { relations } from "drizzle-orm";
 import {
   pgTable,
@@ -6,6 +8,7 @@ import {
   boolean,
   integer,
   index,
+  uniqueIndex,
   pgEnum,
   customType,
 } from "drizzle-orm/pg-core";
@@ -211,4 +214,139 @@ export const passkeyRelations = relations(passkey, ({ one }) => ({
     fields: [passkey.userId],
     references: [user.id],
   }),
+}));
+
+// ---------------------------------------------------------------------------
+// Store / commerce domain (product listings). See STORE_BACKEND_STRUCTURE.md.
+//
+// ID STRATEGY — deliberate deviation from the auth tables. Auth rows carry ids
+// minted by Better Auth (`text("id").primaryKey()`, no DB default). These
+// commerce tables are ours and Better Auth never touches them, so they
+// self-generate opaque `text` ids via randomUUID at insert time — still string
+// ids to stay consistent with the rest of the schema.
+// ---------------------------------------------------------------------------
+
+// The listing's product category. Stored as slugs; the wizard maps its display
+// labels ("Home & Kitchen") to these (home_kitchen). Enum so Postgres rejects
+// any value the app doesn't know about.
+export const productCategoryEnum = pgEnum("product_category", [
+  "electronics",
+  "fashion",
+  "home_kitchen",
+  "anime_collectibles",
+  "digital_goods",
+  "books_media",
+  "sports_outdoors",
+  "beauty_personal_care",
+]);
+
+// Physical condition of the item. Wizard's New/Refurbished/Used, lowercased.
+export const productConditionEnum = pgEnum("product_condition", ["new", "refurbished", "used"]);
+
+// Listing lifecycle. `draft` = seller is still building it / abandoned the
+// wizard (visible only to them); `active` = published, buyer-visible. The
+// draft→active transition is gated server-side (POST /products/:id/publish).
+export const productStatusEnum = pgEnum("product_status", ["draft", "active"]);
+
+// A product listing, owned by exactly one seller.
+export const product = pgTable(
+  "product",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // Owner. Stamped from req.user.id at create — NEVER from the body
+    // (CLAUDE.md §1.1). Cascade so deleting a user removes their listings.
+    sellerId: text("seller_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    brand: text("brand"),
+    category: productCategoryEnum("category").notNull(),
+    condition: productConditionEnum("condition").default("new").notNull(),
+    description: text("description"),
+    // Money in integer cents. Server-authoritative; the client sends cents,
+    // never dollars — no floating-point money in the DB or on the wire.
+    priceInCents: integer("price_in_cents").notNull(),
+    compareAtPriceInCents: integer("compare_at_price_in_cents"),
+    // Server-owned; the wizard hardcodes "$". Not client-writable.
+    currency: text("currency").default("USD").notNull(),
+    stockQuantity: integer("stock_quantity").default(0).notNull(),
+    sku: text("sku"),
+    // Short ordered display bullets ("30-hour battery life"). A text[] column,
+    // NOT a table: no identity/relationships/queries of their own. Promote to a
+    // table only if features ever grow attributes.
+    keyFeatures: text("key_features").array().notNull().default([]),
+    status: productStatusEnum("status").default("draft").notNull(),
+    // NULL until first published; set on the draft→active transition.
+    publishedAt: timestamp("published_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("product_sellerId_idx").on(table.sellerId),
+    index("product_status_idx").on(table.status),
+    // A seller can't reuse one SKU across their own listings. Postgres UNIQUE
+    // permits many NULLs, so SKU stays optional.
+    uniqueIndex("product_seller_sku_unq").on(table.sellerId, table.sku),
+  ],
+);
+
+// A product's images. Two-phase upload: the listing is created first, then
+// images are attached one at a time. `position` orders them; position 0 is the
+// main image (the wizard's "Main image" badge on the first tile).
+export const productImage = pgTable(
+  "product_image",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    // Cloudinary secure_url of the normalized asset.
+    url: text("url").notNull(),
+    // 0 = main listing photo. Contiguous per product; re-packed on delete.
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("product_image_productId_idx").on(table.productId)],
+);
+
+// B2B volume pricing — buy at least `minimumOrderQuantity` to get
+// `unitPriceInCents`. Supported now even though the create wizard doesn't
+// collect it yet (STORE_BACKEND_STRUCTURE.md §11).
+export const productPricingTier = pgTable(
+  "product_pricing_tier",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    unitPriceInCents: integer("unit_price_in_cents").notNull(),
+    minimumOrderQuantity: integer("minimum_order_quantity").notNull(),
+    // Display order of the tier ladder.
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("product_pricing_tier_productId_idx").on(table.productId)],
+);
+
+export const productRelations = relations(product, ({ one, many }) => ({
+  seller: one(user, { fields: [product.sellerId], references: [user.id] }),
+  images: many(productImage),
+  pricingTiers: many(productPricingTier),
+}));
+
+export const productImageRelations = relations(productImage, ({ one }) => ({
+  product: one(product, { fields: [productImage.productId], references: [product.id] }),
+}));
+
+export const productPricingTierRelations = relations(productPricingTier, ({ one }) => ({
+  product: one(product, { fields: [productPricingTier.productId], references: [product.id] }),
 }));

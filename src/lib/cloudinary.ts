@@ -129,3 +129,130 @@ export async function deleteUserAvatar(
     };
   }
 }
+
+/**
+ * Product images live under a per-product folder, one asset per image id:
+ * `qatoto/products/<productId>/<imageId>`. Unlike avatars (one asset per user,
+ * overwritten in place), a product has MANY images, so each gets its own stable
+ * id — uploading or deleting one never clobbers a sibling.
+ */
+const PRODUCT_FOLDER = "qatoto/products";
+
+/** The stable public id for one product image. */
+function productImagePublicId(productId: string, imageId: string): string {
+  return `${PRODUCT_FOLDER}/${productId}/${imageId}`;
+}
+
+/** The folder prefix holding all of a product's image assets. */
+function productFolderPrefix(productId: string): string {
+  return `${PRODUCT_FOLDER}/${productId}/`;
+}
+
+/**
+ * Upload one product image from an already-validated/re-encoded buffer and
+ * return its canonical secure URL. The buffer MUST be checked+normalized by the
+ * caller first (CLAUDE.md §1.1) — this layer trusts it. Each image has a unique
+ * id, so there is nothing to overwrite.
+ */
+export async function uploadProductImage(
+  productId: string,
+  imageId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: productImagePublicId(productId, imageId),
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Delete one product image asset. Treated as success when the asset is already
+ * gone ("not found") — the desired end state is reached either way.
+ */
+export async function deleteProductImage(
+  productId: string,
+  imageId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult = await cloudinary.uploader.destroy(
+      productImagePublicId(productId, imageId),
+      { resource_type: "image", invalidate: true },
+    );
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
+
+/**
+ * Destroy every asset under a product's folder in one call — used before a
+ * listing delete so no orphaned images are left behind. A product with no images
+ * yet ("not found" / empty prefix) still resolves as success.
+ */
+export async function deleteAllProductImages(
+  productId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    await cloudinary.api.delete_resources_by_prefix(productFolderPrefix(productId), {
+      resource_type: "image",
+      invalidate: true,
+    });
+    return { success: true, value: { deleted: true } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}

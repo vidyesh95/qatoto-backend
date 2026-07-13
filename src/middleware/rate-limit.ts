@@ -99,3 +99,31 @@ export const handleAvailabilityLimiter = rateLimit({
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
 });
+
+/**
+ * POST /products — cap listing creation at 30/min per seller. Keyed by user id
+ * (requireAuth runs first) so one seller can't script-spam draft rows, while a
+ * shared NAT doesn't starve other sellers.
+ */
+export const productCreateLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST /products/:id/images — image upload is the expensive path (5 MB buffer +
+ * sharp decode/re-encode + Cloudinary round-trip). Cap at 60/min per seller;
+ * a full 9-image listing is well within one window.
+ */
+export const productImageUploadLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
