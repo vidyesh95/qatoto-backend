@@ -28,11 +28,11 @@ This is the entry point. When you run `pnpm run dev`, Node.js executes this file
 
 Here's what it does, in order:
 
-1.  **`import 'dotenv/config'`**: Loads `.env` file into `process.env`.
-2.  **`import config`**: Validates all env vars with Zod.
-3.  **`import app`**: Creates Express app with all middleware & routes.
-4.  **`http.createServer(app)`**: Wraps it in an HTTP server.
-5.  **`server.listen(port)`**: Starts listening on port 8000.
+1. **`import 'dotenv/config'`**: Loads `.env` file into `process.env`.
+2. **`import config`**: Validates all env vars with Zod.
+3. **`import app`**: Creates Express app with all middleware & routes.
+4. **`http.createServer(app)`**: Wraps it in an HTTP server.
+5. **`server.listen(port)`**: Starts listening on port 8000.
     - ✅ 'Server running on port 8000'
     - Register graceful shutdown: `SIGTERM` / `SIGINT` → close cleanly.
 
@@ -120,7 +120,7 @@ Middleware are functions that run between receiving a request and sending a resp
 ↓
 `[error handler]`
 
-### Your middleware:
+### Your middleware
 
 | File               | What it does                                                                                                                             |
 | :----------------- | :--------------------------------------------------------------------------------------------------------------------------------------- |
@@ -129,7 +129,7 @@ Middleware are functions that run between receiving a request and sending a resp
 | `error-handler.ts` | Catches ALL errors and sends a clean JSON response. In development it includes the stack trace; in production it hides internal details. |
 | `validate.ts`      | Checks that request data (body/params/query) matches a Zod schema. Rejects bad data with a 400 error before it reaches your controller.  |
 
-### Every middleware has the same signature:
+### Every middleware has the same signature
 
 ```typescript
 function myMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -174,9 +174,9 @@ So when the router says `router.get("/")`, the full path becomes `/users` + `/` 
 
 Controllers are the waiters. They:
 
-1.  Receive the request from the route.
-2.  Call the appropriate service function.
-3.  Format the response and send it back.
+1. Receive the request from the route.
+2. Call the appropriate service function.
+3. Format the response and send it back.
 
 ```typescript
 // controllers/users.controller.ts
@@ -220,9 +220,9 @@ This file creates a connection pool to PostgreSQL.
 
 The `query()` helper function is a convenience wrapper that:
 
-1.  Runs the SQL.
-2.  Logs duration in development (so you can spot slow queries).
-3.  Returns the result.
+1. Runs the SQL.
+2. Logs duration in development (so you can spot slow queries).
+3. Returns the result.
 
 ---
 
