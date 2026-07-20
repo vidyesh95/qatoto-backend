@@ -256,3 +256,96 @@ export async function deleteAllProductImages(
     };
   }
 }
+
+/**
+ * R&D project covers. ONE asset per project, overwritten in place — the same shape as
+ * avatars rather than product images, because a project has exactly one cover and a
+ * re-upload should replace it rather than accumulate orphans.
+ */
+const RESEARCH_PROJECT_FOLDER = "qatoto/research-projects";
+
+/** The stable, deterministic public id for a project's cover. */
+export function projectCoverPublicId(projectId: string): string {
+  return `${RESEARCH_PROJECT_FOLDER}/${projectId}/cover`;
+}
+
+/**
+ * Upload a project cover from an already-validated/re-encoded buffer and return its
+ * canonical secure URL. The buffer MUST be checked and normalized by the caller first
+ * (CLAUDE.md §1.1) — this layer trusts it.
+ *
+ * `overwrite: true` + `invalidate: true` make re-upload idempotent and flush the CDN,
+ * so the new cover is visible immediately rather than after a cache TTL.
+ */
+export async function uploadProjectCover(
+  projectId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: projectCoverPublicId(projectId),
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Delete a project's cover asset. Treated as success when the asset is already gone —
+ * the desired end state is reached either way.
+ */
+export async function deleteProjectCover(
+  projectId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
+      projectCoverPublicId(projectId),
+      { invalidate: true },
+    );
+    const outcome = destroyResult.result;
+    return { success: true, value: { deleted: outcome === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}

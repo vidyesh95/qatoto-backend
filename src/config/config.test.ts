@@ -39,4 +39,73 @@ describe("Config", () => {
     expect(config.BETTER_AUTH_URL).toBe(mockEnv.BETTER_AUTH_URL);
     expect(config.FRONTEND_URL).toBe(mockEnv.FRONTEND_URL);
   });
+
+  // The native-client lists (R_AND_D_BACKEND_STRUCTURE.md §4a). Both are UNSET in
+  // this suite's environment, which is the case that matters most: it is the exact
+  // shape a dev machine and CI run in, and it must spread to nothing so passkey and
+  // OAuth behave identically to before these vars existed.
+  it("defaults both native-origin lists to [] when unset", async () => {
+    const { config } = await import("#src/config/index.js");
+
+    expect(config.PASSKEY_NATIVE_ORIGINS).toEqual([]);
+    expect(config.NATIVE_DEEP_LINK_SCHEMES).toEqual([]);
+  });
+});
+
+/**
+ * Re-parses the env schema in isolation. `config` is a module-level singleton parsed
+ * once at import, so overriding a var after the fact cannot be observed through it —
+ * these cases exercise the same schema against fresh input.
+ */
+async function parseWithOverrides(overrides: Readonly<Record<string, string>>): Promise<{ readonly success: boolean }> {
+  const { z } = await import("zod");
+  const commaSeparatedList = z
+    .string()
+    .optional()
+    .transform((rawValue) =>
+      (rawValue ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    );
+
+  const schema = z.object({
+    PASSKEY_NATIVE_ORIGINS: commaSeparatedList.pipe(
+      z.array(z.string().regex(/^(android:apk-key-hash:[A-Za-z0-9_-]+|https:\/\/[^/\s]+)$/)),
+    ),
+    NATIVE_DEEP_LINK_SCHEMES: commaSeparatedList.pipe(z.array(z.string().regex(/^[a-z][a-z0-9+.-]*:\/\/$/))),
+  });
+
+  return schema.safeParse(overrides);
+}
+
+describe("native-origin list parsing", () => {
+  it("parses a two-entry comma-separated list, trimming whitespace", async () => {
+    const parsed = await parseWithOverrides({
+      NATIVE_DEEP_LINK_SCHEMES: "qatoto://, app://",
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects a scheme with no :// — Better Auth prefix-matches, so it would match nothing", async () => {
+    const parsed = await parseWithOverrides({ NATIVE_DEEP_LINK_SCHEMES: "qatoto" });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a trailing slash on a passkey origin — expectedOrigin is compared exactly", async () => {
+    const parsed = await parseWithOverrides({ PASSKEY_NATIVE_ORIGINS: "https://app.qatoto.com/" });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects a plain http origin for a passkey ceremony", async () => {
+    const parsed = await parseWithOverrides({ PASSKEY_NATIVE_ORIGINS: "http://app.qatoto.com" });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts an android apk-key-hash alongside an https origin", async () => {
+    const parsed = await parseWithOverrides({
+      PASSKEY_NATIVE_ORIGINS: "android:apk-key-hash:Zm9vYmFy,https://app.qatoto.com",
+    });
+    expect(parsed.success).toBe(true);
+  });
 });

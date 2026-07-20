@@ -4,6 +4,7 @@ import { and, eq, gt, inArray, isNull, lte, ne } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { handleReservation, user } from "#src/db/schema.js";
+import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -325,16 +326,14 @@ export interface SetHandleSuccess {
  * handle_reservations PK are the real race guards behind the SELECT-based
  * availability re-check; a concurrent claim that beats us surfaces here.
  */
-const PG_UNIQUE_VIOLATION = "23505";
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code: unknown }).code === PG_UNIQUE_VIOLATION
-  );
-}
+/**
+ * BUG FIX: this previously read `error.code` at the top level, which is always
+ * undefined under drizzle-orm 0.45 — it wraps driver failures in a DrizzleQueryError
+ * and puts the pg error on `.cause`. The check therefore never matched, so a handle
+ * claimed by two users in the same instant produced an unhandled re-throw (500)
+ * instead of the intended 409 TAKEN. See src/lib/pg-errors.ts.
+ */
+const isUniqueViolation = isUniqueConstraintViolation;
 
 /**
  * Tier-2 authoritative set/revert — the trust boundary (CLAUDE.md §1.1, §3.3).

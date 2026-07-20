@@ -127,3 +127,109 @@ export const productImageUploadLimiter = rateLimit({
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
 });
+
+// ---------------------------------------------------------------------------
+// Research & Development (R_AND_D_BACKEND_STRUCTURE.md §4a).
+//
+// All per-user, keyed on `userKey` because `requireAuth` runs first in every chain.
+// Keying by IP instead would let one user behind a shared NAT starve another, and
+// would be trivially defeated by rotating an IP — the point of these is to bound what
+// ONE ACCOUNT can do, which is also why they sit alongside `requireIdentifiedUser`:
+// the limiter bounds an account, the guard makes accounts expensive to mint.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /research-projects — a project create is one transaction writing five rows
+ * (project, founder member, interval, stats, genesis audit). 20/min is far above any
+ * human wizard pace and well below script-spam.
+ */
+export const projectCreateLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/applications — the anti-spam surface that matters most on this domain: an
+ * application is visible to a founder, so a flood is both a DB cost and a harassment
+ * vector. The partial unique index already caps ONE live application per role, so this
+ * bounds churn across many projects.
+ */
+export const applicationCreateLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/invites — an invite lands in someone else's notifications, so this is
+ * outbound-to-a-third-party and is capped tighter than inbound applications.
+ */
+export const inviteCreateLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST /research-categories — the taxonomy is client-writable, which makes it a spam
+ * surface (§5). Rows land `pending`, so the real cost of abuse is moderator time;
+ * 5 per 15 minutes is generous for a wizard step nobody legitimately repeats.
+ */
+export const categoryCreateLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST/DELETE …/watch — idempotent and cheap, but it moves a counter, so an unbounded
+ * tap loop is pointless write amplification on the hottest row in the domain.
+ */
+export const projectWatchLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/cover — the expensive path: a 5 MB buffer, a sharp decode/re-encode, and a
+ * Cloudinary round-trip. Mirrors productImageUploadLimiter but tighter, because a
+ * project has exactly ONE cover and re-uploading it is rare.
+ */
+export const projectCoverUploadLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/roles — role churn is cheap but writes compensation strands too. Generous,
+ * since a founder legitimately adds several roles in one sitting at publish time.
+ */
+export const projectRoleWriteLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});

@@ -71,6 +71,13 @@
       "when": 1783935427021,
       "tag": "0009_amused_talkback",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784569181301,
+      "tag": "0010_peaceful_rogue",
+      "breakpoints": true
     }
   ]
 }

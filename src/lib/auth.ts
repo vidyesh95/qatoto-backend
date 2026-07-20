@@ -3,7 +3,7 @@ import { hash, verify } from "@node-rs/argon2";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
-import { anonymous, emailOTP, multiSession } from "better-auth/plugins";
+import { anonymous, bearer, emailOTP, multiSession } from "better-auth/plugins";
 import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 
@@ -45,7 +45,17 @@ export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg" }),
   secret: config.BETTER_AUTH_SECRET,
   baseURL: config.BETTER_AUTH_URL,
-  trustedOrigins: [config.FRONTEND_URL],
+  // §4a: native clients complete OAuth by being redirected to a custom scheme, and
+  // a callback to an untrusted origin is rejected. Better Auth compares http/https
+  // entries by EXACT origin and everything else by PREFIX, so a scheme registers WITH
+  // its "://" ("qatoto://"), which then matches "qatoto://auth-callback"; registering
+  // "qatoto" matches nothing. Unset → this spreads [] and the list is exactly
+  // [FRONTEND_URL], byte-identical to before.
+  //
+  // A custom scheme is claimable by any app on the device, so prefer Android App Links
+  // / iOS Universal Links (https, exact-origin matched) with the scheme as a fallback,
+  // and mandate PKCE on the native side.
+  trustedOrigins: [config.FRONTEND_URL, ...config.NATIVE_DEEP_LINK_SCHEMES],
   user: {
     // Expose the user's handle on the session so session.user.handle drives
     // menu/avatar display (the frontend mirrors this via inferAdditionalFields).
@@ -279,13 +289,42 @@ export const auth = betterAuth({
   },
   plugins: [
     anonymous(),
+    // §4a: `requireAuth` resolves a session from a COOKIE, and Kotlin/Swift have no
+    // cookie jar. This plugin converts `Authorization: Bearer <token>` into the
+    // session cookie Better Auth already understands, and stamps the token onto auth
+    // responses as the `set-auth-token` header.
+    //
+    // ZERO RISK TO WEB: the plugin's `before` hook only fires when an `Authorization`
+    // header is present, and browsers never send one to these routes. `requireAuth`
+    // needs no change — it calls auth.api.getSession(), which runs these hooks.
+    //
+    // TODO(native): flip to `bearer({ requireSignature: true })` BEFORE the first
+    // mobile release. With the default (false) a RAW session token is accepted, which
+    // means the value stored in `session.token` is itself a working credential —
+    // anyone who can merely READ the database (a backup, a read replica, a logging
+    // pipeline) can replay a row and become that user. `true` accepts only the signed
+    // `<token>.<hmac>` form, which cannot be forged without BETTER_AUTH_SECRET.
+    // Flipping it AFTER mobile ships invalidates every token already in Keychain /
+    // EncryptedSharedPreferences and logs every mobile user out; today it is free.
+    bearer(),
     passkey({
       // WebAuthn relying-party identity. The ceremony runs in the user's browser
       // at FRONTEND_URL, so rpID/origin derive from there (NOT the API origin).
       // rpID must be the frontend's registrable domain; origin must match exactly.
       rpID: new URL(config.FRONTEND_URL).hostname,
       rpName: "Qatoto",
-      origin: new URL(config.FRONTEND_URL).origin,
+      // §4a multi-origin: ONE rpID, several acceptable ceremony origins (web,
+      // Android apk-key-hash, iOS associated domain). rpID deliberately does NOT
+      // change — native platforms assert against the web domain via assetlinks.json
+      // and apple-app-site-association.
+      //
+      // The web origin is UNCONDITIONAL and must stay first: Better Auth evaluates
+      // `options?.origin || ctx.headers.get("origin")`, and AN EMPTY ARRAY IS TRUTHY
+      // in JS — passing a bare `config.PASSKEY_NATIVE_ORIGINS` would set
+      // expectedOrigin: [] when unset and break every ceremony, web included.
+      // Unset → a 1-element array, which SimpleWebAuthn treats identically to the
+      // scalar this replaced.
+      origin: [new URL(config.FRONTEND_URL).origin, ...config.PASSKEY_NATIVE_ORIGINS],
       registration: {
         // Require an authenticated session to register a passkey. Account creation
         // is owned solely by POST /signup/complete (verified OTP + password); we do

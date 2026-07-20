@@ -15,6 +15,7 @@ import {
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
+import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
 import type { Result } from "#src/types/index.js";
 
 /** Max images per listing (the wizard's MAX_PRODUCT_IMAGES). Enforced here, not the DB. */
@@ -134,10 +135,14 @@ type ProductScalarRow = typeof product.$inferSelect;
  * sku) index is the race-safe authority for SKU uniqueness — we let the insert
  * try and translate this one code into a domain SKU_TAKEN Result (an expected
  * operational failure, not a banned catch-all: any other error re-throws).
+ *
+ * BUG FIX: this previously read `error.code` at the top level, which is always
+ * undefined under drizzle-orm 0.45 — it wraps driver failures in a
+ * DrizzleQueryError and puts the pg error on `.cause`. The check therefore never
+ * matched, and a duplicate SKU produced an unhandled re-throw (500) instead of
+ * 409 SKU_TAKEN. See src/lib/pg-errors.ts, which walks the cause chain.
  */
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
-}
+const isUniqueViolation = isUniqueConstraintViolation;
 
 /** Assemble the read-back shape from an already-loaded scalar row + its children. */
 function toPublicProduct(
