@@ -233,3 +233,55 @@ export const projectRoleWriteLimiter = rateLimit({
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
 });
+
+/**
+ * POST /discovery/problem-reports — THE sybil surface of the whole domain (§6).
+ *
+ * `problem_cluster.distinctReporterCount` is the entire integrity of the opportunity
+ * score, so this limiter and `requireIdentifiedUser` are a PAIR: the guard makes minting
+ * an identity expensive, and this bounds what one identity can do with it. Tighter than
+ * applications because a report is anonymous-to-the-reader and therefore carries no social
+ * cost to spam. Ten genuine civic reports in fifteen minutes is already an implausible
+ * amount of typing.
+ *
+ * It also bounds outbound geocoding: every accepted report that misses the cache costs one
+ * call against a 1 req/s provider budget.
+ */
+export const problemReportLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * PUT/DELETE /discovery/talent/me and the publish toggle — cheap writes, but publishing
+ * flips a row into a directory other people read and invite from, so an unbounded
+ * publish/unpublish loop is notification amplification once §5's invite flow reads it.
+ */
+export const talentProfileWriteLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST /discovery/admin/* — staff are trusted, but a COMPROMISED staff session is the
+ * worst case in this domain: mass-approving spam taxonomy or mass-merging clusters
+ * destroys `distinctReporterCount` irreversibly, because an approved merge deletes the
+ * source rows. Generous enough for a real moderation sitting, low enough that scripted
+ * mass-approval trips it and shows up in the logs.
+ */
+export const discoveryModerationLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});

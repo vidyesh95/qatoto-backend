@@ -17,6 +17,7 @@ import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
 import productsRouter from "#src/routes/products.routes.js";
 import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
+import discoveryRouter from "#src/routes/discovery.routes.js";
 import researchProjectsRouter from "#src/routes/research-projects.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
 
@@ -87,6 +88,10 @@ app.all("/api/auth/*splat", (req, res) => {
 // in ASCII but up to 15 KB in UTF-8 for Devanagari or CJK — the global cap would reject
 // payloads Zod happily accepts, for those users only.
 app.use("/research-projects", parseLongFormJsonBody);
+// Same reasoning for /discovery: POST /discovery/problem-reports carries a 5,000-character
+// description, and PUT /discovery/talent/me carries a bio plus skills plus compensation
+// asks. Both are comfortably over 10 kb once the text is not ASCII.
+app.use("/discovery", parseLongFormJsonBody);
 
 // Body parsing with size limits to prevent payload abuse — for YOUR routes only.
 app.use(express.json({ limit: "10kb" }));
@@ -102,6 +107,7 @@ app.use("/users", usersRouter);
 app.use("/handles", handlesRouter);
 app.use("/products", productsRouter);
 app.use("/research-projects", researchProjectsRouter);
+app.use("/discovery", discoveryRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,
 // exactly as the spec mounts the funding router at "/".
 app.use("/", researchCatalogRouter);
