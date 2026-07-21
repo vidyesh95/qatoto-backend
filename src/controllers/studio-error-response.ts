@@ -1,6 +1,8 @@
 import type { Response } from "express";
 
 import type { ContentReviewError } from "#src/services/content-review.service.js";
+import type { PlaylistError } from "#src/services/playlists.service.js";
+import type { AnimeSeriesError } from "#src/services/series.service.js";
 import type { VideoError } from "#src/services/videos.service.js";
 
 /**
@@ -55,7 +57,7 @@ export {
  * which is exactly why any variant that must render as a DIFFERENT status gets a
  * different literal rather than a different payload.
  */
-export type StudioDomainError = VideoError | ContentReviewError;
+export type StudioDomainError = VideoError | ContentReviewError | PlaylistError | AnimeSeriesError;
 
 const CHAPTER_RULE_MESSAGES: Readonly<
   Record<Extract<VideoError, { type: "INVALID_CHAPTERS" }>["reason"], string>
@@ -81,6 +83,16 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
     // --- 404: lookups. Indistinguishable from "you may not see this".
     case "VIDEO_NOT_FOUND":
       return { statusCode: 404, message: "Video not found." };
+    case "PLAYLIST_NOT_FOUND":
+      return { statusCode: 404, message: "Playlist not found." };
+    // A series id in the PATH. Its body-field twin, ANIME_SERIES_NOT_FOUND, is a 422 —
+    // see the header note on why those are two literals and not one.
+    case "SERIES_NOT_FOUND":
+      return { statusCode: 404, message: "Series not found." };
+    case "SEASON_NOT_FOUND":
+      return { statusCode: 404, message: "Season not found." };
+    case "EPISODE_NOT_FOUND":
+      return { statusCode: 404, message: "Episode not found." };
 
     // --- 403: the ONLY variant, and only on /videos/admin/*. Names no resource and no
     // id, so it cannot be used to test whether an id exists — and it is decided before
@@ -167,6 +179,12 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
         message: "You can only add this video to your own playlists.",
         errors: { playlistIds: [...error.playlistIds] },
       };
+    case "VIDEO_NOT_OWNED":
+      return {
+        statusCode: 422,
+        message: "You can only add your own videos to a playlist.",
+        errors: { videoIds: [...error.videoIds] },
+      };
     case "ANIME_SERIES_NOT_FOUND":
       return {
         statusCode: 422,
@@ -192,6 +210,11 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
       return {
         statusCode: 409,
         message: `Episode ${error.episodeNumber} already exists in that season.`,
+      };
+    case "SEASON_LABEL_TAKEN":
+      return {
+        statusCode: 409,
+        message: `That series already has a season called "${error.seasonLabel}".`,
       };
     case "NO_TOKEN_REQUIRED":
       // Deferred route (Appendix A). A YouTube video has nothing to sign, and saying so

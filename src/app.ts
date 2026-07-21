@@ -16,9 +16,11 @@ import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
 import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
+import playlistsRouter from "#src/routes/playlists.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
 import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
 import researchProjectsRouter from "#src/routes/research-projects.routes.js";
+import seriesRouter from "#src/routes/series.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
 import videosRouter from "#src/routes/videos.routes.js";
 
@@ -118,6 +120,8 @@ app.use("/discovery", discoveryRouter);
 // root /admin, matching /discovery/admin/* — one domain's moderation surface should not
 // claim the global namespace.
 app.use("/videos", videosRouter);
+app.use("/playlists", playlistsRouter);
+app.use("/series", seriesRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,
 // exactly as the spec mounts the funding router at "/".
 app.use("/", researchCatalogRouter);

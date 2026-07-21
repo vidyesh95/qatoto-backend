@@ -1,0 +1,237 @@
+import type { Request, Response } from "express";
+import { z } from "zod";
+
+import {
+  firstParam,
+  respondStudioError,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/controllers/studio-error-response.js";
+import * as playlistsService from "#src/services/playlists.service.js";
+import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
+
+/** Creator playlist endpoints (docs/STUDIO_BACKEND_STRUCTURE.md §6). */
+
+/**
+ * Declared once and WITHOUT defaults, so the update schema can be `.partial()`d safely —
+ * `.partial()` does not strip `.default()`, and a PATCH that silently re-asserts a
+ * default is how a rename ends up resetting a playlist's visibility. Same reasoning as
+ * videos.controller.ts and products.controller.ts.
+ */
+const playlistFieldShapes = {
+  title: z.string().trim().min(1).max(150),
+  description: z.string().trim().max(5000),
+  visibility: z.enum(["public", "unlisted", "private"]),
+  defaultVideoOrder: z.enum([
+    "date_published_newest",
+    "date_published_oldest",
+    "date_added_newest",
+    "date_added_oldest",
+    "manual",
+  ]),
+  language: z.string().trim().max(60),
+};
+
+const CreatePlaylistSchema = z
+  .object(playlistFieldShapes)
+  .partial()
+  .extend({
+    title: playlistFieldShapes.title,
+    // Private by default: a playlist created mid-edit should not be publicly listed
+    // before the creator has decided it is ready.
+    visibility: playlistFieldShapes.visibility.default("private"),
+    defaultVideoOrder: playlistFieldShapes.defaultVideoOrder.default("date_published_newest"),
+  })
+  .strict();
+
+const UpdatePlaylistSchema = z.object(playlistFieldShapes).partial().strict();
+
+const ReplacePlaylistVideosSchema = z
+  .object({ videoIds: z.array(z.string().min(1).max(64)).max(500) })
+  .strict();
+
+const ListMyPlaylistsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+
+export type CreatePlaylistInput = z.infer<typeof CreatePlaylistSchema>;
+export type UpdatePlaylistInput = z.infer<typeof UpdatePlaylistSchema>;
+
+/** POST /playlists */
+export async function createPlaylist(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedBody = CreatePlaylistSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const createResult = await playlistsService.createPlaylist(req.user.id, parsedBody.data);
+  if (!createResult.success) {
+    respondStudioError(res, createResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 201,
+    message: "Playlist created successfully",
+    data: createResult.value,
+  };
+  res.status(201).json(response);
+}
+
+/** GET /playlists/mine */
+export async function getMyPlaylists(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = ListMyPlaylistsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const playlistsPage = await playlistsService.listMyPlaylists(
+    req.user.id,
+    parsedQuery.data.page,
+    parsedQuery.data.limit,
+  );
+
+  const response: PaginatedResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Playlists retrieved successfully",
+    data: [...playlistsPage.rows],
+    pagination: {
+      page: parsedQuery.data.page,
+      limit: parsedQuery.data.limit,
+      total: playlistsPage.total,
+      totalPages: Math.ceil(playlistsPage.total / parsedQuery.data.limit),
+    },
+  };
+  res.status(200).json(response);
+}
+
+/** GET /playlists/:playlistId */
+export async function getPlaylistById(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const getResult = await playlistsService.getPlaylist(
+    req.user.id,
+    firstParam(req.params.playlistId ?? ""),
+  );
+  if (!getResult.success) {
+    respondStudioError(res, getResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Playlist retrieved successfully",
+    data: getResult.value,
+  };
+  res.status(200).json(response);
+}
+
+/** PATCH /playlists/:playlistId */
+export async function updatePlaylist(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedBody = UpdatePlaylistSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const updateResult = await playlistsService.updatePlaylist(
+    req.user.id,
+    firstParam(req.params.playlistId ?? ""),
+    parsedBody.data,
+  );
+  if (!updateResult.success) {
+    respondStudioError(res, updateResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Playlist updated successfully",
+    data: updateResult.value,
+  };
+  res.status(200).json(response);
+}
+
+/** DELETE /playlists/:playlistId */
+export async function deletePlaylist(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const deleteResult = await playlistsService.deletePlaylist(
+    req.user.id,
+    firstParam(req.params.playlistId ?? ""),
+  );
+  if (!deleteResult.success) {
+    respondStudioError(res, deleteResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Playlist deleted successfully",
+    data: deleteResult.value,
+  };
+  res.status(200).json(response);
+}
+
+/** PUT /playlists/:playlistId/videos — membership AND order. */
+export async function replacePlaylistVideos(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedBody = ReplacePlaylistVideosSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const replaceResult = await playlistsService.replacePlaylistVideos(
+    req.user.id,
+    firstParam(req.params.playlistId ?? ""),
+    parsedBody.data.videoIds,
+  );
+  if (!replaceResult.success) {
+    respondStudioError(res, replaceResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Playlist videos updated successfully",
+    data: replaceResult.value,
+  };
+  res.status(200).json(response);
+}
