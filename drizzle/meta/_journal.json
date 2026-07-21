@@ -85,6 +85,13 @@
       "when": 1784616369478,
       "tag": "0011_long_menace",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1784643037167,
+      "tag": "0012_woozy_wendigo",
+      "breakpoints": true
     }
   ]
 }
