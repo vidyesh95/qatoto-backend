@@ -1,10 +1,9 @@
+import type { Pool } from "pg";
 // pg-boss v12 exports the class by NAME, not as a default — a v9-era
 // `import PgBoss from "pg-boss"` fails to compile against these types.
 import { PgBoss } from "pg-boss";
 import type { Db as PgBossDb, Queue as PgBossQueue, SendOptions } from "pg-boss";
 import { z } from "zod";
-
-import type { Pool } from "pg";
 
 import { config } from "#src/config/index.js";
 import { pool } from "#src/db/index.js";

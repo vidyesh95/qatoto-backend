@@ -36,7 +36,10 @@ export interface OrderingKey<TRow> {
   readonly direction: "ascending" | "descending";
 }
 
-function compareExtractedKeys(left: bigint | number | string, right: bigint | number | string): number {
+function compareExtractedKeys(
+  left: bigint | number | string,
+  right: bigint | number | string,
+): number {
   if (typeof left === "string" || typeof right === "string") {
     return compareUtf8Bytes(String(left), String(right));
   }

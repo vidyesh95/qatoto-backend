@@ -97,6 +97,8 @@ export async function handleRefreshTalentProjectionsTick(
   );
 
   if (!enqueueResult.success) {
-    throw new Error(`refresh-talent-projections-tick: enqueue failed (${enqueueResult.error.type})`);
+    throw new Error(
+      `refresh-talent-projections-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
   }
 }

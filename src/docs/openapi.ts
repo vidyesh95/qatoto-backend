@@ -516,7 +516,12 @@ export const openApiSpec = {
           "cluster does not disclose one reporter's exact address. " +
           "`opportunityScorePoints` is NULL until the nightly job has run — never 0.",
         parameters: [
-          { name: "category", in: "query", schema: { type: "string" }, description: "Category slug" },
+          {
+            name: "category",
+            in: "query",
+            schema: { type: "string" },
+            description: "Category slug",
+          },
           { name: "region", in: "query", schema: { type: "string" }, description: "Region slug" },
           {
             name: "minOpportunityScorePoints",
@@ -538,8 +543,7 @@ export const openApiSpec = {
         responses: {
           "200": { description: "A page of clusters." },
           "422": {
-            description:
-              "Unknown query key, or a PARTIAL viewport — all four bounds or none.",
+            description: "Unknown query key, or a PARTIAL viewport — all four bounds or none.",
           },
         },
       },
@@ -552,7 +556,12 @@ export const openApiSpec = {
           "A merged or hidden cluster STILL resolves 200 and carries `mergedIntoClusterId`, " +
           "so a shared link follows the merge rather than dying.",
         parameters: [
-          { name: "clusterId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          {
+            name: "clusterId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
         ],
         responses: {
           "200": { description: "The cluster." },
@@ -675,7 +684,11 @@ export const openApiSpec = {
         tags: ["Discovery"],
         summary: "Region lookup (unpaginated — it sources a select)",
         parameters: [
-          { name: "countryCode", in: "query", schema: { type: "string", minLength: 2, maxLength: 2 } },
+          {
+            name: "countryCode",
+            in: "query",
+            schema: { type: "string", minLength: 2, maxLength: 2 },
+          },
         ],
         responses: { "200": { description: "Regions, ordered by kind then label." } },
       },
@@ -686,7 +699,7 @@ export const openApiSpec = {
         summary: "Canonical skill vocabulary (unpaginated)",
         description:
           "These slugs are what `?skill=` matches BY EQUALITY, which is the structural fix " +
-          "for the substring bug where a \"Water\" chip matched \"Water Polo\".",
+          'for the substring bug where a "Water" chip matched "Water Polo".',
         responses: { "200": { description: "Active skills." } },
       },
     },
@@ -695,7 +708,7 @@ export const openApiSpec = {
         tags: ["Discovery"],
         summary: "Knowledge-hub insight cards",
         description:
-          "`statValue` from the mocks (\"+34%\", \"68M people\", \"3x coverage\") is " +
+          '`statValue` from the mocks ("+34%", "68M people", "3x coverage") is ' +
           "decomposed into statKind + statValueMilli (value x 1000) + statUnitKey, so the " +
           "client formats both the magnitude and the locale.",
         parameters: [
@@ -722,7 +735,7 @@ export const openApiSpec = {
         description:
           "Resolves MAX(asOf) first and pins to it, so a query running mid-job never " +
           "interleaves two runs and shows two rank-3s. The run's `asOf` is echoed at the " +
-          "top level so clients render \"as of\" and never imply live numbers.",
+          'top level so clients render "as of" and never imply live numbers.',
         parameters: [
           { name: "region", in: "query", schema: { type: "string" } },
           { name: "category", in: "query", schema: { type: "string" } },
@@ -785,13 +798,15 @@ export const openApiSpec = {
         summary: "Create or replace the caller's profile (wholesale)",
         description:
           "PUT, not PATCH: the profile is a value object, and wholesale replacement is the " +
-          "only way \"remove my equity ask\" is expressible. A first create ALWAYS lands " +
+          'only way "remove my equity ask" is expressible. A first create ALWAYS lands ' +
           "private — visibility is never a side effect of an edit. " +
           "`currency`, `isPublished`, `verifiedEffortMinutes`, `userId` and skill " +
           "`isVerified` are absent by construction.",
         requestBody: {
           required: true,
-          content: { "application/json": { schema: { type: "object", additionalProperties: false } } },
+          content: {
+            "application/json": { schema: { type: "object", additionalProperties: false } },
+          },
         },
         responses: {
           "200": { description: "Saved." },

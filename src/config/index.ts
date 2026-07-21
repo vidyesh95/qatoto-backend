@@ -103,6 +103,15 @@ const envSchema = z.object({
   // Nominatim permits at most 1 request/second. The worker serializes calls to honour it.
   GEOCODING_MIN_INTERVAL_MS: z.coerce.number().int().min(0).default(1_100),
   GEOCODING_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(10_000),
+  // --- Studio video (STUDIO_BACKEND_STRUCTURE.md §9). The creator pastes a YouTube link
+  //     and the server proves the video exists, is public and permits embedding with ONE
+  //     oEmbed call before the row is written.
+  //
+  // No API key and no quota: oEmbed is not the YouTube Data API. This bounds the call so a
+  // hanging request cannot hold an Express worker — a timeout is a 502, never a 500.
+  // Defaulted rather than required so an existing deployment (and app.test.ts, which stubs
+  // env explicitly) keeps booting without a new variable.
+  YOUTUBE_OEMBED_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(3_000),
 });
 
 export const config = envSchema.parse(process.env);

@@ -170,9 +170,7 @@ async function findRegionIdForCountryCode(countryCode: string): Promise<string |
   const [row] = await db
     .select({ id: discoveryRegion.id })
     .from(discoveryRegion)
-    .where(
-      and(eq(discoveryRegion.countryCode, countryCode), eq(discoveryRegion.kind, "country")),
-    )
+    .where(and(eq(discoveryRegion.countryCode, countryCode), eq(discoveryRegion.kind, "country")))
     .limit(1);
   return row?.id ?? null;
 }

@@ -37,7 +37,7 @@ describe("compareUtf8Bytes", () => {
     expect(compareUtf8Bytes(bmpCharacter, astralCharacter)).toBeLessThan(0);
   });
 
-  it("sorts a list the same way Postgres COLLATE \"C\" would", () => {
+  it('sorts a list the same way Postgres COLLATE "C" would', () => {
     const sorted = ["Zebra", "apple", "Apple", "banana"].toSorted(compareUtf8Bytes);
     // Uppercase sorts before lowercase under byte ordering (A=0x41 < a=0x61).
     expect(sorted).toEqual(["Apple", "Zebra", "apple", "banana"]);
@@ -115,9 +115,7 @@ describe("rankByTotalOrder", () => {
       { id: "a", score: 1, reporters: 1 },
       { id: "b", score: 1, reporters: 1 },
     ];
-    const nonUniqueKeys = [
-      { extract: (row: ScoredRow) => row.score, direction: "descending" as const },
-    ];
+    const nonUniqueKeys = [{ extract: (row: ScoredRow) => row.score, direction: "descending" as const }];
 
     expect(() => rankByTotalOrder(rows, nonUniqueKeys)).toThrow(/not total/);
   });

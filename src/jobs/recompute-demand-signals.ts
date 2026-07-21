@@ -159,7 +159,9 @@ export async function handleRecomputeDemandSignals(rawPayload: unknown): Promise
   // Reading "the latest" would make this job's output depend on what else has run since,
   // so a replay would produce a different trendDirection than the original — the same
   // class of bug as omitting the `< asOf` bound.
-  const previousAsOf = new Date(asOf.getTime() - (windowEndsAt.getTime() - windowStartsAt.getTime()));
+  const previousAsOf = new Date(
+    asOf.getTime() - (windowEndsAt.getTime() - windowStartsAt.getTime()),
+  );
   const previousRows = await db
     .select({
       regionId: demandSignalSnapshot.regionId,
@@ -178,7 +180,8 @@ export async function handleRecomputeDemandSignals(rawPayload: unknown): Promise
       .insert(demandSignalSnapshot)
       .values(
         ranked.map((cell, rankIndex) => {
-          const previousScore = previousScoreByCell.get(`${cell.regionId}:${cell.categoryId}`) ?? null;
+          const previousScore =
+            previousScoreByCell.get(`${cell.regionId}:${cell.categoryId}`) ?? null;
           return {
             asOf,
             windowStartsAt,

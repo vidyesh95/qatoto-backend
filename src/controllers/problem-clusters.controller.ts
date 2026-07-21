@@ -92,7 +92,9 @@ export const CreateProblemReportSchema = z
 
 export const ListMyProblemReportsQuerySchema = z
   .object({
-    clusteringStatus: z.enum(["queued", "clustered", "geocode_failed", "rejected", "failed"]).optional(),
+    clusteringStatus: z
+      .enum(["queued", "clustered", "geocode_failed", "rejected", "failed"])
+      .optional(),
     page: z.coerce.number().int().min(1).max(500).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })

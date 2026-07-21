@@ -63,9 +63,7 @@ describe("timestamp (OID 1114) parsing", () => {
 
     expect(parsed instanceof Date ? parsed.getTime() : null).toBe(utcDayStart.getTime());
     // The property §4c actually relies on: still exactly on a UTC day boundary.
-    expect(
-      parsed instanceof Date ? parsed.getTime() % 86_400_000 : null,
-    ).toBe(0);
+    expect(parsed instanceof Date ? parsed.getTime() % 86_400_000 : null).toBe(0);
   });
 
   it("is not accidentally passing because the host is already UTC", () => {

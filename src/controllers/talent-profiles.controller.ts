@@ -91,10 +91,7 @@ export const ListTalentQuerySchema = z
      * is what a row of filter chips means.
      */
     skill: z
-      .union([
-        z.string().trim().min(1).max(60),
-        z.array(z.string().trim().min(1).max(60)).max(10),
-      ])
+      .union([z.string().trim().min(1).max(60), z.array(z.string().trim().min(1).max(60)).max(10)])
       .transform((value) => (Array.isArray(value) ? value : [value]))
       .optional(),
     availability: z.enum(TALENT_AVAILABILITIES).optional(),
@@ -233,11 +230,7 @@ export async function unpublishMyTalentProfile(req: Request, res: Response): Pro
   await setPublished(req, res, false);
 }
 
-async function setPublished(
-  req: Request,
-  res: Response,
-  shouldPublish: boolean,
-): Promise<void> {
+async function setPublished(req: Request, res: Response, shouldPublish: boolean): Promise<void> {
   if (!req.user) {
     respondUnauthenticated(res);
     return;

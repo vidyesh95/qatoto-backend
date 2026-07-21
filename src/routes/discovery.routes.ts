@@ -42,7 +42,11 @@ const router = express.Router();
 
 // --- Problem clusters. Public read surface.
 router.get("/problem-clusters", attachOptionalUser, clustersController.listProblemClusters);
-router.get("/problem-clusters/:clusterId", attachOptionalUser, clustersController.getProblemCluster);
+router.get(
+  "/problem-clusters/:clusterId",
+  attachOptionalUser,
+  clustersController.getProblemCluster,
+);
 
 // --- Problem reports. `/mine` is a literal and is declared FIRST.
 router.get("/problem-reports/mine", requireAuth, clustersController.listMyProblemReports);

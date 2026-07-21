@@ -14,33 +14,56 @@ const PricingTierSchema = z.object({
 });
 
 /**
- * The listing fields the client may set. `.strict()` rejects unknown keys — in
- * particular a client-sent `sellerId`/`status`/`currency`, all of which are
- * server-owned (CLAUDE.md §1.1). Money is integer cents; a future client posting
- * dollars ("129.99") fails the `.int()` check loudly rather than storing garbage.
+ * The listing field shapes, declared ONCE and deliberately WITHOUT defaults.
+ *
+ * WHY THE DEFAULTS LIVE BELOW AND NOT HERE — this is a bug fix, read before "simplifying".
+ * `.partial()` does NOT strip `.default()`. A schema built as `Fields.partial()` parses
+ * `{ title: "x" }` into `{ title, condition: "new", keyFeatures: [], stockQuantity: 0,
+ * pricingTiers: [] }` — every defaulted key arrives DEFINED, so a service guarded with
+ * `if (patch.X !== undefined)` applies all of them. That is how a PATCH that touches only
+ * the title silently reset the condition, blanked the key features, zeroed the stock and
+ * DELETED every pricing tier on the listing.
+ *
+ * So the create schema adds defaults on top of these shapes and the update schema does
+ * not. Never derive a PATCH schema from a schema carrying `.default()`.
+ */
+const productFieldShapes = {
+  title: z.string().trim().min(1).max(200),
+  brand: z.string().trim().max(120).optional(),
+  category: z.enum([
+    "electronics",
+    "fashion",
+    "home_kitchen",
+    "anime_collectibles",
+    "digital_goods",
+    "books_media",
+    "sports_outdoors",
+    "beauty_personal_care",
+  ]),
+  condition: z.enum(["new", "refurbished", "used"]),
+  description: z.string().trim().max(5000).optional(),
+  keyFeatures: z.array(z.string().trim().min(1).max(200)).max(20),
+  priceInCents: z.number().int().min(0),
+  compareAtPriceInCents: z.number().int().min(0).optional(),
+  stockQuantity: z.number().int().min(0),
+  sku: z.string().trim().max(64).optional(),
+  pricingTiers: z.array(PricingTierSchema).max(10),
+};
+
+/**
+ * The listing fields the client may set on CREATE, where a default is the correct
+ * behaviour for an omitted key. `.strict()` rejects unknown keys — in particular a
+ * client-sent `sellerId`/`status`/`currency`, all of which are server-owned
+ * (CLAUDE.md §1.1). Money is integer cents; a future client posting dollars ("129.99")
+ * fails the `.int()` check loudly rather than storing garbage.
  */
 const ProductFieldsSchema = z
   .object({
-    title: z.string().trim().min(1).max(200),
-    brand: z.string().trim().max(120).optional(),
-    category: z.enum([
-      "electronics",
-      "fashion",
-      "home_kitchen",
-      "anime_collectibles",
-      "digital_goods",
-      "books_media",
-      "sports_outdoors",
-      "beauty_personal_care",
-    ]),
-    condition: z.enum(["new", "refurbished", "used"]).default("new"),
-    description: z.string().trim().max(5000).optional(),
-    keyFeatures: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
-    priceInCents: z.number().int().min(0),
-    compareAtPriceInCents: z.number().int().min(0).optional(),
-    stockQuantity: z.number().int().min(0).default(0),
-    sku: z.string().trim().max(64).optional(),
-    pricingTiers: z.array(PricingTierSchema).max(10).default([]),
+    ...productFieldShapes,
+    condition: productFieldShapes.condition.default("new"),
+    keyFeatures: productFieldShapes.keyFeatures.default([]),
+    stockQuantity: productFieldShapes.stockQuantity.default(0),
+    pricingTiers: productFieldShapes.pricingTiers.default([]),
   })
   .strict();
 
@@ -64,18 +87,26 @@ const compareAtRefinement = {
   path: ["compareAtPriceInCents"],
 };
 
-const CreateProductSchema = ProductFieldsSchema.refine(
+// Exported so the defaults-vs-partial regression is testable without a request; the
+// discovery controllers export their schemas the same way.
+export const CreateProductSchema = ProductFieldsSchema.refine(
   compareAtPriceExceedsPrice,
   compareAtRefinement,
 );
 
-// Every field optional — a PATCH may touch any subset. Sending `pricingTiers`
-// REPLACES the set. `.partial()` runs on the base object (before `.refine`), then
-// the compare-at check is re-applied for payloads that carry both prices.
-const UpdateProductSchema = ProductFieldsSchema.partial().refine(
-  compareAtPriceExceedsPrice,
-  compareAtRefinement,
-);
+/**
+ * Every field optional and NONE defaulted — a PATCH may touch any subset, and a key the
+ * client did not send must arrive `undefined` so the service leaves that column alone.
+ * Sending `pricingTiers` REPLACES the set; omitting it now leaves the set untouched.
+ *
+ * Built from `productFieldShapes` rather than `ProductFieldsSchema.partial()`, because
+ * `.partial()` preserves defaults — see the note on `productFieldShapes`.
+ */
+export const UpdateProductSchema = z
+  .object(productFieldShapes)
+  .partial()
+  .strict()
+  .refine(compareAtPriceExceedsPrice, compareAtRefinement);
 
 const ReorderImagesSchema = z.object({ imageIds: z.array(z.string()).min(1) }).strict();
 

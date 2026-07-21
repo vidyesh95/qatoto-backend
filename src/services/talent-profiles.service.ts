@@ -211,9 +211,7 @@ const TALENT_PROFILE_COLUMNS = {
   region: DISCOVERY_REGION_REF_COLUMNS,
 } as const;
 
-async function loadSkillsAndAsks(
-  profileUserIds: readonly string[],
-): Promise<{
+async function loadSkillsAndAsks(profileUserIds: readonly string[]): Promise<{
   readonly skillsByUser: Map<string, TalentSkillView[]>;
   readonly askRowsByUser: Map<string, (typeof talentCompensationAsk.$inferSelect)[]>;
 }> {
@@ -423,7 +421,11 @@ export async function listTalentProfiles(filter: TalentListFilter): Promise<Tale
 
   return {
     rows: rows.map((row) =>
-      toTalentProfileView(row, skillsByUser.get(row.userId) ?? [], askRowsByUser.get(row.userId) ?? []),
+      toTalentProfileView(
+        row,
+        skillsByUser.get(row.userId) ?? [],
+        askRowsByUser.get(row.userId) ?? [],
+      ),
     ),
     total: totalRow?.total ?? 0,
   };
@@ -500,7 +502,9 @@ export async function upsertTalentProfile(
       : await db
           .select({ id: discoverySkill.id, slug: discoverySkill.slug })
           .from(discoverySkill)
-          .where(and(inArray(discoverySkill.slug, requestedSlugs), eq(discoverySkill.isActive, true)));
+          .where(
+            and(inArray(discoverySkill.slug, requestedSlugs), eq(discoverySkill.isActive, true)),
+          );
 
   if (knownSkills.length !== requestedSlugs.length) {
     const knownSlugSet = new Set(knownSkills.map((skill) => skill.slug));

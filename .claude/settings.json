@@ -29,7 +29,11 @@
       "Bash(node -e \"console.log\\(Object.keys\\(require\\('./package.json'\\).scripts\\).filter\\(k=>k.startsWith\\('db:'\\)\\).join\\('\\\\n'\\)\\)\")",
       "Bash(curl -s -o /dev/null -w \"existing server on :8000 → HTTP %{http_code}\\\\n\" http://localhost:8000/health)",
       "Bash(curl -s http://localhost:8000/health)",
-      "Bash(curl -s -o /dev/null -w \"GET /research-categories → %{http_code}\\\\n\" http://localhost:8000/research-categories)"
+      "Bash(curl -s -o /dev/null -w \"GET /research-categories → %{http_code}\\\\n\" http://localhost:8000/research-categories)",
+      "Bash(grep -rn 'interface $ZodURLParams\\\\|protocol' node_modules/zod/v4/core/schemas.d.cts)",
+      "Bash(grep -n 'sql`' /Users/vinitchuri/code/backend/qatoto-backend/src/db/schema.ts)",
+      "Bash(pnpm exec *)",
+      "Bash(node ./zod-check.mjs)"
     ]
   }
 }

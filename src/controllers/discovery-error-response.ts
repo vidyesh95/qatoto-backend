@@ -82,9 +82,7 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
         statusCode: 422,
         message: "That category is still awaiting review.",
         errors: {
-          categoryId: [
-            "Category is pending moderation and cannot be used until it is approved.",
-          ],
+          categoryId: ["Category is pending moderation and cannot be used until it is approved."],
         },
       };
     case "VIEWPORT_INCOMPLETE":

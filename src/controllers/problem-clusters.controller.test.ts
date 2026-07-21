@@ -21,9 +21,8 @@ vi.mock("#src/lib/jobs.js", () => ({
 
 const clustersService = await import("#src/services/problem-clusters.service.js");
 const jobs = await import("#src/lib/jobs.js");
-const { CreateProblemReportSchema, createProblemReport, listProblemClusters } = await import(
-  "#src/controllers/problem-clusters.controller.js"
-);
+const { CreateProblemReportSchema, createProblemReport, listProblemClusters } =
+  await import("#src/controllers/problem-clusters.controller.js");
 
 const checkCategoryUsableMock = vi.mocked(clustersService.checkCategoryUsable);
 const createProblemSubmissionMock = vi.mocked(clustersService.createProblemSubmission);
@@ -134,9 +133,7 @@ describe("CreateProblemReportSchema — server-owned keys are rejected", () => {
   });
 
   it("rejects a location that is only whitespace", () => {
-    expect(
-      CreateProblemReportSchema.safeParse({ ...VALID_REPORT_BODY, locationText: "   " }).success,
-    ).toBe(false);
+    expect(CreateProblemReportSchema.safeParse({ ...VALID_REPORT_BODY, locationText: "   " }).success).toBe(false);
   });
 });
 
@@ -197,10 +194,7 @@ describe("createProblemReport", () => {
       response,
     );
 
-    expect(createProblemSubmissionMock).toHaveBeenCalledExactlyOnceWith(
-      "session-user",
-      VALID_REPORT_BODY,
-    );
+    expect(createProblemSubmissionMock).toHaveBeenCalledExactlyOnceWith("session-user", VALID_REPORT_BODY);
   });
 
   it("refuses a pending category, so the moderation queue is not decorative", async () => {
@@ -237,10 +231,7 @@ describe("createProblemReport", () => {
     const { response } = createResponseStub();
 
     await expect(
-      createProblemReport(
-        createRequestStub({ body: VALID_REPORT_BODY, user: createSessionUser("user-1") }),
-        response,
-      ),
+      createProblemReport(createRequestStub({ body: VALID_REPORT_BODY, user: createSessionUser("user-1") }), response),
     ).rejects.toThrow(/could not be enqueued/);
   });
 });
@@ -253,10 +244,7 @@ describe("listProblemClusters", () => {
   it("rejects a partial viewport with 422 rather than silently returning the planet", async () => {
     const { response, statusSpy, jsonSpy } = createResponseStub();
 
-    await listProblemClusters(
-      createRequestStub({ query: { minLatitudeMicrodegrees: "1000" } }),
-      response,
-    );
+    await listProblemClusters(createRequestStub({ query: { minLatitudeMicrodegrees: "1000" } }), response);
 
     expect(statusSpy).toHaveBeenCalledExactlyOnceWith(422);
     expect(JSON.stringify(jsonSpy.mock.calls[0])).toContain("all four bounds");

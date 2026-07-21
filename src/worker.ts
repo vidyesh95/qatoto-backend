@@ -1,5 +1,4 @@
 import "dotenv/config";
-
 import { PgBoss } from "pg-boss";
 import type { Job } from "pg-boss";
 
@@ -126,11 +125,7 @@ function runJob(
  * from a job that never existed — a report whose clustering failed would simply vanish,
  * with the reporter seeing "queued" forever and no operator surface showing why.
  */
-async function recordJobFailure(
-  queueName: string,
-  job: Job,
-  error: unknown,
-): Promise<void> {
+async function recordJobFailure(queueName: string, job: Job, error: unknown): Promise<void> {
   try {
     await db
       .insert(jobFailure)

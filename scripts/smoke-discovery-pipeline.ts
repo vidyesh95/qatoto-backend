@@ -173,7 +173,11 @@ async function main(): Promise<void> {
       .select({ normalizedQuery: geocodeCache.normalizedQuery })
       .from(geocodeCache)
       .where(eq(geocodeCache.normalizedQuery, "nakuru, kenya"));
-    record("geocode cached for replay determinism", cacheRows.length === 1, `rows=${cacheRows.length}`);
+    record(
+      "geocode cached for replay determinism",
+      cacheRows.length === 1,
+      `rows=${cacheRows.length}`,
+    );
 
     if (createdClusterId) {
       const [cluster] = await db
@@ -223,7 +227,11 @@ async function main(): Promise<void> {
         .from(problemClusterScoreSnapshot)
         .where(eq(problemClusterScoreSnapshot.clusterId, createdClusterId));
 
-      record("scoring job wrote a snapshot", snapshot !== undefined, `found=${snapshot !== undefined}`);
+      record(
+        "scoring job wrote a snapshot",
+        snapshot !== undefined,
+        `found=${snapshot !== undefined}`,
+      );
 
       if (snapshot) {
         const componentSum =

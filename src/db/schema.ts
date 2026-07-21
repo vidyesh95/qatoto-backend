@@ -1496,10 +1496,7 @@ export const geocodeCache = pgTable(
           AND (longitude_microdegrees IS NULL
                OR longitude_microdegrees BETWEEN -180000000 AND 180000000)`,
     ),
-    check(
-      "geocode_cache_country_ck",
-      sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`,
-    ),
+    check("geocode_cache_country_ck", sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`),
   ],
 );
 
@@ -1728,10 +1725,7 @@ export const problemCluster = pgTable(
            OR current_opportunity_score_points BETWEEN 0 AND 100)
           AND (current_opportunity_score_points IS NULL) = (score_computed_at IS NULL)`,
     ),
-    check(
-      "problem_cluster_country_ck",
-      sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`,
-    ),
+    check("problem_cluster_country_ck", sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`),
   ],
 );
 

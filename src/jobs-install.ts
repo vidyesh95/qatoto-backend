@@ -1,5 +1,4 @@
 import "dotenv/config";
-
 import { PgBoss } from "pg-boss";
 
 import { config } from "#src/config/index.js";
@@ -51,7 +50,9 @@ async function main(): Promise<void> {
   await boss.start();
 
   const schemaVersion = await boss.schemaVersion();
-  console.log(`pg-boss schema "${config.JOBS_SCHEMA}" ready (version ${schemaVersion ?? "unknown"}).`);
+  console.log(
+    `pg-boss schema "${config.JOBS_SCHEMA}" ready (version ${schemaVersion ?? "unknown"}).`,
+  );
 
   for (const definition of Object.values(JOB_DEFINITIONS)) {
     // The dead-letter queue must exist BEFORE the queue that references it, or the

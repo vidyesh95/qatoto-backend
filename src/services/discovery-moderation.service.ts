@@ -194,7 +194,11 @@ export async function decideMergeProposal(
 
     // 2. Repoint project backlinks, tolerating a link that already exists on the target.
     const sourceLinks = await tx
-      .select({ projectId: problemClusterProjectLink.projectId, source: problemClusterProjectLink.source, linkedByUserId: problemClusterProjectLink.linkedByUserId })
+      .select({
+        projectId: problemClusterProjectLink.projectId,
+        source: problemClusterProjectLink.source,
+        linkedByUserId: problemClusterProjectLink.linkedByUserId,
+      })
       .from(problemClusterProjectLink)
       .where(eq(problemClusterProjectLink.clusterId, proposal.sourceClusterId));
 
@@ -313,7 +317,12 @@ function toMergeProposalView(
 export async function listPendingMergeProposals(
   actorUserId: string,
   filter: { readonly page: number; readonly limit: number },
-): Promise<Result<{ readonly rows: readonly MergeProposalView[]; readonly total: number }, DiscoveryModerationError>> {
+): Promise<
+  Result<
+    { readonly rows: readonly MergeProposalView[]; readonly total: number },
+    DiscoveryModerationError
+  >
+> {
   const capabilityResult = await requirePlatformCapability(actorUserId, "moderate_clusters");
   if (!capabilityResult.success) {
     return { success: false, error: capabilityResult.error };

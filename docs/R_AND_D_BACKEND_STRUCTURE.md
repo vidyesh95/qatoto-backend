@@ -8,7 +8,7 @@
 > same envelope — scoped to the whole `/research-and-development` surface.
 >
 > **Goal:** run Qatoto's concept-to-consumer pipeline server-side — post an idea, form a team for
-> equity, log daily work, have that work *verified* into a dynamic equity ledger, raise money into
+> equity, log daily work, have that work _verified_ into a dynamic equity ledger, raise money into
 > escrow, and release it against milestones — with the backend as the only source of truth for
 > every number involved.
 >
@@ -49,9 +49,9 @@ mutation the backend **re-checks everything, every request, by itself**:
 - **No request body ever carries a value the server owns.** Not a price, not an equity share, not
   a slice count, not an hour count, not a fair-market rate, not an opportunity score, not a
   verification verdict, not a status. The client sends **ids and intent**; the server looks the
-  real value up in its own rows. This is the rule that answers *"what if the client edits $1,000
-  into ¥10 and posts it back?"* — there is no field to edit. `POST
-  /funding-rounds/:roundId/pledges` accepts exactly `{ amountInCents }` and still re-bounds it
+  real value up in its own rows. This is the rule that answers _"what if the client edits $1,000
+  into ¥10 and posts it back?"_ — there is no field to edit. `POST
+/funding-rounds/:roundId/pledges` accepts exactly `{ amountInCents }` and still re-bounds it
   against the round's own min/max; `POST /milestones/:milestoneId/escrow-releases` accepts **no
   amount at all** and snapshots `milestone.escrowReleaseAmountInCents` server-side at request time.
 - **Equity is computed, never asserted.** A member's share is the output of the Slicing Pie formula
@@ -74,38 +74,38 @@ If you remember nothing else from this file, remember §0.
 
 Ten routes, all under `(home)`, all rendering mocks today. The contract each one needs:
 
-| Route | Surface | Needs from the backend |
-| --- | --- | --- |
-| `/research-and-development` | Pipeline landing | Project rail, top problem clusters, market insights, open roles |
-| `/research-and-development/new` | 4-step idea wizard | Create a `draft` project from `NewIdeaDraft` |
-| `/research-and-development/project/[id]` | Detail, 5 tabs | Project + team + milestones + daily logs + funding + escrow ledger |
-| `/research-and-development/project/[id]/workshop` | Boards / Files / Chat | Kanban, file store, team chat |
+| Route                                                    | Surface                    | Needs from the backend                                                  |
+| -------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------------- |
+| `/research-and-development`                              | Pipeline landing           | Project rail, top problem clusters, market insights, open roles         |
+| `/research-and-development/new`                          | 4-step idea wizard         | Create a `draft` project from `NewIdeaDraft`                            |
+| `/research-and-development/project/[id]`                 | Detail, 5 tabs             | Project + team + milestones + daily logs + funding + escrow ledger      |
+| `/research-and-development/project/[id]/workshop`        | Boards / Files / Chat      | Kanban, file store, team chat                                           |
 | `/research-and-development/project/[id]/proof-of-effort` | Slicing Pie ledger, 5 tabs | Slice breakdown, verification runs, disputes, optimization, audit trail |
-| `/research-and-development/problem-map` | Civic Pulse | Problem clusters with geo + opportunity scores |
-| `/research-and-development/knowledge-hub` | Market intel | Insights + demand-signal leaderboard |
-| `/research-and-development/talent` | Talent directory | Filterable talent profiles + open roles |
-| `/research-and-development/funding` | Investor deal flow | Open rounds + investor-confidence signal |
-| `/research-and-development/projects/project-immortal` | Moonshot program | Branch tree, papers, posts, ideas, contributors, stats |
+| `/research-and-development/problem-map`                  | Civic Pulse                | Problem clusters with geo + opportunity scores                          |
+| `/research-and-development/knowledge-hub`                | Market intel               | Insights + demand-signal leaderboard                                    |
+| `/research-and-development/talent`                       | Talent directory           | Filterable talent profiles + open roles                                 |
+| `/research-and-development/funding`                      | Investor deal flow         | Open rounds + investor-confidence signal                                |
+| `/research-and-development/projects/project-immortal`    | Moonshot program           | Branch tree, papers, posts, ideas, contributors, stats                  |
 
 ### The wire-format contract
 
 The frontend types today carry **pre-formatted display strings** — `"$6,000"`, `"62%"`,
 `"148 hrs"`, `"1.8 MB"`, `"Locks in 9h 14m"`. Every file header under
-`src/types/research-and-development/` states this as deliberate: *"every figure arrives as a
-pre-computed display string."*
+`src/types/research-and-development/` states this as deliberate: _"every figure arrives as a
+pre-computed display string."_
 
 **That changes.** The backend sends **raw integers in explicitly named units**, and each client
 formats:
 
-| Kind | Wire field | Unit |
-| --- | --- | --- |
-| Money | `…InCents` | integer cents, always with an ISO 4217 `currency` alongside |
-| Equity | `…BasisPoints` | integer basis points, `10000` = 100% |
-| Effort | `…Minutes` | integer minutes |
-| File size | `…Bytes` | integer bytes |
-| Score | `…Points` | integer, stated range |
-| Instant | `…At` | ISO-8601 UTC |
-| Calendar day | `…Date` | ISO-8601 date-only `YYYY-MM-DD` |
+| Kind         | Wire field     | Unit                                                        |
+| ------------ | -------------- | ----------------------------------------------------------- |
+| Money        | `…InCents`     | integer cents, always with an ISO 4217 `currency` alongside |
+| Equity       | `…BasisPoints` | integer basis points, `10000` = 100%                        |
+| Effort       | `…Minutes`     | integer minutes                                             |
+| File size    | `…Bytes`       | integer bytes                                               |
+| Score        | `…Points`      | integer, stated range                                       |
+| Instant      | `…At`          | ISO-8601 UTC                                                |
+| Calendar day | `…Date`        | ISO-8601 date-only `YYYY-MM-DD`                             |
 
 Three reasons this is not negotiable:
 
@@ -132,20 +132,20 @@ Three reasons this is not negotiable:
 Most of this is already installed for auth, store and studio. Three additions are genuinely new
 and each is load-bearing.
 
-| Concern | Pick | Why / reuse |
-| --- | --- | --- |
-| Server framework | **Express 5** | Same app, four more routers. |
-| Language | **TypeScript** (strict, ESM `#src/*`) | Shared shapes with the frontend. |
-| Database ORM | **Drizzle ORM** | New tables in `src/db/schema.ts`; `pnpm db:generate && db:migrate`. |
-| Database | **PostgreSQL** via `pg` | FKs, enums, partial + unique indexes, `bigint` money. |
-| Validation | **zod** | Inline `.safeParse()` in the controller → `422` (prevailing style). |
-| Image storage | **Cloudinary** (`src/lib/cloudinary.ts`) | Project covers, avatars — reuse the product-image helpers. |
-| Image processing | **sharp** (`src/lib/image.ts`) | Reuse `validateAndNormalizeImage`; also the EXIF reader for §9 receipt forensics. |
-| Video | **Livepeer** | Reuse the STUDIO direct-upload pattern verbatim — the backend never touches video bytes. |
-| Rate limiting | **express-rate-limit** | New named limiters per §4a. |
-| **Job runner** | **pg-boss** ⟵ NEW | Postgres-backed queue. Nothing in this repo runs scheduled or async work today, and §9 cannot exist without it. Same database, same transaction, no new infrastructure. |
-| **Object storage** | **S3-compatible** ⟵ NEW | Cloudinary is an image CDN. Workshop files are CAD models, spreadsheets and archives up to 100 MB, and some are *forensic evidence* for equity claims (§9) — they need presigned direct upload, versioning and retention that an image CDN does not provide. |
-| **Payments / escrow** | **Stripe** (Connect + Treasury) ⟵ NEW | PROOF_OF_EFFORT_SPEC.md §1 Phase 2 names exactly this. Qatoto must never custody funds itself. |
+| Concern               | Pick                                     | Why / reuse                                                                                                                                                                                                                                                  |
+| --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Server framework      | **Express 5**                            | Same app, four more routers.                                                                                                                                                                                                                                 |
+| Language              | **TypeScript** (strict, ESM `#src/*`)    | Shared shapes with the frontend.                                                                                                                                                                                                                             |
+| Database ORM          | **Drizzle ORM**                          | New tables in `src/db/schema.ts`; `pnpm db:generate && db:migrate`.                                                                                                                                                                                          |
+| Database              | **PostgreSQL** via `pg`                  | FKs, enums, partial + unique indexes, `bigint` money.                                                                                                                                                                                                        |
+| Validation            | **zod**                                  | Inline `.safeParse()` in the controller → `422` (prevailing style).                                                                                                                                                                                          |
+| Image storage         | **Cloudinary** (`src/lib/cloudinary.ts`) | Project covers, avatars — reuse the product-image helpers.                                                                                                                                                                                                   |
+| Image processing      | **sharp** (`src/lib/image.ts`)           | Reuse `validateAndNormalizeImage`; also the EXIF reader for §9 receipt forensics.                                                                                                                                                                            |
+| Video                 | **Livepeer**                             | Reuse the STUDIO direct-upload pattern verbatim — the backend never touches video bytes.                                                                                                                                                                     |
+| Rate limiting         | **express-rate-limit**                   | New named limiters per §4a.                                                                                                                                                                                                                                  |
+| **Job runner**        | **pg-boss** ⟵ NEW                        | Postgres-backed queue. Nothing in this repo runs scheduled or async work today, and §9 cannot exist without it. Same database, same transaction, no new infrastructure.                                                                                      |
+| **Object storage**    | **S3-compatible** ⟵ NEW                  | Cloudinary is an image CDN. Workshop files are CAD models, spreadsheets and archives up to 100 MB, and some are _forensic evidence_ for equity claims (§9) — they need presigned direct upload, versioning and retention that an image CDN does not provide. |
+| **Payments / escrow** | **Stripe** (Connect + Treasury) ⟵ NEW    | PROOF_OF_EFFORT_SPEC.md §1 Phase 2 names exactly this. Qatoto must never custody funds itself.                                                                                                                                                               |
 
 **Money is integer cents everywhere, in `bigint` columns** (§4b). **Equity is integer basis
 points.** No `numeric`, no floats, ever.
@@ -206,7 +206,7 @@ sufficient guard for this domain.
 
 > **Why this section exists.** This contract was drafted domain-by-domain and the drafts collided
 > hard: `project_member` was defined three times with three different role enums;
-> `project_governance_role` was defined as *both* a `pgEnum` and a `pgTable` (Postgres puts them in
+> `project_governance_role` was defined as _both_ a `pgEnum` and a `pgTable` (Postgres puts them in
 > one namespace — the migration simply fails); `compensation_kind` appeared three times, kebab-case
 > in one draft and snake_case in two; and the Slicing Pie formula was written three ways, all three
 > non-deterministic.
@@ -231,7 +231,9 @@ Pulse opportunity score, is the clearest casualty.
 // requireAuth proves "a session exists". This proves "a real, accountable account exists":
 // the user must have at least one non-anonymous `account` row (credential, google, github,
 // or passkey). Fails with 403, NOT 401 — the caller HAS a session, it is just not enough.
-export async function requireIdentifiedUser(req, res, next): Promise<void> { /* … */ }
+export async function requireIdentifiedUser(req, res, next): Promise<void> {
+    /* … */
+}
 ```
 
 Apply it to every write touching money, equity, effort, a distinct-count, or a uniqueness quota:
@@ -288,12 +290,12 @@ release must not be its requester. Both are checked in `escrow.service.ts`, not 
 **Native clients (Kotlin / Swift) cannot authenticate today.** Four separate blockers in
 `src/lib/auth.ts`, all of which must be fixed before any native client ships:
 
-| Blocker | Today | Fix |
-| --- | --- | --- |
-| Session transport | `requireAuth` resolves a session from a **cookie** only | Register Better Auth's `bearer()` plugin; native clients send `Authorization: Bearer <token>` and store it in Keychain / EncryptedSharedPreferences |
-| Passkeys | `passkey({ rpID, origin })` — single-valued, from `FRONTEND_URL` | `origin` must accept an array: the web origin, Android's `android:apk-key-hash:…`, and the iOS associated-domain origin |
-| OAuth | `trustedOrigins: [FRONTEND_URL]` — one element | Must include the native deep-link schemes, or every native social sign-in callback is rejected |
-| Body size | `express.json({ limit: "10kb" })` global | Several R&D payloads exceed it and would throw Express's raw `PayloadTooLargeError`, bypassing the `ApiResponse` envelope entirely. Raise per-route, not globally |
+| Blocker           | Today                                                            | Fix                                                                                                                                                               |
+| ----------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session transport | `requireAuth` resolves a session from a **cookie** only          | Register Better Auth's `bearer()` plugin; native clients send `Authorization: Bearer <token>` and store it in Keychain / EncryptedSharedPreferences               |
+| Passkeys          | `passkey({ rpID, origin })` — single-valued, from `FRONTEND_URL` | `origin` must accept an array: the web origin, Android's `android:apk-key-hash:…`, and the iOS associated-domain origin                                           |
+| OAuth             | `trustedOrigins: [FRONTEND_URL]` — one element                   | Must include the native deep-link schemes, or every native social sign-in callback is rejected                                                                    |
+| Body size         | `express.json({ limit: "10kb" })` global                         | Several R&D payloads exceed it and would throw Express's raw `PayloadTooLargeError`, bypassing the `ApiResponse` envelope entirely. Raise per-route, not globally |
 
 **New rate limiters** (`src/middleware/rate-limit.ts`), all per-user:
 
@@ -308,7 +310,7 @@ Restating §1 as a schema rule, plus the two traps:
 
 - **Money is `bigint`, not `integer`.** Drizzle's `integer` is Postgres `int4`, which caps at
   ±2,147,483,647 — **±$21,474,836.47**. A single Series-A round or Project Immortal's
-  `estimatedMarketSizeInCents` (`"$12B est. market"` = `1200000000000`, 560× the ceiling) overflows
+  `estimatedMarketSizeInCents` (`"$12B est. market"`=`1200000000000`, 560× the ceiling) overflows
   it. This must be right on day one, because the escrow hash chain (§4c) covers posting amounts:
   widening the column later invalidates every historical hash.
 - **Equity is `integer` basis points.** `10000` = 100%. Basis points give 0.01% resolution, which
@@ -371,7 +373,7 @@ chains (escrow §7, audit §9):
 - A `hashVersion` column on every chained row, so the algorithm can evolve without invalidating
   history.
 - Hashes are stored and compared **full-length** (64 lowercase hex chars). The 6-character form the
-  mocks show (`"c7d9a1"`) is a *rendering*: at 24 bits, collisions hit 50% around 4,800 entries. It
+  mocks show (`"c7d9a1"`) is a _rendering_: at 24 bits, collisions hit 50% around 4,800 entries. It
   must never be used as a key, a cache key, or an equality test.
 
 ### 4d. Shared enums
@@ -427,19 +429,19 @@ forensics, none of which can run inside an HTTP request.
 **pg-boss**, because it is Postgres-backed: the same database, enlisted in the same transaction, no
 new infrastructure to operate.
 
-| Job | Cadence | Purpose |
-| --- | --- | --- |
-| `cluster-problem-submission` | on submit | Attach a raw submission to a problem cluster (§6) |
-| `recompute-opportunity-scores` | nightly | Civic Pulse ranking (§6) |
-| `recompute-demand-signals` | nightly | Knowledge-hub leaderboard (§6) |
-| `refresh-talent-projections` | hourly | Talent directory denormalization (§6) |
-| `reconcile-escrow-ledger` | hourly | Provider ↔ ledger reconciliation (§7) |
-| `recompute-investor-confidence` | nightly | Deal-flow signal (§7) |
-| `transcribe-daily-log` | on submit | Video → transcript (§8) |
-| `verify-effort-claim` | on submit | The 4-step pipeline (§9) |
-| `recompute-slicing-pie` | nightly + on verdict | The equity ledger (§9) |
-| `sweep-dispute-windows` | every minute | Lock expired 24h windows (§9) |
-| `recompute-program-stats` | nightly | Project Immortal stats (§10) |
+| Job                             | Cadence              | Purpose                                           |
+| ------------------------------- | -------------------- | ------------------------------------------------- |
+| `cluster-problem-submission`    | on submit            | Attach a raw submission to a problem cluster (§6) |
+| `recompute-opportunity-scores`  | nightly              | Civic Pulse ranking (§6)                          |
+| `recompute-demand-signals`      | nightly              | Knowledge-hub leaderboard (§6)                    |
+| `refresh-talent-projections`    | hourly               | Talent directory denormalization (§6)             |
+| `reconcile-escrow-ledger`       | hourly               | Provider ↔ ledger reconciliation (§7)             |
+| `recompute-investor-confidence` | nightly              | Deal-flow signal (§7)                             |
+| `transcribe-daily-log`          | on submit            | Video → transcript (§8)                           |
+| `verify-effort-claim`           | on submit            | The 4-step pipeline (§9)                          |
+| `recompute-slicing-pie`         | nightly + on verdict | The equity ledger (§9)                            |
+| `sweep-dispute-windows`         | every minute         | Lock expired 24h windows (§9)                     |
+| `recompute-program-stats`       | nightly              | Project Immortal stats (§10)                      |
 
 Every job: an **idempotency key**, bounded retries with exponential backoff, a dead-letter state,
 and the `(data, asOf)` purity rule from §4c. A job that cannot be safely re-run is a bug.
@@ -664,19 +666,19 @@ so putting `watchersCount` on it would bump `updatedAt` every time a stranger ta
 generating index churn on the hottest row in the domain. Cold entity row + hot stats row is the
 correct split, and the 1:1 join is on the primary key, so it is effectively free.
 
-| Column | Type | Notes |
-| --- | --- | --- |
-| `projectId` | `text` PK + FK cascade | Exactly one stats row per project |
-| `watchersCount` | `integer` | **Counter column**, not computed-on-read. `project_watcher` stays the source of truth; this is a rebuildable cache. Incremented in the *same transaction* as the watcher insert, reconciled nightly against `COUNT(*)` |
-| `teamMemberCount` | `integer` default 1 | Active members. Defaults to 1 — the founder row is inserted at create |
-| `openRoleCount` | `integer` | Drives the ProjectCard badge |
-| `pendingApplicationCount` | `integer` | Founder-facing only; never in the public projection |
-| `dailyLogStreakDays` | `integer` | **Job-computed and stored.** A streak is a temporal fold over the whole log history *and it decays with wall-clock time* — it silently drops at midnight with no write happening. Written by the log-ingest transaction and by a nightly decay job |
-| `lastDailyLogDate` | `date` | The decay job's input |
-| `projectTimeZone` | `text` default `"UTC"` | IANA zone. Without it "a day" is undefined and a distributed team can double-count a streak |
-| `verifiedEffortMinutesTotal` | `integer` | Integer **minutes**. Written only by the §9 verification job |
-| `allocatedEquityBasisPoints` | `integer` | Written by the nightly slicing-pie job. Per §9.4 this **must always equal `10000`** on a non-degenerate project — the apportionment sums to exactly 10000 by construction, so any other value is an alertable invariant violation, not an "unallocated" remainder |
-| `statsComputedAt` | `timestamp` | **Returned to clients** so all three render "as of" and never imply live numbers |
+| Column                       | Type                   | Notes                                                                                                                                                                                                                                                             |
+| ---------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projectId`                  | `text` PK + FK cascade | Exactly one stats row per project                                                                                                                                                                                                                                 |
+| `watchersCount`              | `integer`              | **Counter column**, not computed-on-read. `project_watcher` stays the source of truth; this is a rebuildable cache. Incremented in the _same transaction_ as the watcher insert, reconciled nightly against `COUNT(*)`                                            |
+| `teamMemberCount`            | `integer` default 1    | Active members. Defaults to 1 — the founder row is inserted at create                                                                                                                                                                                             |
+| `openRoleCount`              | `integer`              | Drives the ProjectCard badge                                                                                                                                                                                                                                      |
+| `pendingApplicationCount`    | `integer`              | Founder-facing only; never in the public projection                                                                                                                                                                                                               |
+| `dailyLogStreakDays`         | `integer`              | **Job-computed and stored.** A streak is a temporal fold over the whole log history _and it decays with wall-clock time_ — it silently drops at midnight with no write happening. Written by the log-ingest transaction and by a nightly decay job                |
+| `lastDailyLogDate`           | `date`                 | The decay job's input                                                                                                                                                                                                                                             |
+| `projectTimeZone`            | `text` default `"UTC"` | IANA zone. Without it "a day" is undefined and a distributed team can double-count a streak                                                                                                                                                                       |
+| `verifiedEffortMinutesTotal` | `integer`              | Integer **minutes**. Written only by the §9 verification job                                                                                                                                                                                                      |
+| `allocatedEquityBasisPoints` | `integer`              | Written by the nightly slicing-pie job. Per §9.4 this **must always equal `10000`** on a non-degenerate project — the apportionment sums to exactly 10000 by construction, so any other value is an alertable invariant violation, not an "unallocated" remainder |
+| `statsComputedAt`            | `timestamp`            | **Returned to clients** so all three render "as of" and never imply live numbers                                                                                                                                                                                  |
 
 > **Why `watchersCount` is a counter but `dailyLogStreakDays` is a job.** The counter is
 > transactionally exact and cheap; the streak is a time-decaying fold that would need
@@ -685,7 +687,7 @@ correct split, and the 1:1 join is on the primary key, so it is effectively free
 
 ### `project_member`
 
-Membership as a **granted state** — strictly separate from `project_application` (a *request*).
+Membership as a **granted state** — strictly separate from `project_application` (a _request_).
 Carries **no equity and no effort columns**; both are derived (§9).
 
 Key columns beyond the obvious: `projectRole` (§4d, server-owned — accepting an application always
@@ -712,7 +714,7 @@ projection. Storing both permits the contradictory state `isFounder: true` +
     uniqueIndex("project_member_one_founder_unq")
         .on(table.projectId)
         .where(sql`project_role = 'founder'`),
-]
+];
 ```
 
 ### `project_open_role` + `open_role_compensation`
@@ -726,12 +728,12 @@ kind-specific numeric range that must be independently queryable ("roles offerin
 "roles paying ≥ $4k/mo") and independently validated. It replaces
 `CompensationComponent.amountLabel`:
 
-| Frontend label | Columns | Unit |
-| --- | --- | --- |
-| `"$4k–6k/mo"` | `salaryMinInCentsPerMonth` / `salaryMaxInCentsPerMonth` | integer cents per month (`400000` / `600000`) |
-| `"$9k"` | `oneTimeMinInCents` / `oneTimeMaxInCents` | integer cents (`900000`) |
-| `"2–4%"` | `equityBasisPointsMin` / `equityBasisPointsMax` | integer basis points (`200` / `400`) |
-| `earnedAsLabel` prose | `earnedAsPolicy` (§4d) + optional `earnedAsNote` | enum; clients render localized copy |
+| Frontend label        | Columns                                                 | Unit                                          |
+| --------------------- | ------------------------------------------------------- | --------------------------------------------- |
+| `"$4k–6k/mo"`         | `salaryMinInCentsPerMonth` / `salaryMaxInCentsPerMonth` | integer cents per month (`400000` / `600000`) |
+| `"$9k"`               | `oneTimeMinInCents` / `oneTimeMaxInCents`               | integer cents (`900000`)                      |
+| `"2–4%"`              | `equityBasisPointsMin` / `equityBasisPointsMax`         | integer basis points (`200` / `400`)          |
+| `earnedAsLabel` prose | `earnedAsPolicy` (§4d) + optional `earnedAsNote`        | enum; clients render localized copy           |
 
 Two server-side validations that matter: the equity range is an **advertised offer**, never the
 granted share (grants come only from §9), and `max` is bounded `≤ 10000`.
@@ -747,7 +749,7 @@ uniqueIndex("open_role_compensation_role_kind_unq").on(table.openRoleId, table.k
 
 ### `project_application` and `project_invite`
 
-**One table, two directions.** `project_application` is person → project and backs *both* the
+**One table, two directions.** `project_application` is person → project and backs _both_ the
 apply-role sheet and the "Request to join" button, discriminated by `kind`, which the server
 **derives** from whether `openRoleId` is present — `.strict()` rejects a client-sent `kind`.
 `project_invite` is project → person (the talent-page "Invite talent") and is a separate table
@@ -834,20 +836,20 @@ is always renderable with its freshness bound and is reproducible from the same 
 
 ### Tables
 
-| Table | Purpose |
-| --- | --- |
-| `discovery_category` | Shared taxonomy with §5's `research_category` — **one table, not two** |
-| `discovery_region` | Region lookup, so the demand leaderboard can join rather than string-match |
-| `discovery_skill` | Canonical skills, replacing free-text `string[]` |
-| `problem_submission` | One person's raw report. Never rendered directly |
-| `problem_cluster` | The deduplicated public entity — `ProblemReport` in the frontend |
-| `problem_cluster_score_snapshot` | Job-written scores with `asOf`; append-only |
-| `problem_cluster_merge_proposal` | Moderator queue for suspected duplicate clusters |
-| `market_insight` | Knowledge-hub insight cards |
-| `demand_signal_snapshot` | Job-written leaderboard rows with `rank` + `demandScorePoints` |
-| `talent_profile` | Opt-in directory projection of a `user` |
-| `talent_profile_skill` | Join to `discovery_skill` |
-| `talent_compensation_ask` | The applicant-side mirror of `open_role_compensation` |
+| Table                            | Purpose                                                                    |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| `discovery_category`             | Shared taxonomy with §5's `research_category` — **one table, not two**     |
+| `discovery_region`               | Region lookup, so the demand leaderboard can join rather than string-match |
+| `discovery_skill`                | Canonical skills, replacing free-text `string[]`                           |
+| `problem_submission`             | One person's raw report. Never rendered directly                           |
+| `problem_cluster`                | The deduplicated public entity — `ProblemReport` in the frontend           |
+| `problem_cluster_score_snapshot` | Job-written scores with `asOf`; append-only                                |
+| `problem_cluster_merge_proposal` | Moderator queue for suspected duplicate clusters                           |
+| `market_insight`                 | Knowledge-hub insight cards                                                |
+| `demand_signal_snapshot`         | Job-written leaderboard rows with `rank` + `demandScorePoints`             |
+| `talent_profile`                 | Opt-in directory projection of a `user`                                    |
+| `talent_profile_skill`           | Join to `discovery_skill`                                                  |
+| `talent_compensation_ask`        | The applicant-side mirror of `open_role_compensation`                      |
 
 `MarketInsight.statValue` is the sneakiest field on the surface — the mocks carry `"+34%"`,
 `"68M people"`, `"3× coverage"` and `"-22%"` in one column. It decomposes into
@@ -882,12 +884,12 @@ double-entry instead**: a journal header plus **≥ 2 signed postings whose amou
 
 Four reasons:
 
-1. `direction: in|out` cannot say *where* money came from or went to — and the Governance tab's
+1. `direction: in|out` cannot say _where_ money came from or went to — and the Governance tab's
    Allocated / Released / Held question is literally an account-balance question.
 2. Money in flight (submitted to Stripe, not yet settled) has no honest single-row representation.
    With a `provider_clearing` account it is simply a balance.
 3. Provider-vs-ledger disagreement can be absorbed into a `reconciliation_suspense` account, so the
-   books still balance while the discrepancy stays *visible*.
+   books still balance while the discrepancy stays _visible_.
 4. The zero-sum invariant is a machine-checkable proof that no money was conjured. A signed-amount
    table cannot offer that.
 
@@ -952,7 +954,10 @@ export const escrowJournalEntry = pgTable(
         // NO updatedAt column, deliberately. An append-only table has nothing to update.
     },
     (table) => [
-        uniqueIndex("escrow_journal_entry_project_seq_unq").on(table.projectId, table.sequenceNumber),
+        uniqueIndex("escrow_journal_entry_project_seq_unq").on(
+            table.projectId,
+            table.sequenceNumber,
+        ),
         index("escrow_journal_entry_project_occurredAt_idx").on(table.projectId, table.occurredAt),
         index("escrow_journal_entry_settlement_idx").on(table.settlement),
     ],
@@ -1007,10 +1012,10 @@ That is a grep-able invariant.
 `floor(raised * 10000 / goal)` and returned as `percentageFundedBasisPoints`. It cannot be stored,
 so it cannot be forged or drift. Clients must render the server's basis points and use the raw
 integers only for bar width; the value may exceed `10000` when overfunded, and the client clamps
-the *width*, not the number.
+the _width_, not the number.
 
 **Never trust the webhook payload's amount over our own `provider_transfer` row.** The payload
-identifies *which* transfer settled, not *how much*.
+identifies _which_ transfer settled, not _how much_.
 
 ### Milestone release — the four-eyes rule
 
@@ -1104,18 +1109,18 @@ to `verify-effort-claim` (§9).
 
 ### Workshop and daily-log tables
 
-| Table | Notes |
-| --- | --- |
-| `workshop_board_column` | `position` integer, contiguous, re-packed on delete |
-| `workshop_task` | `rank` — see the ordering note below |
-| `workshop_file` | `sizeBytes` **integer bytes**, measured server-side, never client-claimed |
-| `workshop_chat_message` | `sentAt` with microsecond precision — it is also the pagination cursor |
-| `workshop_chat_read_state` | Per-member read cursor |
-| `daily_log` | `logDate` (the day **claimed**) + `submittedAt` (the instant) — two distinct fields, never collapsed |
-| `daily_log_transcript_segment` | Job-written |
-| `daily_log_ai_summary_chip` | LLM output; carries `generatedByModel` + `promptVersion` provenance |
-| `daily_log_extracted_claim` | The bridge into §9 |
-| `daily_log_evidence_link` | Machine-readable evidence refs |
+| Table                          | Notes                                                                                                |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `workshop_board_column`        | `position` integer, contiguous, re-packed on delete                                                  |
+| `workshop_task`                | `rank` — see the ordering note below                                                                 |
+| `workshop_file`                | `sizeBytes` **integer bytes**, measured server-side, never client-claimed                            |
+| `workshop_chat_message`        | `sentAt` with microsecond precision — it is also the pagination cursor                               |
+| `workshop_chat_read_state`     | Per-member read cursor                                                                               |
+| `daily_log`                    | `logDate` (the day **claimed**) + `submittedAt` (the instant) — two distinct fields, never collapsed |
+| `daily_log_transcript_segment` | Job-written                                                                                          |
+| `daily_log_ai_summary_chip`    | LLM output; carries `generatedByModel` + `promptVersion` provenance                                  |
+| `daily_log_extracted_claim`    | The bridge into §9                                                                                   |
+| `daily_log_evidence_link`      | Machine-readable evidence refs                                                                       |
 
 ### Kanban ordering
 
@@ -1179,10 +1184,10 @@ The single most important idea in this domain, and the product's entire commerci
 
 That line is drawn **in the data model**, not in prose:
 
-| | AI-produced (reviewable, overridable) | Formula-produced (never hand-edited) |
-| --- | --- | --- |
+|         | AI-produced (reviewable, overridable)                                                                                                                                                          | Formula-produced (never hand-edited)                                                                                                                                                                                      |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Columns | `effort_claim.extractedMinutes`, `groundedMinutes`, `claimSummary` · `verification_step.status`, `findingSummary`, `scoreBps` · `receipt_forensics_check.result` · `optimization_suggestion.*` | `slice_ledger_entry.sliceNumerator`, `slicesAwarded` · `slice_allocation_proposal.proposedSlices` · `equity_snapshot_share.equityBasisPoints` · `project_audit_entry.entryHash` · `member_fair_market_rate.*` once locked |
-| Carries | `modelName`, `modelVersion`, `promptVersion`, `confidenceBps` **and** `overriddenStatus`, `reviewedByUserId`, `overrideReason` | **no override columns at all** — their absence *is* the contract |
+| Carries | `modelName`, `modelVersion`, `promptVersion`, `confidenceBps` **and** `overriddenStatus`, `reviewedByUserId`, `overrideReason`                                                                 | **no override columns at all** — their absence _is_ the contract                                                                                                                                                          |
 
 Corrections flow one way: change an **input** (override a step status, override `groundedMinutes`)
 and let the formula recompute — or append a `reversal` entry. Never an `UPDATE`.
@@ -1226,10 +1231,10 @@ Verified against **every** figure in `solar-cold-storage.ts`: 148 h @ $120 →
 > `sliceNumerator` and every slice total are `bigint`. `slicesAwarded` and `equityBasisPoints` stay
 > `integer` because they are bounded and small.
 
-**The unpaid-portion column the mock is missing.** Slicing Pie credits only *unpaid* contribution.
+**The unpaid-portion column the mock is missing.** Slicing Pie credits only _unpaid_ contribution.
 `member_fair_market_rate` therefore carries **both** `fairMarketRateCentsPerHour` and
 `paidCashRateCentsPerHour`, and the ledger prices the difference. Without this, a salaried member
-earns full sweat equity *on top of* their salary — **this is the largest correctness gap in the
+earns full sweat equity _on top of_ their salary — **this is the largest correctness gap in the
 mock**, and it has no frontend representation at all.
 
 ### 9.3 Rounding
@@ -1244,7 +1249,7 @@ export function divideRoundHalfEven(numerator: bigint, denominator: bigint): big
     const remainder = numerator % denominator;
     if (remainder === 0n) return quotient;
     const twiceRemainder = (remainder < 0n ? -remainder : remainder) * 2n;
-    const sign = (numerator < 0n) !== (denominator < 0n) ? -1n : 1n;
+    const sign = numerator < 0n !== denominator < 0n ? -1n : 1n;
     if (twiceRemainder > denominator) return quotient + sign;
     if (twiceRemainder < denominator) return quotient;
     return quotient % 2n === 0n ? quotient : quotient + sign; // exact tie → nearest even
@@ -1280,11 +1285,17 @@ export function apportionBasisPoints(inputs: readonly MemberSliceInput[]): reado
     const total = inputs.reduce((sum, member) => sum + member.slices, 0n);
     if (total === 0n) {
         // isDegenerate: brand-new project, every share 0, sum-to-10000 suspended.
-        return inputs.map((member) => ({ memberUserId: member.memberUserId, basisPoints: 0, remainder: 0n }));
+        return inputs.map((member) => ({
+            memberUserId: member.memberUserId,
+            basisPoints: 0,
+            remainder: 0n,
+        }));
     }
 
     // 1. CANONICAL ORDERING first, so the tie-break never depends on row order from Postgres.
-    const ordered = [...inputs].sort((left, right) => (left.memberUserId < right.memberUserId ? -1 : 1));
+    const ordered = [...inputs].sort((left, right) =>
+        left.memberUserId < right.memberUserId ? -1 : 1,
+    );
 
     // 2. Floor each share, keeping the exact remainder.
     const floored = ordered.map((member) => {
@@ -1316,7 +1327,7 @@ byte-identical `equity_snapshot_share` rows every time.
 ### 9.5 The reserve pool — drop it
 
 The mock header in `research-and-development-proof-of-effort-mocks.ts` flags its reserve slice pool
-as *"a mild deviation from orthodox Slicing Pie… so the backend phase can revisit it."*
+as _"a mild deviation from orthodox Slicing Pie… so the backend phase can revisit it."_
 
 **Revisited: drop it**, along with the fixed 200,000-slice pool it depends on. Three reasons, in
 severity order:
@@ -1333,7 +1344,7 @@ severity order:
    §9.4 would have to be deleted, or a phantom "reserve member" invented that needs an owner, a
    rate, and a dispute path it can never use.
 
-**What replaces it, so the UI keeps the affordance:** a *projection*, computed on read, never
+**What replaces it, so the UI keeps the affordance:** a _projection_, computed on read, never
 persisted as slices.
 
 ```text
@@ -1356,33 +1367,33 @@ created at bake time from frozen percentages, not a live-ledger concept.
 
 ### 9.6 Tables
 
-| Table | Purpose |
-| --- | --- |
-| `member_fair_market_rate` | Effective-dated, immutable once locked. **The most important table in the domain** — SPEC §2's "valuation rules locked in and transparent to everyone" |
-| `slice_ledger_entry` | Append-only. `sequenceNumber` gapless per project; `sliceNumerator` (`bigint`) + `slicesAwarded`; `fairMarketRateId` pins the rate used |
-| `effort_claim` | The claim under audit. `extractedMinutes` vs `groundedMinutes` are the two halves of SPEC §4 |
-| `claim_verification_run` | One pass. `attemptNumber` 1, then 2+ for re-verification |
-| `verification_step` | The four ordered steps, with provenance + override quartets |
-| `artifact_evidence` | Deterministic digital receipts with identity — replaces `evidenceLabels: string[]` |
-| `integration_consent_grant` | Per **(project, member, provider)** — see §9.10 |
-| `physical_work_receipt` | `contentSha256` + `perceptualHash` |
-| `receipt_forensics_check` | EXIF / device fingerprint / reverse image search |
-| `slice_allocation_proposal` | The 24-hour window — the discriminated union, as CHECK-constrained columns |
-| `dispute` + `dispute_vote` | Consensus. **`dispute_vote` has no frontend counterpart at all** |
-| `project_audit_entry` + `project_chain_head` | The hash chain and its serialization point |
-| `equity_snapshot` + `equity_snapshot_share` | The nightly recalculation; makes bake atomic |
-| `pie_bake_event` | Exactly once, ever, per project |
-| `optimization_suggestion` (+ `_evidence`) | With LLM provenance and a lifecycle the mock lacks |
-| `verification_job` | The queue (§4e) |
+| Table                                        | Purpose                                                                                                                                                |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `member_fair_market_rate`                    | Effective-dated, immutable once locked. **The most important table in the domain** — SPEC §2's "valuation rules locked in and transparent to everyone" |
+| `slice_ledger_entry`                         | Append-only. `sequenceNumber` gapless per project; `sliceNumerator` (`bigint`) + `slicesAwarded`; `fairMarketRateId` pins the rate used                |
+| `effort_claim`                               | The claim under audit. `extractedMinutes` vs `groundedMinutes` are the two halves of SPEC §4                                                           |
+| `claim_verification_run`                     | One pass. `attemptNumber` 1, then 2+ for re-verification                                                                                               |
+| `verification_step`                          | The four ordered steps, with provenance + override quartets                                                                                            |
+| `artifact_evidence`                          | Deterministic digital receipts with identity — replaces `evidenceLabels: string[]`                                                                     |
+| `integration_consent_grant`                  | Per **(project, member, provider)** — see §9.10                                                                                                        |
+| `physical_work_receipt`                      | `contentSha256` + `perceptualHash`                                                                                                                     |
+| `receipt_forensics_check`                    | EXIF / device fingerprint / reverse image search                                                                                                       |
+| `slice_allocation_proposal`                  | The 24-hour window — the discriminated union, as CHECK-constrained columns                                                                             |
+| `dispute` + `dispute_vote`                   | Consensus. **`dispute_vote` has no frontend counterpart at all**                                                                                       |
+| `project_audit_entry` + `project_chain_head` | The hash chain and its serialization point                                                                                                             |
+| `equity_snapshot` + `equity_snapshot_share`  | The nightly recalculation; makes bake atomic                                                                                                           |
+| `pie_bake_event`                             | Exactly once, ever, per project                                                                                                                        |
+| `optimization_suggestion` (+ `_evidence`)    | With LLM provenance and a lifecycle the mock lacks                                                                                                     |
+| `verification_job`                           | The queue (§4e)                                                                                                                                        |
 
 **Why effective-dating the rate rather than a column on `project_member`:** a raise must not
 retroactively re-price two years of logged effort. Each ledger entry stores `fairMarketRateId`, so
 history pins to the rate in force. A single mutable column makes every historical slice count a
-function of *today's* rate — precisely the founder-tweaks-the-spreadsheet failure mode SPEC §2
+function of _today's_ rate — precisely the founder-tweaks-the-spreadsheet failure mode SPEC §2
 exists to prevent, and the bug stays invisible until someone gets a raise.
 
-**Why `groundedMinutes` is separate from `extractedMinutes`:** `extractedMinutes` is *what the
-member said*; `groundedMinutes` is *what the artifacts prove*. The ledger prices
+**Why `groundedMinutes` is separate from `extractedMinutes`:** `extractedMinutes` is _what the
+member said_; `groundedMinutes` is _what the artifacts prove_. The ledger prices
 `COALESCE(overriddenMinutes, groundedMinutes)` — never `extractedMinutes`. Collapsing them destroys
 the audit story.
 
@@ -1450,19 +1461,19 @@ The verdict function is pure and exhaustive — any `failed` → `unverified-zer
 ### 9.8 The dispute state machine
 
 The proposal is created by `finalize-verdict`, **not** by the ledger. **No slices exist until a
-window locks** — the 24-hour window is not an annotation on an award, it is a *precondition* for
+window locks** — the 24-hour window is not an annotation on an award, it is a _precondition_ for
 one.
 
-| From | To | Trigger | Who | Slices |
-| --- | --- | --- | --- | --- |
-| — | `open` | `finalize-verdict` | System | **None written.** `proposedSlices` frozen on the proposal, outside `totalSlices` |
-| `open` | `disputed` | `POST …/dispute` | Any **active member**, including the subject. Not observers | `escrowedSlices = proposedSlices`; reported separately so the UI shows "frozen in escrow" honestly |
-| `open` | `locked` | Expiry sweep | System | **Written.** One `award` entry at `proposedSlices` |
-| `disputed` | `consensus-reached` | resolve `upheld` | Founder, or majority of `quorumMemberCount` | Released at full `proposedSlices` |
-| `disputed` | `consensus-reached` | resolve `voided` | Founder / majority | Released at **0** — but a zero-slice entry *is still written* (no sequence holes) |
-| `disputed` | `consensus-reached` | resolve `re-verified` | Founder / majority | Scoped re-verification run; settles at the **re-derived** number. The only path that changes the amount, and it comes from the formula |
-| `disputed` | `open` | `withdrawn` before `windowClosesAt` | The **raiser only** | Original window resumes on its **original** clock — it does not restart, or serial withdraw/re-dispute holds slices hostage forever |
-| `locked` | — | **nothing** | — | Terminal. Corrected only by appending a `reversal` |
+| From       | To                  | Trigger                             | Who                                                         | Slices                                                                                                                                 |
+| ---------- | ------------------- | ----------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| —          | `open`              | `finalize-verdict`                  | System                                                      | **None written.** `proposedSlices` frozen on the proposal, outside `totalSlices`                                                       |
+| `open`     | `disputed`          | `POST …/dispute`                    | Any **active member**, including the subject. Not observers | `escrowedSlices = proposedSlices`; reported separately so the UI shows "frozen in escrow" honestly                                     |
+| `open`     | `locked`            | Expiry sweep                        | System                                                      | **Written.** One `award` entry at `proposedSlices`                                                                                     |
+| `disputed` | `consensus-reached` | resolve `upheld`                    | Founder, or majority of `quorumMemberCount`                 | Released at full `proposedSlices`                                                                                                      |
+| `disputed` | `consensus-reached` | resolve `voided`                    | Founder / majority                                          | Released at **0** — but a zero-slice entry _is still written_ (no sequence holes)                                                      |
+| `disputed` | `consensus-reached` | resolve `re-verified`               | Founder / majority                                          | Scoped re-verification run; settles at the **re-derived** number. The only path that changes the amount, and it comes from the formula |
+| `disputed` | `open`              | `withdrawn` before `windowClosesAt` | The **raiser only**                                         | Original window resumes on its **original** clock — it does not restart, or serial withdraw/re-dispute holds slices hostage forever    |
+| `locked`   | —                   | **nothing**                         | —                                                           | Terminal. Corrected only by appending a `reversal`                                                                                     |
 
 Rejected with `409`: `locked → *`; `open → consensus-reached` (must pass through `disputed`); a
 second dispute (`ALREADY_DISPUTED`); disputing after the window (`WINDOW_CLOSED`); anything at all
@@ -1498,8 +1509,8 @@ delimiter — a delimiter is an injection surface (a `detailNote` containing it 
 hand-rolled ordering drifts between the Node implementation and the Kotlin/Swift verifiers. JCS also
 mandates integers-only serialization, which is a second reason nothing here is a float.
 
-**Algorithm: SHA-256, lowercase hex, 64 characters.** `entryHashLabel: "c7d9a1"` is a *client-side
-truncation for display*. 24 bits is trivially collidable and must never be compared.
+**Algorithm: SHA-256, lowercase hex, 64 characters.** `entryHashLabel: "c7d9a1"` is a _client-side
+truncation for display_. 24 bits is trivially collidable and must never be compared.
 
 **Appending takes a lock.** A chain has one writer per project, always:
 `SELECT … FROM project_chain_head WHERE project_id = $1 FOR UPDATE` inside the transaction. Every
@@ -1516,7 +1527,7 @@ is an operational emergency and must page.
 > affordances make the chain independently verifiable: a `/hash-input` endpoint returning the
 > canonical bytes so any client can SHA-256 them locally (five lines in `crypto.subtle`,
 > `MessageDigest`, or `CryptoKit`); a list endpoint that returns every hash-input column so a
-> client can canonicalize *without* trusting the server's bytes; and **daily external anchoring** of
+> client can canonicalize _without_ trusting the server's bytes; and **daily external anchoring** of
 > the head hash to append-only storage under a separate credential.
 >
 > Without the anchor, anyone with DB write access recomputes the whole chain from any point forward
@@ -1546,9 +1557,9 @@ source repository.
   anyone's code.
 - Verification runs and steps survive intact. The audit story is preserved; the source data is gone.
 
-**Why not claw back the slices** — two symmetric attacks, both fatal. *Member-side:* revoke on the
+**Why not claw back the slices** — two symmetric attacks, both fatal. _Member-side:_ revoke on the
 way out to force a re-verification that must now fail, then dispute the zero; equity becomes hostage
-to consent. *Founder-side:* pressure a member into revoking to zero out their contribution — the
+to consent. _Founder-side:_ pressure a member into revoking to zero out their contribution — the
 founder-fiat failure mode arriving through a side door. Slicing Pie agrees: a slice records **risk
 already taken**, and risk taken in March is not undone by a token revoked in July.
 
@@ -1567,7 +1578,7 @@ Four further obligations, none of which exist yet:
 - **`device_fingerprint` is biometric-adjacent** in some jurisdictions. Store a salted hash, never
   the raw EXIF serial.
 - **Right to erasure vs. an immutable ledger.** These genuinely conflict. Resolution: `user` rows
-  anonymize; `memberUserId` persists as an opaque id. But `actorNameSnapshot` is *inside the hash*
+  anonymize; `memberUserId` persists as an opaque id. But `actorNameSnapshot` is _inside the hash_
   and cannot be edited without breaking the chain — so **it must be pseudonymous at write time**.
   Get this right at the first write, or the chain and GDPR become mutually exclusive later.
 
@@ -1588,7 +1599,7 @@ recovery is a manual, audited, out-of-band operation.
 ### 9.12 An open decision for a human
 
 §0 says the client never sends a server-owned value, explicitly including an hour count. That makes
-it **impossible** for a consensus resolution to say *"we agreed it was 3 hours, not 4."*
+it **impossible** for a consensus resolution to say _"we agreed it was 3 hours, not 4."_
 
 The design above routes around it: `resolve` accepts a narrowed ISO-8601 **window**, and the server
 re-derives minutes from artifact overlap inside it — preserving the rule and keeping the number
@@ -1596,7 +1607,7 @@ formula-produced. **That is the right default and this doc ships it.**
 
 But it has a real cost. For **physical work with no digital artifacts**, there is nothing to overlap
 a window against, so `re-verify` cannot produce a different number and the only outcomes are
-all-or-nothing — on a claim the team may agree was *partially* valid. The solar mock depicts exactly
+all-or-nothing — on a claim the team may agree was _partially_ valid. The solar mock depicts exactly
 the disallowed case: `"Re-verified at 3 hrs — adjusted to 510 slices."`
 
 Two options, to be decided knowingly:
@@ -1607,8 +1618,8 @@ Two options, to be decided knowingly:
 - **(b) Add a narrow, heavily-audited exception.** `consensusAdjustedMinutes`, accepted **only** on
   dispute resolution, **only** with `resolution: "re-verified"`, **only** after a majority of
   `quorumMemberCount` has voted, written as a `consensus-adjustment` ledger entry naming every voter
-  in the audit payload. It is a human-supplied *input* to the formula — like the negotiated fair
-  market rate, which §0 already tolerates at lock time — not a server-owned *output*.
+  in the audit payload. It is a human-supplied _input_ to the formula — like the negotiated fair
+  market rate, which §0 already tolerates at lock time — not a server-owned _output_.
 
 This is the one place the stated rules genuinely pull against the product behaviour the mocks
 depict. It needs a decision, not a default.
@@ -1624,7 +1635,7 @@ Firm recommendation: **model it as a distinct `research_program` entity**, not a
 
 The two share almost nothing structurally. A `research_project` has one founder, a small closed
 team, a funding round, milestones, escrow, and a Slicing Pie ledger over verified daily logs.
-Project Immortal has 2,847 open contributors, a branch *tree*, a paper library, public discussion,
+Project Immortal has 2,847 open contributors, a branch _tree_, a paper library, public discussion,
 and contribution tracking that is not equity at all. Forcing them into one table means a dozen
 nullable columns and an authorization model that has to branch on kind at every call site.
 
@@ -1633,19 +1644,19 @@ They do share the **contributor compensation vocabulary** (§4d `compensation_ki
 
 ### Program tables
 
-| Table | Notes |
-| --- | --- |
-| `research_program` | The singleton today; `slug`, stats sidecar |
-| `immortal_research_branch` | The tree — see below |
-| `immortal_branch_claim` | Who is working on which branch (drives `contributorCount`) |
-| `immortal_research_paper` | Formal library; PDF, DOI, content hash |
-| `immortal_post` | Informal posts **and** netizen ideas **and** replies — one table, self-referential `parentPostId` |
-| `immortal_post_reaction` | One row per user per target; idempotent `PUT`/`DELETE` |
-| `immortal_product_opportunity` | Monetizable derivations |
-| `research_program_participant` | Contributors + `compensationPreference` |
-| `research_effort_log` / `research_contribution_ledger_entry` | Effort and contribution tracking (`restrict` FKs — §4f) |
-| `immortal_content_report` + `immortal_moderation_action` | Moderation |
-| `research_program_stat_snapshot` | Job-computed program stats |
+| Table                                                        | Notes                                                                                             |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `research_program`                                           | The singleton today; `slug`, stats sidecar                                                        |
+| `immortal_research_branch`                                   | The tree — see below                                                                              |
+| `immortal_branch_claim`                                      | Who is working on which branch (drives `contributorCount`)                                        |
+| `immortal_research_paper`                                    | Formal library; PDF, DOI, content hash                                                            |
+| `immortal_post`                                              | Informal posts **and** netizen ideas **and** replies — one table, self-referential `parentPostId` |
+| `immortal_post_reaction`                                     | One row per user per target; idempotent `PUT`/`DELETE`                                            |
+| `immortal_product_opportunity`                               | Monetizable derivations                                                                           |
+| `research_program_participant`                               | Contributors + `compensationPreference`                                                           |
+| `research_effort_log` / `research_contribution_ledger_entry` | Effort and contribution tracking (`restrict` FKs — §4f)                                           |
+| `immortal_content_report` + `immortal_moderation_action`     | Moderation                                                                                        |
+| `research_program_stat_snapshot`                             | Job-computed program stats                                                                        |
 
 ### The branch tree
 
@@ -1683,7 +1694,7 @@ mocks, all integers on the wire. The thousands separator is a client locale deci
 `RelativeDateTimeFormatter` / `DateUtils.getRelativeTimeSpanString`.
 
 `isUploadedByViewer` is **computed per request** from `uploaderUserId === req.user?.id`, never a
-column — it is a property of the *viewer*, not of the row.
+column — it is a property of the _viewer_, not of the row.
 
 `marketPotentialLabel: "$12B est. market"` becomes `estimatedMarketSizeInCents` — which **must** be
 `bigint`: `1200000000000` is 560× the int4 ceiling (§4b). `readinessLabel: "Monetizable in 2–4 yrs"`
@@ -1735,121 +1746,121 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 
 ### 11a. Projects, team, roles (§5)
 
-| Method & path | Body / input | Behavior & statuses |
-| --- | --- | --- |
-| `POST /research-projects` | `CreateProjectSchema` (the wizard's `NewIdeaDraft`) | Creates a **draft** + founder `project_member` + `project_stats` in one txn. `201` · `422` |
-| `GET /research-projects` | `?category=&stage=&sort=&page=&limit=` | Public feed of `active` projects. `200` |
-| `GET /research-projects/slugs` | — | Slug list for `generateStaticParams`. `200` |
-| `GET /research-projects/mine` | `?status=&page=&limit=` | Caller's own, including drafts. `200` |
-| `GET /research-projects/:projectSlug` | — | Detail. Draft → owner only, else `404` |
-| `PATCH /research-projects/:projectSlug` | `UpdateProjectSchema` (no `status`, no `stage`, no equity grant) | Partial update. `200` · `422` · `404` |
-| `POST /research-projects/:projectSlug/cover` | multipart, field `cover` | sharp validate + normalize → Cloudinary. `200` · `413` · `422` · `502` |
-| `POST /research-projects/:projectSlug/publish` | — | Server-side completeness gate; materializes seed roles; freezes the slug. `200` · `422 INCOMPLETE_FOR_PUBLISH` |
-| `POST /research-projects/:projectSlug/unpublish` · `/archive` | — | `active` ↔ `draft`; archive is terminal. `200` |
-| `PATCH /research-projects/:projectSlug/stage` | `{ stage }` | Dedicated route — writes a `project_stage_transition` audit row. `200` |
-| `GET /research-projects/:projectSlug/team` | — | Roster; `name`/`avatar` joined from `user`. `200` |
-| `PATCH` · `DELETE /research-projects/:projectSlug/members/:memberId` | `{ projectRole?, roleTitle? }` | Founder only. `founder` can never be assigned. `200` · `403` |
-| `DELETE /research-projects/:projectSlug/members/me` | — | Sets `left`, never deletes. `200` |
-| `GET` · `POST` · `PATCH` · `DELETE /research-projects/:projectSlug/roles[/:roleId]` | `OpenRoleSchema` + compensation strands | Maintainer+. `200`/`201` · `422` |
-| `GET /open-roles` | `?commitment=&skill=&minEquityBasisPoints=&page=` | Cross-project rail + `/talent`. `200` |
-| `POST /research-projects/:projectSlug/applications` | `{ openRoleId?, shortPitch, selectedSkills[], statedCommitment, expectedCompensationNote? }` | `kind` **server-derived**. Skills validated as a subset. `201` · `409` · `422` |
-| `POST …/applications/:id/accept` · `/decline` · `/withdraw` | `{ note? }` | Accept creates the member row + increments `slotsFilledCount` in one txn. `200` |
-| `POST /research-projects/:projectSlug/invites` (+ `/accept`, `/decline`, `DELETE`) | `{ inviteeUserId, openRoleId?, message? }` | Talent-page "Invite". `201` · `409` |
-| `POST` · `DELETE /research-projects/:projectSlug/watch` | — | Idempotent; counter in the same txn. `200` |
-| `GET /research-categories` | `?status=approved` | Approved facets only. `200` |
+| Method & path                                                                       | Body / input                                                                                 | Behavior & statuses                                                                                            |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `POST /research-projects`                                                           | `CreateProjectSchema` (the wizard's `NewIdeaDraft`)                                          | Creates a **draft** + founder `project_member` + `project_stats` in one txn. `201` · `422`                     |
+| `GET /research-projects`                                                            | `?category=&stage=&sort=&page=&limit=`                                                       | Public feed of `active` projects. `200`                                                                        |
+| `GET /research-projects/slugs`                                                      | —                                                                                            | Slug list for `generateStaticParams`. `200`                                                                    |
+| `GET /research-projects/mine`                                                       | `?status=&page=&limit=`                                                                      | Caller's own, including drafts. `200`                                                                          |
+| `GET /research-projects/:projectSlug`                                               | —                                                                                            | Detail. Draft → owner only, else `404`                                                                         |
+| `PATCH /research-projects/:projectSlug`                                             | `UpdateProjectSchema` (no `status`, no `stage`, no equity grant)                             | Partial update. `200` · `422` · `404`                                                                          |
+| `POST /research-projects/:projectSlug/cover`                                        | multipart, field `cover`                                                                     | sharp validate + normalize → Cloudinary. `200` · `413` · `422` · `502`                                         |
+| `POST /research-projects/:projectSlug/publish`                                      | —                                                                                            | Server-side completeness gate; materializes seed roles; freezes the slug. `200` · `422 INCOMPLETE_FOR_PUBLISH` |
+| `POST /research-projects/:projectSlug/unpublish` · `/archive`                       | —                                                                                            | `active` ↔ `draft`; archive is terminal. `200`                                                                 |
+| `PATCH /research-projects/:projectSlug/stage`                                       | `{ stage }`                                                                                  | Dedicated route — writes a `project_stage_transition` audit row. `200`                                         |
+| `GET /research-projects/:projectSlug/team`                                          | —                                                                                            | Roster; `name`/`avatar` joined from `user`. `200`                                                              |
+| `PATCH` · `DELETE /research-projects/:projectSlug/members/:memberId`                | `{ projectRole?, roleTitle? }`                                                               | Founder only. `founder` can never be assigned. `200` · `403`                                                   |
+| `DELETE /research-projects/:projectSlug/members/me`                                 | —                                                                                            | Sets `left`, never deletes. `200`                                                                              |
+| `GET` · `POST` · `PATCH` · `DELETE /research-projects/:projectSlug/roles[/:roleId]` | `OpenRoleSchema` + compensation strands                                                      | Maintainer+. `200`/`201` · `422`                                                                               |
+| `GET /open-roles`                                                                   | `?commitment=&skill=&minEquityBasisPoints=&page=`                                            | Cross-project rail + `/talent`. `200`                                                                          |
+| `POST /research-projects/:projectSlug/applications`                                 | `{ openRoleId?, shortPitch, selectedSkills[], statedCommitment, expectedCompensationNote? }` | `kind` **server-derived**. Skills validated as a subset. `201` · `409` · `422`                                 |
+| `POST …/applications/:id/accept` · `/decline` · `/withdraw`                         | `{ note? }`                                                                                  | Accept creates the member row + increments `slotsFilledCount` in one txn. `200`                                |
+| `POST /research-projects/:projectSlug/invites` (+ `/accept`, `/decline`, `DELETE`)  | `{ inviteeUserId, openRoleId?, message? }`                                                   | Talent-page "Invite". `201` · `409`                                                                            |
+| `POST` · `DELETE /research-projects/:projectSlug/watch`                             | —                                                                                            | Idempotent; counter in the same txn. `200`                                                                     |
+| `GET /research-categories`                                                          | `?status=approved`                                                                           | Approved facets only. `200`                                                                                    |
 
 ### 11b. Discovery (§6)
 
-| Method & path | Body / input | Behavior & statuses |
-| --- | --- | --- |
-| `GET /discovery/problem-clusters` | `?category=&region=&minOpportunityScore=&sort=&page=` | The map + landing teaser. Returns lat/lng microdegrees. `200` |
-| `GET /discovery/problem-clusters/:id` | — | Cluster detail + linked projects. `200` |
-| `POST /discovery/problem-reports` | `{ title, categoryId, description, latitudeMicrodegrees, longitudeMicrodegrees }` | `requireIdentifiedUser` + limiter. **`countryCode`, `reportCount`, `opportunityScore`, cluster assignment are all server-derived.** `202` (clustering is async) · `422` · `429` |
-| `GET /discovery/problem-reports/mine` | `?page=` | `200` |
-| `GET` · `POST /discovery/categories` | `{ label }` | User-minted lands `pending`. `201` · `409` · `429` |
-| `GET /discovery/regions` · `/market-insights` · `/demand-signals` | `?region=&category=&page=` | Knowledge hub. `200` |
-| `GET /discovery/talent` | `?commitment=&skill=&availability=&region=&page=` | Server-side filtering (§6). `200` |
-| `GET` · `PUT` · `DELETE /discovery/talent/me` | `TalentProfileSchema` | Opt-in directory record. `200` |
-| `POST /discovery/talent/me/publish` · `/unpublish` | — | Visibility toggle. `200` |
-| `POST /discovery/admin/categories/:id/decide` | `{ decision, note? }` | Platform `moderator` only (§4a). `200` · `403` |
-| `POST /discovery/admin/merge-proposals/:id/decide` | `{ decision }` | Cluster dedup queue. `200` · `403` |
+| Method & path                                                     | Body / input                                                                      | Behavior & statuses                                                                                                                                                             |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /discovery/problem-clusters`                                 | `?category=&region=&minOpportunityScore=&sort=&page=`                             | The map + landing teaser. Returns lat/lng microdegrees. `200`                                                                                                                   |
+| `GET /discovery/problem-clusters/:id`                             | —                                                                                 | Cluster detail + linked projects. `200`                                                                                                                                         |
+| `POST /discovery/problem-reports`                                 | `{ title, categoryId, description, latitudeMicrodegrees, longitudeMicrodegrees }` | `requireIdentifiedUser` + limiter. **`countryCode`, `reportCount`, `opportunityScore`, cluster assignment are all server-derived.** `202` (clustering is async) · `422` · `429` |
+| `GET /discovery/problem-reports/mine`                             | `?page=`                                                                          | `200`                                                                                                                                                                           |
+| `GET` · `POST /discovery/categories`                              | `{ label }`                                                                       | User-minted lands `pending`. `201` · `409` · `429`                                                                                                                              |
+| `GET /discovery/regions` · `/market-insights` · `/demand-signals` | `?region=&category=&page=`                                                        | Knowledge hub. `200`                                                                                                                                                            |
+| `GET /discovery/talent`                                           | `?commitment=&skill=&availability=&region=&page=`                                 | Server-side filtering (§6). `200`                                                                                                                                               |
+| `GET` · `PUT` · `DELETE /discovery/talent/me`                     | `TalentProfileSchema`                                                             | Opt-in directory record. `200`                                                                                                                                                  |
+| `POST /discovery/talent/me/publish` · `/unpublish`                | —                                                                                 | Visibility toggle. `200`                                                                                                                                                        |
+| `POST /discovery/admin/categories/:id/decide`                     | `{ decision, note? }`                                                             | Platform `moderator` only (§4a). `200` · `403`                                                                                                                                  |
+| `POST /discovery/admin/merge-proposals/:id/decide`                | `{ decision }`                                                                    | Cluster dedup queue. `200` · `403`                                                                                                                                              |
 
 ### 11c. Funding and escrow (§7)
 
-| Method & path | Body / input | Behavior & statuses |
-| --- | --- | --- |
-| `POST /research-projects/:projectSlug/funding-rounds` | `{ type, goalAmountInCents, closesAt }` | Gated by `ENABLED_FUNDING_ROUND_TYPES`. `201` · `403 ROUND_TYPE_DISABLED` |
-| `POST /funding-rounds/:roundId/open` · `/close` | — | Founder + `admin`. `200` |
-| `GET /funding-rounds/:roundId` · `/backers` · `/pledge-options` | — | `percentageFundedBasisPoints` computed on read. `200` |
-| **`POST /funding-rounds/:roundId/pledges`** | **`{ amountInCents }` — and nothing else** | Server re-bounds, derives fee, resolves currency, writes `provider_transfer` with our idempotency key. `201` · `422` · `429`. See the rejected-keys list in §7 |
-| `GET /pledges/mine` · `POST /pledges/:id/cancel` | — | No `userId` param exists; the filter is `req.user.id`. `200` |
-| `GET /funding/deals` | `?roundType=&stage=&page=` | Investor deal flow. `200` |
-| `POST` · `PATCH` · `GET …/milestones` | `MilestoneSchema` | `escrowReleaseAmountInCents`. `201`/`200` |
-| `POST /milestones/:id/complete` · `PUT /milestones/:id/variance` | `{ …variance integers }` | `200` |
-| `GET /research-projects/:projectSlug/escrow/summary` · `/ledger` | `?page=` | Allocated / released / held from **account balances**, not client arithmetic. `200` |
-| **`POST /milestones/:id/escrow-releases`** | **`{ requestNote? }` — no amount** | Snapshots the amount server-side. `201` |
-| `POST /escrow-releases/:id/approve` · `/reject` | `{ note }` | Four-eyes: `422 SELF_APPROVAL_FORBIDDEN`. Re-derives every gate. `200` |
-| `GET …/compensation` · `PUT …/members/:id/compensation-rate` · `POST …/compensation-rate/accept` | `{ rateInCentsPerHour, effectiveFrom }` | Rate requires member acceptance. `200` · `409` |
-| `GET …/investor-confidence` · `/audit-trail` | `?page=` | Returns `asOf`. `200` |
-| `POST /webhooks/payments/stripe` | raw body | **Unauthenticated by session, authenticated by signature.** Verify → persist → dedupe → process in a txn. `200` even for duplicates |
+| Method & path                                                                                    | Body / input                               | Behavior & statuses                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /research-projects/:projectSlug/funding-rounds`                                            | `{ type, goalAmountInCents, closesAt }`    | Gated by `ENABLED_FUNDING_ROUND_TYPES`. `201` · `403 ROUND_TYPE_DISABLED`                                                                                      |
+| `POST /funding-rounds/:roundId/open` · `/close`                                                  | —                                          | Founder + `admin`. `200`                                                                                                                                       |
+| `GET /funding-rounds/:roundId` · `/backers` · `/pledge-options`                                  | —                                          | `percentageFundedBasisPoints` computed on read. `200`                                                                                                          |
+| **`POST /funding-rounds/:roundId/pledges`**                                                      | **`{ amountInCents }` — and nothing else** | Server re-bounds, derives fee, resolves currency, writes `provider_transfer` with our idempotency key. `201` · `422` · `429`. See the rejected-keys list in §7 |
+| `GET /pledges/mine` · `POST /pledges/:id/cancel`                                                 | —                                          | No `userId` param exists; the filter is `req.user.id`. `200`                                                                                                   |
+| `GET /funding/deals`                                                                             | `?roundType=&stage=&page=`                 | Investor deal flow. `200`                                                                                                                                      |
+| `POST` · `PATCH` · `GET …/milestones`                                                            | `MilestoneSchema`                          | `escrowReleaseAmountInCents`. `201`/`200`                                                                                                                      |
+| `POST /milestones/:id/complete` · `PUT /milestones/:id/variance`                                 | `{ …variance integers }`                   | `200`                                                                                                                                                          |
+| `GET /research-projects/:projectSlug/escrow/summary` · `/ledger`                                 | `?page=`                                   | Allocated / released / held from **account balances**, not client arithmetic. `200`                                                                            |
+| **`POST /milestones/:id/escrow-releases`**                                                       | **`{ requestNote? }` — no amount**         | Snapshots the amount server-side. `201`                                                                                                                        |
+| `POST /escrow-releases/:id/approve` · `/reject`                                                  | `{ note }`                                 | Four-eyes: `422 SELF_APPROVAL_FORBIDDEN`. Re-derives every gate. `200`                                                                                         |
+| `GET …/compensation` · `PUT …/members/:id/compensation-rate` · `POST …/compensation-rate/accept` | `{ rateInCentsPerHour, effectiveFrom }`    | Rate requires member acceptance. `200` · `409`                                                                                                                 |
+| `GET …/investor-confidence` · `/audit-trail`                                                     | `?page=`                                   | Returns `asOf`. `200`                                                                                                                                          |
+| `POST /webhooks/payments/stripe`                                                                 | raw body                                   | **Unauthenticated by session, authenticated by signature.** Verify → persist → dedupe → process in a txn. `200` even for duplicates                            |
 
 ### 11d. Workshop and daily logs (§8)
 
-| Method & path | Body / input | Behavior & statuses |
-| --- | --- | --- |
-| `GET /research-projects/:projectSlug/workshop` · `/board` | — | Member only → else `404`. `200` |
-| `POST` · `PATCH` · `DELETE …/workshop/columns[/:id]` (+ `/reorder`) | `{ title }` / `{ columnIds[] }` | `200`/`201` |
-| `POST` · `PATCH` · `DELETE …/workshop/tasks[/:id]` | `WorkshopTaskSchema` | `201`/`200` |
-| `POST …/workshop/tasks/:id/move` | `{ columnId, beforeTaskId?, afterTaskId? }` | **Server derives the rank** — the client never computes one. `200` |
-| `POST …/workshop/files` → `/:fileId/complete` | `{ fileName, mimeType }` → — | Presigned direct upload; server `HEAD`s for the real `sizeBytes`. `201`/`200` · `413` |
-| `GET …/workshop/files/:id/download` · `DELETE` | — | Short-lived signed URL. `200` |
-| `GET` · `POST` · `PATCH` · `DELETE …/workshop/chat[/:id]` | `{ messageText }` · `?cursor=&limit=` | Keyset by `sentAt`. `200`/`201` · `429` |
-| `GET …/workshop/chat/stream` | — | **SSE**, not WebSocket (§8) |
-| `POST …/workshop/chat/read` | `{ throughMessageId }` | `200` |
-| `GET` · `POST` · `PATCH` · `DELETE …/daily-logs[/:logId]` | `{ logDate, narrative? }` | `201`/`200` |
-| `POST …/daily-logs/:logId/submit` | `{ idempotencyKey }` | Enqueues transcription → §9 pipeline. **`202`**, not a verdict |
-| `GET …/daily-logs/:logId/transcript` · `/playback-token` | — | Signed, short-lived. `200` |
-| `POST /webhooks/livepeer` · `/webhooks/object-storage` | raw body | Signature-verified. `200` |
+| Method & path                                                       | Body / input                                | Behavior & statuses                                                                   |
+| ------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `GET /research-projects/:projectSlug/workshop` · `/board`           | —                                           | Member only → else `404`. `200`                                                       |
+| `POST` · `PATCH` · `DELETE …/workshop/columns[/:id]` (+ `/reorder`) | `{ title }` / `{ columnIds[] }`             | `200`/`201`                                                                           |
+| `POST` · `PATCH` · `DELETE …/workshop/tasks[/:id]`                  | `WorkshopTaskSchema`                        | `201`/`200`                                                                           |
+| `POST …/workshop/tasks/:id/move`                                    | `{ columnId, beforeTaskId?, afterTaskId? }` | **Server derives the rank** — the client never computes one. `200`                    |
+| `POST …/workshop/files` → `/:fileId/complete`                       | `{ fileName, mimeType }` → —                | Presigned direct upload; server `HEAD`s for the real `sizeBytes`. `201`/`200` · `413` |
+| `GET …/workshop/files/:id/download` · `DELETE`                      | —                                           | Short-lived signed URL. `200`                                                         |
+| `GET` · `POST` · `PATCH` · `DELETE …/workshop/chat[/:id]`           | `{ messageText }` · `?cursor=&limit=`       | Keyset by `sentAt`. `200`/`201` · `429`                                               |
+| `GET …/workshop/chat/stream`                                        | —                                           | **SSE**, not WebSocket (§8)                                                           |
+| `POST …/workshop/chat/read`                                         | `{ throughMessageId }`                      | `200`                                                                                 |
+| `GET` · `POST` · `PATCH` · `DELETE …/daily-logs[/:logId]`           | `{ logDate, narrative? }`                   | `201`/`200`                                                                           |
+| `POST …/daily-logs/:logId/submit`                                   | `{ idempotencyKey }`                        | Enqueues transcription → §9 pipeline. **`202`**, not a verdict                        |
+| `GET …/daily-logs/:logId/transcript` · `/playback-token`            | —                                           | Signed, short-lived. `200`                                                            |
+| `POST /webhooks/livepeer` · `/webhooks/object-storage`              | raw body                                    | Signature-verified. `200`                                                             |
 
 ### 11e. Proof of Effort (§9)
 
-| Method & path | Body / input | Behavior & statuses |
-| --- | --- | --- |
-| `GET …/proof-of-effort` · `/equity` · `/slice-ledger` · `/equity/snapshots` | `?page=&limit=` | Stakeholder read. Response invariant asserted: shares sum to exactly `10000` unless `isDegenerate`. `200` |
-| `GET …/equity/open-role-projection` | — | The ghost segment that replaces the reserve pool (§9.5). `200` |
-| `POST …/members/:memberUserId/fair-market-rate` | `{ fairMarketRateCentsPerHour, paidCashRateCentsPerHour, currencyCode, effectiveFrom, rationaleNote }` | Founder only. `409 RETROACTIVE_RATE_CHANGE`. **The one place a rate legitimately enters via a body** — a negotiated input, not a derived value. `201` |
-| `POST …/fair-market-rate/lock` | `{ rateId, acknowledgement }` | Immutable after. `200` · `409 RATE_ALREADY_LOCKED` |
-| `GET …/members/:memberUserId/fair-market-rate` | — | Full effective-dated history — *this is* the transparency promise. `200` |
-| `POST …/effort-claims` | `{ sourceKind, dailyLogId?, physicalReceiptIds[], claimedForDate, narrative?, idempotencyKey }` | **No minutes, no cash, no verdict, no slices.** `202` · `409 RATE_NOT_LOCKED` · `429` |
-| `GET …/effort-claims/:claimId` | — | Claim + all runs + steps in `stepOrder` + evidence. `200` |
-| `POST …/effort-claims/:claimId/reverify` | `{ reason }` | `409 CLAIM_SETTLED` once locked. `202` |
-| `PATCH …/effort-claims/:claimId/steps/:stepId/override` | `{ overriddenStatus, overrideReason }` | **The only hand-edit in the domain — and it edits an AI judgement, not a number.** `200` · `409` |
-| `POST …/physical-receipts` | multipart `receipt` + `{ receiptKind, idempotencyKey }` | Size/hash/pHash server-measured. `202` · `409 DUPLICATE_RECEIPT` · `413` |
-| `GET …/allocation-proposals` | `?status=&page=` | `windowClosesAt` as ISO — **never** a countdown string. `200` |
-| `POST …/allocation-proposals/:id/dispute` | `{ disputeNote }` | Any active member. Freezes slices in escrow. `201` · `409 WINDOW_CLOSED` |
-| `POST …/disputes/:id/votes` | `{ position, note? }` | One vote per voter; majority auto-resolves. `201` |
-| `POST …/disputes/:id/resolve` | `{ resolution, resolutionNote, scopedWindowStart?, scopedWindowEnd? }` | See §9.8 + the open decision in §9.12. `200`/`202` · `409 EVIDENCE_PURGED` |
-| `GET` · `POST` · `DELETE …/integrations[/:provider]` (+ `/authorize-url`) | `{ requestedResourceIds[] }` | OAuth `state` **signed, single-use, 10-minute**. Revoke is self-only. `200` · `503 INTEGRATION_UNCONFIGURED` |
-| `GET /integrations/:provider/callback` | provider redirect | Identity from the signed `state`, not a session. `302` |
-| `GET …/audit-trail` · `/verify` · `/:entryId/hash-input` | `?fromSequence=&toSequence=` | `409 CHAIN_BROKEN` on a break — it must page. `200` |
-| `GET` · `POST …/optimization-suggestions` · `…/:id/accept` · `…/:id/dismiss` | `{ note? }` | `200` |
-| `POST …/pie-bake` | `{ trigger, triggerEvidenceNote, valuationCents?, acknowledgement, expectedSnapshotId }` | Irreversible, once ever. `201` · `409 UNSETTLED_ALLOCATIONS` · `409 SNAPSHOT_STALE` |
+| Method & path                                                                | Body / input                                                                                           | Behavior & statuses                                                                                                                                   |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET …/proof-of-effort` · `/equity` · `/slice-ledger` · `/equity/snapshots`  | `?page=&limit=`                                                                                        | Stakeholder read. Response invariant asserted: shares sum to exactly `10000` unless `isDegenerate`. `200`                                             |
+| `GET …/equity/open-role-projection`                                          | —                                                                                                      | The ghost segment that replaces the reserve pool (§9.5). `200`                                                                                        |
+| `POST …/members/:memberUserId/fair-market-rate`                              | `{ fairMarketRateCentsPerHour, paidCashRateCentsPerHour, currencyCode, effectiveFrom, rationaleNote }` | Founder only. `409 RETROACTIVE_RATE_CHANGE`. **The one place a rate legitimately enters via a body** — a negotiated input, not a derived value. `201` |
+| `POST …/fair-market-rate/lock`                                               | `{ rateId, acknowledgement }`                                                                          | Immutable after. `200` · `409 RATE_ALREADY_LOCKED`                                                                                                    |
+| `GET …/members/:memberUserId/fair-market-rate`                               | —                                                                                                      | Full effective-dated history — _this is_ the transparency promise. `200`                                                                              |
+| `POST …/effort-claims`                                                       | `{ sourceKind, dailyLogId?, physicalReceiptIds[], claimedForDate, narrative?, idempotencyKey }`        | **No minutes, no cash, no verdict, no slices.** `202` · `409 RATE_NOT_LOCKED` · `429`                                                                 |
+| `GET …/effort-claims/:claimId`                                               | —                                                                                                      | Claim + all runs + steps in `stepOrder` + evidence. `200`                                                                                             |
+| `POST …/effort-claims/:claimId/reverify`                                     | `{ reason }`                                                                                           | `409 CLAIM_SETTLED` once locked. `202`                                                                                                                |
+| `PATCH …/effort-claims/:claimId/steps/:stepId/override`                      | `{ overriddenStatus, overrideReason }`                                                                 | **The only hand-edit in the domain — and it edits an AI judgement, not a number.** `200` · `409`                                                      |
+| `POST …/physical-receipts`                                                   | multipart `receipt` + `{ receiptKind, idempotencyKey }`                                                | Size/hash/pHash server-measured. `202` · `409 DUPLICATE_RECEIPT` · `413`                                                                              |
+| `GET …/allocation-proposals`                                                 | `?status=&page=`                                                                                       | `windowClosesAt` as ISO — **never** a countdown string. `200`                                                                                         |
+| `POST …/allocation-proposals/:id/dispute`                                    | `{ disputeNote }`                                                                                      | Any active member. Freezes slices in escrow. `201` · `409 WINDOW_CLOSED`                                                                              |
+| `POST …/disputes/:id/votes`                                                  | `{ position, note? }`                                                                                  | One vote per voter; majority auto-resolves. `201`                                                                                                     |
+| `POST …/disputes/:id/resolve`                                                | `{ resolution, resolutionNote, scopedWindowStart?, scopedWindowEnd? }`                                 | See §9.8 + the open decision in §9.12. `200`/`202` · `409 EVIDENCE_PURGED`                                                                            |
+| `GET` · `POST` · `DELETE …/integrations[/:provider]` (+ `/authorize-url`)    | `{ requestedResourceIds[] }`                                                                           | OAuth `state` **signed, single-use, 10-minute**. Revoke is self-only. `200` · `503 INTEGRATION_UNCONFIGURED`                                          |
+| `GET /integrations/:provider/callback`                                       | provider redirect                                                                                      | Identity from the signed `state`, not a session. `302`                                                                                                |
+| `GET …/audit-trail` · `/verify` · `/:entryId/hash-input`                     | `?fromSequence=&toSequence=`                                                                           | `409 CHAIN_BROKEN` on a break — it must page. `200`                                                                                                   |
+| `GET` · `POST …/optimization-suggestions` · `…/:id/accept` · `…/:id/dismiss` | `{ note? }`                                                                                            | `200`                                                                                                                                                 |
+| `POST …/pie-bake`                                                            | `{ trigger, triggerEvidenceNote, valuationCents?, acknowledgement, expectedSnapshotId }`               | Irreversible, once ever. `201` · `409 UNSETTLED_ALLOCATIONS` · `409 SNAPSHOT_STALE`                                                                   |
 
 ### 11f. Project Immortal (§10)
 
-| Method & path | Body / input | Behavior & statuses |
-| --- | --- | --- |
-| `GET /research-programs/:programSlug` · `/stats` | — | Public. `200` |
-| `GET` · `POST` · `PATCH …/branches[/:branchId]` | `{ title, summary, parentBranchId }` | `status` and `overlappingGroupCount` are **job-derived, never accepted**. `200`/`201` |
-| `POST` · `DELETE …/branches/:branchId/claim` | — | Drives `contributorCount`. `200` |
-| `GET` · `POST …/papers` → `/:paperId/file` | `{ title, categoryId, doi? }` → multipart | Dedup by DOI **and** content hash. `201` · `409 DUPLICATE_PAPER` · `429` |
-| `GET …/papers/:id/download` · `DELETE` · `POST …/moderate` | — | Moderator for `/moderate`. `200` · `403` |
-| `GET` · `POST …/posts[/:postId/replies]` | `{ title?, bodyText, parentPostId? }` | Depth-capped. `201` · `429` |
-| `PUT` · `DELETE …/posts/:postId/reaction` | — | **Idempotent by verb** — a double-tap is harmless. `200` · `429` |
-| `POST …/posts/:postId/report` · `GET …/moderation/queue` | `{ reason }` | `201` · `403` |
-| `GET` · `POST …/product-opportunities` | `{ productName, derivedFromBranchId, estimatedMarketSizeInCents, readinessMinMonths, readinessMaxMonths }` | `bigint` money. `201` |
-| `GET …/contributors` · `POST`/`PATCH …/contributors/me` | `{ compensationPreference, contributionSummary? }` | `200`/`201` |
-| `POST …/effort-logs` | `{ minutes, branchId, note }` | `requireIdentifiedUser` + limiter. `201` |
+| Method & path                                              | Body / input                                                                                               | Behavior & statuses                                                                   |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `GET /research-programs/:programSlug` · `/stats`           | —                                                                                                          | Public. `200`                                                                         |
+| `GET` · `POST` · `PATCH …/branches[/:branchId]`            | `{ title, summary, parentBranchId }`                                                                       | `status` and `overlappingGroupCount` are **job-derived, never accepted**. `200`/`201` |
+| `POST` · `DELETE …/branches/:branchId/claim`               | —                                                                                                          | Drives `contributorCount`. `200`                                                      |
+| `GET` · `POST …/papers` → `/:paperId/file`                 | `{ title, categoryId, doi? }` → multipart                                                                  | Dedup by DOI **and** content hash. `201` · `409 DUPLICATE_PAPER` · `429`              |
+| `GET …/papers/:id/download` · `DELETE` · `POST …/moderate` | —                                                                                                          | Moderator for `/moderate`. `200` · `403`                                              |
+| `GET` · `POST …/posts[/:postId/replies]`                   | `{ title?, bodyText, parentPostId? }`                                                                      | Depth-capped. `201` · `429`                                                           |
+| `PUT` · `DELETE …/posts/:postId/reaction`                  | —                                                                                                          | **Idempotent by verb** — a double-tap is harmless. `200` · `429`                      |
+| `POST …/posts/:postId/report` · `GET …/moderation/queue`   | `{ reason }`                                                                                               | `201` · `403`                                                                         |
+| `GET` · `POST …/product-opportunities`                     | `{ productName, derivedFromBranchId, estimatedMarketSizeInCents, readinessMinMonths, readinessMaxMonths }` | `bigint` money. `201`                                                                 |
+| `GET …/contributors` · `POST`/`PATCH …/contributors/me`    | `{ compensationPreference, contributionSummary? }`                                                         | `200`/`201`                                                                           |
+| `POST …/effort-logs`                                       | `{ minutes, branchId, note }`                                                                              | `requireIdentifiedUser` + limiter. `201`                                              |
 
 ---
 
@@ -1916,7 +1927,7 @@ POST …/daily-logs/:id/submit      → 202
 - Every project-scoped route re-checks membership in the **service** via `requireProjectRole`;
   failure → `NOT_FOUND` → `404`, never `403`, so ids cannot be probed.
 - **No request body carries a price, equity share, slice count, hour count, score, verdict, or
-  status.** The two deliberate exceptions are both *negotiated inputs*, not derived outputs, and both
+  status.** The two deliberate exceptions are both _negotiated inputs_, not derived outputs, and both
   are documented as such: a founder's advertised equity band (§5) and a member-accepted fair market
   rate (§9).
 - Pledges accept `{ amountInCents }` only, and the server still re-bounds it. Escrow releases accept
@@ -2024,15 +2035,15 @@ project-role concept, and no `escrowedSlices`.
 
 Do **not** implement the domains in parallel — §9 defines the numbers every other section reads.
 
-| Phase | Scope | Why here |
-| --- | --- | --- |
-| **0. Unblock** | `bearer()` plugin + multi-origin passkey/OAuth (§4a) · `requireIdentifiedUser` · `project_member` + `requireProjectRole` · `src/lib/money.ts` · `src/lib/canonical-hash.ts` · pg-boss + the worker process · shared enums (§4d) | Every phase below depends on all of it. Native clients are blocked entirely until the auth items land |
-| **1. Projects & team** (§5) | Idea → project → publish → team → roles → applications | The spine. Everything else FKs to `research_project` |
-| **2. Workshop & daily logs** (§8) | Board, files, chat, log capture + transcription | Produces the input §9 consumes |
-| **3. Proof of Effort** (§9) | Rate lock → claims → pipeline → disputes → ledger → snapshots → bake | The hardest and highest-value. Its patterns get copied |
-| **4. Funding & escrow** (§7) | Rounds, pledges, provider, ledger, releases | Highest stakes; depends on §9 verdicts for release gating. **Crowdfunding only** — equity/venture stay flag-disabled until Phase 4 of the business sequence |
-| **5. Discovery** (§6) | Clusters, scoring jobs, insights, talent | Independent; deferrable without blocking anything |
-| **6. Project Immortal** (§10) | Branches, papers, posts, moderation | Largest surface, lowest coupling. Needs the moderator role first |
+| Phase                             | Scope                                                                                                                                                                                                                           | Why here                                                                                                                                                    |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0. Unblock**                    | `bearer()` plugin + multi-origin passkey/OAuth (§4a) · `requireIdentifiedUser` · `project_member` + `requireProjectRole` · `src/lib/money.ts` · `src/lib/canonical-hash.ts` · pg-boss + the worker process · shared enums (§4d) | Every phase below depends on all of it. Native clients are blocked entirely until the auth items land                                                       |
+| **1. Projects & team** (§5)       | Idea → project → publish → team → roles → applications                                                                                                                                                                          | The spine. Everything else FKs to `research_project`                                                                                                        |
+| **2. Workshop & daily logs** (§8) | Board, files, chat, log capture + transcription                                                                                                                                                                                 | Produces the input §9 consumes                                                                                                                              |
+| **3. Proof of Effort** (§9)       | Rate lock → claims → pipeline → disputes → ledger → snapshots → bake                                                                                                                                                            | The hardest and highest-value. Its patterns get copied                                                                                                      |
+| **4. Funding & escrow** (§7)      | Rounds, pledges, provider, ledger, releases                                                                                                                                                                                     | Highest stakes; depends on §9 verdicts for release gating. **Crowdfunding only** — equity/venture stay flag-disabled until Phase 4 of the business sequence |
+| **5. Discovery** (§6)             | Clusters, scoring jobs, insights, talent                                                                                                                                                                                        | Independent; deferrable without blocking anything                                                                                                           |
+| **6. Project Immortal** (§10)     | Branches, papers, posts, moderation                                                                                                                                                                                             | Largest surface, lowest coupling. Needs the moderator role first                                                                                            |
 
 This matches PROOF_OF_EFFORT_SPEC.md §1's business sequencing: the AI Chief of Staff (§9) is the
 Phase-1 revenue product; reward crowdfunding (§7) is Year 1; equity crowdfunding is Year 3+ and
@@ -2043,7 +2054,7 @@ stays API-disabled until then.
 ## 17. Verification (when the backend phase begins)
 
 1. `pnpm db:generate && pnpm db:migrate`, then hand-add what Drizzle cannot express: the `COLLATE
-   "C"` alterations (§8, §10), the append-only triggers and revoked grants (§4f, §7), and the
+"C"` alterations (§8, §10), the append-only triggers and revoked grants (§4f, §7), and the
    partial unique indexes.
 2. **Determinism suite, before anything else ships.** Run `recompute-equity-snapshot` 1,000 times
    with input rows shuffled and assert byte-identical `equity_snapshot_share` output. Assert
@@ -2056,10 +2067,10 @@ stays API-disabled until then.
    different currency's magnitude, replay the pledge — assert the server charges its own value and
    that every rejected key in §7 returns `422`. Repeat against the native clients with a proxy.
 5. **Four-eyes test.** Founder requests a release and attempts to approve it → `422
-   SELF_APPROVAL_FORBIDDEN`. Founder grants themselves `admin` → rejected.
+SELF_APPROVAL_FORBIDDEN`. Founder grants themselves `admin` → rejected.
 6. **Dispute lifecycle.** Verify a claim, confirm nothing is in the ledger; let the window expire and
    confirm exactly one entry appears; re-run the sweep and confirm it is a no-op (idempotency);
-   dispute another and confirm slices show as escrowed and *outside* `totalSlices`.
+   dispute another and confirm slices show as escrowed and _outside_ `totalSlices`.
 7. **Zero-trust sweep.** `grep` every Zod schema for `userId|equity|slice|Cents|score|verdict|status`
    and confirm each hit is one of the two documented negotiated-input exceptions.
 8. **Cascade sweep.** For every FK into a financial or audit table, assert `onDelete` is `restrict`

@@ -461,7 +461,9 @@ export async function createProblemSubmission(
  */
 export async function checkCategoryUsable(
   categoryId: string,
-): Promise<{ readonly usable: true } | { readonly usable: false; readonly error: ProblemClusterError }> {
+): Promise<
+  { readonly usable: true } | { readonly usable: false; readonly error: ProblemClusterError }
+> {
   const [row] = await db
     .select({ status: researchCategory.status })
     .from(researchCategory)

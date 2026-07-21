@@ -61,9 +61,7 @@ interface ScoredCandidate {
  * The id is unique, so the order is total and no tie can survive to be broken by row
  * order — which is exactly what §4c rule 4 requires of anything a job depends on.
  */
-export function selectBestCandidate(
-  scored: readonly ScoredCandidate[],
-): ScoredCandidate | null {
+export function selectBestCandidate(scored: readonly ScoredCandidate[]): ScoredCandidate | null {
   let best: ScoredCandidate | null = null;
 
   for (const current of scored) {

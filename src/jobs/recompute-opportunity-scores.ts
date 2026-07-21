@@ -106,7 +106,10 @@ export async function handleRecomputeOpportunityScores(rawPayload: unknown): Pro
       .select({ submissionCount: sql<number>`count(*)::int` })
       .from(problemSubmission)
       .where(
-        and(eq(problemSubmission.categoryId, cluster.categoryId), lt(problemSubmission.createdAt, asOf)),
+        and(
+          eq(problemSubmission.categoryId, cluster.categoryId),
+          lt(problemSubmission.createdAt, asOf),
+        ),
       );
 
     const [linkedProjects] = await db

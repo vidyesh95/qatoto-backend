@@ -75,12 +75,7 @@ describe("requirePlatformCapability", () => {
   });
 
   it("grants an admin everything", async () => {
-    for (const capability of [
-      "moderate_taxonomy",
-      "moderate_clusters",
-      "moderate_content",
-      "audit_escrow",
-    ] as const) {
+    for (const capability of ["moderate_taxonomy", "moderate_clusters", "moderate_content", "audit_escrow"] as const) {
       stubPlatformRole("admin");
       expect((await requirePlatformCapability("user-1", capability)).success).toBe(true);
     }

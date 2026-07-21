@@ -155,9 +155,7 @@ export interface MarketInsightPage {
  * work in progress, and the partial index this query rides is declared on exactly that
  * predicate.
  */
-export async function listMarketInsights(
-  filter: MarketInsightFilter,
-): Promise<MarketInsightPage> {
+export async function listMarketInsights(filter: MarketInsightFilter): Promise<MarketInsightPage> {
   const conditions = [isNotNull(marketInsight.publishedAt)];
   if (filter.regionSlug) conditions.push(eq(discoveryRegion.slug, filter.regionSlug));
   if (filter.categorySlug) conditions.push(eq(researchCategory.slug, filter.categorySlug));
@@ -206,7 +204,9 @@ export async function listMarketInsights(
       // look like a data problem rather than the code problem it actually is
       // (CLAUDE.md §3.3 — unrecoverable programmer error).
       if (row.publishedAt === null) {
-        throw new Error(`listMarketInsights: insight ${row.id} passed the published filter with a null publishedAt`);
+        throw new Error(
+          `listMarketInsights: insight ${row.id} passed the published filter with a null publishedAt`,
+        );
       }
       return { ...row, publishedAt: row.publishedAt.toISOString() };
     }),

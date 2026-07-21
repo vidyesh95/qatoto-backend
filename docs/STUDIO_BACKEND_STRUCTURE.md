@@ -98,9 +98,9 @@ mutation the backend **re-checks everything, every request, by itself**:
   mean **Qatoto-surface visibility only** — they hide the row in Qatoto's own lists; they do
   **not** protect the video. Claiming otherwise in the UI would be a false security promise. The
   server-minted playback JWT returns with self-hosting ([Appendix A](#appendix-a--deferred-self-hosted-video-livepeer-direct-upload)) —
-  the *principle* (gating is decided server-side, never self-issued by the client) is unchanged.
+  the _principle_ (gating is decided server-side, never self-issued by the client) is unchanged.
 - **Publish is gated server-side.** "Save draft" vs "Publish" is UX; the server decides whether a
-  video is *complete enough* to go live (title, `uploadStatus = ready`, a visibility tier) at
+  video is _complete enough_ to go live (title, `uploadStatus = ready`, a visibility tier) at
   `POST /videos/:id/publish`, and rejects with `422` otherwise.
 - **Anime approval is server-side only.** An anime episode never self-publishes. On publish it
   goes to `reviewStatus: pending`; only a `moderator`/`admin` (role re-derived from the session,
@@ -146,7 +146,7 @@ column or child table in §4.
 | Frontend field (`StudioVideo`)                             | Backend field                                                  | Notes                                                    |
 | ---------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------- |
 | `youtubeUrl`                                               | `youtubeVideoId`                                               | the **11-char id**; parsed + oEmbed-verified server-side |
-| *(implicit: `youtubeUrl === ""`)*                          | `videoSource` (enum)                                           | `youtube`\|`hosted` — explicit enum, not a sentinel      |
+| _(implicit: `youtubeUrl === ""`)_                          | `videoSource` (enum)                                           | `youtube`\|`hosted` — explicit enum, not a sentinel      |
 | `title`                                                    | `title`                                                        | 1–100 chars (modal shows a 0/100 counter)                |
 | `description`                                              | `description`                                                  | nullable                                                 |
 | `videoType`                                                | `videoType` (enum)                                             | `pitch`\|`demo`\|`update`\|`ama`\|`anime_episode`        |
@@ -859,7 +859,7 @@ still exists:
 
 - **No gating. At all.** The video is public on youtube.com. `investor_only` and NDA-gated
   playback are **impossible**, which is why the backend rejects them (`422
-  GATING_UNSUPPORTED_FOR_SOURCE`, §0/§6) instead of implying protection it can't deliver.
+GATING_UNSUPPORTED_FOR_SOURCE`, §0/§6) instead of implying protection it can't deliver.
   `private`/`unlisted` hide the Qatoto row, nothing more. **If confidential pitch video is a
   product requirement, this design does not meet it** — that requirement is what unblocks
   Appendix A.
@@ -1052,7 +1052,7 @@ Notes the doc pins down:
   a deleted video passes Zod and fails at the oEmbed step in the service (§9). Both layers are
   needed — don't collapse them.
 - **The gated-tier rejection lives in the service, not the schema.** `visibility: "investor_only"`
-  and `isNdaRequired: true` are individually valid; they're only illegal *in combination with*
+  and `isNdaRequired: true` are individually valid; they're only illegal _in combination with_
   `videoSource = "youtube"`. That's a cross-field rule over persisted state, so it belongs where
   the source is known — enforced on create, on `PATCH`, and again on publish, because a row can
   be created `public` and edited toward `investor_only` later.
@@ -1184,7 +1184,7 @@ Three steps, all synchronous. There is no background job, no polling, no callbac
 
 1. **Parse (`POST /videos`).** `extractYoutubeVideoId(youtubeUrl)` reduces the client string to an
    11-char id, rejecting anything whose hostname isn't on the allowlist. No id → `422
-   INVALID_YOUTUBE_URL`. **This is a security boundary, not a convenience** (§0): everything
+INVALID_YOUTUBE_URL`. **This is a security boundary, not a convenience** (§0): everything
    downstream handles an id, never the client's string.
 
 2. **Verify (oEmbed).** `verifyYoutubeVideo(videoId)` calls
@@ -1198,7 +1198,7 @@ Three steps, all synchronous. There is no background job, no polling, no callbac
     - **`200`** → the video exists, is public, and permits embedding. Take `thumbnail_url` and
       `title` from the payload. This is the only accepted outcome.
     - **`401` / `403` / `404`** → deleted, private, or embedding-disabled → `422
-      YOUTUBE_VIDEO_UNAVAILABLE`. The creator must fix the link.
+YOUTUBE_VIDEO_UNAVAILABLE`. The creator must fix the link.
     - **timeout / network error / 5xx** → `502 YOUTUBE_VERIFY_FAILED`. Not the creator's fault;
       the client may retry. Bound the call with `YOUTUBE_OEMBED_TIMEOUT_MS` so a hanging request
       can't hold an Express worker.
@@ -1322,7 +1322,7 @@ through staff review before appearing in `/anime` — the boundary specced in
   `hasFundingCallToAction` link fields, but the **pitch** (`/studio/pitches`) and **funding**
   (`/studio/funding`) products are separate subsystems with their own tables and docs. This doc owns
   the video-side attachment, not the pitch/funding domain.
-- **Role applications.** `video_open_role` stores the roles; viewers *applying* to a role
+- **Role applications.** `video_open_role` stores the roles; viewers _applying_ to a role
   (applications, review, messaging) is a future feature.
 - **NDA / investor identity.** `isNdaRequired` and `investor_only` are **rejected** for YouTube
   rows (§0). Verifying investor identity and recording NDA acceptance is a server-side flow to be
@@ -1406,7 +1406,7 @@ authoritative on the source question until it is refreshed.
     - `GET /videos/:id/playback-token` on any YouTube row → `409 NO_TOKEN_REQUIRED`
     - a non-moderator hitting `/admin/review` → `403`
     - oEmbed unreachable (block it in `/etc/hosts` or set a 1 ms timeout) → `502
-      YOUTUBE_VERIFY_FAILED`, and **no row is written**
+YOUTUBE_VERIFY_FAILED`, and **no row is written**
 
 ---
 
@@ -1431,7 +1431,7 @@ authoritative on the source question until it is refreshed.
 
 The design goal was to keep running cost at or near zero at low volume, scaling linearly after.
 
-1. **Bytes never transit Express.** `POST /videos` calls the provider's *request-upload* and
+1. **Bytes never transit Express.** `POST /videos` calls the provider's _request-upload_ and
    returns a **short-lived, resumable upload URL** (Livepeer TUS endpoint). The browser uploads
    the file **directly to the provider** — the backend only ever moves small JSON. So there is
    **no server egress billed, no proxy bandwidth (which would be 2× — in then out), no multi-GB
@@ -1476,7 +1476,7 @@ Livepeer is **one implementation behind a seam**, so switching later is cheap an
 
 - **The frontend never names the provider.** It calls our `/videos` endpoints and uploads to the
   **opaque URL** we return. Swapping the backend provider leaves the frontend untouched (only the
-  client upload lib changes if the *protocol* changes — TUS vs presigned PUT).
+  client upload lib changes if the _protocol_ changes — TUS vs presigned PUT).
 
 - **One seam — `src/lib/videoProvider.ts`** — an interface every provider implements:
 
