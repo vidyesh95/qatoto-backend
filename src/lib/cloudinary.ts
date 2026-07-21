@@ -349,3 +349,101 @@ export async function deleteProjectCover(
     };
   }
 }
+
+/**
+ * Custom video thumbnails. ONE asset per video, overwritten in place — the project-cover
+ * shape rather than the product-image shape, because a video has exactly one thumbnail
+ * and a re-upload should replace it rather than accumulate orphans.
+ *
+ * NOTE WHAT THIS IS NOT. There is no video upload path here and there must not be: the
+ * shipped design stores an 11-character YouTube id and never touches video bytes
+ * (STUDIO_BACKEND_STRUCTURE.md §5). Only `resource_type: "image"` is ever used.
+ *
+ * The DEFAULT thumbnail is YouTube's own oEmbed `thumbnail_url` and costs nothing —
+ * these helpers run only when a creator uploads their own, which is why `video`
+ * carries `hasCustomThumbnail`: without it, DELETE cannot tell whether we own an asset
+ * to destroy and would either orphan it or 503 on a box with no Cloudinary credentials.
+ */
+const VIDEO_THUMBNAIL_FOLDER = "qatoto/video-thumbnails";
+
+/** The stable, deterministic public id for a video's custom thumbnail. */
+export function videoThumbnailPublicId(videoId: string): string {
+  return `${VIDEO_THUMBNAIL_FOLDER}/${videoId}/thumbnail`;
+}
+
+/**
+ * Upload a custom thumbnail from an already-validated/re-encoded buffer and return its
+ * canonical secure URL. The buffer MUST be checked and normalized by the caller first
+ * (CLAUDE.md §1.1) — this layer trusts it.
+ */
+export async function uploadVideoThumbnail(
+  videoId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: videoThumbnailPublicId(videoId),
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Delete a video's custom thumbnail. Treated as success when the asset is already gone —
+ * the desired end state is reached either way.
+ */
+export async function deleteVideoThumbnail(
+  videoId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
+      videoThumbnailPublicId(videoId),
+      { invalidate: true },
+    );
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}

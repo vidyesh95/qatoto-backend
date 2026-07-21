@@ -20,6 +20,7 @@ import productsRouter from "#src/routes/products.routes.js";
 import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
 import researchProjectsRouter from "#src/routes/research-projects.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
+import videosRouter from "#src/routes/videos.routes.js";
 
 const app = express();
 
@@ -92,6 +93,11 @@ app.use("/research-projects", parseLongFormJsonBody);
 // description, and PUT /discovery/talent/me carries a bio plus skills plus compensation
 // asks. Both are comfortably over 10 kb once the text is not ASCII.
 app.use("/discovery", parseLongFormJsonBody);
+// Same again for /videos: CreateVideoSchema permits a 5,000-character description plus
+// up to 20 sector tags, 30 tags, six 2,048-character URLs and the whole anime block.
+// MUST stay ABOVE the global express.json() below — body-parser sets `req._body` on the
+// first parse, so a larger parser mounted after it is a silent no-op.
+app.use("/videos", parseLongFormJsonBody);
 
 // Body parsing with size limits to prevent payload abuse — for YOUR routes only.
 app.use(express.json({ limit: "10kb" }));
@@ -108,6 +114,10 @@ app.use("/handles", handlesRouter);
 app.use("/products", productsRouter);
 app.use("/research-projects", researchProjectsRouter);
 app.use("/discovery", discoveryRouter);
+// Creator Studio. The anime review queue is nested at /videos/admin/review rather than a
+// root /admin, matching /discovery/admin/* — one domain's moderation surface should not
+// claim the global namespace.
+app.use("/videos", videosRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,
 // exactly as the spec mounts the funding router at "/".
 app.use("/", researchCatalogRouter);

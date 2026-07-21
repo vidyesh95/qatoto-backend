@@ -285,3 +285,50 @@ export const discoveryModerationLimiter = rateLimit({
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
 });
+
+/**
+ * POST /videos — the ONLY route in the codebase that makes an outbound request on the
+ * request path (the oEmbed verify, STUDIO_BACKEND_STRUCTURE.md §9), so this limiter is
+ * that call's budget as much as it is abuse control.
+ *
+ * It is also LOAD-BEARING FOR A SCHEMA DECISION. §4 deliberately leaves
+ * `video.youtubeVideoId` indexed but NOT unique, because two Qatoto rows may legitimately
+ * point at one YouTube video, and defers abuse control ("one account spamming the feed
+ * with one video") to exactly this limiter. Removing it re-opens that hole.
+ */
+export const videoCreateLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST /videos/:videoId/thumbnail — a 5 MB buffer, a sharp decode/re-encode and a
+ * Cloudinary round-trip. Same shape and reasoning as projectCoverUploadLimiter: a video
+ * has exactly one thumbnail and re-uploading it is rare.
+ */
+export const videoThumbnailUploadLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * /videos/admin/review* — staff throughput, mirroring discoveryModerationLimiter. A
+ * moderator legitimately works through a queue quickly, so this is generous; it exists
+ * to bound a COMPROMISED staff session, not to pace an honest one.
+ */
+export const contentReviewLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
