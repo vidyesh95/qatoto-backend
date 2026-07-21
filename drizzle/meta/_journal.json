@@ -78,6 +78,13 @@
       "when": 1784569181301,
       "tag": "0010_peaceful_rogue",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784616369478,
+      "tag": "0011_long_menace",
+      "breakpoints": true
     }
   ]
 }

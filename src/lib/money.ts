@@ -17,6 +17,8 @@
  *      TypeScript does every division.
  */
 
+import { compareUtf8Bytes } from "#src/lib/ordering.js";
+
 /** 10000 basis points = 100%. Basis points give 0.01% resolution and sum exactly. */
 export const BASIS_POINTS_TOTAL = 10_000;
 
@@ -48,18 +50,6 @@ export function divRoundHalfAwayFromZero(numerator: bigint, denominator: bigint)
 
   // >=, not >: an exact half rounds AWAY from zero, which is what Postgres does.
   return absoluteRemainderDoubled >= absoluteDenominator ? quotient + resultSign : quotient;
-}
-
-/**
- * Compares two strings by their UTF-8 BYTES, ascending.
- *
- * Deliberately not `a < b`: JavaScript compares UTF-16 code units, so an astral-plane
- * character (emoji, rare CJK) orders differently than it does under Postgres
- * `COLLATE "C"`. A tie-break that disagrees across those two places moves a basis
- * point, which changes an equity share, which changes a hash.
- */
-function compareUtf8Bytes(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 interface ApportionmentSlot {

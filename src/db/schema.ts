@@ -16,6 +16,10 @@ import {
   pgEnum,
   customType,
 } from "drizzle-orm/pg-core";
+// Self-referential and mutually-referential FKs need this annotation or TypeScript
+// recurses forever inferring the column type. Used by discoveryRegion.parentRegionId,
+// problemCluster.mergedIntoClusterId and problemCluster.currentScoreSnapshotId.
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 // Case-insensitive text (Postgres `citext`). Used for the email columns so that
 // equality AND the UNIQUE constraint compare case-insensitively: two providers
@@ -466,6 +470,11 @@ export const effortVerificationStatusEnum = pgEnum("effort_verification_status",
   "unverified", // no digital receipts → zero slices
 ]);
 
+// Shared by market insights and demand signals (§6), and by §7's investor-confidence
+// signal later. Declared in the §4d shared block rather than the §6 domain block because
+// more than one section reads it.
+export const trendDirectionEnum = pgEnum("trend_direction", ["up", "down", "flat"]);
+
 // --- Domain enums (§5)
 
 export const researchProjectStatusEnum = pgEnum("research_project_status", [
@@ -511,6 +520,114 @@ export const memberIntervalEndReasonEnum = pgEnum("member_interval_end_reason", 
   "removed", // removed by a founder
 ]);
 
+// --- Domain enums (§6 discovery)
+
+// The pin asset a client renders for a category on the problem map.
+//
+// Server-owned, and moderator-assigned at approval time. It lives here rather than on
+// the client because the frontend currently keys its PIN_ICON_SRC_BY_CATEGORY map on the
+// DISPLAY LABEL — so a moderator renaming "Water & Sanitation" to "Water, Sanitation &
+// Hygiene" silently drops every pin on the map to the default icon, with no error
+// anywhere. A stable key cannot be renamed by an editorial decision.
+export const categoryPinIconKeyEnum = pgEnum("category_pin_icon_key", [
+  "water",
+  "energy",
+  "health",
+  "agriculture",
+  "housing",
+  "transport",
+  "waste",
+  "connectivity",
+  "manufacturing",
+  "education",
+  "other",
+]);
+
+// The lifecycle of ONE person's raw report, from submission to cluster attachment.
+//
+// Geocoding and clustering both run in the async job (§4e), never in the request, so a
+// submission is observable in an un-geocoded state and the states must be distinct: a
+// submission that could not be geocoded is a DIFFERENT problem from one still queued,
+// and only the former needs a human.
+export const problemSubmissionStatusEnum = pgEnum("problem_submission_status", [
+  "queued", // accepted, awaiting the geocode-and-cluster job
+  "clustered", // geocoded and attached to a problem_cluster
+  "geocode_failed", // the location string resolved to nothing — needs a human, not a retry
+  "rejected", // moderator judged it spam; excluded from every count, never deleted
+  "failed", // the job dead-lettered after bounded retries
+]);
+
+export const problemClusterStatusEnum = pgEnum("problem_cluster_status", [
+  "active",
+  "merged", // absorbed by an approved merge proposal; mergedIntoClusterId names the survivor
+  "hidden", // moderator-hidden; excluded from public reads, NOT deleted
+]);
+
+export const clusterMergeProposalStatusEnum = pgEnum("cluster_merge_proposal_status", [
+  "pending",
+  "approved",
+  "rejected",
+  "superseded", // one side was itself merged elsewhere first
+]);
+
+export const clusterMergeProposalSourceEnum = pgEnum("cluster_merge_proposal_source", [
+  "job_similarity",
+  "moderator",
+]);
+
+export const problemClusterLinkSourceEnum = pgEnum("problem_cluster_link_source", [
+  "origin", // the project was BORN from this cluster — at most one per project
+  "founder_declared", // an additional cluster the founder says the project addresses
+  "moderator",
+]);
+
+export const discoveryRegionKindEnum = pgEnum("discovery_region_kind", [
+  "global",
+  "macro_region",
+  "country",
+]);
+
+// Whether a cached geocode resolved. A miss is cached TOO — see geocodeCache: re-asking a
+// provider that already said "no such place" is a rate-limit burn that always fails.
+export const geocodeStatusEnum = pgEnum("geocode_status", ["resolved", "not_found"]);
+
+// `MarketInsight.statValue` is the sneakiest field on the surface: the mocks carry
+// "+34%", "68M people", "3× coverage" and "-22%" in ONE string column. It decomposes into
+// a KIND (what sort of magnitude this is) and a UNIT (what it counts), paired by a CHECK
+// so a `multiplier` can never render as "3 people".
+export const marketInsightStatKindEnum = pgEnum("market_insight_stat_kind", [
+  "percent_change", // "+34%", "-22%" — SIGNED delta, the only kind that may be negative
+  "percent_level", // "31%" — an absolute rate, never negative, never above 100%
+  "absolute_count", // "68M people", "250K tonnes"
+  "multiplier", // "3× coverage" — strictly positive
+]);
+
+export const marketInsightStatUnitKeyEnum = pgEnum("market_insight_stat_unit_key", [
+  "percent",
+  "multiple",
+  "people",
+  "households",
+  "tonnes",
+  "litres",
+  "hectares",
+  // DOLLARS, not cents, and this is deliberate — see marketInsight.statValueMilli.
+  "usd_dollars",
+  "count", // dimensionless fallback
+]);
+
+export const talentAvailabilityEnum = pgEnum("talent_availability", [
+  "open_to_work",
+  "open_to_offers",
+  "unavailable",
+]);
+
+// An opt-in directory defaults to NOT listed. Visibility is never a side effect of an
+// edit — publishing is its own explicit action, so a listing can never appear by accident.
+export const talentProfileVisibilityEnum = pgEnum("talent_profile_visibility", [
+  "private",
+  "published",
+]);
+
 /**
  * The project taxonomy. A TABLE, not a pgEnum, because the wizard's step 1 explicitly
  * lets a user create a category. A client-writable taxonomy is a spam surface, so
@@ -536,6 +653,12 @@ export const researchCategory = pgTable(
     label: text("label").notNull(),
     // Server-owned. Seed rows insert `approved`; user-minted rows `pending`.
     status: researchCategoryStatusEnum("status").default("pending").notNull(),
+    // Which pin asset the problem map renders for this category (§6).
+    //
+    // NOT NULL DEFAULT 'other' so a user-minted category gets a working pin immediately,
+    // without waiting on a moderator. Absent from every create schema — a minter must not
+    // be able to choose their own map iconography — and assigned on approval instead.
+    pinIconKey: categoryPinIconKeyEnum("pin_icon_key").default("other").notNull(),
     // NULL for seeded rows. `set null`, NOT cascade (§4f) — deleting a user must not
     // delete a taxonomy every other project points at.
     createdByUserId: text("created_by_user_id").references(() => user.id, {
@@ -1224,6 +1347,969 @@ export const projectStageTransition = pgTable(
   ],
 );
 
+// ============================================================================
+// §6 DISCOVERY — problem clusters, knowledge hub, talent directory
+// ============================================================================
+
+/**
+ * Region lookup, so the demand leaderboard can JOIN rather than string-match (§6).
+ *
+ * A tree: `global` → `macro_region` ("East Africa") → `country` ("Kenya"). Only country
+ * rows carry an ISO 3166-1 alpha-2 code, which is the landing target for reverse
+ * geocoding — resolve a coordinate to alpha-2, find that row, walk parents for the
+ * macro-region rollup the knowledge hub groups by.
+ *
+ * Seeded, with no write endpoint: a client-writable region table would let anyone mint
+ * "Atlantis" and split the leaderboard.
+ */
+export const discoveryRegion = pgTable(
+  "discovery_region",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // The stable ?region= filter key across all three clients.
+    slug: text("slug").notNull(),
+    label: text("label").notNull(),
+    kind: discoveryRegionKindEnum("kind").notNull(),
+    parentRegionId: text("parent_region_id").references((): AnyPgColumn => discoveryRegion.id, {
+      onDelete: "restrict",
+    }),
+    // `text` + a regex CHECK rather than char(2): bpchar blank-pads on comparison, which
+    // makes 'KE' and 'KE ' equal in some contexts and not others.
+    countryCode: text("country_code"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("discovery_region_slug_unq").on(table.slug),
+    uniqueIndex("discovery_region_countryCode_unq")
+      .on(table.countryCode)
+      .where(sql`country_code IS NOT NULL`),
+    index("discovery_region_parentRegionId_idx").on(table.parentRegionId),
+    index("discovery_region_kind_idx").on(table.kind),
+    check(
+      "discovery_region_country_ck",
+      sql`(kind = 'country') = (country_code IS NOT NULL)
+          AND (country_code IS NULL OR country_code ~ '^[A-Z]{2}$')`,
+    ),
+    // Exactly one root, and it is the global row.
+    check("discovery_region_root_ck", sql`(kind = 'global') = (parent_region_id IS NULL)`),
+  ],
+);
+
+/**
+ * The canonical skill vocabulary, replacing the frontend's free-text `string[]`.
+ *
+ * THIS TABLE IS A BUG FIX. `talent-filter-grid.tsx` filters with
+ * `skills.some((skill) => skill.includes(chipText))` — a SUBSTRING match, so a "Water"
+ * chip matches "Water Polo". Moving to slug equality makes that class of bug
+ * unrepresentable rather than merely fixed.
+ *
+ * Seeded. There is no POST /discovery/skills in §11b, so there is no spam surface here
+ * and therefore no moderation status — the difference from research_category is
+ * deliberate, not an oversight.
+ */
+export const discoverySkill = pgTable(
+  "discovery_skill",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    label: text("label").notNull(),
+    // `set null` — taxonomy rule (§4f). Deleting a category must not delete a skill.
+    categoryId: text("category_id").references(() => researchCategory.id, {
+      onDelete: "set null",
+    }),
+    // Retirement WITHOUT a DELETE: talent_profile_skill references this with `restrict`,
+    // so a curated skill can never vanish out from under a published profile.
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("discovery_skill_slug_unq").on(table.slug),
+    index("discovery_skill_categoryId_idx").on(table.categoryId),
+    index("discovery_skill_active_label_idx")
+      .on(table.label, table.id)
+      .where(sql`is_active`),
+  ],
+);
+
+/**
+ * Geocode results, cached forever, keyed on the normalized query string.
+ *
+ * THIS TABLE IS THE DETERMINISM ANCHOR OF THE WHOLE SECTION, and it is not an
+ * optimization. §4c requires every job to be a pure function of `(data, asOf)` — but an
+ * external geocoder is NOT a pure function: providers re-tile, re-rank and re-license
+ * their data, so the same query returns different coordinates months apart. Re-running
+ * `geocode-and-cluster-submission` would then silently move a submission into a different
+ * cluster and change a published opportunity score, with no code change and no audit
+ * trail.
+ *
+ * So: geocode ONCE, store the result, and replay from this row forever. The provider is
+ * consulted only on a cache miss. A re-run reads the same row and produces the same
+ * cluster assignment, which is what makes the job replayable at all.
+ *
+ * MISSES ARE CACHED TOO (`not_found`). Re-asking a provider that already said "no such
+ * place" burns the rate limit on a call that always fails, and for Nominatim's 1 req/s
+ * budget that is the difference between a working queue and a stalled one.
+ */
+export const geocodeCache = pgTable(
+  "geocode_cache",
+  {
+    // The PK IS the lookup key: the caller's location text, normalized (NFKC, lowercased,
+    // collapsed whitespace) so "Nakuru County, Kenya" and "  nakuru  county,kenya " share
+    // one row and one provider call.
+    normalizedQuery: text("normalized_query").primaryKey(),
+    // The raw text as the reporter typed it, kept for support and for re-geocoding under
+    // a future provider without losing what was actually asked.
+    originalQuery: text("original_query").notNull(),
+    status: geocodeStatusEnum("status").notNull(),
+    // NULL when status='not_found'. Integer microdegrees (§6) — never float.
+    latitudeMicrodegrees: integer("latitude_microdegrees"),
+    longitudeMicrodegrees: integer("longitude_microdegrees"),
+    countryCode: text("country_code"),
+    // Resolved from countryCode at cache-write time. `restrict`: a region row that
+    // submissions point at through this cache must not disappear.
+    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    // A human-readable place name FROM THE PROVIDER, e.g. "Nakuru County, Kenya". This is
+    // what the map renders — never the reporter's own typing, which is unverified.
+    resolvedLabel: text("resolved_label"),
+    // Which provider produced this, so a provider swap is auditable and a targeted
+    // re-geocode can select exactly the rows one provider wrote.
+    provider: text("provider").notNull(),
+    fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("geocode_cache_countryCode_idx").on(table.countryCode),
+    index("geocode_cache_status_idx").on(table.status),
+    check(
+      "geocode_cache_resolved_shape_ck",
+      sql`(status = 'resolved') = (latitude_microdegrees IS NOT NULL)
+          AND (latitude_microdegrees IS NULL) = (longitude_microdegrees IS NULL)
+          AND (status = 'not_found' OR country_code IS NOT NULL)`,
+    ),
+    check(
+      "geocode_cache_coordinate_range_ck",
+      sql`(latitude_microdegrees IS NULL
+           OR latitude_microdegrees BETWEEN -90000000 AND 90000000)
+          AND (longitude_microdegrees IS NULL
+               OR longitude_microdegrees BETWEEN -180000000 AND 180000000)`,
+    ),
+    check(
+      "geocode_cache_country_ck",
+      sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`,
+    ),
+  ],
+);
+
+/**
+ * ONE person's raw report. Never rendered directly — the map shows clusters (§6).
+ *
+ * The single most important modelling decision in this domain: `ProblemReport.reportCount
+ * = 342` means 342 DIFFERENT PEOPLE reported the same problem, so the mock's
+ * `ProblemReport` is not a submission, it is a CLUSTER. Two tables, not one.
+ *
+ * Coordinates are NULLABLE and JOB-WRITTEN, which departs from §11b's request body. The
+ * report sheet collects a free-text location and has no coordinate capture at all, and
+ * §6 forbids client-claimed geography — so the server forward-geocodes `locationText`
+ * inside the job. There is no coordinate field for a client to forge because there is no
+ * coordinate field at all.
+ */
+export const problemSubmission = pgTable(
+  "problem_submission",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // Stamped from req.user.id, NEVER a body field (§13).
+    //
+    // `restrict`, not cascade: this row is the evidence behind distinctReporterCount,
+    // which is the entire sybil-resistance of the opportunity score. Account deletion is
+    // anonymization, not erasure.
+    reporterUserId: text("reporter_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => researchCategory.id, { onDelete: "restrict" }),
+    // What the reporter TYPED. Never authoritative geography — it is the geocoder's
+    // input, and the resolved label on the cluster is what clients render.
+    locationText: text("location_text").notNull(),
+    // --- Everything below is JOB-WRITTEN. None of it appears in any request schema.
+    latitudeMicrodegrees: integer("latitude_microdegrees"),
+    longitudeMicrodegrees: integer("longitude_microdegrees"),
+    countryCode: text("country_code"),
+    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    status: problemSubmissionStatusEnum("status").default("queued").notNull(),
+    clusterId: text("cluster_id").references((): AnyPgColumn => problemCluster.id, {
+      onDelete: "restrict",
+    }),
+    clusteredAt: timestamp("clustered_at"),
+    // 0..10000 basis points. The text similarity that justified the attach — auditable,
+    // and the input a merge proposal is later re-derived from.
+    clusterMatchBasisPoints: integer("cluster_match_basis_points"),
+    // Why geocoding failed, for the human who has to look at it. NULL otherwise.
+    geocodeFailureReason: text("geocode_failure_reason"),
+    // MODERATOR-owned. The single predicate the score job filters on, so a sybil ring can
+    // be struck from the count without deleting the evidence of it.
+    countsTowardDistinctReporters: boolean("counts_toward_distinct_reporters")
+      .default(true)
+      .notNull(),
+    moderationNote: text("moderation_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("problem_submission_clusterId_createdAt_idx").on(
+      table.clusterId,
+      table.createdAt,
+      table.id,
+    ),
+    index("problem_submission_reporterUserId_createdAt_idx").on(
+      table.reporterUserId,
+      table.createdAt,
+      table.id,
+    ),
+    // The job's work queue. Partial, so it stays tiny forever regardless of table size.
+    index("problem_submission_queued_idx")
+      .on(table.createdAt, table.id)
+      .where(sql`status = 'queued'`),
+    // THE clustering probe: a category-scoped bounding-box scan. This index is what
+    // replaces PostGIS — leading categoryId, then latitude, then longitude.
+    index("problem_submission_category_bbox_idx").on(
+      table.categoryId,
+      table.latitudeMicrodegrees,
+      table.longitudeMicrodegrees,
+    ),
+    index("problem_submission_regionId_idx").on(table.regionId),
+    check(
+      "problem_submission_coordinate_range_ck",
+      sql`(latitude_microdegrees IS NULL
+           OR latitude_microdegrees BETWEEN -90000000 AND 90000000)
+          AND (longitude_microdegrees IS NULL
+               OR longitude_microdegrees BETWEEN -180000000 AND 180000000)
+          AND (latitude_microdegrees IS NULL) = (longitude_microdegrees IS NULL)`,
+    ),
+    check(
+      "problem_submission_country_ck",
+      sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`,
+    ),
+    // Illegal states unrepresentable: 'clustered' IFF a cluster and a timestamp, and a
+    // clustered row must have coordinates (it cannot have been placed without them).
+    check(
+      "problem_submission_cluster_shape_ck",
+      sql`(status = 'clustered') = (cluster_id IS NOT NULL)
+          AND (cluster_id IS NULL) = (clustered_at IS NULL)
+          AND (cluster_id IS NULL OR latitude_microdegrees IS NOT NULL)`,
+    ),
+    check(
+      "problem_submission_match_ck",
+      sql`cluster_match_basis_points IS NULL
+          OR cluster_match_basis_points BETWEEN 0 AND 10000`,
+    ),
+    check(
+      "problem_submission_text_ck",
+      sql`char_length(title) BETWEEN 1 AND 160
+          AND char_length(description) BETWEEN 1 AND 5000
+          AND char_length(location_text) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
+/**
+ * The deduplicated, scored, publicly rendered entity — `ProblemReport` in the frontend.
+ *
+ * THE CENTROID IS STORED AS A SUM PLUS A COUNT, not as a mean. §4c bans running-mean
+ * updates because they are float and order-dependent: averaging in a new point drifts,
+ * and two servers replaying the same attaches in different orders diverge. Storing the
+ * sum makes the centroid a PURE FUNCTION of the multiset of member coordinates —
+ * `divRoundHalfAwayFromZero(sum, count)` — so attach order cannot change it, and an
+ * approved merge is exact integer addition of two sums.
+ */
+export const problemCluster = pgTable(
+  "problem_cluster",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // No slug: §11b addresses clusters by id, which saves an entire collision-suffix
+    // mechanism for an entity nobody links to by name.
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => researchCategory.id, { onDelete: "restrict" }),
+    // --- Geography. Job-written, recomputed from the full member set on every attach.
+    centroidLatitudeMicrodegrees: integer("centroid_latitude_microdegrees").notNull(),
+    centroidLongitudeMicrodegrees: integer("centroid_longitude_microdegrees").notNull(),
+    // The exact rational behind the centroid. bigint: 1e6 members × 180e6 = 1.8e14, far
+    // past int4 and comfortably inside 2^53.
+    centroidLatitudeSumMicrodegrees: bigint("centroid_latitude_sum_microdegrees", {
+      mode: "number",
+    }).notNull(),
+    centroidLongitudeSumMicrodegrees: bigint("centroid_longitude_sum_microdegrees", {
+      mode: "number",
+    }).notNull(),
+    centroidSampleCount: integer("centroid_sample_count").notNull(),
+    countryCode: text("country_code"),
+    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    // Reverse-geocoded from the centroid. "Nakuru County, Kenya".
+    locationLabel: text("location_label"),
+    status: problemClusterStatusEnum("status").default("active").notNull(),
+    mergedIntoClusterId: text("merged_into_cluster_id").references(
+      (): AnyPgColumn => problemCluster.id,
+      { onDelete: "restrict" },
+    ),
+    // --- THE SYBIL SURFACE (§6). A cache of
+    //     COUNT(DISTINCT reporter_user_id) FILTER (WHERE counts_toward_distinct_reporters),
+    //     over IDENTIFIED submissions only. Reconciled nightly by the score job.
+    distinctReporterCount: integer("distinct_reporter_count").default(0).notNull(),
+    submissionCount: integer("submission_count").default(0).notNull(),
+    firstReportedAt: timestamp("first_reported_at").notNull(),
+    lastReportedAt: timestamp("last_reported_at").notNull(),
+    // --- Read-side score denormalization, so ?minOpportunityScorePoints= hits an index
+    //     instead of joining to the latest snapshot.
+    //
+    // NULLABLE WITH NO DEFAULT, matching project_stats' precedent. Defaulting to 0 would
+    // render a fabricated ranking signal as fact before any job has run: an unscored
+    // cluster is UNSCORED, not worthless, and a client must be able to tell them apart.
+    currentOpportunityScorePoints: integer("current_opportunity_score_points"),
+    scoreComputedAt: timestamp("score_computed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // The map + landing teaser. Partial on the only set the public endpoint reads, and
+    // the unique tail satisfies §4c rule 4.
+    index("problem_cluster_active_score_idx")
+      .on(table.currentOpportunityScorePoints, table.id)
+      .where(sql`status = 'active'`),
+    // Viewport bounding-box query, so the map fetches what is on screen, not the planet.
+    index("problem_cluster_active_bbox_idx")
+      .on(table.centroidLatitudeMicrodegrees, table.centroidLongitudeMicrodegrees)
+      .where(sql`status = 'active'`),
+    index("problem_cluster_category_score_idx")
+      .on(table.categoryId, table.currentOpportunityScorePoints, table.id)
+      .where(sql`status = 'active'`),
+    index("problem_cluster_region_score_idx")
+      .on(table.regionId, table.currentOpportunityScorePoints, table.id)
+      .where(sql`status = 'active'`),
+    index("problem_cluster_mergedIntoClusterId_idx").on(table.mergedIntoClusterId),
+    check(
+      "problem_cluster_centroid_range_ck",
+      sql`centroid_latitude_microdegrees BETWEEN -90000000 AND 90000000
+          AND centroid_longitude_microdegrees BETWEEN -180000000 AND 180000000`,
+    ),
+    check("problem_cluster_sample_count_ck", sql`centroid_sample_count >= 1`),
+    check(
+      "problem_cluster_counts_ck",
+      sql`distinct_reporter_count >= 0
+          AND submission_count >= distinct_reporter_count
+          AND submission_count >= centroid_sample_count`,
+    ),
+    check(
+      "problem_cluster_merged_ck",
+      sql`(status = 'merged') = (merged_into_cluster_id IS NOT NULL)
+          AND (merged_into_cluster_id IS DISTINCT FROM id)`,
+    ),
+    check("problem_cluster_reported_order_ck", sql`last_reported_at >= first_reported_at`),
+    check(
+      "problem_cluster_score_ck",
+      sql`(current_opportunity_score_points IS NULL
+           OR current_opportunity_score_points BETWEEN 0 AND 100)
+          AND (current_opportunity_score_points IS NULL) = (score_computed_at IS NULL)`,
+    ),
+    check(
+      "problem_cluster_country_ck",
+      sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`,
+    ),
+  ],
+);
+
+/**
+ * Job-written opportunity scores, APPEND-ONLY, each carrying the `asOf` it was computed
+ * against (§4c rule 3) and ABSOLUTE window bounds rather than a day count.
+ *
+ * Every INPUT is stored alongside the score, not just the result. A score you cannot
+ * explain is indistinguishable from a bug — and the components CHECK below makes the
+ * subscores genuinely load-bearing rather than decorative: if a formula change breaks the
+ * sum, the transaction that caused it fails, in the job that caused it.
+ *
+ * Rows are protected by an append-only trigger added by hand in the migration, reusing
+ * the qatoto_reject_mutation() function migration 0010 already installed.
+ */
+export const problemClusterScoreSnapshot = pgTable(
+  "problem_cluster_score_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // `restrict` on every parent FK — §4f, the project_stage_transition precedent, so the
+    // cascade sweep needs no per-column reasoning.
+    clusterId: text("cluster_id")
+      .notNull()
+      .references(() => problemCluster.id, { onDelete: "restrict" }),
+    asOf: timestamp("as_of").notNull(),
+    windowStartsAt: timestamp("window_starts_at").notNull(),
+    windowEndsAt: timestamp("window_ends_at").notNull(),
+    opportunityScorePoints: integer("opportunity_score_points").notNull(),
+    // --- Inputs, so the score is reproducible without replaying history.
+    distinctReporterCount: integer("distinct_reporter_count").notNull(),
+    submissionCount: integer("submission_count").notNull(),
+    distinctRegionCount: integer("distinct_region_count").notNull(),
+    categoryShareBasisPoints: integer("category_share_basis_points").notNull(),
+    // Whole days between the cluster's last report and `asOf`, both truncated to UTC
+    // midnight. An INTEGER, because exp(-age/halfLife) is float and §4c bans it.
+    ageInDays: integer("age_in_days").notNull(),
+    linkedProjectCount: integer("linked_project_count").notNull(),
+    // --- Components. Their sum IS the score, asserted by a CHECK.
+    reporterComponentPoints: integer("reporter_component_points").notNull(),
+    spreadComponentPoints: integer("spread_component_points").notNull(),
+    demandComponentPoints: integer("demand_component_points").notNull(),
+    recencyComponentPoints: integer("recency_component_points").notNull(),
+    scarcityComponentPoints: integer("scarcity_component_points").notNull(),
+    // The §4c hashVersion analogue: the formula may evolve without invalidating history.
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // NO updatedAt, deliberately. An append-only table has nothing to update.
+  },
+  (table) => [
+    // IDEMPOTENCY (§4e: "a job that cannot be safely re-run is a bug"). A re-run at the
+    // same asOf is an ON CONFLICT DO NOTHING, not a duplicate row.
+    uniqueIndex("problem_cluster_score_snapshot_clusterId_asOf_unq").on(
+      table.clusterId,
+      table.asOf,
+    ),
+    index("problem_cluster_score_snapshot_clusterId_asOf_idx").on(
+      table.clusterId,
+      table.asOf,
+      table.id,
+    ),
+    index("problem_cluster_score_snapshot_asOf_idx").on(table.asOf, table.id),
+    check(
+      "problem_cluster_score_snapshot_score_ck",
+      sql`opportunity_score_points BETWEEN 0 AND 100`,
+    ),
+    check(
+      "problem_cluster_score_snapshot_window_ck",
+      sql`window_ends_at > window_starts_at AND as_of >= window_ends_at`,
+    ),
+    check(
+      "problem_cluster_score_snapshot_inputs_ck",
+      sql`distinct_reporter_count >= 0
+          AND submission_count >= distinct_reporter_count
+          AND distinct_region_count >= 0
+          AND category_share_basis_points BETWEEN 0 AND 10000
+          AND linked_project_count >= 0`,
+    ),
+    // The invariant worth having: the components ARE the score.
+    check(
+      "problem_cluster_score_snapshot_components_ck",
+      sql`reporter_component_points >= 0 AND spread_component_points >= 0
+          AND demand_component_points >= 0 AND recency_component_points >= 0
+          AND scarcity_component_points >= 0
+          AND reporter_component_points + spread_component_points + demand_component_points
+              + recency_component_points + scarcity_component_points
+              = opportunity_score_points`,
+    ),
+  ],
+);
+
+/**
+ * The moderator queue for suspected duplicate clusters. Directional: `source` is absorbed
+ * INTO `target`.
+ *
+ * The one-open-proposal-per-UNORDERED-pair guarantee cannot be expressed as a Drizzle
+ * index because it indexes LEAST/GREATEST expressions — it is added by hand in the
+ * migration. Without it, A→B and B→A both sit in the queue and can both be approved.
+ */
+export const problemClusterMergeProposal = pgTable(
+  "problem_cluster_merge_proposal",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    sourceClusterId: text("source_cluster_id")
+      .notNull()
+      .references(() => problemCluster.id, { onDelete: "restrict" }),
+    targetClusterId: text("target_cluster_id")
+      .notNull()
+      .references(() => problemCluster.id, { onDelete: "restrict" }),
+    status: clusterMergeProposalStatusEnum("status").default("pending").notNull(),
+    source: clusterMergeProposalSourceEnum("source").default("job_similarity").notNull(),
+    // The evidence, in integers: 0..10000 basis points of text similarity, and an integer
+    // metre distance from the fixed integer approximation — never float haversine (§6).
+    similarityBasisPoints: integer("similarity_basis_points").notNull(),
+    centroidDistanceMetres: integer("centroid_distance_metres").notNull(),
+    asOf: timestamp("as_of").notNull(),
+    // NULL for job-raised proposals, which is most of them.
+    proposedByUserId: text("proposed_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    // `restrict`: who approved a destructive, irreversible merge is audit weight.
+    decidedByUserId: text("decided_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    decidedAt: timestamp("decided_at"),
+    decisionNote: text("decision_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("problem_cluster_merge_proposal_pending_idx")
+      .on(table.createdAt, table.id)
+      .where(sql`status = 'pending'`),
+    index("problem_cluster_merge_proposal_sourceClusterId_idx").on(table.sourceClusterId),
+    index("problem_cluster_merge_proposal_targetClusterId_idx").on(table.targetClusterId),
+    check(
+      "problem_cluster_merge_proposal_distinct_ck",
+      sql`source_cluster_id <> target_cluster_id`,
+    ),
+    check(
+      "problem_cluster_merge_proposal_decided_ck",
+      sql`(status = 'pending') = (decided_at IS NULL)
+          AND (decided_by_user_id IS NULL) = (decided_at IS NULL)`,
+    ),
+    check(
+      "problem_cluster_merge_proposal_evidence_ck",
+      sql`similarity_basis_points BETWEEN 0 AND 10000 AND centroid_distance_metres >= 0`,
+    ),
+  ],
+);
+
+/**
+ * The cluster ↔ project backlink, behind the "Born from Civic Pulse report" chip and the
+ * linked-project-scarcity input to the opportunity score.
+ *
+ * Many-to-many: a cluster can spawn several projects and a project can address several
+ * clusters. §5's prose describes a scalar `research_project.originProblemClusterId`
+ * column — that column does not exist, so this table replaces it rather than duplicating
+ * it. Storing both would put one fact in two writable places, the exact failure mode the
+ * schema rejects by name for `isFounder` and `TeamMember.name`.
+ */
+export const problemClusterProjectLink = pgTable(
+  "problem_cluster_project_link",
+  {
+    clusterId: text("cluster_id")
+      .notNull()
+      .references(() => problemCluster.id, { onDelete: "restrict" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    source: problemClusterLinkSourceEnum("source").notNull(),
+    linkedByUserId: text("linked_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.clusterId, table.projectId] }),
+    index("problem_cluster_project_link_projectId_idx").on(table.projectId),
+    // "Born from" is 1:1 — at most one ORIGIN cluster per project, enforced by Postgres
+    // rather than by hope. This is what replaces the scalar column.
+    uniqueIndex("problem_cluster_project_link_origin_unq")
+      .on(table.projectId)
+      .where(sql`source = 'origin'`),
+  ],
+);
+
+/**
+ * Knowledge-hub insight cards.
+ *
+ * `MarketInsight.statValue` in the mocks is one string column holding "+34%",
+ * "68M people", "3× coverage" and "-22%" — a magnitude, a unit and a direction fused into
+ * text that no native client can localize and no query can sort. It decomposes here into
+ * statKind + statValueMilli + statUnitKey, and the client formats both the magnitude and
+ * the locale.
+ *
+ * WHY `usd_dollars` AND NOT CENTS, which departs from §4b's integer-cents rule. This
+ * column is value × 1000, so a "$12B est. market" insight in cents-milli is 1.2e15 —
+ * already 13% of Number.MAX_SAFE_INTEGER, and a $100B market at 1e16 would silently lose
+ * precision the moment JSON.stringify touched it. Milli-DOLLARS keep tenth-of-a-cent
+ * resolution with four orders of magnitude of headroom, and the CHECK below makes an
+ * out-of-range write fail in Postgres rather than corrupt in serialization. §7's escrow
+ * amounts, which are genuinely money rather than a headline statistic, stay in cents.
+ */
+export const marketInsight = pgTable(
+  "market_insight",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    headline: text("headline").notNull(),
+    summary: text("summary"),
+    statKind: marketInsightStatKindEnum("stat_kind").notNull(),
+    statValueMilli: bigint("stat_value_milli", { mode: "number" }).notNull(),
+    statUnitKey: marketInsightStatUnitKeyEnum("stat_unit_key").notNull(),
+    trendDirection: trendDirectionEnum("trend_direction").notNull(),
+    regionId: text("region_id")
+      .notNull()
+      .references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => researchCategory.id, { onDelete: "restrict" }),
+    // The mocks' `sourceNote: "WHO regional water survey, 2025"` split into three (§15) —
+    // one string carrying an attribution, a citation and a date the client cannot format.
+    sourceName: text("source_name").notNull(),
+    sourceUrl: text("source_url"),
+    sourcePublishedDate: date("source_published_date", { mode: "string" }).notNull(),
+    // NULL until an editor publishes. Public reads filter on this being non-null.
+    publishedAt: timestamp("published_at"),
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("market_insight_published_idx")
+      .on(table.publishedAt, table.id)
+      .where(sql`published_at IS NOT NULL`),
+    index("market_insight_region_published_idx")
+      .on(table.regionId, table.publishedAt, table.id)
+      .where(sql`published_at IS NOT NULL`),
+    index("market_insight_category_published_idx")
+      .on(table.categoryId, table.publishedAt, table.id)
+      .where(sql`published_at IS NOT NULL`),
+    // The flattened-discriminated-union CHECK, exactly the open_role_compensation shape.
+    // Without it a `multiplier` insight can carry unit='people' and render "3 people"
+    // where "3× coverage" was meant.
+    check(
+      "market_insight_stat_unit_pairing_ck",
+      sql`(stat_kind IN ('percent_change','percent_level') AND stat_unit_key = 'percent')
+          OR (stat_kind = 'multiplier' AND stat_unit_key = 'multiple')
+          OR (stat_kind = 'absolute_count' AND stat_unit_key NOT IN ('percent','multiple'))`,
+    ),
+    check(
+      "market_insight_stat_range_ck",
+      sql`(stat_kind = 'percent_change' OR stat_value_milli >= 0)
+          AND (stat_kind <> 'multiplier' OR stat_value_milli > 0)
+          AND (stat_kind <> 'percent_level' OR stat_value_milli BETWEEN 0 AND 100000)
+          AND abs(stat_value_milli) <= 9000000000000000`,
+    ),
+    // The arrow cannot contradict the sign: "+34%" can never render with a down chevron.
+    check(
+      "market_insight_trend_agreement_ck",
+      sql`stat_kind <> 'percent_change'
+          OR (trend_direction = 'up' AND stat_value_milli > 0)
+          OR (trend_direction = 'down' AND stat_value_milli < 0)
+          OR (trend_direction = 'flat' AND stat_value_milli = 0)`,
+    ),
+    check("market_insight_headline_ck", sql`char_length(headline) BETWEEN 1 AND 240`),
+  ],
+);
+
+/**
+ * The knowledge-hub demand leaderboard, one row per (region, category) cell per run.
+ * Append-only, job-written, and backing the frontend's `TrendingSignal`.
+ *
+ * RANK IS UNIQUE WITHIN A RUN, enforced by a unique index. Without it two rows tie for #3
+ * and the leaderboard's ORDER BY is unstable (§4c rule 4). The job breaks ties before
+ * insert using a total order that ends in the cell's own unique key, so `rank = index + 1`
+ * is a total function and the competition-vs-dense-ranking question (1,2,2,4 vs 1,2,2,3)
+ * can never arise. This index makes forgetting that fail loudly.
+ *
+ * There is deliberately NO run-header table: the job inserts an entire run in ONE
+ * transaction, so a reader never observes a half-written leaderboard — uncommitted rows
+ * are invisible. That requirement lives in the job, not in a table.
+ */
+export const demandSignalSnapshot = pgTable(
+  "demand_signal_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    asOf: timestamp("as_of").notNull(),
+    windowStartsAt: timestamp("window_starts_at").notNull(),
+    windowEndsAt: timestamp("window_ends_at").notNull(),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => researchCategory.id, { onDelete: "restrict" }),
+    regionId: text("region_id")
+      .notNull()
+      .references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    rank: integer("rank").notNull(),
+    demandScorePoints: integer("demand_score_points").notNull(),
+    trendDirection: trendDirectionEnum("trend_direction").notNull(),
+    // How the arrow was derived. Without it trendDirection is a magic value nobody can
+    // audit; with it, the CHECK below makes a contradictory arrow unrepresentable.
+    // NULL on a cell's first-ever snapshot, where there is no evidence of a direction.
+    previousDemandScorePoints: integer("previous_demand_score_points"),
+    // --- Inputs, same reproducibility argument as the cluster score snapshot.
+    clusterCount: integer("cluster_count").notNull(),
+    distinctReporterCount: integer("distinct_reporter_count").notNull(),
+    relatedProjectCount: integer("related_project_count").notNull(),
+    openRoleCount: integer("open_role_count").notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("demand_signal_snapshot_asOf_cell_unq").on(
+      table.asOf,
+      table.categoryId,
+      table.regionId,
+    ),
+    uniqueIndex("demand_signal_snapshot_asOf_rank_unq").on(table.asOf, table.rank),
+    index("demand_signal_snapshot_cell_asOf_idx").on(
+      table.categoryId,
+      table.regionId,
+      table.asOf,
+      table.id,
+    ),
+    check("demand_signal_snapshot_rank_ck", sql`rank >= 1`),
+    check("demand_signal_snapshot_score_ck", sql`demand_score_points BETWEEN 0 AND 100`),
+    check(
+      "demand_signal_snapshot_window_ck",
+      sql`window_ends_at > window_starts_at AND as_of >= window_ends_at`,
+    ),
+    check(
+      "demand_signal_snapshot_counts_ck",
+      sql`cluster_count >= 0 AND distinct_reporter_count >= 0
+          AND related_project_count >= 0 AND open_role_count >= 0
+          AND (previous_demand_score_points IS NULL
+               OR previous_demand_score_points BETWEEN 0 AND 100)`,
+    ),
+    check(
+      "demand_signal_snapshot_trend_agreement_ck",
+      sql`previous_demand_score_points IS NULL
+          OR (trend_direction = 'up' AND demand_score_points > previous_demand_score_points)
+          OR (trend_direction = 'down' AND demand_score_points < previous_demand_score_points)
+          OR (trend_direction = 'flat' AND demand_score_points = previous_demand_score_points)`,
+    ),
+  ],
+);
+
+/**
+ * The opt-in talent directory — A PROJECTION OF `user`, not a parallel identity (§6).
+ *
+ * NOTE WHAT IS NOT HERE: `name` and `avatarImageUrl`. They join from user.name and
+ * user.image on read, because a copy drifts the moment someone changes their photo — the
+ * same rule project_member follows for TeamMember.name.
+ *
+ * The PK IS the FK, the project_stats pattern: exactly one directory row per person, and
+ * DELETE /discovery/talent/me is a plain delete. `cascade` is correct here and is not an
+ * §4f violation: a directory listing is a PREFERENCE that dies with the account, bearing
+ * no equity, effort or audit weight. The effort minutes below are a rebuildable CACHE of
+ * §9 data that lives in §9's own tables.
+ */
+export const talentProfile = pgTable(
+  "talent_profile",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => user.id, { onDelete: "cascade" }),
+    headlineRole: text("headline_role").notNull(),
+    bio: text("bio"),
+    // Self-description, for display only. Free text is safe HERE because it feeds no
+    // score — which is precisely why it is NOT safe on problem_submission.
+    locationLabel: text("location_label"),
+    // The ?region= filter joins THIS, never the label (§6: "join rather than
+    // string-match"). The client picks a region id; it does not type a string.
+    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "set null" }),
+    availability: talentAvailabilityEnum("availability").default("unavailable").notNull(),
+    commitment: roleCommitmentEnum("commitment"),
+    visibility: talentProfileVisibilityEnum("visibility").default("private").notNull(),
+    publishedAt: timestamp("published_at"),
+    // Server-owned, the product.currency / research_project.currency precedent. §4b: no
+    // currency field in any request body, and a talent ask has no project to inherit one
+    // from, so it is set from config and absent from the schema `.strict()` accepts.
+    currency: text("currency").default("USD").notNull(),
+    // --- refresh-talent-projections (hourly). NULLABLE WITH NO DEFAULT: a 0 would assert
+    //     unverified effort as fact. NULL until §9's ledger exists to compute from.
+    cachedEffortMinutesLogged: integer("cached_effort_minutes_logged"),
+    cachedProjectsCompletedCount: integer("cached_projects_completed_count"),
+    // Returned to clients so all three render "as of" and never imply a live number.
+    projectionComputedAt: timestamp("projection_computed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // The ONLY set GET /discovery/talent reads. Partial, so it stays small even if every
+    // account creates a private draft.
+    index("talent_profile_published_idx")
+      .on(table.availability, table.commitment, table.updatedAt, table.userId)
+      .where(sql`visibility = 'published'`),
+    index("talent_profile_published_region_idx")
+      .on(table.regionId, table.updatedAt, table.userId)
+      .where(sql`visibility = 'published'`),
+    index("talent_profile_regionId_idx").on(table.regionId),
+    check(
+      "talent_profile_published_at_ck",
+      sql`(visibility = 'published') = (published_at IS NOT NULL)`,
+    ),
+    check(
+      "talent_profile_cached_ck",
+      sql`(cached_effort_minutes_logged IS NULL OR cached_effort_minutes_logged >= 0)
+          AND (cached_projects_completed_count IS NULL OR cached_projects_completed_count >= 0)
+          AND (cached_effort_minutes_logged IS NULL) = (projection_computed_at IS NULL)`,
+    ),
+    check("talent_profile_headline_ck", sql`char_length(headline_role) BETWEEN 1 AND 120`),
+    check("talent_profile_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+  ],
+);
+
+/**
+ * A person's skills, as canonical slugs rather than free text.
+ *
+ * `isVerified` is JOB-WRITTEN ONLY (§15's `{ slug, displayLabel, isVerified }`). It means
+ * §9 recorded verified effort on a project tagged with this skill. If a request could set
+ * it the badge would mean nothing — that IS the column's entire purpose.
+ */
+export const talentProfileSkill = pgTable(
+  "talent_profile_skill",
+  {
+    talentProfileUserId: text("talent_profile_user_id")
+      .notNull()
+      .references(() => talentProfile.userId, { onDelete: "cascade" }),
+    // `restrict` — a curated skill must not vanish out from under a published profile.
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => discoverySkill.id, { onDelete: "restrict" }),
+    isVerified: boolean("is_verified").default(false).notNull(),
+    verifiedAt: timestamp("verified_at"),
+    // The evidence behind the badge, so it is auditable rather than asserted.
+    verifiedEffortMinutes: integer("verified_effort_minutes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.talentProfileUserId, table.skillId] }),
+    // The ?skill= reverse lookup.
+    index("talent_profile_skill_skillId_idx").on(table.skillId),
+    check(
+      "talent_profile_skill_verified_ck",
+      sql`(is_verified = false) = (verified_at IS NULL)
+          AND (verified_effort_minutes IS NULL OR verified_effort_minutes >= 0)`,
+    ),
+  ],
+);
+
+/**
+ * The applicant-side mirror of open_role_compensation: what a person wants in return.
+ *
+ * DELIBERATELY NO `earnedAsPolicy`. Per the frontend type's own comment, that mechanism
+ * "belongs to the role offering the work" — a person ASKS for an amount; only a ROLE may
+ * promise a payout mechanism, because only a role's promise is something the escrow
+ * engine will execute.
+ *
+ * The equity band is an ASK, never a grant. Grants come solely from §9's ledger, and
+ * there is no writable equity column anywhere in this schema.
+ */
+export const talentCompensationAsk = pgTable(
+  "talent_compensation_ask",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    talentProfileUserId: text("talent_profile_user_id")
+      .notNull()
+      .references(() => talentProfile.userId, { onDelete: "cascade" }),
+    kind: compensationKindEnum("kind").notNull(),
+    salaryMinInCentsPerMonth: bigint("salary_min_in_cents_per_month", { mode: "number" }),
+    salaryMaxInCentsPerMonth: bigint("salary_max_in_cents_per_month", { mode: "number" }),
+    oneTimeMinInCents: bigint("one_time_min_in_cents", { mode: "number" }),
+    oneTimeMaxInCents: bigint("one_time_max_in_cents", { mode: "number" }),
+    equityBasisPointsMin: integer("equity_basis_points_min"),
+    equityBasisPointsMax: integer("equity_basis_points_max"),
+    note: text("note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // At most one strand per kind, the open_role_compensation invariant.
+    uniqueIndex("talent_compensation_ask_userId_kind_unq").on(
+      table.talentProfileUserId,
+      table.kind,
+    ),
+    index("talent_compensation_ask_kind_equityMin_idx").on(table.kind, table.equityBasisPointsMin),
+    index("talent_compensation_ask_kind_salaryMin_idx").on(
+      table.kind,
+      table.salaryMinInCentsPerMonth,
+    ),
+    // Byte-for-byte the open_role_compensation_kind_columns_ck shape — the same
+    // discriminated union flattened into one row needs the same guard.
+    check(
+      "talent_compensation_ask_kind_columns_ck",
+      sql`
+      (kind = 'salary' AND salary_min_in_cents_per_month IS NOT NULL
+                       AND one_time_min_in_cents IS NULL AND one_time_max_in_cents IS NULL
+                       AND equity_basis_points_min IS NULL AND equity_basis_points_max IS NULL)
+      OR (kind = 'one_time' AND one_time_min_in_cents IS NOT NULL
+                       AND salary_min_in_cents_per_month IS NULL AND salary_max_in_cents_per_month IS NULL
+                       AND equity_basis_points_min IS NULL AND equity_basis_points_max IS NULL)
+      OR (kind = 'equity' AND equity_basis_points_min IS NOT NULL
+                       AND salary_min_in_cents_per_month IS NULL AND salary_max_in_cents_per_month IS NULL
+                       AND one_time_min_in_cents IS NULL AND one_time_max_in_cents IS NULL)`,
+    ),
+    check(
+      "talent_compensation_ask_ranges_ck",
+      sql`
+      (salary_min_in_cents_per_month IS NULL OR salary_min_in_cents_per_month >= 0)
+      AND (salary_max_in_cents_per_month IS NULL OR salary_max_in_cents_per_month >= salary_min_in_cents_per_month)
+      AND (one_time_min_in_cents IS NULL OR one_time_min_in_cents >= 0)
+      AND (one_time_max_in_cents IS NULL OR one_time_max_in_cents >= one_time_min_in_cents)
+      AND (equity_basis_points_min IS NULL OR equity_basis_points_min BETWEEN 0 AND 10000)
+      AND (equity_basis_points_max IS NULL OR (equity_basis_points_max >= equity_basis_points_min
+                                               AND equity_basis_points_max <= 10000))`,
+    ),
+  ],
+);
+
+/**
+ * Dead-lettered background jobs, captured for a human.
+ *
+ * NOT OPTIONAL, and not merely observability: pg-boss deletes completed and failed jobs
+ * after `deleteAfterSeconds` (7 days by default), so a dead-lettered job that nobody
+ * drains becomes INDISTINGUISHABLE FROM A JOB THAT NEVER EXISTED. A submission whose
+ * clustering failed would simply vanish, with the reporter seeing a queued state forever
+ * and no operator surface showing why.
+ *
+ * Deliberately a plain content table, not append-only: `resolvedAt` is how an operator
+ * marks a failure handled after requeuing it.
+ */
+export const jobFailure = pgTable(
+  "job_failure",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    queueName: text("queue_name").notNull(),
+    // pg-boss's own job id. Not an FK: pg-boss owns its schema exclusively and deletes
+    // its rows on its own schedule, so a real reference would break on its retention pass.
+    sourceJobId: text("source_job_id").notNull(),
+    // The payload as enqueued, so an operator can requeue without reconstructing it.
+    payloadJson: text("payload_json").notNull(),
+    errorMessage: text("error_message").notNull(),
+    attemptCount: integer("attempt_count").notNull(),
+    failedAt: timestamp("failed_at").defaultNow().notNull(),
+    resolvedAt: timestamp("resolved_at"),
+    resolutionNote: text("resolution_note"),
+  },
+  (table) => [
+    // The operator's queue: unresolved failures, oldest first.
+    index("job_failure_unresolved_idx")
+      .on(table.failedAt, table.id)
+      .where(sql`resolved_at IS NULL`),
+    index("job_failure_queueName_failedAt_idx").on(table.queueName, table.failedAt, table.id),
+    uniqueIndex("job_failure_sourceJobId_unq").on(table.sourceJobId),
+    check("job_failure_attempt_ck", sql`attempt_count >= 0`),
+  ],
+);
+
 // --- Relations. Declared CHILD-SIDE ONLY, matching the store domain's precedent:
 // product declares `seller: one(user, …)` and userRelations was deliberately left
 // untouched. Amending userRelations here is what would force six relationName pairs,
@@ -1365,5 +2451,174 @@ export const projectStageTransitionRelations = relations(projectStageTransition,
   changedBy: one(user, {
     fields: [projectStageTransition.changedByUserId],
     references: [user.id],
+  }),
+}));
+
+// --- §6 discovery relations. Child-side only, same convention as above. `relationName`
+// appears only where one child holds TWO relations to the same parent, which the linter
+// cannot disambiguate on its own.
+
+export const discoveryRegionRelations = relations(discoveryRegion, ({ one, many }) => ({
+  parentRegion: one(discoveryRegion, {
+    fields: [discoveryRegion.parentRegionId],
+    references: [discoveryRegion.id],
+    relationName: "region_parent",
+  }),
+  childRegions: many(discoveryRegion, { relationName: "region_parent" }),
+}));
+
+export const discoverySkillRelations = relations(discoverySkill, ({ one, many }) => ({
+  category: one(researchCategory, {
+    fields: [discoverySkill.categoryId],
+    references: [researchCategory.id],
+  }),
+  talentProfileSkills: many(talentProfileSkill),
+}));
+
+export const geocodeCacheRelations = relations(geocodeCache, ({ one }) => ({
+  region: one(discoveryRegion, {
+    fields: [geocodeCache.regionId],
+    references: [discoveryRegion.id],
+  }),
+}));
+
+export const problemSubmissionRelations = relations(problemSubmission, ({ one }) => ({
+  reporter: one(user, { fields: [problemSubmission.reporterUserId], references: [user.id] }),
+  category: one(researchCategory, {
+    fields: [problemSubmission.categoryId],
+    references: [researchCategory.id],
+  }),
+  region: one(discoveryRegion, {
+    fields: [problemSubmission.regionId],
+    references: [discoveryRegion.id],
+  }),
+  cluster: one(problemCluster, {
+    fields: [problemSubmission.clusterId],
+    references: [problemCluster.id],
+  }),
+}));
+
+export const problemClusterRelations = relations(problemCluster, ({ one, many }) => ({
+  category: one(researchCategory, {
+    fields: [problemCluster.categoryId],
+    references: [researchCategory.id],
+  }),
+  region: one(discoveryRegion, {
+    fields: [problemCluster.regionId],
+    references: [discoveryRegion.id],
+  }),
+  mergedInto: one(problemCluster, {
+    fields: [problemCluster.mergedIntoClusterId],
+    references: [problemCluster.id],
+    relationName: "cluster_merged_into",
+  }),
+  absorbedClusters: many(problemCluster, { relationName: "cluster_merged_into" }),
+  submissions: many(problemSubmission),
+  scoreSnapshots: many(problemClusterScoreSnapshot),
+  projectLinks: many(problemClusterProjectLink),
+}));
+
+export const problemClusterScoreSnapshotRelations = relations(
+  problemClusterScoreSnapshot,
+  ({ one }) => ({
+    cluster: one(problemCluster, {
+      fields: [problemClusterScoreSnapshot.clusterId],
+      references: [problemCluster.id],
+    }),
+  }),
+);
+
+export const problemClusterMergeProposalRelations = relations(
+  problemClusterMergeProposal,
+  ({ one }) => ({
+    sourceCluster: one(problemCluster, {
+      fields: [problemClusterMergeProposal.sourceClusterId],
+      references: [problemCluster.id],
+      relationName: "merge_proposal_source",
+    }),
+    targetCluster: one(problemCluster, {
+      fields: [problemClusterMergeProposal.targetClusterId],
+      references: [problemCluster.id],
+      relationName: "merge_proposal_target",
+    }),
+    proposedBy: one(user, {
+      fields: [problemClusterMergeProposal.proposedByUserId],
+      references: [user.id],
+      relationName: "merge_proposal_proposer",
+    }),
+    decidedBy: one(user, {
+      fields: [problemClusterMergeProposal.decidedByUserId],
+      references: [user.id],
+      relationName: "merge_proposal_decider",
+    }),
+  }),
+);
+
+export const problemClusterProjectLinkRelations = relations(
+  problemClusterProjectLink,
+  ({ one }) => ({
+    cluster: one(problemCluster, {
+      fields: [problemClusterProjectLink.clusterId],
+      references: [problemCluster.id],
+    }),
+    project: one(researchProject, {
+      fields: [problemClusterProjectLink.projectId],
+      references: [researchProject.id],
+    }),
+    linkedBy: one(user, {
+      fields: [problemClusterProjectLink.linkedByUserId],
+      references: [user.id],
+    }),
+  }),
+);
+
+export const marketInsightRelations = relations(marketInsight, ({ one }) => ({
+  region: one(discoveryRegion, {
+    fields: [marketInsight.regionId],
+    references: [discoveryRegion.id],
+  }),
+  category: one(researchCategory, {
+    fields: [marketInsight.categoryId],
+    references: [researchCategory.id],
+  }),
+  createdBy: one(user, { fields: [marketInsight.createdByUserId], references: [user.id] }),
+}));
+
+export const demandSignalSnapshotRelations = relations(demandSignalSnapshot, ({ one }) => ({
+  category: one(researchCategory, {
+    fields: [demandSignalSnapshot.categoryId],
+    references: [researchCategory.id],
+  }),
+  region: one(discoveryRegion, {
+    fields: [demandSignalSnapshot.regionId],
+    references: [discoveryRegion.id],
+  }),
+}));
+
+export const talentProfileRelations = relations(talentProfile, ({ one, many }) => ({
+  user: one(user, { fields: [talentProfile.userId], references: [user.id] }),
+  region: one(discoveryRegion, {
+    fields: [talentProfile.regionId],
+    references: [discoveryRegion.id],
+  }),
+  skills: many(talentProfileSkill),
+  compensationAsks: many(talentCompensationAsk),
+}));
+
+export const talentProfileSkillRelations = relations(talentProfileSkill, ({ one }) => ({
+  talentProfile: one(talentProfile, {
+    fields: [talentProfileSkill.talentProfileUserId],
+    references: [talentProfile.userId],
+  }),
+  skill: one(discoverySkill, {
+    fields: [talentProfileSkill.skillId],
+    references: [discoverySkill.id],
+  }),
+}));
+
+export const talentCompensationAskRelations = relations(talentCompensationAsk, ({ one }) => ({
+  talentProfile: one(talentProfile, {
+    fields: [talentCompensationAsk.talentProfileUserId],
+    references: [talentProfile.userId],
   }),
 }));

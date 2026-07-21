@@ -1,10 +1,36 @@
 import { readFileSync } from "node:fs";
 
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool, type QueryResult, type QueryResultRow } from "pg";
+import { Pool, types as pgTypes, type QueryResult, type QueryResultRow } from "pg";
 
 import { config } from "#src/config/index.js";
 import * as schema from "#src/db/schema.js";
+
+/**
+ * Parse `timestamp without time zone` as UTC, not as the process's local zone.
+ *
+ * THE BUG THIS FIXES. Every one of the 84 `timestamp(...)` columns in schema.ts is
+ * `without time zone`, and node-postgres's default parser for that type (OID 1114) builds
+ * a Date using the SERVER PROCESS's local zone. So a row written as UTC midnight reads
+ * back as midnight-in-whatever-zone-the-host-is-in — on a UTC+5:30 machine, that is
+ * 18:30 the previous day. The value silently changes meaning on its way out of the
+ * database, and nothing errors.
+ *
+ * src/config/index.ts already asserts `TZ === "UTC"` in production, which acknowledged
+ * this dependency but only covered one environment: every developer machine and every CI
+ * runner outside UTC was reading offset timestamps the whole time.
+ *
+ * §6 makes it acute rather than merely untidy. Job `asOf` values are PERSISTED and later
+ * compared for byte-identity (§4c rule 3), and `wholeDaysBetweenUtcDayStarts` throws on
+ * an instant that is not exactly on a UTC day boundary — so a round-tripped asOf would
+ * either throw or, worse, quietly re-bucket a cluster's recency score.
+ *
+ * Postgres hands us a bare `YYYY-MM-DD HH:MM:SS[.ffffff]` string with no offset. Appending
+ * "Z" states the convention the schema already assumes: these columns hold UTC.
+ */
+pgTypes.setTypeParser(pgTypes.builtins.TIMESTAMP, (rawValue: string) =>
+  rawValue === null ? null : new Date(`${rawValue.replace(" ", "T")}Z`),
+);
 
 const ssl = config.DATABASE_CA_CERT_PATH
   ? {
@@ -21,10 +47,21 @@ const connectionString = ssl
   ? config.DATABASE_URL.replace(/([?&])sslmode=[^&]*&?/, "$1").replace(/[?&]$/, "")
   : config.DATABASE_URL;
 
-export const pool = new Pool({
-  connectionString,
+/**
+ * Shared pool tuning.
+ *
+ * CONNECTION BUDGET IS A HARD, SHARED RESOURCE. The managed instance this connects to
+ * reports `max_connections = 20` for the WHOLE SERVER — not per client — and a handful are
+ * always taken by other sessions. Every process that connects draws from that same
+ * twenty: the API, each worker, every `pnpm db:*` script, and any open psql.
+ *
+ * `DATABASE_POOL_MAX` therefore defaults deliberately low. Over-provisioning here does not
+ * buy throughput; it converts a queue-inside-the-pool (harmless, invisible) into
+ * `FATAL: sorry, too many clients already` (SQLSTATE 53300) in whichever process happens
+ * to ask last — which is how a background worker takes down the API.
+ */
+const POOL_TUNING = {
   ssl,
-  max: 20,
   // Recycle idle connections before the Aiven server reaps them out from under
   // us. A reaped idle socket surfaces later as a "read ETIMEDOUT" / "Connection
   // terminated unexpectedly" on the next checkout, so keep idle time short.
@@ -34,7 +71,25 @@ export const pool = new Pool({
   // Send TCP keepalives so dead connections are detected and dropped early
   // instead of failing on first reuse.
   keepAlive: true,
+} as const;
+
+export const pool = new Pool({
+  connectionString,
+  ...POOL_TUNING,
+  max: config.DATABASE_POOL_MAX,
 });
+
+/**
+ * Builds a SEPARATE pool for a process that must not compete with the API's.
+ *
+ * The worker needs its own: pg-boss polls every queue on an interval, so its connection
+ * demand is steady and concurrent rather than request-shaped, and sharing the API's pool
+ * makes a slow scoring job starve HTTP handlers. The caller owns the returned pool and
+ * must `end()` it.
+ */
+export function createDedicatedPool(maxConnections: number): Pool {
+  return new Pool({ connectionString, ...POOL_TUNING, max: maxConnections });
+}
 
 export const db = drizzle(pool, { schema });
 

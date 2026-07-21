@@ -29,6 +29,7 @@ async function main(): Promise<void> {
         // Seeded rows are trusted, so they bypass the `pending` moderation queue that
         // user-minted categories land in.
         status: "approved" as const,
+        pinIconKey: category.pinIconKey,
         createdByUserId: null,
       })),
     )

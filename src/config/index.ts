@@ -68,6 +68,41 @@ const envSchema = z.object({
         ),
     ),
   ),
+  // --- Background jobs (§4e). pg-boss owns its own Postgres schema exclusively; it is
+  //     deliberately NOT declared in src/db/schema.ts, so drizzle never diffs it.
+  // The API pool's ceiling. The managed instance reports max_connections = 20 FOR THE
+  // WHOLE SERVER, shared across the API, every worker, and every db:* script — so this
+  // defaults well below that. Raising it does not buy throughput; it converts an
+  // invisible in-pool wait into `FATAL: too many clients` in whichever process asks last.
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(8),
+  // The worker's own, separate pool. pg-boss polls every queue on an interval, so its
+  // demand is steady and concurrent rather than request-shaped.
+  WORKER_DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(4),
+  JOBS_SCHEMA: z.string().min(1).default("pgboss"),
+  // How many jobs one worker process runs concurrently. Kept low by default because the
+  // recompute jobs run full-table scans, and the worker shares a database with the API.
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
+  // Runs the job workers INSIDE the API process. A single-terminal convenience for local
+  // development only — it is refused in production below, because a CPU-bound scoring job
+  // sharing an event loop with HTTP handlers turns every recompute into a p99 latency
+  // spike on every request.
+  WORKER_INLINE: z
+    .string()
+    .optional()
+    .transform((rawValue) => rawValue === "true"),
+  // --- Geocoding (§6). Problem reports carry a free-text location; the server resolves
+  //     it to coordinates and a country, because §6 forbids client-claimed geography.
+  //
+  // Results are CACHED PERMANENTLY in `geocode_cache` and never re-fetched, which is what
+  // keeps the clustering job deterministic — an external geocoder is not a pure function.
+  GEOCODING_PROVIDER: z.enum(["nominatim", "none"]).default("nominatim"),
+  GEOCODING_BASE_URL: z.url().default("https://nominatim.openstreetmap.org"),
+  // Nominatim's usage policy REQUIRES a genuine identifying User-Agent with contact
+  // details. Requests without one are blocked, so this is not optional politeness.
+  GEOCODING_USER_AGENT: z.string().min(1).default("Qatoto/0.1 (backend@qatoto.com)"),
+  // Nominatim permits at most 1 request/second. The worker serializes calls to honour it.
+  GEOCODING_MIN_INTERVAL_MS: z.coerce.number().int().min(0).default(1_100),
+  GEOCODING_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(10_000),
 });
 
 export const config = envSchema.parse(process.env);
@@ -82,5 +117,15 @@ if (config.NODE_ENV === "production" && process.env.TZ !== "UTC") {
   throw new Error(
     `TZ must be "UTC" in production (received ${process.env.TZ ?? "unset"}): ` +
       "`timestamp` columns are parsed in the server's local zone.",
+  );
+}
+
+// Inline workers are a local-development convenience and a production incident waiting to
+// happen: the §6 recompute jobs scan every cluster, and §9's pipeline will be CPU-bound,
+// so sharing the API's event loop turns each run into a latency spike on every in-flight
+// request. Deployments run `pnpm start:worker` as its own process instead.
+if (config.NODE_ENV === "production" && config.WORKER_INLINE) {
+  throw new Error(
+    "WORKER_INLINE must not be enabled in production — run the worker as a separate process (`pnpm start:worker`).",
   );
 }

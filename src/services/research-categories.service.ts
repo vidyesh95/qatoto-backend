@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { researchCategory } from "#src/db/schema.js";
@@ -16,14 +16,22 @@ export type ResearchCategoryError = { type: "CATEGORY_LABEL_TAKEN"; slug: string
 export interface ResearchCategoryView {
   readonly id: string;
   readonly slug: string;
-  readonly label: string;
+  /**
+   * The human name. Named `displayLabel` on the wire, not `label` (§15) — three clients
+   * render it, and `label` reads like a form label rather than the name of a taxonomy
+   * node. The COLUMN is still `label`; the alias is applied at the projection boundary.
+   */
+  readonly displayLabel: string;
+  /** Which pin asset the §6 problem map renders for this category. */
+  readonly pinIconKey: (typeof researchCategory.$inferSelect)["pinIconKey"];
   readonly status: (typeof researchCategory.$inferSelect)["status"];
 }
 
 const CATEGORY_VIEW_COLUMNS = {
   id: researchCategory.id,
   slug: researchCategory.slug,
-  label: researchCategory.label,
+  displayLabel: researchCategory.label,
+  pinIconKey: researchCategory.pinIconKey,
   status: researchCategory.status,
 } as const;
 
@@ -106,4 +114,48 @@ export async function findCategoryById(categoryId: string): Promise<ResearchCate
     .from(researchCategory)
     .where(eq(researchCategory.id, categoryId));
   return row ?? null;
+}
+
+/**
+ * Records a platform moderator's decision on a user-minted category (§11b).
+ *
+ * The CAPABILITY CHECK IS THE CALLER'S JOB and must happen BEFORE this function is
+ * reached — see discovery-moderation.service.ts. This function only knows how to write a
+ * decision; putting the authorization here as well would give the rule two homes.
+ *
+ * Re-deciding an already-decided category is refused rather than treated as idempotent:
+ * a second approval would stamp a new decision over the original moderator's, silently
+ * rewriting who is accountable for it.
+ */
+export async function applyCategoryDecision(input: {
+  readonly categoryId: string;
+  readonly nextStatus: Extract<
+    (typeof researchCategory.$inferSelect)["status"],
+    "approved" | "rejected"
+  >;
+  readonly pinIconKey?: (typeof researchCategory.$inferSelect)["pinIconKey"];
+}): Promise<ResearchCategoryView | null> {
+  const [updated] = await db
+    .update(researchCategory)
+    .set({
+      status: input.nextStatus,
+      // Only overwrite the pin when the moderator actually chose one — omitting it must
+      // leave the existing value rather than resetting it to the column default.
+      ...(input.pinIconKey === undefined ? {} : { pinIconKey: input.pinIconKey }),
+    })
+    .where(and(eq(researchCategory.id, input.categoryId), eq(researchCategory.status, "pending")))
+    .returning(CATEGORY_VIEW_COLUMNS);
+
+  return updated ?? null;
+}
+
+/** Reads a category's current moderation status, for the already-decided check. */
+export async function findCategoryStatusById(
+  categoryId: string,
+): Promise<(typeof researchCategory.$inferSelect)["status"] | null> {
+  const [row] = await db
+    .select({ status: researchCategory.status })
+    .from(researchCategory)
+    .where(eq(researchCategory.id, categoryId));
+  return row?.status ?? null;
 }
