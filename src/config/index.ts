@@ -158,6 +158,31 @@ const envSchema = z.object({
   GITHUB_APP_CLIENT_SECRET: z.string().min(1).optional(),
   // Bounds an artifact-grounding fetch so a hanging provider cannot hold a worker slot.
   INTEGRATION_HTTP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
+
+  // --- §7 funding and escrow (docs/R_AND_D_BACKEND_STRUCTURE.md §7).
+  //
+  // THE REGULATORY GATE, checked AT THE API — before creating a round, before opening one,
+  // before accepting a pledge, and in the /funding/deals filter. PROOF_OF_EFFORT_SPEC.md
+  // §1 sequences reward crowdfunding in Year 1 and true equity crowdfunding in Year 3+,
+  // behind FINRA/SEC registration or a licensed broker-dealer partner. A disabled type is
+  // invisible AND un-pledgeable over HTTP, which is what makes hiding the chip in
+  // funding-deal-filter-grid.tsx cosmetic rather than load-bearing.
+  //
+  // Empty resolves to the default rather than to "nothing enabled": an operator who
+  // clears the variable meant "reset", and a deployment that silently refuses every round
+  // type is an outage that looks like a policy.
+  ENABLED_FUNDING_ROUND_TYPES: commaSeparatedList
+    .pipe(z.array(z.enum(["crowdfunding", "equity", "venture"])))
+    .transform((types): readonly ("crowdfunding" | "equity" | "venture")[] =>
+      types.length > 0 ? types : ["crowdfunding"],
+    ),
+  // The platform's cut of a pledge, in basis points. 500 = 5%.
+  //
+  // DERIVED FROM THIS, NEVER SENT: `platformFeeInCents` is on §7's rejected-keys list, so
+  // a body carrying one is a 422. Capped at 2000 because a fee an operator can typo into
+  // 50% silently re-prices every pledge in flight, and this value feeds a hash-chained
+  // posting — a wrong one is not editable afterwards, only reversible.
+  PLATFORM_FEE_BASIS_POINTS: z.coerce.number().int().min(0).max(2_000).default(500),
 });
 
 export const config = envSchema.parse(process.env);

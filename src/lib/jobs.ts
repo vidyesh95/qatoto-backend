@@ -55,6 +55,14 @@ export const JOB_NAMES = {
   sweepDisputeWindows: "sweep-dispute-windows",
   recomputeEquitySnapshotTick: "recompute-equity-snapshot-tick",
   recomputeEquitySnapshot: "recompute-equity-snapshot",
+  // §7's funding and escrow jobs. `submit-provider-transfer` is enqueued INSIDE the
+  // pledge transaction, because §7 puts the provider call in a worker and never in the
+  // request handler — a hanging card network must not hold an Express worker.
+  submitProviderTransfer: "submit-provider-transfer",
+  reconcileEscrowLedgerTick: "reconcile-escrow-ledger-tick",
+  reconcileEscrowLedger: "reconcile-escrow-ledger",
+  recomputeInvestorConfidenceTick: "recompute-investor-confidence-tick",
+  recomputeInvestorConfidence: "recompute-investor-confidence",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -124,6 +132,19 @@ const VerificationStagePayloadSchema = z.object({ runId: z.uuid() }).strict();
  * two spellings of the same intent, and only one of them would be tested.
  */
 const RecomputeEquitySnapshotPayloadSchema = z
+  .object({ asOf: AsOfSchema, projectId: z.uuid().nullable() })
+  .strict();
+
+/**
+ * The transfer id and NOTHING else — the same rule as every payload above, and it matters
+ * most here. The amount, the currency, the destination and the idempotency key are all
+ * read from the row inside the handler, so there is no field an operator with a queue
+ * dashboard could edit to move a different sum to a different place.
+ */
+const SubmitProviderTransferPayloadSchema = z.object({ transferId: z.uuid() }).strict();
+
+/** Same `projectId: nullable` shape as the equity snapshot, for the same reason. */
+const ProjectScopedAsOfPayloadSchema = z
   .object({ asOf: AsOfSchema, projectId: z.uuid().nullable() })
   .strict();
 
@@ -381,6 +402,67 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeEquitySnapshot),
     },
   },
+  [JOB_NAMES.submitProviderTransfer]: {
+    name: JOB_NAMES.submitProviderTransfer,
+    payloadSchema: SubmitProviderTransferPayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      // Generous, because against a real card network this is an outbound HTTPS call.
+      // Against the internal adapter it is a status flip; the ceiling costs nothing and
+      // does not have to change when Appendix A3 lands.
+      expireInSeconds: 120,
+      deadLetter: deadLetterNameFor(JOB_NAMES.submitProviderTransfer),
+    },
+  },
+  [JOB_NAMES.reconcileEscrowLedgerTick]: {
+    name: JOB_NAMES.reconcileEscrowLedgerTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.reconcileEscrowLedgerTick),
+    },
+  },
+  [JOB_NAMES.reconcileEscrowLedger]: {
+    name: JOB_NAMES.reconcileEscrowLedger,
+    payloadSchema: ProjectScopedAsOfPayloadSchema,
+    queueOptions: {
+      // `singleton` — one reconciliation at a time. Two concurrent runs would both see a
+      // discrepancy, both post a suspense entry for it, and double-count the delta.
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.reconcileEscrowLedger),
+    },
+  },
+  [JOB_NAMES.recomputeInvestorConfidenceTick]: {
+    name: JOB_NAMES.recomputeInvestorConfidenceTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeInvestorConfidenceTick),
+    },
+  },
+  [JOB_NAMES.recomputeInvestorConfidence]: {
+    name: JOB_NAMES.recomputeInvestorConfidence,
+    payloadSchema: ProjectScopedAsOfPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeInvestorConfidence),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -416,6 +498,14 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   [JOB_NAMES.sweepDisputeWindowsTick]: "* * * * *",
   // After the streak decay, so the nightly cap table is computed over a settled ledger.
   [JOB_NAMES.recomputeEquitySnapshotTick]: "45 3 * * *",
+  // HOURLY (§4e). Reconciliation is a comparison, not a correction: it never patches the
+  // ledger, it posts the delta into `reconciliation_suspense` and alarms. Running it often
+  // is cheap and shortens the window in which a discrepancy is invisible.
+  [JOB_NAMES.reconcileEscrowLedgerTick]: "20 * * * *",
+  // After the equity snapshot at 03:45, because investor confidence reads the cap table's
+  // dispute history and a signal computed over a half-recomputed ledger is a signal that
+  // changes when nothing changed.
+  [JOB_NAMES.recomputeInvestorConfidenceTick]: "5 4 * * *",
 };
 
 export type JobEnqueueError =
@@ -635,6 +725,11 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.sweepDisputeWindows]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.recomputeEquitySnapshotTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeEquitySnapshot]: RecomputeEquitySnapshotPayloadSchema,
+  [JOB_NAMES.submitProviderTransfer]: SubmitProviderTransferPayloadSchema,
+  [JOB_NAMES.reconcileEscrowLedgerTick]: TickPayloadSchema,
+  [JOB_NAMES.reconcileEscrowLedger]: ProjectScopedAsOfPayloadSchema,
+  [JOB_NAMES.recomputeInvestorConfidenceTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeInvestorConfidence]: ProjectScopedAsOfPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -697,4 +792,13 @@ export const idempotencyKeyFor = {
   sweepDisputeWindows: (asOfIso: string): string => `${JOB_NAMES.sweepDisputeWindows}:${asOfIso}`,
   recomputeEquitySnapshot: (asOfIso: string, projectId: string | null): string =>
     `${JOB_NAMES.recomputeEquitySnapshot}:${asOfIso}:${projectId ?? "all"}`,
+  // Keyed on the TRANSFER alone. A retried pledge request that somehow reaches the enqueue
+  // twice must submit once — this is the one job in the registry where a duplicate would
+  // cost money once a real card network is behind it.
+  submitProviderTransfer: (transferId: string): string =>
+    `${JOB_NAMES.submitProviderTransfer}:${transferId}`,
+  reconcileEscrowLedger: (asOfIso: string, projectId: string | null): string =>
+    `${JOB_NAMES.reconcileEscrowLedger}:${asOfIso}:${projectId ?? "all"}`,
+  recomputeInvestorConfidence: (asOfIso: string, projectId: string | null): string =>
+    `${JOB_NAMES.recomputeInvestorConfidence}:${asOfIso}:${projectId ?? "all"}`,
 } as const;
