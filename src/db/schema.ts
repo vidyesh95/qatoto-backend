@@ -1206,6 +1206,19 @@ export const projectMember = pgTable(
     removedByUserId: text("removed_by_user_id").references(() => user.id, {
       onDelete: "set null",
     }),
+    // WHO GRANTED THIS ROLE. §4a: `admin` exists to co-sign an escrow release (§7's
+    // four-eyes rule), and that rule is defeated the moment a founder can grant `admin`
+    // to themselves. Today no endpoint assigns `admin` at all — updateProjectMember's
+    // enum is `maintainer | contributor` — so the rule holds by ACCIDENT of a missing
+    // feature. This column plus the CHECK below makes it STRUCTURAL, so the day an
+    // admin-grant endpoint lands it cannot reintroduce the hole.
+    //
+    // NULL for the founder row (nobody granted it — the create transaction wrote it) and
+    // for every row predating this column. `escrow-releases.service.ts` treats NULL on an
+    // `admin` row as un-provenanced and refuses it as an approver.
+    roleGrantedByUserId: text("role_granted_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -1232,6 +1245,15 @@ export const projectMember = pgTable(
     ),
     check("project_member_left_after_joined_ck", sql`left_at IS NULL OR left_at >= joined_at`),
     check("project_member_skills_ck", sql`cardinality(skills) <= 30`),
+    // THE FOUR-EYES RULE, AT THE COLUMN LEVEL (§4a, §7). An `admin` cannot have granted
+    // themselves the role that lets them co-sign a payout. Postgres refuses the row; no
+    // service needs to remember to.
+    check(
+      "project_member_role_granted_by_ck",
+      sql`(project_role <> 'admin')
+          OR (role_granted_by_user_id IS NULL)
+          OR (role_granted_by_user_id <> user_id)`,
+    ),
   ],
 );
 
@@ -3617,6 +3639,20 @@ export const projectAuditEventKindEnum = pgEnum("project_audit_event_kind", [
   "integration_consent_revoked",
   "equity_snapshot_recomputed",
   "pie_baked",
+  // --- §7. Every money event appends to THIS chain, in the same transaction as the
+  // --- escrow journal entry it records (§9.9). The escrow journal has its own hash
+  // --- chain over the postings; this is the human-readable trail beside it, and the two
+  // --- advance under ONE lock (project_chain_head).
+  "funding_round_opened",
+  "funding_round_closed",
+  "pledge_recorded",
+  "pledge_settled",
+  "pledge_failed",
+  "pledge_cancelled",
+  "escrow_release_requested",
+  "escrow_release_approved",
+  "escrow_release_rejected",
+  "reconciliation_discrepancy_opened",
 ]);
 
 export const optimizationSuggestionStatusEnum = pgEnum("optimization_suggestion_status", [
@@ -4563,6 +4599,17 @@ export const projectChainHead = pgTable(
       .references(() => researchProject.id, { onDelete: "restrict" }),
     lastAuditSequenceNumber: integer("last_audit_sequence_number").default(0).notNull(),
     lastLedgerSequenceNumber: integer("last_ledger_sequence_number").default(0).notNull(),
+    // --- §7's escrow journal shares THIS row, and therefore THIS lock.
+    //
+    // §7 specifies "SELECT … FOR UPDATE on the project's last entry" for allocating an
+    // escrow sequence number. That would be a SECOND serialization point, and the note
+    // above says why that is wrong: a writer appending an escrow entry AND an audit entry
+    // in one transaction — which every §7 money event does — would take two locks, and
+    // two locks taken in an order someone eventually gets backwards is a deadlock waiting
+    // for load. Three counters, one row, one lock.
+    lastEscrowSequenceNumber: integer("last_escrow_sequence_number").default(0).notNull(),
+    escrowHeadEntryHash: text("escrow_head_entry_hash"),
+    escrowHeadEntryId: text("escrow_head_entry_id"),
     headEntryHash: text("head_entry_hash"),
     headEntryId: text("head_entry_id"),
     lastAnchoredAt: timestamp("last_anchored_at"),
@@ -4577,13 +4624,16 @@ export const projectChainHead = pgTable(
   () => [
     check(
       "project_chain_head_sequence_ck",
-      sql`last_audit_sequence_number >= 0 AND last_ledger_sequence_number >= 0`,
+      sql`last_audit_sequence_number >= 0 AND last_ledger_sequence_number >= 0
+          AND last_escrow_sequence_number >= 0`,
     ),
     check(
       "project_chain_head_hash_ck",
       sql`(head_entry_hash IS NULL OR head_entry_hash ~ '^[0-9a-f]{64}$')
           AND (last_anchored_hash IS NULL OR last_anchored_hash ~ '^[0-9a-f]{64}$')
-          AND (last_audit_sequence_number = 0) = (head_entry_hash IS NULL)`,
+          AND (escrow_head_entry_hash IS NULL OR escrow_head_entry_hash ~ '^[0-9a-f]{64}$')
+          AND (last_audit_sequence_number = 0) = (head_entry_hash IS NULL)
+          AND (last_escrow_sequence_number = 0) = (escrow_head_entry_hash IS NULL)`,
     ),
   ],
 );
@@ -5163,6 +5213,1097 @@ export const optimizationSuggestionEvidenceRelations = relations(
     suggestion: one(optimizationSuggestion, {
       fields: [optimizationSuggestionEvidence.suggestionId],
       references: [optimizationSuggestion.id],
+    }),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// §7 — FUNDING & ESCROW. docs/R_AND_D_BACKEND_STRUCTURE.md §7, §11c, §12.
+//
+// The highest-stakes surface in the product. Read §0 before editing anything below.
+//
+// THE CARD NETWORK IS DEFERRED, THE LEDGER IS NOT (§7's amendment note, Appendix A3).
+// Every table here ships for real: the double-entry ledger, the zero-sum invariant, the
+// hash chain, the four-eyes release, the suspense account and the reconciliation job.
+// What is stubbed is one outbound call — `provider_transfer` goes to an INTERNAL adapter
+// instead of Stripe, and settlement flips through an auditor-gated endpoint instead of
+// `POST /webhooks/payments/stripe`, which does not exist and has no route, no raw-body
+// mount and no signature verification. NO REAL FUNDS MOVE. A pledge is a recorded intent
+// and a release is a recorded entitlement; no client may say a card was charged.
+//
+// ---------------------------------------------------------------------------
+// THE SIGN CONVENTION, stated once, because §7's prose does not fix it and every
+// posting below depends on it.
+//
+// `escrow_posting.signedAmountInCents` is POSITIVE INTO an account and NEGATIVE OUT, and
+// the postings of one journal entry SUM TO EXACTLY ZERO. Read the six accounts as one
+// pool plus the places money enters and leaves it:
+//
+//   provider_clearing      the OUTSIDE WORLD — the card network. A source of funds, so
+//                          its balance is NEGATIVE and grows more negative with volume.
+//                          It does not return to zero, and it should not.
+//   escrow_held            THE POOL. Cash held for the project. Positive.
+//   released_to_project    cumulative payout out of the pool. Positive (a destination).
+//   platform_fee           cumulative fee taken out of the pool. Positive.
+//   refunds_payable        cumulative refunded out of the pool. Positive.
+//   reconciliation_suspense where provider-vs-ledger disagreement lives, in public.
+//
+// So a pledge of gross A with fee F and net N = A − F posts
+// `provider_clearing −A, escrow_held +N, platform_fee +F`, and a milestone release posts
+// `escrow_held −X, released_to_project +X`. Both sum to zero, and
+// `escrow_held + released_to_project + platform_fee + refunds_payable + suspense
+//  + provider_clearing = 0` over the whole project, always. That identity is the
+// machine-checkable proof §7 asks for, and the nightly job asserts it.
+//
+// ---------------------------------------------------------------------------
+// A PENDING ENTRY IS IN THE JOURNAL AND OUT OF THE BALANCE.
+//
+// §7 requires that `raisedAmountInCents`, `backersCount` and account balances move ONLY
+// at settlement. That is why `escrow_account` carries TWO balances: `cachedBalanceInCents`
+// sums postings whose ENTRY is `settled`, and `pendingBalanceInCents` sums postings whose
+// entry is `pending`. Money in flight is then literally "simply a balance" (§7's own
+// words) without a pending pledge ever touching the settled figure.
+//
+// THE PART THAT LOOKS LIKE AN UPDATE AND IS NOT. §7 describes settlement as flipping
+// `escrow_journal_entry.settlement` from `pending` to `settled` — and, four paragraphs
+// later, revokes UPDATE on that table. Both cannot be true. The append-only rule wins,
+// because it is the one with a trigger behind it, so a pledge that settles produces
+// THREE entries and never an edit:
+//
+//   1. `pledge_authorized`  settlement=pending   provider_clearing −A, escrow_held +N,
+//                                                platform_fee +F
+//   2. `reversal`           settlement=pending   the exact mirror of 1, so the PENDING
+//                                                sum returns to zero
+//   3. `pledge_settled`     settlement=settled   the same postings as 1, now real
+//
+// Each sums to zero on its own; both balances stay pure `SUM`s with no join and no
+// special case; and the journal reads as a true story an auditor can follow — authorized,
+// released from in-flight, settled — rather than a row whose history was overwritten. A
+// pledge that FAILS gets entries 1 and 2 and no third, so nothing ever entered the pool.
+//
+// TWO FURTHER DEVIATIONS FROM §7'S LITERAL TEXT, both recorded in the doc:
+//
+//  1. §7's money path reads "settlement … posts provider_clearing → released_to_project".
+//     Taken literally that hands the founder the cash the instant a card clears, which
+//     contradicts the four-eyes milestone gate three paragraphs later and the entire
+//     purpose of an escrow. Settlement moves money INTO `escrow_held`; only an approved
+//     `escrow_release` moves it to `released_to_project`.
+//  2. §7 allocates the escrow sequence with "SELECT … FOR UPDATE on the project's last
+//     entry". That is a second serialization point beside §9's `project_chain_head`, and a
+//     writer appending an escrow entry AND an audit entry in one transaction — which every
+//     money event does — would take two locks. Three counters live on the ONE head row.
+// ---------------------------------------------------------------------------
+
+/**
+ * Round types. `ENABLED_FUNDING_ROUND_TYPES` (env, default `["crowdfunding"]`) gates
+ * these AT THE API — before creating a round, before opening one, before accepting a
+ * pledge, and in the `/funding/deals` filter (§7 regulatory gating).
+ *
+ * PROOF_OF_EFFORT_SPEC.md §1 sequences reward crowdfunding in Year 1 and true equity
+ * crowdfunding in Year 3+, behind FINRA/SEC registration or a licensed broker-dealer
+ * partner. A disabled type must be invisible and un-pledgeable at the HTTP layer, which
+ * is what makes hiding the chip in the frontend cosmetic rather than load-bearing.
+ */
+export const fundingRoundTypeEnum = pgEnum("funding_round_type", [
+  "crowdfunding",
+  "equity",
+  "venture",
+]);
+
+export const fundingRoundStatusEnum = pgEnum("funding_round_status", [
+  "draft", // created, not accepting pledges
+  "open", // accepting pledges
+  "closed", // terminal for pledging; existing pledges keep settling
+  "cancelled", // terminal
+]);
+
+export const pledgeStatusEnum = pgEnum("pledge_status", [
+  "pending", // authorized, provider has not settled
+  "settled", // the ONLY status that has moved a balance
+  "failed", // the provider declined; a reversing entry was appended
+  "cancelled", // withdrawn by the backer before settlement
+  "refunded", // settled, then returned
+]);
+
+/** The six accounts, one set per project. See the sign convention above. */
+export const escrowAccountKindEnum = pgEnum("escrow_account_kind", [
+  "escrow_held",
+  "provider_clearing",
+  "released_to_project",
+  "platform_fee",
+  "refunds_payable",
+  "reconciliation_suspense",
+]);
+
+export const escrowJournalKindEnum = pgEnum("escrow_journal_kind", [
+  "pledge_authorized",
+  "pledge_settled",
+  "pledge_failed",
+  "pledge_cancelled",
+  "pledge_refunded",
+  "platform_fee_charged",
+  "milestone_release",
+  "reconciliation_adjustment",
+  "reversal",
+]);
+
+/** Projects to the frontend's "pending" | "verified" badge. */
+export const escrowEntrySettlementEnum = pgEnum("escrow_entry_settlement", [
+  "pending",
+  "settled",
+  "failed",
+]);
+
+/**
+ * `internal_adapter` is the only value written today. `stripe` exists so that switching
+ * Appendix A3 on is an INSERT rather than a migration — the seam §7 promises.
+ */
+export const paymentProviderEnum = pgEnum("payment_provider", ["internal_adapter", "stripe"]);
+
+export const providerTransferDirectionEnum = pgEnum("provider_transfer_direction", [
+  "inbound", // a backer's pledge
+  "outbound", // a milestone payout
+]);
+
+export const providerTransferStatusEnum = pgEnum("provider_transfer_status", [
+  "created", // row written with OUR idempotency key, BEFORE any provider call
+  "submitted", // handed to the adapter by the worker
+  "settled",
+  "failed",
+  "cancelled",
+]);
+
+export const escrowReleaseStatusEnum = pgEnum("escrow_release_status", [
+  "requested",
+  "approved",
+  "rejected",
+  "cancelled",
+]);
+
+export const milestoneStatusEnum = pgEnum("milestone_status", [
+  "planned",
+  "in_progress",
+  "done", // the only status an escrow release may be approved against
+  "cancelled",
+]);
+
+/**
+ * The unit each variance integer IS IN — not a display hint and not a scale factor.
+ *
+ * §15 replaces five pre-rendered labels with six typed integers and TWO UNIT NOUNS. The
+ * noun travels with the number so no client hardcodes an English word and no reader has
+ * to guess: comparing two variance rows means reading the key, which is exactly why it
+ * exists. The server writes the canonical unit today; the wider enum is what lets a
+ * project choose a coarser granularity later without any stored number changing meaning.
+ */
+export const varianceScheduleUnitKeyEnum = pgEnum("variance_schedule_unit_key", ["days", "weeks"]);
+
+export const varianceEffortUnitKeyEnum = pgEnum("variance_effort_unit_key", ["minutes", "hours"]);
+
+export const reconciliationDiscrepancyStatusEnum = pgEnum("reconciliation_discrepancy_status", [
+  "open",
+  "resolved",
+  "written_off",
+]);
+
+/**
+ * A funding round. `percentageFunded` IS NOT A COLUMN and not a request field (§7) — it
+ * is computed on read as `floor(raised * 10000 / goal)` and returned as
+ * `percentageFundedBasisPoints`. It cannot be stored, so it cannot be forged or drift.
+ * The value may exceed 10000 when overfunded; the client clamps the BAR WIDTH, not the
+ * number.
+ */
+export const fundingRound = pgTable(
+  "funding_round",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // `restrict` on every parent FK in this domain, without exception (§4f).
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    type: fundingRoundTypeEnum("type").notNull(),
+    status: fundingRoundStatusEnum("status").default("draft").notNull(),
+    // `bigint`, not `integer` (§4b): int4 caps at ±$21,474,836.47, which one Series-A
+    // round overflows. Getting this wrong is not merely a limit problem — the hash chain
+    // covers posting amounts, so widening the column later re-derives every historical
+    // hash.
+    goalAmountInCents: bigint("goal_amount_in_cents", { mode: "bigint" }).notNull(),
+    // WRITTEN BY EXACTLY ONE CODE PATH: escrow-settlement.service.ts, inside the same
+    // transaction that flips the journal entry to `settled`. No controller and no
+    // user-facing service function touches these two. That is a grep-able invariant (§7).
+    raisedAmountInCents: bigint("raised_amount_in_cents", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    backersCount: integer("backers_count").default(0).notNull(),
+    // The round's OWN bounds, which the server re-checks every pledge against. A client
+    // that edits its copy changes nothing.
+    minimumPledgeInCents: bigint("minimum_pledge_in_cents", { mode: "bigint" })
+      .notNull()
+      .default(sql`100`),
+    maximumPledgeInCents: bigint("maximum_pledge_in_cents", { mode: "bigint" }),
+    // Server-owned, copied from the project at create. There is no `currency` field in
+    // any request body (§4b) — an amount never travels without its ISO 4217 code.
+    currency: text("currency").notNull(),
+    title: text("title").notNull(),
+    summary: text("summary"),
+    opensAt: timestamp("opens_at"),
+    closesAt: timestamp("closes_at"),
+    closedAt: timestamp("closed_at"),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("funding_round_projectId_status_idx").on(table.projectId, table.status),
+    // §4c rule 4: every ORDER BY feeding pagination ends in a UNIQUE column, or a cursor
+    // silently skips rows. Matches the /funding/deals feed.
+    index("funding_round_deals_idx").on(table.status, table.type, table.closesAt, table.id),
+    check("funding_round_goal_ck", sql`goal_amount_in_cents > 0`),
+    check("funding_round_raised_ck", sql`raised_amount_in_cents >= 0 AND backers_count >= 0`),
+    check(
+      "funding_round_bounds_ck",
+      sql`minimum_pledge_in_cents >= 1
+          AND (maximum_pledge_in_cents IS NULL
+               OR maximum_pledge_in_cents >= minimum_pledge_in_cents)`,
+    ),
+    check(
+      "funding_round_window_ck",
+      sql`opens_at IS NULL OR closes_at IS NULL OR closes_at > opens_at`,
+    ),
+    // A round cannot be open without a start instant, or "when did pledging begin" has no
+    // answer on a surface whose whole argument is auditability.
+    check("funding_round_open_ck", sql`(status <> 'open') OR (opens_at IS NOT NULL)`),
+    check("funding_round_closed_at_ck", sql`(status = 'closed') = (closed_at IS NOT NULL)`),
+    check("funding_round_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("funding_round_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
+  ],
+);
+
+/**
+ * A pledge. The request body is `{ amountInCents }` AND NOTHING ELSE — §7 enumerates 27
+ * keys `.strict()` turns into a 422 rather than a silent overwrite, and every column
+ * below that a client might wish to name is server-derived from this row's round.
+ *
+ * `providerTransferId` points AT the transfer and the transfer does not point back: one
+ * direction only, so there is no circular insert and no nullable-then-updated FK pair.
+ */
+export const fundingRoundPledge = pgTable(
+  "funding_round_pledge",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    roundId: text("round_id")
+      .notNull()
+      .references(() => fundingRound.id, { onDelete: "restrict" }),
+    // Denormalized so the escrow reads scope by project without joining the round on
+    // every balance query. Written from the round, never from a body.
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    // ALWAYS req.user.id. There is no `backerUserId` field in any request schema (§13).
+    backerUserId: text("backer_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    amountInCents: bigint("amount_in_cents", { mode: "bigint" }).notNull(),
+    // Derived from `PLATFORM_FEE_BASIS_POINTS` through src/lib/money.ts, never sent.
+    platformFeeInCents: bigint("platform_fee_in_cents", { mode: "bigint" }).notNull(),
+    netToEscrowInCents: bigint("net_to_escrow_in_cents", { mode: "bigint" }).notNull(),
+    currency: text("currency").notNull(),
+    status: pledgeStatusEnum("status").default("pending").notNull(),
+    providerTransferId: text("provider_transfer_id").references(
+      (): AnyPgColumn => providerTransfer.id,
+      { onDelete: "restrict" },
+    ),
+    settledAt: timestamp("settled_at"),
+    cancelledAt: timestamp("cancelled_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("funding_round_pledge_roundId_idx").on(table.roundId, table.createdAt, table.id),
+    index("funding_round_pledge_backerUserId_idx").on(
+      table.backerUserId,
+      table.createdAt,
+      table.id,
+    ),
+    index("funding_round_pledge_projectId_status_idx").on(table.projectId, table.status),
+    // One pledge per transfer. A second pledge sharing a transfer would settle twice.
+    uniqueIndex("funding_round_pledge_providerTransferId_unq")
+      .on(table.providerTransferId)
+      .where(sql`provider_transfer_id IS NOT NULL`),
+    check(
+      "funding_round_pledge_amounts_ck",
+      sql`amount_in_cents > 0
+          AND platform_fee_in_cents >= 0
+          AND platform_fee_in_cents <= amount_in_cents
+          AND net_to_escrow_in_cents = amount_in_cents - platform_fee_in_cents`,
+    ),
+    check(
+      "funding_round_pledge_settled_at_ck",
+      sql`(status IN ('settled','refunded')) = (settled_at IS NOT NULL)`,
+    ),
+    check(
+      "funding_round_pledge_cancelled_at_ck",
+      sql`(status = 'cancelled') = (cancelled_at IS NOT NULL)`,
+    ),
+    check("funding_round_pledge_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+  ],
+);
+
+/**
+ * One account per (project, kind) — the six of §7, created together on first use.
+ *
+ * BOTH BALANCES ARE CACHES; the postings are the truth. `escrow.service.ts` re-derives
+ * from `SUM` on every read that GATES a release, because a stale cache that is wrong in
+ * the permissive direction pays out money the project does not have.
+ * `balanceThroughSequenceNumber` says how stale, so a reader can tell rather than assume.
+ */
+export const escrowAccount = pgTable(
+  "escrow_account",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    kind: escrowAccountKindEnum("kind").notNull(),
+    currency: text("currency").notNull(),
+    /** Sums postings whose ENTRY is `settled`. Written only by the settlement path. */
+    cachedBalanceInCents: bigint("cached_balance_in_cents", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    /** Sums postings whose entry is still `pending` — §7's "money in flight". */
+    pendingBalanceInCents: bigint("pending_balance_in_cents", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    balanceThroughSequenceNumber: integer("balance_through_sequence_number").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("escrow_account_projectId_kind_unq").on(table.projectId, table.kind),
+    check("escrow_account_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("escrow_account_sequence_ck", sql`balance_through_sequence_number >= 0`),
+    // No non-negativity check on either balance, deliberately: `provider_clearing` is the
+    // outside world and is NEGATIVE by construction, and `reconciliation_suspense` takes
+    // whichever sign the discrepancy has. A blanket `>= 0` here would forbid a correct
+    // ledger. Non-negativity of the POOL is a service gate on release, not a column rule.
+  ],
+);
+
+/**
+ * The escrow journal — APPEND-ONLY and HASH-CHAINED (§7).
+ *
+ * ENFORCED FOUR WAYS, because service-layer discipline is not enforcement:
+ *   1. `UPDATE`/`DELETE` REVOKED from the application role (hand-written in the
+ *      migration). This is the layer that survives a bug in our own code.
+ *   2. `BEFORE UPDATE OR DELETE` and `BEFORE TRUNCATE` triggers that RAISE.
+ *   3. No `db.update(...)`/`db.delete(...)` against this table exists anywhere in the
+ *      service. The only verb is `insert`.
+ *   4. `UNIQUE(projectId, sequenceNumber)` plus the chain makes out-of-band tampering
+ *      detectable by any verifier that walks it — `GET …/escrow/verify` is one.
+ *
+ * `settlement` is the one apparent exception and is NOT one: it is written at INSERT and
+ * never moves. A pledge that settles appends a reversal plus a `pledge_settled` entry —
+ * see "THE PART THAT LOOKS LIKE AN UPDATE AND IS NOT" in the section header above.
+ */
+export const escrowJournalEntry = pgTable(
+  "escrow_journal_entry",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // `restrict`, NOT cascade (§4f) — a project deletion must never erase a ledger.
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    // Monotonic per project from 1. A gap or reorder is immediately detectable.
+    // Allocated under the `project_chain_head` lock, alongside the audit and slice
+    // counters, so one writer holds one lock (see the deviation note above).
+    sequenceNumber: integer("sequence_number").notNull(),
+    kind: escrowJournalKindEnum("kind").notNull(),
+    // SERVER-COMPOSED display copy ("Milestone release — 400-vendor demand survey").
+    // Composed here rather than on three clients so web/Kotlin/Swift cannot drift. The
+    // one deliberate display string in this domain — it is prose, not a number.
+    description: text("description").notNull(),
+    currency: text("currency").notNull(),
+    // The BUSINESS EVENT time (provider settlement), which may lag createdAt.
+    occurredAt: timestamp("occurred_at").notNull(),
+    settlement: escrowEntrySettlementEnum("settlement").default("pending").notNull(),
+    // `set null`, NOT cascade — deleting a milestone must never delete financial history.
+    linkedMilestoneId: text("linked_milestone_id").references((): AnyPgColumn => milestone.id, {
+      onDelete: "set null",
+    }),
+    linkedPledgeId: text("linked_pledge_id").references(() => fundingRoundPledge.id, {
+      onDelete: "set null",
+    }),
+    linkedReleaseId: text("linked_release_id").references((): AnyPgColumn => escrowRelease.id, {
+      onDelete: "set null",
+    }),
+    // Self-FK. Non-null means this entry NEGATES an earlier one. THE ONLY CORRECTION
+    // MECHANISM — nothing in this table is ever UPDATEd or DELETEd.
+    //
+    // §7's own snippet leaves this column unreferenced; it is wired here, because a
+    // dangling reversal pointer is a hole in exactly the mechanism that replaces editing.
+    reversesJournalEntryId: text("reverses_journal_entry_id").references(
+      (): AnyPgColumn => escrowJournalEntry.id,
+      { onDelete: "restrict" },
+    ),
+    // Canonical hash per §4c, FULL 64-char hex. The 6-character form the mocks show is
+    // display only: at 24 bits collisions hit 50% around 4,800 entries, so it must never
+    // be a key, a cache key, or an equality test.
+    entryHash: text("entry_hash").notNull(),
+    // The prior entry's hash; the literal "genesis" at sequenceNumber 1. (§9's audit
+    // chain spells its genesis NULL instead — the two are independent chains and each
+    // follows the text that specifies it.)
+    previousEntryHash: text("previous_entry_hash").notNull(),
+    hashVersion: integer("hash_version").default(1).notNull(),
+    // NULL for system/adapter-authored entries — most of them.
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // NO updatedAt column, deliberately. An append-only table has nothing to update.
+  },
+  (table) => [
+    uniqueIndex("escrow_journal_entry_project_seq_unq").on(table.projectId, table.sequenceNumber),
+    index("escrow_journal_entry_project_occurredAt_idx").on(
+      table.projectId,
+      table.occurredAt,
+      table.id,
+    ),
+    index("escrow_journal_entry_settlement_idx").on(table.settlement),
+    index("escrow_journal_entry_linkedPledgeId_idx").on(table.linkedPledgeId),
+    check("escrow_journal_entry_sequence_ck", sql`sequence_number >= 1`),
+    check("escrow_journal_entry_hash_ck", sql`entry_hash ~ '^[0-9a-f]{64}$'`),
+    check(
+      "escrow_journal_entry_link_ck",
+      sql`(sequence_number = 1) = (previous_entry_hash = 'genesis')
+          AND (previous_entry_hash = 'genesis' OR previous_entry_hash ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      "escrow_journal_entry_reversal_ck",
+      sql`(kind <> 'reversal') OR (reverses_journal_entry_id IS NOT NULL)`,
+    ),
+    check("escrow_journal_entry_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("escrow_journal_entry_description_ck", sql`char_length(description) BETWEEN 1 AND 500`),
+  ],
+);
+
+/**
+ * The postings. Positive INTO the account, negative OUT, and `SUM` over one entry MUST
+ * EQUAL ZERO — asserted in the service before commit, by a DEFERRED CONSTRAINT TRIGGER at
+ * commit (hand-written in the migration), and again by the nightly reconciliation job.
+ *
+ * §7 calls the zero-sum invariant "a machine-checkable proof that no money was conjured",
+ * and a proof only the application performs is not that. Three layers, on purpose.
+ *
+ * `accountKind` is denormalized from `escrow_account` so a balance query groups without a
+ * join and so the hash document does not have to resolve an id to a name years later.
+ */
+export const escrowPosting = pgTable(
+  "escrow_posting",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // `restrict`, not cascade, even though this is a child row: cascading from a table
+    // nothing may delete is dead code that reads as permission.
+    journalEntryId: text("journal_entry_id")
+      .notNull()
+      .references(() => escrowJournalEntry.id, { onDelete: "restrict" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => escrowAccount.id, { onDelete: "restrict" }),
+    accountKind: escrowAccountKindEnum("account_kind").notNull(),
+    // `bigint` per §4b. The hash chain covers this column, so widening it later would
+    // force the entire historical chain to be re-derived. Right on day one.
+    signedAmountInCents: bigint("signed_amount_in_cents", { mode: "bigint" }).notNull(),
+    // Stable position inside the entry. The hash sorts child postings by
+    // (accountKind, postingIndex) before serializing (§4c), so this is what makes the
+    // ordering documented and unique rather than whatever Postgres returned.
+    postingIndex: integer("posting_index").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("escrow_posting_entry_index_unq").on(table.journalEntryId, table.postingIndex),
+    index("escrow_posting_account_idx").on(table.accountId, table.id),
+    index("escrow_posting_projectId_kind_idx").on(table.projectId, table.accountKind),
+    check("escrow_posting_index_ck", sql`posting_index >= 0`),
+    // A zero-amount posting carries no information and would let an entry "balance" with
+    // padding rows. Every posting moves something.
+    check("escrow_posting_amount_ck", sql`signed_amount_in_cents <> 0`),
+  ],
+);
+
+/**
+ * A transfer submitted to the payment provider.
+ *
+ * THE ROW IS WRITTEN WITH **OUR OWN** `randomUUID` IDEMPOTENCY KEY BEFORE ANY PROVIDER
+ * CALL (§7). A key minted after the call cannot deduplicate the call that just happened,
+ * which is the entire failure mode idempotency keys exist for.
+ *
+ * `payoutDestinationId` is resolved SERVER-SIDE from the project's registered provider
+ * account. A `destinationAccountId` in a request body is a wire-fraud primitive; every
+ * §7 schema is `.strict()` and rejects it.
+ */
+export const providerTransfer = pgTable(
+  "provider_transfer",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    provider: paymentProviderEnum("provider").default("internal_adapter").notNull(),
+    direction: providerTransferDirectionEnum("direction").notNull(),
+    status: providerTransferStatusEnum("status").default("created").notNull(),
+    amountInCents: bigint("amount_in_cents", { mode: "bigint" }).notNull(),
+    currency: text("currency").notNull(),
+    /** OURS, not the provider's. Unique, and minted before the call. */
+    idempotencyKey: text("idempotency_key").notNull(),
+    /** The provider's own identifier, learned only after it answers. */
+    providerTransferRef: text("provider_transfer_ref"),
+    /** Outbound only, and never client-supplied. */
+    payoutDestinationId: text("payout_destination_id"),
+    failureReason: text("failure_reason"),
+    submittedAt: timestamp("submitted_at"),
+    settledAt: timestamp("settled_at"),
+    failedAt: timestamp("failed_at"),
+    /** The auditor who flipped settlement, since no card network does it here (§7). */
+    settlementDecidedByUserId: text("settlement_decided_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("provider_transfer_idempotencyKey_unq").on(table.idempotencyKey),
+    index("provider_transfer_projectId_status_idx").on(table.projectId, table.status),
+    index("provider_transfer_status_createdAt_idx").on(table.status, table.createdAt, table.id),
+    check("provider_transfer_amount_ck", sql`amount_in_cents > 0`),
+    check("provider_transfer_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    // An inbound transfer has no payout destination; there is nowhere for a backer's
+    // money to be "sent to" on the way in, and a populated column would read as one.
+    check(
+      "provider_transfer_destination_ck",
+      sql`(direction = 'outbound') OR (payout_destination_id IS NULL)`,
+    ),
+    check("provider_transfer_submitted_at_ck", sql`(status = 'created') = (submitted_at IS NULL)`),
+    check("provider_transfer_settled_at_ck", sql`(status = 'settled') = (settled_at IS NOT NULL)`),
+    check(
+      "provider_transfer_failed_at_ck",
+      sql`(status = 'failed') = (failed_at IS NOT NULL)
+          AND (status = 'failed') = (failure_reason IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The provider's own event, persisted BEFORE it is processed and deduped by a unique
+ * constraint (§7's webhook discipline: verify → persist → dedupe → process in one
+ * transaction → return 200 for duplicates).
+ *
+ * THIS TABLE IS WRITTEN TODAY, not reserved for Stripe. The auditor-gated settlement
+ * endpoint records `provider = 'internal_adapter'` with a synthetic event id, so the
+ * dedupe machinery is EXERCISED now rather than shipped untested — which is the whole
+ * point of the seam. When Appendix A3 lands, the Stripe route writes the same rows and
+ * runs the same transaction.
+ */
+export const providerWebhookEvent = pgTable(
+  "provider_webhook_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    provider: paymentProviderEnum("provider").default("internal_adapter").notNull(),
+    /** The provider's event id — the dedup key, never ours. */
+    providerEventId: text("provider_event_id").notNull(),
+    eventType: text("event_type").notNull(),
+    projectId: text("project_id").references(() => researchProject.id, { onDelete: "restrict" }),
+    providerTransferId: text("provider_transfer_id").references(() => providerTransfer.id, {
+      onDelete: "restrict",
+    }),
+    /** Stored verbatim, as text. Evidence of what arrived, not a parsed opinion of it. */
+    payloadJson: text("payload_json").notNull(),
+    receivedAt: timestamp("received_at").defaultNow().notNull(),
+    processedAt: timestamp("processed_at"),
+    processingError: text("processing_error"),
+  },
+  (table) => [
+    // The dedupe. A replayed event collides here and the handler answers 200 without
+    // processing twice.
+    uniqueIndex("provider_webhook_event_provider_eventId_unq").on(
+      table.provider,
+      table.providerEventId,
+    ),
+    index("provider_webhook_event_transferId_idx").on(table.providerTransferId),
+    index("provider_webhook_event_processedAt_idx").on(table.processedAt, table.receivedAt),
+  ],
+);
+
+/**
+ * A milestone. `escrowReleaseAmountInCents` is the founder's declared payout for the
+ * milestone — and an `escrow_release` SNAPSHOTS it at request time, so editing this
+ * column between request and approval cannot inflate a payout (§7).
+ */
+export const milestone = pgTable(
+  "milestone",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    status: milestoneStatusEnum("status").default("planned").notNull(),
+    escrowReleaseAmountInCents: bigint("escrow_release_amount_in_cents", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    currency: text("currency").notNull(),
+    // Date-only ISO string — the §1 wire format, with no Date object to reinterpret in a
+    // local zone on the way out.
+    dueDate: date("due_date", { mode: "string" }),
+    completedAt: timestamp("completed_at"),
+    orderIndex: integer("order_index").notNull(),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("milestone_projectId_orderIndex_unq").on(table.projectId, table.orderIndex),
+    index("milestone_projectId_status_idx").on(table.projectId, table.status),
+    check("milestone_amount_ck", sql`escrow_release_amount_in_cents >= 0`),
+    check("milestone_order_ck", sql`order_index >= 0`),
+    check("milestone_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
+    check("milestone_completed_at_ck", sql`(status = 'done') = (completed_at IS NOT NULL)`),
+    check("milestone_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+  ],
+);
+
+/**
+ * Planned-versus-actual, as SIX TYPED INTEGERS and TWO UNIT NOUNS (§15) — replacing five
+ * pre-rendered labels, of which `varianceLabel: "26% behind"` was the worst: a string
+ * that cannot be sorted, compared, localized, or checked for sign.
+ *
+ * `varianceBasisPoints` is SIGNED and SERVER-COMPUTED through src/lib/money.ts. Negative
+ * is behind, positive is ahead. There is no field for it in any request body.
+ */
+export const milestoneVariance = pgTable(
+  "milestone_variance",
+  {
+    // PK and FK at once — exactly one variance row per milestone.
+    milestoneId: text("milestone_id")
+      .primaryKey()
+      .references(() => milestone.id, { onDelete: "restrict" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    plannedDurationDays: integer("planned_duration_days").notNull(),
+    actualDurationDays: integer("actual_duration_days").notNull(),
+    plannedCostInCents: bigint("planned_cost_in_cents", { mode: "bigint" }).notNull(),
+    actualCostInCents: bigint("actual_cost_in_cents", { mode: "bigint" }).notNull(),
+    plannedEffortMinutes: integer("planned_effort_minutes").notNull(),
+    actualEffortMinutes: integer("actual_effort_minutes").notNull(),
+    scheduleUnitKey: varianceScheduleUnitKeyEnum("schedule_unit_key").default("days").notNull(),
+    effortUnitKey: varianceEffortUnitKeyEnum("effort_unit_key").default("minutes").notNull(),
+    /** Signed. Computed from the schedule pair, never asserted by a client. */
+    varianceBasisPoints: integer("variance_basis_points").notNull(),
+    currency: text("currency").notNull(),
+    computedAt: timestamp("computed_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("milestone_variance_projectId_idx").on(table.projectId),
+    check(
+      "milestone_variance_non_negative_ck",
+      sql`planned_duration_days >= 0 AND actual_duration_days >= 0
+          AND planned_cost_in_cents >= 0 AND actual_cost_in_cents >= 0
+          AND planned_effort_minutes >= 0 AND actual_effort_minutes >= 0`,
+    ),
+    // Bounded rather than unbounded: a milestone 10,000× over plan is a data-entry
+    // accident, and letting it through renders as a chart nobody can read.
+    check(
+      "milestone_variance_basis_points_ck",
+      sql`variance_basis_points BETWEEN -1000000 AND 1000000`,
+    ),
+    check("milestone_variance_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+  ],
+);
+
+/**
+ * A milestone payout request and its decision — THE FOUR-EYES RULE (§7).
+ *
+ * The request body is `{ requestNote? }` and carries NO AMOUNT AT ALL. `amountInCents` is
+ * read from `milestone.escrowReleaseAmountInCents` and SNAPSHOTTED here at request time,
+ * so a founder can neither assert an amount nor edit the milestone between request and
+ * approval to inflate the payout.
+ *
+ * Approval independently re-derives EVERY gate server-side (requester ≠ approver even for
+ * a founder; the approver holds `audit_escrow` or a non-self-granted project `admin`;
+ * `milestone.status = 'done'`; zero open or disputed §9 allocation windows; `escrow_held`
+ * ≥ the snapshot) and freezes the evidence into `verificationSnapshot`, so a later audit
+ * can prove WHY, not merely THAT.
+ *
+ * `verificationSnapshot` is `text`, not `jsonb`, and that is load-bearing: jsonb reorders
+ * keys and normalizes numbers on write, so the bytes read back would not be the bytes
+ * recorded — the same reason `project_audit_entry.payloadJson` is text.
+ */
+export const escrowRelease = pgTable(
+  "escrow_release",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    milestoneId: text("milestone_id")
+      .notNull()
+      .references(() => milestone.id, { onDelete: "restrict" }),
+    /** THE SNAPSHOT. Frozen at request time by a hand-written trigger, not by hope. */
+    amountInCents: bigint("amount_in_cents", { mode: "bigint" }).notNull(),
+    currency: text("currency").notNull(),
+    status: escrowReleaseStatusEnum("status").default("requested").notNull(),
+    requestedByUserId: text("requested_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    requestNote: text("request_note"),
+    requestedAt: timestamp("requested_at").defaultNow().notNull(),
+    decidedByUserId: text("decided_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    decisionNote: text("decision_note"),
+    decidedAt: timestamp("decided_at"),
+    /** Canonical JSON of every gate and its evidence, recorded at the decision. */
+    verificationSnapshot: text("verification_snapshot"),
+    journalEntryId: text("journal_entry_id").references(() => escrowJournalEntry.id, {
+      onDelete: "restrict",
+    }),
+    providerTransferId: text("provider_transfer_id").references(() => providerTransfer.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("escrow_release_projectId_status_idx").on(table.projectId, table.status),
+    index("escrow_release_milestoneId_idx").on(table.milestoneId),
+    // At most one release in flight per milestone, and at most one that ever paid. Two
+    // approved releases on one milestone is the double-payout bug, expressed as a row.
+    uniqueIndex("escrow_release_milestone_requested_unq")
+      .on(table.milestoneId)
+      .where(sql`status = 'requested'`),
+    uniqueIndex("escrow_release_milestone_approved_unq")
+      .on(table.milestoneId)
+      .where(sql`status = 'approved'`),
+    check("escrow_release_amount_ck", sql`amount_in_cents > 0`),
+    check("escrow_release_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    // FOUR EYES, AT THE COLUMN LEVEL. The service returns 422 SELF_APPROVAL_FORBIDDEN
+    // first; this is what holds if anyone ever writes the row another way.
+    check(
+      "escrow_release_four_eyes_ck",
+      sql`decided_by_user_id IS NULL OR decided_by_user_id <> requested_by_user_id`,
+    ),
+    check(
+      "escrow_release_decision_ck",
+      sql`(status IN ('approved','rejected'))
+          = (decided_by_user_id IS NOT NULL AND decided_at IS NOT NULL
+             AND verification_snapshot IS NOT NULL)`,
+    ),
+    // An approval that posted no journal entry moved no money while claiming to.
+    check("escrow_release_journal_ck", sql`(status = 'approved') = (journal_entry_id IS NOT NULL)`),
+  ],
+);
+
+/**
+ * The nightly provider-versus-ledger comparison (§7 reconciliation).
+ *
+ * WHEN THE TWO DISAGREE, THE LEDGER IS NOT SILENTLY PATCHED. The job writes a row here,
+ * posts the delta into `reconciliation_suspense` (preserving the zero-sum invariant), and
+ * alarms. The provider is authoritative for CASH; the ledger is authoritative for
+ * ENTITLEMENT; this account is where the two are allowed to differ, in public.
+ *
+ * HONEST CAVEAT (Appendix A3): until an adapter that actually moves cash exists there is
+ * no external source of truth to reconcile against, so the discrepancy count is trivially
+ * zero. Do not read that as evidence the books are right.
+ */
+export const reconciliationDiscrepancy = pgTable(
+  "reconciliation_discrepancy",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    accountKind: escrowAccountKindEnum("account_kind").notNull(),
+    /** The job's quantized reference instant (§4c rule 3). Stored, never re-read. */
+    asOf: timestamp("as_of").notNull(),
+    ledgerBalanceInCents: bigint("ledger_balance_in_cents", { mode: "bigint" }).notNull(),
+    providerBalanceInCents: bigint("provider_balance_in_cents", { mode: "bigint" }).notNull(),
+    deltaInCents: bigint("delta_in_cents", { mode: "bigint" }).notNull(),
+    status: reconciliationDiscrepancyStatusEnum("status").default("open").notNull(),
+    journalEntryId: text("journal_entry_id").references(() => escrowJournalEntry.id, {
+      onDelete: "restrict",
+    }),
+    resolutionNote: text("resolution_note"),
+    resolvedAt: timestamp("resolved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // Idempotent by construction: re-running the job for the same asOf writes nothing
+    // new, which is §4e's "a job that cannot be safely re-run is a bug".
+    uniqueIndex("reconciliation_discrepancy_project_account_asOf_unq").on(
+      table.projectId,
+      table.accountKind,
+      table.asOf,
+    ),
+    index("reconciliation_discrepancy_status_idx").on(table.status, table.asOf),
+    check(
+      "reconciliation_discrepancy_delta_ck",
+      sql`delta_in_cents = provider_balance_in_cents - ledger_balance_in_cents`,
+    ),
+    check("reconciliation_discrepancy_resolved_ck", sql`(status = 'open') = (resolved_at IS NULL)`),
+  ],
+);
+
+/**
+ * The deal-flow signal, computed nightly and returned WITH ITS `asOf` (§7).
+ *
+ * Replaces the frontend's hardcoded `INVESTOR_CONFIDENCE_PERCENT = 78`. Every input is
+ * stored beside the output so a reader can see what produced the number rather than
+ * trusting it, and the window is stored as ABSOLUTE BOUNDS rather than a day count
+ * (§4c rule 3) — a row that records "30 days" is unreadable a year later.
+ */
+export const investorConfidenceSnapshot = pgTable(
+  "investor_confidence_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    asOf: timestamp("as_of").notNull(),
+    windowStartsAt: timestamp("window_starts_at").notNull(),
+    windowEndsAt: timestamp("window_ends_at").notNull(),
+    /** 0–10000. Basis points, never a float percent (§4b). */
+    confidenceBasisPoints: integer("confidence_basis_points").notNull(),
+    trend: trendDirectionEnum("trend").default("flat").notNull(),
+    // --- The inputs, stored so the output is inspectable rather than asserted.
+    dailyLogStreakDays: integer("daily_log_streak_days").default(0).notNull(),
+    verifiedMilestoneCount: integer("verified_milestone_count").default(0).notNull(),
+    totalMilestoneCount: integer("total_milestone_count").default(0).notNull(),
+    openDisputeCount: integer("open_dispute_count").default(0).notNull(),
+    resolvedDisputeCount: integer("resolved_dispute_count").default(0).notNull(),
+    computedAt: timestamp("computed_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("investor_confidence_snapshot_project_asOf_unq").on(table.projectId, table.asOf),
+    index("investor_confidence_snapshot_projectId_asOf_idx").on(
+      table.projectId,
+      table.asOf,
+      table.id,
+    ),
+    check(
+      "investor_confidence_snapshot_basis_points_ck",
+      sql`confidence_basis_points BETWEEN 0 AND 10000`,
+    ),
+    check(
+      "investor_confidence_snapshot_counts_ck",
+      sql`daily_log_streak_days >= 0 AND verified_milestone_count >= 0
+          AND total_milestone_count >= verified_milestone_count
+          AND open_dispute_count >= 0 AND resolved_dispute_count >= 0`,
+    ),
+    check("investor_confidence_snapshot_window_ck", sql`window_ends_at > window_starts_at`),
+  ],
+);
+
+// --- §7 relations. Child-side only, same convention as §5, §6, §8 and §9.
+
+export const fundingRoundRelations = relations(fundingRound, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [fundingRound.projectId],
+    references: [researchProject.id],
+  }),
+  createdBy: one(user, { fields: [fundingRound.createdByUserId], references: [user.id] }),
+  pledges: many(fundingRoundPledge),
+}));
+
+export const fundingRoundPledgeRelations = relations(fundingRoundPledge, ({ one }) => ({
+  round: one(fundingRound, {
+    fields: [fundingRoundPledge.roundId],
+    references: [fundingRound.id],
+  }),
+  project: one(researchProject, {
+    fields: [fundingRoundPledge.projectId],
+    references: [researchProject.id],
+  }),
+  backer: one(user, { fields: [fundingRoundPledge.backerUserId], references: [user.id] }),
+  transfer: one(providerTransfer, {
+    fields: [fundingRoundPledge.providerTransferId],
+    references: [providerTransfer.id],
+  }),
+}));
+
+export const escrowAccountRelations = relations(escrowAccount, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [escrowAccount.projectId],
+    references: [researchProject.id],
+  }),
+  postings: many(escrowPosting),
+}));
+
+export const escrowJournalEntryRelations = relations(escrowJournalEntry, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [escrowJournalEntry.projectId],
+    references: [researchProject.id],
+  }),
+  createdBy: one(user, { fields: [escrowJournalEntry.createdByUserId], references: [user.id] }),
+  postings: many(escrowPosting),
+}));
+
+export const escrowPostingRelations = relations(escrowPosting, ({ one }) => ({
+  entry: one(escrowJournalEntry, {
+    fields: [escrowPosting.journalEntryId],
+    references: [escrowJournalEntry.id],
+  }),
+  account: one(escrowAccount, {
+    fields: [escrowPosting.accountId],
+    references: [escrowAccount.id],
+  }),
+}));
+
+export const providerTransferRelations = relations(providerTransfer, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [providerTransfer.projectId],
+    references: [researchProject.id],
+  }),
+  settlementDecidedBy: one(user, {
+    fields: [providerTransfer.settlementDecidedByUserId],
+    references: [user.id],
+  }),
+  webhookEvents: many(providerWebhookEvent),
+}));
+
+export const providerWebhookEventRelations = relations(providerWebhookEvent, ({ one }) => ({
+  transfer: one(providerTransfer, {
+    fields: [providerWebhookEvent.providerTransferId],
+    references: [providerTransfer.id],
+  }),
+  project: one(researchProject, {
+    fields: [providerWebhookEvent.projectId],
+    references: [researchProject.id],
+  }),
+}));
+
+export const milestoneRelations = relations(milestone, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [milestone.projectId],
+    references: [researchProject.id],
+  }),
+  createdBy: one(user, { fields: [milestone.createdByUserId], references: [user.id] }),
+  variance: one(milestoneVariance, {
+    fields: [milestone.id],
+    references: [milestoneVariance.milestoneId],
+  }),
+  releases: many(escrowRelease),
+}));
+
+export const milestoneVarianceRelations = relations(milestoneVariance, ({ one }) => ({
+  milestone: one(milestone, {
+    fields: [milestoneVariance.milestoneId],
+    references: [milestone.id],
+  }),
+}));
+
+export const escrowReleaseRelations = relations(escrowRelease, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [escrowRelease.projectId],
+    references: [researchProject.id],
+  }),
+  milestone: one(milestone, {
+    fields: [escrowRelease.milestoneId],
+    references: [milestone.id],
+  }),
+  // relationName because this table has TWO relations to `user`; without it Drizzle
+  // cannot tell them apart.
+  requestedBy: one(user, {
+    fields: [escrowRelease.requestedByUserId],
+    references: [user.id],
+    relationName: "escrowReleaseRequestedBy",
+  }),
+  decidedBy: one(user, {
+    fields: [escrowRelease.decidedByUserId],
+    references: [user.id],
+    relationName: "escrowReleaseDecidedBy",
+  }),
+  journalEntry: one(escrowJournalEntry, {
+    fields: [escrowRelease.journalEntryId],
+    references: [escrowJournalEntry.id],
+  }),
+}));
+
+export const reconciliationDiscrepancyRelations = relations(
+  reconciliationDiscrepancy,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [reconciliationDiscrepancy.projectId],
+      references: [researchProject.id],
+    }),
+    journalEntry: one(escrowJournalEntry, {
+      fields: [reconciliationDiscrepancy.journalEntryId],
+      references: [escrowJournalEntry.id],
+    }),
+  }),
+);
+
+export const investorConfidenceSnapshotRelations = relations(
+  investorConfidenceSnapshot,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [investorConfidenceSnapshot.projectId],
+      references: [researchProject.id],
     }),
   }),
 );
