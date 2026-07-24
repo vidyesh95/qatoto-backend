@@ -1142,6 +1142,46 @@ milestones, and dispute rate, and returned with its `asOf`. And
 it is **effective-dated and requires the member's acceptance**, because a founder who can silently
 edit a rate can silently rewrite everyone's equity.
 
+### Where the build diverged from this section
+
+**✅ §7 is shipped.** Five places where the code does something other than what the text above
+says, each because following the text literally would have contradicted something else in it.
+
+1. **The sign convention.** §7 names six accounts and never fixes their signs. The build reads
+   `provider_clearing` as the OUTSIDE WORLD — a source of funds, so permanently NEGATIVE — with
+   `escrow_held` as the pool and the other four as destinations money leaves it to. A pledge posts
+   `provider_clearing −gross, escrow_held +net, platform_fee +fee`. Every entry sums to zero, so the
+   six balances sum to zero per project, which is the machine-checkable form of §7's own claim.
+2. **Settlement appends; it does not edit.** §7 says settlement flips
+   `escrow_journal_entry.settlement` from `pending` to `settled`, then four paragraphs later revokes
+   `UPDATE` on that table. Both cannot hold. The append-only rule wins, because it is the one with a
+   trigger behind it: a settling pledge produces a `reversal` (mirroring the authorization out of
+   the pending bucket) plus a `pledge_settled`. `escrow_account` therefore carries TWO balances, and
+   §7's "money in flight is simply a balance" becomes literally true.
+3. **Settlement moves money INTO escrow, not out to the project.** §7's money path reads
+   `provider_clearing → released_to_project` at settlement. Taken literally that pays the founder
+   the instant a card clears, which contradicts the four-eyes milestone gate in the same section.
+4. **One lock, three counters.** §7 allocates the escrow sequence with `SELECT … FOR UPDATE` on the
+   project's last entry. That is a second serialization point beside `project_chain_head`, and every
+   money event appends an escrow entry AND an audit entry in one transaction — so that writer would
+   hold two locks, in an order somebody eventually gets backwards. The escrow counter and head hash
+   live on `project_chain_head` beside the audit and slice counters.
+5. **No `project_member_compensation_rate`.** §9 already shipped `member_fair_market_rate` —
+   effective-dated, member-accepted, trigger-frozen, and the only rate the slice math reads. See
+   §11c for the two endpoints this supersedes.
+
+**Two additions this section does not ask for**, both security-critical and both worth flagging:
+
+- **`SELF_PLEDGE_FORBIDDEN`.** A founder pledging to their own round is refused with `422`. No money
+  moves in this phase, so it costs nothing and inflates `raisedAmountInCents`, `backersCount` and
+  the investor-confidence signal computed from them. Those three numbers exist to tell an outsider
+  whether STRANGERS believe in a project, and the frontend has no way to tell the difference.
+- **`project_member.roleGrantedByUserId`** plus `project_member_role_granted_by_ck`. §4a says a
+  founder cannot grant themselves `admin`; today that holds only because no endpoint assigns `admin`
+  at all. The column makes it structural, and `resolveApproverStanding` additionally refuses an
+  `admin` row with no recorded grantor — a row that cannot prove it was not self-granted has no
+  business co-signing a payout.
+
 ### The rejected-keys list
 
 `.strict()` turns each of these into a `422` instead of a silent overwrite. Enumerated so a reviewer
@@ -1904,8 +1944,17 @@ app.use("/", researchCatalogRouter); // ✅ shipped — /open-roles, /research-c
 // cannot carry a project slug; the project and member come out of the signed state (§9.10).
 app.use("/", integrationCallbackRouter); // ✅ shipped — GET /integrations/:provider/callback
 
-// NOT YET IN src/app.ts — §7 and §10 have no router to mount:
-// app.use("/", fundingRouter);              // ⏳ pending — /funding-rounds, /pledges, /milestones
+// Same prefix a fourth time, declared AFTER all three: projectFundingRouter owns
+// /:projectSlug's /funding-rounds, /milestones, /escrow/*, /compensation and
+// /investor-confidence.
+app.use("/research-projects", projectFundingRouter); // ✅ shipped — §7
+// Root-mounted for the same reason researchCatalogRouter is: a backer arriving from a
+// deal-flow list holds a round id and has no reason to know which project owns it.
+// Owns /funding-rounds, /pledges, /milestones, /escrow-releases, /provider-transfers
+// and /funding/deals.
+app.use("/", fundingRouter); // ✅ shipped — §7
+
+// NOT YET IN src/app.ts — §10 has no router to mount:
 // app.use("/research-programs", researchProgramsRouter); // ⏳ pending — §10
 ```
 
@@ -1933,15 +1982,15 @@ Three states, checked against the actual route files in `src/routes/`, not again
 | ------------------------------------- | -------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
 | [11a](#11a-projects-team-roles-5)     | Projects, team, roles (§5) | ✅ Shipped | `research-projects.routes.ts`, `research-catalog.routes.ts`                                                |
 | [11b](#11b-discovery-6)               | Discovery (§6)             | ✅ Shipped | `discovery.routes.ts`                                                                                      |
-| [11c](#11c-funding-and-escrow-7)      | Funding & escrow (§7)      | ⏳ Pending | none — no `funding.routes.ts` exists. One row inside is additionally 🚫 deferred                           |
+| [11c](#11c-funding-and-escrow-7)      | Funding & escrow (§7)      | ✅ Shipped | `funding.routes.ts`, `funding.controller.ts`, eight services, three jobs, migration 0016                   |
 | [11d](#11d-workshop-and-daily-logs-8) | Workshop & daily logs (§8) | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A                 |
 | [11e](#11e-proof-of-effort-9)         | Proof of Effort (§9)       | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015 |
 | [11f](#11f-project-immortal-10)       | Project Immortal (§10)     | ⏳ Pending | none — no `research-programs.routes.ts` exists                                                             |
 
-Each subsection below opens with one line stating its state. §11c additionally flags one row inline
-with 🚫, because that subsection mixes ⏳ pending with one 🚫 deferred endpoint under a single
-heading — every other subsection is uniform, so a per-row column would repeat the same word down
-an entire table for no reason.
+Each subsection below opens with one line stating its state. No subsection mixes states any more:
+§11c's one 🚫 deferred row (`POST /webhooks/payments/stripe`) is gone from its table entirely and
+lives only in [Appendix A3](#a3-stripe-connect--treasury-escrow-7), replaced by the auditor-gated
+settlement endpoint that shipped in its place.
 
 ### 11a. Projects, team, roles (§5)
 
@@ -1991,28 +2040,47 @@ reachable today.
 
 ### 11c. Funding and escrow (§7)
 
-**⏳ Pending — none of this is built.** No `funding.routes.ts`, no controller, no service, no
-migration for any table in §7. Build order is Phase 4 (§16), after §9 exists to gate release. One
-row is additionally **🚫 deferred** rather than merely pending — flagged inline — because it names
-Stripe specifically; when this phase is built, that row routes through the internal ledger-only
-adapter §7's amendment note describes, not a real webhook.
+**✅ Shipped in full.** Every row below is routed and reachable today, backed by
+`funding.routes.ts`, `funding.controller.ts` / `funding-error-response.ts`, seven services
+(`escrow`, `escrow-provider-adapter`, `escrow-settlement`, `funding-rounds`, `milestones`,
+`escrow-releases`, `investor-confidence`, `compensation`), three jobs and migration 0016.
 
-| Method & path                                                                                    | Body / input                               | Behavior & statuses                                                                                                                                            |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /research-projects/:projectSlug/funding-rounds`                                            | `{ type, goalAmountInCents, closesAt }`    | Gated by `ENABLED_FUNDING_ROUND_TYPES`. `201` · `403 ROUND_TYPE_DISABLED`                                                                                      |
-| `POST /funding-rounds/:roundId/open` · `/close`                                                  | —                                          | Founder + `admin`. `200`                                                                                                                                       |
-| `GET /funding-rounds/:roundId` · `/backers` · `/pledge-options`                                  | —                                          | `percentageFundedBasisPoints` computed on read. `200`                                                                                                          |
-| **`POST /funding-rounds/:roundId/pledges`**                                                      | **`{ amountInCents }` — and nothing else** | Server re-bounds, derives fee, resolves currency, writes `provider_transfer` with our idempotency key. `201` · `422` · `429`. See the rejected-keys list in §7 |
-| `GET /pledges/mine` · `POST /pledges/:id/cancel`                                                 | —                                          | No `userId` param exists; the filter is `req.user.id`. `200`                                                                                                   |
-| `GET /funding/deals`                                                                             | `?roundType=&stage=&page=`                 | Investor deal flow. `200`                                                                                                                                      |
-| `POST` · `PATCH` · `GET …/milestones`                                                            | `MilestoneSchema`                          | `escrowReleaseAmountInCents`. `201`/`200`                                                                                                                      |
-| `POST /milestones/:id/complete` · `PUT /milestones/:id/variance`                                 | `{ …variance integers }`                   | `200`                                                                                                                                                          |
-| `GET /research-projects/:projectSlug/escrow/summary` · `/ledger`                                 | `?page=`                                   | Allocated / released / held from **account balances**, not client arithmetic. `200`                                                                            |
-| **`POST /milestones/:id/escrow-releases`**                                                       | **`{ requestNote? }` — no amount**         | Snapshots the amount server-side. `201`                                                                                                                        |
-| `POST /escrow-releases/:id/approve` · `/reject`                                                  | `{ note }`                                 | Four-eyes: `422 SELF_APPROVAL_FORBIDDEN`. Re-derives every gate. `200`                                                                                         |
-| `GET …/compensation` · `PUT …/members/:id/compensation-rate` · `POST …/compensation-rate/accept` | `{ rateInCentsPerHour, effectiveFrom }`    | Rate requires member acceptance. `200` · `409`                                                                                                                 |
-| `GET …/investor-confidence` · `/audit-trail`                                                     | `?page=`                                   | Returns `asOf`. `200`                                                                                                                                          |
-| 🚫 `POST /webhooks/payments/stripe`                                                              | raw body                                   | **Deferred (Appendix A3).** Ships as an internal, auditor-gated settlement endpoint instead — no Stripe SDK, no signature verification, no raw-body mount.     |
+The one row this table used to flag 🚫 — `POST /webhooks/payments/stripe` — is **not built and
+will not be**, exactly as Appendix A3 says. It is replaced below by the auditor-gated settlement
+endpoint that stands in for it. There is still no webhook router and no raw-body mount anywhere in
+`src/app.ts`.
+
+| Method & path                                                    | Body / input                                | Behavior & statuses                                                                                                                                                                                                                                                              |
+| ---------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /research-projects/:projectSlug/funding-rounds`            | `{ type, title, goalAmountInCents, … }`     | Founder only. Gated by `ENABLED_FUNDING_ROUND_TYPES`. `201` · `403 ROUND_TYPE_DISABLED`                                                                                                                                                                                          |
+| `GET /research-projects/:projectSlug/funding-rounds`             | —                                           | Member only → else `404`. `200`                                                                                                                                                                                                                                                  |
+| `POST /funding-rounds/:roundId/open` · `/close`                  | —                                           | Founder + `admin`. Re-checks the type gate at open. `200` · `422 ROUND_INCOMPLETE_FOR_OPEN`                                                                                                                                                                                      |
+| `GET /funding-rounds/:roundId` · `/backers` · `/pledge-options`  | —                                           | `percentageFundedBasisPoints` computed on read, may exceed `10000`. A draft round is `404` to non-members. Backers lists **settled** pledges only. `200`                                                                                                                         |
+| **`POST /funding-rounds/:roundId/pledges`**                      | **`{ amountInCents }` — and nothing else**  | Server re-bounds, derives fee, resolves currency, writes `provider_transfer` with our idempotency key. `201` · `422` · `429`. See the rejected-keys list in §7                                                                                                                   |
+| `GET /pledges/mine` · `POST /pledges/:id/cancel`                 | —                                           | No `userId` param exists; the filter is `req.user.id`. Cancel is pending-only. `200`                                                                                                                                                                                             |
+| `GET /funding/deals`                                             | `?roundType=&stage=&page=`                  | Investor deal flow, filtered by the enabled types **in SQL**. `200`                                                                                                                                                                                                              |
+| `GET` · `POST …/milestones` · `PATCH /milestones/:id`            | `MilestoneSchema`                           | `orderIndex` server-derived; no `status` field on the PATCH. `201`/`200`                                                                                                                                                                                                         |
+| `POST /milestones/:id/complete` · `PUT /milestones/:id/variance` | `{ …six variance integers }`                | Signed `varianceBasisPoints` computed server-side and clamped to the column bound. `200`                                                                                                                                                                                         |
+| `GET /research-projects/:projectSlug/escrow/summary` · `/ledger` | `?page=`                                    | Allocated / released / held from **account balances**, not client arithmetic. `direction: in\|out` is a read projection off the `escrow_held` posting. `200`                                                                                                                     |
+| `GET …/escrow/verify` · `…/escrow/ledger/:entryId/hash-input`    | —                                           | Re-walks the chain; a break is **`409 ESCROW_CHAIN_BROKEN`**, never `200 {valid:false}`. `hash-input` returns the canonical bytes. `200` · `409`                                                                                                                                 |
+| **`POST /milestones/:id/escrow-releases`**                       | **`{ requestNote? }` — no amount**          | Founder only. Snapshots `milestone.escrowReleaseAmountInCents` server-side, frozen by a trigger. `201`                                                                                                                                                                           |
+| `POST /escrow-releases/:id/approve` · `/reject`                  | `{ note }`                                  | Four-eyes: `422 SELF_APPROVAL_FORBIDDEN`. Re-derives all five gates and freezes them into `verificationSnapshot`. `200` · `403` · `409`                                                                                                                                          |
+| `GET …/compensation`                                             | —                                           | Locked rate (from §9's `member_fair_market_rate`), advertised offers, and approved payouts. `200`                                                                                                                                                                                |
+| `GET …/investor-confidence`                                      | —                                           | Returns `asOf`. **`404` when never computed** — never a fabricated `0`. `200` · `404`                                                                                                                                                                                            |
+| `GET /provider-transfers/pending`                                | `?limit=`                                   | The settlement auditor's work queue. Platform `audit_escrow` only. `200` · `403`                                                                                                                                                                                                 |
+| **`POST /provider-transfers/:transferId/settle` · `/fail`**      | `{ note?, failureReason? }` — **no amount** | **Replaces `POST /webhooks/payments/stripe` (Appendix A3).** Platform `audit_escrow`, checked before the transfer is loaded. The ONE path that moves `raisedAmountInCents`, `backersCount` and the settled balances. A replay is deduplicated, not double-counted. `200` · `403` |
+
+**Two rows the original table listed are gone, and this is a deliberate divergence:**
+`PUT …/members/:id/compensation-rate` and `POST …/compensation-rate/accept` are **superseded by
+§9's shipped `POST …/members/:memberUserId/fair-market-rate` and `…/accept`**. §7's table list
+names a `project_member_compensation_rate` described as "the locked fair-market rate that §9's
+slice math depends on … effective-dated and requires the member's acceptance" — which is exactly
+`member_fair_market_rate`, already built, already trigger-protected in migration 0014, and already
+the only table §9's slice math reads. A second effective-dated rate table would put two answers to
+"what is this member paid" in one database with the formula reading one of them.
+
+`GET …/audit-trail` is also absent here because §9's router already owns it; §7's own chain is
+exposed at `…/escrow/verify`, beside the ledger it verifies.
 
 ### 11d. Workshop and daily logs (§8)
 
@@ -2144,23 +2212,39 @@ needs the platform `moderator` role from §4a Layer 3, which also does not exist
 
 ### Pledge → escrow → milestone release (§7)
 
-**⏳ Pending — none of this is built.** The flow below is the target contract; the `Stripe` and
-`/webhooks/payments/stripe` mentions are the drafted design and will read as the internal
-ledger-only adapter once built — see the §7 amendment note and Appendix A3.
+**✅ Shipped in full.** Every line below runs today, and `pnpm db:smoke-funding-escrow` drives
+exactly this sequence against a real database — including the two attacks.
 
 ```text
-POST /funding-rounds/:id/pledges { amountInCents }
-  → re-bound against the round · derive fee · resolve currency · provider_transfer + idempotency key
-  → post escrow_held → provider_clearing (settlement='pending')     [worker submits to the adapter]
-POST /webhooks/payments/stripe   (signature-verified)   ← 🚫 deferred; ships as an internal endpoint
-  → settlement='settled' · post provider_clearing → released_to_project
-  → ONLY NOW raisedAmountInCents and backersCount move
-POST /milestones/:id/escrow-releases { requestNote? }   ← no amount
-  → snapshot milestone.escrowReleaseAmountInCents
-POST /escrow-releases/:id/approve
-  → requester ≠ approver · milestone done · POE verdict verified · window closed · balance sufficient
-  → freeze the evidence into verificationSnapshot · append journal entry + postings summing to zero
+POST /funding-rounds/:id/pledges { amountInCents }                          ✅
+  → re-bound against the round · derive fee · resolve currency · provider_transfer + OUR
+    idempotency key, written BEFORE any provider call
+  → append `pledge_authorized` settlement='pending':
+        provider_clearing −gross · escrow_held +net · platform_fee +fee
+  → 201, and raisedAmountInCents has NOT moved. The pending bucket holds it.
+  → submit-provider-transfer is enqueued INSIDE the pledge transaction        ✅
+[the worker submits to the adapter]                                          ✅
+  → status='submitted'. Still nothing has moved.
+POST /provider-transfers/:id/settle   ← the auditor-gated stand-in for the Stripe webhook  ✅
+  → platform `audit_escrow`, checked BEFORE the transfer is loaded
+  → persist the event, dedupe on (provider, providerEventId), process in ONE transaction
+  → append `reversal` settlement='pending' (the mirror) + `pledge_settled` settlement='settled'
+  → ONLY NOW raisedAmountInCents and backersCount move, by exactly one code path
+POST /milestones/:id/escrow-releases { requestNote? }   ← no amount           ✅
+  → snapshot milestone.escrowReleaseAmountInCents, frozen afterwards by a trigger
+  → editing the milestone to 400,000 changes nothing: the release still pays the snapshot
+POST /escrow-releases/:id/approve                                            ✅
+  → requester ≠ approver (422 SELF_APPROVAL_FORBIDDEN, even for a founder)
+  → approver holds `audit_escrow`, or a project admin they did NOT grant themselves
+  → milestone done · zero open or disputed §9 windows · escrow_held ≥ the snapshot,
+    RE-DERIVED from the postings rather than read from the cached column
+  → freeze the evidence into verificationSnapshot · append escrow_held −X, released_to_project +X
 ```
+
+**§7's own money path reads `settlement … posts provider_clearing → released_to_project`.** That is
+not what shipped, and the divergence is deliberate: taken literally it hands the founder the cash
+the instant a card clears, which contradicts the four-eyes milestone gate three paragraphs later.
+Settlement moves money INTO `escrow_held`; only an approved release moves it out.
 
 ### Daily log → slices (§8 → §9)
 
@@ -2309,15 +2393,15 @@ project-role concept, and no `escrowedSlices`.
 
 Do **not** implement the domains in parallel — §9 defines the numbers every other section reads.
 
-| Phase                             | Scope                                                                                                                                                                                                                           | Why here                                                                                                                                                    |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **0. Unblock**                    | `bearer()` plugin + multi-origin passkey/OAuth (§4a) · `requireIdentifiedUser` · `project_member` + `requireProjectRole` · `src/lib/money.ts` · `src/lib/canonical-hash.ts` · pg-boss + the worker process · shared enums (§4d) | Every phase below depends on all of it. Native clients are blocked entirely until the auth items land                                                       |
-| **1. Projects & team** (§5)       | Idea → project → publish → team → roles → applications                                                                                                                                                                          | The spine. Everything else FKs to `research_project`                                                                                                        |
-| **2. Workshop & daily logs** (§8) | Board, files (links), chat, log capture + analysis                                                                                                                                                                              | Produces the input §9 consumes                                                                                                                              |
-| **3. Proof of Effort** (§9) ✅    | Rate lock → claims → pipeline → disputes → ledger → snapshots → bake                                                                                                                                                            | **Shipped.** The hardest and highest-value. Its patterns are the ones §7 copies                                                                             |
-| **4. Funding & escrow** (§7)      | Rounds, pledges, provider, ledger, releases                                                                                                                                                                                     | Highest stakes; depends on §9 verdicts for release gating. **Crowdfunding only** — equity/venture stay flag-disabled until Phase 4 of the business sequence |
-| **5. Discovery** (§6)             | Clusters, scoring jobs, insights, talent                                                                                                                                                                                        | Independent; deferrable without blocking anything                                                                                                           |
-| **6. Project Immortal** (§10)     | Branches, papers, posts, moderation                                                                                                                                                                                             | Largest surface, lowest coupling. Needs the moderator role first                                                                                            |
+| Phase                             | Scope                                                                                                                                                                                                                           | Why here                                                                                                                                                                 |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **0. Unblock**                    | `bearer()` plugin + multi-origin passkey/OAuth (§4a) · `requireIdentifiedUser` · `project_member` + `requireProjectRole` · `src/lib/money.ts` · `src/lib/canonical-hash.ts` · pg-boss + the worker process · shared enums (§4d) | Every phase below depends on all of it. Native clients are blocked entirely until the auth items land                                                                    |
+| **1. Projects & team** (§5)       | Idea → project → publish → team → roles → applications                                                                                                                                                                          | The spine. Everything else FKs to `research_project`                                                                                                                     |
+| **2. Workshop & daily logs** (§8) | Board, files (links), chat, log capture + analysis                                                                                                                                                                              | Produces the input §9 consumes                                                                                                                                           |
+| **3. Proof of Effort** (§9) ✅    | Rate lock → claims → pipeline → disputes → ledger → snapshots → bake                                                                                                                                                            | **Shipped.** The hardest and highest-value. Its patterns are the ones §7 copies                                                                                          |
+| **4. Funding & escrow** (§7) ✅   | Rounds, pledges, provider, ledger, releases                                                                                                                                                                                     | **Shipped.** Highest stakes; depends on §9 verdicts for release gating. **Crowdfunding only** — equity/venture stay flag-disabled until Phase 4 of the business sequence |
+| **5. Discovery** (§6)             | Clusters, scoring jobs, insights, talent                                                                                                                                                                                        | Independent; deferrable without blocking anything                                                                                                                        |
+| **6. Project Immortal** (§10)     | Branches, papers, posts, moderation                                                                                                                                                                                             | Largest surface, lowest coupling. Needs the moderator role first                                                                                                         |
 
 This matches PROOF_OF_EFFORT_SPEC.md §1's business sequencing: the AI Chief of Staff (§9) is the
 Phase-1 revenue product; reward crowdfunding (§7) is Year 1; equity crowdfunding is Year 3+ and
@@ -2340,11 +2424,19 @@ db:verify-proof-of-effort-constraints` then EXERCISES all 38 database-level guar
 3. **Chain suite.** Append 500 entries, verify; then tamper with one row's `detailNote` directly in
    SQL and assert `/audit-trail/verify` returns `409` naming that exact sequence. Delete a row and
    assert the gap is detected even though every surviving hash is self-consistent.
-4. **The tampering test the user asked for.** Fetch a round, edit `amountInCents` in DevTools to a
-   different currency's magnitude, replay the pledge — assert the server charges its own value and
-   that every rejected key in §7 returns `422`. Repeat against the native clients with a proxy.
-5. **Four-eyes test.** Founder requests a release and attempts to approve it → `422
-SELF_APPROVAL_FORBIDDEN`. Founder grants themselves `admin` → rejected.
+4. **The tampering test the user asked for.** ✅ Fetch a round, edit `amountInCents` in DevTools to
+   a different currency's magnitude, replay the pledge — assert the server charges its own value and
+   that every rejected key in §7 returns `422`. `funding.controller.schemas.test.ts` asserts all 27
+   rejected keys against every §7 body plus that exact payload, and `db:smoke-funding-escrow` proves
+   the server re-bounds the amount against the round's own min/max. Still to repeat against the
+   native clients with a proxy.
+5. **Four-eyes test.** ✅ `pnpm db:smoke-funding-escrow` runs exactly this: the founder requests a
+   release and attempts to approve it → `422 SELF_APPROVAL_FORBIDDEN`; a project outsider →
+   `403 APPROVER_NOT_AUTHORIZED`; a second, non-self-granted `admin` → approved. A founder granting
+   themselves `admin` is rejected by `project_member_role_granted_by_ck` at the column level, and
+   `resolveApproverStanding` additionally refuses an `admin` row with no recorded grantor. The same
+   script edits the milestone to 400,000 after the request and asserts the release still pays the
+   250,000 snapshot.
 6. **The analysis path, against the real provider.** ✅ `pnpm db:smoke-daily-log-analysis` is the
    only proof in the repo that reaches Gemini: `gemini.test.ts` injects `fetch`, `db:smoke-workshop`
    asserts only that a submit receipt is not a verdict, and `db:smoke-proof-of-effort` writes its
@@ -2366,13 +2458,17 @@ SELF_APPROVAL_FORBIDDEN`. Founder grants themselves `admin` → rejected.
    proving the triggers do not work.
 8. **Zero-trust sweep.** `grep` every Zod schema for `userId|equity|slice|Cents|score|verdict|status`
    and confirm each hit is one of the two documented negotiated-input exceptions.
-9. **Cascade sweep.** For every FK into a financial or audit table, assert `onDelete` is `restrict`
-   or `set null`. Then delete a test user with ledger history and confirm it fails loudly.
+9. **Cascade sweep.** ✅ For every FK into a financial or audit table, assert `onDelete` is
+   `restrict` or `set null`. `db:verify-escrow-constraints` checks all 33 of §7's against a
+   hand-maintained expectation AND sweeps the catalog for any cascade at all, so a table added later
+   without updating the list still fails. Then delete a test user with ledger history and confirm it
+   fails loudly.
 10. **Coverage sweep.** Every route in [R_AND_D_STRUCTURE.md](R_AND_D_STRUCTURE.md) §3 and every
     action in its §8/§9 maps to a named endpoint in §11.
 
 ```bash
-# The core money-path smoke test
+# The core money-path smoke test. `pnpm db:smoke-funding-escrow` drives all of this and
+# 28 more assertions against a real database; these three are the hand-runnable form.
 curl -X POST https://localhost:8000/research-projects -b cookies.txt \
   -H 'content-type: application/json' \
   -d '{"name":"SolarChill","tagline":"Solar cold rooms","categoryId":"<id>",
@@ -2381,7 +2477,8 @@ curl -X POST https://localhost:8000/research-projects -b cookies.txt \
 
 curl -X POST https://localhost:8000/funding-rounds/<id>/pledges -b cookies.txt \
   -H 'content-type: application/json' -d '{"amountInCents":5000}'
-# → 201; then confirm raisedAmountInCents has NOT moved until the webhook settles
+# → 201; raisedAmountInCents has NOT moved. It moves only at
+#   POST /provider-transfers/<transferId>/settle, called by a holder of `audit_escrow`.
 
 curl -X POST https://localhost:8000/funding-rounds/<id>/pledges -b cookies.txt \
   -H 'content-type: application/json' -d '{"amountInCents":5000,"currency":"CNY","backerUserId":"someone-else"}'
@@ -2457,17 +2554,27 @@ processes in a transaction, flipping `settlement` to `settled` and posting
 move. The nightly `reconcile-escrow-ledger` job pulls provider balances and posts any delta into
 `reconciliation_suspense` rather than silently patching the ledger.
 
-**The seam.** Every table in §7 ships as specified, including `provider_transfer`,
-`provider_webhook_event` and `reconciliation_discrepancy`. Only the module behind them changes: an
-internal adapter with an auditor-gated settlement endpoint stands in for the card network. The
-webhook route is the single addition when Stripe lands, and its handler is the same transaction the
-internal adapter already runs.
+**The seam.** ✅ Built. Every table in §7 shipped as specified, including `provider_transfer`,
+`provider_webhook_event` and `reconciliation_discrepancy`. Only the module behind them changed:
+`src/services/escrow-provider-adapter.service.ts` stands in for the card network, and
+`POST /provider-transfers/:transferId/settle` — gated on the platform `audit_escrow` capability —
+stands in for the webhook. The webhook route is the single addition when Stripe lands, and its
+handler is the same transaction `escrow-settlement.service.ts` already runs.
+
+`provider_webhook_event` is **written today rather than reserved**, and that is what makes the seam
+real rather than theoretical: the internal settlement path records a row with
+`provider = 'internal_adapter'` and a deterministic event id, so the dedupe, the
+persist-before-process ordering and the replay-returns-success behaviour are all exercised on every
+settlement. Stripe adds signature verification in front of machinery that already works.
 
 **What the substitute costs.** No money moves. A pledge is a recorded intent and an escrow release
-is a recorded entitlement, and any client copy implying a card was charged is false. The
-reconciliation job has no external source of truth to reconcile against until an adapter that
-actually moves cash exists, so its discrepancy count is trivially zero — do not read that as
-evidence the books are right.
+is a recorded entitlement, and any client copy implying a card was charged is false — which is why
+`POST …/pledges` answers with "No funds have moved: it settles once an escrow auditor confirms it"
+rather than a confirmation. The reconciliation job has no external source of truth to reconcile
+against until an adapter that actually moves cash exists, so its discrepancy count is trivially
+zero — do not read that as evidence the books are right. What it DOES prove hourly is the aggregate
+zero-sum identity across all six accounts, which catches a posting written by anything other than
+`escrow.service.ts`.
 
 ### A4. Real-time chat over SSE (§8)
 
