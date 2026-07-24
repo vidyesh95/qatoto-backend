@@ -332,3 +332,86 @@ export const contentReviewLimiter = rateLimit({
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
 });
+
+/**
+ * The workshop board writes — create/rename/delete a column, create/update/delete/move a
+ * task (§8).
+ *
+ * Generous, because a real drag session is a burst: reordering a board or triaging a
+ * standup produces dozens of writes in a minute and none of them cost anything beyond one
+ * row. This exists to bound a loop, not to pace a member.
+ */
+export const workshopBoardWriteLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/workshop/files — adding a link (§8).
+ *
+ * Tighter than the board because each accepted row is a URL other members will click, so
+ * an unbounded loop is a way to fill a teammate's file list with links. It costs the
+ * server nothing — there is no upload — which is exactly why the bound has to be about
+ * the social surface rather than about load.
+ */
+export const workshopFileCreateLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST/PATCH …/workshop/chat — team chat (§8).
+ *
+ * Sized for a fast typist in a real conversation and no higher. Chat is the one §8 surface
+ * that notifies other people, so the ceiling is about flooding a channel rather than about
+ * database cost.
+ */
+export const chatMessageLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST/PATCH/DELETE …/daily-logs — draft writes (§8).
+ *
+ * A member files at most one log a day and edits it a handful of times, so this is
+ * deliberately low. Each create may also cost one outbound oEmbed call to verify a pasted
+ * YouTube link, and that budget is shared with the studio's upload path.
+ */
+export const dailyLogWriteLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/daily-logs/:logId/submit — the expensive one (§8).
+ *
+ * Every accepted submit queues one Gemini call, and that call is drawn against a FREE-TIER
+ * REQUEST BUDGET shared by the whole deployment. The unique index already caps a member at
+ * one log per claimed day, so this bounds the remaining lever: resubmitting a failed
+ * analysis in a loop. Ten in fifteen minutes is far past any honest retry.
+ */
+export const dailyLogSubmitLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});

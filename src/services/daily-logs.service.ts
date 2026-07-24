@@ -126,10 +126,17 @@ export interface CreateDailyLogInput {
   readonly youtubeUrl?: string | undefined;
 }
 
-export type UpdateDailyLogInput = Partial<CreateDailyLogInput> & {
-  /** Explicit null detaches the video and returns the log to `videoSource = 'none'`. */
+export interface UpdateDailyLogInput {
+  readonly logDate?: string | undefined;
+  readonly narrative?: string | undefined;
+  /**
+   * Explicit null detaches the video and returns the log to `videoSource = 'none'`;
+   * absent leaves it alone. Declared as its own interface rather than
+   * `Partial<CreateDailyLogInput>` because an intersection cannot WIDEN an optional
+   * field to accept null — it narrows to `string | undefined` and the null is lost.
+   */
   readonly youtubeUrl?: string | null | undefined;
-};
+}
 
 interface VerifiedVideo {
   readonly youtubeVideoId: string;

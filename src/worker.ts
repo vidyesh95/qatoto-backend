@@ -5,11 +5,14 @@ import type { Job } from "pg-boss";
 import { config } from "#src/config/index.js";
 import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
+import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
+import { handleRecomputeDailyLogStreaks } from "#src/jobs/recompute-daily-log-streaks.js";
 import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals.js";
 import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import {
+  handleRecomputeDailyLogStreaksTick,
   handleRecomputeDemandSignalsTick,
   handleRecomputeOpportunityScoresTick,
   handleRefreshTalentProjectionsTick,
@@ -190,6 +193,22 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.refreshTalentProjections,
     workOptions,
     runJob(JOB_NAMES.refreshTalentProjections, handleRefreshTalentProjections),
+  );
+
+  await boss.work(
+    JOB_NAMES.analyzeDailyLog,
+    workOptions,
+    runJob(JOB_NAMES.analyzeDailyLog, handleAnalyzeDailyLog),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeDailyLogStreaksTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeDailyLogStreaksTick, handleRecomputeDailyLogStreaksTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeDailyLogStreaks,
+    workOptions,
+    runJob(JOB_NAMES.recomputeDailyLogStreaks, handleRecomputeDailyLogStreaks),
   );
 
   // THE DEAD-LETTER QUEUES DELIBERATELY HAVE NO ALWAYS-ON WORKERS.

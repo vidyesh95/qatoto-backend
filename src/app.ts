@@ -23,6 +23,7 @@ import researchProjectsRouter from "#src/routes/research-projects.routes.js";
 import seriesRouter from "#src/routes/series.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
 import videosRouter from "#src/routes/videos.routes.js";
+import workshopRouter from "#src/routes/workshop.routes.js";
 
 const app = express();
 
@@ -90,6 +91,9 @@ app.all("/api/auth/*splat", (req, res) => {
 // z.string().max(n) counts UTF-16 code units, so a 5,000-character description is ~5 KB
 // in ASCII but up to 15 KB in UTF-8 for Devanagari or CJK — the global cap would reject
 // payloads Zod happily accepts, for those users only.
+//
+// This mount ALSO covers the §8 workshop router, which shares the prefix: a daily log's
+// narrative is 10,000 characters and a chat message is 4,000.
 app.use("/research-projects", parseLongFormJsonBody);
 // Same reasoning for /discovery: POST /discovery/problem-reports carries a 5,000-character
 // description, and PUT /discovery/talent/me carries a bio plus skills plus compensation
@@ -115,6 +119,10 @@ app.use("/users", usersRouter);
 app.use("/handles", handlesRouter);
 app.use("/products", productsRouter);
 app.use("/research-projects", researchProjectsRouter);
+// Same prefix, declared AFTER: the workshop router owns /:projectSlug/workshop/* and
+// /:projectSlug/daily-logs/* (§8). No collision — researchProjectsRouter's "/:projectSlug"
+// matches that one segment exactly and never swallows a deeper path.
+app.use("/research-projects", workshopRouter);
 app.use("/discovery", discoveryRouter);
 // Creator Studio. The anime review queue is nested at /videos/admin/review rather than a
 // root /admin, matching /discovery/admin/* — one domain's moderation surface should not

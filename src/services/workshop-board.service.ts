@@ -82,7 +82,10 @@ export interface CreateColumnInput {
 export interface CreateTaskInput {
   readonly columnId: string;
   readonly title: string;
-  readonly description?: string | undefined;
+  // `null` is distinct from absent on every clearable field here: absent leaves the
+  // column alone on a PATCH, null clears it. Collapsing them makes a partial update
+  // silently erase a description.
+  readonly description?: string | null | undefined;
   readonly assigneeMemberId?: string | null | undefined;
   readonly priority?: WorkshopTaskPriority | undefined;
   readonly labels?: readonly string[] | undefined;

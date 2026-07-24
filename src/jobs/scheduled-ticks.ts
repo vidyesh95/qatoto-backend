@@ -102,3 +102,32 @@ export async function handleRefreshTalentProjectionsTick(
     );
   }
 }
+
+/**
+ * The streak decay's tick.
+ *
+ * Quantized to the UTC DAY even though each project's decay is evaluated in its OWN zone
+ * (see the handler): the asOf is the reference INSTANT, and the handler converts it per
+ * project. Quantizing to the hour instead would produce 24 distinct job ids a day for a
+ * job that must run once, and quantizing per zone would need the tick to read every
+ * project — which is the handler's job, not the clock's.
+ */
+export async function handleRecomputeDailyLogStreaksTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcDayStart(readClock());
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeDailyLogStreaks,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeDailyLogStreaks(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-daily-log-streaks-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
