@@ -41,6 +41,9 @@ export const JOB_NAMES = {
   recomputeDemandSignals: "recompute-demand-signals",
   refreshTalentProjectionsTick: "refresh-talent-projections-tick",
   refreshTalentProjections: "refresh-talent-projections",
+  analyzeDailyLog: "analyze-daily-log",
+  recomputeDailyLogStreaksTick: "recompute-daily-log-streaks-tick",
+  recomputeDailyLogStreaks: "recompute-daily-log-streaks",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -70,6 +73,17 @@ const GeocodeAndClusterSubmissionPayloadSchema = z
   .strict();
 
 const AsOfOnlyPayloadSchema = z.object({ asOf: AsOfSchema }).strict();
+
+const AnalyzeDailyLogPayloadSchema = z
+  .object({
+    // The log id and NOTHING else, for the same reason the clustering payload carries
+    // only a submission id: everything the handler needs — the video id, the narrative,
+    // the claimed date — is server-owned and is read from the row. A payload carrying the
+    // YouTube id would be a field an operator could edit to point the analysis at a
+    // different video.
+    dailyLogId: z.uuid(),
+  })
+  .strict();
 
 const WindowedAsOfPayloadSchema = z
   .object({
@@ -203,6 +217,42 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.refreshTalentProjections),
     },
   },
+  [JOB_NAMES.analyzeDailyLog]: {
+    name: JOB_NAMES.analyzeDailyLog,
+    payloadSchema: AnalyzeDailyLogPayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      // The model watches a whole video. This must exceed GEMINI_TIMEOUT_MS with room to
+      // spare, or pg-boss reclaims a job that is still legitimately in flight and a
+      // second worker starts the same expensive call against a free-tier budget.
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.analyzeDailyLog),
+    },
+  },
+  [JOB_NAMES.recomputeDailyLogStreaksTick]: {
+    name: JOB_NAMES.recomputeDailyLogStreaksTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeDailyLogStreaksTick),
+    },
+  },
+  [JOB_NAMES.recomputeDailyLogStreaks]: {
+    name: JOB_NAMES.recomputeDailyLogStreaks,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeDailyLogStreaks),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -228,6 +278,9 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   [JOB_NAMES.recomputeOpportunityScoresTick]: "15 2 * * *",
   [JOB_NAMES.recomputeDemandSignalsTick]: "45 2 * * *",
   [JOB_NAMES.refreshTalentProjectionsTick]: "5 * * * *",
+  // After the other nightlies, so a slow recompute cannot delay the streak decay past
+  // the hour a project card is first read in the earliest timezone.
+  [JOB_NAMES.recomputeDailyLogStreaksTick]: "25 3 * * *",
 };
 
 export type JobEnqueueError =
@@ -436,6 +489,9 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.recomputeDemandSignals]: WindowedAsOfPayloadSchema,
   [JOB_NAMES.refreshTalentProjectionsTick]: TickPayloadSchema,
   [JOB_NAMES.refreshTalentProjections]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.analyzeDailyLog]: AnalyzeDailyLogPayloadSchema,
+  [JOB_NAMES.recomputeDailyLogStreaksTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeDailyLogStreaks]: AsOfOnlyPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -479,4 +535,11 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.recomputeDemandSignals}:${asOfIso}`,
   refreshTalentProjections: (asOfIso: string): string =>
     `${JOB_NAMES.refreshTalentProjections}:${asOfIso}`,
+  // Keyed on the log alone, NOT on an attempt counter: a double-submit inside the
+  // retention window must collapse to one analysis, because each one spends a request
+  // against a free-tier budget. Re-analysis after an override is an explicit re-enqueue
+  // with its own key (§9), not a repeat of this one.
+  analyzeDailyLog: (dailyLogId: string): string => `${JOB_NAMES.analyzeDailyLog}:${dailyLogId}`,
+  recomputeDailyLogStreaks: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputeDailyLogStreaks}:${asOfIso}`,
 } as const;
