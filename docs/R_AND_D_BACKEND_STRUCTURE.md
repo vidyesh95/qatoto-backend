@@ -1888,17 +1888,17 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 
 Three states, checked against the actual route files in `src/routes/`, not against intent:
 
-| State          | Meaning                                                                                  |
-| -------------- | ---------------------------------------------------------------------------------------- |
+| State           | Meaning                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------- |
 | ✅ **Shipped**  | Routed, controlled, serviced, migrated. Reachable on `pnpm dev` today.                   |
 | ⏳ **Pending**  | Spec'd below, in scope for this project, **not built yet** — §16 orders when.            |
 | 🚫 **Deferred** | Spec'd below but **will not be built** against a paid provider — see Appendix A instead. |
 
-| Subsection                            | Domain                     | Status    | Backing files                                                                              |
-| ------------------------------------- | -------------------------- | --------- | ------------------------------------------------------------------------------------------ |
+| Subsection                            | Domain                     | Status     | Backing files                                                                              |
+| ------------------------------------- | -------------------------- | ---------- | ------------------------------------------------------------------------------------------ |
 | [11a](#11a-projects-team-roles-5)     | Projects, team, roles (§5) | ✅ Shipped | `research-projects.routes.ts`, `research-catalog.routes.ts`                                |
 | [11b](#11b-discovery-6)               | Discovery (§6)             | ✅ Shipped | `discovery.routes.ts`                                                                      |
-| [11c](#11c-funding-and-escrow-7)      | Funding & escrow (§7)      | ⏳ Pending | none — no `funding.routes.ts` exists. One row inside is additionally 🚫 deferred            |
+| [11c](#11c-funding-and-escrow-7)      | Funding & escrow (§7)      | ⏳ Pending | none — no `funding.routes.ts` exists. One row inside is additionally 🚫 deferred           |
 | [11d](#11d-workshop-and-daily-logs-8) | Workshop & daily logs (§8) | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A |
 | [11e](#11e-proof-of-effort-9)         | Proof of Effort (§9)       | ⏳ Pending | none — no `proof-of-effort.routes.ts` exists                                               |
 | [11f](#11f-project-immortal-10)       | Project Immortal (§10)     | ⏳ Pending | none — no `research-programs.routes.ts` exists                                             |
@@ -1977,7 +1977,7 @@ adapter §7's amendment note describes, not a real webhook.
 | `POST /escrow-releases/:id/approve` · `/reject`                                                  | `{ note }`                                 | Four-eyes: `422 SELF_APPROVAL_FORBIDDEN`. Re-derives every gate. `200`                                                                                         |
 | `GET …/compensation` · `PUT …/members/:id/compensation-rate` · `POST …/compensation-rate/accept` | `{ rateInCentsPerHour, effectiveFrom }`    | Rate requires member acceptance. `200` · `409`                                                                                                                 |
 | `GET …/investor-confidence` · `/audit-trail`                                                     | `?page=`                                   | Returns `asOf`. `200`                                                                                                                                          |
-| 🚫 `POST /webhooks/payments/stripe`                                                               | raw body                                   | **Deferred (Appendix A3).** Ships as an internal, auditor-gated settlement endpoint instead — no Stripe SDK, no signature verification, no raw-body mount.     |
+| 🚫 `POST /webhooks/payments/stripe`                                                              | raw body                                   | **Deferred (Appendix A3).** Ships as an internal, auditor-gated settlement endpoint instead — no Stripe SDK, no signature verification, no raw-body mount.     |
 
 ### 11d. Workshop and daily logs (§8)
 
