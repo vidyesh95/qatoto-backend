@@ -47,6 +47,20 @@ import type { ApiResponse } from "#src/types/index.js";
  *
  * `currencyCode` is deliberately absent from every schema below even though §11e's table
  * lists it: §4b says an amount's currency is derived from the project, never sent.
+ *
+ * THE §17 STEP 7 SWEEP, ANSWERED HERE SO NOBODY HAS TO RE-DERIVE IT. Grepping every schema
+ * below for `userId|equity|slice|Cents|score|verdict|status|Minutes` returns exactly four
+ * live hits, and each is accounted for:
+ *
+ *   `fairMarketRateCentsPerHour` + `paidCashRateCentsPerHour` — exception 1 above.
+ *   `valuationCents` on a bake — see the note on {@link BakePieSchema}: it is RECORDED
+ *       EVIDENCE, and no formula reads it.
+ *   `status` on the proposal LIST query — a filter over rows that already exist, not an
+ *       assertion about one. A query parameter cannot set anything.
+ *
+ * Zero hits for `slice`, `equity`, `verdict`, `score`, `Minutes` or `userId` in any body,
+ * which is the property that actually matters: there is no field through which a client
+ * could name a number the formula owns.
  */
 
 const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
@@ -754,6 +768,16 @@ export const AuthorizeIntegrationSchema = z
   })
   .strict();
 
+/**
+ * `valuationCents` IS ACCEPTED, AND IT IS NOT AN EXCEPTION TO §0.
+ *
+ * §0 forbids a body carrying a value the SERVER owns. A priced round's valuation is agreed
+ * with an investor outside this system and is unknowable to it — and, decisively, NO FORMULA
+ * READS IT. It is stored, put in the audit payload, and returned; it never enters
+ * `computeSlicesAwarded`, never touches a numerator, and cannot move a basis point. It is
+ * recorded EVIDENCE about why the pie was baked, in the same category as
+ * `triggerEvidenceNote` beside it.
+ */
 export const BakePieSchema = z
   .object({
     trigger: z.enum(["cash_flow_breakeven", "priced_round"]),

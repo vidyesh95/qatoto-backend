@@ -20,10 +20,10 @@
 > `/research-projects/*`, `/discovery/*`, `/funding/*` and `/research-programs/*` routes and ~60 new
 > tables.
 >
-> **Status:** three of six domains are **✅ shipped and reachable today** — §5 (projects, team,
-> roles, applications), §6 (discovery) and §8 (workshop, daily logs). §7 (funding/escrow), §9
-> (Proof of Effort) and §10 (Project Immortal) are **⏳ pending** — no route, controller, service or
-> migration exists for any of them yet. §11's "Implementation status, per subsection" table is the
+> **Status:** four of six domains are **✅ shipped and reachable today** — §5 (projects, team,
+> roles, applications), §6 (discovery), §8 (workshop, daily logs) and §9 (Proof of Effort). §7
+> (funding/escrow) and §10 (Project Immortal) are **⏳ pending** — no route, controller, service or
+> migration exists for either yet. §11's "Implementation status, per subsection" table is the
 > authoritative, per-endpoint breakdown; treat it over this paragraph if the two ever disagree, since
 > this one is prose and that one is checked against the actual route files.
 >
@@ -1866,11 +1866,17 @@ app.use("/research-projects", researchProjectsRouter); // ✅ shipped — §5
 // matches that one segment exactly and never swallows a deeper path.
 app.use("/research-projects", workshopRouter); // ✅ shipped — §8
 app.use("/discovery", discoveryRouter); // ✅ shipped — §6
+// Same prefix again, declared AFTER both: proofOfEffortRouter owns /:projectSlug's
+// /effort-claims/*, /equity/*, /allocation-proposals/*, /disputes/*, /audit-trail/*,
+// /physical-receipts, /integrations/*, /pie-bake, /slice-ledger and /proof-of-effort.
+app.use("/research-projects", proofOfEffortRouter); // ✅ shipped — §9
 app.use("/", researchCatalogRouter); // ✅ shipped — /open-roles, /research-categories (§5)
+// Root-mounted because a provider's redirect URI is fixed at app-registration time and
+// cannot carry a project slug; the project and member come out of the signed state (§9.10).
+app.use("/", integrationCallbackRouter); // ✅ shipped — GET /integrations/:provider/callback
 
-// NOT YET IN src/app.ts — §7, §9 and §10 have no router to mount:
+// NOT YET IN src/app.ts — §7 and §10 have no router to mount:
 // app.use("/", fundingRouter);              // ⏳ pending — /funding-rounds, /pledges, /milestones
-// app.use("/", proofOfEffortRouter);         // ⏳ pending — §9
 // app.use("/research-programs", researchProgramsRouter); // ⏳ pending — §10
 ```
 
@@ -1894,14 +1900,14 @@ Three states, checked against the actual route files in `src/routes/`, not again
 | ⏳ **Pending**  | Spec'd below, in scope for this project, **not built yet** — §16 orders when.            |
 | 🚫 **Deferred** | Spec'd below but **will not be built** against a paid provider — see Appendix A instead. |
 
-| Subsection                            | Domain                     | Status     | Backing files                                                                              |
-| ------------------------------------- | -------------------------- | ---------- | ------------------------------------------------------------------------------------------ |
-| [11a](#11a-projects-team-roles-5)     | Projects, team, roles (§5) | ✅ Shipped | `research-projects.routes.ts`, `research-catalog.routes.ts`                                |
-| [11b](#11b-discovery-6)               | Discovery (§6)             | ✅ Shipped | `discovery.routes.ts`                                                                      |
-| [11c](#11c-funding-and-escrow-7)      | Funding & escrow (§7)      | ⏳ Pending | none — no `funding.routes.ts` exists. One row inside is additionally 🚫 deferred           |
-| [11d](#11d-workshop-and-daily-logs-8) | Workshop & daily logs (§8) | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A |
-| [11e](#11e-proof-of-effort-9)         | Proof of Effort (§9)       | ⏳ Pending | none — no `proof-of-effort.routes.ts` exists                                               |
-| [11f](#11f-project-immortal-10)       | Project Immortal (§10)     | ⏳ Pending | none — no `research-programs.routes.ts` exists                                             |
+| Subsection                            | Domain                     | Status     | Backing files                                                                                              |
+| ------------------------------------- | -------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
+| [11a](#11a-projects-team-roles-5)     | Projects, team, roles (§5) | ✅ Shipped | `research-projects.routes.ts`, `research-catalog.routes.ts`                                                |
+| [11b](#11b-discovery-6)               | Discovery (§6)             | ✅ Shipped | `discovery.routes.ts`                                                                                      |
+| [11c](#11c-funding-and-escrow-7)      | Funding & escrow (§7)      | ⏳ Pending | none — no `funding.routes.ts` exists. One row inside is additionally 🚫 deferred                           |
+| [11d](#11d-workshop-and-daily-logs-8) | Workshop & daily logs (§8) | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A                 |
+| [11e](#11e-proof-of-effort-9)         | Proof of Effort (§9)       | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015 |
+| [11f](#11f-project-immortal-10)       | Project Immortal (§10)     | ⏳ Pending | none — no `research-programs.routes.ts` exists                                                             |
 
 Each subsection below opens with one line stating its state. §11c additionally flags one row inline
 with 🚫, because that subsection mixes ⏳ pending with one 🚫 deferred endpoint under a single
@@ -2004,12 +2010,38 @@ nothing 🚫 deferred left inside this subsection to flag.
 
 ### 11e. Proof of Effort (§9)
 
-**⏳ Pending — none of this is built.** No `proof-of-effort.routes.ts`, no controller, no
-`slicing-pie.service.ts` / `verification.service.ts`, no migration for any table in §9. This is
-Phase 3 (§16) — the hardest and highest-value phase, and every other pending section (§7's release
-gating, §8's `effortVerificationStatus` column) is written against the contract below without it
-existing yet. `daily_log.effortVerificationStatus` already sits in the shipped §8 schema, defaulted
-to `not_run` and written by nothing — this section is the only thing that will ever move it.
+**✅ Shipped in full.** Every row below is routed and reachable today, backed by
+`proof-of-effort.routes.ts`, `proof-of-effort.controller.ts` /
+`proof-of-effort-error-response.ts`, ten services (`fair-market-rate`, `effort-claims`,
+`verification`, `slice-allocation`, `slice-ledger`, `dispute`, `equity-snapshot`,
+`project-audit`, `physical-receipts`, `integration-consent`, `pie-bake`,
+`optimization-suggestions`), four libraries (`slice-math`, `verdict`, `receipt-forensics`,
+`token-encryption`, `github-integration`), six jobs (the four pipeline stages plus
+`sweep-dispute-windows` and `recompute-equity-snapshot`) and migrations 0014–0015.
+`daily_log.effortVerificationStatus` — which §8 shipped defaulted to `not_run` and written by
+nothing — is now written here, and by nothing else.
+
+**Six rows differ from the table as originally drafted.** Each is a deliberate decision, not
+drift:
+
+| Change                                                                   | Why                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Added** `POST …/members/:memberUserId/fair-market-rate/:rateId/accept` | The lifecycle cannot complete without it: a rate must be `accepted` before it can be `locked`, and §13 describes §0's exception as "a member-**accepted** fair market rate". Without this step the founder both sets and ratifies the number — founder fiat. |
+| **Added** `POST …/disputes/:disputeId/withdraw`                          | §9.8's state machine has a `disputed → open` transition and §11e had no endpoint for it. The original window resumes on its **original** clock.                                                                                                              |
+| **Added** `GET …/physical-receipts`, `GET …/pie-bake`                    | A member cannot cite a receipt id they were never shown, and a frozen cap table with no read is a write-only record.                                                                                                                                         |
+| **Removed** `currencyCode` from the rate body                            | §4b: "there is no `currency` field in any request body — it is derived from the round/project". `research_project.currency` already holds it, and a client-chosen currency would let a $120/h rate be re-read as ¥120/h.                                     |
+| **Money crosses the wire as a decimal STRING**, not a number             | `fairMarketRateCentsPerHour`, `valuationCents`, `sliceNumerator`, `totalSlices`. `bigint` past 2^53 loses precision the moment `JSON.stringify` touches it (§4b), and `z.number()` would additionally accept `120.5` for a whole-cent field.                 |
+| **`re_verified` resolutions return `202`**, not `200`                    | The number does not exist yet: a scoped re-verification has to run. §9.12 option (a) is settled, so there is no `consensusAdjustedMinutes` field anywhere.                                                                                                   |
+
+**What ships DEGRADED, honestly, and why the numbers are still right.** Without a connected
+provider an evidence link is a reference with no independently verifiable timestamp, so
+`artifact_grounding` resolves **`flagged`** rather than `passed` — real evidence, withheld
+pending a human — and the claim reaches `flagged_for_review` at zero slices. A maintainer
+overrides the step, which edits an **AI judgement**, and the formula recomputes the number.
+Substance and temporal analysis `skip` in that case rather than flagging, so review has ONE gate
+rather than three. A claim with **no** evidence at all FAILS grounding and earns zero (SPEC §4
+step 2). A physical claim derives its minutes from receipt EXIF capture spans, because §0 forbids
+a body carrying an hour count and a photograph has no transcript.
 
 | Method & path                                                                | Body / input                                                                                           | Behavior & statuses                                                                                                                                   |
 | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2103,22 +2135,30 @@ POST /escrow-releases/:id/approve
 
 ### Daily log → slices (§8 → §9)
 
-**Half shipped, half pending.** The first three lines below (through `analyze-daily-log`) are ✅
-§8 and run today. Everything from `ground-artifacts` onward is ⏳ §9 and does not exist yet — a
-submitted log's `effortVerificationStatus` stops at `not_run` until Phase 3 lands.
+**✅ Shipped in full.** Every line below runs today, and
+`pnpm db:smoke-proof-of-effort` drives exactly this sequence against a real database.
 
 ```text
 POST …/daily-logs                 → { logDate, narrative?, youtubeUrl? }     ✅
   → the URL is parsed to an 11-char id and oEmbed-verified; no video is also valid
 POST …/daily-logs/:id/submit      → 202                                     ✅
   → analyze-daily-log (ONE Gemini call) → transcript segments + chips + claims + evidence links  ✅
-  -- everything below is §9, ⏳ pending --
-  → ground-artifacts → analyze-substance → analyze-temporal
-  → finalize-verdict: pure verdict function; computeSlices → proposedSlices FROZEN on a proposal
+POST …/members/:userId/fair-market-rate → /accept → /fair-market-rate/lock   ✅
+  → NOTHING can be claimed until a rate is LOCKED: 409 RATE_NOT_LOCKED
+POST …/effort-claims              → { sourceKind, dailyLogId?, claimedForDate, idempotencyKey }
+  → 202 and a receipt. No minutes, no cash, no verdict, no slices in the body.
+  → ground-artifacts → analyze-substance → analyze-temporal                 ✅
+  → finalize-verdict: pure verdict function; computeSlicesAwarded → proposedSlices FROZEN
   → slice_allocation_proposal opens; NOTHING is written to the ledger yet
+  → daily_log.effortVerificationStatus finally moves off `not_run`
 [24 hours pass, no dispute]
-  → expire-dispute-window sweep (60s) locks it: ONE slice_ledger_entry + audit append, same txn
+  → sweep-dispute-windows (every 60s) locks it: ONE slice_ledger_entry per contribution kind
+    + an audit append, in the same txn. Re-running the sweep is a no-op.
   → recompute-equity-snapshot → largest-remainder apportionment → shares sum to exactly 10000
+[or, inside the window]
+POST …/allocation-proposals/:id/dispute  → slices freeze in escrow, OUTSIDE totalSlices
+  → votes reach a majority, or the founder resolves: upheld / voided / re-verified
+  → `voided` still writes a ZERO entry — no gap in the sequence, and the member sees it
 ```
 
 ---
@@ -2245,7 +2285,7 @@ Do **not** implement the domains in parallel — §9 defines the numbers every o
 | **0. Unblock**                    | `bearer()` plugin + multi-origin passkey/OAuth (§4a) · `requireIdentifiedUser` · `project_member` + `requireProjectRole` · `src/lib/money.ts` · `src/lib/canonical-hash.ts` · pg-boss + the worker process · shared enums (§4d) | Every phase below depends on all of it. Native clients are blocked entirely until the auth items land                                                       |
 | **1. Projects & team** (§5)       | Idea → project → publish → team → roles → applications                                                                                                                                                                          | The spine. Everything else FKs to `research_project`                                                                                                        |
 | **2. Workshop & daily logs** (§8) | Board, files (links), chat, log capture + analysis                                                                                                                                                                              | Produces the input §9 consumes                                                                                                                              |
-| **3. Proof of Effort** (§9)       | Rate lock → claims → pipeline → disputes → ledger → snapshots → bake                                                                                                                                                            | The hardest and highest-value. Its patterns get copied                                                                                                      |
+| **3. Proof of Effort** (§9) ✅    | Rate lock → claims → pipeline → disputes → ledger → snapshots → bake                                                                                                                                                            | **Shipped.** The hardest and highest-value. Its patterns are the ones §7 copies                                                                             |
 | **4. Funding & escrow** (§7)      | Rounds, pledges, provider, ledger, releases                                                                                                                                                                                     | Highest stakes; depends on §9 verdicts for release gating. **Crowdfunding only** — equity/venture stay flag-disabled until Phase 4 of the business sequence |
 | **5. Discovery** (§6)             | Clusters, scoring jobs, insights, talent                                                                                                                                                                                        | Independent; deferrable without blocking anything                                                                                                           |
 | **6. Project Immortal** (§10)     | Branches, papers, posts, moderation                                                                                                                                                                                             | Largest surface, lowest coupling. Needs the moderator role first                                                                                            |
@@ -2258,9 +2298,12 @@ stays API-disabled until then.
 
 ## 17. Verification (when the backend phase begins)
 
-1. `pnpm db:generate && pnpm db:migrate`, then hand-add what Drizzle cannot express: the `COLLATE
-"C"` alterations (§8, §10), the append-only triggers and revoked grants (§4f, §7), and the
-   partial unique indexes.
+1. `pnpm db:generate && pnpm db:migrate && pnpm jobs:install`, then hand-add what Drizzle cannot
+   express: the `COLLATE "C"` alterations (§8, §10) and the append-only triggers and narrow UPDATE
+   guards (§4f, §7, §9.1). **Drizzle DOES emit partial unique indexes** — the first draft of this
+   step was wrong about that, and §9's are declared normally. `pnpm
+db:verify-proof-of-effort-constraints` then EXERCISES all 38 database-level guarantees against
+   real rows: an untested hand-written migration is indistinguishable from an absent one.
 2. **Determinism suite, before anything else ships.** Run `recompute-equity-snapshot` 1,000 times
    with input rows shuffled and assert byte-identical `equity_snapshot_share` output. Assert
    `computeSlices` reproduces **every** figure in `solar-cold-storage.ts` (§9.2 lists them). Assert
@@ -2273,9 +2316,14 @@ stays API-disabled until then.
    that every rejected key in §7 returns `422`. Repeat against the native clients with a proxy.
 5. **Four-eyes test.** Founder requests a release and attempts to approve it → `422
 SELF_APPROVAL_FORBIDDEN`. Founder grants themselves `admin` → rejected.
-6. **Dispute lifecycle.** Verify a claim, confirm nothing is in the ledger; let the window expire and
-   confirm exactly one entry appears; re-run the sweep and confirm it is a no-op (idempotency);
-   dispute another and confirm slices show as escrowed and _outside_ `totalSlices`.
+6. **Dispute lifecycle.** ✅ `pnpm db:smoke-proof-of-effort` runs exactly this, in order, against a
+   real database: verify a claim and confirm nothing is in the ledger; expire the window and confirm
+   the settlement appears; re-run the sweep and confirm it is a no-op; dispute another and confirm
+   slices show as escrowed and _outside_ `totalSlices`. It also tampers with a `detailNote` in SQL
+   (with the append-only trigger disabled, which is the honest shape of the threat) and asserts the
+   chain breaks at that exact sequence. **The script leaves its rows behind and that is the
+   guarantee, not a limitation** — a smoke test that could clean up after itself would be one
+   proving the triggers do not work.
 7. **Zero-trust sweep.** `grep` every Zod schema for `userId|equity|slice|Cents|score|verdict|status`
    and confirm each hit is one of the two documented negotiated-input exceptions.
 8. **Cascade sweep.** For every FK into a financial or audit table, assert `onDelete` is `restrict`
