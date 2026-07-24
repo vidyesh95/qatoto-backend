@@ -4,6 +4,10 @@ import type { DisputeError } from "#src/services/dispute.service.js";
 import type { EffortClaimError } from "#src/services/effort-claims.service.js";
 import type { EquitySnapshotError } from "#src/services/equity-snapshot.service.js";
 import type { FairMarketRateError } from "#src/services/fair-market-rate.service.js";
+import type { IntegrationError } from "#src/services/integration-consent.service.js";
+import type { OptimizationSuggestionError } from "#src/services/optimization-suggestions.service.js";
+import type { PhysicalReceiptError } from "#src/services/physical-receipts.service.js";
+import type { PieBakeError } from "#src/services/pie-bake.service.js";
 import type { AuditChainError } from "#src/services/project-audit.service.js";
 import type { AllocationError } from "#src/services/slice-allocation.service.js";
 import type { LedgerError } from "#src/services/slice-ledger.service.js";
@@ -39,7 +43,11 @@ export type ProofOfEffortDomainError =
   | DisputeError
   | AuditChainError
   | EquitySnapshotError
-  | LedgerError;
+  | LedgerError
+  | PhysicalReceiptError
+  | IntegrationError
+  | PieBakeError
+  | OptimizationSuggestionError;
 
 export function mapProofOfEffortErrorToResponse(error: ProofOfEffortDomainError): {
   readonly statusCode: number;
@@ -70,6 +78,10 @@ export function mapProofOfEffortErrorToResponse(error: ProofOfEffortDomainError)
       return { statusCode: 404, message: "Ledger entry not found." };
     case "RECEIPT_NOT_FOUND":
       return { statusCode: 404, message: "Receipt not found." };
+    case "GRANT_NOT_FOUND":
+      return { statusCode: 404, message: `No ${error.provider} connection on this project.` };
+    case "SUGGESTION_NOT_FOUND":
+      return { statusCode: 404, message: "Suggestion not found." };
 
     // --- 403: membership is proven; the refusal names a rule.
     case "NOT_THE_RATE_SUBJECT":
@@ -80,6 +92,13 @@ export function mapProofOfEffortErrorToResponse(error: ProofOfEffortDomainError)
       return { statusCode: 403, message: "Only the member who raised a dispute can withdraw it." };
     case "NOT_AUTHORIZED_TO_RESOLVE":
       return { statusCode: 403, message: "Only the founder can resolve this dispute." };
+    case "GRANT_NOT_YOURS":
+      return {
+        statusCode: 403,
+        // §9.10: revoke is SELF-ONLY. A founder who could revoke someone else's consent
+        // could force a re-verification to fail — founder fiat through a side door.
+        message: "Only the member who connected an integration can revoke it.",
+      };
 
     // --- 409: the lifecycle conflicts, which this domain is largely made of.
     case "RETROACTIVE_RATE_CHANGE":
@@ -152,6 +171,29 @@ export function mapProofOfEffortErrorToResponse(error: ProofOfEffortDomainError)
         statusCode: 409,
         message: "This project's pie is baked. Equity is frozen and no longer accrues.",
       };
+    case "DUPLICATE_RECEIPT":
+      return {
+        statusCode: 409,
+        // The same bytes cannot fund two receipts (§9.6). Naming the hash lets a client
+        // point at the receipt that already exists.
+        message: "This exact file has already been uploaded as a receipt on this project.",
+        errors: { receipt: [`sha256 ${error.contentSha256}`] },
+      };
+    case "SNAPSHOT_STALE":
+      return {
+        statusCode: 409,
+        // §9.11: a founder must not bake a cap table they have not seen.
+        message:
+          "The cap table has changed since you reviewed it. Re-read the current snapshot before baking.",
+        errors: { expectedSnapshotId: [`The latest snapshot is ${error.latestSnapshotId}.`] },
+      };
+    case "UNSETTLED_ALLOCATIONS":
+      return {
+        statusCode: 409,
+        message: `${error.openCount} open and ${error.disputedCount} disputed allocation window(s) must settle before the pie can be baked.`,
+      };
+    case "SUGGESTION_ALREADY_DECIDED":
+      return { statusCode: 409, message: `That suggestion was already ${error.status}.` };
 
     // --- 422: validation a schema could not do alone.
     case "ACKNOWLEDGEMENT_MISMATCH":
@@ -197,6 +239,49 @@ export function mapProofOfEffortErrorToResponse(error: ProofOfEffortDomainError)
           ],
         },
       };
+
+    // --- 422/413/503: uploads and third parties.
+    case "RECEIPT_FILE_MISSING":
+      return {
+        statusCode: 422,
+        message: "No receipt file was attached.",
+        errors: { receipt: ["Send the image in a multipart field named `receipt`."] },
+      };
+    case "NOT_AN_IMAGE":
+      return { statusCode: 422, message: "That file is not a readable image." };
+    case "UNSUPPORTED_FORMAT":
+      return {
+        statusCode: 422,
+        message: `Unsupported image format: ${error.format}. Use JPEG, PNG or WebP.`,
+      };
+    case "DIMENSIONS_TOO_SMALL":
+      return {
+        statusCode: 422,
+        message: `Receipt is too small (${error.width}×${error.height}). Minimum 64×64.`,
+      };
+    case "DIMENSIONS_TOO_LARGE":
+      return {
+        statusCode: 422,
+        message: `Receipt is too large (${error.width}×${error.height}). Maximum 8192×8192.`,
+      };
+    case "OAUTH_STATE_INVALID":
+      return {
+        statusCode: 422,
+        // The state IS the identity on a provider callback (§11e), so a bad one is not a
+        // recoverable hiccup — the connection has to be started again.
+        message: "That connection link has expired or was tampered with. Start again.",
+      };
+    case "INTEGRATION_UNCONFIGURED":
+      return {
+        statusCode: 503,
+        message: `${error.provider} integration is not configured on this deployment.`,
+      };
+    case "NOT_CONFIGURED":
+      return { statusCode: 503, message: "Receipt storage is not configured." };
+    case "UPLOAD_FAILED":
+      return { statusCode: 502, message: "Receipt upload failed. Please try again." };
+    case "DELETE_FAILED":
+      return { statusCode: 502, message: "Receipt deletion failed. Please try again." };
 
     // --- The chain. A break must PAGE, not render as a field in a 200 (§9.9).
     case "CHAIN_BROKEN":

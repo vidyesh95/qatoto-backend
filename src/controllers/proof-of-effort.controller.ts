@@ -1,16 +1,23 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { config } from "#src/config/index.js";
 import {
   firstParam,
+  optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
 import { respondProofOfEffortError } from "#src/controllers/proof-of-effort-error-response.js";
+import { exchangeCodeForToken, fetchViewerLogin } from "#src/lib/github-integration.js";
 import * as disputeService from "#src/services/dispute.service.js";
 import * as claimsService from "#src/services/effort-claims.service.js";
 import * as snapshotService from "#src/services/equity-snapshot.service.js";
 import * as rateService from "#src/services/fair-market-rate.service.js";
+import * as integrationService from "#src/services/integration-consent.service.js";
+import * as suggestionsService from "#src/services/optimization-suggestions.service.js";
+import * as receiptsService from "#src/services/physical-receipts.service.js";
+import * as bakeService from "#src/services/pie-bake.service.js";
 import * as auditService from "#src/services/project-audit.service.js";
 import * as membershipService from "#src/services/project-membership.service.js";
 import * as allocationService from "#src/services/slice-allocation.service.js";
@@ -714,4 +721,363 @@ export async function getAuditHashInput(req: Request, res: Response): Promise<vo
     return;
   }
   respondOk(res, "Hash input loaded.", hashInput.value);
+}
+
+// --- Physical receipts. Every measurement is the server's; the body carries a kind and a
+// --- dedup token, and nothing else.
+
+export const UploadReceiptSchema = z
+  .object({
+    receiptKind: z.enum(["photo_of_work", "cad_file", "material_receipt", "other"]),
+    idempotencyKey: z.string().trim().min(8).max(128),
+  })
+  .strict();
+
+export const CreateSuggestionSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    bodyText: z.string().trim().min(1).max(4_000),
+    memberId: z.uuid().optional(),
+    evidenceLabels: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
+  })
+  .strict();
+
+export const DecideSuggestionSchema = z
+  .object({ note: z.string().trim().max(2_000).optional() })
+  .strict();
+
+export const AuthorizeIntegrationSchema = z
+  .object({
+    // The narrowed scope the member consents to. Empty is legal and means "connect the
+    // account but read nothing yet" — §9.10's default-to-narrowest rule.
+    requestedResourceIds: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
+  })
+  .strict();
+
+export const BakePieSchema = z
+  .object({
+    trigger: z.enum(["cash_flow_breakeven", "priced_round"]),
+    triggerEvidenceNote: z.string().trim().min(1).max(2_000),
+    // Money as a decimal STRING; a valuation in cents is far past 2^53 for any real round.
+    valuationCents: z
+      .string()
+      .regex(/^\d{1,18}$/, "Must be a whole number of cents, as a string")
+      .optional(),
+    acknowledgement: z.string(),
+    expectedSnapshotId: z.uuid(),
+  })
+  .strict();
+
+const IntegrationProviderSchema = z.enum(["github", "gitlab", "figma", "jira", "linear"]);
+
+/**
+ * `POST …/physical-receipts` — multipart, **202**.
+ *
+ * 202 rather than 201 because a receipt is EVIDENCE AWAITING A CLAIM, not a claim: nothing
+ * is priced until a member cites it. `sizeBytes`, dimensions, both hashes and the capture
+ * time are all measured here and appear in no request field.
+ */
+export async function uploadPhysicalReceipt(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const parsedBody = UploadReceiptSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  if (!req.file) {
+    respondProofOfEffortError(res, { type: "RECEIPT_FILE_MISSING" });
+    return;
+  }
+
+  const uploaded = await receiptsService.uploadReceipt(
+    { projectId: caller.context.projectId, memberId: caller.context.memberId },
+    req.file.buffer,
+    parsedBody.data,
+  );
+
+  if (!uploaded.success) {
+    respondProofOfEffortError(res, uploaded.error);
+    return;
+  }
+
+  res.status(202).json({
+    status: "success",
+    statusCode: 202,
+    message: "Receipt stored and analyzed. Cite it in an effort claim to have it priced.",
+    data: uploaded.value,
+  } satisfies ApiResponse);
+}
+
+/** `GET …/physical-receipts` — the caller's OWN unclaimed receipts. */
+export async function listPhysicalReceipts(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  respondOk(
+    res,
+    "Receipts loaded.",
+    await receiptsService.listUnclaimedReceipts(
+      caller.context.projectId,
+      // Scoped to the caller: a receipt is evidence about one person's work, and listing
+      // everyone's would tell a member which photographs to cite.
+      caller.context.memberId,
+    ),
+  );
+}
+
+// --- Integration consent. A TRIPLE — (project, member, provider) — never a pair.
+
+/** `GET …/integrations` — the caller's own grants, never anyone else's, never a token. */
+export async function listIntegrations(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  respondOk(
+    res,
+    "Integrations loaded.",
+    await integrationService.listGrants(caller.context.projectId, caller.context.memberId),
+  );
+}
+
+/** `POST …/integrations/:provider/authorize-url` — `503` when the provider is unconfigured. */
+export async function createIntegrationAuthorizeUrl(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const parsedProvider = IntegrationProviderSchema.safeParse(req.params.provider);
+  if (!parsedProvider.success) {
+    respondValidationFailed(res, parsedProvider.error);
+    return;
+  }
+
+  const parsedBody = AuthorizeIntegrationSchema.safeParse(optionalBody(req));
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const authorizeUrl = await integrationService.buildAuthorizeUrl(
+    { projectId: caller.context.projectId, memberId: caller.context.memberId },
+    parsedProvider.data,
+    parsedBody.data.requestedResourceIds,
+  );
+
+  if (!authorizeUrl.success) {
+    respondProofOfEffortError(res, authorizeUrl.error);
+    return;
+  }
+  respondOk(res, "Authorization link created.", authorizeUrl.value);
+}
+
+/**
+ * `DELETE …/integrations/:provider` — SELF ONLY, and it never touches equity.
+ *
+ * The response names how many claims can no longer be re-checked, because §9.10 asks for
+ * exactly that sentence at the moment of revocation: "Revoking means these 47 claims can no
+ * longer be re-checked if challenged."
+ */
+export async function revokeIntegration(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const parsedProvider = IntegrationProviderSchema.safeParse(req.params.provider);
+  if (!parsedProvider.success) {
+    respondValidationFailed(res, parsedProvider.error);
+    return;
+  }
+
+  const revoked = await integrationService.revokeGrant(
+    { projectId: caller.context.projectId, memberId: caller.context.memberId },
+    parsedProvider.data,
+    caller.userId,
+    caller.context.memberRole,
+  );
+
+  if (!revoked.success) {
+    respondProofOfEffortError(res, revoked.error);
+    return;
+  }
+
+  respondOk(
+    res,
+    `Connection revoked. ${revoked.value.claimsNoLongerReVerifiable} claim(s) can no longer be re-verified if challenged. No slices were reversed.`,
+    revoked.value,
+  );
+}
+
+// --- Baking the pie. Irreversible, once ever.
+
+/** `GET …/pie-bake` — the frozen cap table, or null while equity is still dynamic. */
+export async function getPieBake(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  respondOk(res, "Pie bake loaded.", await bakeService.findPieBake(caller.context.projectId));
+}
+
+/** `POST …/pie-bake` — founder only. There is no unbake endpoint. */
+export async function bakePie(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "founder");
+  if (!caller) return;
+
+  const parsedBody = BakePieSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const baked = await bakeService.bakePie(
+    caller.context,
+    {
+      trigger: parsedBody.data.trigger,
+      triggerEvidenceNote: parsedBody.data.triggerEvidenceNote,
+      ...(parsedBody.data.valuationCents === undefined
+        ? {}
+        : { valuationCents: BigInt(parsedBody.data.valuationCents) }),
+      acknowledgement: parsedBody.data.acknowledgement,
+      expectedSnapshotId: parsedBody.data.expectedSnapshotId,
+    },
+    caller.userId,
+    caller.context.memberRole,
+  );
+
+  if (!baked.success) {
+    respondProofOfEffortError(res, baked.error);
+    return;
+  }
+
+  res.status(201).json({
+    status: "success",
+    statusCode: 201,
+    message: "The pie is baked. Equity is frozen permanently and no longer accrues.",
+    data: baked.value,
+  } satisfies ApiResponse);
+}
+
+// --- Optimization suggestions. They suggest; they never allocate.
+
+export async function listOptimizationSuggestions(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  respondOk(
+    res,
+    "Suggestions loaded.",
+    await suggestionsService.listSuggestions(caller.context.projectId),
+  );
+}
+
+export async function createOptimizationSuggestion(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "maintainer");
+  if (!caller) return;
+
+  const parsedBody = CreateSuggestionSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const created = await suggestionsService.createSuggestion(caller.context, parsedBody.data);
+  if (!created.success) {
+    respondProofOfEffortError(res, created.error);
+    return;
+  }
+
+  res.status(201).json({
+    status: "success",
+    statusCode: 201,
+    message: "Suggestion recorded.",
+    data: created.value,
+  } satisfies ApiResponse);
+}
+
+/** `POST …/:id/accept` and `…/:id/dismiss` — one decision, recorded once. */
+export function decideOptimizationSuggestion(
+  decision: "accepted" | "dismissed",
+): (req: Request, res: Response) => Promise<void> {
+  return async (req: Request, res: Response): Promise<void> => {
+    const caller = await requireRoleOrRespond(req, res, "maintainer");
+    if (!caller) return;
+
+    const parsedBody = DecideSuggestionSchema.safeParse(optionalBody(req));
+    if (!parsedBody.success) {
+      respondValidationFailed(res, parsedBody.error);
+      return;
+    }
+
+    const decided = await suggestionsService.decideSuggestion(
+      caller.context,
+      firstParam(req.params.suggestionId ?? ""),
+      decision,
+      caller.userId,
+      parsedBody.data.note ?? null,
+    );
+
+    if (!decided.success) {
+      respondProofOfEffortError(res, decided.error);
+      return;
+    }
+    respondOk(res, `Suggestion ${decision}.`, decided.value);
+  };
+}
+
+const IntegrationCallbackQuerySchema = z
+  .object({ code: z.string().min(1), state: z.string().min(1) })
+  .strict();
+
+/**
+ * `GET /integrations/:provider/callback` — the provider redirect. Mounted at the ROOT,
+ * because a provider redirect URI is fixed at app-registration time and cannot carry a
+ * project slug.
+ *
+ * **IDENTITY COMES FROM THE SIGNED `state`, NOT FROM A SESSION** (§11e). The browser
+ * arriving here carries whatever cookies it had — possibly a different member's, possibly
+ * none — so the only trustworthy statement of who started this flow is the HMAC this
+ * server minted ten minutes ago.
+ *
+ * ALWAYS REDIRECTS, NEVER RENDERS JSON. The user is in a browser mid-OAuth; an error
+ * envelope would strand them on a blank page. The outcome travels as a query parameter the
+ * frontend renders.
+ */
+export async function handleIntegrationCallback(req: Request, res: Response): Promise<void> {
+  const parsedQuery = IntegrationCallbackQuerySchema.safeParse(req.query);
+  const redirectTo = new URL(`${config.FRONTEND_URL}/research-and-development`);
+
+  if (!parsedQuery.success) {
+    redirectTo.searchParams.set("integration", "failed");
+    res.redirect(302, redirectTo.toString());
+    return;
+  }
+
+  const claims = integrationService.verifyOauthState(parsedQuery.data.state);
+  if (!claims.success) {
+    redirectTo.searchParams.set("integration", "state-invalid");
+    res.redirect(302, redirectTo.toString());
+    return;
+  }
+
+  const token = await exchangeCodeForToken(parsedQuery.data.code);
+  if (!token.success) {
+    redirectTo.searchParams.set("integration", "exchange-failed");
+    res.redirect(302, redirectTo.toString());
+    return;
+  }
+
+  // The connected account's login, stored as the grant's label AND used as the commit
+  // author filter during grounding — so a member can only ever ground their own work.
+  const login = await fetchViewerLogin(token.value.accessToken);
+
+  const completed = await integrationService.completeGrant(
+    claims.value,
+    token.value.accessToken,
+    login.success ? login.value : null,
+    // The actor is the member the STATE names, not whoever happens to hold the session.
+    claims.value.memberId,
+  );
+
+  redirectTo.searchParams.set("integration", completed.success ? "connected" : "failed");
+  res.redirect(302, redirectTo.toString());
 }

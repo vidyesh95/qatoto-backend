@@ -18,7 +18,9 @@ import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
 import playlistsRouter from "#src/routes/playlists.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
-import proofOfEffortRouter from "#src/routes/proof-of-effort.routes.js";
+import proofOfEffortRouter, {
+  integrationCallbackRouter,
+} from "#src/routes/proof-of-effort.routes.js";
 import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
 import researchProjectsRouter from "#src/routes/research-projects.routes.js";
 import seriesRouter from "#src/routes/series.routes.js";
@@ -139,6 +141,10 @@ app.use("/series", seriesRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,
 // exactly as the spec mounts the funding router at "/".
 app.use("/", researchCatalogRouter);
+// The §9 integration callback. Root-mounted because a provider's redirect URI is fixed at
+// app-registration time and cannot carry a project slug; the project and the member come
+// out of the signed `state` instead (§9.10).
+app.use("/", integrationCallbackRouter);
 app.use("/", docsRouter);
 
 // --- Error handling ---

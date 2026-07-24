@@ -10,10 +10,13 @@ import {
   dailyLog,
   dailyLogEvidenceLink,
   effortClaim,
+  integrationConsentGrant,
   physicalWorkReceipt,
   verificationStep,
 } from "#src/db/schema.js";
-import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
+import { fetchAuthoredCommits } from "#src/lib/github-integration.js";
+import { idempotencyKeyFor, JOB_NAMES, PermanentJobError, sendJob } from "#src/lib/jobs.js";
+import { decryptToken } from "#src/lib/token-encryption.js";
 import {
   decideClaimVerdict,
   VERIFICATION_STEP_KINDS,
@@ -276,6 +279,11 @@ interface CollectedArtifact {
    */
   readonly hasVerifiableTimestamp: boolean;
   readonly isCodeBearing: boolean;
+  readonly signatureStatus: (typeof artifactEvidence.$inferSelect)["signatureStatus"];
+  /** Set only for provider-fetched artifacts; a revocation purges through this link. */
+  readonly consentGrantId: string | null;
+  /** The payload a revocation NULLs. Null for a link, which has no payload to hold. */
+  readonly rawPayloadJson: string | null;
 }
 
 /**
@@ -286,10 +294,11 @@ interface CollectedArtifact {
  * no-op; a DIFFERENT claim citing an artifact already counted elsewhere is silently not
  * counted here, which is exactly the intent.
  *
- * PROVIDER ADAPTERS ARE THE 9D SEAM. When a GitHub grant exists and `GITHUB_APP_*` is
- * configured, real commits with real signatures and real timestamps join this list. Until
- * then the sources are the ones §8 already stored, and everything downstream degrades
- * honestly rather than pretending.
+ * THREE SOURCES, in ascending order of what they prove: the evidence links §8 already
+ * stored (a reference, no verifiable instant), physical receipts (EXIF capture time, which
+ * a camera wrote), and a connected provider (an instant and a signature the member could
+ * not author). With no grant the third simply contributes nothing, and everything
+ * downstream degrades honestly rather than pretending.
  */
 async function collectAndRecordArtifacts(
   claim: typeof effortClaim.$inferSelect,
@@ -318,6 +327,9 @@ async function collectAndRecordArtifacts(
         occurredAt: log?.submittedAt ?? log?.createdAt ?? claim.createdAt,
         hasVerifiableTimestamp: false,
         isCodeBearing: link.provider === "github" || link.provider === "gitlab",
+        signatureStatus: "unknown",
+        consentGrantId: null,
+        rawPayloadJson: null,
       });
     }
   }
@@ -339,8 +351,14 @@ async function collectAndRecordArtifacts(
       // verifiable instant this stack has without an external API.
       hasVerifiableTimestamp: receipt.capturedAt !== null,
       isCodeBearing: false,
+      signatureStatus: "unknown",
+      consentGrantId: null,
+      rawPayloadJson: null,
     });
   }
+
+  const providerArtifacts = await collectProviderArtifacts(claim);
+  collected.push(...providerArtifacts.artifacts);
 
   for (const artifact of collected) {
     await db
@@ -353,13 +371,113 @@ async function collectAndRecordArtifacts(
         label: artifact.label.slice(0, 500),
         externalUrl: artifact.externalUrl,
         payloadSha256: referenceSha256(artifact.provider, artifact.externalId),
-        signatureStatus: "unknown",
+        signatureStatus: artifact.signatureStatus,
         artifactOccurredAt: artifact.occurredAt,
+        ...(artifact.consentGrantId === null ? {} : { consentGrantId: artifact.consentGrantId }),
+        ...(artifact.rawPayloadJson === null ? {} : { rawPayloadJson: artifact.rawPayloadJson }),
       })
       .onConflictDoNothing();
   }
 
   return collected;
+}
+
+/**
+ * Artifacts fetched from a connected provider, scoped to the member's own grant.
+ *
+ * THE SCOPE IS THE GRANT'S, NOT THE CALLER'S. Repositories come from
+ * `allowedResourceIds` — the narrowed list the member consented to — and the author is the
+ * account they connected. A claim cannot reach a repository nobody granted access to, on
+ * this project or any other, because the grant is a (project, member, provider) TRIPLE.
+ *
+ * A permanent provider failure is rethrown as a {@link PermanentJobError} so grounding
+ * dead-letters immediately: §9.7 names 401 (consent revoked upstream) and 404 (artifact
+ * deleted) as permanent, and burning five exponential backoff attempts on either just
+ * delays the signal by half an hour. Everything else returns no artifacts and lets the
+ * link-only path decide, because a rate limit must not zero a member's honest day.
+ */
+async function collectProviderArtifacts(
+  claim: typeof effortClaim.$inferSelect,
+): Promise<{ readonly artifacts: readonly CollectedArtifact[] }> {
+  const [grant] = await db
+    .select()
+    .from(integrationConsentGrant)
+    .where(
+      and(
+        eq(integrationConsentGrant.projectId, claim.projectId),
+        eq(integrationConsentGrant.memberId, claim.memberId),
+        eq(integrationConsentGrant.provider, "github"),
+        eq(integrationConsentGrant.status, "active"),
+      ),
+    );
+
+  if (!grant?.encryptedAccessToken || grant.allowedResourceIds.length === 0) {
+    return { artifacts: [] };
+  }
+
+  const accessToken = decryptToken(grant.encryptedAccessToken);
+  if (!accessToken.success) {
+    // A key rotation that left this row behind. Permanent: retrying decrypts the same
+    // bytes with the same key and fails identically.
+    throw new PermanentJobError(
+      "INTEGRATION_TOKEN_UNDECRYPTABLE",
+      `ground-artifacts: grant ${grant.id} could not be decrypted`,
+    );
+  }
+
+  const authorLogin = grant.externalAccountLabel;
+  if (!authorLogin) {
+    return { artifacts: [] };
+  }
+
+  const dayStart = new Date(`${claim.claimedForDate}T00:00:00.000Z`);
+  const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+  const artifacts: CollectedArtifact[] = [];
+
+  for (const repositoryFullName of grant.allowedResourceIds) {
+    const commits = await fetchAuthoredCommits(
+      { repositoryFullName, authorLogin, since: dayStart, until: dayEnd },
+      accessToken.value,
+    );
+
+    if (!commits.success) {
+      if (commits.error.type === "GITHUB_UNAUTHORIZED") {
+        throw new PermanentJobError(
+          "INTEGRATION_CONSENT_REVOKED",
+          `ground-artifacts: GitHub rejected the token on grant ${grant.id}`,
+        );
+      }
+      // A missing repository, a rate limit, a network fault: this repository contributes
+      // nothing and the others still get their chance.
+      continue;
+    }
+
+    for (const commit of commits.value) {
+      artifacts.push({
+        provider: "github",
+        externalId: commit.sha,
+        label: `${repositoryFullName}@${commit.sha.slice(0, 12)} — ${commit.message.split("\n")[0] ?? ""}`,
+        externalUrl: commit.htmlUrl,
+        occurredAt: commit.authoredAt,
+        // THE WHOLE POINT OF A CONNECTED PROVIDER: an instant GitHub recorded, which the
+        // member could not have authored. This is what lets grounding reach `passed` and
+        // temporal analysis run at all.
+        hasVerifiableTimestamp: true,
+        isCodeBearing: true,
+        signatureStatus: commit.signatureStatus,
+        consentGrantId: grant.id,
+        // Retained until a revocation NULLs it, at which point the hash, the sha and the
+        // instant still prove the claim (§9.10).
+        rawPayloadJson: JSON.stringify({
+          sha: commit.sha,
+          message: commit.message,
+          authoredAt: commit.authoredAt.toISOString(),
+        }),
+      });
+    }
+  }
+
+  return { artifacts };
 }
 
 /** §8's link providers map onto §9's wider artifact vocabulary. */

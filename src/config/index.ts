@@ -127,6 +127,23 @@ const envSchema = z.object({
   // the call runs in a worker whose job slot it would otherwise hold indefinitely.
   GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
   GEMINI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(65_536).default(8_192),
+
+  // --- §9 integration consent (docs/R_AND_D_BACKEND_STRUCTURE.md §9.10).
+  //
+  // The key that envelope-encrypts third-party access tokens at rest. OPTIONAL, and its
+  // absence DISABLES the connect routes with 503 rather than degrading to a default key —
+  // a default key is indistinguishable from plaintext to anyone who has read the source.
+  // §9.10 specifies a KMS-held key; src/lib/token-encryption.ts isolates the derivation
+  // into one function so that swap is an edit rather than a migration.
+  INTEGRATION_TOKEN_SECRET: z.string().min(32).optional(),
+  // The GitHub App that grounds code artifacts. All three are required together, and
+  // without them `POST …/integrations` answers 503 INTEGRATION_UNCONFIGURED and grounding
+  // falls back to the evidence links §8 already stored.
+  GITHUB_APP_ID: z.string().min(1).optional(),
+  GITHUB_APP_CLIENT_ID: z.string().min(1).optional(),
+  GITHUB_APP_CLIENT_SECRET: z.string().min(1).optional(),
+  // Bounds an artifact-grounding fetch so a hanging provider cannot hold a worker slot.
+  INTEGRATION_HTTP_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
 });
 
 export const config = envSchema.parse(process.env);

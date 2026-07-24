@@ -447,3 +447,71 @@ export async function deleteVideoThumbnail(
     };
   }
 }
+
+/**
+ * §9 physical-work receipts. UNLIKE every other asset in this file, a receipt is
+ * CONTENT-ADDRESSED rather than entity-addressed: its public id is derived from the
+ * sha256 of the uploaded bytes.
+ *
+ * That is deliberate and it follows the domain rule. `physical_work_receipt_content_unq`
+ * already guarantees the same bytes cannot fund two receipts inside one project, so a
+ * content-addressed id makes the storage layer agree with the database rather than
+ * quietly holding two copies under two ids. It also makes the upload idempotent: a
+ * retried request overwrites itself.
+ */
+const PHYSICAL_RECEIPT_FOLDER = "qatoto/proof-of-effort/receipts";
+
+/** The stable public id a receipt's bytes always live at, within its project. */
+export function physicalReceiptPublicId(projectId: string, contentSha256: string): string {
+  return `${PHYSICAL_RECEIPT_FOLDER}/${projectId}/${contentSha256}`;
+}
+
+/**
+ * Upload a receipt from an already-validated, re-encoded buffer.
+ *
+ * The buffer MUST be normalized by the caller first (CLAUDE.md §1.1) — this layer trusts
+ * it. Note that the STORED image therefore carries no EXIF: the forensics read happens
+ * against the raw upload before normalization, and the stripped copy is what a human
+ * later looks at.
+ */
+export async function uploadPhysicalReceipt(
+  projectId: string,
+  contentSha256: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string; publicId: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  const publicId = physicalReceiptPublicId(projectId, contentSha256);
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { public_id: publicId, resource_type: "image", overwrite: true, invalidate: true },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl, publicId } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}

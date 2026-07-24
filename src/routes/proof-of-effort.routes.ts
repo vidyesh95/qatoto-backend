@@ -10,6 +10,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import { uploadPhysicalReceipt } from "#src/middleware/upload-physical-receipt.js";
 
 const router = express.Router();
 
@@ -219,6 +220,108 @@ router.get(
   "/:projectSlug/audit-trail/:entryId/hash-input",
   requireAuth,
   proofOfEffortController.getAuditHashInput,
+);
+
+// --- Physical receipts. The ONLY multipart route in this router; `uploadPhysicalReceipt`
+// --- runs INSIDE the route so the global express.json() never touches a multipart body.
+
+router.get(
+  "/:projectSlug/physical-receipts",
+  requireAuth,
+  proofOfEffortController.listPhysicalReceipts,
+);
+
+/** POST …/physical-receipts — server-measured in every field. 202, 409, 413. */
+router.post(
+  "/:projectSlug/physical-receipts",
+  requireAuth,
+  effortClaimLimiter,
+  requireIdentifiedUser,
+  uploadPhysicalReceipt,
+  proofOfEffortController.uploadPhysicalReceipt,
+);
+
+// --- Integration consent. A (project, member, provider) triple; revoke is SELF-ONLY.
+
+router.get("/:projectSlug/integrations", requireAuth, proofOfEffortController.listIntegrations);
+
+router.post(
+  "/:projectSlug/integrations/:provider/authorize-url",
+  requireAuth,
+  fairMarketRateLimiter,
+  requireIdentifiedUser,
+  parseCompactJsonBody,
+  proofOfEffortController.createIntegrationAuthorizeUrl,
+);
+
+router.delete(
+  "/:projectSlug/integrations/:provider",
+  requireAuth,
+  fairMarketRateLimiter,
+  requireIdentifiedUser,
+  proofOfEffortController.revokeIntegration,
+);
+
+// --- Baking the pie. Irreversible, once ever, and there is no unbake route below.
+
+router.get("/:projectSlug/pie-bake", requireAuth, proofOfEffortController.getPieBake);
+
+router.post(
+  "/:projectSlug/pie-bake",
+  requireAuth,
+  fairMarketRateLimiter,
+  requireIdentifiedUser,
+  parseCompactJsonBody,
+  proofOfEffortController.bakePie,
+);
+
+// --- Optimization suggestions. `/accept` and `/dismiss` are literals under :suggestionId.
+
+router.get(
+  "/:projectSlug/optimization-suggestions",
+  requireAuth,
+  proofOfEffortController.listOptimizationSuggestions,
+);
+
+router.post(
+  "/:projectSlug/optimization-suggestions",
+  requireAuth,
+  effortClaimLimiter,
+  parseCompactJsonBody,
+  proofOfEffortController.createOptimizationSuggestion,
+);
+
+router.post(
+  "/:projectSlug/optimization-suggestions/:suggestionId/accept",
+  requireAuth,
+  effortClaimLimiter,
+  parseCompactJsonBody,
+  proofOfEffortController.decideOptimizationSuggestion("accepted"),
+);
+
+router.post(
+  "/:projectSlug/optimization-suggestions/:suggestionId/dismiss",
+  requireAuth,
+  effortClaimLimiter,
+  parseCompactJsonBody,
+  proofOfEffortController.decideOptimizationSuggestion("dismissed"),
+);
+
+/**
+ * The provider callback, mounted at the ROOT rather than under `/research-projects`.
+ *
+ * A provider's redirect URI is registered once with the app and cannot vary per project,
+ * so this path carries no slug — the project comes out of the signed `state`, which is
+ * also the only trustworthy statement of WHO started the flow (§11e).
+ */
+export const integrationCallbackRouter = express.Router();
+
+integrationCallbackRouter.get(
+  "/integrations/:provider/callback",
+  // NO `requireAuth`. The caller is a provider redirect, and requiring a session here
+  // would break the flow for anyone whose cookies did not survive the round trip — while
+  // proving nothing, because the identity is in the signed state either way.
+  proofOfEffortController.handleIntegrationCallback,
 );
 
 export default router;
