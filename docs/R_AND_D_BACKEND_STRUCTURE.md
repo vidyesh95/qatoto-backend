@@ -13,11 +13,12 @@
 > every number involved.
 >
 > **Stack (mostly reused):** **Express 5** + **Drizzle ORM** + **PostgreSQL** + **zod** +
-> **Cloudinary** (images) + **sharp** + **multer** + **express-rate-limit**, all already installed.
-> **Three genuinely new dependencies** (§2): a job runner (**pg-boss**), an object store for large
-> files (**S3-compatible**), and a payments/escrow provider (**Stripe**). Better Auth already owns
-> identity; this feature owns the `/research-projects/*`, `/discovery/*`, `/funding/*` and
-> `/research-programs/*` routes and ~60 new tables.
+> **Cloudinary** (images) + **sharp** + **multer** + **express-rate-limit** + **pg-boss** (the job
+> runner, shipped with §6), all already installed. The only genuinely new dependency this domain
+> still adds is an **LLM provider** for §8/§9 analysis — **Gemini on the AI Studio free tier**,
+> called with plain `fetch`, no SDK. Better Auth already owns identity; this feature owns the
+> `/research-projects/*`, `/discovery/*`, `/funding/*` and `/research-programs/*` routes and ~60 new
+> tables.
 >
 > **Status:** the entire R&D frontend is **pure UI over static mocks** —
 > [R_AND_D_STRUCTURE.md](R_AND_D_STRUCTURE.md) §10 and every file under
@@ -31,6 +32,38 @@
 > Immortal (§10) and the full Proof-of-Effort mechanism spec'd in
 > [PROOF_OF_EFFORT_SPEC.md](PROOF_OF_EFFORT_SPEC.md) (§9). Build order — what ships first and what
 > waits — is §16.
+>
+> ---
+>
+> ## ⚠️ Read this first — the zero-cost stack
+>
+> This document was drafted against three paid dependencies. **All three are deferred**, on cost
+> grounds, exactly as [STUDIO_BACKEND_STRUCTURE.md](STUDIO_BACKEND_STRUCTURE.md) deferred Livepeer
+> for the Creator Studio. What ships instead:
+>
+> | Concern | Drafted (deferred) | **Ships now** |
+> | --------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+> | Daily-log video (§8) | Livepeer direct upload | **An optional pasted YouTube link**, parsed to an 11-char id and proven with one free oEmbed call. A log may also be text-only. |
+> | Workshop files (§8), papers (§10) | S3-compatible presigned upload | **An external link** to a host allowlist (Drive, Dropbox, GitHub, OneDrive, Figma, Notion). The backend stores a URL. |
+> | Transcription + claim extraction (§8/§9) | Whisper-class ASR + a paid LLM | **Gemini, AI Studio free tier**, one structured call per log. No key configured → the analysis records `skipped_unconfigured`. |
+> | Escrow money movement (§7) | Stripe Connect + Treasury | **A ledger-only provider adapter with manual settlement.** The double-entry ledger, four-eyes release, hash chain and reconciliation are all built for real; only the outbound cash call is stubbed behind a seam. |
+>
+> **The backend still never touches video bytes, file bytes or customer funds.** That was already
+> true of the drafted design for video; it is now true of all three.
+>
+> **What must NOT be built:** the Livepeer upload/transcode/playback-token path, the S3 presigned
+> upload + `/complete` + `HEAD`-sizing path, `POST /webhooks/livepeer`, `POST
+> /webhooks/object-storage`, `POST /webhooks/payments/stripe`, and the Stripe SDK. All of it is
+> preserved in **[Appendix A](#appendix-a--deferred-paid-infrastructure)** so switching back is a
+> re-read, not a redesign.
+>
+> **Forward compatibility is in the schema, not in a promise.** `workshop_file.source` carries a
+> `hosted` variant beside `external_link`, `daily_log.videoSource` carries `hosted` beside `youtube`
+> and `none`, and `storageProvider` / `objectKey` sit nullable and unwritten — the same shape the
+> studio domain uses for `videoSourceEnum` + the dead provider columns. No table drop, no rename.
+>
+> **Where a section below still says Livepeer, S3 or Stripe as if it ships,** the amended text in
+> §2, §4e, §7, §8, §10 and §11 wins, and the original wording is in Appendix A.
 
 ---
 
@@ -129,23 +162,26 @@ Three reasons this is not negotiable:
 
 ## 2. The stack
 
-Most of this is already installed for auth, store and studio. Three additions are genuinely new
-and each is load-bearing.
+Most of this is already installed for auth, store and studio. One addition is genuinely new — the
+LLM provider. The other two rows the first draft called new (object storage, payments) are
+**deferred to [Appendix A](#appendix-a--deferred-paid-infrastructure)** and replaced by a link and a
+ledger seam respectively.
 
-| Concern               | Pick                                     | Why / reuse                                                                                                                                                                                                                                                  |
-| --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Server framework      | **Express 5**                            | Same app, four more routers.                                                                                                                                                                                                                                 |
-| Language              | **TypeScript** (strict, ESM `#src/*`)    | Shared shapes with the frontend.                                                                                                                                                                                                                             |
-| Database ORM          | **Drizzle ORM**                          | New tables in `src/db/schema.ts`; `pnpm db:generate && db:migrate`.                                                                                                                                                                                          |
-| Database              | **PostgreSQL** via `pg`                  | FKs, enums, partial + unique indexes, `bigint` money.                                                                                                                                                                                                        |
-| Validation            | **zod**                                  | Inline `.safeParse()` in the controller → `422` (prevailing style).                                                                                                                                                                                          |
-| Image storage         | **Cloudinary** (`src/lib/cloudinary.ts`) | Project covers, avatars — reuse the product-image helpers.                                                                                                                                                                                                   |
-| Image processing      | **sharp** (`src/lib/image.ts`)           | Reuse `validateAndNormalizeImage`; also the EXIF reader for §9 receipt forensics.                                                                                                                                                                            |
-| Video                 | **Livepeer**                             | Reuse the STUDIO direct-upload pattern verbatim — the backend never touches video bytes.                                                                                                                                                                     |
-| Rate limiting         | **express-rate-limit**                   | New named limiters per §4a.                                                                                                                                                                                                                                  |
-| **Job runner**        | **pg-boss** ⟵ NEW                        | Postgres-backed queue. Nothing in this repo runs scheduled or async work today, and §9 cannot exist without it. Same database, same transaction, no new infrastructure.                                                                                      |
-| **Object storage**    | **S3-compatible** ⟵ NEW                  | Cloudinary is an image CDN. Workshop files are CAD models, spreadsheets and archives up to 100 MB, and some are _forensic evidence_ for equity claims (§9) — they need presigned direct upload, versioning and retention that an image CDN does not provide. |
-| **Payments / escrow** | **Stripe** (Connect + Treasury) ⟵ NEW    | PROOF_OF_EFFORT_SPEC.md §1 Phase 2 names exactly this. Qatoto must never custody funds itself.                                                                                                                                                               |
+| Concern           | Pick                                      | Why / reuse                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server framework  | **Express 5**                             | Same app, four more routers.                                                                                                                                                                                                                                                                                                  |
+| Language          | **TypeScript** (strict, ESM `#src/*`)     | Shared shapes with the frontend.                                                                                                                                                                                                                                                                                              |
+| Database ORM      | **Drizzle ORM**                           | New tables in `src/db/schema.ts`; `pnpm db:generate && db:migrate`.                                                                                                                                                                                                                                                           |
+| Database          | **PostgreSQL** via `pg`                   | FKs, enums, partial + unique indexes, `bigint` money.                                                                                                                                                                                                                                                                         |
+| Validation        | **zod**                                   | Inline `.safeParse()` in the controller → `422` (prevailing style).                                                                                                                                                                                                                                                           |
+| Image storage     | **Cloudinary** (`src/lib/cloudinary.ts`)  | Project covers, avatars — reuse the product-image helpers.                                                                                                                                                                                                                                                                    |
+| Image processing  | **sharp** (`src/lib/image.ts`)            | Reuse `validateAndNormalizeImage`; also the EXIF reader for §9 receipt forensics.                                                                                                                                                                                                                                             |
+| Daily-log video   | **A YouTube link** (`src/lib/youtube.ts`) | Reuse the STUDIO §9 path verbatim: parse the URL to an 11-char id, prove it with one free oEmbed call, store the id. The backend never touches video bytes, and neither does any provider we pay. Video is **optional** — a log may be text-only.                                                                             |
+| Rate limiting     | **express-rate-limit**                    | New named limiters per §4a.                                                                                                                                                                                                                                                                                                   |
+| **Job runner**    | **pg-boss**                               | Postgres-backed queue, installed with §6. Same database, same transaction, no new infrastructure. §8 and §9 cannot exist without it.                                                                                                                                                                                          |
+| **LLM analysis**  | **Gemini, AI Studio free tier** ⟵ NEW     | One structured-output call per daily log returns the transcript, the summary chips and the extracted claims together — two jobs would be two calls against a free quota. Plain `fetch`, no SDK, injectable for tests, `temperature: 0`. Absent key → `skipped_unconfigured`, never a fabricated verdict.                      |
+| Workshop files    | **An external link**                      | Deferred from S3 on cost. The member pastes a Drive/Dropbox/GitHub/OneDrive/Figma/Notion URL; the server allowlists the host and stores the URL. `sizeBytes` is **NULL**, never a client claim. `source = 'hosted'` + `objectKey` stay in the schema, unwritten, for [Appendix A](#appendix-a--deferred-paid-infrastructure). |
+| Payments / escrow | **A ledger-only provider adapter**        | Deferred from Stripe. §7's double-entry ledger, four-eyes release, hash chain and reconciliation are built for real; settlement flips through an internal, auditor-gated adapter instead of a card network. Qatoto still custodies nothing — it moves no money at all yet.                                                    |
 
 **Money is integer cents everywhere, in `bigint` columns** (§4b). **Equity is integer basis
 points.** No `numeric`, no floats, ever.
@@ -168,7 +204,8 @@ qatoto-backend/
 │   │   ├── workshop.routes.ts                 # NEW — board, files, chat, daily logs
 │   │   ├── proof-of-effort.routes.ts          # NEW — slice ledger, claims, disputes, audit
 │   │   ├── research-programs.routes.ts        # NEW — Project Immortal
-│   │   └── webhooks.routes.ts                 # NEW — Stripe, Livepeer, object storage (raw body!)
+│   │                                          # NO webhooks.routes.ts — nothing signature-
+│   │                                          # verified ships; see Appendix A
 │   ├── controllers/                           # NEW — one per router above
 │   ├── services/
 │   │   ├── research-projects.service.ts       # NEW
@@ -176,24 +213,29 @@ qatoto-backend/
 │   │   ├── discovery.service.ts               # NEW
 │   │   ├── funding.service.ts                 # NEW
 │   │   ├── escrow.service.ts                  # NEW — append-only ledger + hash chain
-│   │   ├── workshop.service.ts                # NEW
-│   │   ├── daily-logs.service.ts              # NEW
+│   │   ├── workshop-board.service.ts          # NEW — columns, tasks, lexicographic ranks (§8)
+│   │   ├── workshop-files.service.ts          # NEW — external links, host allowlist (§8)
+│   │   ├── workshop-chat.service.ts           # NEW — keyset chat + read state (§8)
+│   │   ├── daily-logs.service.ts              # NEW — drafts, YouTube attach, submit (§8)
 │   │   ├── slicing-pie.service.ts             # NEW — the deterministic equity formula (§9)
 │   │   ├── verification.service.ts            # NEW — the 4-step pipeline (§9)
 │   │   └── research-programs.service.ts       # NEW
 │   ├── middleware/
 │   │   ├── require-identified-user.ts         # NEW — requireAuth is NOT enough (§4a)
 │   │   ├── rate-limit.ts                      # + ~12 new named limiters (§4a)
-│   │   └── upload-*.ts                        # + workshop file / paper multipart handlers
+│   │                                          # NO new upload-*.ts: workshop files are links
 │   ├── lib/
 │   │   ├── auth.ts                            # + bearer() plugin, multi-origin passkey (§4a)
 │   │   ├── money.ts                           # NEW — THE one arithmetic module (§4c)
 │   │   ├── canonical-hash.ts                  # NEW — the audit chain hash (§4c)
 │   │   ├── jobs.ts                            # NEW — pg-boss bootstrap + job registry (§4e)
-│   │   ├── object-storage.ts                  # NEW — presigned S3 upload/download
-│   │   └── payments.ts                        # NEW — Stripe escrow, idempotency keys
+│   │   ├── youtube.ts                         # REUSED from the studio domain (§8)
+│   │   ├── gemini.ts                          # NEW — the one LLM call, structured output (§8)
+│   │   ├── lexorank.ts                        # NEW — kanban rank strings, COLLATE "C"-safe (§8)
+│   │   ├── external-link.ts                   # NEW — file-link host allowlist (§8)
+│   │   └── daily-log-streak.ts                # NEW — the pure streak fold (§8)
 │   ├── jobs/                                  # NEW — one file per scheduled/async worker (§4e)
-│   └── app.ts                                 # + 7 routers; webhook raw-body mount BEFORE json()
+│   └── app.ts                                 # + 6 routers. No raw-body mount: no webhooks
 ```
 
 `req.user` is attached by `requireAuth` (`src/middleware/require-auth.ts`) and typed via the ambient
@@ -429,19 +471,20 @@ forensics, none of which can run inside an HTTP request.
 **pg-boss**, because it is Postgres-backed: the same database, enlisted in the same transaction, no
 new infrastructure to operate.
 
-| Job                             | Cadence              | Purpose                                           |
-| ------------------------------- | -------------------- | ------------------------------------------------- |
-| `cluster-problem-submission`    | on submit            | Attach a raw submission to a problem cluster (§6) |
-| `recompute-opportunity-scores`  | nightly              | Civic Pulse ranking (§6)                          |
-| `recompute-demand-signals`      | nightly              | Knowledge-hub leaderboard (§6)                    |
-| `refresh-talent-projections`    | hourly               | Talent directory denormalization (§6)             |
-| `reconcile-escrow-ledger`       | hourly               | Provider ↔ ledger reconciliation (§7)             |
-| `recompute-investor-confidence` | nightly              | Deal-flow signal (§7)                             |
-| `transcribe-daily-log`          | on submit            | Video → transcript (§8)                           |
-| `verify-effort-claim`           | on submit            | The 4-step pipeline (§9)                          |
-| `recompute-slicing-pie`         | nightly + on verdict | The equity ledger (§9)                            |
-| `sweep-dispute-windows`         | every minute         | Lock expired 24h windows (§9)                     |
-| `recompute-program-stats`       | nightly              | Project Immortal stats (§10)                      |
+| Job                             | Cadence              | Purpose                                            |
+| ------------------------------- | -------------------- | -------------------------------------------------- |
+| `cluster-problem-submission`    | on submit            | Attach a raw submission to a problem cluster (§6)  |
+| `recompute-opportunity-scores`  | nightly              | Civic Pulse ranking (§6)                           |
+| `recompute-demand-signals`      | nightly              | Knowledge-hub leaderboard (§6)                     |
+| `refresh-talent-projections`    | hourly               | Talent directory denormalization (§6)              |
+| `reconcile-escrow-ledger`       | hourly               | Provider ↔ ledger reconciliation (§7)              |
+| `recompute-investor-confidence` | nightly              | Deal-flow signal (§7)                              |
+| `analyze-daily-log`             | on submit            | One Gemini call → transcript + chips + claims (§8) |
+| `recompute-daily-log-streaks`   | nightly              | Decay the streak counter on `project_stats` (§8)   |
+| `verify-effort-claim`           | on submit            | The 4-step pipeline (§9)                           |
+| `recompute-slicing-pie`         | nightly + on verdict | The equity ledger (§9)                             |
+| `sweep-dispute-windows`         | every minute         | Lock expired 24h windows (§9)                      |
+| `recompute-program-stats`       | nightly              | Project Immortal stats (§10)                       |
 
 Every job: an **idempotency key**, bounded retries with exponential backoff, a dead-letter state,
 and the `(data, asOf)` purity rule from §4c. A job that cannot be safely re-run is a bug.
@@ -877,6 +920,24 @@ keyset pagination whose `ORDER BY` ends in a unique column (§4c).
 
 This is the highest-stakes surface in the product. Read §0 again before implementing it.
 
+> **Amended for the zero-cost stack.** Everything below ships **except the card network**. The
+> double-entry ledger, the zero-sum invariant, the hash chain, the four-eyes release, the
+> suspense account and the reconciliation job are all built for real — they are the part that
+> encodes the invariants, and they cost nothing to run. What is stubbed is the single outbound
+> call: `provider_transfer` is submitted to an **internal adapter** rather than Stripe, and
+> settlement flips through an auditor-gated internal endpoint instead of
+> `POST /webhooks/payments/stripe`, which does not exist.
+>
+> Three properties survive that substitution intact, which is why it is safe: the settlement path
+> is still **exactly one code path** writing `raisedAmountInCents`, `backersCount` and account
+> balances; a pledge body still carries `{ amountInCents }` and nothing else; and the ledger is
+> still authoritative for entitlement while the adapter is authoritative for cash. Swapping the
+> adapter for Stripe later changes one module and adds one signature-verified route — not a table.
+>
+> **Until an adapter that actually moves money exists, no real funds are involved at all.** Do not
+> ship a client that tells a backer their card was charged. The original Stripe design is
+> [Appendix A](#appendix-a--deferred-paid-infrastructure).
+
 ### Double-entry, not a signed single row
 
 The mock models the ledger as `EscrowLedgerEntry { direction: "in" | "out", amount }`. **Use
@@ -1097,15 +1158,60 @@ paymentMethodId · occurredAt · createdAt · id
 Every `/workshop/*` route runs `requireProjectRole(projectId, req.user.id, "contributor")` (§4a),
 not merely `requireAuth`. Failure → `404`.
 
-### Video: reuse the Studio pipeline, do not invent a second one
+### Video: a YouTube link, or no video at all
 
-A daily log's video is the **input to the entire equity ledger**, so it needs the strongest upload
-path available — and one already exists. Reuse STUDIO_BACKEND_STRUCTURE.md §5.1 verbatim: Livepeer
-direct upload, where **the backend never touches video bytes**. The client requests a short-lived
-upload URL, uploads directly, and Livepeer calls `POST /webhooks/livepeer` on completion.
+A daily log's video is the **input to the entire equity ledger**, so it needs the strongest path
+available at zero cost — and one already exists in this codebase. Reuse
+STUDIO_BACKEND_STRUCTURE.md §9 verbatim: the member pastes a YouTube URL,
+`extractYoutubeVideoId` (`src/lib/youtube.ts`) parses it to an 11-character id against a hostname
+allowlist, one free **oEmbed** call proves the video exists and permits embedding, and the row
+stores **the id**. The backend never touches video bytes. Livepeer direct upload is
+[Appendix A](#appendix-a--deferred-paid-infrastructure); there is no `POST /webhooks/livepeer`.
 
-Then `transcribe-daily-log` (§4e) runs, writing `daily_log_transcript_segment` rows, and hands off
-to `verify-effort-claim` (§9).
+**Video is optional.** `daily_log.videoSource` is `none | youtube | hosted`, and a `none` log is a
+first-class log carrying only `logDate` and `narrative`. Three reasons this is not a downgrade:
+a member with no video on a given day must still be able to log; §9's physical-work claims have no
+video by definition; and a required-video contract would make the unlisted-link failure mode
+(see below) a hard block on logging rather than a degraded analysis.
+
+**Three honest consequences of using YouTube, stated rather than hidden.** The bytes live on
+youtube.com, so an "unlisted" link is protected by obscurity and nothing else — do not describe it
+as private anywhere in a client. The member can delete the video out from under a claim, which is
+why §9 grounds effort on artifacts and never on the video's continued existence. And YouTube is
+where the recording lives, so there is no playback token to mint: `GET
+…/daily-logs/:logId/playback-token` does not exist, and clients embed
+`youtube-nocookie.com/embed/<id>` rebuilt server-side from the stored id.
+
+Then `analyze-daily-log` (§4e) runs — see below — and later hands off to `verify-effort-claim` (§9).
+
+### Analysis: one Gemini call, and a pipeline that never guesses
+
+`analyze-daily-log` makes **one** structured-output call to Gemini (AI Studio free tier) with the
+YouTube URL when there is one and the narrative text when there is not, and writes the transcript
+segments, the AI summary chips, the extracted claims and the evidence links from that single
+response. One call rather than a transcribe-then-extract pair, because two calls are two draws
+against a free quota for the same tokens.
+
+The job's own lifecycle is `daily_log.analysisStatus`
+(`not_requested | queued | running | succeeded | failed | skipped_unconfigured`) and it is
+**orthogonal to `effortVerificationStatus`** — the same split the studio domain draws between
+`uploadStatus`, `publishStatus` and `reviewStatus`. One column cannot say "transcribed but
+unverified", and §9 owns the verdict column exclusively:
+
+- No `GEMINI_API_KEY` configured → `skipped_unconfigured`. Not `failed`, and above all not a chip.
+- Gemini rejects the input (private video, blocked region) → `failed` with a reason, and the log
+  keeps its narrative. Analysis is retried against the narrative alone, never abandoned silently.
+- 429 / 5xx / timeout → retryable; pg-boss backs off per §4e.
+- Output that fails its Zod schema after **one** repair attempt → `failed`, permanently. The same
+  line §9.7 draws for schema-invalid LLM output.
+
+In every failure mode `effortVerificationStatus` stays `not_run`. **A broken pipeline awards
+nothing and asserts nothing** — it never writes `verified`, and it never invents a chip.
+
+Everything Gemini produces is §9.1's left column: AI-produced, reviewable, carrying
+`generatedByModel` + `promptVersion` + `confidenceBps`. `daily_log_extracted_claim.extractedMinutes`
+is _what the member said_, per §9.6; `groundedMinutes` belongs to §9 and is deliberately absent
+here.
 
 ### Workshop and daily-log tables
 
@@ -1113,11 +1219,11 @@ to `verify-effort-claim` (§9).
 | ------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `workshop_board_column`        | `position` integer, contiguous, re-packed on delete                                                  |
 | `workshop_task`                | `rank` — see the ordering note below                                                                 |
-| `workshop_file`                | `sizeBytes` **integer bytes**, measured server-side, never client-claimed                            |
+| `workshop_file`                | An external link + its allowlisted host. `sizeBytes` is **NULL** — see below                         |
 | `workshop_chat_message`        | `sentAt` with microsecond precision — it is also the pagination cursor                               |
 | `workshop_chat_read_state`     | Per-member read cursor                                                                               |
 | `daily_log`                    | `logDate` (the day **claimed**) + `submittedAt` (the instant) — two distinct fields, never collapsed |
-| `daily_log_transcript_segment` | Job-written                                                                                          |
+| `daily_log_transcript_segment` | Job-written; offsets are integer **seconds**, never floats (§4c)                                     |
 | `daily_log_ai_summary_chip`    | LLM output; carries `generatedByModel` + `promptVersion` provenance                                  |
 | `daily_log_extracted_claim`    | The bridge into §9                                                                                   |
 | `daily_log_evidence_link`      | Machine-readable evidence refs                                                                       |
@@ -1153,18 +1259,38 @@ body.
 
 ### Chat transport
 
-REST + cursor pagination for v1, with `GET /workshop/chat/stream` as **SSE**, not WebSockets. SSE
-survives proxies, reconnects natively, needs no new server infrastructure, and both native clients
-handle it fine. Real-time chat is not on the critical path — the composer in
-`workshop-chat.tsx` is a decorative `div` today (§14).
+**REST + keyset cursor pagination.** `GET /workshop/chat/stream` (SSE) is **deferred**, for a
+concrete reason rather than a preference: the managed Postgres instance allows **twenty connections
+for the whole server**, shared across the API pool, the worker pool and every `db:*` script (the
+comment at the bottom of `src/worker.ts` records the outage that established this). Every open SSE
+stream either polls the database or holds a `LISTEN` session, so real-time chat would trade a
+connection budget the request path needs for a surface the frontend does not have yet — the composer
+in `workshop-chat.tsx` is a decorative `div` (§14). The cursor is `(sentAt, id)`, so the polling a
+client does today and the stream it gets later read the same rows in the same order.
 
-### Files: object storage, not Cloudinary
+Messages are **soft-deleted** (`deletedAt`), because a hard delete punches a hole in a keyset cursor
+and a client paging backwards silently skips a page.
 
-Workshop files are CAD models, spreadsheets and archives up to 100 MB — and some are **forensic
-evidence** for §9 physical-work claims, so they need versioning and retention Cloudinary does not
-provide. Presigned direct upload to S3-compatible storage, with
-`POST /workshop/files/:fileId/complete` confirming and the server issuing a **`HEAD`** to measure
-the real byte size. The client's claimed size is never trusted.
+### Files: an external link, measured by nobody
+
+Workshop files are CAD models, spreadsheets and archives, and some are **forensic evidence** for §9
+physical-work claims. S3-compatible presigned upload is the right long-term answer and is preserved
+in [Appendix A](#appendix-a--deferred-paid-infrastructure). What ships is a **link**: the member
+pastes a URL, the server allowlists its host (Drive, Docs, Dropbox, GitHub,
+`raw.githubusercontent.com`, OneDrive, Figma, Notion), strips credentials and fragment, and stores
+the normalized URL plus the derived host.
+
+**`sizeBytes` stays NULL, and that is the honest answer.** The original rule was "the server
+measures the bytes, the client's claim is never trusted" — with a link there are no bytes to
+measure, so the column stays null rather than accepting a number the client made up. Nothing in the
+UI may render a size for a linked file. `source = 'hosted'`, `storageProvider` and `objectKey` sit
+in the schema nullable and unwritten, which is what makes Appendix A an insert rather than a
+migration.
+
+Two consequences to state plainly: a linked file's permissions are the linking service's problem,
+not Qatoto's, so a member can share a link nobody else on the team can open; and the file can change
+under a claim without the ledger noticing, which is why `contentSha256` exists (nullable, unwritten)
+and why §9 grounds physical work on `physical_work_receipt` rather than on workshop files.
 
 ---
 
@@ -1722,13 +1848,17 @@ buttons in `idea-item.tsx` have `aria-label`s but **no `onClick` handler at all*
 
 ## 11. The API
 
-Mounted in `src/app.ts`, after `express.json()` — except the webhook router, which needs the **raw
-body** for signature verification and must mount before it:
+Mounted in `src/app.ts`, after `express.json()`. There is **no webhook router and no raw-body
+mount** — the three providers that would have signed a webhook are all deferred (Appendix A), and
+adding a raw-body branch for a route that does not exist is a security surface bought for nothing.
 
 ```ts
-app.use("/webhooks", webhooksRouter); // BEFORE express.json() — raw body for signature checks
-// … express.json() …
+// … parseLongFormJsonBody for /research-projects and /discovery, then express.json() …
 app.use("/research-projects", researchProjectsRouter);
+// Same prefix, declared AFTER: workshopRouter owns /:projectSlug/workshop/* and
+// /:projectSlug/daily-logs/*. No collision — researchProjectsRouter's "/:projectSlug"
+// matches that one segment exactly and never swallows a deeper path.
+app.use("/research-projects", workshopRouter);
 app.use("/discovery", discoveryRouter);
 app.use("/", fundingRouter); // /funding-rounds, /pledges, /milestones, /escrow-releases
 app.use("/research-programs", researchProgramsRouter);
@@ -1806,21 +1936,18 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 
 ### 11d. Workshop and daily logs (§8)
 
-| Method & path                                                       | Body / input                                | Behavior & statuses                                                                   |
-| ------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `GET /research-projects/:projectSlug/workshop` · `/board`           | —                                           | Member only → else `404`. `200`                                                       |
-| `POST` · `PATCH` · `DELETE …/workshop/columns[/:id]` (+ `/reorder`) | `{ title }` / `{ columnIds[] }`             | `200`/`201`                                                                           |
-| `POST` · `PATCH` · `DELETE …/workshop/tasks[/:id]`                  | `WorkshopTaskSchema`                        | `201`/`200`                                                                           |
-| `POST …/workshop/tasks/:id/move`                                    | `{ columnId, beforeTaskId?, afterTaskId? }` | **Server derives the rank** — the client never computes one. `200`                    |
-| `POST …/workshop/files` → `/:fileId/complete`                       | `{ fileName, mimeType }` → —                | Presigned direct upload; server `HEAD`s for the real `sizeBytes`. `201`/`200` · `413` |
-| `GET …/workshop/files/:id/download` · `DELETE`                      | —                                           | Short-lived signed URL. `200`                                                         |
-| `GET` · `POST` · `PATCH` · `DELETE …/workshop/chat[/:id]`           | `{ messageText }` · `?cursor=&limit=`       | Keyset by `sentAt`. `200`/`201` · `429`                                               |
-| `GET …/workshop/chat/stream`                                        | —                                           | **SSE**, not WebSocket (§8)                                                           |
-| `POST …/workshop/chat/read`                                         | `{ throughMessageId }`                      | `200`                                                                                 |
-| `GET` · `POST` · `PATCH` · `DELETE …/daily-logs[/:logId]`           | `{ logDate, narrative? }`                   | `201`/`200`                                                                           |
-| `POST …/daily-logs/:logId/submit`                                   | `{ idempotencyKey }`                        | Enqueues transcription → §9 pipeline. **`202`**, not a verdict                        |
-| `GET …/daily-logs/:logId/transcript` · `/playback-token`            | —                                           | Signed, short-lived. `200`                                                            |
-| `POST /webhooks/livepeer` · `/webhooks/object-storage`              | raw body                                    | Signature-verified. `200`                                                             |
+| Method & path                                                       | Body / input                                | Behavior & statuses                                                                     |
+| ------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `GET /research-projects/:projectSlug/workshop` · `/board`           | —                                           | Member only → else `404`. `200`                                                         |
+| `POST` · `PATCH` · `DELETE …/workshop/columns[/:id]` (+ `/reorder`) | `{ title }` / `{ columnIds[] }`             | `200`/`201`                                                                             |
+| `POST` · `PATCH` · `DELETE …/workshop/tasks[/:id]`                  | `WorkshopTaskSchema`                        | `201`/`200`                                                                             |
+| `POST …/workshop/tasks/:id/move`                                    | `{ columnId, beforeTaskId?, afterTaskId? }` | **Server derives the rank** — the client never computes one. `200`                      |
+| `GET` · `POST` · `DELETE …/workshop/files[/:fileId]`                | `{ fileName, fileKind, externalUrl }`       | Host-allowlisted link. `sizeBytes` is NULL. Soft delete. `201`/`200` · `409` · `422`    |
+| `GET` · `POST` · `PATCH` · `DELETE …/workshop/chat[/:id]`           | `{ messageText }` · `?cursor=&limit=`       | Keyset by `(sentAt, id)`; soft delete. `200`/`201` · `429`                              |
+| `POST …/workshop/chat/read`                                         | `{ throughMessageId }`                      | `200`                                                                                   |
+| `GET` · `POST` · `PATCH` · `DELETE …/daily-logs[/:logId]`           | `{ logDate, narrative?, youtubeUrl? }`      | Video optional; the URL is parsed + oEmbed-verified. `201`/`200` · `409` once submitted |
+| `POST …/daily-logs/:logId/submit`                                   | `{ idempotencyKey }`                        | Enqueues `analyze-daily-log`. **`202`**, not a verdict                                  |
+| `GET …/daily-logs/:logId/transcript`                                | —                                           | Segments + chips + claims + `analysisStatus`. `200`                                     |
 
 ### 11e. Proof of Effort (§9)
 
@@ -1906,9 +2033,11 @@ POST /escrow-releases/:id/approve
 ### Daily log → slices (§8 → §9)
 
 ```text
-POST …/daily-logs                 → Livepeer direct upload (backend never touches bytes)
+POST …/daily-logs                 → { logDate, narrative?, youtubeUrl? }
+  → the URL is parsed to an 11-char id and oEmbed-verified; no video is also valid
 POST …/daily-logs/:id/submit      → 202
-  → transcribe-log → extract-claims → ground-artifacts → analyze-substance → analyze-temporal
+  → analyze-daily-log (ONE Gemini call) → transcript segments + chips + claims + evidence links
+  → ground-artifacts → analyze-substance → analyze-temporal
   → finalize-verdict: pure verdict function; computeSlices → proposedSlices FROZEN on a proposal
   → slice_allocation_proposal opens; NOTHING is written to the ledger yet
 [24 hours pass, no dispute]
@@ -2039,7 +2168,7 @@ Do **not** implement the domains in parallel — §9 defines the numbers every o
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **0. Unblock**                    | `bearer()` plugin + multi-origin passkey/OAuth (§4a) · `requireIdentifiedUser` · `project_member` + `requireProjectRole` · `src/lib/money.ts` · `src/lib/canonical-hash.ts` · pg-boss + the worker process · shared enums (§4d) | Every phase below depends on all of it. Native clients are blocked entirely until the auth items land                                                       |
 | **1. Projects & team** (§5)       | Idea → project → publish → team → roles → applications                                                                                                                                                                          | The spine. Everything else FKs to `research_project`                                                                                                        |
-| **2. Workshop & daily logs** (§8) | Board, files, chat, log capture + transcription                                                                                                                                                                                 | Produces the input §9 consumes                                                                                                                              |
+| **2. Workshop & daily logs** (§8) | Board, files (links), chat, log capture + analysis                                                                                                                                                                              | Produces the input §9 consumes                                                                                                                              |
 | **3. Proof of Effort** (§9)       | Rate lock → claims → pipeline → disputes → ledger → snapshots → bake                                                                                                                                                            | The hardest and highest-value. Its patterns get copied                                                                                                      |
 | **4. Funding & escrow** (§7)      | Rounds, pledges, provider, ledger, releases                                                                                                                                                                                     | Highest stakes; depends on §9 verdicts for release gating. **Crowdfunding only** — equity/venture stay flag-disabled until Phase 4 of the business sequence |
 | **5. Discovery** (§6)             | Clusters, scoring jobs, insights, talent                                                                                                                                                                                        | Independent; deferrable without blocking anything                                                                                                           |
@@ -2094,3 +2223,102 @@ curl -X POST https://localhost:8000/funding-rounds/<id>/pledges -b cookies.txt \
   -H 'content-type: application/json' -d '{"amountInCents":5000,"currency":"CNY","backerUserId":"someone-else"}'
 # → 422, both unknown keys rejected by .strict()
 ```
+
+---
+
+## Appendix A — Deferred paid infrastructure
+
+Everything in this appendix was specified in the body of this document and is **not built**. It is
+preserved unabridged so switching any of it on later is a re-read rather than a redesign. Nothing
+here may be implemented without an explicit decision to start paying for it.
+
+Each entry states what was deferred, the seam that keeps it cheap to restore, and the honest cost of
+the substitute that shipped instead.
+
+### A1. Livepeer direct upload (daily-log video, §8)
+
+**The deferred design.** A daily log's video is the input to the entire equity ledger, so it was to
+reuse STUDIO_BACKEND_STRUCTURE.md §5.1 verbatim: Livepeer Studio direct upload, where the backend
+never touches video bytes. The client requests a short-lived TUS upload URL, uploads directly to
+Livepeer, and Livepeer calls `POST /webhooks/livepeer` on completion, which flips the log's media
+state and enqueues transcription. Playback is gated by a server-minted, short-lived JWT
+(`GET …/daily-logs/:logId/playback-token`), which is what makes a private project's daily log
+actually private.
+
+**The seam.** `daily_log.videoSource` already carries a `hosted` variant beside `none` and
+`youtube`, and the provider columns (`videoAssetId`, `playbackId`, `playbackUrl`,
+`storageProvider`) exist nullable and unwritten — the same arrangement the studio `video` table
+uses. Restoring this is an insert plus one signature-verified route: no table drop, no rename, no
+frontend type change beyond gaining a playback field.
+
+**What the substitute costs.** A YouTube link is protected by obscurity, not by access control:
+"unlisted" is not private, and any client that says otherwise is lying to a member about where
+their work-in-progress is visible. The member can also delete the video out from under a settled
+claim — which is precisely why §9 grounds effort on artifacts and receipts rather than on the
+video's continued existence, and why the video is evidence rather than proof.
+
+### A2. S3-compatible object storage (workshop files §8, papers §10)
+
+**The deferred design.** Workshop files are CAD models, spreadsheets and archives up to 100 MB, and
+some are forensic evidence for §9 physical-work claims, so they need versioning and retention an
+image CDN does not provide. Presigned direct upload to S3-compatible storage:
+`POST …/workshop/files` mints a presigned PUT, the client uploads directly,
+`POST …/workshop/files/:fileId/complete` confirms, and the server issues a **`HEAD`** to measure
+the real byte size and compute `contentSha256`. The client's claimed size is never trusted.
+`GET …/workshop/files/:id/download` returns a short-lived signed URL, and
+`POST /webhooks/object-storage` handles out-of-band lifecycle events. Project Immortal's paper
+library (§10) uses the same path, with dedup by DOI **and** content hash.
+
+**The seam.** `workshop_file.source` carries a `hosted` variant beside `external_link`;
+`storageProvider`, `objectKey`, `sizeBytes` and `contentSha256` all exist and are nullable. The
+CHECK constraint already encodes both shapes (`external_link` ⇒ a URL and a null size;
+`hosted` ⇒ an object key), so the two can coexist during a migration and old rows never need
+rewriting.
+
+**What the substitute costs.** Three things, worth stating rather than discovering: a linked file's
+permissions belong to the linking service, so a member can share a link the rest of the team cannot
+open, and Qatoto cannot tell; the bytes can change under a claim with no hash to notice, which is
+why §9 must not treat a workshop file as tamper-evident evidence; and `sizeBytes` is NULL forever,
+so no client may render a file size for a linked file.
+
+### A3. Stripe Connect + Treasury (escrow, §7)
+
+**The deferred design.** PROOF_OF_EFFORT_SPEC.md §1 Phase 2 names Stripe Connect + Treasury
+specifically, so Qatoto never custodies funds itself. `POST /funding-rounds/:roundId/pledges`
+writes a `provider_transfer` carrying **our own** randomUUID idempotency key before any provider
+call; a worker submits it; `POST /webhooks/payments/stripe` — the only unauthenticated route in the
+domain, authenticated by signature — verifies, persists, dedupes on a unique constraint and
+processes in a transaction, flipping `settlement` to `settled` and posting
+`provider_clearing → released_to_project`. Only then do `raisedAmountInCents` and `backersCount`
+move. The nightly `reconcile-escrow-ledger` job pulls provider balances and posts any delta into
+`reconciliation_suspense` rather than silently patching the ledger.
+
+**The seam.** Every table in §7 ships as specified, including `provider_transfer`,
+`provider_webhook_event` and `reconciliation_discrepancy`. Only the module behind them changes: an
+internal adapter with an auditor-gated settlement endpoint stands in for the card network. The
+webhook route is the single addition when Stripe lands, and its handler is the same transaction the
+internal adapter already runs.
+
+**What the substitute costs.** No money moves. A pledge is a recorded intent and an escrow release
+is a recorded entitlement, and any client copy implying a card was charged is false. The
+reconciliation job has no external source of truth to reconcile against until an adapter that
+actually moves cash exists, so its discrepancy count is trivially zero — do not read that as
+evidence the books are right.
+
+### A4. Real-time chat over SSE (§8)
+
+**The deferred design.** `GET …/workshop/chat/stream` as Server-Sent Events, not WebSockets: SSE
+survives proxies, reconnects natively, needs no new server infrastructure, and both native clients
+handle it.
+
+**Why it is deferred, and it is not cost.** The managed Postgres instance allows **twenty
+connections for the whole server**, shared by the API pool, the worker pool and every `db:*`
+script — subscribing one worker per dead-letter queue already exhausted it once (`FATAL: sorry, too
+many clients already`; the incident is recorded in `src/worker.ts`). Every open stream either polls
+the database or holds a `LISTEN` session, so shipping SSE today trades connections the request path
+needs for a surface the frontend does not yet have: the composer in `workshop-chat.tsx` is a
+decorative `div` (§14).
+
+**The seam.** The keyset cursor is `(sentAt, id)` with microsecond precision, and messages are
+soft-deleted, so the rows a client polls today and the rows a stream pushes later are the same rows
+in the same order. Adding the stream changes no table and no cursor.
