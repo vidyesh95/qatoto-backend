@@ -18,6 +18,7 @@ import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
 import playlistsRouter from "#src/routes/playlists.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
+import proofOfEffortRouter from "#src/routes/proof-of-effort.routes.js";
 import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
 import researchProjectsRouter from "#src/routes/research-projects.routes.js";
 import seriesRouter from "#src/routes/series.routes.js";
@@ -123,6 +124,11 @@ app.use("/research-projects", researchProjectsRouter);
 // /:projectSlug/daily-logs/* (§8). No collision — researchProjectsRouter's "/:projectSlug"
 // matches that one segment exactly and never swallows a deeper path.
 app.use("/research-projects", workshopRouter);
+// Same prefix again, declared AFTER both: the Proof-of-Effort router owns
+// /:projectSlug/effort-claims/*, /equity/*, /allocation-proposals/*, /disputes/*,
+// /audit-trail/*, /slice-ledger and /proof-of-effort (§9). Still no collision, for the
+// same reason — a single-segment "/:projectSlug" never swallows a deeper path.
+app.use("/research-projects", proofOfEffortRouter);
 app.use("/discovery", discoveryRouter);
 // Creator Studio. The anime review queue is nested at /videos/admin/review rather than a
 // root /admin, matching /discovery/admin/* — one domain's moderation surface should not

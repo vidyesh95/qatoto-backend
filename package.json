@@ -39,6 +39,7 @@
     "db:verify-proof-of-effort-constraints": "tsx --conditions=development scripts/verify-proof-of-effort-constraints.ts",
     "db:smoke-discovery": "tsx --conditions=development scripts/smoke-discovery-pipeline.ts",
     "db:smoke-workshop": "tsx --conditions=development scripts/smoke-workshop-pipeline.ts",
+    "db:smoke-proof-of-effort": "tsx --conditions=development scripts/smoke-proof-of-effort.ts",
     "db:expire-stale-project-requests": "tsx --conditions=development scripts/expire-stale-project-requests.ts",
     "db:reconcile-project-stats": "tsx --conditions=development scripts/reconcile-project-stats.ts",
     "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",

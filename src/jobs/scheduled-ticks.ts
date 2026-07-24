@@ -131,3 +131,60 @@ export async function handleRecomputeDailyLogStreaksTick(
     );
   }
 }
+
+/**
+ * The dispute-window sweep's tick, quantized to the MINUTE.
+ *
+ * Deliberately finer than every other tick in this file, because the sweep runs every 60
+ * seconds and a day-quantized asOf would dedup 1,439 of the day's 1,440 firings into
+ * nothing. The minute is also the right grain semantically: `windowClosesAt` is compared
+ * against this instant, and the 24-hour window is a MINIMUM (§9.8), so a slightly stale
+ * asOf can only ever leave a window open a little longer — the safe direction.
+ */
+export async function handleSweepDisputeWindowsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  // Truncated to whole seconds rather than through the as-of helpers: those quantize to a
+  // day or an hour, both of which are far too coarse for a per-minute sweep. Zeroing the
+  // milliseconds is what makes two firings inside the same second dedup.
+  const now = readClock();
+  const asOf = new Date(Math.floor(now.getTime() / 1_000) * 1_000);
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.sweepDisputeWindows,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.sweepDisputeWindows(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`sweep-dispute-windows-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/**
+ * The nightly cap-table recomputation's tick.
+ *
+ * `projectId: null` means "every active project". The dispute sweep enqueues the SAME job
+ * for one named project the instant slices land, so this nightly pass is a backstop that
+ * catches projects whose ledger moved without a sweep — a reversal, a dispute resolved by
+ * consensus — rather than the only thing keeping the cap table fresh.
+ */
+export async function handleRecomputeEquitySnapshotTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcDayStart(readClock());
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeEquitySnapshot,
+    { asOf: asOfIso, projectId: null },
+    { idempotencyKey: idempotencyKeyFor.recomputeEquitySnapshot(asOfIso, null) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`recompute-equity-snapshot-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}

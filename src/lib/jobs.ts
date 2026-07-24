@@ -44,6 +44,17 @@ export const JOB_NAMES = {
   analyzeDailyLog: "analyze-daily-log",
   recomputeDailyLogStreaksTick: "recompute-daily-log-streaks-tick",
   recomputeDailyLogStreaks: "recompute-daily-log-streaks",
+  // §9's verification pipeline. Each handler enqueues its successor; a `failed` or
+  // `flagged` step STILL enqueues finalize-verdict, because the pipeline must always
+  // reach a verdict rather than stall silently (§9.7).
+  groundArtifacts: "ground-artifacts",
+  analyzeSubstance: "analyze-substance",
+  analyzeTemporal: "analyze-temporal",
+  finalizeVerdict: "finalize-verdict",
+  sweepDisputeWindowsTick: "sweep-dispute-windows-tick",
+  sweepDisputeWindows: "sweep-dispute-windows",
+  recomputeEquitySnapshotTick: "recompute-equity-snapshot-tick",
+  recomputeEquitySnapshot: "recompute-equity-snapshot",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -97,6 +108,24 @@ const WindowedAsOfPayloadSchema = z
   .strict();
 
 const TickPayloadSchema = z.object({}).strict();
+
+/**
+ * Every §9 pipeline stage carries the RUN id and nothing else, for the same reason the
+ * clustering payload carries only a submission id: the claim, the member, the rate, the
+ * claimed date and the evidence are all server-owned and are read from rows. A payload
+ * carrying a minute count would be a field an operator could edit to mint equity.
+ */
+const VerificationStagePayloadSchema = z.object({ runId: z.uuid() }).strict();
+
+/**
+ * `projectId` is REQUIRED and explicitly nullable rather than optional: null means "every
+ * project", which the nightly tick wants, and a named project is what the dispute sweep
+ * enqueues after it locks a window. An optional key would make "absent" and "null"
+ * two spellings of the same intent, and only one of them would be tested.
+ */
+const RecomputeEquitySnapshotPayloadSchema = z
+  .object({ asOf: AsOfSchema, projectId: z.uuid().nullable() })
+  .strict();
 
 /**
  * One definition per job: its payload contract and its queue policy.
@@ -253,6 +282,105 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeDailyLogStreaks),
     },
   },
+
+  // --- §9. The four pipeline stages share one policy: `standard` (many claims verify
+  // --- concurrently; they touch disjoint rows) and the §9.7 backoff STANDARD_RETRY
+  // --- already encodes. Only the expiry differs, by how long each stage can legitimately
+  // --- take.
+  [JOB_NAMES.groundArtifacts]: {
+    name: JOB_NAMES.groundArtifacts,
+    payloadSchema: VerificationStagePayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      // A fan-out across providers with their own rate limits.
+      expireInSeconds: 600,
+      deadLetter: deadLetterNameFor(JOB_NAMES.groundArtifacts),
+    },
+  },
+  [JOB_NAMES.analyzeSubstance]: {
+    name: JOB_NAMES.analyzeSubstance,
+    payloadSchema: VerificationStagePayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      expireInSeconds: 600,
+      deadLetter: deadLetterNameFor(JOB_NAMES.analyzeSubstance),
+    },
+  },
+  [JOB_NAMES.analyzeTemporal]: {
+    name: JOB_NAMES.analyzeTemporal,
+    payloadSchema: VerificationStagePayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      // Pure integer arithmetic over rows already fetched; nothing here waits on a
+      // network.
+      expireInSeconds: 120,
+      deadLetter: deadLetterNameFor(JOB_NAMES.analyzeTemporal),
+    },
+  },
+  [JOB_NAMES.finalizeVerdict]: {
+    name: JOB_NAMES.finalizeVerdict,
+    payloadSchema: VerificationStagePayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      expireInSeconds: 120,
+      deadLetter: deadLetterNameFor(JOB_NAMES.finalizeVerdict),
+    },
+  },
+
+  [JOB_NAMES.sweepDisputeWindowsTick]: {
+    name: JOB_NAMES.sweepDisputeWindowsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: false,
+      expireInSeconds: 45,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepDisputeWindowsTick),
+    },
+  },
+  [JOB_NAMES.sweepDisputeWindows]: {
+    name: JOB_NAMES.sweepDisputeWindows,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      // `singleton` — one sweep at a time. Two concurrent sweeps are safe (the dequeue
+      // takes FOR UPDATE SKIP LOCKED and re-asserts status inside the transaction) but
+      // pointless, and they would contend on the same chain-head locks.
+      policy: "singleton",
+      retryLimit: 3,
+      retryDelay: 30,
+      retryBackoff: false,
+      expireInSeconds: 300,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepDisputeWindows),
+    },
+  },
+  [JOB_NAMES.recomputeEquitySnapshotTick]: {
+    name: JOB_NAMES.recomputeEquitySnapshotTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeEquitySnapshotTick),
+    },
+  },
+  [JOB_NAMES.recomputeEquitySnapshot]: {
+    name: JOB_NAMES.recomputeEquitySnapshot,
+    payloadSchema: RecomputeEquitySnapshotPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeEquitySnapshot),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -281,6 +409,13 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // After the other nightlies, so a slow recompute cannot delay the streak decay past
   // the hour a project card is first read in the earliest timezone.
   [JOB_NAMES.recomputeDailyLogStreaksTick]: "25 3 * * *",
+  // EVERY MINUTE (§9.8). The 24-hour window is a MINIMUM, never a maximum: a late sweep
+  // leaves a window open longer, which is always the safe direction, and the sweep reads
+  // persisted state rather than a timer — so a worker down six hours locks six hours of
+  // backlog on restart, all at correct amounts. NEVER pre-lock.
+  [JOB_NAMES.sweepDisputeWindowsTick]: "* * * * *",
+  // After the streak decay, so the nightly cap table is computed over a settled ledger.
+  [JOB_NAMES.recomputeEquitySnapshotTick]: "45 3 * * *",
 };
 
 export type JobEnqueueError =
@@ -492,6 +627,14 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.analyzeDailyLog]: AnalyzeDailyLogPayloadSchema,
   [JOB_NAMES.recomputeDailyLogStreaksTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeDailyLogStreaks]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.groundArtifacts]: VerificationStagePayloadSchema,
+  [JOB_NAMES.analyzeSubstance]: VerificationStagePayloadSchema,
+  [JOB_NAMES.analyzeTemporal]: VerificationStagePayloadSchema,
+  [JOB_NAMES.finalizeVerdict]: VerificationStagePayloadSchema,
+  [JOB_NAMES.sweepDisputeWindowsTick]: TickPayloadSchema,
+  [JOB_NAMES.sweepDisputeWindows]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.recomputeEquitySnapshotTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeEquitySnapshot]: RecomputeEquitySnapshotPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -542,4 +685,16 @@ export const idempotencyKeyFor = {
   analyzeDailyLog: (dailyLogId: string): string => `${JOB_NAMES.analyzeDailyLog}:${dailyLogId}`,
   recomputeDailyLogStreaks: (asOfIso: string): string =>
     `${JOB_NAMES.recomputeDailyLogStreaks}:${asOfIso}`,
+  // Keyed on the RUN, not the claim: a re-verification is a new run and must genuinely
+  // re-run the pipeline, while a retried enqueue of the SAME run must collapse to one.
+  // An override re-enqueues finalize-verdict for a run that has already reached a
+  // verdict once, so that stage additionally keys on the override generation.
+  groundArtifacts: (runId: string): string => `${JOB_NAMES.groundArtifacts}:${runId}`,
+  analyzeSubstance: (runId: string): string => `${JOB_NAMES.analyzeSubstance}:${runId}`,
+  analyzeTemporal: (runId: string): string => `${JOB_NAMES.analyzeTemporal}:${runId}`,
+  finalizeVerdict: (runId: string, generation: number): string =>
+    `${JOB_NAMES.finalizeVerdict}:${runId}:${generation}`,
+  sweepDisputeWindows: (asOfIso: string): string => `${JOB_NAMES.sweepDisputeWindows}:${asOfIso}`,
+  recomputeEquitySnapshot: (asOfIso: string, projectId: string | null): string =>
+    `${JOB_NAMES.recomputeEquitySnapshot}:${asOfIso}:${projectId ?? "all"}`,
 } as const;

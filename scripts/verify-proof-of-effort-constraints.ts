@@ -152,7 +152,7 @@ const EXPECTED_INDEXES = [
   "effort_claim_dailyLogId_unq",
   "dispute_proposalId_open_unq",
   "slice_ledger_entry_projectId_sequence_unq",
-  "slice_ledger_entry_proposalId_unq",
+  "slice_ledger_entry_proposalId_kind_unq",
   "project_audit_entry_projectId_sequence_unq",
   "pie_bake_event_project_unq",
   "equity_snapshot_projectId_baked_unq",
@@ -718,9 +718,9 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
         client.query(
           `INSERT INTO slice_allocation_proposal
              (id, project_id, claim_id, member_id, run_id, verdict, proposed_slices,
-              proposed_slice_numerator, status, window_closes_at, locked_at)
+              proposed_slice_numerator, proposed_time_slice_numerator, status, window_closes_at, locked_at)
            VALUES ('verify-poe-proposal-bad', $1, 'verify-poe-claim', $2, 'verify-poe-run',
-                   'verified', 100, 300000, 'locked', now() + interval '1 day', now())`,
+                   'verified', 100, 300000, 300000, 'locked', now() + interval '1 day', now())`,
           [fixtures.projectId, fixtures.memberId],
         ),
     );
@@ -734,9 +734,9 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
         client.query(
           `INSERT INTO slice_allocation_proposal
              (id, project_id, claim_id, member_id, run_id, verdict, proposed_slices,
-              proposed_slice_numerator, status, window_closes_at, escrowed_slices)
+              proposed_slice_numerator, proposed_time_slice_numerator, status, window_closes_at, escrowed_slices)
            VALUES ('verify-poe-proposal-esc', $1, 'verify-poe-claim', $2, 'verify-poe-run',
-                   'verified', 100, 300000, 'open', now() + interval '1 day', 100)`,
+                   'verified', 100, 300000, 300000, 'open', now() + interval '1 day', 100)`,
           [fixtures.projectId, fixtures.memberId],
         ),
     );
@@ -771,9 +771,9 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
     await client.query(
       `INSERT INTO slice_allocation_proposal
          (id, project_id, claim_id, member_id, run_id, verdict, proposed_slices,
-          proposed_slice_numerator, status, window_closes_at)
+          proposed_slice_numerator, proposed_time_slice_numerator, status, window_closes_at)
        VALUES ('verify-poe-proposal', $1, 'verify-poe-claim', $2, 'verify-poe-run',
-               'verified', 100, 300000, 'open', now() + interval '1 day')`,
+               'verified', 100, 300000, 300000, 'open', now() + interval '1 day')`,
       [fixtures.projectId, fixtures.memberId],
     );
     await client.query(

@@ -9,14 +9,24 @@ import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
 import { handleRecomputeDailyLogStreaks } from "#src/jobs/recompute-daily-log-streaks.js";
 import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals.js";
+import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapshot.js";
 import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import {
   handleRecomputeDailyLogStreaksTick,
   handleRecomputeDemandSignalsTick,
+  handleRecomputeEquitySnapshotTick,
   handleRecomputeOpportunityScoresTick,
   handleRefreshTalentProjectionsTick,
+  handleSweepDisputeWindowsTick,
 } from "#src/jobs/scheduled-ticks.js";
+import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
+import {
+  handleAnalyzeSubstance,
+  handleAnalyzeTemporal,
+  handleFinalizeVerdict,
+  handleGroundArtifacts,
+} from "#src/jobs/verify-effort-claim.js";
 import {
   createPgBossDbAdapter,
   JOB_NAMES,
@@ -209,6 +219,49 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeDailyLogStreaks,
     workOptions,
     runJob(JOB_NAMES.recomputeDailyLogStreaks, handleRecomputeDailyLogStreaks),
+  );
+
+  // --- §9. The four pipeline stages, then the two schedules that settle and apportion
+  // --- what they produce. Bound in pipeline order so the sequence reads as the flow.
+  await boss.work(
+    JOB_NAMES.groundArtifacts,
+    workOptions,
+    runJob(JOB_NAMES.groundArtifacts, handleGroundArtifacts),
+  );
+  await boss.work(
+    JOB_NAMES.analyzeSubstance,
+    workOptions,
+    runJob(JOB_NAMES.analyzeSubstance, handleAnalyzeSubstance),
+  );
+  await boss.work(
+    JOB_NAMES.analyzeTemporal,
+    workOptions,
+    runJob(JOB_NAMES.analyzeTemporal, handleAnalyzeTemporal),
+  );
+  await boss.work(
+    JOB_NAMES.finalizeVerdict,
+    workOptions,
+    runJob(JOB_NAMES.finalizeVerdict, handleFinalizeVerdict),
+  );
+  await boss.work(
+    JOB_NAMES.sweepDisputeWindowsTick,
+    workOptions,
+    runJob(JOB_NAMES.sweepDisputeWindowsTick, handleSweepDisputeWindowsTick),
+  );
+  await boss.work(
+    JOB_NAMES.sweepDisputeWindows,
+    workOptions,
+    runJob(JOB_NAMES.sweepDisputeWindows, handleSweepDisputeWindows),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeEquitySnapshotTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeEquitySnapshotTick, handleRecomputeEquitySnapshotTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeEquitySnapshot,
+    workOptions,
+    runJob(JOB_NAMES.recomputeEquitySnapshot, handleRecomputeEquitySnapshot),
   );
 
   // THE DEAD-LETTER QUEUES DELIBERATELY HAVE NO ALWAYS-ON WORKERS.

@@ -415,3 +415,69 @@ export const dailyLogSubmitLimiter = rateLimit({
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
 });
+
+/**
+ * POST …/effort-claims and …/reverify — the input to the entire equity ledger (§9).
+ *
+ * Every accepted claim queues a four-stage pipeline whose grounding stage fans out across
+ * external providers. A member files at most one claim per daily log — the unique index
+ * says so — which leaves re-verification as the only lever, and this bounds it. It is also
+ * the anti-griefing bound on `reverify`, which any member may call on any claim: twenty in
+ * fifteen minutes is far past any honest use and far below anything that would exhaust a
+ * worker.
+ */
+export const effortClaimLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/dispute, …/votes, …/resolve, …/withdraw — the consensus surface (§9.8).
+ *
+ * A dispute FREEZES another member's slices, so the abuse case is real: raise, withdraw,
+ * raise again, forever. The original-clock rule already defeats the hostage-taking, and
+ * this bounds the noise it would generate on the transparency ledger.
+ */
+export const disputeLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/fair-market-rate and …/lock — negotiating the one number a body may carry (§9.6).
+ *
+ * Low on purpose. A rate is negotiated between two people over days, not adjusted in a
+ * loop, and each proposal appends to an immutable hash chain that nobody can prune.
+ */
+export const fairMarketRateLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * GET …/audit-trail/verify — re-walks and re-hashes every entry in a project's chain (§9.9).
+ *
+ * Unbounded, this is a cheap way to make the server SHA-256 a few hundred thousand rows on
+ * demand. It is also the endpoint a monitoring dashboard polls, so the bound is generous
+ * enough for a minute-by-minute check and nothing more.
+ */
+export const chainVerifyLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});

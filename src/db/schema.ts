@@ -4253,7 +4253,20 @@ export const sliceAllocationProposal = pgTable(
     verdict: effortVerificationStatusEnum("verdict").notNull(),
     // FORMULA-PRODUCED. Frozen at open, never recomputed in place — a re-derivation
     // creates a new run and settles at the new number.
+    //
+    // TWO NUMERATORS, NOT ONE, because a single day genuinely produces both kinds: §8's
+    // extraction emits `time_spent` and `cash_spent` as separate claims, and §9.2 prices
+    // them with different premiums (2× and 4×). They are summed for display but rounded
+    // SEPARATELY at settlement — §9.3 rounds once PER LEDGER ENTRY, and the sum of two
+    // rounded values is not the rounding of their sum.
+    proposedTimeSliceNumerator: bigint("proposed_time_slice_numerator", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    proposedCashSliceNumerator: bigint("proposed_cash_slice_numerator", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
     proposedSlices: integer("proposed_slices").notNull(),
+    /** The sum of the two above, retained for the audit payload and the transparency read. */
     proposedSliceNumerator: bigint("proposed_slice_numerator", { mode: "bigint" }).notNull(),
     fairMarketRateId: text("fair_market_rate_id").references(() => memberFairMarketRate.id, {
       onDelete: "restrict",
@@ -4316,7 +4329,10 @@ export const sliceAllocationProposal = pgTable(
     check("proposal_window_ck", sql`window_closes_at > window_opens_at`),
     check(
       "proposal_slices_ck",
-      sql`proposed_slices >= 0 AND escrowed_slices >= 0 AND proposed_slice_numerator >= 0`,
+      sql`proposed_slices >= 0 AND escrowed_slices >= 0 AND proposed_slice_numerator >= 0
+          AND proposed_time_slice_numerator >= 0 AND proposed_cash_slice_numerator >= 0
+          AND proposed_slice_numerator
+              = proposed_time_slice_numerator + proposed_cash_slice_numerator`,
     ),
     check("proposal_verdict_ck", sql`verdict IN ('verified', 'flagged_for_review', 'unverified')`),
   ],
@@ -4493,9 +4509,11 @@ export const sliceLedgerEntry = pgTable(
       table.occurredAt,
       table.id,
     ),
-    // One entry per settled proposal. Re-running the sweep must be a no-op (§17 step 6).
-    uniqueIndex("slice_ledger_entry_proposalId_unq")
-      .on(table.proposalId)
+    // One entry per settled proposal PER CONTRIBUTION KIND. Re-running the sweep must be
+    // a no-op (§17 step 6), and a day that was both worked and paid for out of pocket
+    // settles as two entries priced at two different premiums (§9.2).
+    uniqueIndex("slice_ledger_entry_proposalId_kind_unq")
+      .on(table.proposalId, table.contributionKind)
       .where(sql`proposal_id IS NOT NULL`),
     check("slice_ledger_entry_sequence_ck", sql`sequence_number >= 1`),
     check(
