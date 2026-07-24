@@ -41,21 +41,21 @@
 > grounds, exactly as [STUDIO_BACKEND_STRUCTURE.md](STUDIO_BACKEND_STRUCTURE.md) deferred Livepeer
 > for the Creator Studio. What ships instead:
 >
-> | Concern | Drafted (deferred) | **Ships now** |
-> | --------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-> | Daily-log video (§8) | Livepeer direct upload | **An optional pasted YouTube link**, parsed to an 11-char id and proven with one free oEmbed call. A log may also be text-only. |
-> | Workshop files (§8), papers (§10) | S3-compatible presigned upload | **An external link** to a host allowlist (Drive, Dropbox, GitHub, OneDrive, Figma, Notion). The backend stores a URL. |
-> | Transcription + claim extraction (§8/§9) | Whisper-class ASR + a paid LLM | **Gemini, AI Studio free tier**, one structured call per log. No key configured → the analysis records `skipped_unconfigured`. |
-> | Escrow money movement (§7) | Stripe Connect + Treasury | **A ledger-only provider adapter with manual settlement.** The double-entry ledger, four-eyes release, hash chain and reconciliation are all built for real; only the outbound cash call is stubbed behind a seam. |
+> | Concern                                  | Drafted (deferred)             | **Ships now**                                                                                                                                                                                                      |
+> | ---------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+> | Daily-log video (§8)                     | Livepeer direct upload         | **An optional pasted YouTube link**, parsed to an 11-char id and proven with one free oEmbed call. A log may also be text-only.                                                                                    |
+> | Workshop files (§8), papers (§10)        | S3-compatible presigned upload | **An external link** to a host allowlist (Drive, Dropbox, GitHub, OneDrive, Figma, Notion). The backend stores a URL.                                                                                              |
+> | Transcription + claim extraction (§8/§9) | Whisper-class ASR + a paid LLM | **Gemini, AI Studio free tier**, one structured call per log. No key configured → the analysis records `skipped_unconfigured`.                                                                                     |
+> | Escrow money movement (§7)               | Stripe Connect + Treasury      | **A ledger-only provider adapter with manual settlement.** The double-entry ledger, four-eyes release, hash chain and reconciliation are all built for real; only the outbound cash call is stubbed behind a seam. |
 >
 > **The backend still never touches video bytes, file bytes or customer funds.** That was already
 > true of the drafted design for video; it is now true of all three.
 >
 > **What must NOT be built:** the Livepeer upload/transcode/playback-token path, the S3 presigned
-> upload + `/complete` + `HEAD`-sizing path, `POST /webhooks/livepeer`, `POST
-> /webhooks/object-storage`, `POST /webhooks/payments/stripe`, and the Stripe SDK. All of it is
-> preserved in **[Appendix A](#appendix-a--deferred-paid-infrastructure)** so switching back is a
-> re-read, not a redesign.
+> upload + `/complete` + `HEAD`-sizing path, the three signature-verified webhook routes
+> (`/webhooks/livepeer`, `/webhooks/object-storage`, `/webhooks/payments/stripe`), and the Stripe
+> SDK. All of it is preserved in **[Appendix A](#appendix-a--deferred-paid-infrastructure)** so
+> switching back is a re-read, not a redesign.
 >
 > **Forward compatibility is in the schema, not in a promise.** `workshop_file.source` carries a
 > `hosted` variant beside `external_link`, `daily_log.videoSource` carries `hosted` beside `youtube`

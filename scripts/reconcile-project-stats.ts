@@ -9,9 +9,16 @@
  * `project_watcher` / `project_member` / `project_open_role` remain the SOURCE OF
  * TRUTH; project_stats is a rebuildable cache. That is why `--fix` is safe.
  *
- * The job-computed columns (dailyLogStreakDays, verifiedEffortMinutesTotal,
- * allocatedEquityBasisPoints) are deliberately NOT touched — they are NULL until §8/§9
- * land, and writing 0 into them would fabricate a number.
+ * THE DAILY-LOG COLUMNS ARE REPORTED BUT NEVER REPAIRED (§8). `lastDailyLogDate` is
+ * derivable — it is `MAX(log_date)` over submitted logs — but `dailyLogStreakDays` is NOT:
+ * the streak deliberately ignores back-dated logs, so recomputing it from the log table
+ * would produce a DIFFERENT number than the fold that wrote it, and "repairing" a project
+ * to that number would silently hand a member the 30-day streak that back-filling a month
+ * is supposed to be unable to buy. Drift here means the submit transaction or the nightly
+ * decay has a bug, and that is a thing to investigate rather than to overwrite.
+ *
+ * `verifiedEffortMinutesTotal` and `allocatedEquityBasisPoints` are untouched for the
+ * older reason: they are NULL until §9 lands, and writing 0 would fabricate a number.
  *
  *   pnpm db:reconcile-project-stats           # report drift, change nothing
  *   pnpm db:reconcile-project-stats -- --fix  # repair from the source tables
@@ -32,6 +39,9 @@ interface DriftRow extends Record<string, unknown> {
   readonly actual_open_roles: number;
   readonly stored_pending_applications: number;
   readonly actual_pending_applications: number;
+  readonly stored_last_log_date: string | null;
+  readonly actual_last_log_date: string | null;
+  readonly stored_streak_days: number | null;
 }
 
 async function main(): Promise<void> {
@@ -57,13 +67,20 @@ async function main(): Promise<void> {
       s.pending_application_count  AS stored_pending_applications,
       (SELECT count(*) FROM project_application a
         WHERE a.project_id = p.id AND a.status = 'pending')::int
-                                   AS actual_pending_applications
+                                   AS actual_pending_applications,
+      s.last_daily_log_date        AS stored_last_log_date,
+      (SELECT max(l.log_date) FROM daily_log l
+        WHERE l.project_id = p.id AND l.status = 'submitted')
+                                   AS actual_last_log_date,
+      s.daily_log_streak_days      AS stored_streak_days
     FROM research_project p
     JOIN project_stats s ON s.project_id = p.id
     WHERE s.watchers_count            <> (SELECT count(*) FROM project_watcher w WHERE w.project_id = p.id)
        OR s.team_member_count         <> (SELECT count(*) FROM project_member m WHERE m.project_id = p.id AND m.status = 'active')
        OR s.open_role_count           <> (SELECT count(*) FROM project_open_role r WHERE r.project_id = p.id AND r.status = 'open')
        OR s.pending_application_count <> (SELECT count(*) FROM project_application a WHERE a.project_id = p.id AND a.status = 'pending')
+       OR s.last_daily_log_date IS DISTINCT FROM
+          (SELECT max(l.log_date) FROM daily_log l WHERE l.project_id = p.id AND l.status = 'submitted')
     ORDER BY p.slug
   `);
 
@@ -91,6 +108,14 @@ async function main(): Promise<void> {
         `    pendingApplicationCount ${row.stored_pending_applications} → ${row.actual_pending_applications}`,
       );
     }
+    if (row.stored_last_log_date !== row.actual_last_log_date) {
+      // REPORTED, NOT REPAIRED — see the module comment. A mismatch here means the submit
+      // transaction did not write both halves together, which is a bug in that path.
+      console.log(
+        `    lastDailyLogDate        ${row.stored_last_log_date ?? "null"} vs ${row.actual_last_log_date ?? "null"} (log table) — INVESTIGATE, not repaired`,
+      );
+      console.log(`    dailyLogStreakDays      ${row.stored_streak_days ?? "null"} (left alone)`);
+    }
   }
 
   if (!shouldFix) {
@@ -98,6 +123,8 @@ async function main(): Promise<void> {
     return;
   }
 
+  // The four transactional counters only. The daily-log columns are deliberately absent
+  // from this UPDATE — see the module comment.
   await db.execute(sql`
     UPDATE project_stats s SET
       watchers_count            = (SELECT count(*) FROM project_watcher w WHERE w.project_id = s.project_id),
