@@ -2618,6 +2618,759 @@ export const talentCompensationAskRelations = relations(talentCompensationAsk, (
 }));
 
 // ---------------------------------------------------------------------------
+// R&D §8 — the Virtual Workshop and daily logs.
+// See docs/R_AND_D_BACKEND_STRUCTURE.md §8 and its "Read this first" header.
+//
+// The three §5/§6 rules at the top of this domain still apply verbatim. Four more
+// govern everything below:
+//
+//  1. THE WORKSHOP IS PRIVATE. Every row here is reachable only through
+//     requireProjectRole(slug, userId, "contributor"), and failure is 404 — never
+//     403 — so a stranger cannot probe which projects exist. No table below has a
+//     public read projection.
+//
+//  2. TWO STATUSES, NEVER ONE. `daily_log.analysisStatus` is the Gemini job's
+//     lifecycle; `daily_log.effortVerificationStatus` is §9's VERDICT and is written
+//     by nothing in this phase. Collapsing them would permit "transcribed" to read
+//     as "verified" — the same trap the studio block splits uploadStatus /
+//     publishStatus / reviewStatus to avoid. A failed analysis leaves the verdict at
+//     `not_run`; the pipeline never guesses.
+//
+//  3. THE ZERO-COST SUBSTITUTIONS ARE SEAMS, NOT SENTINELS. `workshop_file.source`
+//     carries `hosted` beside `external_link` and `daily_log.videoSource` carries
+//     `hosted` beside `youtube`/`none`, with `storageProvider`, `objectKey`,
+//     `sizeBytes` and `contentSha256` nullable and written by NOTHING. That is what
+//     makes Appendix A an insert rather than a migration. Do not populate them from
+//     the link path, and do not delete them.
+//
+//  4. AI OUTPUT CARRIES ITS PROVENANCE, ALWAYS (§9.1). Every chip, claim and
+//     transcript segment names the model and prompt version that produced it, and
+//     every one of them is REVIEWABLE input — not a number anyone is paid on.
+//     `extractedMinutes` is what the member SAID; `groundedMinutes` is §9's and is
+//     deliberately absent here.
+//
+// TWO THINGS DRIZZLE CANNOT EXPRESS, added by hand in the migration (§17 step 1):
+//   ALTER TABLE workshop_task ALTER COLUMN rank TYPE text COLLATE "C";
+//   ALTER TABLE workshop_board_column ADD CONSTRAINT
+//     workshop_board_column_projectId_position_unq UNIQUE (project_id, position)
+//     DEFERRABLE INITIALLY DEFERRED;
+// Neither is declared below, on purpose: drizzle-kit diffs only what it declared, so
+// hand-added objects survive every later `db:generate` — the same arrangement
+// migration 0008 uses for the citext extension.
+// ---------------------------------------------------------------------------
+
+export const workshopTaskPriorityEnum = pgEnum("workshop_task_priority", ["high", "medium", "low"]);
+
+// Where a workshop file's bytes live. `external_link` is the only value produced today;
+// `hosted` exists so restoring presigned S3 upload (Appendix A) is an insert.
+export const workshopFileSourceEnum = pgEnum("workshop_file_source", ["external_link", "hosted"]);
+
+// Dead column support for the deferred `hosted` path. Deliberately NOT the studio's
+// `storage_provider` enum: that one is video-shaped (it carries "livepeer") and is
+// declared further down this file, so referencing it here would also be a temporal
+// dead zone at module evaluation.
+export const workshopStorageProviderEnum = pgEnum("workshop_storage_provider", [
+  "s3_compatible",
+  "cloudinary",
+]);
+
+// The frontend's WorkshopFileKind, snake_cased per §4d ("cad-model" → "cad_model", a
+// §15 rename). `archive` and `other` are added because a link can point at anything and
+// a kind the client cannot render is better than a lie about a zip file being a document.
+export const workshopFileKindEnum = pgEnum("workshop_file_kind", [
+  "document",
+  "spreadsheet",
+  "cad_model",
+  "image",
+  "video",
+  "archive",
+  "other",
+]);
+
+// A log is editable while `draft` and FROZEN once `submitted` — at that point it is
+// effort evidence feeding §9, and an editable evidence record is not evidence.
+export const dailyLogStatusEnum = pgEnum("daily_log_status", ["draft", "submitted"]);
+
+// `none` is a first-class value, not a missing one: a member with no video that day must
+// still be able to log, and §9's physical-work claims have no video by definition.
+export const dailyLogVideoSourceEnum = pgEnum("daily_log_video_source", [
+  "none",
+  "youtube",
+  "hosted",
+]);
+
+// The ANALYSIS job's lifecycle — NOT a verdict. See rule 2 above.
+//
+// `skipped_unconfigured` is distinct from `failed` on purpose: "no LLM key is configured
+// in this environment" is an operator fact, and rendering it as a failure would send a
+// member chasing a problem with their log.
+export const dailyLogAnalysisStatusEnum = pgEnum("daily_log_analysis_status", [
+  "not_requested", // still a draft; nothing has been asked of the model
+  "queued",
+  "running",
+  "succeeded",
+  "failed", // rejected input, or output that would not parse after one repair
+  "skipped_unconfigured", // no GEMINI_API_KEY in this environment
+]);
+
+export const aiSummaryChipKindEnum = pgEnum("ai_summary_chip_kind", [
+  "blocker",
+  "progress",
+  "velocity",
+  "suggestion",
+]);
+
+export const extractedClaimKindEnum = pgEnum("extracted_claim_kind", [
+  "time_spent",
+  "cash_spent",
+  "artifact_reference",
+  "blocker",
+  "milestone_progress",
+]);
+
+export const evidenceLinkProviderEnum = pgEnum("evidence_link_provider", [
+  "github",
+  "gitlab",
+  "figma",
+  "google_docs",
+  "notion",
+  "other",
+]);
+
+// Who put the link on the log. §9 will weigh these differently — a member-supplied
+// artifact reference is a claim, an AI-extracted one is a reading of the transcript —
+// so the distinction has to exist at write time, not be inferred later.
+export const evidenceLinkSourceKindEnum = pgEnum("evidence_link_source_kind", [
+  "member_supplied",
+  "ai_extracted",
+]);
+
+/**
+ * A kanban column. `position` is contiguous from 0 and re-packed on delete.
+ *
+ * Why columns use an integer position while TASKS use a rank string: a board has a
+ * handful of columns, reordered rarely and by one person at a time, so a re-pack is two
+ * rows and a transaction. Tasks are dragged concurrently by several members, where a
+ * re-pack is a write storm and a lost move (§8).
+ */
+export const workshopBoardColumn = pgTable(
+  "workshop_board_column",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // R1: every FK into research_project is `restrict`. A workshop is not a rebuildable
+    // cache — it is the team's working record, and §9 reads it.
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    position: integer("position").notNull(),
+    // Attribution that must never block an account deletion.
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // Ends in a unique column (§4c rule 4) so two columns sharing a position — which the
+    // deferred UNIQUE forbids at COMMIT but permits mid-transaction — can never swap
+    // places between two reads.
+    index("workshop_board_column_projectId_position_idx").on(
+      table.projectId,
+      table.position,
+      table.id,
+    ),
+    check("workshop_board_column_title_ck", sql`char_length(title) BETWEEN 1 AND 60`),
+    check("workshop_board_column_position_ck", sql`position >= 0`),
+  ],
+);
+
+/**
+ * A task card. Ordered by a LEXICOGRAPHIC RANK STRING, not an integer position.
+ *
+ * THE COLLATION TRAP, restated because it is invisible until it bites: `ORDER BY` on a
+ * text column follows the database's LC_COLLATE (typically ICU en_US.UTF-8), which
+ * reorders case and punctuation, while a JS/Kotlin/Swift `a < b` compares code points.
+ * They disagree, and the board renders in a different order than the server paginates.
+ * The migration forces `COLLATE "C"` on this column, and the CHECK below keeps the
+ * alphabet inside [0-9a-z] where the two orderings are provably identical.
+ */
+export const workshopTask = pgTable(
+  "workshop_task",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    // Cascade: §4f puts content tables (board columns, tasks, chat) on cascade, and a
+    // task cannot outlive the column it sits in.
+    columnId: text("column_id")
+      .notNull()
+      .references(() => workshopBoardColumn.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    // `set null`, not restrict: a departing member must not pin every task they were
+    // assigned, and an unassigned task is a real state the board already renders.
+    assigneeMemberId: text("assignee_member_id").references(() => projectMember.id, {
+      onDelete: "set null",
+    }),
+    priority: workshopTaskPriorityEnum("priority").default("medium").notNull(),
+    labels: text("labels").array().notNull().default([]),
+    // Date-only, the §1 wire format. No Date object to reinterpret in a local zone, and
+    // no "due at 00:00 in whose timezone?" question.
+    dueDate: date("due_date", { mode: "string" }),
+    // SERVER-DERIVED, always. POST /tasks/:id/move takes { beforeTaskId, afterTaskId }
+    // and the server computes this; there is no `rank` field in any request body.
+    rank: text("rank").notNull(),
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // The board read, in render order.
+    uniqueIndex("workshop_task_columnId_rank_unq").on(table.columnId, table.rank),
+    index("workshop_task_projectId_idx").on(table.projectId),
+    index("workshop_task_assigneeMemberId_idx").on(table.assigneeMemberId),
+    check("workshop_task_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
+    check(
+      "workshop_task_description_ck",
+      sql`description IS NULL OR char_length(description) <= 5000`,
+    ),
+    check("workshop_task_labels_ck", sql`cardinality(labels) <= 8`),
+    // The alphabet guard. Without it a rank containing an uppercase letter or a hyphen
+    // orders one way in Postgres under a non-C collation and another way in the client.
+    check("workshop_task_rank_ck", sql`rank ~ '^[0-9a-z]+$'`),
+  ],
+);
+
+/**
+ * A shared file — TODAY, A LINK.
+ *
+ * `sizeBytes` is NULL and stays NULL. The rule was never "store a size"; it was "the
+ * server measures the bytes, the client's claim is never trusted" (§0). With a link there
+ * are no bytes to measure, so the honest value is null rather than a number the client
+ * made up. No client may render a size for a linked file.
+ *
+ * `contentSha256`, `storageProvider` and `objectKey` are the Appendix A seam: nullable,
+ * written by nothing, and the reason restoring presigned upload does not rewrite a row.
+ */
+export const workshopFile = pgTable(
+  "workshop_file",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    fileName: text("file_name").notNull(),
+    fileKind: workshopFileKindEnum("file_kind").default("other").notNull(),
+    source: workshopFileSourceEnum("source").default("external_link").notNull(),
+    // The NORMALIZED url — credentials and fragment stripped by src/lib/external-link.ts,
+    // host allowlisted. The client's raw string is never stored and never echoed.
+    externalUrl: text("external_url"),
+    // Derived from externalUrl by the server, stored so a client can badge the source
+    // without re-parsing a URL (and so a host allowlist change is auditable).
+    externalHost: text("external_host"),
+    // --- The Appendix A seam. Nullable, and written by NOTHING.
+    sizeBytes: integer("size_bytes"),
+    contentSha256: text("content_sha256"),
+    storageProvider: workshopStorageProviderEnum("storage_provider"),
+    objectKey: text("object_key"),
+    // `restrict`: a file can be §9 evidence, so its uploader must stay resolvable.
+    uploadedByMemberId: text("uploaded_by_member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    // SOFT delete. A hard delete would erase a row a §9 claim may reference, and the
+    // uniqueness rule below has to be able to tell "removed" from "never existed".
+    removedAt: timestamp("removed_at"),
+    removedByUserId: text("removed_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("workshop_file_projectId_createdAt_idx").on(table.projectId, table.createdAt, table.id),
+    // The same link twice on one project is a mistake, not an intent. Partial, so a
+    // removed link can be re-added.
+    uniqueIndex("workshop_file_projectId_externalUrl_unq")
+      .on(table.projectId, table.externalUrl)
+      .where(sql`removed_at IS NULL`),
+    check("workshop_file_fileName_ck", sql`char_length(file_name) BETWEEN 1 AND 200`),
+    // Makes the two shapes unrepresentable in each other's terms (CLAUDE.md Pattern 1):
+    // a link has a URL and no size; a hosted object has a key. Neither can be half-set.
+    check(
+      "workshop_file_source_shape_ck",
+      sql`(source = 'external_link'
+             AND external_url IS NOT NULL AND external_host IS NOT NULL
+             AND size_bytes IS NULL AND object_key IS NULL)
+          OR (source = 'hosted' AND object_key IS NOT NULL)`,
+    ),
+    check(
+      "workshop_file_externalUrl_ck",
+      sql`external_url IS NULL
+          OR (char_length(external_url) <= 2048 AND external_url LIKE 'https://%')`,
+    ),
+    check("workshop_file_sizeBytes_ck", sql`size_bytes IS NULL OR size_bytes >= 0`),
+    check(
+      "workshop_file_removed_ck",
+      sql`(removed_by_user_id IS NULL) OR (removed_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * One team-chat message.
+ *
+ * `sentAt` is the PAGINATION CURSOR as well as a display field, which is why it is
+ * explicit microsecond precision and why every index ends in `id` (§4c rule 4): two
+ * messages sharing a microsecond must still have a total order, or a keyset page either
+ * repeats a row or skips one.
+ *
+ * Deletes are SOFT for the same reason — a hard delete punches a hole in a cursor, and a
+ * client paging backwards silently loses a page.
+ */
+export const workshopChatMessage = pgTable(
+  "workshop_chat_message",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    authorMemberId: text("author_member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    messageText: text("message_text").notNull(),
+    sentAt: timestamp("sent_at", { precision: 6 }).defaultNow().notNull(),
+    editedAt: timestamp("edited_at", { precision: 6 }),
+    deletedAt: timestamp("deleted_at", { precision: 6 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("workshop_chat_message_projectId_sentAt_idx").on(table.projectId, table.sentAt, table.id),
+    check("workshop_chat_message_text_ck", sql`char_length(message_text) BETWEEN 1 AND 4000`),
+    check("workshop_chat_message_edited_ck", sql`edited_at IS NULL OR edited_at >= sent_at`),
+  ],
+);
+
+/** Per-member read cursor. Composite natural PK, so marking read is one upsert. */
+export const workshopChatReadState = pgTable(
+  "workshop_chat_read_state",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    // `set null`: a read cursor pointing at a message is a preference, and it must never
+    // stop a message row from being cleaned up in some future retention pass.
+    throughMessageId: text("through_message_id").references(() => workshopChatMessage.id, {
+      onDelete: "set null",
+    }),
+    readAt: timestamp("read_at", { precision: 6 }).defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.projectId, table.memberId] })],
+);
+
+/**
+ * A daily log — the input to the entire equity ledger (§9).
+ *
+ * `logDate` (the day CLAIMED) and `submittedAt` (the instant it was filed) are two
+ * distinct fields and are never collapsed: filing Monday's work on Tuesday morning is
+ * ordinary, and a single timestamp cannot say which day the effort belongs to.
+ *
+ * The video is OPTIONAL and, when present, is an 11-character YouTube id — never the
+ * client's URL (§0). Every embed URL is rebuilt server-side by
+ * src/lib/youtube.ts buildYoutubeEmbedUrl. There is no playback token, because the bytes
+ * are on youtube.com and minting one would be a false security promise.
+ */
+export const dailyLog = pgTable(
+  "daily_log",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    // `restrict`: this row is effort evidence and its author must stay resolvable
+    // forever. Membership is never hard-deleted anyway (§4a), so this costs nothing.
+    authorMemberId: text("author_member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    logDate: date("log_date", { mode: "string" }).notNull(),
+    narrative: text("narrative"),
+    status: dailyLogStatusEnum("status").default("draft").notNull(),
+    submittedAt: timestamp("submitted_at"),
+    // --- Video. Server-derived in every field; a client that sends one gets a 422.
+    videoSource: dailyLogVideoSourceEnum("video_source").default("none").notNull(),
+    youtubeVideoId: text("youtube_video_id"),
+    // YouTube's own oEmbed thumbnail, host-allowlisted by sanitizeYoutubeThumbnailUrl
+    // before it is stored — it is a third-party string a client will put in an <img src>.
+    youtubeThumbnailUrl: text("youtube_thumbnail_url"),
+    videoVerifiedAt: timestamp("video_verified_at"),
+    // --- Analysis. The JOB's lifecycle, never a verdict (rule 2 at the top of §8).
+    analysisStatus: dailyLogAnalysisStatusEnum("analysis_status")
+      .default("not_requested")
+      .notNull(),
+    analysisModelName: text("analysis_model_name"),
+    analysisModelVersion: text("analysis_model_version"),
+    analysisPromptVersion: text("analysis_prompt_version"),
+    analysisCompletedAt: timestamp("analysis_completed_at"),
+    // Operator- and member-readable reason, never a stack trace.
+    analysisFailureReason: text("analysis_failure_reason"),
+    // --- §9's verdict column. WRITTEN BY NOTHING IN THIS PHASE. The frontend's
+    // `isEffortVerified: boolean` is derived from it on read as `=== 'verified'`.
+    effortVerificationStatus: effortVerificationStatusEnum("effort_verification_status")
+      .default("not_run")
+      .notNull(),
+    // Client-supplied, and one of the few client strings this domain accepts — it is an
+    // opaque dedup token, not a value the server owns. A retried submit on a flaky mobile
+    // connection must not file twice.
+    submitIdempotencyKey: text("submit_idempotency_key"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // ONE log per member per claimed day. This is what makes the streak countable and
+    // stops the same day funding two §9 claims.
+    uniqueIndex("daily_log_projectId_authorMemberId_logDate_unq").on(
+      table.projectId,
+      table.authorMemberId,
+      table.logDate,
+    ),
+    uniqueIndex("daily_log_authorMemberId_idempotencyKey_unq")
+      .on(table.authorMemberId, table.submitIdempotencyKey)
+      .where(sql`submit_idempotency_key IS NOT NULL`),
+    index("daily_log_projectId_logDate_idx").on(table.projectId, table.logDate, table.id),
+    // The operator's queue: logs whose analysis is stuck or was never run.
+    index("daily_log_analysisStatus_idx")
+      .on(table.analysisStatus, table.id)
+      .where(sql`status = 'submitted'`),
+    check("daily_log_narrative_ck", sql`narrative IS NULL OR char_length(narrative) <= 10000`),
+    // A YouTube log has an id; a log without one is `none` or the deferred `hosted`.
+    check("daily_log_video_ck", sql`(video_source = 'youtube') = (youtube_video_id IS NOT NULL)`),
+    check("daily_log_submitted_ck", sql`(status = 'submitted') = (submitted_at IS NOT NULL)`),
+    // A draft has asked nothing of the model; a completed analysis reached a terminal
+    // state. Neither half can be half-true.
+    check(
+      "daily_log_analysis_ck",
+      sql`(analysis_status = 'not_requested' OR status = 'submitted')
+          AND (analysis_completed_at IS NULL
+               OR analysis_status IN ('succeeded', 'failed', 'skipped_unconfigured'))`,
+    ),
+  ],
+);
+
+/**
+ * A transcript segment. JOB-WRITTEN, and regenerated wholesale on re-analysis — which is
+ * what makes `analyze-daily-log` safe to retry.
+ *
+ * Offsets are integer SECONDS (§4c rule 2). A float offset from an LLM would be a float
+ * in an evidence record, and §9 has to be able to overlap these windows against artifact
+ * timestamps deterministically.
+ */
+export const dailyLogTranscriptSegment = pgTable(
+  "daily_log_transcript_segment",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // Cascade: a derivative that can be recomputed from the log at any time.
+    dailyLogId: text("daily_log_id")
+      .notNull()
+      .references(() => dailyLog.id, { onDelete: "cascade" }),
+    sequenceNumber: integer("sequence_number").notNull(),
+    startOffsetSeconds: integer("start_offset_seconds").notNull(),
+    endOffsetSeconds: integer("end_offset_seconds"),
+    speakerLabel: text("speaker_label"),
+    segmentText: text("segment_text").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("daily_log_transcript_segment_logId_seq_unq").on(
+      table.dailyLogId,
+      table.sequenceNumber,
+    ),
+    check("daily_log_transcript_segment_seq_ck", sql`sequence_number >= 0`),
+    check(
+      "daily_log_transcript_segment_offsets_ck",
+      sql`start_offset_seconds >= 0
+          AND (end_offset_seconds IS NULL OR end_offset_seconds >= start_offset_seconds)`,
+    ),
+    check(
+      "daily_log_transcript_segment_text_ck",
+      sql`char_length(segment_text) BETWEEN 1 AND 5000`,
+    ),
+  ],
+);
+
+/** An AI summary chip. Model output, with its provenance attached (rule 4). */
+export const dailyLogAiSummaryChip = pgTable(
+  "daily_log_ai_summary_chip",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    dailyLogId: text("daily_log_id")
+      .notNull()
+      .references(() => dailyLog.id, { onDelete: "cascade" }),
+    sequenceNumber: integer("sequence_number").notNull(),
+    kind: aiSummaryChipKindEnum("kind").notNull(),
+    label: text("label").notNull(),
+    // Integer basis points, like every other ratio in this domain (§4b). NULL when the
+    // model offered no confidence — never 0, which would read as "certainly wrong".
+    confidenceBps: integer("confidence_bps"),
+    generatedByModel: text("generated_by_model").notNull(),
+    promptVersion: text("prompt_version").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("daily_log_ai_summary_chip_logId_seq_unq").on(
+      table.dailyLogId,
+      table.sequenceNumber,
+    ),
+    check("daily_log_ai_summary_chip_label_ck", sql`char_length(label) BETWEEN 1 AND 80`),
+    check(
+      "daily_log_ai_summary_chip_confidence_ck",
+      sql`confidence_bps IS NULL OR confidence_bps BETWEEN 0 AND 10000`,
+    ),
+  ],
+);
+
+/**
+ * An extracted claim — THE BRIDGE INTO §9, and nothing more.
+ *
+ * `extractedMinutes` is what the member SAID, read out of their own words by a model. It
+ * is not effort, it is not grounded, and it pays nobody: §9's ledger prices
+ * COALESCE(overriddenMinutes, groundedMinutes) and never touches this column. Collapsing
+ * the two destroys the audit story (§9.6), so `groundedMinutes` is deliberately absent
+ * from this table.
+ */
+export const dailyLogExtractedClaim = pgTable(
+  "daily_log_extracted_claim",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    dailyLogId: text("daily_log_id")
+      .notNull()
+      .references(() => dailyLog.id, { onDelete: "cascade" }),
+    sequenceNumber: integer("sequence_number").notNull(),
+    claimKind: extractedClaimKindEnum("claim_kind").notNull(),
+    extractedMinutes: integer("extracted_minutes"),
+    // Integer cents, `bigint` per §4b — a cash claim is money and money is never int4.
+    extractedCashInCents: bigint("extracted_cash_in_cents", { mode: "bigint" }),
+    claimSummary: text("claim_summary").notNull(),
+    confidenceBps: integer("confidence_bps"),
+    generatedByModel: text("generated_by_model").notNull(),
+    promptVersion: text("prompt_version").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("daily_log_extracted_claim_logId_seq_unq").on(
+      table.dailyLogId,
+      table.sequenceNumber,
+    ),
+    check(
+      "daily_log_extracted_claim_summary_ck",
+      sql`char_length(claim_summary) BETWEEN 1 AND 1000`,
+    ),
+    // A day holds 1440 minutes. A larger extraction is a model error, not a work record,
+    // and it must fail at the write rather than surface as a plausible number in §9.
+    check(
+      "daily_log_extracted_claim_minutes_ck",
+      sql`extracted_minutes IS NULL OR extracted_minutes BETWEEN 0 AND 1440`,
+    ),
+    check(
+      "daily_log_extracted_claim_cash_ck",
+      sql`extracted_cash_in_cents IS NULL OR extracted_cash_in_cents >= 0`,
+    ),
+    check(
+      "daily_log_extracted_claim_confidence_ck",
+      sql`confidence_bps IS NULL OR confidence_bps BETWEEN 0 AND 10000`,
+    ),
+  ],
+);
+
+/**
+ * A machine-readable evidence reference — a commit, a design file, a document.
+ *
+ * §9 grounds effort on these, so the source matters: a member-supplied link is a claim
+ * about their own work, while an AI-extracted one is a reading of the transcript. Storing
+ * which is which at write time is the only moment that distinction is knowable.
+ */
+export const dailyLogEvidenceLink = pgTable(
+  "daily_log_evidence_link",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    dailyLogId: text("daily_log_id")
+      .notNull()
+      .references(() => dailyLog.id, { onDelete: "cascade" }),
+    provider: evidenceLinkProviderEnum("provider").default("other").notNull(),
+    sourceKind: evidenceLinkSourceKindEnum("source_kind").notNull(),
+    // Normalized and host-checked before storage, exactly like workshop_file.externalUrl.
+    externalUrl: text("external_url").notNull(),
+    externalHost: text("external_host").notNull(),
+    // The provider's own id when one can be parsed out (a commit sha, a file key). §9
+    // dedupes artifacts on this, which is why it is stored rather than re-derived.
+    externalId: text("external_id"),
+    generatedByModel: text("generated_by_model"),
+    promptVersion: text("prompt_version"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("daily_log_evidence_link_logId_url_unq").on(table.dailyLogId, table.externalUrl),
+    check(
+      "daily_log_evidence_link_url_ck",
+      sql`char_length(external_url) <= 2048 AND external_url LIKE 'https://%'`,
+    ),
+    // Model provenance is required exactly when a model produced the row (rule 4).
+    check(
+      "daily_log_evidence_link_provenance_ck",
+      sql`(source_kind = 'ai_extracted')
+          = (generated_by_model IS NOT NULL AND prompt_version IS NOT NULL)`,
+    ),
+  ],
+);
+
+// --- §8 relations. Child-side only, same convention as §5, §6 and the studio domain.
+
+export const workshopBoardColumnRelations = relations(workshopBoardColumn, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [workshopBoardColumn.projectId],
+    references: [researchProject.id],
+  }),
+  createdBy: one(user, {
+    fields: [workshopBoardColumn.createdByUserId],
+    references: [user.id],
+  }),
+  tasks: many(workshopTask),
+}));
+
+export const workshopTaskRelations = relations(workshopTask, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [workshopTask.projectId],
+    references: [researchProject.id],
+  }),
+  boardColumn: one(workshopBoardColumn, {
+    fields: [workshopTask.columnId],
+    references: [workshopBoardColumn.id],
+  }),
+  assignee: one(projectMember, {
+    fields: [workshopTask.assigneeMemberId],
+    references: [projectMember.id],
+  }),
+}));
+
+export const workshopFileRelations = relations(workshopFile, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [workshopFile.projectId],
+    references: [researchProject.id],
+  }),
+  uploadedBy: one(projectMember, {
+    fields: [workshopFile.uploadedByMemberId],
+    references: [projectMember.id],
+  }),
+}));
+
+export const workshopChatMessageRelations = relations(workshopChatMessage, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [workshopChatMessage.projectId],
+    references: [researchProject.id],
+  }),
+  author: one(projectMember, {
+    fields: [workshopChatMessage.authorMemberId],
+    references: [projectMember.id],
+  }),
+}));
+
+export const workshopChatReadStateRelations = relations(workshopChatReadState, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [workshopChatReadState.projectId],
+    references: [researchProject.id],
+  }),
+  member: one(projectMember, {
+    fields: [workshopChatReadState.memberId],
+    references: [projectMember.id],
+  }),
+  throughMessage: one(workshopChatMessage, {
+    fields: [workshopChatReadState.throughMessageId],
+    references: [workshopChatMessage.id],
+  }),
+}));
+
+export const dailyLogRelations = relations(dailyLog, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [dailyLog.projectId],
+    references: [researchProject.id],
+  }),
+  author: one(projectMember, {
+    fields: [dailyLog.authorMemberId],
+    references: [projectMember.id],
+  }),
+  transcriptSegments: many(dailyLogTranscriptSegment),
+  aiSummaryChips: many(dailyLogAiSummaryChip),
+  extractedClaims: many(dailyLogExtractedClaim),
+  evidenceLinks: many(dailyLogEvidenceLink),
+}));
+
+export const dailyLogTranscriptSegmentRelations = relations(
+  dailyLogTranscriptSegment,
+  ({ one }) => ({
+    dailyLog: one(dailyLog, {
+      fields: [dailyLogTranscriptSegment.dailyLogId],
+      references: [dailyLog.id],
+    }),
+  }),
+);
+
+export const dailyLogAiSummaryChipRelations = relations(dailyLogAiSummaryChip, ({ one }) => ({
+  dailyLog: one(dailyLog, {
+    fields: [dailyLogAiSummaryChip.dailyLogId],
+    references: [dailyLog.id],
+  }),
+}));
+
+export const dailyLogExtractedClaimRelations = relations(dailyLogExtractedClaim, ({ one }) => ({
+  dailyLog: one(dailyLog, {
+    fields: [dailyLogExtractedClaim.dailyLogId],
+    references: [dailyLog.id],
+  }),
+}));
+
+export const dailyLogEvidenceLinkRelations = relations(dailyLogEvidenceLink, ({ one }) => ({
+  dailyLog: one(dailyLog, {
+    fields: [dailyLogEvidenceLink.dailyLogId],
+    references: [dailyLog.id],
+  }),
+}));
+
+// ---------------------------------------------------------------------------
 // Creator Studio video domain. See docs/STUDIO_BACKEND_STRUCTURE.md §0-§13.
 //
 // APPENDIX A (self-hosted video via Livepeer) IS DEFERRED AND NOT BUILT. Nothing
