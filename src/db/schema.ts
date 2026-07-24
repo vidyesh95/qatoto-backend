@@ -3371,6 +3371,1785 @@ export const dailyLogEvidenceLinkRelations = relations(dailyLogEvidenceLink, ({ 
 }));
 
 // ---------------------------------------------------------------------------
+// R&D §9 — Proof of Effort: the Slicing Pie ledger and its verification pipeline.
+// See docs/R_AND_D_BACKEND_STRUCTURE.md §9 and docs/PROOF_OF_EFFORT_SPEC.md §3-§4.
+//
+// THE DETERMINISM BOUNDARY IS DRAWN IN THIS SCHEMA, NOT IN PROSE (§9.1). Read the
+// column list of any table below and you can tell which side of it you are on:
+//
+//   AI-PRODUCED — reviewable, overridable. `effort_claim.extractedMinutes` /
+//     `groundedMinutes`, `verification_step.status` / `findingSummary` / `scoreBps`,
+//     `receipt_forensics_check.result`, `optimization_suggestion.*`. Every one of
+//     them carries `modelName` + `promptVersion` + `confidenceBps` AND an override
+//     quartet (`overriddenStatus`, `reviewedByUserId`, `overrideReason`, `reviewedAt`).
+//
+//   FORMULA-PRODUCED — never hand-edited by anyone, including staff, including the
+//     founder, including a DBA. `slice_ledger_entry.sliceNumerator` / `slicesAwarded`,
+//     `slice_allocation_proposal.proposedSlices`, `equity_snapshot_share.equityBasisPoints`,
+//     `project_audit_entry.entryHash`, `member_fair_market_rate.*` once locked. These
+//     tables have NO OVERRIDE COLUMNS AT ALL — their absence IS the contract.
+//
+// Corrections flow one way: change an INPUT and let the formula recompute, or append a
+// `reversal` entry. Never an UPDATE.
+//
+// SEVEN RULES THAT GOVERN EVERY TABLE BELOW:
+//
+//  1. THERE IS NO WRITABLE EQUITY COLUMN, ANYWHERE. A member's share is the output of
+//     apportioning `slice_ledger_entry` sums; a founder cannot type a number into
+//     someone's stake because there is no field to type it into.
+//
+//  2. EQUITY IS `integer` BASIS POINTS; SLICE NUMERATORS ARE `bigint`. A single entry
+//     already reaches 8,880 × 12,000 = 106,560,000 and summed over years a project
+//     approaches Number.MAX_SAFE_INTEGER (§9.2). `slicesAwarded` and
+//     `equityBasisPoints` stay `integer` because both are bounded and small.
+//
+//  3. THE LEDGER AND THE AUDIT TRAIL ARE APPEND-ONLY AND NEVER CASCADE (§4f). Every
+//     parent FK on `slice_ledger_entry`, `project_audit_entry`, `effort_claim`,
+//     `artifact_evidence` and `member_fair_market_rate` is `restrict`, and BEFORE
+//     UPDATE OR DELETE triggers reject mutation outright — added by hand in the
+//     migration, exactly as 0010 did for `project_member_interval`.
+//
+//  4. NO SLICES EXIST UNTIL A WINDOW LOCKS (§9.8). `finalize-verdict` opens a
+//     `slice_allocation_proposal` and freezes `proposedSlices` ON THE PROPOSAL,
+//     outside `totalSlices`. The 24-hour window is a PRECONDITION for an award, not
+//     an annotation on one.
+//
+//  5. RATES ARE EFFECTIVE-DATED, NOT A COLUMN ON project_member. A raise must not
+//     retroactively re-price two years of logged effort, so every ledger entry pins
+//     `fairMarketRateId` and history stays anchored to the rate in force (§9.6).
+//
+//  6. REVOCATION DESTROYS THE EVIDENCE, NEVER THE EQUITY (§9.10).
+//     `artifact_evidence.rawPayloadJson` goes NULL while `payloadSha256`,
+//     `externalId`, `label`, `artifactOccurredAt` and `signatureStatus` are RETAINED —
+//     the claim stays provable without the platform holding a copy of anyone's code.
+//     No `slice_ledger_entry` is ever touched.
+//
+//  7. `actorNameSnapshot` IS INSIDE THE HASH AND MUST BE PSEUDONYMOUS AT WRITE TIME.
+//     A user row can be anonymized later; a value already hashed into a chain cannot
+//     be edited without breaking it. Get this right at the first write or GDPR and the
+//     chain become mutually exclusive (§9.10).
+//
+// WHAT IS DELIBERATELY ABSENT:
+//   - `verification_job`. §9.6 lists a queue table and §9.7 shows its dequeue SQL, but
+//     that is precisely what pg-boss already does (`FOR UPDATE SKIP LOCKED`, priority
+//     ordering, leases, exponential backoff, dead-letter). §4e picked pg-boss as THE
+//     job runner; a second hand-rolled queue beside it would be two schedulers with
+//     two retry policies that drift.
+//   - A reserve slice pool and the fixed 200,000-slice constant (§9.5). Both are
+//     founder fiat in the denominator, which is the one thing this product exists to
+//     eliminate. `equity_snapshot.totalSlices` is EMERGENT — a live SUM — and the
+//     UI's reserve affordance is replaced by a projection computed on read from the
+//     advertised compensation band, never persisted as slices.
+//   - `consensusAdjustedMinutes`. §9.12's open decision is settled as option (a): a
+//     dispute resolution narrows a WINDOW and the server re-derives minutes from
+//     artifact overlap inside it. No number ever enters through a request body.
+//
+// WHAT DRIZZLE CANNOT EXPRESS, added by hand in migration 0014 (§17 step 1): the
+// append-only triggers, the narrow UPDATE guards on member_fair_market_rate and
+// artifact_evidence, and the TRUNCATE guards a row trigger never fires for. The partial
+// unique indexes below ARE emitted by drizzle-kit and are declared normally.
+// ---------------------------------------------------------------------------
+
+// A negotiated rate's lifecycle. `locked` is terminal and immutable — the trigger in
+// the migration rejects any UPDATE of a locked row, because §9.6 calls this "the most
+// important table in the domain": SPEC §2's "valuation rules locked in and transparent
+// to everyone".
+export const fairMarketRateStatusEnum = pgEnum("fair_market_rate_status", [
+  "proposed", // the founder has offered it; it prices nothing yet
+  "accepted", // the member agreed
+  "locked", // immutable forever; only now can claims be filed against it
+]);
+
+// Where a claim's evidence comes from. Git is deterministic; sanding a 3D-printed
+// chassis is not (SPEC §4), so physical work grounds on uploaded receipts instead of
+// on API artifacts.
+export const effortClaimSourceKindEnum = pgEnum("effort_claim_source_kind", [
+  "daily_log",
+  "physical_receipt",
+]);
+
+// SPEC §4's four-step audit, in order. `stepOrder` is this list's position, 1-based.
+export const verificationStepKindEnum = pgEnum("verification_step_kind", [
+  "claim_extraction", // what did the member actually claim?
+  "artifact_grounding", // do deterministic digital receipts back it?
+  "substance_analysis", // substantive work, or 5,000 lines of padding?
+  "temporal_analysis", // do the timestamps match the hours claimed?
+]);
+
+// One step's outcome. `skipped` and `failed` are NOT interchangeable and the difference
+// decides whether someone is paid: `skipped` means the step does not apply (AST analysis
+// of a photograph), while a claim with NO digital receipts FAILS grounding — SPEC §4
+// step 2 is explicit that it earns zero. See src/lib/verdict.ts.
+export const verificationStepStatusEnum = pgEnum("verification_step_status", [
+  "pending",
+  "passed",
+  "flagged",
+  "failed",
+  "skipped",
+]);
+
+// The kind of contribution a ledger entry prices. Both reduce to one denominator of
+// 3000 (§9.2), which is why there is one numerator column rather than two.
+export const sliceContributionKindEnum = pgEnum("slice_contribution_kind", ["time", "cash"]);
+
+// Append-only correction mechanism. A `reversal` names the entry it reverses and carries
+// a negative numerator; there is no UPDATE and no DELETE (§9.1).
+export const sliceLedgerEntryKindEnum = pgEnum("slice_ledger_entry_kind", ["award", "reversal"]);
+
+// The 24-hour transparency window's state machine (§9.8). `locked` and
+// `consensus_reached` are both terminal and both have written exactly one ledger entry;
+// they differ only in whether a human was involved.
+export const sliceAllocationProposalStatusEnum = pgEnum("slice_allocation_proposal_status", [
+  "open", // window running; NOTHING is in the ledger
+  "disputed", // slices frozen in escrow, reported separately from totalSlices
+  "locked", // expiry sweep settled it; terminal
+  "consensus_reached", // a dispute resolved it; terminal
+]);
+
+export const disputeStatusEnum = pgEnum("dispute_status", [
+  "open",
+  "withdrawn", // by the raiser only, before windowClosesAt
+  "consensus_reached",
+]);
+
+// How a dispute ended. `re_verified` is the ONLY path that changes the amount, and the
+// amount still comes from the formula — the resolver narrows a window, the server
+// re-derives minutes from artifact overlap inside it (§9.12 option (a)).
+export const disputeResolutionEnum = pgEnum("dispute_resolution", [
+  "upheld", // released at full proposedSlices
+  "voided", // released at 0 — but a zero-slice entry IS still written
+  "re_verified", // scoped re-verification run; settles at the re-derived number
+]);
+
+export const disputeVotePositionEnum = pgEnum("dispute_vote_position", [
+  "uphold",
+  "void",
+  "re_verify",
+]);
+
+// Where an artifact came from. `workshop_link` and `daily_log_link` are the zero-cost
+// providers that need no OAuth at all: rows already stored by §8.
+export const artifactProviderEnum = pgEnum("artifact_provider", [
+  "github",
+  "gitlab",
+  "figma",
+  "jira",
+  "linear",
+  "notion",
+  "google_docs",
+  "daily_log_link",
+  "workshop_link",
+  "physical_receipt",
+  "other",
+]);
+
+// Cryptographic standing of an artifact. `unknown` is honest and common — a provider
+// that does not expose signatures cannot be made to.
+export const artifactSignatureStatusEnum = pgEnum("artifact_signature_status", [
+  "valid",
+  "invalid",
+  "unsigned",
+  "unknown",
+]);
+
+// Providers a member can actually connect. Narrower than artifactProviderEnum on
+// purpose: the link providers need no grant, and a grant for something we cannot call
+// is a token with no purpose.
+export const integrationProviderEnum = pgEnum("integration_provider", [
+  "github",
+  "gitlab",
+  "figma",
+  "jira",
+  "linear",
+]);
+
+export const integrationGrantStatusEnum = pgEnum("integration_grant_status", [
+  "pending", // authorize-url issued, callback not yet returned
+  "active",
+  "revoked",
+  "expired",
+]);
+
+export const physicalReceiptKindEnum = pgEnum("physical_receipt_kind", [
+  "photo_of_work",
+  "cad_file",
+  "material_receipt",
+  "other",
+]);
+
+// SPEC §4's hardware edge case: EXIF check, device fingerprint, reverse image search.
+export const receiptForensicsCheckKindEnum = pgEnum("receipt_forensics_check_kind", [
+  "exif_present",
+  "capture_time_consistency",
+  "device_fingerprint",
+  "reverse_image_search",
+]);
+
+// `not_applicable` is a first-class result, not a silent pass. Reverse image search
+// ships a member's photo to a third party and therefore needs its own explicit consent
+// (§9.10); without it the check records `not_applicable` rather than being skipped
+// invisibly or, worse, run anyway.
+export const receiptForensicsResultEnum = pgEnum("receipt_forensics_result", [
+  "pass",
+  "flag",
+  "fail",
+  "not_applicable",
+]);
+
+// Every event that appends to the hash chain (§9.9). Adding a value here changes what
+// the chain covers, never how it is hashed.
+export const projectAuditEventKindEnum = pgEnum("project_audit_event_kind", [
+  "rate_proposed",
+  "rate_accepted",
+  "rate_locked",
+  "claim_submitted",
+  "claim_verdict_reached",
+  "verification_step_overridden",
+  "claim_reverification_requested",
+  "allocation_proposal_opened",
+  "allocation_disputed",
+  "dispute_withdrawn",
+  "dispute_vote_cast",
+  "dispute_resolved",
+  "slices_awarded",
+  "slices_reversed",
+  "integration_consent_granted",
+  "integration_consent_revoked",
+  "equity_snapshot_recomputed",
+  "pie_baked",
+]);
+
+export const optimizationSuggestionStatusEnum = pgEnum("optimization_suggestion_status", [
+  "open",
+  "accepted",
+  "dismissed",
+]);
+
+// SPEC §3.4: dynamic calculation stops at cash-flow breakeven or a priced round.
+export const pieBakeTriggerEnum = pgEnum("pie_bake_trigger", [
+  "cash_flow_breakeven",
+  "priced_round",
+]);
+
+/**
+ * THE MOST IMPORTANT TABLE IN THE DOMAIN (§9.6) — the negotiated fair market rate,
+ * effective-dated and immutable once locked.
+ *
+ * WHY EFFECTIVE-DATING RATHER THAN A COLUMN ON project_member: a raise must not
+ * retroactively re-price two years of logged effort. Each ledger entry stores
+ * `fairMarketRateId`, so history pins to the rate in force. A single mutable column
+ * makes every historical slice count a function of TODAY's rate — precisely the
+ * founder-tweaks-the-spreadsheet failure mode SPEC §2 exists to prevent, and the bug
+ * stays invisible until someone gets a raise.
+ *
+ * WHY TWO RATE COLUMNS. Slicing Pie credits only the UNPAID portion of a contribution,
+ * so the ledger prices `fairMarketRateCentsPerHour − paidCashRateCentsPerHour`. Without
+ * the second column a salaried member earns full sweat equity ON TOP OF their salary;
+ * §9.2 calls that the largest correctness gap in the mock, and it has no frontend
+ * representation at all. See src/lib/slice-math.ts `unpaidRateCentsPerHour`.
+ *
+ * THE ONE PLACE A RATE LEGITIMATELY ENTERS VIA A REQUEST BODY (§0, §13). It is a
+ * NEGOTIATED INPUT, not a derived output — the same category as a founder's advertised
+ * equity band, and the only other exception in the whole domain.
+ */
+export const memberFairMarketRate = pgTable(
+  "member_fair_market_rate",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    // `bigint` because it is money (§4b). A rate is per HOUR while effort is recorded in
+    // MINUTES; the conversion is exact integer arithmetic over a denominator of 3000 and
+    // happens only in src/lib/slice-math.ts.
+    fairMarketRateCentsPerHour: bigint("fair_market_rate_cents_per_hour", {
+      mode: "bigint",
+    }).notNull(),
+    // What the member is ALREADY paid in cash for the same hour. Zero for the unpaid
+    // founder case, which is most of them.
+    // `sql\`0\`` rather than `0n`: drizzle-kit serializes its snapshot with JSON.stringify,
+    // which throws outright on a BigInt default. This is the only bigint default in the
+    // schema, and the SQL literal produces an identical `DEFAULT 0` column.
+    paidCashRateCentsPerHour: bigint("paid_cash_rate_cents_per_hour", { mode: "bigint" })
+      .notNull()
+      .default(sql`0`),
+    // An amount is never stored or sent without its currency (§4b). Derived from the
+    // project, never from a request body.
+    currencyCode: text("currency_code").notNull(),
+    status: fairMarketRateStatusEnum("status").default("proposed").notNull(),
+    // The instant from which this rate prices effort. Absolute, never a day count (§4c).
+    effectiveFrom: timestamp("effective_from").notNull(),
+    // Why this number. Required: a rate with no stated basis is founder fiat with extra
+    // steps, and this column is what makes the history in §11e's GET readable.
+    rationaleNote: text("rationale_note").notNull(),
+    proposedByUserId: text("proposed_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    acceptedAt: timestamp("accepted_at"),
+    acceptedByUserId: text("accepted_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    lockedAt: timestamp("locked_at"),
+    lockedByUserId: text("locked_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // The effective-dating lookup: "which rate was in force for this member at this
+    // instant?" Ends in a unique column so two rates sharing an instant cannot swap
+    // places between two reads (§4c rule 4).
+    index("member_fair_market_rate_memberId_effectiveFrom_idx").on(
+      table.memberId,
+      table.effectiveFrom,
+      table.id,
+    ),
+    // One rate per member per effective instant. Two rows claiming the same instant make
+    // "the rate in force" ambiguous, and an ambiguous rate silently re-prices a claim.
+    uniqueIndex("member_fair_market_rate_memberId_effectiveFrom_unq").on(
+      table.memberId,
+      table.effectiveFrom,
+    ),
+    check("member_fair_market_rate_rate_ck", sql`fair_market_rate_cents_per_hour >= 0`),
+    check("member_fair_market_rate_paid_ck", sql`paid_cash_rate_cents_per_hour >= 0`),
+    check("member_fair_market_rate_currency_ck", sql`currency_code ~ '^[A-Z]{3}$'`),
+    check(
+      "member_fair_market_rate_rationale_ck",
+      sql`char_length(rationale_note) BETWEEN 1 AND 1000`,
+    ),
+    // The lifecycle cannot be half-true: accepted names when and by whom, and locked
+    // additionally requires acceptance to have happened first. A rate nobody accepted
+    // cannot be locked into the ledger.
+    check(
+      "member_fair_market_rate_lifecycle_ck",
+      sql`(status <> 'proposed' OR (accepted_at IS NULL AND locked_at IS NULL))
+          AND (status <> 'accepted' OR (accepted_at IS NOT NULL AND locked_at IS NULL))
+          AND (status <> 'locked' OR (accepted_at IS NOT NULL AND locked_at IS NOT NULL))
+          AND (accepted_at IS NULL) = (accepted_by_user_id IS NULL)
+          AND (locked_at IS NULL) = (locked_by_user_id IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The claim under audit — one member, one day, one body of work.
+ *
+ * `extractedMinutes` vs `groundedMinutes` are the two halves of SPEC §4 and collapsing
+ * them destroys the audit story (§9.6): `extractedMinutes` is WHAT THE MEMBER SAID, read
+ * out of their own words by a model in §8; `groundedMinutes` is WHAT THE ARTIFACTS PROVE.
+ *
+ * THE LEDGER PRICES `COALESCE(overriddenMinutes, groundedMinutes)` AND NEVER
+ * `extractedMinutes`. All three are AI-produced or human-reviewed INPUTS — §9.1's left
+ * column — which is why the override quartet lives here and not on the ledger.
+ *
+ * `verificationStatus` uses the ONE shared enum (§4d) rather than a §9-local copy, and
+ * it is the same value that will be mirrored onto `daily_log.effortVerificationStatus`
+ * — the column §8 shipped defaulted to `not_run` and written by nothing until now.
+ */
+export const effortClaim = pgTable(
+  "effort_claim",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    sourceKind: effortClaimSourceKindEnum("source_kind").notNull(),
+    dailyLogId: text("daily_log_id").references(() => dailyLog.id, { onDelete: "restrict" }),
+    // The day CLAIMED, date-only — distinct from when the claim was filed, exactly as
+    // daily_log splits logDate from submittedAt.
+    claimedForDate: date("claimed_for_date", { mode: "string" }).notNull(),
+    // --- AI-produced inputs (§9.1 left column).
+    extractedMinutes: integer("extracted_minutes"),
+    extractedCashInCents: bigint("extracted_cash_in_cents", { mode: "bigint" }),
+    // Written by `ground-artifacts`, never by a request body. THIS is what pays.
+    groundedMinutes: integer("grounded_minutes"),
+    groundedCashInCents: bigint("grounded_cash_in_cents", { mode: "bigint" }),
+    // A human's correction of an AI-produced INPUT. Not a formula output, so an override
+    // column is legitimate here in a way it never is on slice_ledger_entry.
+    overriddenMinutes: integer("overridden_minutes"),
+    overrideReason: text("override_reason"),
+    overriddenByUserId: text("overridden_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    overriddenAt: timestamp("overridden_at"),
+    claimSummary: text("claim_summary").notNull(),
+    // --- Pipeline state. The shared §4d enum, never a §9-local re-declaration.
+    verificationStatus: effortVerificationStatusEnum("verification_status")
+      .default("queued")
+      .notNull(),
+    verdictReachedAt: timestamp("verdict_reached_at"),
+    // The rate in force when the verdict landed, pinned so a later raise cannot re-price
+    // this claim (§9.6). NULL for a cash-only claim, which needs no rate at all.
+    fairMarketRateId: text("fair_market_rate_id").references(() => memberFairMarketRate.id, {
+      onDelete: "restrict",
+    }),
+    // Client-supplied opaque dedup token — the same category as daily_log's, and one of
+    // the few client strings this domain accepts. A retried submit on a flaky mobile
+    // connection must not file two claims (§14).
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("effort_claim_memberId_idempotencyKey_unq").on(
+      table.memberId,
+      table.idempotencyKey,
+    ),
+    // ONE claim per daily log, ever. Re-verification adds a RUN, never a second claim —
+    // two claims over one log would pay the same day twice.
+    uniqueIndex("effort_claim_dailyLogId_unq")
+      .on(table.dailyLogId)
+      .where(sql`daily_log_id IS NOT NULL`),
+    index("effort_claim_projectId_claimedForDate_idx").on(
+      table.projectId,
+      table.claimedForDate,
+      table.id,
+    ),
+    index("effort_claim_memberId_status_idx").on(table.memberId, table.verificationStatus),
+    check("effort_claim_source_ck", sql`(source_kind = 'daily_log') = (daily_log_id IS NOT NULL)`),
+    // A day holds 1440 minutes. A larger number is a model error or a forged payload, and
+    // it must fail at the write rather than surface as a plausible slice count.
+    check(
+      "effort_claim_minutes_ck",
+      sql`(extracted_minutes IS NULL OR extracted_minutes BETWEEN 0 AND 1440)
+          AND (grounded_minutes IS NULL OR grounded_minutes BETWEEN 0 AND 1440)
+          AND (overridden_minutes IS NULL OR overridden_minutes BETWEEN 0 AND 1440)`,
+    ),
+    check(
+      "effort_claim_cash_ck",
+      sql`(extracted_cash_in_cents IS NULL OR extracted_cash_in_cents >= 0)
+          AND (grounded_cash_in_cents IS NULL OR grounded_cash_in_cents >= 0)`,
+    ),
+    // An override names its reason, its author and its instant, or it is not an override
+    // — it is an unattributed edit to a number someone is paid on.
+    check(
+      "effort_claim_override_ck",
+      sql`(overridden_minutes IS NULL) = (override_reason IS NULL)
+          AND (overridden_minutes IS NULL) = (overridden_by_user_id IS NULL)
+          AND (overridden_minutes IS NULL) = (overridden_at IS NULL)`,
+    ),
+    check("effort_claim_summary_ck", sql`char_length(claim_summary) BETWEEN 1 AND 1000`),
+    // A verdict instant exists exactly when the status is terminal. `not_run` is absent
+    // deliberately: a row in this table has, by definition, been submitted.
+    check(
+      "effort_claim_verdict_ck",
+      sql`(verdict_reached_at IS NOT NULL)
+          = (verification_status IN ('verified', 'flagged_for_review', 'unverified'))`,
+    ),
+  ],
+);
+
+/**
+ * One pass of the pipeline over a claim. `attemptNumber` is 1, then 2+ for
+ * re-verification (§9.6).
+ *
+ * A run is never edited into a different outcome — a re-check is a NEW run, so the
+ * original verdict and every step that produced it stay readable forever. That is what
+ * makes `GET …/effort-claims/:claimId` (claim + all runs + steps in stepOrder) an audit
+ * record rather than a status page.
+ */
+export const claimVerificationRun = pgTable(
+  "claim_verification_run",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    claimId: text("claim_id")
+      .notNull()
+      .references(() => effortClaim.id, { onDelete: "restrict" }),
+    attemptNumber: integer("attempt_number").notNull(),
+    // NULL for the system-triggered first pass; set for `POST …/reverify` and for a
+    // dispute resolved as `re_verified`.
+    triggeredByUserId: text("triggered_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    triggerReason: text("trigger_reason"),
+    // §9.12 option (a): a dispute resolution narrows a WINDOW and the server re-derives
+    // minutes from artifact overlap inside it. These two columns are that window — and
+    // they are the reason no `consensusAdjustedMinutes` column exists anywhere.
+    scopedWindowStartsAt: timestamp("scoped_window_starts_at"),
+    scopedWindowEndsAt: timestamp("scoped_window_ends_at"),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    completedAt: timestamp("completed_at"),
+    // The pure verdict function's output (src/lib/verdict.ts), constrained to the three
+    // TERMINAL values — `incomplete` describes a run in flight and is never persisted.
+    verdict: effortVerificationStatusEnum("verdict"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("claim_verification_run_claimId_attempt_unq").on(
+      table.claimId,
+      table.attemptNumber,
+    ),
+    check("claim_verification_run_attempt_ck", sql`attempt_number >= 1`),
+    check(
+      "claim_verification_run_verdict_ck",
+      sql`verdict IS NULL OR verdict IN ('verified', 'flagged_for_review', 'unverified')`,
+    ),
+    check("claim_verification_run_completed_ck", sql`(completed_at IS NULL) = (verdict IS NULL)`),
+    check(
+      "claim_verification_run_window_ck",
+      sql`(scoped_window_starts_at IS NULL) = (scoped_window_ends_at IS NULL)
+          AND (scoped_window_ends_at IS NULL OR scoped_window_ends_at > scoped_window_starts_at)`,
+    ),
+  ],
+);
+
+/**
+ * One of the four ordered steps of a run, with its provenance and its override quartet.
+ *
+ * EVERYTHING HERE IS §9.1's LEFT COLUMN: an AI judgement, reviewable and overridable by a
+ * human. `PATCH …/steps/:stepId/override` is the ONLY hand-edit in the entire domain, and
+ * it edits a JUDGEMENT, never a number — the number is recomputed by the formula
+ * afterwards.
+ */
+export const verificationStep = pgTable(
+  "verification_step",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    runId: text("run_id")
+      .notNull()
+      .references(() => claimVerificationRun.id, { onDelete: "restrict" }),
+    stepOrder: integer("step_order").notNull(),
+    stepKind: verificationStepKindEnum("step_kind").notNull(),
+    status: verificationStepStatusEnum("status").default("pending").notNull(),
+    findingSummary: text("finding_summary"),
+    // Integer basis points like every other ratio in this domain (§4b). NULL when the
+    // step produced no score — never 0, which reads as "certainly worthless".
+    scoreBps: integer("score_bps"),
+    // --- Provenance. Required exactly when a model produced the finding (§9.1).
+    modelName: text("model_name"),
+    modelVersion: text("model_version"),
+    promptVersion: text("prompt_version"),
+    confidenceBps: integer("confidence_bps"),
+    // --- The override quartet.
+    overriddenStatus: verificationStepStatusEnum("overridden_status"),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    overrideReason: text("override_reason"),
+    reviewedAt: timestamp("reviewed_at"),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("verification_step_runId_stepKind_unq").on(table.runId, table.stepKind),
+    uniqueIndex("verification_step_runId_stepOrder_unq").on(table.runId, table.stepOrder),
+    check("verification_step_order_ck", sql`step_order BETWEEN 1 AND 4`),
+    check(
+      "verification_step_score_ck",
+      sql`(score_bps IS NULL OR score_bps BETWEEN 0 AND 10000)
+          AND (confidence_bps IS NULL OR confidence_bps BETWEEN 0 AND 10000)`,
+    ),
+    // An override with no author or no reason is an anonymous edit to the thing that
+    // decides whether equity is minted. All four columns move together or none do.
+    check(
+      "verification_step_override_ck",
+      sql`(overridden_status IS NULL) = (reviewed_by_user_id IS NULL)
+          AND (overridden_status IS NULL) = (override_reason IS NULL)
+          AND (overridden_status IS NULL) = (reviewed_at IS NULL)
+          AND (overridden_status IS NULL OR overridden_status <> 'pending')`,
+    ),
+    check(
+      "verification_step_finding_ck",
+      sql`finding_summary IS NULL OR char_length(finding_summary) <= 2000`,
+    ),
+  ],
+);
+
+/**
+ * A deterministic digital receipt with identity — the thing SPEC §4 step 2 grounds a
+ * claim against. Replaces the mock's `evidenceLabels: string[]`, which could not be
+ * deduplicated, dated, or proven.
+ *
+ * REVOCATION NULLS `rawPayloadJson` AND NOTHING ELSE (§9.10). `payloadSha256`,
+ * `externalId`, `label`, `artifactOccurredAt` and `signatureStatus` are RETAINED, so the
+ * claim stays provable — "commit abc123 was signed, valid, at 14:02, hashing to 9f2e…" —
+ * without the platform holding a copy of anyone's source code. `evidenceRetained` records
+ * which state a row is in, because a dispute against a purged claim can resolve `upheld`
+ * or `voided` only; `re_verify` returns 409 EVIDENCE_PURGED.
+ */
+export const artifactEvidence = pgTable(
+  "artifact_evidence",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    claimId: text("claim_id")
+      .notNull()
+      .references(() => effortClaim.id, { onDelete: "restrict" }),
+    provider: artifactProviderEnum("provider").notNull(),
+    // The provider's own id — a commit sha, a file key, an issue key. The dedup axis.
+    externalId: text("external_id").notNull(),
+    label: text("label").notNull(),
+    externalUrl: text("external_url"),
+    // 64 lowercase hex characters, always compared full length (§4c).
+    payloadSha256: text("payload_sha256").notNull(),
+    // NULLED on consent revocation. Everything else on this row survives.
+    rawPayloadJson: text("raw_payload_json"),
+    evidenceRetained: boolean("evidence_retained").default(true).notNull(),
+    signatureStatus: artifactSignatureStatusEnum("signature_status").default("unknown").notNull(),
+    // When the WORK happened, per the provider — not when we fetched it. Temporal
+    // analysis overlaps these against the claimed window.
+    artifactOccurredAt: timestamp("artifact_occurred_at").notNull(),
+    // False for an artifact that was found but must not fund slices — already counted
+    // against another claim, or authored by someone else.
+    countsTowardSlices: boolean("counts_toward_slices").default(true).notNull(),
+    consentGrantId: text("consent_grant_id").references(() => integrationConsentGrant.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // ONE COMMIT MUST NOT FUND TWO MEMBERS' CLAIMS (§9.6). Partial on
+    // counts_toward_slices so an artifact deliberately marked as non-funding can still be
+    // recorded against a second claim for context.
+    uniqueIndex("artifact_evidence_project_claim_unq")
+      .on(table.projectId, table.provider, table.externalId)
+      .where(sql`counts_toward_slices = true`),
+    index("artifact_evidence_claimId_idx").on(table.claimId, table.id),
+    index("artifact_evidence_occurredAt_idx").on(table.projectId, table.artifactOccurredAt),
+    check("artifact_evidence_sha_ck", sql`payload_sha256 ~ '^[0-9a-f]{64}$'`),
+    check("artifact_evidence_label_ck", sql`char_length(label) BETWEEN 1 AND 500`),
+    check(
+      "artifact_evidence_url_ck",
+      sql`external_url IS NULL
+          OR (char_length(external_url) <= 2048 AND external_url LIKE 'https://%')`,
+    ),
+    // Purged evidence has no payload; retained evidence may still legitimately have none
+    // (a provider that returns nothing worth storing), so this is one-directional.
+    check(
+      "artifact_evidence_retention_ck",
+      sql`evidence_retained = true OR raw_payload_json IS NULL`,
+    ),
+  ],
+);
+
+/**
+ * Consent is a TRIPLE — (project, member, provider) — never a pair (§9.10).
+ *
+ * A member on three projects who connects GitHub creates three independently revocable
+ * grants with independently narrowed `allowedResourceIds`. A grant for the solar project
+ * must never be readable by the drone project's pipeline, and the unique index below is
+ * what makes that structural rather than a service-layer promise.
+ *
+ * TOKENS ARE ENVELOPE-ENCRYPTED AT REST. This deliberately diverges from Better Auth's
+ * `account` table, which stores `accessToken` in plaintext — that is Better Auth's table
+ * and its decision; these are third-party org-scoped tokens whose blast radius is a
+ * customer's entire source repository. Default to the narrowest scope the provider
+ * supports: a repo-scoped installation token, never a user PAT.
+ */
+export const integrationConsentGrant = pgTable(
+  "integration_consent_grant",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    provider: integrationProviderEnum("provider").notNull(),
+    status: integrationGrantStatusEnum("status").default("pending").notNull(),
+    // Scope narrowing is the difference between "Qatoto reads your work" and "Qatoto
+    // reads your GitHub". Empty means the member consented to nothing yet.
+    allowedResourceIds: text("allowed_resource_ids").array().notNull().default([]),
+    // Ciphertext only. The plaintext never touches a column, a log, or a response.
+    encryptedAccessToken: text("encrypted_access_token"),
+    encryptedRefreshToken: text("encrypted_refresh_token"),
+    // Which key encrypted it, so rotation is a re-encrypt rather than a data loss.
+    tokenKeyVersion: text("token_key_version"),
+    externalAccountLabel: text("external_account_label"),
+    grantedAt: timestamp("granted_at"),
+    expiresAt: timestamp("expires_at"),
+    revokedAt: timestamp("revoked_at"),
+    revokedByUserId: text("revoked_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // THE TRIPLE. One grant per (project, member, provider), enforced by Postgres.
+    uniqueIndex("integration_consent_grant_triple_unq").on(
+      table.projectId,
+      table.memberId,
+      table.provider,
+    ),
+    index("integration_consent_grant_memberId_idx").on(table.memberId, table.status),
+    // An active grant has a token and an instant; a revoked one has NEITHER a token nor
+    // a missing revocation record. Revocation that leaves ciphertext behind is not
+    // revocation.
+    check(
+      "integration_consent_grant_lifecycle_ck",
+      sql`(status <> 'active' OR (encrypted_access_token IS NOT NULL AND granted_at IS NOT NULL))
+          AND (status <> 'revoked' OR (revoked_at IS NOT NULL AND encrypted_access_token IS NULL))
+          AND (status <> 'pending' OR encrypted_access_token IS NULL)
+          AND (encrypted_access_token IS NULL) = (token_key_version IS NULL)
+          AND (revoked_at IS NULL) = (revoked_by_user_id IS NULL)`,
+    ),
+    check("integration_consent_grant_resources_ck", sql`cardinality(allowed_resource_ids) <= 100`),
+  ],
+);
+
+/**
+ * SPEC §4's hardware edge case: git is deterministic, sanding a 3D-printed chassis is
+ * not. For non-digital work the member uploads a receipt — a photo, a CAD file, a
+ * material receipt — and the server MEASURES it.
+ *
+ * `contentSha256` and `perceptualHash` do two different jobs. The first stops the exact
+ * same bytes funding two claims; the second catches a re-crop, a re-compress or a
+ * screenshot of the same photograph, which changes every byte and none of the pixels.
+ *
+ * `deviceFingerprintHash` IS A SALTED HASH, NEVER THE RAW EXIF SERIAL (§9.10) — a camera
+ * body serial is biometric-adjacent in some jurisdictions, and it identifies a person
+ * across every photo they have ever taken.
+ */
+export const physicalWorkReceipt = pgTable(
+  "physical_work_receipt",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    // NULL until a claim cites it: a member uploads receipts first, then files one claim
+    // naming several.
+    claimId: text("claim_id").references(() => effortClaim.id, { onDelete: "restrict" }),
+    receiptKind: physicalReceiptKindEnum("receipt_kind").notNull(),
+    contentSha256: text("content_sha256").notNull(),
+    perceptualHash: text("perceptual_hash").notNull(),
+    storedImageUrl: text("stored_image_url"),
+    storedImagePublicId: text("stored_image_public_id"),
+    // Server-MEASURED, every one of them. A client-claimed size or dimension is a number
+    // the client made up (§13).
+    sizeBytes: integer("size_bytes").notNull(),
+    widthPixels: integer("width_pixels"),
+    heightPixels: integer("height_pixels"),
+    // From EXIF when present. NULL is common and honest — most uploads are stripped.
+    capturedAt: timestamp("captured_at"),
+    deviceFingerprintHash: text("device_fingerprint_hash"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // THE SAME BYTES CANNOT FUND TWO RECEIPTS (§9.6).
+    uniqueIndex("physical_work_receipt_content_unq").on(table.projectId, table.contentSha256),
+    uniqueIndex("physical_work_receipt_memberId_idempotencyKey_unq").on(
+      table.memberId,
+      table.idempotencyKey,
+    ),
+    index("physical_work_receipt_claimId_idx").on(table.claimId, table.id),
+    // Near-duplicate detection scans this; it is not unique, because a legitimate second
+    // photo of the same workbench SHOULD be flagged for a human rather than rejected.
+    index("physical_work_receipt_phash_idx").on(table.projectId, table.perceptualHash),
+    check("physical_work_receipt_sha_ck", sql`content_sha256 ~ '^[0-9a-f]{64}$'`),
+    check("physical_work_receipt_size_ck", sql`size_bytes > 0`),
+    check(
+      "physical_work_receipt_dimensions_ck",
+      sql`(width_pixels IS NULL OR width_pixels > 0)
+          AND (height_pixels IS NULL OR height_pixels > 0)`,
+    ),
+  ],
+);
+
+/** One forensic check against one receipt: EXIF, device fingerprint, reverse image search. */
+export const receiptForensicsCheck = pgTable(
+  "receipt_forensics_check",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    receiptId: text("receipt_id")
+      .notNull()
+      .references(() => physicalWorkReceipt.id, { onDelete: "restrict" }),
+    checkKind: receiptForensicsCheckKindEnum("check_kind").notNull(),
+    result: receiptForensicsResultEnum("result").notNull(),
+    findingSummary: text("finding_summary"),
+    modelName: text("model_name"),
+    promptVersion: text("prompt_version"),
+    confidenceBps: integer("confidence_bps"),
+    checkedAt: timestamp("checked_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("receipt_forensics_check_receiptId_kind_unq").on(table.receiptId, table.checkKind),
+    check(
+      "receipt_forensics_check_confidence_ck",
+      sql`confidence_bps IS NULL OR confidence_bps BETWEEN 0 AND 10000`,
+    ),
+    check(
+      "receipt_forensics_check_finding_ck",
+      sql`finding_summary IS NULL OR char_length(finding_summary) <= 2000`,
+    ),
+  ],
+);
+
+/**
+ * The 24-hour transparency window (§9.8) — and the reason NO SLICES EXIST UNTIL IT LOCKS.
+ *
+ * `finalize-verdict` creates this row, NOT the ledger. `proposedSlices` is frozen here,
+ * OUTSIDE `totalSlices`, so a proposal under dispute can be reported honestly as "frozen
+ * in escrow" rather than silently counted or silently dropped.
+ *
+ * A `flagged_for_review` verdict STILL OPENS A WINDOW, at zero slices. The solar mock's
+ * "960 slices withheld" entry is exactly this case: if flagged claims vanished silently,
+ * members would lose contributions with no recourse.
+ *
+ * `windowClosesAt` is an absolute instant computed in Postgres, in UTC. The server never
+ * sends a duration — "Locks in 9h 14m" is client arithmetic against this ISO value.
+ */
+export const sliceAllocationProposal = pgTable(
+  "slice_allocation_proposal",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    claimId: text("claim_id")
+      .notNull()
+      .references(() => effortClaim.id, { onDelete: "restrict" }),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => claimVerificationRun.id, { onDelete: "restrict" }),
+    // The terminal verdict that produced this proposal. Constrained to the three
+    // persisted values, like claim_verification_run.verdict.
+    verdict: effortVerificationStatusEnum("verdict").notNull(),
+    // FORMULA-PRODUCED. Frozen at open, never recomputed in place — a re-derivation
+    // creates a new run and settles at the new number.
+    proposedSlices: integer("proposed_slices").notNull(),
+    proposedSliceNumerator: bigint("proposed_slice_numerator", { mode: "bigint" }).notNull(),
+    fairMarketRateId: text("fair_market_rate_id").references(() => memberFairMarketRate.id, {
+      onDelete: "restrict",
+    }),
+    status: sliceAllocationProposalStatusEnum("status").default("open").notNull(),
+    windowOpensAt: timestamp("window_opens_at").defaultNow().notNull(),
+    windowClosesAt: timestamp("window_closes_at").notNull(),
+    // Reported SEPARATELY from totalSlices so the UI can show "frozen in escrow"
+    // honestly instead of implying the slices are either awarded or gone.
+    escrowedSlices: integer("escrowed_slices").default(0).notNull(),
+    activeDisputeId: text("active_dispute_id").references((): AnyPgColumn => dispute.id, {
+      onDelete: "set null",
+    }),
+    lockedAt: timestamp("locked_at"),
+    consensusReachedAt: timestamp("consensus_reached_at"),
+    settledLedgerEntryId: text("settled_ledger_entry_id").references(
+      (): AnyPgColumn => sliceLedgerEntry.id,
+      { onDelete: "restrict" },
+    ),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("slice_allocation_proposal_claimId_unq").on(table.claimId),
+    // The sweep's index: expired open windows, oldest first. Partial, because the sweep
+    // runs every 60 seconds forever and must never scan settled history.
+    index("slice_allocation_proposal_sweep_idx")
+      .on(table.windowClosesAt, table.id)
+      .where(sql`status = 'open'`),
+    index("slice_allocation_proposal_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+      table.id,
+    ),
+    // --- The discriminated union, as CHECK constraints (§9.6). This is what makes the
+    // --- status a real state machine rather than four optional columns.
+    check(
+      "proposal_locked_shape",
+      sql`(status <> 'locked') OR (locked_at IS NOT NULL AND settled_ledger_entry_id IS NOT NULL)`,
+    ),
+    check(
+      "proposal_consensus_shape",
+      sql`(status <> 'consensus_reached')
+          OR (consensus_reached_at IS NOT NULL AND settled_ledger_entry_id IS NOT NULL)`,
+    ),
+    // DELIBERATE DEVIATION FROM §9.6's LITERAL TEXT, which reads `escrowed_slices > 0`.
+    // That would make a flagged-at-zero proposal impossible to dispute — and §9.8 says
+    // any active member may dispute, precisely so a member whose claim was flagged to
+    // zero has recourse. Escrow must therefore equal what was proposed, including when
+    // that is zero. Strictly stronger than the drafted rule in every other case.
+    check(
+      "proposal_disputed_shape",
+      sql`(status <> 'disputed')
+          OR (active_dispute_id IS NOT NULL AND escrowed_slices = proposed_slices)`,
+    ),
+    check("proposal_escrow_zero", sql`(status = 'disputed') OR (escrowed_slices = 0)`),
+    check("proposal_window_ck", sql`window_closes_at > window_opens_at`),
+    check(
+      "proposal_slices_ck",
+      sql`proposed_slices >= 0 AND escrowed_slices >= 0 AND proposed_slice_numerator >= 0`,
+    ),
+    check("proposal_verdict_ck", sql`verdict IN ('verified', 'flagged_for_review', 'unverified')`),
+  ],
+);
+
+/**
+ * A dispute against a proposal — the failsafe that is social, not algorithmic (SPEC §4).
+ *
+ * `quorumMemberCount` is FROZEN at raise time. Computing it live would let the roster
+ * changing mid-dispute move the majority threshold under a vote already in progress.
+ *
+ * WITHDRAWAL RESUMES THE ORIGINAL CLOCK (§9.8) — the proposal's `windowClosesAt` is never
+ * rewritten. Without that rule, serial withdraw-and-re-dispute holds slices hostage
+ * forever.
+ */
+export const dispute = pgTable(
+  "dispute",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    proposalId: text("proposal_id")
+      .notNull()
+      .references((): AnyPgColumn => sliceAllocationProposal.id, { onDelete: "restrict" }),
+    // Any ACTIVE member, including the claim's own subject. Not observers.
+    raisedByMemberId: text("raised_by_member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    disputeNote: text("dispute_note").notNull(),
+    status: disputeStatusEnum("status").default("open").notNull(),
+    // Frozen at raise time; the majority threshold is derived from THIS number.
+    quorumMemberCount: integer("quorum_member_count").notNull(),
+    resolution: disputeResolutionEnum("resolution"),
+    resolutionNote: text("resolution_note"),
+    resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    resolvedAt: timestamp("resolved_at"),
+    // §9.12 option (a): the narrowed window a `re_verified` resolution supplies. The
+    // server re-derives minutes from artifact overlap inside it; the resolver never
+    // states a number.
+    scopedWindowStartsAt: timestamp("scoped_window_starts_at"),
+    scopedWindowEndsAt: timestamp("scoped_window_ends_at"),
+    reverificationRunId: text("reverification_run_id").references(() => claimVerificationRun.id, {
+      onDelete: "restrict",
+    }),
+    withdrawnAt: timestamp("withdrawn_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // ONE live dispute per proposal. A second concurrent dispute is 409 ALREADY_DISPUTED,
+    // and this index is what makes that true under a race rather than under a check.
+    uniqueIndex("dispute_proposalId_open_unq")
+      .on(table.proposalId)
+      .where(sql`status = 'open'`),
+    index("dispute_projectId_status_idx").on(table.projectId, table.status, table.id),
+    check("dispute_note_ck", sql`char_length(dispute_note) BETWEEN 1 AND 2000`),
+    check("dispute_quorum_ck", sql`quorum_member_count >= 1`),
+    check(
+      "dispute_resolution_ck",
+      sql`(status = 'consensus_reached')
+          = (resolution IS NOT NULL AND resolved_at IS NOT NULL AND resolved_by_user_id IS NOT NULL)`,
+    ),
+    check("dispute_withdrawn_ck", sql`(status = 'withdrawn') = (withdrawn_at IS NOT NULL)`),
+    check(
+      "dispute_window_ck",
+      sql`(scoped_window_starts_at IS NULL) = (scoped_window_ends_at IS NULL)
+          AND (scoped_window_ends_at IS NULL OR scoped_window_ends_at > scoped_window_starts_at)
+          AND (scoped_window_starts_at IS NULL OR resolution = 're_verified')`,
+    ),
+  ],
+);
+
+/**
+ * One member's vote on a dispute. **This table has no frontend counterpart at all**
+ * (§9.6) — the consensus mechanism SPEC §4 describes exists only here.
+ */
+export const disputeVote = pgTable(
+  "dispute_vote",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    disputeId: text("dispute_id")
+      .notNull()
+      .references(() => dispute.id, { onDelete: "restrict" }),
+    voterMemberId: text("voter_member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    position: disputeVotePositionEnum("position").notNull(),
+    note: text("note"),
+    castAt: timestamp("cast_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // ONE vote per voter per dispute. Changing a vote is not supported: a majority that
+    // can be un-reached after it resolves is not a consensus.
+    uniqueIndex("dispute_vote_disputeId_voterMemberId_unq").on(
+      table.disputeId,
+      table.voterMemberId,
+    ),
+    check("dispute_vote_note_ck", sql`note IS NULL OR char_length(note) <= 2000`),
+  ],
+);
+
+/**
+ * THE LEDGER. Append-only, gapless per project, and written by exactly one service
+ * (`slice-ledger.service.ts`) which only ever writes `computeSlices` output.
+ *
+ * THERE ARE NO OVERRIDE COLUMNS ON THIS TABLE AND THERE NEVER WILL BE (§9.1). A
+ * correction is a `reversal` entry naming the entry it reverses; there is no UPDATE path,
+ * and the migration's BEFORE UPDATE OR DELETE trigger enforces that against a DBA too.
+ *
+ * `sliceNumerator` is stored ALONGSIDE the rounded `slicesAwarded` so an auditor can see
+ * exactly where the half-slice went (§9.3 rule 2) — rounding you cannot inspect is
+ * indistinguishable from a bug.
+ *
+ * ORDER BY sequenceNumber, NEVER createdAt: two rows share a millisecond and replica
+ * clocks skew (§9.4).
+ */
+export const sliceLedgerEntry = pgTable(
+  "slice_ledger_entry",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    // Gapless per project, allocated under the project_chain_head lock.
+    sequenceNumber: integer("sequence_number").notNull(),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    entryKind: sliceLedgerEntryKindEnum("entry_kind").default("award").notNull(),
+    contributionKind: sliceContributionKindEnum("contribution_kind").notNull(),
+    claimId: text("claim_id").references(() => effortClaim.id, { onDelete: "restrict" }),
+    proposalId: text("proposal_id").references((): AnyPgColumn => sliceAllocationProposal.id, {
+      onDelete: "restrict",
+    }),
+    // --- The numbers. Formula-produced, both of them.
+    sliceNumerator: bigint("slice_numerator", { mode: "bigint" }).notNull(),
+    slicesAwarded: integer("slices_awarded").notNull(),
+    // --- The inputs that produced them, denormalized so an auditor need not re-resolve
+    // --- effective dating years later.
+    fairMarketRateId: text("fair_market_rate_id").references(() => memberFairMarketRate.id, {
+      onDelete: "restrict",
+    }),
+    unpaidRateCentsPerHour: bigint("unpaid_rate_cents_per_hour", { mode: "bigint" }),
+    effortMinutes: integer("effort_minutes"),
+    cashInCents: bigint("cash_in_cents", { mode: "bigint" }),
+    reversalOfEntryId: text("reversal_of_entry_id").references(
+      (): AnyPgColumn => sliceLedgerEntry.id,
+      { onDelete: "restrict" },
+    ),
+    // The instant the CONTRIBUTION is credited to, not the instant the row was written.
+    occurredAt: timestamp("occurred_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("slice_ledger_entry_projectId_sequence_unq").on(
+      table.projectId,
+      table.sequenceNumber,
+    ),
+    index("slice_ledger_entry_memberId_idx").on(table.memberId, table.sequenceNumber),
+    index("slice_ledger_entry_projectId_occurredAt_idx").on(
+      table.projectId,
+      table.occurredAt,
+      table.id,
+    ),
+    // One entry per settled proposal. Re-running the sweep must be a no-op (§17 step 6).
+    uniqueIndex("slice_ledger_entry_proposalId_unq")
+      .on(table.proposalId)
+      .where(sql`proposal_id IS NOT NULL`),
+    check("slice_ledger_entry_sequence_ck", sql`sequence_number >= 1`),
+    check(
+      "slice_ledger_entry_reversal_ck",
+      sql`(entry_kind = 'reversal') = (reversal_of_entry_id IS NOT NULL)`,
+    ),
+    // An award never goes negative and a reversal never goes positive. Without this a
+    // sign error in the formula reads as a legitimate correction.
+    check(
+      "slice_ledger_entry_sign_ck",
+      sql`(entry_kind = 'award' AND slices_awarded >= 0 AND slice_numerator >= 0)
+          OR (entry_kind = 'reversal' AND slices_awarded <= 0 AND slice_numerator <= 0)`,
+    ),
+    // The contribution kind and its inputs move together: a time entry has minutes and a
+    // rate, a cash entry has cents and neither.
+    check(
+      "slice_ledger_entry_inputs_ck",
+      sql`(contribution_kind = 'time')
+            = (effort_minutes IS NOT NULL AND unpaid_rate_cents_per_hour IS NOT NULL)
+          AND (contribution_kind = 'cash') = (cash_in_cents IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The hash chain's serialization point — one row per project, and the lock every writer
+ * takes (§9.9).
+ *
+ * `SELECT … FROM project_chain_head WHERE project_id = $1 FOR UPDATE` inside the
+ * transaction is what guarantees ONE WRITER PER PROJECT, always. Every ledger write, rate
+ * lock, dispute transition, consent change and bake appends its audit entry IN THE SAME
+ * TRANSACTION — an audit trail that can lag the ledger is worse than none.
+ *
+ * The ledger's sequence lives here too, so one lock serializes both counters rather than
+ * two locks taken in an order someone will eventually get backwards.
+ *
+ * THE ANCHOR COLUMNS ARE THE HONEST PART. Without daily external anchoring of the head
+ * hash to append-only storage under a separate credential, anyone with database write
+ * access can recompute the whole chain from any point forward and every verification
+ * still passes. A hash chain is tamper-evident AGAINST OUTSIDERS ONLY.
+ */
+export const projectChainHead = pgTable(
+  "project_chain_head",
+  {
+    projectId: text("project_id")
+      .primaryKey()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    lastAuditSequenceNumber: integer("last_audit_sequence_number").default(0).notNull(),
+    lastLedgerSequenceNumber: integer("last_ledger_sequence_number").default(0).notNull(),
+    headEntryHash: text("head_entry_hash"),
+    headEntryId: text("head_entry_id"),
+    lastAnchoredAt: timestamp("last_anchored_at"),
+    lastAnchoredHash: text("last_anchored_hash"),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  // No `table` parameter: every constraint below is expressed in raw SQL against column
+  // names, so binding one would be an unused parameter.
+  () => [
+    check(
+      "project_chain_head_sequence_ck",
+      sql`last_audit_sequence_number >= 0 AND last_ledger_sequence_number >= 0`,
+    ),
+    check(
+      "project_chain_head_hash_ck",
+      sql`(head_entry_hash IS NULL OR head_entry_hash ~ '^[0-9a-f]{64}$')
+          AND (last_anchored_hash IS NULL OR last_anchored_hash ~ '^[0-9a-f]{64}$')
+          AND (last_audit_sequence_number = 0) = (head_entry_hash IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The tamper-evident audit chain (§9.9). Append-only, hashed in a FIXED DECLARED ORDER
+ * with RFC 8785 canonicalization (src/lib/canonical-hash.ts).
+ *
+ * WHAT IS HASHED, in order: projectId, sequenceNumber, eventKind, actorUserId,
+ * actorNameSnapshot, actorRoleSnapshot, actionLabel, targetLabel, detailNote, payloadJson,
+ * occurredAt, previousEntryHash, hashAlgorithmVersion.
+ *
+ * WHAT IS DELIBERATELY EXCLUDED: `id` (a random UUID makes the chain unreproducible from
+ * semantics), `createdAt` (write time is not event time), and every FK back-reference
+ * (circular).
+ *
+ * `detailNote` IS `''`, NEVER NULL. `null` and `""` are different documents and hash to
+ * different bytes; permitting both makes the same event hash two ways.
+ *
+ * `payloadJson` is `text`, not `jsonb`, and that is load-bearing: jsonb reorders keys and
+ * normalizes numbers on write, so the bytes read back would not be the bytes hashed.
+ */
+export const projectAuditEntry = pgTable(
+  "project_audit_entry",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    sequenceNumber: integer("sequence_number").notNull(),
+    eventKind: projectAuditEventKindEnum("event_kind").notNull(),
+    // NULL for a system actor (the expiry sweep, a nightly recompute).
+    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "restrict" }),
+    // PSEUDONYMOUS AT WRITE TIME (§9.10). This value is inside the hash and can never be
+    // edited afterwards, so it must not be a legal name — a user row anonymizes later,
+    // and a chain covering their real name would have to break for that to happen.
+    actorNameSnapshot: text("actor_name_snapshot").notNull(),
+    actorRoleSnapshot: text("actor_role_snapshot").notNull(),
+    actionLabel: text("action_label").notNull(),
+    targetLabel: text("target_label").notNull(),
+    detailNote: text("detail_note").default("").notNull(),
+    payloadJson: text("payload_json").notNull(),
+    occurredAt: timestamp("occurred_at").notNull(),
+    // NULL only for sequence 1 — the genesis entry has no predecessor.
+    previousEntryHash: text("previous_entry_hash"),
+    entryHash: text("entry_hash").notNull(),
+    hashAlgorithmVersion: text("hash_algorithm_version").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("project_audit_entry_projectId_sequence_unq").on(
+      table.projectId,
+      table.sequenceNumber,
+    ),
+    index("project_audit_entry_projectId_occurredAt_idx").on(
+      table.projectId,
+      table.occurredAt,
+      table.id,
+    ),
+    check("project_audit_entry_sequence_ck", sql`sequence_number >= 1`),
+    // Full length, lowercase hex, always. The 6-character form the UI shows is a
+    // RENDERING: at 24 bits collisions hit 50% around 4,800 entries, so it must never be
+    // used as a key, a cache key, or an equality test (§4c).
+    check("project_audit_entry_hash_ck", sql`entry_hash ~ '^[0-9a-f]{64}$'`),
+    check(
+      "project_audit_entry_link_ck",
+      sql`(sequence_number = 1) = (previous_entry_hash IS NULL)
+          AND (previous_entry_hash IS NULL OR previous_entry_hash ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      "project_audit_entry_labels_ck",
+      sql`char_length(action_label) BETWEEN 1 AND 200
+          AND char_length(target_label) BETWEEN 1 AND 200
+          AND char_length(detail_note) <= 2000`,
+    ),
+  ],
+);
+
+/**
+ * The nightly recalculation, frozen as a row (§9.6). Makes `bake` atomic: baking marks
+ * one already-computed snapshot rather than racing a recompute.
+ *
+ * `totalSlices` is EMERGENT — a live SUM over the ledger, not a fixed pool. The mock's
+ * "1% = 2,000 slices" only holds when the pool is exactly 200,000, and the pool changes
+ * daily by construction (§9.5).
+ *
+ * `isDegenerate` is its own state, not a zero. A brand-new project where nobody has
+ * contributed has NO cap table, and rendering "0%" for every member would present a
+ * fabricated number as a computed fact.
+ */
+export const equitySnapshot = pgTable(
+  "equity_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    // The QUANTIZED reference instant this run was a pure function of (§4c rule 3).
+    asOf: timestamp("as_of").notNull(),
+    computedAt: timestamp("computed_at").defaultNow().notNull(),
+    totalSlices: bigint("total_slices", { mode: "bigint" }).notNull(),
+    memberCount: integer("member_count").notNull(),
+    // Recorded in the data, per §9.4, so a future algorithm change is visible in history
+    // rather than silently re-apportioning it.
+    apportionmentAlgorithm: text("apportionment_algorithm")
+      .default("largest-remainder-v1")
+      .notNull(),
+    // Exactly which ledger prefix this snapshot covers — the reason it is reproducible.
+    throughLedgerSequenceNumber: integer("through_ledger_sequence_number").notNull(),
+    isDegenerate: boolean("is_degenerate").default(false).notNull(),
+    isBaked: boolean("is_baked").default(false).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("equity_snapshot_projectId_asOf_unq").on(table.projectId, table.asOf),
+    index("equity_snapshot_projectId_computedAt_idx").on(
+      table.projectId,
+      table.computedAt,
+      table.id,
+    ),
+    // The pie bakes ONCE, ever (§9.11). One baked snapshot per project, enforced here as
+    // well as by pie_bake_event's own unique index.
+    uniqueIndex("equity_snapshot_projectId_baked_unq")
+      .on(table.projectId)
+      .where(sql`is_baked = true`),
+    check(
+      "equity_snapshot_totals_ck",
+      sql`total_slices >= 0 AND member_count >= 0 AND through_ledger_sequence_number >= 0`,
+    ),
+    // Degeneracy is exactly "no slices anywhere", and it is the ONLY case in which the
+    // shares below are permitted not to sum to 10000.
+    check("equity_snapshot_degenerate_ck", sql`(is_degenerate = true) = (total_slices = 0)`),
+  ],
+);
+
+/**
+ * One member's share in one snapshot. FORMULA-PRODUCED, apportioned by largest remainder
+ * so the parts sum to EXACTLY 10000 basis points (§9.4).
+ *
+ * `memberUserId` is denormalized DELIBERATELY: it is the canonical tie-break key, compared
+ * in BYTE ORDER, and apportionment must not depend on a join whose collation could change.
+ */
+export const equitySnapshotShare = pgTable(
+  "equity_snapshot_share",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    snapshotId: text("snapshot_id")
+      .notNull()
+      .references(() => equitySnapshot.id, { onDelete: "restrict" }),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    memberUserId: text("member_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    slices: bigint("slices", { mode: "bigint" }).notNull(),
+    equityBasisPoints: integer("equity_basis_points").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("equity_snapshot_share_snapshotId_memberId_unq").on(
+      table.snapshotId,
+      table.memberId,
+    ),
+    index("equity_snapshot_share_memberId_idx").on(table.memberId, table.id),
+    check(
+      "equity_snapshot_share_bps_ck",
+      sql`equity_basis_points BETWEEN 0 AND 10000 AND slices >= 0`,
+    ),
+  ],
+);
+
+/**
+ * Baking the pie (§9.11, SPEC §3.4) — dynamic calculation STOPS and percentages freeze
+ * permanently.
+ *
+ * `uniqueIndex(project_id)` guarantees once, ever. THERE IS NO UNBAKE ENDPOINT; recovery
+ * is a manual, audited, out-of-band operation.
+ */
+export const pieBakeEvent = pgTable(
+  "pie_bake_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    snapshotId: text("snapshot_id")
+      .notNull()
+      .references(() => equitySnapshot.id, { onDelete: "restrict" }),
+    trigger: pieBakeTriggerEnum("trigger").notNull(),
+    triggerEvidenceNote: text("trigger_evidence_note").notNull(),
+    // Money, so `bigint` (§4b). NULL for a breakeven bake, which has no valuation.
+    valuationCents: bigint("valuation_cents", { mode: "bigint" }),
+    // The typed phrase. Stored so the audit entry can prove a human typed it.
+    acknowledgement: text("acknowledgement").notNull(),
+    bakedByUserId: text("baked_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    bakedAt: timestamp("baked_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // ONCE, EVER, PER PROJECT.
+    uniqueIndex("pie_bake_event_project_unq").on(table.projectId),
+    check("pie_bake_event_evidence_ck", sql`char_length(trigger_evidence_note) BETWEEN 1 AND 2000`),
+    check("pie_bake_event_valuation_ck", sql`valuation_cents IS NULL OR valuation_cents > 0`),
+  ],
+);
+
+/**
+ * An AI-produced suggestion with a lifecycle the mock lacks — §9.1's left column, so it
+ * carries full provenance and can be accepted or dismissed by a human.
+ *
+ * It suggests; it never allocates. Nothing here writes a slice.
+ */
+export const optimizationSuggestion = pgTable(
+  "optimization_suggestion",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    // NULL when the suggestion is about the project rather than one person.
+    memberId: text("member_id").references(() => projectMember.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    bodyText: text("body_text").notNull(),
+    status: optimizationSuggestionStatusEnum("status").default("open").notNull(),
+    modelName: text("model_name").notNull(),
+    modelVersion: text("model_version"),
+    promptVersion: text("prompt_version").notNull(),
+    confidenceBps: integer("confidence_bps"),
+    asOf: timestamp("as_of").notNull(),
+    decidedByUserId: text("decided_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    decidedAt: timestamp("decided_at"),
+    decisionNote: text("decision_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("optimization_suggestion_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+      table.id,
+    ),
+    check(
+      "optimization_suggestion_text_ck",
+      sql`char_length(title) BETWEEN 1 AND 200 AND char_length(body_text) BETWEEN 1 AND 4000`,
+    ),
+    check(
+      "optimization_suggestion_confidence_ck",
+      sql`confidence_bps IS NULL OR confidence_bps BETWEEN 0 AND 10000`,
+    ),
+    check(
+      "optimization_suggestion_decision_ck",
+      sql`(status = 'open') = (decided_at IS NULL)
+          AND (decided_at IS NULL) = (decided_by_user_id IS NULL)`,
+    ),
+  ],
+);
+
+/** What a suggestion is based on. Cascades: a derivative, recomputable at any time. */
+export const optimizationSuggestionEvidence = pgTable(
+  "optimization_suggestion_evidence",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    suggestionId: text("suggestion_id")
+      .notNull()
+      .references(() => optimizationSuggestion.id, { onDelete: "cascade" }),
+    sequenceNumber: integer("sequence_number").notNull(),
+    label: text("label").notNull(),
+    // `set null`, not `restrict`: the evidence pointer is a convenience, and a suggestion
+    // must never be the reason a claim cannot be archived.
+    relatedClaimId: text("related_claim_id").references(() => effortClaim.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("optimization_suggestion_evidence_seq_unq").on(
+      table.suggestionId,
+      table.sequenceNumber,
+    ),
+    check("optimization_suggestion_evidence_label_ck", sql`char_length(label) BETWEEN 1 AND 500`),
+  ],
+);
+
+// --- §9 relations. Child-side only, same convention as §5, §6 and §8.
+
+export const memberFairMarketRateRelations = relations(memberFairMarketRate, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [memberFairMarketRate.projectId],
+    references: [researchProject.id],
+  }),
+  member: one(projectMember, {
+    fields: [memberFairMarketRate.memberId],
+    references: [projectMember.id],
+  }),
+  // relationName because this table has THREE relations to `user`; without it Drizzle
+  // cannot tell them apart.
+  proposedBy: one(user, {
+    fields: [memberFairMarketRate.proposedByUserId],
+    references: [user.id],
+    relationName: "fairMarketRateProposedBy",
+  }),
+  acceptedBy: one(user, {
+    fields: [memberFairMarketRate.acceptedByUserId],
+    references: [user.id],
+    relationName: "fairMarketRateAcceptedBy",
+  }),
+  lockedBy: one(user, {
+    fields: [memberFairMarketRate.lockedByUserId],
+    references: [user.id],
+    relationName: "fairMarketRateLockedBy",
+  }),
+}));
+
+export const effortClaimRelations = relations(effortClaim, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [effortClaim.projectId],
+    references: [researchProject.id],
+  }),
+  member: one(projectMember, {
+    fields: [effortClaim.memberId],
+    references: [projectMember.id],
+  }),
+  dailyLog: one(dailyLog, {
+    fields: [effortClaim.dailyLogId],
+    references: [dailyLog.id],
+  }),
+  fairMarketRate: one(memberFairMarketRate, {
+    fields: [effortClaim.fairMarketRateId],
+    references: [memberFairMarketRate.id],
+  }),
+  overriddenBy: one(user, {
+    fields: [effortClaim.overriddenByUserId],
+    references: [user.id],
+  }),
+  runs: many(claimVerificationRun),
+  evidence: many(artifactEvidence),
+}));
+
+export const claimVerificationRunRelations = relations(claimVerificationRun, ({ one, many }) => ({
+  claim: one(effortClaim, {
+    fields: [claimVerificationRun.claimId],
+    references: [effortClaim.id],
+  }),
+  triggeredBy: one(user, {
+    fields: [claimVerificationRun.triggeredByUserId],
+    references: [user.id],
+  }),
+  steps: many(verificationStep),
+}));
+
+export const verificationStepRelations = relations(verificationStep, ({ one }) => ({
+  run: one(claimVerificationRun, {
+    fields: [verificationStep.runId],
+    references: [claimVerificationRun.id],
+  }),
+  reviewedBy: one(user, {
+    fields: [verificationStep.reviewedByUserId],
+    references: [user.id],
+  }),
+}));
+
+export const artifactEvidenceRelations = relations(artifactEvidence, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [artifactEvidence.projectId],
+    references: [researchProject.id],
+  }),
+  claim: one(effortClaim, {
+    fields: [artifactEvidence.claimId],
+    references: [effortClaim.id],
+  }),
+  consentGrant: one(integrationConsentGrant, {
+    fields: [artifactEvidence.consentGrantId],
+    references: [integrationConsentGrant.id],
+  }),
+}));
+
+export const integrationConsentGrantRelations = relations(
+  integrationConsentGrant,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [integrationConsentGrant.projectId],
+      references: [researchProject.id],
+    }),
+    member: one(projectMember, {
+      fields: [integrationConsentGrant.memberId],
+      references: [projectMember.id],
+    }),
+    revokedBy: one(user, {
+      fields: [integrationConsentGrant.revokedByUserId],
+      references: [user.id],
+    }),
+    evidence: many(artifactEvidence),
+  }),
+);
+
+export const physicalWorkReceiptRelations = relations(physicalWorkReceipt, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [physicalWorkReceipt.projectId],
+    references: [researchProject.id],
+  }),
+  member: one(projectMember, {
+    fields: [physicalWorkReceipt.memberId],
+    references: [projectMember.id],
+  }),
+  claim: one(effortClaim, {
+    fields: [physicalWorkReceipt.claimId],
+    references: [effortClaim.id],
+  }),
+  forensicsChecks: many(receiptForensicsCheck),
+}));
+
+export const receiptForensicsCheckRelations = relations(receiptForensicsCheck, ({ one }) => ({
+  receipt: one(physicalWorkReceipt, {
+    fields: [receiptForensicsCheck.receiptId],
+    references: [physicalWorkReceipt.id],
+  }),
+}));
+
+export const sliceAllocationProposalRelations = relations(
+  sliceAllocationProposal,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [sliceAllocationProposal.projectId],
+      references: [researchProject.id],
+    }),
+    claim: one(effortClaim, {
+      fields: [sliceAllocationProposal.claimId],
+      references: [effortClaim.id],
+    }),
+    member: one(projectMember, {
+      fields: [sliceAllocationProposal.memberId],
+      references: [projectMember.id],
+    }),
+    run: one(claimVerificationRun, {
+      fields: [sliceAllocationProposal.runId],
+      references: [claimVerificationRun.id],
+    }),
+    disputes: many(dispute),
+  }),
+);
+
+export const disputeRelations = relations(dispute, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [dispute.projectId],
+    references: [researchProject.id],
+  }),
+  proposal: one(sliceAllocationProposal, {
+    fields: [dispute.proposalId],
+    references: [sliceAllocationProposal.id],
+  }),
+  raisedBy: one(projectMember, {
+    fields: [dispute.raisedByMemberId],
+    references: [projectMember.id],
+  }),
+  resolvedBy: one(user, {
+    fields: [dispute.resolvedByUserId],
+    references: [user.id],
+  }),
+  votes: many(disputeVote),
+}));
+
+export const disputeVoteRelations = relations(disputeVote, ({ one }) => ({
+  dispute: one(dispute, {
+    fields: [disputeVote.disputeId],
+    references: [dispute.id],
+  }),
+  voter: one(projectMember, {
+    fields: [disputeVote.voterMemberId],
+    references: [projectMember.id],
+  }),
+}));
+
+export const sliceLedgerEntryRelations = relations(sliceLedgerEntry, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [sliceLedgerEntry.projectId],
+    references: [researchProject.id],
+  }),
+  member: one(projectMember, {
+    fields: [sliceLedgerEntry.memberId],
+    references: [projectMember.id],
+  }),
+  claim: one(effortClaim, {
+    fields: [sliceLedgerEntry.claimId],
+    references: [effortClaim.id],
+  }),
+  fairMarketRate: one(memberFairMarketRate, {
+    fields: [sliceLedgerEntry.fairMarketRateId],
+    references: [memberFairMarketRate.id],
+  }),
+}));
+
+export const projectChainHeadRelations = relations(projectChainHead, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [projectChainHead.projectId],
+    references: [researchProject.id],
+  }),
+}));
+
+export const projectAuditEntryRelations = relations(projectAuditEntry, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [projectAuditEntry.projectId],
+    references: [researchProject.id],
+  }),
+  actor: one(user, {
+    fields: [projectAuditEntry.actorUserId],
+    references: [user.id],
+  }),
+}));
+
+export const equitySnapshotRelations = relations(equitySnapshot, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [equitySnapshot.projectId],
+    references: [researchProject.id],
+  }),
+  shares: many(equitySnapshotShare),
+}));
+
+export const equitySnapshotShareRelations = relations(equitySnapshotShare, ({ one }) => ({
+  snapshot: one(equitySnapshot, {
+    fields: [equitySnapshotShare.snapshotId],
+    references: [equitySnapshot.id],
+  }),
+  member: one(projectMember, {
+    fields: [equitySnapshotShare.memberId],
+    references: [projectMember.id],
+  }),
+}));
+
+export const pieBakeEventRelations = relations(pieBakeEvent, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [pieBakeEvent.projectId],
+    references: [researchProject.id],
+  }),
+  snapshot: one(equitySnapshot, {
+    fields: [pieBakeEvent.snapshotId],
+    references: [equitySnapshot.id],
+  }),
+  bakedBy: one(user, {
+    fields: [pieBakeEvent.bakedByUserId],
+    references: [user.id],
+  }),
+}));
+
+export const optimizationSuggestionRelations = relations(
+  optimizationSuggestion,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [optimizationSuggestion.projectId],
+      references: [researchProject.id],
+    }),
+    member: one(projectMember, {
+      fields: [optimizationSuggestion.memberId],
+      references: [projectMember.id],
+    }),
+    evidence: many(optimizationSuggestionEvidence),
+  }),
+);
+
+export const optimizationSuggestionEvidenceRelations = relations(
+  optimizationSuggestionEvidence,
+  ({ one }) => ({
+    suggestion: one(optimizationSuggestion, {
+      fields: [optimizationSuggestionEvidence.suggestionId],
+      references: [optimizationSuggestion.id],
+    }),
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // Creator Studio video domain. See docs/STUDIO_BACKEND_STRUCTURE.md §0-§13.
 //
 // APPENDIX A (self-hosted video via Livepeer) IS DEFERRED AND NOT BUILT. Nothing
