@@ -188,3 +188,58 @@ export async function handleRecomputeEquitySnapshotTick(
     throw new Error(`recompute-equity-snapshot-tick: enqueue failed (${enqueueResult.error.type})`);
   }
 }
+
+/**
+ * The hourly reconciliation tick (§7).
+ *
+ * Quantized to the HOUR, not the day: reconciliation runs hourly, and a day-quantized asOf
+ * would make all 24 runs share one idempotency key so 23 of them would dedup into nothing.
+ *
+ * `projectId: null` means every project. There is no per-project trigger for this one —
+ * unlike the equity snapshot, nothing in the request path knows that a provider's balance
+ * has drifted, because drift is by definition something we learn by looking.
+ */
+export async function handleReconcileEscrowLedgerTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcHourStart(readClock());
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.reconcileEscrowLedger,
+    { asOf: asOfIso, projectId: null },
+    { idempotencyKey: idempotencyKeyFor.reconcileEscrowLedger(asOfIso, null) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`reconcile-escrow-ledger-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/**
+ * The nightly investor-confidence tick (§7).
+ *
+ * Scheduled AFTER the equity snapshot, because the signal reads the cap table's dispute
+ * history: computed over a half-recomputed ledger it would move when nothing moved, which
+ * is the worst property a trend arrow can have.
+ */
+export async function handleRecomputeInvestorConfidenceTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcDayStart(readClock());
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeInvestorConfidence,
+    { asOf: asOfIso, projectId: null },
+    { idempotencyKey: idempotencyKeyFor.recomputeInvestorConfidence(asOfIso, null) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-investor-confidence-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}

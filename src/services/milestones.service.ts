@@ -304,16 +304,32 @@ export interface PutVarianceInput {
 }
 
 /**
+ * The bound `milestone_variance_basis_points_ck` enforces: ±10,000%.
+ *
+ * Declared here rather than inlined so the clamp below and the column can be seen to agree
+ * — a clamp that is looser than its constraint is a 500 waiting for a data-entry accident,
+ * and a clamp that is tighter silently truncates values the column would have accepted.
+ */
+export const VARIANCE_BASIS_POINTS_BOUND = 1_000_000;
+
+/**
  * Computes the signed schedule variance in basis points.
  *
  * SIGN: negative is BEHIND (took longer than planned), positive is AHEAD. Expressed as a
  * deviation from plan — `(planned − actual) / planned` — so a milestone that took 126% of
- * its planned time reads `-2600`, which is exactly the `"26% behind"` the mock rendered as
- * prose, now sortable and localizable.
+ * its planned time reads `-2667`, which is exactly the `"26% behind"` the mock rendered as
+ * prose, now sortable, comparable and localizable.
  *
  * A zero plan has no percentage deviation to express, so the variance is 0 rather than an
  * infinity or a thrown error: "we planned nothing and it took three days" is a real state
  * of a real milestone, and refusing to store its variance would block the whole update.
+ *
+ * CLAMPED TO THE COLUMN'S BOUND, and this is not defensive padding — it is the difference
+ * between a bounded chart and a 500. A one-day milestone that took three years is
+ * −10,940,000 basis points, which `milestone_variance_basis_points_ck` rejects outright,
+ * so an unclamped value turns an honest (if embarrassing) data entry into a failed request
+ * the founder cannot get past. Past ±10,000% the exact figure carries nothing a chart could
+ * render anyway; the six raw integers are stored beside it and remain exact.
  */
 export function computeVarianceBasisPoints(
   plannedDurationDays: number,
@@ -325,10 +341,12 @@ export function computeVarianceBasisPoints(
   // Through src/lib/money.ts, like every derived integer in this domain (§4c rule 1).
   // `basisPointsOf` handles the sign correctly on the way through; `Math.round` would
   // round -0.5 to -0 and disagree with Postgres.
-  return basisPointsOf(
+  const variance = basisPointsOf(
     BigInt(plannedDurationDays - actualDurationDays),
     BigInt(plannedDurationDays),
   );
+
+  return Math.max(-VARIANCE_BASIS_POINTS_BOUND, Math.min(VARIANCE_BASIS_POINTS_BOUND, variance));
 }
 
 /** `PUT /milestones/:id/variance` — six integers in, one signed basis-point figure out. */

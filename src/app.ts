@@ -14,6 +14,7 @@ import { requestId } from "#src/middleware/request-id.js";
 import authRouter from "#src/routes/auth.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
+import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
 import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
 import playlistsRouter from "#src/routes/playlists.routes.js";
@@ -131,6 +132,12 @@ app.use("/research-projects", workshopRouter);
 // /audit-trail/*, /slice-ledger and /proof-of-effort (§9). Still no collision, for the
 // same reason — a single-segment "/:projectSlug" never swallows a deeper path.
 app.use("/research-projects", proofOfEffortRouter);
+// Same prefix a fourth time, declared AFTER all three: the funding router owns
+// /:projectSlug/funding-rounds, /:projectSlug/milestones, /:projectSlug/escrow/*,
+// /:projectSlug/compensation and /:projectSlug/investor-confidence (§7). Still no
+// collision, for the same reason — a single-segment "/:projectSlug" never swallows a
+// deeper path.
+app.use("/research-projects", projectFundingRouter);
 app.use("/discovery", discoveryRouter);
 // Creator Studio. The anime review queue is nested at /videos/admin/review rather than a
 // root /admin, matching /discovery/admin/* — one domain's moderation surface should not
@@ -141,6 +148,17 @@ app.use("/series", seriesRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,
 // exactly as the spec mounts the funding router at "/".
 app.use("/", researchCatalogRouter);
+// §7's id-keyed half: /funding-rounds, /pledges, /milestones, /escrow-releases,
+// /provider-transfers and /funding/deals. Root-mounted because a backer arriving from a
+// deal-flow list holds a round id and has no reason to know which project owns it — the
+// handler resolves the id to a project and proves membership against that.
+//
+// THERE IS NO WEBHOOK ROUTE AND NO RAW-BODY MOUNT (§11). Settlement runs through
+// POST /provider-transfers/:transferId/settle, gated on the platform `audit_escrow`
+// capability, because the card network this would have been signed by is deferred
+// (Appendix A3) and a raw-body branch for a route that does not exist is a security
+// surface bought for nothing.
+app.use("/", fundingRouter);
 // The §9 integration callback. Root-mounted because a provider's redirect URI is fixed at
 // app-registration time and cannot carry a project slug; the project and the member come
 // out of the signed `state` instead (§9.10).

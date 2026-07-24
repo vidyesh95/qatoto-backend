@@ -481,3 +481,72 @@ export const chainVerifyLimiter = rateLimit({
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
 });
+
+/**
+ * POST /funding-rounds/:roundId/pledges — the money path's front door (§4a, §7).
+ *
+ * LOW, and for a reason that is not throughput. Every pledge appends three rows to an
+ * append-only hash-chained ledger that nobody can prune, so a loop here is a loop that
+ * permanently enlarges a financial record. It also increments a public backer count once
+ * settled, which is the number an outsider reads as social proof.
+ *
+ * Fifteen in fifteen minutes is far past any honest backer and far below anything that
+ * would make a ledger unreadable.
+ */
+export const pledgeLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST · PATCH on funding rounds and milestones (§7).
+ *
+ * Founder-facing planning writes. Higher than the pledge bound because editing a roadmap
+ * is a normal burst — a founder laying out eight milestones in a sitting is not abuse —
+ * and none of it moves money on its own.
+ */
+export const fundingRoundWriteLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/escrow-releases, …/approve, …/reject — the four-eyes surface (§7).
+ *
+ * The lowest bound in this file. A release request is a payout request; an approval is a
+ * payout. Neither is a thing anyone does in a loop, and both append to the ledger.
+ * A low ceiling here also blunts the obvious grief: request, get rejected, request again.
+ */
+export const escrowReleaseLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST /provider-transfers/:transferId/settle · /fail — staff only, and still bounded.
+ *
+ * The caller already holds `audit_escrow`, so this is not an anti-abuse bound: it is a
+ * blast-radius bound. Settlement is the ONE path that moves `raisedAmountInCents`, and a
+ * compromised or scripted auditor session should not be able to walk the whole pending
+ * queue in a second.
+ */
+export const escrowSettlementLimiter = rateLimit({
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});

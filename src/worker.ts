@@ -10,16 +10,21 @@ import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster
 import { handleRecomputeDailyLogStreaks } from "#src/jobs/recompute-daily-log-streaks.js";
 import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals.js";
 import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapshot.js";
+import { handleRecomputeInvestorConfidence } from "#src/jobs/recompute-investor-confidence.js";
 import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
+import { handleReconcileEscrowLedger } from "#src/jobs/reconcile-escrow-ledger.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import {
+  handleReconcileEscrowLedgerTick,
   handleRecomputeDailyLogStreaksTick,
   handleRecomputeDemandSignalsTick,
   handleRecomputeEquitySnapshotTick,
+  handleRecomputeInvestorConfidenceTick,
   handleRecomputeOpportunityScoresTick,
   handleRefreshTalentProjectionsTick,
   handleSweepDisputeWindowsTick,
 } from "#src/jobs/scheduled-ticks.js";
+import { handleSubmitProviderTransfer } from "#src/jobs/submit-provider-transfer.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
 import {
   handleAnalyzeSubstance,
@@ -106,7 +111,11 @@ boss.on("error", (error: unknown) => {
  */
 function runJob(
   jobName: JobName,
-  handler: (rawPayload: unknown) => Promise<void>,
+  // `Promise<unknown>` rather than `Promise<void>`: several handlers return a run summary
+  // that a script or a test reads directly (the reconciliation counts, the confidence
+  // tallies). pg-boss discards a handler's return value, so widening the parameter costs
+  // nothing here and saves every such handler from being wrapped at its call site.
+  handler: (rawPayload: unknown) => Promise<unknown>,
 ): (jobs: Job[]) => Promise<void> {
   return async (jobs: Job[]): Promise<void> => {
     // pg-boss v10+ ALWAYS hands the handler an array, even at batchSize 1. Writing this
@@ -262,6 +271,33 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeEquitySnapshot,
     workOptions,
     runJob(JOB_NAMES.recomputeEquitySnapshot, handleRecomputeEquitySnapshot),
+  );
+
+  // §7 — funding and escrow.
+  await boss.work(
+    JOB_NAMES.submitProviderTransfer,
+    workOptions,
+    runJob(JOB_NAMES.submitProviderTransfer, handleSubmitProviderTransfer),
+  );
+  await boss.work(
+    JOB_NAMES.reconcileEscrowLedgerTick,
+    workOptions,
+    runJob(JOB_NAMES.reconcileEscrowLedgerTick, handleReconcileEscrowLedgerTick),
+  );
+  await boss.work(
+    JOB_NAMES.reconcileEscrowLedger,
+    workOptions,
+    runJob(JOB_NAMES.reconcileEscrowLedger, handleReconcileEscrowLedger),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeInvestorConfidenceTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeInvestorConfidenceTick, handleRecomputeInvestorConfidenceTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeInvestorConfidence,
+    workOptions,
+    runJob(JOB_NAMES.recomputeInvestorConfidence, handleRecomputeInvestorConfidence),
   );
 
   // THE DEAD-LETTER QUEUES DELIBERATELY HAVE NO ALWAYS-ON WORKERS.
