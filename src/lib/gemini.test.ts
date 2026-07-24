@@ -52,7 +52,7 @@ function jsonResponse(payload: unknown, status = 200): Response {
   });
 }
 
-function candidateResponse(analysisJson: unknown, modelVersion = "gemini-2.5-flash-002"): Response {
+function candidateResponse(analysisJson: unknown, modelVersion = "gemini-3.5-flash-lite-07-2026"): Response {
   return jsonResponse({
     candidates: [{ content: { parts: [{ text: JSON.stringify(analysisJson) }] }, finishReason: "STOP" }],
     modelVersion,
@@ -90,7 +90,7 @@ function stubFetch(respond: (callIndex: number) => Response): {
   return { fetchImplementation, requests };
 }
 
-const baseOptions = { apiKey: "test-key", model: "gemini-2.5-flash" };
+const baseOptions = { apiKey: "test-key", model: "gemini-3.5-flash-lite" };
 
 describe("analyzeDailyLog", () => {
   it("returns the parsed analysis with its provenance", async () => {
@@ -103,8 +103,8 @@ describe("analyzeDailyLog", () => {
     expect(result.value.analysis.extractedClaims[0]?.extractedMinutes).toBe(180);
     // Provenance is not optional: §9's override flow needs to know which model and which
     // instruction produced the row a human is overriding.
-    expect(result.value.modelName).toBe("gemini-2.5-flash");
-    expect(result.value.modelVersion).toBe("gemini-2.5-flash-002");
+    expect(result.value.modelName).toBe("gemini-3.5-flash-lite");
+    expect(result.value.modelVersion).toBe("gemini-3.5-flash-lite-07-2026");
     expect(result.value.promptVersion).toBe(DAILY_LOG_ANALYSIS_PROMPT_VERSION);
   });
 
@@ -114,7 +114,7 @@ describe("analyzeDailyLog", () => {
     await analyzeDailyLog(INPUT, { ...baseOptions, fetchImplementation });
 
     const request = requests[0];
-    expect(request?.url).toContain("gemini-2.5-flash:generateContent");
+    expect(request?.url).toContain("gemini-3.5-flash-lite:generateContent");
     // A key in the query string lands in access logs and in every proxy in between.
     expect(request?.url).not.toContain("test-key");
     expect(request?.headers["x-goog-api-key"]).toBe("test-key");
@@ -124,6 +124,30 @@ describe("analyzeDailyLog", () => {
     // Deterministic decoding, so a re-analysis after a fix is comparable to the run it
     // replaced rather than noise.
     expect(request?.body).toContain('"temperature":0');
+  });
+
+  it("pins thinkingLevel rather than inheriting a provider default", async () => {
+    const { fetchImplementation, requests } = stubFetch(() => candidateResponse(VALID_ANALYSIS));
+
+    await analyzeDailyLog(INPUT, { ...baseOptions, fetchImplementation });
+
+    // `thinkingLevel`, NOT the Gemini 2.5-era `thinkingBudget` — the 3.x family answers the
+    // old spelling with a 400, which this module classifies permanent, so the wrong key
+    // here fails every analysis in the environment instead of degrading.
+    expect(requests[0]?.body).toContain('"thinkingConfig":{"thinkingLevel":"low"}');
+    expect(requests[0]?.body).not.toContain("thinkingBudget");
+  });
+
+  it("sends the configured output ceiling, so an operator can actually raise it", async () => {
+    const { fetchImplementation, requests } = stubFetch(() => candidateResponse(VALID_ANALYSIS));
+
+    await analyzeDailyLog(INPUT, {
+      ...baseOptions,
+      maxOutputTokens: 65_536,
+      fetchImplementation,
+    });
+
+    expect(requests[0]?.body).toContain('"maxOutputTokens":65536');
   });
 
   it("sends no fileData part for a text-only log", async () => {
@@ -142,7 +166,7 @@ describe("analyzeDailyLog", () => {
 
     const result = await analyzeDailyLog(INPUT, {
       apiKey: undefined,
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash-lite",
       fetchImplementation,
     });
 
@@ -196,17 +220,28 @@ describe("analyzeDailyLog", () => {
   });
 
   it("treats a truncated response as permanent rather than retrying into the same wall", async () => {
-    const { fetchImplementation } = stubFetch(() =>
+    const { fetchImplementation, requests } = stubFetch(() =>
       jsonResponse({
         candidates: [{ content: { parts: [{ text: "{" }] }, finishReason: "MAX_TOKENS" }],
       }),
     );
 
-    const result = await analyzeDailyLog(INPUT, { ...baseOptions, fetchImplementation });
+    const result = await analyzeDailyLog(INPUT, {
+      ...baseOptions,
+      maxOutputTokens: 4_096,
+      fetchImplementation,
+    });
 
     expect(result.success).toBe(false);
     if (result.success) return;
-    expect(result.error.type).toBe("GEMINI_INPUT_REJECTED");
+    // Its OWN type, carrying the ceiling that stopped it. Truncation is not a refusal: an
+    // operator raises a limit, they do not go looking at the member's video. And it must
+    // not be retried into the same wall — one attempt, no repair.
+    expect(result.error).toStrictEqual({
+      type: "GEMINI_OUTPUT_TRUNCATED",
+      maxOutputTokens: 4_096,
+    });
+    expect(requests).toHaveLength(1);
   });
 
   it("repairs a schema-invalid response ONCE and succeeds", async () => {

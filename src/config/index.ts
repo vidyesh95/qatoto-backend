@@ -122,11 +122,25 @@ const envSchema = z.object({
   // an operator fact, not a member's problem, and it is deliberately NOT `failed` — nor
   // is it ever a fabricated chip.
   GEMINI_API_KEY: z.string().min(1).optional(),
-  GEMINI_MODEL: z.string().min(1).default("gemini-2.5-flash"),
+  // A THINKING model (the API reports `thinking: true` for it), which is why
+  // src/lib/gemini.ts pins `thinkingConfig.thinkingLevel` rather than leaving the default:
+  // transcription and claim extraction are mechanical, and unbounded reasoning spends
+  // latency and free-tier quota on a task with nothing to reason about.
+  GEMINI_MODEL: z.string().min(1).default("gemini-3.5-flash-lite"),
   // Generous: the model watches a video end to end. It still has to be BOUNDED, because
   // the call runs in a worker whose job slot it would otherwise hold indefinitely.
-  GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
-  GEMINI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(65_536).default(8_192),
+  //
+  // A TIMEOUT IS CLASSIFIED RETRYABLE, so a value that is merely tight does not fail fast —
+  // it burns five exponential-backoff attempts before an operator sees anything. Three
+  // minutes covers a long log; the ceiling below still bounds the worst case.
+  GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(180_000),
+  // `maxOutputTokens` is a CAP, NOT A RESERVATION — an unused ceiling costs nothing, and
+  // the model's own limit is 65_536. Under-sizing it is what costs: a truncated response
+  // comes back as `finishReason: MAX_TOKENS`, which src/lib/gemini.ts classifies PERMANENT,
+  // so an 8k budget turns every long daily log into a dead-lettered `failed` analysis
+  // rather than a retry. A 400-segment transcript plus chips and claims sits well inside
+  // this.
+  GEMINI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(65_536).default(32_768),
 
   // --- §9 integration consent (docs/R_AND_D_BACKEND_STRUCTURE.md §9.10).
   //

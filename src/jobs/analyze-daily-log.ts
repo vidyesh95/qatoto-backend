@@ -10,7 +10,7 @@ import {
   dailyLogTranscriptSegment,
 } from "#src/db/schema.js";
 import { parseExternalLink, extractExternalId } from "#src/lib/external-link.js";
-import { analyzeDailyLog, type DailyLogAnalysis } from "#src/lib/gemini.js";
+import { analyzeDailyLog, type DailyLogAnalysis, type GeminiError } from "#src/lib/gemini.js";
 import {
   JOB_NAMES,
   JOB_PAYLOAD_SCHEMAS,
@@ -45,6 +45,41 @@ import {
 
 /** Bounds what one log can write, independently of what the model returned. */
 const MAX_TRANSCRIPT_SEGMENTS = 400;
+
+/** The three outcomes no retry can improve on. Each dead-letters; each explains itself. */
+type PermanentAnalysisError = Extract<
+  GeminiError,
+  { type: "GEMINI_INPUT_REJECTED" | "GEMINI_OUTPUT_TRUNCATED" | "GEMINI_SCHEMA_INVALID" }
+>;
+
+/**
+ * The sentence a member reads on a failed log, and the one an operator triages from.
+ *
+ * THE THREE ARE KEPT DISTINCT because they send a reader to three different places: a
+ * rejected input is about the video, a truncation is about our own output ceiling, and
+ * invalid output is about the model. Collapsing them — as an earlier version did, folding
+ * truncation into "could not read this log" — sends an operator to inspect a video that
+ * was never the problem. No environment variable is named here: this string reaches
+ * clients through `GET …/daily-logs/:logId`.
+ */
+function failureReasonFor(error: PermanentAnalysisError): string {
+  switch (error.type) {
+    case "GEMINI_INPUT_REJECTED":
+      return `The analysis provider could not read this log (${error.detail}).`;
+    case "GEMINI_OUTPUT_TRUNCATED":
+      return (
+        "The analysis provider's response was cut off before it finished, at this " +
+        `environment's ${error.maxOutputTokens}-token output limit. Nothing was recorded; ` +
+        "the log can be re-analyzed once the limit is raised."
+      );
+    case "GEMINI_SCHEMA_INVALID":
+      return `The analysis provider returned output that could not be read (${error.issues.join("; ")}).`;
+    default: {
+      const exhaustiveCheck: never = error;
+      throw new Error(`Unhandled analysis failure: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
 
 export async function handleAnalyzeDailyLog(rawPayload: unknown): Promise<void> {
   const payload = parseJobPayload(
@@ -122,11 +157,9 @@ export async function handleAnalyzeDailyLog(rawPayload: unknown): Promise<void> 
         return;
 
       case "GEMINI_INPUT_REJECTED":
+      case "GEMINI_OUTPUT_TRUNCATED":
       case "GEMINI_SCHEMA_INVALID": {
-        const reason =
-          analysis.error.type === "GEMINI_INPUT_REJECTED"
-            ? `The analysis provider could not read this log (${analysis.error.detail}).`
-            : `The analysis provider returned output that could not be read (${analysis.error.issues.join("; ")}).`;
+        const reason = failureReasonFor(analysis.error);
 
         await db
           .update(dailyLog)

@@ -206,7 +206,7 @@ describe("daily-log schemas refuse every pipeline and verdict field", () => {
     expect(
       acceptedFields(CreateDailyLogSchema, validBody, [
         { analysisStatus: "succeeded" },
-        { analysisModelName: "gemini-2.5-flash" },
+        { analysisModelName: "gemini-3.5-flash-lite" },
         { analysisPromptVersion: "daily-log-analysis-v1" },
         { aiSummaryChips: [{ kind: "progress", label: "Done" }] },
         { transcriptSegments: [{ startOffsetSeconds: 0, segmentText: "hi" }] },

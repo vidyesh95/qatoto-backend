@@ -38,12 +38,29 @@ import type { Result } from "#src/types/index.js";
  * indistinguishable in the data even though two different instructions produced them —
  * and §9's override flow needs to know which instruction a human is overriding.
  */
-export const DAILY_LOG_ANALYSIS_PROMPT_VERSION = "daily-log-analysis-v1";
+export const DAILY_LOG_ANALYSIS_PROMPT_VERSION = "daily-log-analysis-v2";
 
 const GENERATIVE_LANGUAGE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
-const DEFAULT_TIMEOUT_MS = 60_000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
+const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
+
+/**
+ * How much the model may think before it answers (Gemini 3.x's `thinkingLevel`).
+ *
+ * PINNED, NOT DEFAULTED, for two reasons. The shipped model — `gemini-3.5-flash-lite` — is
+ * a thinking model (the API reports `thinking: true` for it), and this task is mechanical:
+ * transcribe what was said, copy down what was claimed, echo the URLs verbatim. There is
+ * nothing here to reason about, so unbounded thinking spends latency and free-tier quota
+ * for no accuracy. Leaving it unset also leaves it free to change under us when Google
+ * moves a default.
+ *
+ * IT IS `thinkingLevel`, NOT `thinkingBudget`. The Gemini 2.5-era `thinkingBudget: 0`
+ * spelling is rejected outright by the 3.x family — HTTP 400 INVALID_ARGUMENT, which this
+ * module classifies as PERMANENT, so getting it wrong would fail every analysis in the
+ * environment rather than degrading quietly.
+ */
+const THINKING_LEVEL = "low";
 
 /** Bounds what the model may hand back, so one verbose response cannot fill a table. */
 const MAX_TRANSCRIPT_SEGMENTS = 400;
@@ -128,6 +145,13 @@ export type GeminiError =
   | { type: "GEMINI_UNAVAILABLE"; detail: string }
   /** The model refused this input: private video, blocked region, safety stop. Permanent. */
   | { type: "GEMINI_INPUT_REJECTED"; detail: string }
+  /**
+   * The answer hit the output ceiling and came back truncated. Permanent for this budget:
+   * the same log re-analysed with the same `maxOutputTokens` truncates in the same place,
+   * and truncated JSON never parses. Split from GEMINI_INPUT_REJECTED because the fix is
+   * an operator raising GEMINI_MAX_OUTPUT_TOKENS, not a member re-recording their video.
+   */
+  | { type: "GEMINI_OUTPUT_TRUNCATED"; maxOutputTokens: number }
   /** Output that would not parse, after one repair attempt. Permanent (§9.7's rule). */
   | { type: "GEMINI_SCHEMA_INVALID"; issues: readonly string[] };
 
@@ -176,9 +200,11 @@ function buildPrompt(input: AnalyzeDailyLogInput): string {
     "",
     "Produce JSON with exactly four fields: transcriptSegments, summaryChips, extractedClaims, evidenceLinks.",
     "",
-    "transcriptSegments: a faithful transcript of the video, split into short segments with",
-    "integer second offsets from the start. If there is no video, return an empty array — do",
-    "not transcribe the written narrative into segments.",
+    "transcriptSegments: a faithful transcript of the video, split into segments with integer",
+    "second offsets from the start. Merge anything shorter than about ten seconds into its",
+    "neighbour — one segment per sentence fragment inflates the response past its token",
+    "ceiling on a long log, and a truncated response is discarded whole. If there is no",
+    "video, return an empty array — do not transcribe the written narrative into segments.",
     "",
     "summaryChips: at most 8 short labels (<= 80 characters) categorising what happened, each",
     "one of: blocker, progress, velocity, suggestion.",
@@ -343,11 +369,15 @@ function extractResponseText(payload: GeminiResponsePayload): string | null {
 }
 
 /**
- * `finishReason` values that mean the model refused or truncated rather than answered.
+ * `finishReason` values that mean the model REFUSED rather than answered.
  *
  * These are PERMANENT for this input: retrying the same video with the same prompt
  * produces the same refusal, and burning five exponential backoff attempts on it only
  * delays the operator's signal by half an hour (§9.7).
+ *
+ * `MAX_TOKENS` is deliberately NOT here. It is equally permanent, but it is not a refusal
+ * — it is our own output ceiling, and it is handled separately so the reason a human reads
+ * points at the budget instead of at the member's video.
  */
 const PERMANENT_FINISH_REASONS = new Set([
   "SAFETY",
@@ -355,7 +385,6 @@ const PERMANENT_FINISH_REASONS = new Set([
   "BLOCKLIST",
   "PROHIBITED_CONTENT",
   "SPII",
-  "MAX_TOKENS",
 ]);
 
 interface GenerateOutcome {
@@ -377,6 +406,7 @@ async function generateOnce(
   }
 
   const parts = buildRequestParts(input);
+  const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   const requestBody = {
     contents: [
       {
@@ -385,14 +415,18 @@ async function generateOnce(
       },
     ],
     generationConfig: {
-      // Zero, deliberately. The output is not formula-produced and is not required to be
-      // bit-identical (§4c governs the FORMULA, not the model), but a stable temperature
-      // makes a re-analysis after a fix comparable to the run it replaced, and makes a
-      // prompt regression visible instead of noise.
+      // Zero, deliberately, and kept at zero on a Gemini 3.x model whose own default is 1.
+      // The output is not formula-produced and is not required to be bit-identical (§4c
+      // governs the FORMULA, not the model), but a stable temperature makes a re-analysis
+      // after a fix comparable to the run it replaced, and makes a prompt regression
+      // visible instead of noise. Verified against `gemini-3.5-flash-lite` on both a
+      // text-only log and a YouTube video: schema-conforming output, `finishReason: STOP`,
+      // no degeneration into a loop.
       temperature: 0,
       responseMimeType: "application/json",
       responseSchema: RESPONSE_JSON_SCHEMA,
-      maxOutputTokens: options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      maxOutputTokens,
+      thinkingConfig: { thinkingLevel: THINKING_LEVEL },
     },
   };
 
@@ -472,6 +506,12 @@ async function generateOnce(
       success: false,
       error: { type: "GEMINI_INPUT_REJECTED", detail: `finishReason: ${finishReason}` },
     };
+  }
+  // Checked BEFORE the text is read: a truncated response usually still carries text, and
+  // it is exactly the half a JSON document that would otherwise fail the parse with a
+  // syntax error that says nothing about why.
+  if (finishReason === "MAX_TOKENS") {
+    return { success: false, error: { type: "GEMINI_OUTPUT_TRUNCATED", maxOutputTokens } };
   }
 
   const rawText = extractResponseText(readPayload);

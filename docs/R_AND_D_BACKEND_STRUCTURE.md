@@ -173,21 +173,21 @@ LLM provider. The other two rows the first draft called new (object storage, pay
 **deferred to [Appendix A](#appendix-a--deferred-paid-infrastructure)** and replaced by a link and a
 ledger seam respectively.
 
-| Concern           | Pick                                      | Why / reuse                                                                                                                                                                                                                                                                                                                   |
-| ----------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Server framework  | **Express 5**                             | Same app, four more routers.                                                                                                                                                                                                                                                                                                  |
-| Language          | **TypeScript** (strict, ESM `#src/*`)     | Shared shapes with the frontend.                                                                                                                                                                                                                                                                                              |
-| Database ORM      | **Drizzle ORM**                           | New tables in `src/db/schema.ts`; `pnpm db:generate && db:migrate`.                                                                                                                                                                                                                                                           |
-| Database          | **PostgreSQL** via `pg`                   | FKs, enums, partial + unique indexes, `bigint` money.                                                                                                                                                                                                                                                                         |
-| Validation        | **zod**                                   | Inline `.safeParse()` in the controller → `422` (prevailing style).                                                                                                                                                                                                                                                           |
-| Image storage     | **Cloudinary** (`src/lib/cloudinary.ts`)  | Project covers, avatars — reuse the product-image helpers.                                                                                                                                                                                                                                                                    |
-| Image processing  | **sharp** (`src/lib/image.ts`)            | Reuse `validateAndNormalizeImage`; also the EXIF reader for §9 receipt forensics.                                                                                                                                                                                                                                             |
-| Daily-log video   | **A YouTube link** (`src/lib/youtube.ts`) | Reuse the STUDIO §9 path verbatim: parse the URL to an 11-char id, prove it with one free oEmbed call, store the id. The backend never touches video bytes, and neither does any provider we pay. Video is **optional** — a log may be text-only.                                                                             |
-| Rate limiting     | **express-rate-limit**                    | New named limiters per §4a.                                                                                                                                                                                                                                                                                                   |
-| **Job runner**    | **pg-boss**                               | Postgres-backed queue, installed with §6. Same database, same transaction, no new infrastructure. §8 and §9 cannot exist without it.                                                                                                                                                                                          |
-| **LLM analysis**  | **Gemini, AI Studio free tier** ⟵ NEW     | One structured-output call per daily log returns the transcript, the summary chips and the extracted claims together — two jobs would be two calls against a free quota. Plain `fetch`, no SDK, injectable for tests, `temperature: 0`. Absent key → `skipped_unconfigured`, never a fabricated verdict.                      |
-| Workshop files    | **An external link**                      | Deferred from S3 on cost. The member pastes a Drive/Dropbox/GitHub/OneDrive/Figma/Notion URL; the server allowlists the host and stores the URL. `sizeBytes` is **NULL**, never a client claim. `source = 'hosted'` + `objectKey` stay in the schema, unwritten, for [Appendix A](#appendix-a--deferred-paid-infrastructure). |
-| Payments / escrow | **A ledger-only provider adapter**        | Deferred from Stripe. §7's double-entry ledger, four-eyes release, hash chain and reconciliation are built for real; settlement flips through an internal, auditor-gated adapter instead of a card network. Qatoto still custodies nothing — it moves no money at all yet.                                                    |
+| Concern           | Pick                                      | Why / reuse                                                                                                                                                                                                                                                                                                                    |
+| ----------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Server framework  | **Express 5**                             | Same app, four more routers.                                                                                                                                                                                                                                                                                                   |
+| Language          | **TypeScript** (strict, ESM `#src/*`)     | Shared shapes with the frontend.                                                                                                                                                                                                                                                                                               |
+| Database ORM      | **Drizzle ORM**                           | New tables in `src/db/schema.ts`; `pnpm db:generate && db:migrate`.                                                                                                                                                                                                                                                            |
+| Database          | **PostgreSQL** via `pg`                   | FKs, enums, partial + unique indexes, `bigint` money.                                                                                                                                                                                                                                                                          |
+| Validation        | **zod**                                   | Inline `.safeParse()` in the controller → `422` (prevailing style).                                                                                                                                                                                                                                                            |
+| Image storage     | **Cloudinary** (`src/lib/cloudinary.ts`)  | Project covers, avatars — reuse the product-image helpers.                                                                                                                                                                                                                                                                     |
+| Image processing  | **sharp** (`src/lib/image.ts`)            | Reuse `validateAndNormalizeImage`; also the EXIF reader for §9 receipt forensics.                                                                                                                                                                                                                                              |
+| Daily-log video   | **A YouTube link** (`src/lib/youtube.ts`) | Reuse the STUDIO §9 path verbatim: parse the URL to an 11-char id, prove it with one free oEmbed call, store the id. The backend never touches video bytes, and neither does any provider we pay. Video is **optional** — a log may be text-only.                                                                              |
+| Rate limiting     | **express-rate-limit**                    | New named limiters per §4a.                                                                                                                                                                                                                                                                                                    |
+| **Job runner**    | **pg-boss**                               | Postgres-backed queue, installed with §6. Same database, same transaction, no new infrastructure. §8 and §9 cannot exist without it.                                                                                                                                                                                           |
+| **LLM analysis**  | **`gemini-3.5-flash-lite`, AI Studio**    | One structured-output call per daily log returns the transcript, the summary chips and the extracted claims together — two jobs would be two calls against a free quota. Plain `fetch`, no SDK, injectable for tests, `temperature: 0`, `thinkingLevel: low`. Absent key → `skipped_unconfigured`, never a fabricated verdict. |
+| Workshop files    | **An external link**                      | Deferred from S3 on cost. The member pastes a Drive/Dropbox/GitHub/OneDrive/Figma/Notion URL; the server allowlists the host and stores the URL. `sizeBytes` is **NULL**, never a client claim. `source = 'hosted'` + `objectKey` stay in the schema, unwritten, for [Appendix A](#appendix-a--deferred-paid-infrastructure).  |
+| Payments / escrow | **A ledger-only provider adapter**        | Deferred from Stripe. §7's double-entry ledger, four-eyes release, hash chain and reconciliation are built for real; settlement flips through an internal, auditor-gated adapter instead of a card network. Qatoto still custodies nothing — it moves no money at all yet.                                                     |
 
 **Money is integer cents everywhere, in `bigint` columns** (§4b). **Equity is integer basis
 points.** No `numeric`, no floats, ever.
@@ -1192,11 +1192,27 @@ Then `analyze-daily-log` (§4e) runs — see below — and later hands off to `v
 
 ### Analysis: one Gemini call, and a pipeline that never guesses
 
-`analyze-daily-log` makes **one** structured-output call to Gemini (AI Studio free tier) with the
+`analyze-daily-log` makes **one** structured-output call to Gemini (AI Studio) with the
 YouTube URL when there is one and the narrative text when there is not, and writes the transcript
 segments, the AI summary chips, the extracted claims and the evidence links from that single
 response. One call rather than a transcribe-then-extract pair, because two calls are two draws
 against a free quota for the same tokens.
+
+**The model is `gemini-3.5-flash-lite`** (`GEMINI_MODEL`), and three request-shape decisions are
+specific to the Gemini 3.x family rather than incidental:
+
+- **`thinkingLevel: "low"`, pinned rather than defaulted.** These are thinking models, and this
+  task is mechanical — transcribe what was said, copy down what was claimed, echo the URLs. Note
+  the 2.5-era spelling `thinkingBudget: 0` is answered with a **400 INVALID_ARGUMENT** by the 3.x
+  family, so a downgrade to a 2.5 model is not a drop-in swap of `GEMINI_MODEL` alone.
+- **`temperature: 0`, kept**, though the family's own default is 1. §4c governs the formula, not
+  the model, but a stable temperature makes a re-analysis after a fix comparable to the run it
+  replaced. Verified against both a text-only log and a YouTube video: schema-conforming output,
+  `finishReason: STOP`, no looping.
+- **A generous `GEMINI_MAX_OUTPUT_TOKENS` (32,768 of the model's 65,536).** It is a cap, not a
+  reservation, so an unused ceiling costs nothing — while an undersized one truncates a long
+  transcript into a **permanent** failure. The prompt additionally asks for segments no shorter
+  than ~10 seconds, which is what keeps a long log inside the ceiling at all.
 
 The job's own lifecycle is `daily_log.analysisStatus`
 (`not_requested | queued | running | succeeded | failed | skipped_unconfigured`) and it is
@@ -1208,6 +1224,10 @@ unverified", and §9 owns the verdict column exclusively:
 - Gemini rejects the input (private video, blocked region) → `failed` with a reason, and the log
   keeps its narrative. Analysis is retried against the narrative alone, never abandoned silently.
 - 429 / 5xx / timeout → retryable; pg-boss backs off per §4e.
+- The answer hits the output ceiling (`finishReason: MAX_TOKENS`) → `failed`, permanently, **with
+  its own reason string**. Truncation is equally permanent but it is not a refusal: the fix is an
+  operator raising the ceiling, so folding it in with "could not read this log" would send them to
+  inspect a video that was never the problem.
 - Output that fails its Zod schema after **one** repair attempt → `failed`, permanently. The same
   line §9.7 draws for schema-invalid LLM output.
 
@@ -2316,7 +2336,18 @@ db:verify-proof-of-effort-constraints` then EXERCISES all 38 database-level guar
    that every rejected key in §7 returns `422`. Repeat against the native clients with a proxy.
 5. **Four-eyes test.** Founder requests a release and attempts to approve it → `422
 SELF_APPROVAL_FORBIDDEN`. Founder grants themselves `admin` → rejected.
-6. **Dispute lifecycle.** ✅ `pnpm db:smoke-proof-of-effort` runs exactly this, in order, against a
+6. **The analysis path, against the real provider.** ✅ `pnpm db:smoke-daily-log-analysis` is the
+   only proof in the repo that reaches Gemini: `gemini.test.ts` injects `fetch`, `db:smoke-workshop`
+   asserts only that a submit receipt is not a verdict, and `db:smoke-proof-of-effort` writes its
+   `daily_log_extracted_claim` rows by hand (`generatedByModel = 'smoke'`) so §9 stays deterministic
+   and offline. Until it existed, `daily_log_transcript_segment` and `daily_log_ai_summary_chip` had
+   never held a row in any environment and every verdict in the database had been priced from
+   hand-typed minutes — a correct formula over a fabricated input. The script submits a real
+   video log and a real text log, runs the job handler, asserts the provenance is the live model
+   and not a fixture, asserts `effortVerificationStatus` is still `not_run` afterwards, then files
+   an effort claim and drives the four stages to a verdict whose minutes equal the model's own
+   `extractedMinutes`. It needs a key and refuses to run without one. Costs two requests per run.
+7. **Dispute lifecycle.** ✅ `pnpm db:smoke-proof-of-effort` runs exactly this, in order, against a
    real database: verify a claim and confirm nothing is in the ledger; expire the window and confirm
    the settlement appears; re-run the sweep and confirm it is a no-op; dispute another and confirm
    slices show as escrowed and _outside_ `totalSlices`. It also tampers with a `detailNote` in SQL
@@ -2324,12 +2355,12 @@ SELF_APPROVAL_FORBIDDEN`. Founder grants themselves `admin` → rejected.
    chain breaks at that exact sequence. **The script leaves its rows behind and that is the
    guarantee, not a limitation** — a smoke test that could clean up after itself would be one
    proving the triggers do not work.
-7. **Zero-trust sweep.** `grep` every Zod schema for `userId|equity|slice|Cents|score|verdict|status`
+8. **Zero-trust sweep.** `grep` every Zod schema for `userId|equity|slice|Cents|score|verdict|status`
    and confirm each hit is one of the two documented negotiated-input exceptions.
-8. **Cascade sweep.** For every FK into a financial or audit table, assert `onDelete` is `restrict`
+9. **Cascade sweep.** For every FK into a financial or audit table, assert `onDelete` is `restrict`
    or `set null`. Then delete a test user with ledger history and confirm it fails loudly.
-9. **Coverage sweep.** Every route in [R_AND_D_STRUCTURE.md](R_AND_D_STRUCTURE.md) §3 and every
-   action in its §8/§9 maps to a named endpoint in §11.
+10. **Coverage sweep.** Every route in [R_AND_D_STRUCTURE.md](R_AND_D_STRUCTURE.md) §3 and every
+    action in its §8/§9 maps to a named endpoint in §11.
 
 ```bash
 # The core money-path smoke test
