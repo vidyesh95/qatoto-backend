@@ -20,13 +20,19 @@
 > `/research-projects/*`, `/discovery/*`, `/funding/*` and `/research-programs/*` routes and ~60 new
 > tables.
 >
-> **Status:** the entire R&D frontend is **pure UI over static mocks** —
+> **Status:** three of six domains are **✅ shipped and reachable today** — §5 (projects, team,
+> roles, applications), §6 (discovery) and §8 (workshop, daily logs). §7 (funding/escrow), §9
+> (Proof of Effort) and §10 (Project Immortal) are **⏳ pending** — no route, controller, service or
+> migration exists for any of them yet. §11's "Implementation status, per subsection" table is the
+> authoritative, per-endpoint breakdown; treat it over this paragraph if the two ever disagree, since
+> this one is prose and that one is checked against the actual route files.
+>
+> The frontend, meanwhile, is still **pure UI over static mocks** for the whole surface —
 > [R_AND_D_STRUCTURE.md](R_AND_D_STRUCTURE.md) §10 and every file under
-> `src/mocks/research-and-development/` say so explicitly. Every funding figure, equity share,
-> escrow row, opportunity score and verification verdict on the surface today is fabricated. The
-> R&D domain does **not** exist in the backend at all (greenfield: `src/db/schema.ts` has the auth
-> tables plus three commerce tables and nothing else). This doc is the spec the backend-integration
-> phase implements.
+> `src/mocks/research-and-development/` say so explicitly, and nothing in the shipped §5/§6/§8
+> backend is wired to it yet. Every funding figure, equity share, escrow row, opportunity score and
+> verification verdict rendered on the surface today is still fabricated, even where the backend
+> behind it is live. This doc is the spec the backend-integration phase implements.
 >
 > **Scope:** all ten routes in [R_AND_D_STRUCTURE.md](R_AND_D_STRUCTURE.md) §3, plus Project
 > Immortal (§10) and the full Proof-of-Effort mechanism spec'd in
@@ -1854,14 +1860,18 @@ adding a raw-body branch for a route that does not exist is a security surface b
 
 ```ts
 // … parseLongFormJsonBody for /research-projects and /discovery, then express.json() …
-app.use("/research-projects", researchProjectsRouter);
+app.use("/research-projects", researchProjectsRouter); // ✅ shipped — §5
 // Same prefix, declared AFTER: workshopRouter owns /:projectSlug/workshop/* and
 // /:projectSlug/daily-logs/*. No collision — researchProjectsRouter's "/:projectSlug"
 // matches that one segment exactly and never swallows a deeper path.
-app.use("/research-projects", workshopRouter);
-app.use("/discovery", discoveryRouter);
-app.use("/", fundingRouter); // /funding-rounds, /pledges, /milestones, /escrow-releases
-app.use("/research-programs", researchProgramsRouter);
+app.use("/research-projects", workshopRouter); // ✅ shipped — §8
+app.use("/discovery", discoveryRouter); // ✅ shipped — §6
+app.use("/", researchCatalogRouter); // ✅ shipped — /open-roles, /research-categories (§5)
+
+// NOT YET IN src/app.ts — §7, §9 and §10 have no router to mount:
+// app.use("/", fundingRouter);              // ⏳ pending — /funding-rounds, /pledges, /milestones
+// app.use("/", proofOfEffortRouter);         // ⏳ pending — §9
+// app.use("/research-programs", researchProgramsRouter); // ⏳ pending — §10
 ```
 
 **Path convention, applied uniformly:** project-scoped resources nest under
@@ -1874,7 +1884,33 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 `requireProjectRole` (§4a), and every mutation touching money/equity/effort adds
 `requireIdentifiedUser` (§4a).
 
+### Implementation status, per subsection
+
+Three states, checked against the actual route files in `src/routes/`, not against intent:
+
+| State          | Meaning                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------- |
+| ✅ **Shipped**  | Routed, controlled, serviced, migrated. Reachable on `pnpm dev` today.                   |
+| ⏳ **Pending**  | Spec'd below, in scope for this project, **not built yet** — §16 orders when.            |
+| 🚫 **Deferred** | Spec'd below but **will not be built** against a paid provider — see Appendix A instead. |
+
+| Subsection                            | Domain                     | Status    | Backing files                                                                              |
+| ------------------------------------- | -------------------------- | --------- | ------------------------------------------------------------------------------------------ |
+| [11a](#11a-projects-team-roles-5)     | Projects, team, roles (§5) | ✅ Shipped | `research-projects.routes.ts`, `research-catalog.routes.ts`                                |
+| [11b](#11b-discovery-6)               | Discovery (§6)             | ✅ Shipped | `discovery.routes.ts`                                                                      |
+| [11c](#11c-funding-and-escrow-7)      | Funding & escrow (§7)      | ⏳ Pending | none — no `funding.routes.ts` exists. One row inside is additionally 🚫 deferred            |
+| [11d](#11d-workshop-and-daily-logs-8) | Workshop & daily logs (§8) | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A |
+| [11e](#11e-proof-of-effort-9)         | Proof of Effort (§9)       | ⏳ Pending | none — no `proof-of-effort.routes.ts` exists                                               |
+| [11f](#11f-project-immortal-10)       | Project Immortal (§10)     | ⏳ Pending | none — no `research-programs.routes.ts` exists                                             |
+
+Each subsection below opens with one line stating its state. §11c additionally flags one row inline
+with 🚫, because that subsection mixes ⏳ pending with one 🚫 deferred endpoint under a single
+heading — every other subsection is uniform, so a per-row column would repeat the same word down
+an entire table for no reason.
+
 ### 11a. Projects, team, roles (§5)
+
+**✅ Shipped in full.** Every row below is routed and reachable today.
 
 | Method & path                                                                       | Body / input                                                                                 | Behavior & statuses                                                                                            |
 | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -1901,6 +1937,9 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 
 ### 11b. Discovery (§6)
 
+**✅ Shipped in full**, including the `/admin/*` moderation rows. Every row below is routed and
+reachable today.
+
 | Method & path                                                     | Body / input                                                                      | Behavior & statuses                                                                                                                                                             |
 | ----------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /discovery/problem-clusters`                                 | `?category=&region=&minOpportunityScore=&sort=&page=`                             | The map + landing teaser. Returns lat/lng microdegrees. `200`                                                                                                                   |
@@ -1917,6 +1956,12 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 
 ### 11c. Funding and escrow (§7)
 
+**⏳ Pending — none of this is built.** No `funding.routes.ts`, no controller, no service, no
+migration for any table in §7. Build order is Phase 4 (§16), after §9 exists to gate release. One
+row is additionally **🚫 deferred** rather than merely pending — flagged inline — because it names
+Stripe specifically; when this phase is built, that row routes through the internal ledger-only
+adapter §7's amendment note describes, not a real webhook.
+
 | Method & path                                                                                    | Body / input                               | Behavior & statuses                                                                                                                                            |
 | ------------------------------------------------------------------------------------------------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /research-projects/:projectSlug/funding-rounds`                                            | `{ type, goalAmountInCents, closesAt }`    | Gated by `ENABLED_FUNDING_ROUND_TYPES`. `201` · `403 ROUND_TYPE_DISABLED`                                                                                      |
@@ -1932,9 +1977,17 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 | `POST /escrow-releases/:id/approve` · `/reject`                                                  | `{ note }`                                 | Four-eyes: `422 SELF_APPROVAL_FORBIDDEN`. Re-derives every gate. `200`                                                                                         |
 | `GET …/compensation` · `PUT …/members/:id/compensation-rate` · `POST …/compensation-rate/accept` | `{ rateInCentsPerHour, effectiveFrom }`    | Rate requires member acceptance. `200` · `409`                                                                                                                 |
 | `GET …/investor-confidence` · `/audit-trail`                                                     | `?page=`                                   | Returns `asOf`. `200`                                                                                                                                          |
-| `POST /webhooks/payments/stripe`                                                                 | raw body                                   | **Unauthenticated by session, authenticated by signature.** Verify → persist → dedupe → process in a txn. `200` even for duplicates                            |
+| 🚫 `POST /webhooks/payments/stripe`                                                               | raw body                                   | **Deferred (Appendix A3).** Ships as an internal, auditor-gated settlement endpoint instead — no Stripe SDK, no signature verification, no raw-body mount.     |
 
 ### 11d. Workshop and daily logs (§8)
+
+**✅ Shipped in full.** Every row below is routed and reachable today, backed by
+`workshop.routes.ts`, `workshop.controller.ts` / `daily-logs.controller.ts`, four services
+(`workshop-board`, `workshop-files`, `workshop-chat`, `daily-logs`), the `analyze-daily-log` job and
+migration 0013. This table already reflects the zero-cost amendment — the three rows the original
+draft had here (`/playback-token`, `/webhooks/livepeer`, `/workshop/chat/stream`) are gone from this
+table entirely and live only in [Appendix A](#appendix-a--deferred-paid-infrastructure); there is
+nothing 🚫 deferred left inside this subsection to flag.
 
 | Method & path                                                       | Body / input                                | Behavior & statuses                                                                     |
 | ------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -1950,6 +2003,13 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 | `GET …/daily-logs/:logId/transcript`                                | —                                           | Segments + chips + claims + `analysisStatus`. `200`                                     |
 
 ### 11e. Proof of Effort (§9)
+
+**⏳ Pending — none of this is built.** No `proof-of-effort.routes.ts`, no controller, no
+`slicing-pie.service.ts` / `verification.service.ts`, no migration for any table in §9. This is
+Phase 3 (§16) — the hardest and highest-value phase, and every other pending section (§7's release
+gating, §8's `effortVerificationStatus` column) is written against the contract below without it
+existing yet. `daily_log.effortVerificationStatus` already sits in the shipped §8 schema, defaulted
+to `not_run` and written by nothing — this section is the only thing that will ever move it.
 
 | Method & path                                                                | Body / input                                                                                           | Behavior & statuses                                                                                                                                   |
 | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1975,6 +2035,11 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 
 ### 11f. Project Immortal (§10)
 
+**⏳ Pending — none of this is built.** No `research-programs.routes.ts`, no controller, no
+service, no migration for any table in §10. Lowest coupling of the pending phases (§16 Phase 6) —
+it shares only the `user` table and the `compensation_kind` enum with everything else — but it
+needs the platform `moderator` role from §4a Layer 3, which also does not exist yet.
+
 | Method & path                                              | Body / input                                                                                               | Behavior & statuses                                                                   |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `GET /research-programs/:programSlug` · `/stats`           | —                                                                                                          | Public. `200`                                                                         |
@@ -1994,6 +2059,8 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 ## 12. How a request flows
 
 ### Idea → published project
+
+**✅ Shipped in full** — §5.
 
 ```text
 1. Wizard finish → POST /research-projects { ideaName→name, oneLinePitch→tagline, categoryId,
@@ -2016,11 +2083,15 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 
 ### Pledge → escrow → milestone release (§7)
 
+**⏳ Pending — none of this is built.** The flow below is the target contract; the `Stripe` and
+`/webhooks/payments/stripe` mentions are the drafted design and will read as the internal
+ledger-only adapter once built — see the §7 amendment note and Appendix A3.
+
 ```text
 POST /funding-rounds/:id/pledges { amountInCents }
   → re-bound against the round · derive fee · resolve currency · provider_transfer + idempotency key
-  → post escrow_held → provider_clearing (settlement='pending')     [worker submits to Stripe]
-POST /webhooks/payments/stripe   (signature-verified)
+  → post escrow_held → provider_clearing (settlement='pending')     [worker submits to the adapter]
+POST /webhooks/payments/stripe   (signature-verified)   ← 🚫 deferred; ships as an internal endpoint
   → settlement='settled' · post provider_clearing → released_to_project
   → ONLY NOW raisedAmountInCents and backersCount move
 POST /milestones/:id/escrow-releases { requestNote? }   ← no amount
@@ -2032,11 +2103,16 @@ POST /escrow-releases/:id/approve
 
 ### Daily log → slices (§8 → §9)
 
+**Half shipped, half pending.** The first three lines below (through `analyze-daily-log`) are ✅
+§8 and run today. Everything from `ground-artifacts` onward is ⏳ §9 and does not exist yet — a
+submitted log's `effortVerificationStatus` stops at `not_run` until Phase 3 lands.
+
 ```text
-POST …/daily-logs                 → { logDate, narrative?, youtubeUrl? }
+POST …/daily-logs                 → { logDate, narrative?, youtubeUrl? }     ✅
   → the URL is parsed to an 11-char id and oEmbed-verified; no video is also valid
-POST …/daily-logs/:id/submit      → 202
-  → analyze-daily-log (ONE Gemini call) → transcript segments + chips + claims + evidence links
+POST …/daily-logs/:id/submit      → 202                                     ✅
+  → analyze-daily-log (ONE Gemini call) → transcript segments + chips + claims + evidence links  ✅
+  -- everything below is §9, ⏳ pending --
   → ground-artifacts → analyze-substance → analyze-temporal
   → finalize-verdict: pure verdict function; computeSlices → proposedSlices FROZEN on a proposal
   → slice_allocation_proposal opens; NOTHING is written to the ledger yet
