@@ -112,6 +112,21 @@ const envSchema = z.object({
   // Defaulted rather than required so an existing deployment (and app.test.ts, which stubs
   // env explicitly) keeps booting without a new variable.
   YOUTUBE_OEMBED_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(3_000),
+  // --- Daily-log analysis (R_AND_D_BACKEND_STRUCTURE.md §8). One Gemini call per
+  //     submitted log returns the transcript, the summary chips, the extracted claims and
+  //     the evidence links together — two calls would spend a free-tier request budget
+  //     twice on the same tokens.
+  //
+  // OPTIONAL, like Cloudinary and Brevo: with no key the submit path records
+  // `analysis_status = 'skipped_unconfigured'` and the log keeps its narrative. That is
+  // an operator fact, not a member's problem, and it is deliberately NOT `failed` — nor
+  // is it ever a fabricated chip.
+  GEMINI_API_KEY: z.string().min(1).optional(),
+  GEMINI_MODEL: z.string().min(1).default("gemini-2.5-flash"),
+  // Generous: the model watches a video end to end. It still has to be BOUNDED, because
+  // the call runs in a worker whose job slot it would otherwise hold indefinitely.
+  GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
+  GEMINI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(65_536).default(8_192),
 });
 
 export const config = envSchema.parse(process.env);
