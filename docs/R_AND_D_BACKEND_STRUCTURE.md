@@ -1748,33 +1748,42 @@ already-written rows), marks that snapshot `isBaked`, and appends a `pie-baked` 
 `uniqueIndex("pie_bake_event_project_unq")` guarantees once, ever. **There is no unbake endpoint** —
 recovery is a manual, audited, out-of-band operation.
 
-### 9.12 An open decision for a human
+### 9.12 The all-or-nothing tradeoff — settled as option (a)
 
 §0 says the client never sends a server-owned value, explicitly including an hour count. That makes
 it **impossible** for a consensus resolution to say _"we agreed it was 3 hours, not 4."_
 
-The design above routes around it: `resolve` accepts a narrowed ISO-8601 **window**, and the server
+The design routes around it: `resolve` accepts a narrowed ISO-8601 **window**, and the server
 re-derives minutes from artifact overlap inside it — preserving the rule and keeping the number
-formula-produced. **That is the right default and this doc ships it.**
+formula-produced. **This is what shipped**, enforced in four places, not merely documented in one:
+`dispute.service.ts`'s `resolveDispute` has no field that could carry a human-asserted number;
+`effort_claim` and `slice_ledger_entry` (`schema.ts`) both carry a comment naming
+`consensusAdjustedMinutes` only to record that no such column exists; and
+`proof-of-effort.controller.ts`'s rejected-keys list names it explicitly, alongside every other
+server-owned value a body must never carry.
 
-But it has a real cost. For **physical work with no digital artifacts**, there is nothing to overlap
-a window against, so `re-verify` cannot produce a different number and the only outcomes are
-all-or-nothing — on a claim the team may agree was _partially_ valid. The solar mock depicts exactly
-the disallowed case: `"Re-verified at 3 hrs — adjusted to 510 slices."`
+The cost, accepted knowingly rather than discovered later: for **physical work with no digital
+artifacts**, there is nothing to overlap a window against, so `re-verify` cannot produce a different
+number and the only outcomes are all-or-nothing — on a claim the team may agree was _partially_
+valid. The solar mock depicts exactly the disallowed case: `"Re-verified at 3 hrs — adjusted to 510
+slices."` That mock string has no backend behavior behind it and will not get one; §15 should list it
+as a UI string to drop or reword, not a contract to implement.
 
-Two options, to be decided knowingly:
+The rejected alternative, recorded so a future session does not re-litigate it from scratch: a narrow,
+heavily-audited `consensusAdjustedMinutes` exception, accepted only on dispute resolution, only with
+`resolution: "re-verified"`, only after a majority of `quorumMemberCount` has voted, written as a
+`consensus-adjustment` ledger entry naming every voter. It draws the same shape as the negotiated fair
+market rate §0 already tolerates at lock time — a human-supplied _input_, not a server-owned _output_
+— but unlike the rate (agreed once, before any work is logged, then immutable) this would be
+decided **after the fact**, specifically to overrule what the formula already computed, and repeatably
+so across every future dispute. That is majority-fiat wearing a quorum instead of a founder, and it is
+exactly what §9.1 — the single most important idea in this domain — exists to rule out. Rejected on
+that basis, not merely deferred.
 
-- **(a) Keep the rule as written.** Physical-work disputes are binary; partial credit is achieved by
-  voiding and re-submitting a smaller claim, which re-runs forensics. Stricter, and no number ever
-  enters through a request body.
-- **(b) Add a narrow, heavily-audited exception.** `consensusAdjustedMinutes`, accepted **only** on
-  dispute resolution, **only** with `resolution: "re-verified"`, **only** after a majority of
-  `quorumMemberCount` has voted, written as a `consensus-adjustment` ledger entry naming every voter
-  in the audit payload. It is a human-supplied _input_ to the formula — like the negotiated fair
-  market rate, which §0 already tolerates at lock time — not a server-owned _output_.
-
-This is the one place the stated rules genuinely pull against the product behaviour the mocks
-depict. It needs a decision, not a default.
+The residual gap for physical work with zero artifacts is real: the escape valve is voiding the claim
+and re-submitting a smaller one, which re-runs forensics from scratch and costs another 24-hour
+window. Worth a UX affordance (§14) for "re-submit at a reduced claim"; not worth reopening this
+decision.
 
 ---
 
@@ -2078,7 +2087,7 @@ a body carrying an hour count and a photograph has no transcript.
 | `GET …/allocation-proposals`                                                 | `?status=&page=`                                                                                       | `windowClosesAt` as ISO — **never** a countdown string. `200`                                                                                         |
 | `POST …/allocation-proposals/:id/dispute`                                    | `{ disputeNote }`                                                                                      | Any active member. Freezes slices in escrow. `201` · `409 WINDOW_CLOSED`                                                                              |
 | `POST …/disputes/:id/votes`                                                  | `{ position, note? }`                                                                                  | One vote per voter; majority auto-resolves. `201`                                                                                                     |
-| `POST …/disputes/:id/resolve`                                                | `{ resolution, resolutionNote, scopedWindowStart?, scopedWindowEnd? }`                                 | See §9.8 + the open decision in §9.12. `200`/`202` · `409 EVIDENCE_PURGED`                                                                            |
+| `POST …/disputes/:id/resolve`                                                | `{ resolution, resolutionNote, scopedWindowStart?, scopedWindowEnd? }`                                 | See §9.8 + §9.12 (settled as option (a)). `200`/`202` · `409 EVIDENCE_PURGED`                                                                         |
 | `GET` · `POST` · `DELETE …/integrations[/:provider]` (+ `/authorize-url`)    | `{ requestedResourceIds[] }`                                                                           | OAuth `state` **signed, single-use, 10-minute**. Revoke is self-only. `200` · `503 INTEGRATION_UNCONFIGURED`                                          |
 | `GET /integrations/:provider/callback`                                       | provider redirect                                                                                      | Identity from the signed `state`, not a session. `302`                                                                                                |
 | `GET …/audit-trail` · `/verify` · `/:entryId/hash-input`                     | `?fromSequence=&toSequence=`                                                                           | `409 CHAIN_BROKEN` on a break — it must page. `200`                                                                                                   |
