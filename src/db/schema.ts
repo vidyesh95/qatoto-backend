@@ -445,12 +445,77 @@ export const compensationKindEnum = pgEnum("compensation_kind", ["salary", "one_
 
 // Replaces the frontend's free-prose `earnedAsLabel`. Shipping English sentences from
 // the server forces three native clients to render un-localizable strings, and lets a
-// founder write a payout promise the escrow engine will not honour. Clients map the
-// enum to localized copy.
+// founder write a payout promise the platform will not honour. Clients map the enum to
+// localized copy.
+//
+// THE TWO ESCROW VALUES ARE RETIRED (§4d). They forced every cash strand through a
+// milestone escrow release, which meant a founder who never ran a funding round here had
+// no way to say "I pay this person from my own bank account" — money-in gated data-out —
+// and worse, it made a wage conditional on a Proof-of-Effort verdict, which §0 now forbids
+// outright. They stay in the type so migration 0010's existing rows remain readable;
+// `open_role_compensation_policy_pairing_ck` (migration 0018) makes them UNWRITABLE, and
+// the two new values are the only ones a cash strand accepts.
 export const compensationEarnedAsPolicyEnum = pgEnum("compensation_earned_as_policy", [
-  "milestone_escrow_release",
-  "on_completion_escrow_release",
-  "slicing_pie_vesting",
+  "milestone_escrow_release", // RETIRED — readable, never writable
+  "on_completion_escrow_release", // RETIRED — readable, never writable
+  "slicing_pie_vesting", // equity, and equity only
+  "off_platform_payroll", // DEFAULT for cash: paid by the company, reported here (§7A)
+  "direct_transfer", // one-off, paid directly, reported here (§7A)
+]);
+
+// How a member is engaged (§4d). FOUNDER-DECLARED, never inferred: the tax, wage-law and
+// social-contribution treatment differ per branch, and misclassification liability belongs
+// to the company, not to Qatoto (§7A.6 item 3). No endpoint derives this from behaviour,
+// hours, or anything else — a platform that guesses employment status is making a legal
+// determination it is not qualified to make.
+export const engagementKindEnum = pgEnum("engagement_kind", [
+  "employee",
+  "independent_contractor",
+  "unpaid_founder",
+]);
+
+// A cash agreement's lifecycle (§7A.2). Mirrors `fair_market_rate_status` deliberately:
+// the founder proposes, the SUBJECT accepts, and only an `active` row prices anything.
+// `superseded` is what a later effective-dated agreement does to the one before it;
+// `withdrawn` is a proposal nobody accepted. Neither is a deletion — a finalized statement
+// line pins `sourceAgreementId` forever.
+export const compensationAgreementStatusEnum = pgEnum("compensation_agreement_status", [
+  "proposed",
+  "active",
+  "superseded",
+  "withdrawn",
+]);
+
+// A compensation period's lifecycle (§4d, §7A.3). `finalized` is terminal and hash-frozen;
+// a correction supersedes the period with a new one rather than editing it, the same way
+// the audit chain corrects by reversal rather than by UPDATE (§4f).
+export const compensationPeriodStatusEnum = pgEnum("compensation_period_status", [
+  "open",
+  "finalized",
+  "superseded",
+]);
+
+// One line per member per kind per period (§7A.3). A cash line carries money and no basis
+// points; an equity line carries basis points and no money. Equity is NOT money and the
+// two must never be summed — `compensation_period_line_kind_ck` encodes that rather than
+// leaving it to a comment.
+export const compensationPeriodLineKindEnum = pgEnum("compensation_period_line_kind", [
+  "cash_retainer",
+  "cash_hourly",
+  "equity_delta",
+]);
+
+// How the founder says they paid, on a payment ATTESTATION (§7A's
+// `compensation_payment_record`). A key, never an instrument: this domain stores no account
+// number, no IBAN, no UPI handle and no card detail, so the enum names the rail and the
+// free-text `reference_note` carries a human note like a UTR or a payroll run id.
+export const compensationPaymentMethodKeyEnum = pgEnum("compensation_payment_method_key", [
+  "bank_transfer",
+  "sepa_transfer",
+  "upi",
+  "payroll_provider",
+  "cash",
+  "other",
 ]);
 
 // The ONE verification status, shared by daily logs (§8), effort claims (§9) and
@@ -3653,6 +3718,17 @@ export const projectAuditEventKindEnum = pgEnum("project_audit_event_kind", [
   "escrow_release_approved",
   "escrow_release_rejected",
   "reconciliation_discrepancy_opened",
+  // --- §7A. The compensation statement's own events. They append to THIS chain, in the
+  // --- same transaction as the thing they record, under the SAME project_chain_head lock
+  // --- that already serializes the audit, ledger and escrow counters (§7A.5).
+  "compensation_agreement_proposed",
+  "compensation_agreement_accepted",
+  "compensation_period_opened",
+  "compensation_period_finalized",
+  "compensation_period_countersigned",
+  "compensation_period_superseded",
+  "compensation_payment_recorded",
+  "compensation_payment_confirmed",
 ]);
 
 export const optimizationSuggestionStatusEnum = pgEnum("optimization_suggestion_status", [
@@ -4610,6 +4686,21 @@ export const projectChainHead = pgTable(
     lastEscrowSequenceNumber: integer("last_escrow_sequence_number").default(0).notNull(),
     escrowHeadEntryHash: text("escrow_head_entry_hash"),
     escrowHeadEntryId: text("escrow_head_entry_id"),
+    // --- §7A's compensation statements share THIS row, and therefore THIS lock, for the
+    // --- same reason the escrow journal does: one writer per project, always.
+    //
+    // TWO COUNTERS, BECAUSE THERE ARE TWO MOMENTS. `sequenceNumber` is allocated when a
+    // period OPENS, so it runs in calendar order and is gapless. The statement HASH does
+    // not exist until the period is FINALIZED, and a period may be finalized late while
+    // the next one is already accruing — so the hash chain links finalized periods in
+    // finalize order and never has a hole for a month nobody has signed yet. Folding the
+    // two into one counter would mean either a gap in the calendar sequence or a chain
+    // that cannot be walked.
+    lastCompensationSequenceNumber: integer("last_compensation_sequence_number")
+      .default(0)
+      .notNull(),
+    compensationHeadStatementHash: text("compensation_head_statement_hash"),
+    compensationHeadPeriodId: text("compensation_head_period_id"),
     headEntryHash: text("head_entry_hash"),
     headEntryId: text("head_entry_id"),
     lastAnchoredAt: timestamp("last_anchored_at"),
@@ -4625,7 +4716,8 @@ export const projectChainHead = pgTable(
     check(
       "project_chain_head_sequence_ck",
       sql`last_audit_sequence_number >= 0 AND last_ledger_sequence_number >= 0
-          AND last_escrow_sequence_number >= 0`,
+          AND last_escrow_sequence_number >= 0
+          AND last_compensation_sequence_number >= 0`,
     ),
     check(
       "project_chain_head_hash_ck",
@@ -4634,6 +4726,16 @@ export const projectChainHead = pgTable(
           AND (escrow_head_entry_hash IS NULL OR escrow_head_entry_hash ~ '^[0-9a-f]{64}$')
           AND (last_audit_sequence_number = 0) = (head_entry_hash IS NULL)
           AND (last_escrow_sequence_number = 0) = (escrow_head_entry_hash IS NULL)`,
+    ),
+    // Deliberately NOT paired with last_compensation_sequence_number, unlike the two
+    // checks above. A project can have opened five periods and finalized none: the
+    // sequence counter is at 5 while the statement head is still NULL, which is the
+    // normal state of a young project and not a broken chain.
+    check(
+      "project_chain_head_compensation_hash_ck",
+      sql`(compensation_head_statement_hash IS NULL
+           OR compensation_head_statement_hash ~ '^[0-9a-f]{64}$')
+          AND (compensation_head_statement_hash IS NULL) = (compensation_head_period_id IS NULL)`,
     ),
   ],
 );
@@ -6304,6 +6406,570 @@ export const investorConfidenceSnapshotRelations = relations(
     project: one(researchProject, {
       fields: [investorConfidenceSnapshot.projectId],
       references: [researchProject.id],
+    }),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// §7A — COMPENSATION PERIODS AND PAYOUT STATEMENTS.
+// See docs/R_AND_D_BACKEND_STRUCTURE.md §7A.
+//
+// THE PRODUCT FOUNDERS ACTUALLY ASKED FOR: "tell me what I owe each person this
+// month." Not a payment rail — a number, with its working shown, that a founder
+// can act on and an employee can trust.
+//
+// QATOTO HOLDS NO FUNDS AND CHARGES NOBODY. Nothing below is a balance, a pool,
+// a payout rail or a card number. The tables compute an obligation and record an
+// attestation that it was settled between the parties' own accounts. That is
+// bookkeeping software, and it is the reason none of PSD2, US state
+// money-transmitter law or RBI payment-aggregator authorisation attaches (§7A.6
+// item 1).
+//
+// THREE RULES GOVERN EVERY TABLE HERE, and each has a statute behind it:
+//
+//  1. CASH IS NEVER GATED ON A VERDICT (§0). `verification_note` is the ONLY
+//     place a Proof-of-Effort verdict may touch a cash line, and it changes no
+//     number. Conditioning earned wages on an algorithm passing is unlawful
+//     withholding under the FLSA and state timely-payment law in the US, under
+//     national wage statutes across the EU, and under §18 of India's Code on
+//     Wages 2019, whose list of permitted deductions is exhaustive. §9 withholds
+//     SLICES; it does not withhold wages.
+//  2. NO AMOUNT IS EVER IN A REQUEST BODY. A line is computed from an accepted
+//     agreement and the member's own recorded minutes. The only number a client
+//     may send is `paid_amount_in_cents` on a payment record — and that is an
+//     attestation about the outside world, not an assertion about what is owed.
+//  3. GROSS ONLY. No withholding, no tax, no social contribution. Qatoto is not
+//     a payroll processor and every statement surface must say so (§7A.6 item 3).
+// ---------------------------------------------------------------------------
+
+/**
+ * What a member is paid in CASH, and on what basis (§7A.2).
+ *
+ * MIRRORS `member_fair_market_rate` (§9) EXACTLY — effective-dated, member-accepted,
+ * trigger-frozen — because it is the same kind of object and a second shape would be a
+ * second source of truth for "what is this person paid".
+ *
+ * THE ACCEPTANCE STEP IS NOT CEREMONY. A founder proposes; the member accepts; only then
+ * does the row become `active` and only then does it price anything. `qatoto_cash_agreement_accept_only`
+ * (migration 0017) freezes the amounts, the currency and the effective date at acceptance,
+ * copying 0014's `qatoto_fair_market_rate_lock_only`. A founder who can silently edit an
+ * accepted rate can silently rewrite what someone is owed, which is the founder-fiat
+ * failure mode PROOF_OF_EFFORT_SPEC.md §2 exists to eliminate.
+ *
+ * THIS IS NOT `member_fair_market_rate.paidCashRateCentsPerHour`, AND THE DIFFERENCE
+ * MATTERS. That column exists so the slice math can price the UNPAID portion of an hour
+ * (`fairMarketRate − paidCash`, src/lib/slice-math.ts). This table is what the member is
+ * actually OWED. They are usually the same number and must still be two columns: one is an
+ * input to an equity formula, the other is an obligation. When an hourly agreement is
+ * accepted the two are validated equal and a mismatch is a `422`, so the pie and the
+ * payslip cannot disagree.
+ */
+export const memberCashCompensationAgreement = pgTable(
+  "member_cash_compensation_agreement",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // `restrict` on both, per §4f. This row is the basis for what someone was paid, and a
+    // deleted user must not be able to erase the evidence a wage was owed.
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    // FOUNDER-DECLARED, never inferred (§4d). Qatoto does not classify employment.
+    engagementKind: engagementKindEnum("engagement_kind").notNull(),
+    // Exactly one of these two is non-null — `..._basis_ck` enforces it. A retainer is a
+    // flat monthly amount; an hourly agreement prices verified minutes. `bigint` because
+    // it is money (§4b).
+    monthlyAmountInCents: bigint("monthly_amount_in_cents", { mode: "bigint" }),
+    hourlyRateCentsPerHour: bigint("hourly_rate_cents_per_hour", { mode: "bigint" }),
+    // Derived from the project, never from a request body (§4b). A client-chosen currency
+    // would let a $6,000 retainer be re-read as ¥6,000.
+    currencyCode: text("currency_code").notNull(),
+    status: compensationAgreementStatusEnum("status").default("proposed").notNull(),
+    // Absolute instants, never day counts (§4c rule 3). `effectiveUntil` NULL = in force.
+    effectiveFrom: timestamp("effective_from").notNull(),
+    effectiveUntil: timestamp("effective_until"),
+    // Why this number. Required, for the same reason §9's rate requires one: an amount
+    // with no stated basis is founder fiat with extra steps.
+    rationaleNote: text("rationale_note").notNull(),
+    proposedByUserId: text("proposed_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    acceptedAt: timestamp("accepted_at"),
+    acceptedByUserId: text("accepted_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // "Which agreement was in force for this member at this instant?" Ends in a unique
+    // column so two rows sharing an instant cannot swap places between reads (§4c rule 4).
+    index("member_cash_comp_agreement_memberId_effectiveFrom_idx").on(
+      table.memberId,
+      table.effectiveFrom,
+      table.id,
+    ),
+    index("member_cash_comp_agreement_projectId_idx").on(table.projectId, table.id),
+    // One agreement per member per effective instant. Two rows claiming the same instant
+    // make "what is this person paid" ambiguous in the one place ambiguity is
+    // unacceptable.
+    uniqueIndex("member_cash_comp_agreement_memberId_effectiveFrom_unq").on(
+      table.memberId,
+      table.effectiveFrom,
+    ),
+    // At most one ACTIVE agreement per member, ever.
+    uniqueIndex("member_cash_comp_agreement_active_unq")
+      .on(table.memberId)
+      .where(sql`status = 'active'`),
+    check(
+      "member_cash_comp_agreement_basis_ck",
+      sql`(monthly_amount_in_cents IS NOT NULL) <> (hourly_rate_cents_per_hour IS NOT NULL)`,
+    ),
+    check(
+      "member_cash_comp_agreement_amount_ck",
+      sql`(monthly_amount_in_cents IS NULL OR monthly_amount_in_cents >= 0)
+          AND (hourly_rate_cents_per_hour IS NULL OR hourly_rate_cents_per_hour >= 0)`,
+    ),
+    check("member_cash_comp_agreement_currency_ck", sql`currency_code ~ '^[A-Z]{3}$'`),
+    check(
+      "member_cash_comp_agreement_rationale_ck",
+      sql`char_length(rationale_note) BETWEEN 1 AND 1000`,
+    ),
+    check(
+      "member_cash_comp_agreement_window_ck",
+      sql`effective_until IS NULL OR effective_until > effective_from`,
+    ),
+    // The lifecycle cannot be half-true: an agreement that prices anything names who
+    // accepted it and when. `withdrawn` is a proposal nobody accepted, so it stays
+    // unaccepted; `superseded` was accepted once and keeps that record.
+    check(
+      "member_cash_comp_agreement_lifecycle_ck",
+      sql`(status <> 'proposed' OR accepted_at IS NULL)
+          AND (status <> 'withdrawn' OR accepted_at IS NULL)
+          AND (status NOT IN ('active','superseded') OR accepted_at IS NOT NULL)
+          AND (accepted_at IS NULL) = (accepted_by_user_id IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * One calendar month of compensation, IN THE PROJECT'S OWN TIME ZONE (§7A.3).
+ *
+ * WHY THE ZONE IS ON THE ROW rather than read live from `project_stats.projectTimeZone`:
+ * a later zone change must not silently re-slice a month that has already been finalized
+ * and signed. It is snapshotted at open, exactly as `equity_snapshot` snapshots the ledger
+ * prefix it covers.
+ *
+ * AN OPEN PERIOD ACCRUES — redrawn nightly, nothing frozen, numbers may move.
+ * A FINALIZED PERIOD IS FROZEN — hash-chained, two people signed it, it never changes.
+ *
+ * CORRECTIONS SUPERSEDE; THEY NEVER EDIT. A finalized period whose numbers turn out wrong
+ * is not reopened — a new period is created with `supersededByPeriodId` pointing back, the
+ * audit chain records both, and the member can see exactly what changed and when. A record
+ * that can be quietly rewritten is not evidence of anything (§4f).
+ */
+export const compensationPeriod = pgTable(
+  "compensation_period",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    // Gapless per project from 1, allocated under the EXISTING project_chain_head lock —
+    // never a second lock (§9.9's note applies verbatim).
+    sequenceNumber: integer("sequence_number").notNull(),
+    // Calendar days, half-open `[start, end)`. Day-only because a month boundary is a
+    // calendar fact in a named zone, not an instant.
+    periodStartDate: date("period_start_date").notNull(),
+    periodEndDate: date("period_end_date").notNull(),
+    // Snapshotted from project_stats at open. See the note above.
+    timeZone: text("time_zone").notNull(),
+    status: compensationPeriodStatusEnum("status").default("open").notNull(),
+    // The QUANTIZED reference instant of the last draft redraw (§4c rule 3). Returned on
+    // an open period so no client can imply a frozen number.
+    lastDraftedAt: timestamp("last_drafted_at"),
+    finalizedAt: timestamp("finalized_at"),
+    finalizedByUserId: text("finalized_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    // THE SECOND PAIR OF EYES (§4a). Must differ from `finalizedByUserId`, and the check
+    // below makes that structural rather than conventional — a founder cannot ratify their
+    // own statement.
+    countersignedAt: timestamp("countersigned_at"),
+    countersignedByUserId: text("countersigned_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    countersignNote: text("countersign_note"),
+    // Full 64 lowercase hex, always. The 6-character form a UI shows is a RENDERING: at
+    // 24 bits collisions hit 50% around 4,800 entries (§4c).
+    statementHash: text("statement_hash"),
+    // The predecessor's hash, or the literal "genesis" for a project's first finalized
+    // period — so it is never NULL on a finalized row and the chain has one shape.
+    previousStatementHash: text("previous_statement_hash"),
+    // So the algorithm can evolve without invalidating history (§4c).
+    hashVersion: text("hash_version"),
+    // A correction creates a NEW period that supersedes this one. Nothing is ever edited.
+    supersededByPeriodId: text("superseded_by_period_id").references(
+      (): AnyPgColumn => compensationPeriod.id,
+      { onDelete: "restrict" },
+    ),
+    supersedeReasonNote: text("supersede_reason_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("compensation_period_projectId_sequence_unq").on(
+      table.projectId,
+      table.sequenceNumber,
+    ),
+    // ONE open period per project. Two would make "this month" ambiguous and let the
+    // nightly draft write the same minutes into two statements.
+    uniqueIndex("compensation_period_projectId_open_unq")
+      .on(table.projectId)
+      .where(sql`status = 'open'`),
+    // The list read, ordered newest first and ending in a unique column (§4c rule 4).
+    index("compensation_period_projectId_start_idx").on(
+      table.projectId,
+      table.periodStartDate,
+      table.id,
+    ),
+    check("compensation_period_sequence_ck", sql`sequence_number >= 1`),
+    check("compensation_period_window_ck", sql`period_end_date > period_start_date`),
+    // A finalized period carries a complete, well-formed chain link; a period that is not
+    // finalized carries none of it. Half a hash is worse than no hash.
+    check(
+      "compensation_period_finalize_ck",
+      sql`(status = 'finalized' OR status = 'superseded')
+            = (statement_hash IS NOT NULL)
+          AND (statement_hash IS NULL)
+            = (finalized_at IS NULL AND finalized_by_user_id IS NULL
+               AND previous_statement_hash IS NULL AND hash_version IS NULL)
+          AND (finalized_at IS NULL) = (finalized_by_user_id IS NULL)
+          AND (statement_hash IS NULL OR statement_hash ~ '^[0-9a-f]{64}$')
+          AND (previous_statement_hash IS NULL
+               OR previous_statement_hash = 'genesis'
+               OR previous_statement_hash ~ '^[0-9a-f]{64}$')`,
+    ),
+    // FOUR EYES, AT THE COLUMN LEVEL. `IS DISTINCT FROM` rather than `<>` so a NULL
+    // finalizer cannot make the comparison NULL and let the row through.
+    check(
+      "compensation_period_countersign_ck",
+      sql`(countersigned_at IS NULL) = (countersigned_by_user_id IS NULL)
+          AND (countersigned_at IS NULL OR finalized_at IS NOT NULL)
+          AND (countersigned_by_user_id IS NULL
+               OR countersigned_by_user_id IS DISTINCT FROM finalized_by_user_id)`,
+    ),
+    // A superseded period names its successor and says why; nothing else may.
+    check(
+      "compensation_period_supersede_ck",
+      sql`(status = 'superseded') = (superseded_by_period_id IS NOT NULL)
+          AND (superseded_by_period_id IS NULL OR superseded_by_period_id <> id)
+          AND (superseded_by_period_id IS NULL) = (supersede_reason_note IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * One line per member per kind per period (§7A.3).
+ *
+ * RE-RUNNING THE NIGHTLY DRAFT MUST BE A NO-OP, NOT A DUPLICATE — hence the
+ * `(periodId, memberId, kind)` unique, the same shape as `slice_ledger_entry`'s
+ * per-proposal-per-kind uniqueness (§9.6). §17 step 5b runs the draft 100 times with rows
+ * shuffled and asserts byte-identical output; that is the test, not an aspiration.
+ *
+ * EQUITY IS NOT MONEY AND MUST NEVER BE SUMMED WITH IT. A cash line carries
+ * `grossAmountInCents` and no basis points; an `equity_delta` line carries basis points
+ * and no money. `..._kind_ck` encodes that rather than leaving it to a comment.
+ *
+ * `equityBasisPointsDelta` IS SIGNED, and a negative value is the model working rather
+ * than a bug: a member's share falls when others out-contribute them over the period.
+ *
+ * `verificationNote` IS THE ONLY PLACE A VERDICT MAY TOUCH A CASH LINE, AND IT CHANGES NO
+ * NUMBER (§0). There is no verification status column here, and no query that produces
+ * `grossAmountInCents` filters on one.
+ */
+export const compensationPeriodLine = pgTable(
+  "compensation_period_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    periodId: text("period_id")
+      .notNull()
+      .references(() => compensationPeriod.id, { onDelete: "restrict" }),
+    // Denormalized so a line can be authorized and listed without joining the period.
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    memberId: text("member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    kind: compensationPeriodLineKindEnum("kind").notNull(),
+    // `bigint` because it is money (§4b). NULL on an `equity_delta` line.
+    grossAmountInCents: bigint("gross_amount_in_cents", { mode: "bigint" }),
+    // Always beside the amount (§4b). NULL on an equity line, which has no currency.
+    currency: text("currency"),
+    // Integer minutes, on `cash_hourly` only (§4b).
+    effortMinutes: integer("effort_minutes"),
+    // The EXACT rows the number came from, denormalized so an auditor need not re-resolve
+    // effective dating years later. `restrict`, and the agreement's no-DELETE trigger
+    // backs it up for the case where no line references it yet.
+    sourceAgreementId: text("source_agreement_id").references(
+      () => memberCashCompensationAgreement.id,
+      { onDelete: "restrict" },
+    ),
+    sourceRateId: text("source_rate_id").references(() => memberFairMarketRate.id, {
+      onDelete: "restrict",
+    }),
+    // On `equity_delta` only. `Delta` is SIGNED — see the note above.
+    equityBasisPointsAtStart: integer("equity_basis_points_at_start"),
+    equityBasisPointsAtEnd: integer("equity_basis_points_at_end"),
+    equityBasisPointsDelta: integer("equity_basis_points_delta"),
+    // The snapshots the two endpoints were read from, so the subtraction is reproducible.
+    startSnapshotId: text("start_snapshot_id").references(() => equitySnapshot.id, {
+      onDelete: "restrict",
+    }),
+    endSnapshotId: text("end_snapshot_id").references(() => equitySnapshot.id, {
+      onDelete: "restrict",
+    }),
+    // Free text, nullable. THE ONLY PLACE A VERDICT MAY TOUCH A CASH LINE (§0).
+    verificationNote: text("verification_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("compensation_period_line_period_member_kind_unq").on(
+      table.periodId,
+      table.memberId,
+      table.kind,
+    ),
+    // "What have I been owed across every period?" Ends in a unique column (§4c rule 4).
+    index("compensation_period_line_memberId_idx").on(table.memberId, table.id),
+    index("compensation_period_line_projectId_idx").on(table.projectId, table.id),
+    // An equity line carries basis points and no money; a cash line carries money and no
+    // basis points. Encoded here rather than in a comment.
+    check(
+      "compensation_period_line_kind_ck",
+      sql`(kind = 'equity_delta')
+          = (gross_amount_in_cents IS NULL AND equity_basis_points_delta IS NOT NULL)`,
+    ),
+    // A period cannot owe NEGATIVE wages. An over-payment is corrected by superseding the
+    // period, never by a negative line (§7A.4).
+    check(
+      "compensation_period_line_amount_ck",
+      sql`(gross_amount_in_cents IS NULL OR gross_amount_in_cents >= 0)
+          AND (gross_amount_in_cents IS NULL) = (currency IS NULL)
+          AND (currency IS NULL OR currency ~ '^[A-Z]{3}$')`,
+    ),
+    // Minutes belong to an hourly line and nowhere else, and they are never negative:
+    // the reversal-inclusive sum is clamped at zero in TypeScript before it lands here.
+    check(
+      "compensation_period_line_minutes_ck",
+      sql`(effort_minutes IS NOT NULL) = (kind = 'cash_hourly')
+          AND (effort_minutes IS NULL OR effort_minutes >= 0)`,
+    ),
+    // The three equity columns move together, each within range, and the delta IS the
+    // subtraction — so a transcription error in either endpoint fails loudly here rather
+    // than reading as a legitimate swing.
+    check(
+      "compensation_period_line_equity_ck",
+      sql`(equity_basis_points_delta IS NULL)
+            = (equity_basis_points_at_start IS NULL AND equity_basis_points_at_end IS NULL)
+          AND (equity_basis_points_at_start IS NULL
+               OR equity_basis_points_at_start BETWEEN 0 AND 10000)
+          AND (equity_basis_points_at_end IS NULL
+               OR equity_basis_points_at_end BETWEEN 0 AND 10000)
+          AND (equity_basis_points_delta IS NULL
+               OR equity_basis_points_delta
+                  = equity_basis_points_at_end - equity_basis_points_at_start)`,
+    ),
+  ],
+);
+
+/**
+ * A payment the parties made BETWEEN THEMSELVES, recorded here (§7A's
+ * `compensation_payment_record`).
+ *
+ * RECORDING A PAYMENT DOES NOT MOVE MONEY AND DOES NOT CHANGE THE LINE. The founder pays
+ * from their own bank or payroll provider; this is the receipt. Append-only, with exactly
+ * one permitted later write: the member's confirmation.
+ *
+ * TWO-SIDED CONFIRMATION IS WHAT MAKES THIS EVIDENCE RATHER THAN BOOKKEEPING. A founder
+ * recording "paid" is an assertion. A member confirming receipt is corroboration. The
+ * pair, hash-chained against a frozen statement line, is the artifact that answers "was
+ * this person paid what they were owed, and when" — which is the question a labour
+ * inspector, an acquirer's diligence team, or an aggrieved ex-employee actually asks. THE
+ * UI MUST SHOW UNCONFIRMED PAYMENTS AS UNCONFIRMED AND NEVER AS PAID.
+ *
+ * IT STORES NO ACCOUNT NUMBER, NO IBAN, NO UPI HANDLE, NO CARD DETAIL AND NO PAYMENT
+ * INSTRUMENT OF ANY KIND. `referenceNote` is a human note — a UTR, a payroll run id — and
+ * the API rejects anything that pattern-matches a PAN. Storing payment instruments would
+ * drag PCI-DSS scope into a product that has no business being in it, create a PII breach
+ * surface with no upside, and hand an attacker a wire-fraud primitive.
+ *
+ * There is deliberately NO `updatedAt`: there is nothing to update.
+ */
+export const compensationPaymentRecord = pgTable(
+  "compensation_payment_record",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    lineId: text("line_id")
+      .notNull()
+      .references(() => compensationPeriodLine.id, { onDelete: "restrict" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    // `bigint` because it is money (§4b). THE ONE NUMBER A CLIENT MAY SEND in this whole
+    // domain — and it is an attestation about the outside world, not an assertion about
+    // what is owed. It may differ from the line: a partial payment is a fact, not an error.
+    paidAmountInCents: bigint("paid_amount_in_cents", { mode: "bigint" }).notNull(),
+    currency: text("currency").notNull(),
+    // The calendar day the payer says the money left. Day-only: a bank does not publish an
+    // instant, and inventing one would be precision the record does not have.
+    paidOnDate: date("paid_on_date").notNull(),
+    methodKey: compensationPaymentMethodKeyEnum("method_key").notNull(),
+    // A human note. NEVER an instrument — see the header.
+    referenceNote: text("reference_note"),
+    recordedByUserId: text("recorded_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    // THE MEMBER'S half of the evidence. Set once, never cleared (trigger, migration 0017).
+    confirmedByMemberAt: timestamp("confirmed_by_member_at"),
+    confirmedByUserId: text("confirmed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    // Client-supplied, per-line. A retried POST must not record the same payment twice —
+    // "did I already tell it I paid this?" is exactly the question a flaky network makes
+    // unanswerable.
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("compensation_payment_record_line_idempotency_unq").on(
+      table.lineId,
+      table.idempotencyKey,
+    ),
+    index("compensation_payment_record_lineId_idx").on(table.lineId, table.id),
+    index("compensation_payment_record_projectId_idx").on(table.projectId, table.id),
+    check("compensation_payment_record_amount_ck", sql`paid_amount_in_cents > 0`),
+    check("compensation_payment_record_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "compensation_payment_record_confirm_ck",
+      sql`(confirmed_by_member_at IS NULL) = (confirmed_by_user_id IS NULL)`,
+    ),
+    check(
+      "compensation_payment_record_note_ck",
+      sql`reference_note IS NULL OR char_length(reference_note) BETWEEN 1 AND 500`,
+    ),
+    check(
+      "compensation_payment_record_idempotency_ck",
+      sql`char_length(idempotency_key) BETWEEN 8 AND 200`,
+    ),
+  ],
+);
+
+// --- §7A relations. Child-side only, same convention as §5, §6, §7, §8 and §9.
+
+export const memberCashCompensationAgreementRelations = relations(
+  memberCashCompensationAgreement,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [memberCashCompensationAgreement.projectId],
+      references: [researchProject.id],
+    }),
+    member: one(projectMember, {
+      fields: [memberCashCompensationAgreement.memberId],
+      references: [projectMember.id],
+    }),
+    // relationName because this table has TWO relations to `user`; without it Drizzle
+    // cannot tell them apart.
+    proposedBy: one(user, {
+      fields: [memberCashCompensationAgreement.proposedByUserId],
+      references: [user.id],
+      relationName: "cashCompensationAgreementProposedBy",
+    }),
+    acceptedBy: one(user, {
+      fields: [memberCashCompensationAgreement.acceptedByUserId],
+      references: [user.id],
+      relationName: "cashCompensationAgreementAcceptedBy",
+    }),
+  }),
+);
+
+export const compensationPeriodRelations = relations(compensationPeriod, ({ one, many }) => ({
+  project: one(researchProject, {
+    fields: [compensationPeriod.projectId],
+    references: [researchProject.id],
+  }),
+  finalizedBy: one(user, {
+    fields: [compensationPeriod.finalizedByUserId],
+    references: [user.id],
+    relationName: "compensationPeriodFinalizedBy",
+  }),
+  countersignedBy: one(user, {
+    fields: [compensationPeriod.countersignedByUserId],
+    references: [user.id],
+    relationName: "compensationPeriodCountersignedBy",
+  }),
+  lines: many(compensationPeriodLine),
+}));
+
+export const compensationPeriodLineRelations = relations(
+  compensationPeriodLine,
+  ({ one, many }) => ({
+    period: one(compensationPeriod, {
+      fields: [compensationPeriodLine.periodId],
+      references: [compensationPeriod.id],
+    }),
+    member: one(projectMember, {
+      fields: [compensationPeriodLine.memberId],
+      references: [projectMember.id],
+    }),
+    sourceAgreement: one(memberCashCompensationAgreement, {
+      fields: [compensationPeriodLine.sourceAgreementId],
+      references: [memberCashCompensationAgreement.id],
+    }),
+    sourceRate: one(memberFairMarketRate, {
+      fields: [compensationPeriodLine.sourceRateId],
+      references: [memberFairMarketRate.id],
+    }),
+    payments: many(compensationPaymentRecord),
+  }),
+);
+
+export const compensationPaymentRecordRelations = relations(
+  compensationPaymentRecord,
+  ({ one }) => ({
+    line: one(compensationPeriodLine, {
+      fields: [compensationPaymentRecord.lineId],
+      references: [compensationPeriodLine.id],
+    }),
+    recordedBy: one(user, {
+      fields: [compensationPaymentRecord.recordedByUserId],
+      references: [user.id],
+      relationName: "compensationPaymentRecordedBy",
+    }),
+    confirmedBy: one(user, {
+      fields: [compensationPaymentRecord.confirmedByUserId],
+      references: [user.id],
+      relationName: "compensationPaymentConfirmedBy",
     }),
   }),
 );

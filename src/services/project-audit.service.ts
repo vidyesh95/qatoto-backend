@@ -346,6 +346,83 @@ export async function advanceEscrowChainHead(
     .where(eq(projectChainHead.projectId, projectId));
 }
 
+/** The literal §7A spells for a statement chain's first predecessor. */
+export const STATEMENT_GENESIS_PREVIOUS_HASH = "genesis";
+
+/**
+ * Allocates the next COMPENSATION PERIOD sequence number under the same lock (§7A.3).
+ *
+ * THE FOURTH COUNTER ON ONE ROW, for the reason {@link allocateEscrowChainSlot} already
+ * gives: a writer that opens a period AND appends an audit entry in one transaction —
+ * which every §7A lifecycle event does — would otherwise take two locks, and two locks
+ * taken in an order someone eventually gets backwards is a deadlock waiting for load.
+ *
+ * Deliberately SEPARATE from the statement chain below, because they are two different
+ * moments. This number is allocated when a period OPENS, so it runs in calendar order and
+ * is gapless. The hash does not exist until the period is FINALIZED, and a period may be
+ * finalized late while the next one is already accruing.
+ */
+export async function allocateCompensationSequenceNumber(
+  tx: DatabaseExecutor,
+  projectId: string,
+): Promise<number> {
+  const head = await lockChainHead(tx, projectId);
+  const next = head.lastCompensationSequenceNumber + 1;
+
+  await tx
+    .update(projectChainHead)
+    .set({ lastCompensationSequenceNumber: next })
+    .where(eq(projectChainHead.projectId, projectId));
+
+  return next;
+}
+
+export interface StatementChainSlot {
+  /** The predecessor's hash, or the literal "genesis" for the first finalized period. */
+  readonly previousStatementHash: string;
+}
+
+/**
+ * Reads the statement chain's head under the same lock, at FINALIZE time (§7A.5).
+ *
+ * Returns only the predecessor hash, not a sequence number: the period already carries
+ * one, allocated at open. Folding the two together would either leave a gap in the
+ * calendar sequence for a month nobody finalized, or produce a chain that cannot be walked
+ * — and §7A's verifier checks BOTH the links and the absence of gaps, exactly as §9.9's
+ * does, because a deleted row leaves every surviving hash self-consistent.
+ */
+export async function readStatementChainSlot(
+  tx: DatabaseExecutor,
+  projectId: string,
+): Promise<StatementChainSlot> {
+  const head = await lockChainHead(tx, projectId);
+  return {
+    previousStatementHash: head.compensationHeadStatementHash ?? STATEMENT_GENESIS_PREVIOUS_HASH,
+  };
+}
+
+/**
+ * Moves the statement head to the period just finalized. MUST run in the same transaction
+ * as {@link readStatementChainSlot}, while the head row is still locked.
+ *
+ * Separate from the reader rather than folded into it because the hash does not exist
+ * until the statement is composed, and a head advanced before the freeze would point at a
+ * period that may never land.
+ */
+export async function advanceStatementChainHead(
+  tx: DatabaseExecutor,
+  projectId: string,
+  finalized: { readonly periodId: string; readonly statementHash: string },
+): Promise<void> {
+  await tx
+    .update(projectChainHead)
+    .set({
+      compensationHeadStatementHash: finalized.statementHash,
+      compensationHeadPeriodId: finalized.periodId,
+    })
+    .where(eq(projectChainHead.projectId, projectId));
+}
+
 export interface AuditEntryView {
   readonly id: string;
   readonly sequenceNumber: number;
