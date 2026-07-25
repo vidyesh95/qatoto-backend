@@ -16,11 +16,8 @@ vi.mock("#src/services/project-membership.service.js", () => ({}));
 const {
   CreateFundingRoundSchema,
   CreatePledgeSchema,
-  DecideEscrowReleaseSchema,
   MilestoneSchema,
   MilestoneVarianceSchema,
-  RequestEscrowReleaseSchema,
-  SettleTransferSchema,
   UpdateMilestoneSchema,
 } = await import("#src/controllers/funding.controller.js");
 
@@ -127,55 +124,6 @@ describe("the pledge body", () => {
 
     expect(parsed.success).toBe(true);
     expect(parsed.success && BigInt(parsed.data.amountInCents).toString()).toBe(enormous);
-  });
-});
-
-describe("the escrow release body", () => {
-  it("has NO amount field, and rejects one", () => {
-    // §7: the amount is snapshotted from the milestone at request time. A body that could
-    // name one would make the snapshot decorative.
-    expect(RequestEscrowReleaseSchema.safeParse({ requestNote: "Survey shipped", amountInCents: "1" }).success).toBe(
-      false,
-    );
-    expect(RequestEscrowReleaseSchema.safeParse({ plannedPayoutInCents: "1" }).success).toBe(false);
-  });
-
-  it("accepts an optional note and nothing else", () => {
-    expect(RequestEscrowReleaseSchema.safeParse({}).success).toBe(true);
-    expect(RequestEscrowReleaseSchema.safeParse({ requestNote: "Done" }).success).toBe(true);
-  });
-
-  it.each(REJECTED_KEYS)("rejects `%s` on a release request", (rejectedKey) => {
-    expect(RequestEscrowReleaseSchema.safeParse({ [rejectedKey]: "attacker-supplied" }).success).toBe(false);
-  });
-
-  it("rejects a payout destination on the approval body — a wire-fraud primitive (§7)", () => {
-    expect(DecideEscrowReleaseSchema.safeParse({ note: "Approved", payoutDestinationId: "acct_evil" }).success).toBe(
-      false,
-    );
-    expect(DecideEscrowReleaseSchema.safeParse({ note: "Approved", destinationAccountId: "acct_evil" }).success).toBe(
-      false,
-    );
-  });
-
-  it("requires a note on a decision", () => {
-    // A payout approved with no stated reason is a payout nobody can review later. The
-    // note is frozen into the audit chain beside the verification snapshot.
-    expect(DecideEscrowReleaseSchema.safeParse({}).success).toBe(false);
-    expect(DecideEscrowReleaseSchema.safeParse({ note: "" }).success).toBe(false);
-    expect(DecideEscrowReleaseSchema.safeParse({ note: "   " }).success).toBe(false);
-  });
-});
-
-describe("the settlement body", () => {
-  it("carries no amount — the payload says WHICH transfer, never HOW MUCH (§7)", () => {
-    expect(SettleTransferSchema.safeParse({ note: "Confirmed" }).success).toBe(true);
-    expect(SettleTransferSchema.safeParse({ amountInCents: "5000" }).success).toBe(false);
-    expect(SettleTransferSchema.safeParse({ raisedAmountInCents: "5000" }).success).toBe(false);
-  });
-
-  it.each(REJECTED_KEYS)("rejects `%s` on a settlement decision", (rejectedKey) => {
-    expect(SettleTransferSchema.safeParse({ [rejectedKey]: "attacker-supplied" }).success).toBe(false);
   });
 });
 
@@ -303,9 +251,6 @@ describe("the §17 step 8 zero-trust sweep", () => {
         CreateFundingRoundSchema,
         { type: "crowdfunding", title: "R", goalAmountInCents: "1" },
       ],
-      ["RequestEscrowReleaseSchema", RequestEscrowReleaseSchema, {}],
-      ["DecideEscrowReleaseSchema", DecideEscrowReleaseSchema, { note: "ok" }],
-      ["SettleTransferSchema", SettleTransferSchema, {}],
       ["MilestoneSchema", MilestoneSchema, { title: "M", plannedPayoutInCents: "1" }],
       ["UpdateMilestoneSchema", UpdateMilestoneSchema, {}],
     ] as const;

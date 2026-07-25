@@ -4,18 +4,17 @@ import { z } from "zod";
 import { respondFundingError } from "#src/controllers/funding-error-response.js";
 import {
   firstParam,
-  optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
 import * as compensationService from "#src/services/compensation.service.js";
-import * as releasesService from "#src/services/escrow-releases.service.js";
-import * as settlementService from "#src/services/escrow-settlement.service.js";
-import * as escrowService from "#src/services/escrow.service.js";
+// NOTHING FROM escrow-releases, escrow-settlement OR escrow.service IS IMPORTED HERE ANY
+// MORE (§7A.6, §11g). The nine escrow routes are retired; the services and their tables
+// are still on disk, unreachable and uncalled, and the ledger design is preserved for the
+// commerce domain in docs/ESCROW_LEDGER_STRUCTURE.md.
 import * as roundsService from "#src/services/funding-rounds.service.js";
 import * as confidenceService from "#src/services/investor-confidence.service.js";
 import * as milestonesService from "#src/services/milestones.service.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import * as membershipService from "#src/services/project-membership.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
@@ -130,29 +129,14 @@ export const MilestoneVarianceSchema = z
   })
   .strict();
 
-/** `{ requestNote? }` — NO AMOUNT FIELD, and there never will be one (§7). */
-export const RequestEscrowReleaseSchema = z
-  .object({ requestNote: z.string().trim().max(2_000).optional() })
-  .strict();
-
-export const DecideEscrowReleaseSchema = z
-  .object({ note: z.string().trim().min(1).max(2_000) })
-  .strict();
-
-/**
- * The auditor's settlement decision.
- *
- * A NOTE AND NOTHING ELSE. §7: "Never trust the webhook payload's amount over our own
- * `provider_transfer` row. The payload identifies WHICH transfer settled, not HOW MUCH."
- * The transfer id is in the path; the amount is in our own row; there is no field here
- * through which a settlement could name a different sum.
- */
-export const SettleTransferSchema = z
-  .object({
-    note: z.string().trim().max(2_000).optional(),
-    failureReason: z.string().trim().max(500).optional(),
-  })
-  .strict();
+// THE THREE ESCROW BODIES ARE GONE, along with the routes that parsed them (§7A.6):
+// RequestEscrowReleaseSchema, DecideEscrowReleaseSchema and SettleTransferSchema. Their
+// assertions move to nothing rather than to another file — a schema with no route is not
+// a boundary, and a test proving a dead schema rejects a key proves nothing about the API.
+//
+// Their rejected keys are not lost. `payoutDestinationId`, `destinationAccountId`,
+// `accountNumber`, `iban` and `upiId` are all asserted against every §7A body in
+// compensation.controller.schemas.test.ts, which is where a body could now carry one.
 
 export const DealsQuerySchema = z
   .object({
@@ -511,97 +495,6 @@ export async function listFundingDeals(req: Request, res: Response): Promise<voi
 }
 
 // ---------------------------------------------------------------------------
-// Settlement — the auditor-gated endpoint that stands in for the Stripe webhook
-// ---------------------------------------------------------------------------
-
-/**
- * `POST /provider-transfers/:transferId/settle` and `/fail`.
- *
- * THE `audit_escrow` CAPABILITY IS CHECKED FIRST, BEFORE THE TRANSFER IS LOADED. That
- * ordering is platform-role.service.ts's rule and it is not stylistic: reversed, the route
- * becomes an id oracle — a non-staff caller could tell a real transfer id from a garbage
- * one by which error came back.
- *
- * This is the seam Appendix A3 describes. `POST /webhooks/payments/stripe` does not exist:
- * no route, no raw-body mount, no signature verification, because adding a raw-body branch
- * for a route that is not there is a security surface bought for nothing (§11).
- */
-export function decideSettlement(outcome: "settled" | "failed") {
-  return async function handleDecideSettlement(req: Request, res: Response): Promise<void> {
-    if (!req.user) {
-      respondUnauthenticated(res);
-      return;
-    }
-
-    // CAPABILITY FIRST, RESOURCE SECOND.
-    const staffResult = await requirePlatformCapability(req.user.id, "audit_escrow");
-    if (!staffResult.success) {
-      respondFundingError(res, staffResult.error);
-      return;
-    }
-
-    const parsedBody = SettleTransferSchema.safeParse(optionalBody(req));
-    if (!parsedBody.success) {
-      respondValidationFailed(res, parsedBody.error);
-      return;
-    }
-
-    const decided = await settlementService.decideSettlement({
-      transferId: firstParam(req.params.transferId ?? ""),
-      outcome,
-      decidedByUserId: staffResult.value.staffUserId,
-      note: parsedBody.data.note ?? null,
-      ...(parsedBody.data.failureReason === undefined
-        ? {}
-        : { failureReason: parsedBody.data.failureReason }),
-    });
-
-    if (!decided.success) {
-      respondFundingError(res, decided.error);
-      return;
-    }
-
-    respondOk(
-      res,
-      decided.value.deduplicated
-        ? // §7's webhook discipline, surfaced honestly: a replay is a success that wrote
-          // nothing, not a second settlement and not an error.
-          "This transfer was already decided. Nothing was written again."
-        : outcome === "settled"
-          ? "Transfer settled. Escrow and the round's raised total have moved."
-          : "Transfer marked failed. The authorization was released and nothing entered escrow.",
-      decided.value,
-    );
-  };
-}
-
-/** `GET /provider-transfers/pending` — the settlement auditor's work queue. */
-export async function listPendingSettlements(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
-
-  const staffResult = await requirePlatformCapability(req.user.id, "audit_escrow");
-  if (!staffResult.success) {
-    respondFundingError(res, staffResult.error);
-    return;
-  }
-
-  const parsedQuery = PaginationQuerySchema.safeParse(req.query);
-  if (!parsedQuery.success) {
-    respondValidationFailed(res, parsedQuery.error);
-    return;
-  }
-
-  respondOk(
-    res,
-    "Pending settlements loaded.",
-    await settlementService.listPendingSettlements({ limit: parsedQuery.data.limit }),
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Milestones
 // ---------------------------------------------------------------------------
 
@@ -739,181 +632,6 @@ export async function putMilestoneVariance(req: Request, res: Response): Promise
     return;
   }
   respondOk(res, "Milestone variance recorded.", stored.value);
-}
-
-// ---------------------------------------------------------------------------
-// Escrow releases — the four-eyes rule
-// ---------------------------------------------------------------------------
-
-/** `POST /milestones/:milestoneId/escrow-releases` — body `{ requestNote? }`, no amount. */
-export async function requestEscrowRelease(req: Request, res: Response): Promise<void> {
-  const milestoneId = firstParam(req.params.milestoneId ?? "");
-  const existing = await milestonesService.findMilestoneWithProject(milestoneId);
-
-  const caller = await requireRoleForProjectOrRespond(
-    req,
-    res,
-    existing?.projectSlug ?? null,
-    // §4a: "founder — row owner: … request escrow". `admin` co-signs; it does not request,
-    // or one person holding both roles on two accounts is back where we started.
-    "founder",
-  );
-  if (!caller) return;
-
-  const parsedBody = RequestEscrowReleaseSchema.safeParse(optionalBody(req));
-  if (!parsedBody.success) {
-    respondValidationFailed(res, parsedBody.error);
-    return;
-  }
-
-  const requested = await releasesService.requestEscrowRelease({
-    projectId: caller.context.projectId,
-    milestoneId,
-    requestedByUserId: caller.userId,
-    requesterRoleSnapshot: caller.context.memberRole,
-    requestNote: parsedBody.data.requestNote ?? null,
-  });
-
-  if (!requested.success) {
-    respondFundingError(res, requested.error);
-    return;
-  }
-
-  res.status(201).json({
-    status: "success",
-    statusCode: 201,
-    message:
-      "Release requested. The amount is snapshotted from the milestone and needs a second person to approve it.",
-    data: requested.value,
-  } satisfies ApiResponse);
-}
-
-/**
- * `POST /escrow-releases/:releaseId/approve`.
- *
- * NO PROJECT-ROLE CHECK HERE, deliberately. An approver may be a PLATFORM auditor who is
- * not a member of the project at all — `requireProjectRole` would 404 them. The service
- * proves standing itself, against both acceptable bases, and refuses everything else.
- */
-export async function approveEscrowRelease(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
-
-  const parsedBody = DecideEscrowReleaseSchema.safeParse(req.body);
-  if (!parsedBody.success) {
-    respondValidationFailed(res, parsedBody.error);
-    return;
-  }
-
-  const approved = await releasesService.approveEscrowRelease({
-    releaseId: firstParam(req.params.releaseId ?? ""),
-    // FROM THE SESSION. The four-eyes comparison is meaningless if this is a body field.
-    approverUserId: req.user.id,
-    note: parsedBody.data.note,
-  });
-
-  if (!approved.success) {
-    respondFundingError(res, approved.error);
-    return;
-  }
-  respondOk(res, "Escrow release approved. Funds have left the pool.", approved.value);
-}
-
-export async function rejectEscrowRelease(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
-
-  const parsedBody = DecideEscrowReleaseSchema.safeParse(req.body);
-  if (!parsedBody.success) {
-    respondValidationFailed(res, parsedBody.error);
-    return;
-  }
-
-  const rejected = await releasesService.rejectEscrowRelease({
-    releaseId: firstParam(req.params.releaseId ?? ""),
-    approverUserId: req.user.id,
-    note: parsedBody.data.note,
-  });
-
-  if (!rejected.success) {
-    respondFundingError(res, rejected.error);
-    return;
-  }
-  respondOk(res, "Escrow release rejected.", rejected.value);
-}
-
-// ---------------------------------------------------------------------------
-// Escrow reads
-// ---------------------------------------------------------------------------
-
-/** `GET …/escrow/summary` — Allocated / Released / Held from ACCOUNT BALANCES. */
-export async function getEscrowSummary(req: Request, res: Response): Promise<void> {
-  const caller = await requireRoleOrRespond(req, res, "contributor");
-  if (!caller) return;
-
-  const [summary, releases] = await Promise.all([
-    escrowService.getEscrowSummary(caller.context.projectId),
-    releasesService.listProjectEscrowReleases(caller.context.projectId, { limit: 25 }),
-  ]);
-
-  respondOk(res, "Escrow summary loaded.", { ...summary, recentReleases: releases });
-}
-
-/** `GET …/escrow/ledger` — every hashed column, so a client can verify without trusting us. */
-export async function listEscrowLedger(req: Request, res: Response): Promise<void> {
-  const caller = await requireRoleOrRespond(req, res, "contributor");
-  if (!caller) return;
-
-  const parsedQuery = PaginationQuerySchema.safeParse(req.query);
-  if (!parsedQuery.success) {
-    respondValidationFailed(res, parsedQuery.error);
-    return;
-  }
-
-  respondOk(
-    res,
-    "Escrow ledger loaded.",
-    await escrowService.listEscrowLedger(caller.context.projectId, parsedQuery.data),
-  );
-}
-
-/**
- * `GET …/escrow/verify` — a break returns **409**, never `200 {valid:false}`.
- *
- * §9.9's rule, and it applies identically here: a verification endpoint that answers "no"
- * with a success status will be polled by a dashboard that renders a green tick for a 200.
- */
-export async function verifyEscrowChain(req: Request, res: Response): Promise<void> {
-  const caller = await requireRoleOrRespond(req, res, "contributor");
-  if (!caller) return;
-
-  const verified = await escrowService.verifyEscrowChain(caller.context.projectId);
-  if (!verified.success) {
-    respondFundingError(res, verified.error);
-    return;
-  }
-  respondOk(res, "Escrow ledger verified.", verified.value);
-}
-
-/** `GET …/escrow/ledger/:entryId/hash-input` — the anti-theatre endpoint. */
-export async function getEscrowHashInput(req: Request, res: Response): Promise<void> {
-  const caller = await requireRoleOrRespond(req, res, "contributor");
-  if (!caller) return;
-
-  const hashInput = await escrowService.buildEscrowHashInput(
-    caller.context.projectId,
-    firstParam(req.params.entryId ?? ""),
-  );
-
-  if (!hashInput.success) {
-    respondFundingError(res, hashInput.error);
-    return;
-  }
-  respondOk(res, "Hash input loaded.", hashInput.value);
 }
 
 // ---------------------------------------------------------------------------

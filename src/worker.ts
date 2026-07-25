@@ -14,11 +14,9 @@ import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals
 import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapshot.js";
 import { handleRecomputeInvestorConfidence } from "#src/jobs/recompute-investor-confidence.js";
 import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
-import { handleReconcileEscrowLedger } from "#src/jobs/reconcile-escrow-ledger.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import {
   handleCloseCompensationPeriodTick,
-  handleReconcileEscrowLedgerTick,
   handleRecomputeCompensationDraftTick,
   handleRecomputeDailyLogStreaksTick,
   handleRecomputeDemandSignalsTick,
@@ -28,7 +26,6 @@ import {
   handleRefreshTalentProjectionsTick,
   handleSweepDisputeWindowsTick,
 } from "#src/jobs/scheduled-ticks.js";
-import { handleSubmitProviderTransfer } from "#src/jobs/submit-provider-transfer.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
 import {
   handleAnalyzeSubstance,
@@ -277,22 +274,14 @@ async function startWorker(): Promise<void> {
     runJob(JOB_NAMES.recomputeEquitySnapshot, handleRecomputeEquitySnapshot),
   );
 
-  // §7 — funding and escrow.
-  await boss.work(
-    JOB_NAMES.submitProviderTransfer,
-    workOptions,
-    runJob(JOB_NAMES.submitProviderTransfer, handleSubmitProviderTransfer),
-  );
-  await boss.work(
-    JOB_NAMES.reconcileEscrowLedgerTick,
-    workOptions,
-    runJob(JOB_NAMES.reconcileEscrowLedgerTick, handleReconcileEscrowLedgerTick),
-  );
-  await boss.work(
-    JOB_NAMES.reconcileEscrowLedger,
-    workOptions,
-    runJob(JOB_NAMES.reconcileEscrowLedger, handleReconcileEscrowLedger),
-  );
+  // §7 — funding.
+  //
+  // THREE QUEUES ARE DELIBERATELY UNBOUND HERE: `submit-provider-transfer`,
+  // `reconcile-escrow-ledger` and its tick. Escrow has left this domain (§7A.6) and
+  // nothing enqueues them any more — `createPledge` records a commitment and stops. Their
+  // handlers and queue definitions survive so migration 0016's rows stay explicable and
+  // an operator can still drain anything left in flight by hand, but no worker subscribes
+  // and no cron fires.
   await boss.work(
     JOB_NAMES.recomputeInvestorConfidenceTick,
     workOptions,

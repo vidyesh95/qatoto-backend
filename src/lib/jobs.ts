@@ -55,9 +55,13 @@ export const JOB_NAMES = {
   sweepDisputeWindows: "sweep-dispute-windows",
   recomputeEquitySnapshotTick: "recompute-equity-snapshot-tick",
   recomputeEquitySnapshot: "recompute-equity-snapshot",
-  // §7's funding and escrow jobs. `submit-provider-transfer` is enqueued INSIDE the
-  // pledge transaction, because §7 puts the provider call in a worker and never in the
-  // request handler — a hanging card network must not hold an Express worker.
+  // THESE THREE ARE RETIRED (§7A.6). Nothing enqueues them, no worker subscribes to them
+  // and no cron fires them: escrow left this domain, `createPledge` records a commitment
+  // and stops, and there is no provider balance left to reconcile against. The names
+  // survive so migration 0016's queue rows stay explicable and an operator can drain
+  // anything still in flight by hand. **Do not re-bind them** — putting Qatoto back in
+  // the position of holding someone else's money is a licensing decision taken with
+  // counsel, not a code change.
   submitProviderTransfer: "submit-provider-transfer",
   reconcileEscrowLedgerTick: "reconcile-escrow-ledger-tick",
   reconcileEscrowLedger: "reconcile-escrow-ledger",
@@ -556,10 +560,11 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   [JOB_NAMES.sweepDisputeWindowsTick]: "* * * * *",
   // After the streak decay, so the nightly cap table is computed over a settled ledger.
   [JOB_NAMES.recomputeEquitySnapshotTick]: "45 3 * * *",
-  // HOURLY (§4e). Reconciliation is a comparison, not a correction: it never patches the
-  // ledger, it posts the delta into `reconciliation_suspense` and alarms. Running it often
-  // is cheap and shortens the window in which a discrepancy is invisible.
-  [JOB_NAMES.reconcileEscrowLedgerTick]: "20 * * * *",
+  // `reconcile-escrow-ledger-tick` IS NO LONGER SCHEDULED (§7A.6). Nothing in this domain
+  // has a provider balance to disagree with any more, so there is nothing to reconcile.
+  // The queue definition survives so migration 0016's rows stay explicable; the schedule
+  // does not, because a cron firing hourly against a retired surface is noise an operator
+  // will learn to ignore.
   // After the equity snapshot at 03:45, because investor confidence reads the cap table's
   // dispute history and a signal computed over a half-recomputed ledger is a signal that
   // changes when nothing changed.

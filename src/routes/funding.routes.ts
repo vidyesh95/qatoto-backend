@@ -2,24 +2,22 @@ import express from "express";
 
 import * as fundingController from "#src/controllers/funding.controller.js";
 import { parseCompactJsonBody } from "#src/middleware/json-body.js";
-import {
-  chainVerifyLimiter,
-  escrowReleaseLimiter,
-  escrowSettlementLimiter,
-  fundingRoundWriteLimiter,
-  pledgeLimiter,
-} from "#src/middleware/rate-limit.js";
+import { fundingRoundWriteLimiter, pledgeLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 
 /**
- * Funding and escrow (R_AND_D_BACKEND_STRUCTURE.md §7, §11c).
+ * Funding as a record of intent (R_AND_D_BACKEND_STRUCTURE.md §7, §11g).
+ *
+ * ESCROW IS GONE FROM THIS FILE. What remains is rounds, pledges and milestones, with the
+ * custody removed from underneath them. A pledge is a COMMITMENT: no card is charged, no
+ * funds are held, no fee is taken, and no client copy may imply otherwise.
  *
  * TWO ROUTERS, exactly as proof-of-effort.routes.ts exports a default plus
  * `integrationCallbackRouter`:
  *
- *   default            mounted at "/" — /funding-rounds, /pledges, /milestones,
- *                      /escrow-releases, /provider-transfers, /funding/deals. These are
+ *   default            mounted at "/" — /funding-rounds, /pledges, /milestones and
+ *                      /funding/deals. These are
  *                      keyed on an INTERNAL id rather than a project slug, because a
  *                      backer arriving from a deal-flow list has a round id and no reason
  *                      to know which project owns it. Each handler resolves the id to a
@@ -34,11 +32,12 @@ import { requireIdentifiedUser } from "#src/middleware/require-identified-user.j
  * `req.user.id`.
  *
  * WHERE `requireIdentifiedUser` GOES, by §4a's structural rule rather than by feel: every
- * write that MOVES MONEY or commits to moving it. That is a pledge, a cancellation, a
- * release request, an approval, a rejection and a settlement — because `requireAuth` proves
- * a session exists and an anonymous sign-in creates a real session (§4a Layer 1). It is
- * NOT on round and milestone planning writes, which are already behind a project role that
- * an anonymous account cannot hold.
+ * write that COMMITS someone to something. That is a pledge and its cancellation, because
+ * `requireAuth` proves a session exists and an anonymous sign-in creates a real session
+ * (§4a Layer 1) — and `raisedAmountInCents`, `backersCount` and the investor-confidence
+ * signal are exactly the numbers unlimited throwaway identities would inflate. It is NOT
+ * on round and milestone planning writes, which are already behind a project role that an
+ * anonymous account cannot hold.
  *
  * NO AUTHORIZATION MIDDLEWARE. Membership and role are proven inside each controller via
  * `requireProjectRole`, because a middleware cannot return a `Result` and so cannot
@@ -46,15 +45,12 @@ import { requireIdentifiedUser } from "#src/middleware/require-identified-user.j
  * stranger cannot probe which projects exist.
  *
  * ROUTE ORDER: literal segments before `/:id`, everywhere. `/pledges/mine` precedes
- * `/pledges/:pledgeId/cancel`; `/provider-transfers/pending` precedes
- * `/provider-transfers/:transferId/settle`; `/funding/deals` shares no prefix with
- * `/funding-rounds` at all, because Express matches whole segments.
+ * `/pledges/:pledgeId/cancel`; `/funding/deals` shares no prefix with `/funding-rounds` at
+ * all, because Express matches whole segments.
  *
- * **THERE IS NO `POST /webhooks/payments/stripe`, AND NO RAW-BODY MOUNT.** §11: the three
- * providers that would have signed a webhook are all deferred (Appendix A), and adding a
- * raw-body branch for a route that does not exist is a security surface bought for nothing.
- * Settlement runs through `POST /provider-transfers/:transferId/settle` instead, gated on
- * the platform `audit_escrow` capability.
+ * **THERE IS NO `POST /webhooks/payments/stripe`, AND NO RAW-BODY MOUNT.** §11, and it is
+ * now permanent rather than deferred: this domain moves no money at all, so there is no
+ * provider to sign a webhook and nothing for one to say.
  */
 
 const router = express.Router();
@@ -143,77 +139,36 @@ router.put(
   fundingController.putMilestoneVariance,
 );
 
-/** `POST /milestones/:milestoneId/escrow-releases` — `{ requestNote? }`, NO amount field. */
-router.post(
-  "/milestones/:milestoneId/escrow-releases",
-  requireAuth,
-  escrowReleaseLimiter,
-  requireIdentifiedUser,
-  parseCompactJsonBody,
-  fundingController.requestEscrowRelease,
-);
-
-// --- The four-eyes decision. Requester ≠ approver, checked in the service, EVEN FOR A
-// --- FOUNDER, and answered 422 SELF_APPROVAL_FORBIDDEN.
-
-router.post(
-  "/escrow-releases/:releaseId/approve",
-  requireAuth,
-  escrowReleaseLimiter,
-  requireIdentifiedUser,
-  parseCompactJsonBody,
-  fundingController.approveEscrowRelease,
-);
-
-router.post(
-  "/escrow-releases/:releaseId/reject",
-  requireAuth,
-  escrowReleaseLimiter,
-  requireIdentifiedUser,
-  parseCompactJsonBody,
-  fundingController.rejectEscrowRelease,
-);
-
-// --- Settlement. THE STAND-IN FOR THE STRIPE WEBHOOK (Appendix A3). `/pending` is a
-// --- LITERAL and MUST precede `/:transferId/…`.
-
-/** The settlement auditor's work queue. `audit_escrow` only. */
-router.get("/provider-transfers/pending", requireAuth, fundingController.listPendingSettlements);
-
-/**
- * The ONE path that moves `raisedAmountInCents`, `backersCount` and the settled balances.
- *
- * A HUMAN holding `audit_escrow`, never a timer and never the submitting worker: the
- * moment settlement becomes automatic, the audit story is that the system agreed with
- * itself. The capability is checked BEFORE the transfer is loaded, or the route becomes an
- * id oracle.
- */
-router.post(
-  "/provider-transfers/:transferId/settle",
-  requireAuth,
-  escrowSettlementLimiter,
-  requireIdentifiedUser,
-  parseCompactJsonBody,
-  fundingController.decideSettlement("settled"),
-);
-
-router.post(
-  "/provider-transfers/:transferId/fail",
-  requireAuth,
-  escrowSettlementLimiter,
-  requireIdentifiedUser,
-  parseCompactJsonBody,
-  fundingController.decideSettlement("failed"),
-);
+// --- THE ESCROW SUBTREE IS RETIRED (§7A.6, §11g).
+//
+// Nine routes are gone from this file: /milestones/:id/escrow-releases,
+// /escrow-releases/:id/approve and /reject, /provider-transfers/pending, /settle and
+// /fail, and the four /:projectSlug/escrow/* reads below. They return 404 now.
+//
+// NOT A COST DECISION AND NOT REVERSIBLE BY A BUDGET. Holding funds for later payout
+// requires payment-institution authorisation under PSD2 in the EU, state
+// money-transmitter licensing plus FinCEN registration in the US, and RBI
+// payment-aggregator authorisation with a 15-crore net-worth floor in India — none of
+// which turns on whether a fee is charged. Worse, escrow release had become the gate on
+// cash compensation, which made a wage conditional on an algorithmic verdict: unlawful
+// withholding under the FLSA, national EU wage law and 18 of India's Code on Wages 2019.
+//
+// What replaces them is compensation.routes.ts (7A): Qatoto computes what is owed,
+// freezes it, and records the payment the parties make between themselves.
+//
+// The tables, services and migration 0016 are still on disk and in the database,
+// unreachable and uncalled. The ledger design is preserved for the commerce domain in
+// docs/ESCROW_LEDGER_STRUCTURE.md, where a buyer-seller hold is a real requirement.
 
 /**
  * The project-scoped half, mounted at `/research-projects` AFTER the projects, workshop and
  * proof-of-effort routers. This one owns `/:projectSlug/funding-rounds`,
- * `/:projectSlug/milestones`, `/:projectSlug/escrow/*`, `/:projectSlug/compensation` and
+ * `/:projectSlug/milestones`, `/:projectSlug/compensation` and
  * `/:projectSlug/investor-confidence`.
  *
- * `/:projectSlug/audit-trail` is NOT here — §9's router already owns it, and the escrow
- * journal's own chain is exposed at `/escrow/verify` beside the ledger it verifies.
+ * `/:projectSlug/audit-trail` is NOT here — §9's router already owns it. §7A's statement
+ * chain is verified at `/:projectSlug/compensation-periods/:periodId/verify`, on the
+ * compensation router.
  */
 export const projectFundingRouter = express.Router();
 
@@ -245,36 +200,7 @@ projectFundingRouter.post(
   fundingController.createMilestone,
 );
 
-// --- Escrow reads. `/escrow/verify` is a LITERAL and MUST precede
-// --- `/escrow/ledger/:entryId/hash-input`; they are different paths, but the ordering
-// --- rule is stated here so nobody later adds `/escrow/:something` above them.
-
-projectFundingRouter.get(
-  "/:projectSlug/escrow/summary",
-  requireAuth,
-  fundingController.getEscrowSummary,
-);
-
-/** A break returns 409 ESCROW_CHAIN_BROKEN — an operational emergency, not a 200 field. */
-projectFundingRouter.get(
-  "/:projectSlug/escrow/verify",
-  requireAuth,
-  chainVerifyLimiter,
-  fundingController.verifyEscrowChain,
-);
-
-/** The anti-theatre endpoint: the canonical bytes, so a client can check our arithmetic. */
-projectFundingRouter.get(
-  "/:projectSlug/escrow/ledger/:entryId/hash-input",
-  requireAuth,
-  fundingController.getEscrowHashInput,
-);
-
-projectFundingRouter.get(
-  "/:projectSlug/escrow/ledger",
-  requireAuth,
-  fundingController.listEscrowLedger,
-);
+// --- The four `/:projectSlug/escrow/*` reads are RETIRED. See the note above.
 
 projectFundingRouter.get(
   "/:projectSlug/compensation",

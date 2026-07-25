@@ -42,7 +42,7 @@
     "db:smoke-workshop": "tsx --conditions=development scripts/smoke-workshop-pipeline.ts",
     "db:smoke-daily-log-analysis": "tsx --conditions=development scripts/smoke-daily-log-analysis.ts",
     "db:smoke-proof-of-effort": "tsx --conditions=development scripts/smoke-proof-of-effort.ts",
-    "db:smoke-funding-escrow": "tsx --conditions=development scripts/smoke-funding-escrow.ts",
+    "db:smoke-funding": "tsx --conditions=development scripts/smoke-funding.ts",
     "db:expire-stale-project-requests": "tsx --conditions=development scripts/expire-stale-project-requests.ts",
     "db:reconcile-project-stats": "tsx --conditions=development scripts/reconcile-project-stats.ts",
     "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",

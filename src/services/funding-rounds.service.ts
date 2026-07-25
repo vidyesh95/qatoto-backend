@@ -1,20 +1,14 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { fromDrizzle } from "pg-boss";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
-import {
-  escrowJournalEntry,
-  fundingRound,
-  fundingRoundPledge,
-  providerTransfer,
-  researchProject,
-  user,
-} from "#src/db/schema.js";
-import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
+import { fundingRound, fundingRoundPledge, researchProject, user } from "#src/db/schema.js";
 import { BASIS_POINTS_TOTAL, divRoundHalfAwayFromZero } from "#src/lib/money.js";
-import { createTransfer } from "#src/services/escrow-provider-adapter.service.js";
-import { appendJournalEntry, appendReversingEntry } from "#src/services/escrow.service.js";
+// NOTHING FROM escrow.service.ts OR escrow-provider-adapter.service.ts IS IMPORTED HERE
+// ANY MORE, and the absence is the point (§7A.6). A pledge is a commitment: no journal
+// entry, no posting, no provider transfer, no job. If a future edit needs one of those
+// imports back, the change it is part of is a custody decision taken with counsel, not a
+// refactor.
 import { appendAuditEntry } from "#src/services/project-audit.service.js";
 import type {
   ProjectAccessError,
@@ -478,21 +472,34 @@ function toPledgeView(row: typeof fundingRoundPledge.$inferSelect): PledgeView {
 /**
  * `POST /funding-rounds/:roundId/pledges` — body `{ amountInCents }` and nothing else.
  *
- * ORDER OF OPERATIONS, and every step of it is §7's:
+ * **A PLEDGE IS A COMMITMENT, NOT A CHARGE** (§7, "What survives here"). No card is
+ * charged, no funds are held, no fee is taken, and no client copy may imply otherwise:
+ * the response says a commitment was recorded, never that a payment succeeded. A client
+ * that says otherwise is lying to a backer about where their money is.
+ *
+ * ORDER OF OPERATIONS:
  *
  *   1. re-bound the amount against the ROUND's own min/max — the client's copy of those
  *      numbers is not consulted;
- *   2. derive the fee from config basis points through src/lib/money.ts;
- *   3. resolve the currency from the round;
- *   4. write `provider_transfer` with OUR randomUUID idempotency key BEFORE any provider
- *      call exists to make;
- *   5. append `pledge_authorized` with settlement `pending`;
- *   6. enqueue the submission INSIDE this transaction, so a job never runs against a
- *      pledge that rolled back and a committed pledge is never left unqueued.
+ *   2. resolve the currency from the round;
+ *   3. record the pledge and move `raisedAmountInCents` / `backersCount` in ONE
+ *      transaction;
+ *   4. append the audit entry in that same transaction.
  *
- * The provider call itself happens in a WORKER, never in this request handler.
+ * WHAT USED TO BE HERE AND IS GONE: a `provider_transfer` row, a `pledge_authorized`
+ * journal entry with its escrow postings, a platform-fee posting, and a
+ * `submit-provider-transfer` job. All of it existed to move money into a pool Qatoto
+ * controlled, and Qatoto controls no pool — custody is regulated in all three target
+ * jurisdictions whether or not a fee is charged (§7A.6 item 1).
  *
- * `raisedAmountInCents` DOES NOT MOVE HERE. That is the property §17 step 4 tests.
+ * `raisedAmountInCents` DOES MOVE HERE NOW, and that is a change from the escrow design
+ * rather than a regression. `escrow-settlement.service.ts` used to be its only writer,
+ * gated on an auditor settling a transfer; with no settlement step, leaving it there
+ * would freeze every funding page at zero raised forever. §7 defines the counter as a sum
+ * of COMMITTED pledges and every read projection labels it so.
+ *
+ * §17 step 4's tampering test is unaffected: the amount is still re-bound against the
+ * round's own min/max, and every one of §7's rejected keys still 422s.
  */
 export async function createPledge(input: {
   readonly roundId: string;
@@ -549,18 +556,12 @@ export async function createPledge(input: {
     };
   }
 
+  // Zero, and it stays zero (§0). Retained on the row so a pledge recorded today is
+  // shaped like migration 0016's historical ones and a single query still reads both.
   const platformFeeInCents = derivePlatformFeeInCents(input.amountInCents);
-  const netToEscrowInCents = input.amountInCents - platformFeeInCents;
   const occurredAt = new Date();
 
   const created = await db.transaction(async (tx) => {
-    const transfer = await createTransfer(tx, {
-      projectId: round.projectId,
-      direction: "inbound",
-      amountInCents: input.amountInCents,
-      currency: round.currency,
-    });
-
     const [pledge] = await tx
       .insert(fundingRoundPledge)
       .values({
@@ -569,10 +570,19 @@ export async function createPledge(input: {
         backerUserId: input.backerUserId,
         amountInCents: input.amountInCents,
         platformFeeInCents,
-        netToEscrowInCents,
+        // No fee is taken, so the whole commitment is the commitment. The column keeps
+        // its name because 0016's rows use it; nothing reads it as "money in a pool" any
+        // more, because there is no pool.
+        netToEscrowInCents: input.amountInCents - platformFeeInCents,
         currency: round.currency,
+        // `pending` NOW MEANS COMMITTED, not authorized-and-awaiting-capture. No card is
+        // charged and no funds are held, so there is nothing for a later state to
+        // transition to — `settled` is reserved for migration 0016's historical rows,
+        // which really did pass through a settlement step.
         status: "pending",
-        providerTransferId: transfer.id,
+        // NO PROVIDER TRANSFER. Qatoto holds no funds and operates no payout rail
+        // (§7A.6), so there is nothing to submit and nobody to submit it to.
+        providerTransferId: null,
       })
       .returning();
 
@@ -580,48 +590,42 @@ export async function createPledge(input: {
       throw new Error("createPledge: insert returned no row");
     }
 
-    await appendJournalEntry(tx, {
+    // THE COUNTERS MOVE HERE NOW, and this is the one behavioural change that came with
+    // retiring escrow. `escrow_settlement.service.ts` used to be the sole writer of these
+    // two columns, gated on an auditor settling a provider transfer. With no custody
+    // there is no settlement step, and leaving them to it would freeze every funding page
+    // at zero raised, forever.
+    //
+    // §7's "What survives here" is explicit that they are sums of COMMITTED pledges, and
+    // every read projection labels them so. They are not money received.
+    await tx
+      .update(fundingRound)
+      .set({
+        raisedAmountInCents: sql`${fundingRound.raisedAmountInCents} + ${input.amountInCents}`,
+        backersCount: sql`${fundingRound.backersCount} + 1`,
+      })
+      .where(eq(fundingRound.id, round.id));
+
+    // The audit chain still records it. A commitment is a fact about who backed what and
+    // when, and §9's chain is where this domain keeps facts.
+    await appendAuditEntry(tx, {
       projectId: round.projectId,
-      currency: round.currency,
-      kind: "pledge_authorized",
+      eventKind: "pledge_recorded",
+      actorUserId: input.backerUserId,
+      actorRoleSnapshot: "backer",
+      actionLabel: "Recorded a pledge commitment",
+      targetLabel: `pledge ${pledge.id}`,
       // SERVER-COMPOSED prose. The one deliberate display string in this domain (§7),
       // written here rather than on three clients so web/Kotlin/Swift cannot drift.
-      description: `Pledge authorized — ${round.currency} ${input.amountInCents.toString()} toward ${round.title}`,
-      settlement: "pending",
-      occurredAt,
-      postings: [
-        { accountKind: "provider_clearing", signedAmountInCents: -input.amountInCents },
-        { accountKind: "escrow_held", signedAmountInCents: netToEscrowInCents },
-        ...(platformFeeInCents === 0n
-          ? []
-          : [{ accountKind: "platform_fee" as const, signedAmountInCents: platformFeeInCents }]),
-      ],
-      linkedPledgeId: pledge.id,
-      createdByUserId: input.backerUserId,
-      auditEventKind: "pledge_recorded",
-      actorRoleSnapshot: "backer",
-      auditActionLabel: "Recorded a pledge",
-      auditTargetLabel: `pledge ${pledge.id}`,
-    });
-
-    // Enlisted in THIS transaction. Outside it you get either a pledge nobody ever submits
-    // (the enqueue failed after the commit, invisibly) or a job running against a row that
-    // rolled back.
-    const enqueued = await sendJob(
-      JOB_NAMES.submitProviderTransfer,
-      { transferId: transfer.id },
-      {
-        idempotencyKey: idempotencyKeyFor.submitProviderTransfer(transfer.id),
-        // THE point of this whole transaction: the job row and the pledge commit or roll
-        // back together.
-        db: fromDrizzle(tx, sql),
+      detailNote: `Commitment recorded — ${round.currency} ${input.amountInCents.toString()} toward ${round.title}. No funds were charged or held.`,
+      payload: {
+        pledgeId: pledge.id,
+        roundId: round.id,
+        amountInCents: input.amountInCents,
+        currency: round.currency,
       },
-    );
-    if (!enqueued.success) {
-      // A pledge whose submission cannot be queued is a pledge that will sit `created`
-      // forever with nobody watching. Roll the whole thing back and let the caller retry.
-      throw new Error(`createPledge: could not enqueue submission (${enqueued.error.type})`);
-    }
+      occurredAt,
+    });
 
     return pledge;
   });
@@ -691,58 +695,43 @@ export async function cancelPledge(
       return { kind: "not-cancellable", status: pledge.status } as const;
     }
 
-    const [authorizingEntry] = await tx
-      .select({ id: escrowJournalEntry.id })
-      .from(escrowJournalEntry)
-      .where(
-        and(
-          eq(escrowJournalEntry.linkedPledgeId, pledge.id),
-          eq(escrowJournalEntry.kind, "pledge_authorized"),
-        ),
-      )
-      .orderBy(escrowJournalEntry.sequenceNumber)
-      .limit(1);
-
     const cancelledAt = new Date();
-
-    if (authorizingEntry) {
-      await appendReversingEntry(tx, {
-        projectId: pledge.projectId,
-        reversesJournalEntryId: authorizingEntry.id,
-        kind: "pledge_cancelled",
-        description: `Pledge cancelled by the backer — authorization released`,
-        // `failed` files with the pending bucket, which is where the authorization it
-        // cancels lives. See the header of escrow.service.ts.
-        settlement: "failed",
-        occurredAt: cancelledAt,
-        createdByUserId: backerUserId,
-        auditEventKind: "pledge_cancelled",
-        actorRoleSnapshot: "backer",
-        auditActionLabel: "Cancelled a pledge",
-        auditTargetLabel: `pledge ${pledge.id}`,
-      });
-    }
 
     await tx
       .update(fundingRoundPledge)
       .set({ status: "cancelled", cancelledAt })
       .where(eq(fundingRoundPledge.id, pledgeId));
 
-    // The transfer never went anywhere; mark it so the submit worker skips it. Scoped to
-    // the two non-terminal statuses because the identity trigger rejects a transition out
-    // of `settled` — and a pledge that settled between the status read above and here is a
-    // race we must lose loudly rather than silently un-settle.
-    if (pledge.providerTransferId !== null) {
-      await tx
-        .update(providerTransfer)
-        .set({ status: "cancelled" })
-        .where(
-          and(
-            eq(providerTransfer.id, pledge.providerTransferId),
-            inArray(providerTransfer.status, ["created", "submitted"]),
-          ),
-        );
-    }
+    // THE COUNTERS COME BACK DOWN, in the same transaction that cancelled the pledge.
+    // A withdrawn commitment that left `raisedAmountInCents` where it was would tell an
+    // outsider that strangers still back this project when one of them has said they do
+    // not — which is precisely the number `SELF_PLEDGE_FORBIDDEN` exists to protect.
+    await tx
+      .update(fundingRound)
+      .set({
+        raisedAmountInCents: sql`${fundingRound.raisedAmountInCents} - ${pledge.amountInCents}`,
+        backersCount: sql`GREATEST(${fundingRound.backersCount} - 1, 0)`,
+      })
+      .where(eq(fundingRound.id, pledge.roundId));
+
+    // No reversing journal entry and no provider transfer to cancel: nothing was held and
+    // nothing was submitted (§7A.6). The audit chain still records the withdrawal,
+    // because who withdrew and when is a fact this domain keeps.
+    await appendAuditEntry(tx, {
+      projectId: pledge.projectId,
+      eventKind: "pledge_cancelled",
+      actorUserId: backerUserId,
+      actorRoleSnapshot: "backer",
+      actionLabel: "Withdrew a pledge commitment",
+      targetLabel: `pledge ${pledge.id}`,
+      payload: {
+        pledgeId: pledge.id,
+        roundId: pledge.roundId,
+        amountInCents: pledge.amountInCents,
+        currency: pledge.currency,
+      },
+      occurredAt: cancelledAt,
+    });
 
     const [updated] = await tx
       .select()
@@ -785,11 +774,20 @@ export interface RoundBackerView {
 }
 
 /**
- * `GET /funding-rounds/:roundId/backers`.
+ * `GET /funding-rounds/:roundId/backers` — everyone whose commitment still stands.
  *
- * SETTLED PLEDGES ONLY. A pending authorization is not a backer — it is an intent that may
- * still decline — and listing it would let anyone inflate a public backer list for free by
- * pledging and never settling.
+ * COMMITTED AND HISTORICALLY SETTLED, never `cancelled`, `failed` or `refunded`. The old
+ * rule was "settled only", which made sense when a pledge passed through a card network
+ * that could decline it; with no custody there is no settlement step, and filtering to
+ * `settled` would show an empty backer list on every round created from now on while
+ * still showing migration 0016's historical rows — the worst of both.
+ *
+ * A withdrawn commitment leaves the list because `cancelPledge` moves it to `cancelled`
+ * and decrements the counters in the same transaction, so the list and
+ * `backersCount` cannot disagree.
+ *
+ * **THESE ARE COMMITMENTS, NOT PAYMENTS**, and every client rendering this list must say
+ * so (§7). Nobody here has been charged anything.
  */
 export async function listRoundBackers(
   roundId: string,
@@ -810,7 +808,12 @@ export async function listRoundBackers(
     })
     .from(fundingRoundPledge)
     .innerJoin(user, eq(user.id, fundingRoundPledge.backerUserId))
-    .where(and(eq(fundingRoundPledge.roundId, roundId), eq(fundingRoundPledge.status, "settled")))
+    .where(
+      and(
+        eq(fundingRoundPledge.roundId, roundId),
+        inArray(fundingRoundPledge.status, ["pending", "settled"]),
+      ),
+    )
     .orderBy(desc(fundingRoundPledge.settledAt), desc(fundingRoundPledge.id))
     .limit(limit)
     .offset((page - 1) * limit);
