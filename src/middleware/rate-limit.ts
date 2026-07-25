@@ -550,3 +550,54 @@ export const escrowSettlementLimiter = rateLimit({
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
 });
+
+/**
+ * POST …/members/:id/compensation-agreement · …/accept (§7A.2).
+ *
+ * A negotiation, not a loop. A founder proposing pay for a ten-person team in one sitting
+ * fits comfortably; a script walking every member id does not. The accept side shares the
+ * bound because it is the same conversation from the other end.
+ */
+export const compensationAgreementLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/compensation-periods/:id/finalize · /countersign · /supersede (§7A.5).
+ *
+ * The lowest bound in this file, and for the same reason `escrowReleaseLimiter` was:
+ * these are the acts that decide what someone is owed, and none of them is a thing anyone
+ * does in a loop. Finalizing is once a month per project. A low ceiling also blunts the
+ * obvious grief — supersede, supersede, supersede — which would otherwise let one account
+ * fill a project's audit chain with reversals.
+ */
+export const compensationPeriodDecisionLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});
+
+/**
+ * POST …/compensation-period-lines/:lineId/payments · …/confirm (§7A).
+ *
+ * Higher than the decision bound because a founder settling a month for a large team
+ * records one attestation per line in a single sitting, and each one is append-only
+ * evidence rather than a state change. The idempotency key already makes a retried POST
+ * harmless, so this is an abuse bound rather than a correctness one.
+ */
+export const paymentRecordLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});

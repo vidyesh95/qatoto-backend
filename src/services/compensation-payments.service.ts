@@ -8,6 +8,7 @@ import {
   projectMember,
   user,
 } from "#src/db/schema.js";
+import { containsPaymentInstrument } from "#src/lib/payment-instrument.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { appendAuditEntry } from "#src/services/project-audit.service.js";
 import type { ProjectAccessError } from "#src/services/project-membership.service.js";
@@ -36,11 +37,11 @@ import type { Result } from "#src/types/index.js";
  * ═══ NO PAYMENT INSTRUMENT IS EVER STORED ════════════════════════════════════════════
  *
  * No account number, no IBAN, no UPI handle, no card detail. The `.strict()` schema
- * rejects those KEYS outright (§7A's rejected-keys list); {@link scrubReferenceNote} below
- * rejects the VALUES, because a founder pasting a full card number into a free-text
- * reference field is a mistake rather than an attack and deserves a 422 rather than a
- * silent PCI-DSS scope expansion. Both, not either: a rejected key list is defeated by
- * putting the value somewhere else.
+ * rejects those KEYS outright (§7A's rejected-keys list); `containsPaymentInstrument`
+ * (src/lib/payment-instrument.ts) rejects the VALUES, because a founder pasting a full
+ * card number into a free-text reference field is a mistake rather than an attack and
+ * deserves a 422 rather than a silent PCI-DSS scope expansion. Both, not either: a
+ * rejected-key list is defeated by putting the value somewhere else.
  *
  * RECORDING A PAYMENT CHANGES NO LINE. `paidAmountInCents` may differ from the line's
  * gross — a partial payment is a fact, and forcing it to match would make the record lie
@@ -104,34 +105,6 @@ function toPaymentView(row: PaymentRow): CompensationPaymentView {
     confirmedByUserId: row.confirmedByUserId,
     createdAt: row.createdAt,
   };
-}
-
-/**
- * Any run of 13–19 digits, ignoring the spaces and hyphens people type into card numbers.
- * 13–19 is the ISO/IEC 7812 PAN length range; an IBAN is caught by the alphanumeric rule
- * below it.
- */
-const PAYMENT_INSTRUMENT_PATTERNS: readonly RegExp[] = [
-  // A PAN, with or without the grouping separators a human would type.
-  /(?:\d[ -]?){13,19}/,
-  // An IBAN: two letters, two check digits, then 11–30 alphanumerics.
-  /\b[A-Z]{2}\d{2}[ -]?(?:[A-Z0-9][ -]?){11,30}\b/i,
-];
-
-/**
- * Rejects a reference note that contains something shaped like a payment instrument.
- *
- * NOT A LUHN CHECK, deliberately. The point is to keep card and account numbers OUT of a
- * table that has no business holding them, not to decide whether a particular string is a
- * valid card — a near-miss PAN in a free-text field is the same PCI-DSS and breach problem
- * as a valid one, and hand-tuning the test toward "valid cards only" would let typos
- * through.
- *
- * A UTR, a payroll run id and a bank reference are all comfortably under 13 digits, so the
- * legitimate uses of this field are unaffected.
- */
-export function containsPaymentInstrument(referenceNote: string): boolean {
-  return PAYMENT_INSTRUMENT_PATTERNS.some((pattern) => pattern.test(referenceNote));
 }
 
 interface PayableLine {

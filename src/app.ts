@@ -12,6 +12,7 @@ import { parseLongFormJsonBody } from "#src/middleware/json-body.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import authRouter from "#src/routes/auth.routes.js";
+import compensationRouter from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
@@ -138,6 +139,16 @@ app.use("/research-projects", proofOfEffortRouter);
 // collision, for the same reason — a single-segment "/:projectSlug" never swallows a
 // deeper path.
 app.use("/research-projects", projectFundingRouter);
+// Same prefix a fifth time, declared AFTER all four: the compensation router owns
+// /:projectSlug/compensation-agreements/*, /compensation-periods/*,
+// /compensation-period-lines/* and /members/:memberUserId/compensation-agreement (§7A).
+// Still no collision, for the same reason — a single-segment "/:projectSlug" never
+// swallows a deeper path.
+//
+// Everything it owns is project-scoped, unlike §7's funding router: nobody reaches a
+// compensation statement holding an id and no project, so proving membership from the URL
+// is both possible and correct here.
+app.use("/research-projects", compensationRouter);
 app.use("/discovery", discoveryRouter);
 // Creator Studio. The anime review queue is nested at /videos/admin/review rather than a
 // root /admin, matching /discovery/admin/* — one domain's moderation surface should not
