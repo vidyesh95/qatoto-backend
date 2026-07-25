@@ -246,7 +246,7 @@ describe("hourlyGrossCents", () => {
     // §17 step 5b in miniature: the same inputs in any order produce the same integer.
     const inputs = Array.from({ length: 1_000 }, (_unused, index) => index + 1);
     const forward = inputs.map((minutes) => hourlyGrossCents(minutes, 12_345n));
-    const backward = [...inputs].reverse().map((minutes) => hourlyGrossCents(minutes, 12_345n));
-    expect(forward).toStrictEqual([...backward].reverse());
+    const backward = inputs.toReversed().map((minutes) => hourlyGrossCents(minutes, 12_345n));
+    expect(forward).toStrictEqual(backward.toReversed());
   });
 });

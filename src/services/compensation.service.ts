@@ -2,14 +2,13 @@ import { and, asc, desc, eq } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
-  escrowRelease,
   memberFairMarketRate,
-  milestone,
   openRoleCompensation,
   projectMember,
   projectOpenRole,
   user,
 } from "#src/db/schema.js";
+import { listProjectPayments } from "#src/services/compensation-payments.service.js";
 
 /**
  * `GET …/compensation` (R_AND_D_BACKEND_STRUCTURE.md §7, §11c).
@@ -34,11 +33,23 @@ import {
  * ---------------------------------------------------------------------------
  *
  * WHAT THIS ENDPOINT ACTUALLY ANSWERS: what has each member been promised, and what has
- * actually been paid out. Three sources, none of them writable here:
+ * actually been paid. Three sources, none of them writable here:
  *
  *   the locked rate      `member_fair_market_rate` (§9) — negotiated, member-accepted
  *   the advertised offer `open_role_compensation` (§5) — the founder's public promise
- *   the actual payouts   approved `escrow_release` rows (§7) — what left the pool
+ *   the actual payments  `compensation_payment_record` (§7A) — attested and confirmed
+ *
+ * THE THIRD SOURCE CHANGED, AND THE CHANGE IS THE POINT. It used to read approved
+ * `escrow_release` rows — "what left the pool". There is no pool: Qatoto holds no funds
+ * (§7A.6 item 1), and escrow left this domain because custody is regulated in all three
+ * target jurisdictions whether or not a fee is charged, and because an escrow release had
+ * become the gate on cash compensation, which made a wage conditional on an algorithmic
+ * verdict.
+ *
+ * So "paid" now means what it says on a payslip: the founder paid from their own bank and
+ * BOTH SIDES recorded it. `confirmedByMemberAt` travels with every row precisely so a
+ * client can render an unconfirmed payment as unconfirmed — a payment nobody has
+ * acknowledged receiving is one party's claim, not a record (§7A).
  */
 
 export interface MemberCompensationRateView {
@@ -89,11 +100,22 @@ export interface AdvertisedCompensationView {
 }
 
 export interface PaidOutCompensationView {
-  readonly releaseId: string;
-  readonly milestoneTitle: string;
+  readonly paymentId: string;
+  readonly memberUserId: string;
+  readonly memberName: string;
+  /** Which statement line this settled — `cash_retainer` or `cash_hourly`. */
+  readonly lineKind: string;
+  readonly periodStartDate: string;
   readonly amountInCents: string;
   readonly currency: string;
-  readonly paidAt: Date | null;
+  /** The calendar day the payer says the money left. Never an invented instant. */
+  readonly paidOnDate: string;
+  readonly methodKey: string;
+  /**
+   * NULL until the member confirms receipt. **A client rendering an unconfirmed payment
+   * as "paid" is telling someone they were paid on one party's word alone** (§7A).
+   */
+  readonly confirmedByMemberAt: Date | null;
 }
 
 export interface ProjectCompensationView {
@@ -101,7 +123,14 @@ export interface ProjectCompensationView {
   readonly members: readonly MemberCompensationView[];
   readonly advertised: readonly AdvertisedCompensationView[];
   readonly paidOut: readonly PaidOutCompensationView[];
+  /** Every attested payment, confirmed or not. */
   readonly totalPaidOutInCents: string;
+  /**
+   * The subtotal both sides agree on. Returned separately rather than as the only total,
+   * because the gap between the two IS the thing worth showing: it is exactly the money a
+   * founder says they sent and nobody has said they received.
+   */
+  readonly totalConfirmedPaidInCents: string;
 }
 
 function toRateView(row: typeof memberFairMarketRate.$inferSelect): MemberCompensationRateView {
@@ -163,20 +192,10 @@ export async function getProjectCompensation(
       .where(eq(projectOpenRole.projectId, projectId))
       .orderBy(asc(projectOpenRole.id), asc(openRoleCompensation.id)),
 
-    db
-      .select({
-        releaseId: escrowRelease.id,
-        milestoneTitle: milestone.title,
-        amountInCents: escrowRelease.amountInCents,
-        currency: escrowRelease.currency,
-        paidAt: escrowRelease.decidedAt,
-      })
-      .from(escrowRelease)
-      .innerJoin(milestone, eq(milestone.id, escrowRelease.milestoneId))
-      // APPROVED ONLY. A requested release is a request; showing it as compensation would
-      // tell a member they have been paid something nobody has approved.
-      .where(and(eq(escrowRelease.projectId, projectId), eq(escrowRelease.status, "approved")))
-      .orderBy(desc(escrowRelease.decidedAt), desc(escrowRelease.id)),
+    // Every attested payment, confirmed or not. Deliberately NOT filtered to confirmed:
+    // hiding an unconfirmed payment would leave a founder unable to see what they have
+    // already recorded, and they would record it twice.
+    listProjectPayments(projectId),
   ]);
 
   const ratesByMember = new Map<string, (typeof memberFairMarketRate.$inferSelect)[]>();
@@ -207,19 +226,36 @@ export async function getProjectCompensation(
     };
   });
 
-  const totalPaidOutInCents = payoutRows.reduce(
-    (runningTotal, payout) => runningTotal + payout.amountInCents,
-    0n,
-  );
+  // Summed as `bigint`, never as a JS number: a project's lifetime payments can exceed
+  // 2^53 cents in a currency with a small unit, and the moment one of these becomes a
+  // float the total is silently wrong (§4b).
+  let totalPaidOutInCents = 0n;
+  let totalConfirmedPaidInCents = 0n;
+  for (const payment of payoutRows) {
+    const amount = BigInt(payment.paidAmountInCents);
+    totalPaidOutInCents += amount;
+    if (payment.confirmedByMemberAt !== null) {
+      totalConfirmedPaidInCents += amount;
+    }
+  }
 
   return {
     currency,
     members,
     advertised: advertisedRows,
-    paidOut: payoutRows.map((payout) => ({
-      ...payout,
-      amountInCents: payout.amountInCents.toString(),
+    paidOut: payoutRows.map((payment) => ({
+      paymentId: payment.id,
+      memberUserId: payment.memberUserId,
+      memberName: payment.memberName,
+      lineKind: payment.lineKind,
+      periodStartDate: payment.periodStartDate,
+      amountInCents: payment.paidAmountInCents,
+      currency: payment.currency,
+      paidOnDate: payment.paidOnDate,
+      methodKey: payment.methodKey,
+      confirmedByMemberAt: payment.confirmedByMemberAt,
     })),
     totalPaidOutInCents: totalPaidOutInCents.toString(),
+    totalConfirmedPaidInCents: totalConfirmedPaidInCents.toString(),
   };
 }

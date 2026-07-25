@@ -11,6 +11,7 @@ import {
   researchProject,
   user,
 } from "#src/db/schema.js";
+import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import { recomputeOpenRoleStatus } from "#src/services/project-roles.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -163,6 +164,79 @@ export async function requireProjectRole(
       isFounder: row.memberRole === "founder",
     },
   };
+}
+
+/** What a second signatory was allowed to sign BY, recorded in whatever they signed. */
+export type SecondSignatoryBasis = "platform_auditor" | "project_admin";
+
+export interface SecondSignatoryStanding {
+  readonly authorized: boolean;
+  readonly basis: SecondSignatoryBasis | null;
+}
+
+/**
+ * THE FOUR-EYES TEST (§4a, §7A.5).
+ *
+ * The second signatory holds the platform `audit_escrow` capability, or a project `admin`
+ * role THEY DID NOT GRANT THEMSELVES.
+ *
+ * THE SELF-GRANT HALF IS THE ONE THAT IS EASY TO FORGET AND EASY TO EXPLOIT: four eyes
+ * bought by a founder handing themselves the second role is one pair of eyes with extra
+ * steps. `project_member.roleGrantedByUserId` plus its CHECK constraint makes it
+ * structural, and an `admin` row with a NULL grantor is refused here as un-provenanced —
+ * a row predating the column cannot prove it was not self-granted, and a number somebody
+ * will be paid on is the wrong place to give something the benefit of the doubt.
+ *
+ * A FOUNDER IS NOT AUTOMATICALLY A SECOND SIGNATORY. A founder ratifying their own
+ * project's statement with no second party is precisely the arrangement this exists to
+ * prevent — and §7A.5 says so in as many words, right down to the status code.
+ *
+ * WHY IT LIVES HERE rather than in the service that first needed it. It was written for
+ * §7's escrow release, and escrow is leaving this domain (§7A.6). Two-person control did
+ * not leave with it: it now guards `finalize` → `countersign`, which is where §7A puts the
+ * decision about what someone is owed. A rule this load-bearing must not be deleted
+ * alongside the first feature that happened to use it.
+ *
+ * The capability check runs BEFORE the membership read, deliberately — platform-role
+ * .service.ts's ordering rule. Reversed, the caller learns whether a project id exists
+ * before proving they may ask.
+ */
+export async function resolveSecondSignatoryStanding(
+  projectId: string,
+  signatoryUserId: string,
+): Promise<SecondSignatoryStanding> {
+  const staffResult = await requirePlatformCapability(signatoryUserId, "audit_escrow");
+  if (staffResult.success) {
+    return { authorized: true, basis: "platform_auditor" };
+  }
+
+  const [membership] = await db
+    .select({
+      projectRole: projectMember.projectRole,
+      roleGrantedByUserId: projectMember.roleGrantedByUserId,
+      userId: projectMember.userId,
+    })
+    .from(projectMember)
+    .where(
+      and(
+        eq(projectMember.projectId, projectId),
+        eq(projectMember.userId, signatoryUserId),
+        eq(projectMember.status, "active"),
+      ),
+    );
+
+  if (!membership || membership.projectRole !== "admin") {
+    return { authorized: false, basis: null };
+  }
+  // Un-provenanced or self-granted: not a second pair of eyes.
+  if (
+    membership.roleGrantedByUserId === null ||
+    membership.roleGrantedByUserId === membership.userId
+  ) {
+    return { authorized: false, basis: null };
+  }
+
+  return { authorized: true, basis: "project_admin" };
 }
 
 /** True when the caller is an active member of the project, at any role. */

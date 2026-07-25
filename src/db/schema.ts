@@ -6634,10 +6634,15 @@ export const compensationPeriod = pgTable(
       table.projectId,
       table.sequenceNumber,
     ),
-    // ONE open period per project. Two would make "this month" ambiguous and let the
-    // nightly draft write the same minutes into two statements.
-    uniqueIndex("compensation_period_projectId_open_unq")
-      .on(table.projectId)
+    // ONE open period per project PER MONTH. Deliberately not one per project: §7A.5's
+    // close job stops a period accruing WITHOUT freezing it, so a founder who has not
+    // finalized March yet must still be able to accrue April. Both are `open` at once,
+    // and that is the lifecycle working rather than a leak.
+    //
+    // Scoped to `open` so a supersede can create a second period over the SAME window —
+    // the predecessor is `superseded` by then, so only the replacement is open.
+    uniqueIndex("compensation_period_projectId_start_open_unq")
+      .on(table.projectId, table.periodStartDate)
       .where(sql`status = 'open'`),
     // The list read, ordered newest first and ending in a unique column (§4c rule 4).
     index("compensation_period_projectId_start_idx").on(
