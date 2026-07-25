@@ -243,3 +243,64 @@ export async function handleRecomputeInvestorConfidenceTick(
     );
   }
 }
+
+/**
+ * The daily period roll-over tick (§7A.5).
+ *
+ * DAILY, NOT MONTHLY, and the quantization is why. A period is one calendar month in the
+ * PROJECT'S own zone (§7A.3), so the roll-over lands on a different UTC instant for every
+ * project — 1 April begins in Kiritimati fourteen hours before it begins in Honolulu. A
+ * monthly cron would have to pick one instant and be wrong for every project outside it.
+ *
+ * `truncateToUtcDayStart` rather than the hour, so a double fire inside the same UTC day
+ * dedups to one job id. The handler asks each project's own zone whether its month has
+ * elapsed, so running daily costs one cheap comparison per project on the 29 days out of
+ * 30 when nothing has.
+ *
+ * SCHEDULED BEFORE THE DRAFT. If the draft ran first, it would spend a whole day writing
+ * the elapsed month's minutes into a period that should already have stopped accruing.
+ */
+export async function handleCloseCompensationPeriodTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcDayStart(readClock());
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.closeCompensationPeriod,
+    { asOf: asOfIso, projectId: null },
+    { idempotencyKey: idempotencyKeyFor.closeCompensationPeriod(asOfIso, null) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`close-compensation-period-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/**
+ * The nightly statement redraw tick (§7A.5).
+ *
+ * Scheduled AFTER the equity snapshot, because an `equity_delta` line reads the cap table:
+ * drafted over a half-recomputed ledger it would move when nothing moved, and a member
+ * watching their own statement cannot tell that apart from someone out-contributing them.
+ */
+export async function handleRecomputeCompensationDraftTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcDayStart(readClock());
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeCompensationDraft,
+    { asOf: asOfIso, projectId: null },
+    { idempotencyKey: idempotencyKeyFor.recomputeCompensationDraft(asOfIso, null) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-compensation-draft-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}

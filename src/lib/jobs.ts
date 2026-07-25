@@ -63,6 +63,14 @@ export const JOB_NAMES = {
   reconcileEscrowLedger: "reconcile-escrow-ledger",
   recomputeInvestorConfidenceTick: "recompute-investor-confidence-tick",
   recomputeInvestorConfidence: "recompute-investor-confidence",
+  // §7A's two jobs. Both are DAILY ticks, including the close — a period is a calendar
+  // month in the PROJECT'S own time zone (§7A.3), so "the month rolled over" lands on a
+  // different UTC instant for every project and a monthly cron would have to pick one of
+  // them and be wrong for everyone else.
+  recomputeCompensationDraftTick: "recompute-compensation-draft-tick",
+  recomputeCompensationDraft: "recompute-compensation-draft",
+  closeCompensationPeriodTick: "close-compensation-period-tick",
+  closeCompensationPeriod: "close-compensation-period",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -463,6 +471,56 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeInvestorConfidence),
     },
   },
+  [JOB_NAMES.closeCompensationPeriodTick]: {
+    name: JOB_NAMES.closeCompensationPeriodTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.closeCompensationPeriodTick),
+    },
+  },
+  [JOB_NAMES.closeCompensationPeriod]: {
+    name: JOB_NAMES.closeCompensationPeriod,
+    payloadSchema: ProjectScopedAsOfPayloadSchema,
+    queueOptions: {
+      // `singleton` for the same reason the reconciliation job is: two runs racing the
+      // same boundary would both walk a project forward. The chain-head lock and the
+      // partial unique index already make that safe, but two writers competing for one
+      // lock is wasted work rather than a race worth relying on.
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.closeCompensationPeriod),
+    },
+  },
+  [JOB_NAMES.recomputeCompensationDraftTick]: {
+    name: JOB_NAMES.recomputeCompensationDraftTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeCompensationDraftTick),
+    },
+  },
+  [JOB_NAMES.recomputeCompensationDraft]: {
+    name: JOB_NAMES.recomputeCompensationDraft,
+    payloadSchema: ProjectScopedAsOfPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeCompensationDraft),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -506,6 +564,20 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // dispute history and a signal computed over a half-recomputed ledger is a signal that
   // changes when nothing changed.
   [JOB_NAMES.recomputeInvestorConfidenceTick]: "5 4 * * *",
+  // DAILY, not monthly (§7A.3). A period is one calendar month in the PROJECT'S own zone,
+  // so the roll-over lands on a different UTC instant for every project — 1 April begins
+  // in Kiritimati fourteen hours before it begins in Honolulu. A monthly cron would have
+  // to pick one instant and be wrong for everyone else, and the error would be a whole
+  // day of somebody's wages in the wrong statement.
+  //
+  // At 00:10 UTC, EARLY: the close must run before the draft, or the draft spends a whole
+  // day writing the elapsed month's minutes into a period that should already have
+  // stopped accruing.
+  [JOB_NAMES.closeCompensationPeriodTick]: "10 0 * * *",
+  // After the equity snapshot at 03:45, because `equity_delta` reads the cap table and a
+  // statement drafted over a half-recomputed ledger is a statement that changes when
+  // nothing changed.
+  [JOB_NAMES.recomputeCompensationDraftTick]: "15 4 * * *",
 };
 
 export type JobEnqueueError =
@@ -730,6 +802,10 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.reconcileEscrowLedger]: ProjectScopedAsOfPayloadSchema,
   [JOB_NAMES.recomputeInvestorConfidenceTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeInvestorConfidence]: ProjectScopedAsOfPayloadSchema,
+  [JOB_NAMES.closeCompensationPeriodTick]: TickPayloadSchema,
+  [JOB_NAMES.closeCompensationPeriod]: ProjectScopedAsOfPayloadSchema,
+  [JOB_NAMES.recomputeCompensationDraftTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeCompensationDraft]: ProjectScopedAsOfPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -801,4 +877,11 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.reconcileEscrowLedger}:${asOfIso}:${projectId ?? "all"}`,
   recomputeInvestorConfidence: (asOfIso: string, projectId: string | null): string =>
     `${JOB_NAMES.recomputeInvestorConfidence}:${asOfIso}:${projectId ?? "all"}`,
+  // Keyed on `(asOf, project)` like the other recomputes. A double cron fire inside the
+  // same UTC day dedups to one job, and both jobs are idempotent anyway — the close looks
+  // a period up before allocating a sequence number, and the draft upserts.
+  closeCompensationPeriod: (asOfIso: string, projectId: string | null): string =>
+    `${JOB_NAMES.closeCompensationPeriod}:${asOfIso}:${projectId ?? "all"}`,
+  recomputeCompensationDraft: (asOfIso: string, projectId: string | null): string =>
+    `${JOB_NAMES.recomputeCompensationDraft}:${asOfIso}:${projectId ?? "all"}`,
 } as const;

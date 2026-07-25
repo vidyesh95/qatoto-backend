@@ -6,7 +6,9 @@ import { config } from "#src/config/index.js";
 import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
 import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
+import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
+import { handleRecomputeCompensationDraft } from "#src/jobs/recompute-compensation-draft.js";
 import { handleRecomputeDailyLogStreaks } from "#src/jobs/recompute-daily-log-streaks.js";
 import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals.js";
 import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapshot.js";
@@ -15,7 +17,9 @@ import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunit
 import { handleReconcileEscrowLedger } from "#src/jobs/reconcile-escrow-ledger.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import {
+  handleCloseCompensationPeriodTick,
   handleReconcileEscrowLedgerTick,
+  handleRecomputeCompensationDraftTick,
   handleRecomputeDailyLogStreaksTick,
   handleRecomputeDemandSignalsTick,
   handleRecomputeEquitySnapshotTick,
@@ -298,6 +302,38 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeInvestorConfidence,
     workOptions,
     runJob(JOB_NAMES.recomputeInvestorConfidence, handleRecomputeInvestorConfidence),
+  );
+
+  // §7A — compensation statements.
+  //
+  // FOUR MORE SUBSCRIPTIONS, ZERO MORE CONNECTIONS. Every `boss.work` here multiplexes
+  // over the single dedicated pool created above, capped at WORKER_DATABASE_POOL_MAX (4).
+  // The incident recorded below was caused by SEPARATE dead-letter subscriptions, not by
+  // subscription count as such — worth stating, because the obvious reading of that note
+  // is "never add a queue", and that is not what it says.
+  //
+  // ORDER MATTERS BETWEEN THESE TWO, and it is enforced by cron rather than here: the
+  // close runs at 00:10 and the draft at 04:15. A draft that ran first would spend a day
+  // writing an elapsed month's minutes into a period that should have stopped accruing.
+  await boss.work(
+    JOB_NAMES.closeCompensationPeriodTick,
+    workOptions,
+    runJob(JOB_NAMES.closeCompensationPeriodTick, handleCloseCompensationPeriodTick),
+  );
+  await boss.work(
+    JOB_NAMES.closeCompensationPeriod,
+    workOptions,
+    runJob(JOB_NAMES.closeCompensationPeriod, handleCloseCompensationPeriod),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeCompensationDraftTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeCompensationDraftTick, handleRecomputeCompensationDraftTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeCompensationDraft,
+    workOptions,
+    runJob(JOB_NAMES.recomputeCompensationDraft, handleRecomputeCompensationDraft),
   );
 
   // THE DEAD-LETTER QUEUES DELIBERATELY HAVE NO ALWAYS-ON WORKERS.
