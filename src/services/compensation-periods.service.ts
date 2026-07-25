@@ -386,24 +386,31 @@ export async function openPeriod(
 
   let inserted: PeriodRow | undefined;
   try {
-    [inserted] = await tx
-      .insert(compensationPeriod)
-      .values({
-        projectId,
-        sequenceNumber,
-        periodStartDate: bounds.periodStartDate,
-        periodEndDate: bounds.periodEndDate,
-        // Snapshotted at open so a later zone change cannot silently re-slice a month
-        // somebody has already signed (§7A.3).
-        timeZone: bounds.timeZone,
-        status: "open",
-      })
-      .returning();
+    // INSIDE A SAVEPOINT, and that is load-bearing rather than defensive. A failed
+    // statement aborts the WHOLE transaction in Postgres — every later query returns
+    // `25P02 current transaction is aborted` — so a bare try/catch here would swallow the
+    // real error and then fail the recovery read with a message about the wrong thing.
+    // Drizzle's nested `transaction` compiles to SAVEPOINT / ROLLBACK TO SAVEPOINT, which
+    // leaves the outer transaction usable.
+    await tx.transaction(async (savepoint) => {
+      [inserted] = await savepoint
+        .insert(compensationPeriod)
+        .values({
+          projectId,
+          sequenceNumber,
+          periodStartDate: bounds.periodStartDate,
+          periodEndDate: bounds.periodEndDate,
+          // Snapshotted at open so a later zone change cannot silently re-slice a month
+          // somebody has already signed (§7A.3).
+          timeZone: bounds.timeZone,
+          status: "open",
+        })
+        .returning();
+    });
   } catch (error: unknown) {
-    // The read above races another transaction that had not committed when we looked.
-    // Both wanted the period to exist, which is agreement rather than conflict — but the
-    // chain-head lock this transaction already holds serializes them, so reaching here at
-    // all means something outside `openPeriod` wrote the row.
+    // The read above races another transaction that had not committed when we looked, or
+    // a period already holds this sequence number. Both wanted the period to exist, which
+    // is agreement rather than conflict — but anything else is a real fault.
     if (!isUniqueViolation(error)) {
       throw error;
     }
@@ -422,7 +429,11 @@ export async function openPeriod(
         ),
       );
     if (!existing) {
-      throw new Error(`openPeriod: project ${projectId} has neither a new nor an existing period`);
+      throw new Error(
+        `openPeriod: project ${projectId} could not open ${bounds.periodStartDate} and has no ` +
+          `existing open period for it — sequence ${sequenceNumber} is probably already taken, ` +
+          "which means project_chain_head disagrees with compensation_period",
+      );
     }
     return existing;
   }
