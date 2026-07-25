@@ -12,7 +12,7 @@ import type { Result } from "#src/types/index.js";
 /**
  * Milestones and their variance (R_AND_D_BACKEND_STRUCTURE.md §7, §11c, §15).
  *
- * `escrowReleaseAmountInCents` LIVES HERE AND IS SNAPSHOTTED ELSEWHERE. A founder may edit
+ * `plannedPayoutInCents` LIVES HERE AND IS SNAPSHOTTED ELSEWHERE. A founder may edit
  * it freely while planning; the moment a release is requested,
  * escrow-releases.service.ts freezes the value onto the release row and the release pays
  * THAT number forever. Editing the milestone afterwards changes nothing about a payout in
@@ -57,7 +57,7 @@ export interface MilestoneView {
   readonly title: string;
   readonly description: string | null;
   readonly status: MilestoneStatus;
-  readonly escrowReleaseAmountInCents: string;
+  readonly plannedPayoutInCents: string;
   readonly currency: string;
   readonly dueDate: string | null;
   readonly completedAt: Date | null;
@@ -96,7 +96,7 @@ function toMilestoneView(
     title: row.title,
     description: row.description,
     status: row.status,
-    escrowReleaseAmountInCents: row.escrowReleaseAmountInCents.toString(),
+    plannedPayoutInCents: row.plannedPayoutInCents.toString(),
     currency: row.currency,
     dueDate: row.dueDate,
     completedAt: row.completedAt,
@@ -140,7 +140,7 @@ export async function listProjectMilestones(projectId: string): Promise<readonly
 export interface CreateMilestoneInput {
   readonly title: string;
   readonly description?: string | undefined;
-  readonly escrowReleaseAmountInCents: bigint;
+  readonly plannedPayoutInCents: bigint;
   readonly dueDate?: string | undefined;
 }
 
@@ -172,7 +172,7 @@ export async function createMilestone(
         title: input.title,
         description: input.description ?? null,
         status: "planned",
-        escrowReleaseAmountInCents: input.escrowReleaseAmountInCents,
+        plannedPayoutInCents: input.plannedPayoutInCents,
         // The currency is the PROJECT's (§4b). No body carries one.
         currency: context.currency,
         dueDate: input.dueDate ?? null,
@@ -193,7 +193,7 @@ export async function createMilestone(
 export interface UpdateMilestoneInput {
   readonly title?: string | undefined;
   readonly description?: string | null | undefined;
-  readonly escrowReleaseAmountInCents?: bigint | undefined;
+  readonly plannedPayoutInCents?: bigint | undefined;
   readonly dueDate?: string | null | undefined;
 }
 
@@ -230,8 +230,8 @@ export async function updateMilestone(
     .set({
       ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
-      ...(input.escrowReleaseAmountInCents !== undefined
-        ? { escrowReleaseAmountInCents: input.escrowReleaseAmountInCents }
+      ...(input.plannedPayoutInCents !== undefined
+        ? { plannedPayoutInCents: input.plannedPayoutInCents }
         : {}),
       ...(input.dueDate !== undefined ? { dueDate: input.dueDate } : {}),
     })

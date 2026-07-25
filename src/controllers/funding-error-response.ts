@@ -209,7 +209,7 @@ export function mapFundingErrorToResponse(error: FundingDomainError): {
       return {
         statusCode: 422,
         message: "This milestone has no escrow release amount, so there is nothing to release.",
-        errors: { milestone: ["Set escrowReleaseAmountInCents above zero first."] },
+        errors: { milestone: ["Set plannedPayoutInCents above zero first."] },
       };
     case "AUTHORIZING_ENTRY_MISSING":
       return {

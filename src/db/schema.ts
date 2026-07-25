@@ -1041,14 +1041,20 @@ export const openRoleCompensation = pgTable(
                        AND salary_min_in_cents_per_month IS NULL AND salary_max_in_cents_per_month IS NULL
                        AND one_time_min_in_cents IS NULL AND one_time_max_in_cents IS NULL)`,
     ),
-    // §5: "A founder cannot advertise a payout mechanism the escrow engine will not
-    // execute." Equity vests through Slicing Pie; cash pays out of escrow.
+    // A founder cannot advertise a mechanism that does not exist. Equity vests through
+    // Slicing Pie; cash is paid by the company and reported here (§7A).
+    //
+    // THE TWO ESCROW VALUES ARE ABSENT FROM BOTH BRANCHES, which is what makes them
+    // readable-but-unwritable: migration 0010's rows still parse, and no new row can
+    // carry one. This is the database half of the rule — the Zod schema refuses them
+    // first, with a typed 422 — because a rule with no database behind it is a
+    // convention, and this one has a statute behind it (§0, §7A.6 item 2).
     check(
       "open_role_compensation_policy_pairing_ck",
       sql`
       (kind = 'equity' AND earned_as_policy = 'slicing_pie_vesting')
       OR (kind IN ('salary','one_time')
-          AND earned_as_policy IN ('milestone_escrow_release','on_completion_escrow_release'))`,
+          AND earned_as_policy IN ('off_platform_payroll','direct_transfer'))`,
     ),
     check(
       "open_role_compensation_ranges_ck",
@@ -5967,9 +5973,14 @@ export const providerWebhookEvent = pgTable(
 );
 
 /**
- * A milestone. `escrowReleaseAmountInCents` is the founder's declared payout for the
- * milestone — and an `escrow_release` SNAPSHOTS it at request time, so editing this
- * column between request and approval cannot inflate a payout (§7).
+ * A milestone. `plannedPayoutInCents` is the founder's DECLARED PLAN for what hitting it
+ * is worth — a plan, not an instruction to a payment rail (§7, "What survives here").
+ *
+ * RENAMED FROM `plannedPayoutInCents`, and the rename is the point rather than
+ * tidying. The old name said this column instructed an escrow release; escrow has left
+ * this domain (§7A.6), and nothing reads it to move money any more. It feeds §7A's
+ * statement as a `direct_transfer` line — the founder pays it from their own bank and
+ * records that they did.
  */
 export const milestone = pgTable(
   "milestone",
@@ -5983,7 +5994,7 @@ export const milestone = pgTable(
     title: text("title").notNull(),
     description: text("description"),
     status: milestoneStatusEnum("status").default("planned").notNull(),
-    escrowReleaseAmountInCents: bigint("escrow_release_amount_in_cents", { mode: "bigint" })
+    plannedPayoutInCents: bigint("planned_payout_in_cents", { mode: "bigint" })
       .notNull()
       .default(sql`0`),
     currency: text("currency").notNull(),
@@ -6004,7 +6015,7 @@ export const milestone = pgTable(
   (table) => [
     uniqueIndex("milestone_projectId_orderIndex_unq").on(table.projectId, table.orderIndex),
     index("milestone_projectId_status_idx").on(table.projectId, table.status),
-    check("milestone_amount_ck", sql`escrow_release_amount_in_cents >= 0`),
+    check("milestone_planned_payout_ck", sql`planned_payout_in_cents >= 0`),
     check("milestone_order_ck", sql`order_index >= 0`),
     check("milestone_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
     check("milestone_completed_at_ck", sql`(status = 'done') = (completed_at IS NOT NULL)`),
@@ -6069,7 +6080,7 @@ export const milestoneVariance = pgTable(
  * A milestone payout request and its decision — THE FOUR-EYES RULE (§7).
  *
  * The request body is `{ requestNote? }` and carries NO AMOUNT AT ALL. `amountInCents` is
- * read from `milestone.escrowReleaseAmountInCents` and SNAPSHOTTED here at request time,
+ * read from `milestone.plannedPayoutInCents` and SNAPSHOTTED here at request time,
  * so a founder can neither assert an amount nor edit the milestone between request and
  * approval to inflate the payout.
  *

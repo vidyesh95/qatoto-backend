@@ -86,10 +86,20 @@ export interface OpenRolePage {
 }
 
 /** Which policies each compensation kind may legitimately advertise (§5). */
+/**
+ * THE POLICY PAIRING (§4d, §7A).
+ *
+ * The two escrow values are RETIRED and appear here in NEITHER list. They forced every
+ * cash strand through an escrow release — money-in gated data-out for a founder who never
+ * ran a round here, and a wage made conditional on a Proof-of-Effort verdict, which §0
+ * forbids outright. They remain in the pgEnum so migration 0010's rows stay readable;
+ * `open_role_compensation_policy_pairing_ck` (migration 0019) refuses them at the column
+ * level, and this map refuses them with a typed 422 before it gets that far.
+ */
 const VALID_POLICIES_BY_KIND: Readonly<Record<CompensationKind, readonly EarnedAsPolicy[]>> = {
   equity: ["slicing_pie_vesting"],
-  salary: ["milestone_escrow_release", "on_completion_escrow_release"],
-  one_time: ["milestone_escrow_release", "on_completion_escrow_release"],
+  salary: ["off_platform_payroll", "direct_transfer"],
+  one_time: ["off_platform_payroll", "direct_transfer"],
 };
 
 /**

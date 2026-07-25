@@ -23,7 +23,7 @@ import type { Result } from "#src/types/index.js";
  * POST /milestones/:milestoneId/escrow-releases   body: { requestNote? }   ← NO amount field
  * ```
  *
- * The amount is read from `milestone.escrowReleaseAmountInCents` and SNAPSHOTTED into
+ * The amount is read from `milestone.plannedPayoutInCents` and SNAPSHOTTED into
  * `escrow_release.amountInCents` at request time — so a founder cannot edit the milestone
  * between request and approval to inflate the payout, and cannot assert an amount at all.
  * A hand-written trigger freezes the snapshot afterwards, because the service declining to
@@ -139,7 +139,7 @@ export async function requestEscrowRelease(input: {
     }
     // A release for nothing is not a release. The column CHECK forbids a zero amount, so
     // catching it here turns a 500 into a message that says what to fix.
-    if (milestoneRow.escrowReleaseAmountInCents <= 0n) {
+    if (milestoneRow.plannedPayoutInCents <= 0n) {
       return { kind: "no-amount" } as const;
     }
 
@@ -170,7 +170,7 @@ export async function requestEscrowRelease(input: {
         // THE SNAPSHOT. Read from the milestone HERE and never again. Editing the
         // milestone after this line changes nothing about what this release pays.
         // ---------------------------------------------------------------------------
-        amountInCents: milestoneRow.escrowReleaseAmountInCents,
+        amountInCents: milestoneRow.plannedPayoutInCents,
         currency: milestoneRow.currency,
         status: "requested",
         requestedByUserId: input.requestedByUserId,

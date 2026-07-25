@@ -98,7 +98,7 @@ export const MilestoneSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
     description: z.string().trim().max(5_000).optional(),
-    escrowReleaseAmountInCents: CentsStringSchema,
+    plannedPayoutInCents: CentsStringSchema,
     dueDate: IsoDateSchema.optional(),
   })
   .strict();
@@ -113,7 +113,7 @@ export const UpdateMilestoneSchema = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
     description: z.string().trim().max(5_000).nullable().optional(),
-    escrowReleaseAmountInCents: CentsStringSchema.optional(),
+    plannedPayoutInCents: CentsStringSchema.optional(),
     dueDate: IsoDateSchema.nullable().optional(),
   })
   .strict();
@@ -631,7 +631,7 @@ export async function createMilestone(req: Request, res: Response): Promise<void
     ...(parsedBody.data.description === undefined
       ? {}
       : { description: parsedBody.data.description }),
-    escrowReleaseAmountInCents: BigInt(parsedBody.data.escrowReleaseAmountInCents),
+    plannedPayoutInCents: BigInt(parsedBody.data.plannedPayoutInCents),
     ...(parsedBody.data.dueDate === undefined ? {} : { dueDate: parsedBody.data.dueDate }),
   });
 
@@ -665,9 +665,9 @@ export async function updateMilestone(req: Request, res: Response): Promise<void
     ...(parsedBody.data.description === undefined
       ? {}
       : { description: parsedBody.data.description }),
-    ...(parsedBody.data.escrowReleaseAmountInCents === undefined
+    ...(parsedBody.data.plannedPayoutInCents === undefined
       ? {}
-      : { escrowReleaseAmountInCents: BigInt(parsedBody.data.escrowReleaseAmountInCents) }),
+      : { plannedPayoutInCents: BigInt(parsedBody.data.plannedPayoutInCents) }),
     ...(parsedBody.data.dueDate === undefined ? {} : { dueDate: parsedBody.data.dueDate }),
   });
 

@@ -477,7 +477,7 @@ async function insertFixtures(client: TransactionClient): Promise<Fixtures | nul
   );
   await client.query(
     `INSERT INTO milestone
-       (id, project_id, title, status, escrow_release_amount_in_cents, currency, order_index,
+       (id, project_id, title, status, planned_payout_in_cents, currency, order_index,
         created_by_user_id, completed_at)
      VALUES ($1, $2, 'Probe milestone', 'done', 250000, 'USD', 0, $3, now()),
             ($4, $2, 'Probe milestone two', 'planned', 900000, 'USD', 1, $3, NULL)`,
@@ -1122,7 +1122,7 @@ async function checkRuntimeGuarantees(): Promise<readonly CheckOutcome[]> {
       () =>
         client.query(
           `INSERT INTO milestone
-             (id, project_id, title, status, escrow_release_amount_in_cents, currency,
+             (id, project_id, title, status, planned_payout_in_cents, currency,
               order_index, created_by_user_id)
            VALUES ('verify-escrow-milestone-2', $1, 'Undated', 'done', 1000, 'USD', 1, $2)`,
           [fixtures.projectId, fixtures.userId],

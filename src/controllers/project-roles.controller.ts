@@ -23,7 +23,22 @@ import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
  */
 
 const ROLE_COMMITMENTS = ["full_time", "part_time", "hobby"] as const;
-const ESCROW_POLICIES = ["milestone_escrow_release", "on_completion_escrow_release"] as const;
+
+/**
+ * THE TWO POLICIES A CASH STRAND MAY ADVERTISE (§4d, §7A).
+ *
+ * `milestone_escrow_release` and `on_completion_escrow_release` are RETIRED. They forced
+ * every salary and one-time strand through an escrow release, which meant a founder who
+ * never ran a funding round here had no way to say "I pay this person from my own bank
+ * account" — money-in gated data-out — and, worse, it made a wage conditional on a
+ * Proof-of-Effort verdict, which §0 now forbids outright.
+ *
+ * They stay in the pgEnum so migration 0010's existing rows remain readable. Nothing new
+ * may be written with them: this schema refuses them with a 422, and
+ * `open_role_compensation_policy_pairing_ck` (migration 0019) refuses them at the column
+ * level. Both, not either — a rule with no database behind it is a convention.
+ */
+const CASH_POLICIES = ["off_platform_payroll", "direct_transfer"] as const;
 
 const MoneyInCentsSchema = z.number().int().min(0);
 const BasisPointsSchema = z.number().int().min(0).max(10_000);
@@ -32,8 +47,8 @@ const BasisPointsSchema = z.number().int().min(0).max(10_000);
  * One strand per kind, each carrying only its own columns.
  *
  * The `earnedAsPolicy` enum differs per branch on purpose: equity vests through Slicing
- * Pie, cash pays out of escrow, and pairing them the other way lets a founder advertise
- * a payout mechanism the escrow engine will not execute (§5). The DB CHECK enforces the
+ * Pie, cash is paid by the company and reported here (§7A), and pairing them the other
+ * way lets a founder advertise a mechanism that does not exist. The DB CHECK enforces the
  * same rule; this makes it a 422 with a field path instead of a 500.
  */
 const CompensationStrandSchema = z.discriminatedUnion("kind", [
@@ -42,7 +57,7 @@ const CompensationStrandSchema = z.discriminatedUnion("kind", [
       kind: z.literal("salary"),
       salaryMinInCentsPerMonth: MoneyInCentsSchema,
       salaryMaxInCentsPerMonth: MoneyInCentsSchema.optional(),
-      earnedAsPolicy: z.enum(ESCROW_POLICIES),
+      earnedAsPolicy: z.enum(CASH_POLICIES),
       earnedAsNote: z.string().trim().max(500).optional(),
     })
     .strict(),
@@ -51,7 +66,7 @@ const CompensationStrandSchema = z.discriminatedUnion("kind", [
       kind: z.literal("one_time"),
       oneTimeMinInCents: MoneyInCentsSchema,
       oneTimeMaxInCents: MoneyInCentsSchema.optional(),
-      earnedAsPolicy: z.enum(ESCROW_POLICIES),
+      earnedAsPolicy: z.enum(CASH_POLICIES),
       earnedAsNote: z.string().trim().max(500).optional(),
     })
     .strict(),

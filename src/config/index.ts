@@ -176,13 +176,19 @@ const envSchema = z.object({
     .transform((types): readonly ("crowdfunding" | "equity" | "venture")[] =>
       types.length > 0 ? types : ["crowdfunding"],
     ),
-  // The platform's cut of a pledge, in basis points. 500 = 5%.
+  // The platform's cut of a pledge, in basis points. **0, AND IT STAYS 0** (§0).
+  //
+  // QATOTO CHARGES NOBODY — not a founder, an employee, an employer or an investor. This
+  // variable survives only because migration 0016's historical rows were priced with it,
+  // and removing it would make those rows unexplainable. A nonzero value is an explicit
+  // business decision that also changes the LEGAL analysis, because in several US states
+  // the money-transmitter definition turns partly on being compensated for the service
+  // (§7A.6 item 1). It is not a knob to turn without counsel.
   //
   // DERIVED FROM THIS, NEVER SENT: `platformFeeInCents` is on §7's rejected-keys list, so
-  // a body carrying one is a 422. Capped at 2000 because a fee an operator can typo into
-  // 50% silently re-prices every pledge in flight, and this value feeds a hash-chained
-  // posting — a wrong one is not editable afterwards, only reversible.
-  PLATFORM_FEE_BASIS_POINTS: z.coerce.number().int().min(0).max(2_000).default(500),
+  // a body carrying one is a 422. The cap stays at 2000 rather than 0 so the historical
+  // rows' value remains expressible when replaying them.
+  PLATFORM_FEE_BASIS_POINTS: z.coerce.number().int().min(0).max(2_000).default(0),
 });
 
 export const config = envSchema.parse(process.env);

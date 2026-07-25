@@ -189,7 +189,7 @@ async function createFixtures(): Promise<Fixtures> {
       projectId: project.id,
       title: "400-vendor demand survey",
       status: "in_progress",
-      escrowReleaseAmountInCents: MILESTONE_PAYOUT_IN_CENTS,
+      plannedPayoutInCents: MILESTONE_PAYOUT_IN_CENTS,
       currency: "USD",
       orderIndex: 0,
       createdByUserId: founderUserId,
@@ -378,7 +378,7 @@ async function main(): Promise<void> {
 
   // THE ATTACK. Raise the milestone to 400,000 after the request is in.
   await updateMilestone(fixtures.projectId, fixtures.milestoneId, {
-    escrowReleaseAmountInCents: 400_000n,
+    plannedPayoutInCents: 400_000n,
   });
 
   const [releaseAfterEdit] = await db

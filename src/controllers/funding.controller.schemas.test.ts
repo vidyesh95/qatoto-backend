@@ -137,7 +137,7 @@ describe("the escrow release body", () => {
     expect(RequestEscrowReleaseSchema.safeParse({ requestNote: "Survey shipped", amountInCents: "1" }).success).toBe(
       false,
     );
-    expect(RequestEscrowReleaseSchema.safeParse({ escrowReleaseAmountInCents: "1" }).success).toBe(false);
+    expect(RequestEscrowReleaseSchema.safeParse({ plannedPayoutInCents: "1" }).success).toBe(false);
   });
 
   it("accepts an optional note and nothing else", () => {
@@ -228,7 +228,7 @@ describe("the milestone bodies", () => {
     expect(
       MilestoneSchema.safeParse({
         title: "400-vendor demand survey",
-        escrowReleaseAmountInCents: "250000",
+        plannedPayoutInCents: "250000",
       }).success,
     ).toBe(true);
   });
@@ -306,7 +306,7 @@ describe("the §17 step 8 zero-trust sweep", () => {
       ["RequestEscrowReleaseSchema", RequestEscrowReleaseSchema, {}],
       ["DecideEscrowReleaseSchema", DecideEscrowReleaseSchema, { note: "ok" }],
       ["SettleTransferSchema", SettleTransferSchema, {}],
-      ["MilestoneSchema", MilestoneSchema, { title: "M", escrowReleaseAmountInCents: "1" }],
+      ["MilestoneSchema", MilestoneSchema, { title: "M", plannedPayoutInCents: "1" }],
       ["UpdateMilestoneSchema", UpdateMilestoneSchema, {}],
     ] as const;
 

@@ -98,7 +98,18 @@ export function isRoundTypeEnabled(roundType: FundingRoundType): boolean {
   return config.ENABLED_FUNDING_ROUND_TYPES.includes(roundType);
 }
 
-/** The platform's cut, derived — never sent, never stored on a request. */
+/**
+ * The platform's cut, derived — never sent, never stored on a request.
+ *
+ * **IT IS ZERO, AND IT STAYS ZERO** (§0). `PLATFORM_FEE_BASIS_POINTS` defaults to 0:
+ * Qatoto charges nobody — not a founder, an employee, an employer or an investor. The
+ * function survives because migration 0016's historical rows were priced with a nonzero
+ * value and must remain explicable, and because the callers already omit the fee posting
+ * entirely at zero rather than writing a row of zeros.
+ *
+ * A nonzero value is not a knob to turn: in several US states the money-transmitter
+ * definition turns partly on being compensated for the service (§7A.6 item 1).
+ */
 export function derivePlatformFeeInCents(amountInCents: bigint): bigint {
   return divRoundHalfAwayFromZero(
     amountInCents * BigInt(config.PLATFORM_FEE_BASIS_POINTS),
