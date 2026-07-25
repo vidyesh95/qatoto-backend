@@ -3075,7 +3075,15 @@ db:verify-proof-of-effort-constraints` then EXERCISES all 38 database-level guar
    (with the append-only trigger disabled, which is the honest shape of the threat) and asserts the
    chain breaks at that exact sequence. **The script leaves its rows behind and that is the
    guarantee, not a limitation** — a smoke test that could clean up after itself would be one
-   proving the triggers do not work.
+   proving the triggers do not work. Because it leaves rows behind and so does every other smoke
+   script, **each sweep assertion counts this run's project and no other.** `sweepExpiredWindows` is
+   the production job and is deliberately project-agnostic (§9.8), so a global `settled` count would
+   make this gate pass or fail on what an unrelated run left in the database yesterday — which is
+   exactly how it first broke, on one expired-unlocked window belonging to a `smoke-gemini-*` project
+   from `db:smoke-daily-log-analysis`. The sweep still runs unscoped and still settles those foreign
+   windows; only the assertion is narrowed. It also runs with a batch of 500 rather than the
+   production 50, because the sweep takes the oldest window first and accumulated leftovers always
+   sort ahead of this run's own two.
 8. **Zero-trust sweep.** `grep` every Zod schema for `userId|equity|slice|Cents|score|verdict|status`
    and confirm each hit is one of the two documented negotiated-input exceptions.
 9. **Cascade sweep.** ✅ For every FK into a financial or audit table, assert `onDelete` is

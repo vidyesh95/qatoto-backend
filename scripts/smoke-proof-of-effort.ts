@@ -61,6 +61,7 @@ import { verifyAuditChain } from "#src/services/project-audit.service.js";
 import {
   listAllocationProposals,
   sweepExpiredWindows,
+  type SettlementOutcome,
 } from "#src/services/slice-allocation.service.js";
 import { listLedgerEntries } from "#src/services/slice-ledger.service.js";
 import {
@@ -74,6 +75,34 @@ let failureCount = 0;
 function check(label: string, passed: boolean, detail: string): void {
   console.log(`${passed ? "PASS" : "FAIL"}  ${label} — ${detail}`);
   if (!passed) failureCount += 1;
+}
+
+/**
+ * The sweep takes the OLDEST window first, and every smoke script in this repo leaves its
+ * rows behind on purpose, so foreign leftovers always sort ahead of this run's own two
+ * windows. A batch of 50 could be filled entirely by them; 500 cannot, in any database a
+ * smoke test runs against.
+ */
+const SMOKE_SWEEP_BATCH_SIZE = 500;
+
+/**
+ * The expiry sweep, with its result narrowed to THIS RUN'S project.
+ *
+ * `sweepExpiredWindows` is the production job and is deliberately project-agnostic (§9.8) —
+ * it must lock every unchallenged window everywhere, and it still does here. But asserting
+ * on its GLOBAL count couples this gate to whatever another script left in the database:
+ * one expired-unlocked window from a `smoke-gemini-*` project is enough to turn "the sweep
+ * NEVER pre-locks an open window" into a failure that says nothing about this run.
+ *
+ * So the sweep is unscoped and the ASSERTION is scoped. The foreign windows are still swept,
+ * because that is what the job does; they are simply not this script's evidence.
+ */
+async function sweepThisProject(
+  asOf: Date,
+  projectId: string,
+): Promise<readonly SettlementOutcome[]> {
+  const outcome = await sweepExpiredWindows(asOf, SMOKE_SWEEP_BATCH_SIZE);
+  return outcome.settled.filter((settlement) => settlement.projectId === projectId);
 }
 
 /**
@@ -532,26 +561,26 @@ async function main(): Promise<void> {
   );
 
   // --- 5. The sweep does not pre-lock, then locks exactly once.
-  const earlySweep = await sweepExpiredWindows(new Date());
+  const earlySweep = await sweepThisProject(new Date(), fixtures.projectId);
   check(
     "the sweep NEVER pre-locks an open window",
-    earlySweep.settled.length === 0,
-    `${earlySweep.settled.length} settled`,
+    earlySweep.length === 0,
+    `${earlySweep.length} settled in this project`,
   );
 
   const afterWindow = new Date(Date.now() + 25 * 3_600_000);
-  const firstSweep = await sweepExpiredWindows(afterWindow);
+  const firstSweep = await sweepThisProject(afterWindow, fixtures.projectId);
   check(
     "every expired window locks, including the zero-slice one",
-    firstSweep.settled.length === 2,
-    `${firstSweep.settled.length} settled, ${firstSweep.skipped} skipped`,
+    firstSweep.length === 2,
+    `${firstSweep.length} settled in this project`,
   );
 
-  const secondSweep = await sweepExpiredWindows(afterWindow);
+  const secondSweep = await sweepThisProject(afterWindow, fixtures.projectId);
   check(
     "re-running the sweep is a NO-OP",
-    secondSweep.settled.length === 0,
-    `${secondSweep.settled.length} settled`,
+    secondSweep.length === 0,
+    `${secondSweep.length} settled in this project`,
   );
 
   // --- 6. The number. 480 min × 12000 cents / 3000 = 1,920 slices.
@@ -680,11 +709,14 @@ async function main(): Promise<void> {
     `${disputedProposals[0]?.escrowedSlices ?? "?"} escrowed and outside the ledger, which still holds ${ledgerDuringDispute.length} entries`,
   );
 
-  const sweepDuringDispute = await sweepExpiredWindows(new Date(Date.now() + 48 * 3_600_000));
+  const sweepDuringDispute = await sweepThisProject(
+    new Date(Date.now() + 48 * 3_600_000),
+    fixtures.projectId,
+  );
   check(
     "the sweep never settles a DISPUTED window, however late it runs",
-    sweepDuringDispute.settled.length === 0,
-    `${sweepDuringDispute.settled.length} settled`,
+    sweepDuringDispute.length === 0,
+    `${sweepDuringDispute.length} settled in this project`,
   );
 
   // A single-vote majority: the roster is two, so a majority is two — one vote is not
