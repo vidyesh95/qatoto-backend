@@ -30,13 +30,40 @@
 > `/research-projects/*`, `/discovery/*`, `/funding/*` and `/research-programs/*` routes and ~60 new
 > tables.
 >
-> **Status:** four domains are **✅ shipped and reachable today** — §5 (projects, team, roles,
-> applications), §6 (discovery), §8 (workshop, daily logs) and §9 (Proof of Effort). §7A
-> (compensation statements) and §10 (Project Immortal) are **⏳ pending** — no route, controller,
-> service or migration exists for either yet. **§7 is ⚠️ superseded:** funding and escrow shipped,
-> and the escrow half of it is now removed from this contract. §11's "Implementation status, per
-> subsection" table is the authoritative, per-endpoint breakdown; treat it over this paragraph if the
-> two ever disagree, since this one is prose and that one is checked against the actual route files.
+> **Status:** six domains are **✅ shipped and reachable today** — §5 (projects, team, roles,
+> applications), §6 (discovery), §7 (funding, as a record of intent), §7A (compensation
+> statements), §8 (workshop, daily logs) and §9 (Proof of Effort). §10 (Project Immortal) is
+> **⏳ pending** — no route, controller, service or migration exists for it yet. **The escrow
+> subtree is 🗑️ retired:** its nine routes now 404, its three jobs are unbound, and its tables
+> survive unreachable and uncalled so migration 0016's rows stay explicable. §11's "Implementation
+> status, per subsection" table is the authoritative, per-endpoint breakdown; treat it over this
+> paragraph if the two ever disagree, since this one is prose and that one is checked against the
+> actual route files.
+>
+> **Where the §7A build diverged from this document**, all three recorded here rather than left in a
+> commit message:
+>
+> 1. **`project_chain_head` gained TWO compensation columns, not one.** §7A.3 implies a single
+>    gapless sequence, but a sequence is allocated when a period OPENS and a statement hash only
+>    exists when it is FINALIZED — and a period may be finalized late while the next accrues. One
+>    counter would leave either a gap in the calendar sequence or a chain that cannot be walked, so
+>    `lastCompensationSequenceNumber` and `compensationHeadStatementHash` are separate, on the same
+>    row and under the same lock.
+> 2. **More than one period may be `open` at once**, and the unique index is per project PER MONTH.
+>    §7A.5's close job stops a period accruing _without_ freezing it, so an unfinalized March and an
+>    accruing April are both open. A one-per-project index — which migration 0017 shipped and 0018
+>    corrected — makes that lifecycle impossible.
+> 3. **Enabling the two new `earnedAsPolicy` values took two migrations.** Postgres refuses to _use_
+>    an enum value in the transaction that `ALTER TYPE … ADD VALUE` created it, so the pairing CHECK
+>    that references `off_platform_payroll` had to wait for 0019. That CHECK is `NOT VALID` on
+>    purpose: existing rows legitimately carry a retired escrow policy, they are the offers people
+>    already applied to, and validating would mean rewriting history or dropping the rule.
+>
+> **A pledge now moves `raisedAmountInCents` itself.** `escrow_settlement.service.ts` was the only
+> writer of that counter and of `backersCount`, gated on an auditor settling a provider transfer.
+> With no custody there is no settlement step, so leaving it there would freeze every funding page
+> at zero raised forever. §7's "What survives here" already defines both as sums of **committed**
+> pledges; `createPledge` now moves them in its own transaction and `cancelPledge` moves them back.
 >
 > The frontend, meanwhile, is still **pure UI over static mocks** for the whole surface —
 > [R_AND_D_STRUCTURE.md](R_AND_D_STRUCTURE.md) §10 and every file under
@@ -215,22 +242,22 @@ LLM provider. Object storage is **deferred to
 deferred, they are **gone**: this domain moves no money at all, so there is no payment dependency to
 add, defer, or budget for (§7A.6).
 
-| Concern            | Pick                                      | Why / reuse                                                                                                                                                                                                                                                                                                                    |
-| ------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Server framework   | **Express 5**                             | Same app, four more routers.                                                                                                                                                                                                                                                                                                   |
-| Language           | **TypeScript** (strict, ESM `#src/*`)     | Shared shapes with the frontend.                                                                                                                                                                                                                                                                                               |
-| Database ORM       | **Drizzle ORM**                           | New tables in `src/db/schema.ts`; `pnpm db:generate && db:migrate`.                                                                                                                                                                                                                                                            |
-| Database           | **PostgreSQL** via `pg`                   | FKs, enums, partial + unique indexes, `bigint` money.                                                                                                                                                                                                                                                                          |
-| Validation         | **zod**                                   | Inline `.safeParse()` in the controller → `422` (prevailing style).                                                                                                                                                                                                                                                            |
-| Image storage      | **Cloudinary** (`src/lib/cloudinary.ts`)  | Project covers, avatars — reuse the product-image helpers.                                                                                                                                                                                                                                                                     |
-| Image processing   | **sharp** (`src/lib/image.ts`)            | Reuse `validateAndNormalizeImage`; also the EXIF reader for §9 receipt forensics.                                                                                                                                                                                                                                              |
-| Daily-log video    | **A YouTube link** (`src/lib/youtube.ts`) | Reuse the STUDIO §9 path verbatim: parse the URL to an 11-char id, prove it with one free oEmbed call, store the id. The backend never touches video bytes, and neither does any provider we pay. Video is **optional** — a log may be text-only.                                                                              |
-| Rate limiting      | **express-rate-limit**                    | New named limiters per §4a.                                                                                                                                                                                                                                                                                                    |
-| **Job runner**     | **pg-boss**                               | Postgres-backed queue, installed with §6. Same database, same transaction, no new infrastructure. §8 and §9 cannot exist without it.                                                                                                                                                                                           |
-| **LLM analysis**   | **`gemini-3.5-flash-lite`, AI Studio**    | One structured-output call per daily log returns the transcript, the summary chips and the extracted claims together — two jobs would be two calls against a free quota. Plain `fetch`, no SDK, injectable for tests, `temperature: 0`, `thinkingLevel: low`. Absent key → `skipped_unconfigured`, never a fabricated verdict. |
-| Workshop files     | **An external link**                      | Deferred from S3 on cost. The member pastes a Drive/Dropbox/GitHub/OneDrive/Figma/Notion URL; the server allowlists the host and stores the URL. `sizeBytes` is **NULL**, never a client claim. `source = 'hosted'` + `objectKey` stay in the schema, unwritten, for [Appendix A](#appendix-a--deferred-paid-infrastructure).  |
-| Payments           | **None. Deliberately.**                   | No payment SDK, no provider account, no webhook route, no balance. §7A computes what is owed and the parties settle it themselves. Custody is a licensing decision, not a dependency choice (§7A.6); the ledger design lives in [ESCROW_LEDGER_STRUCTURE.md](ESCROW_LEDGER_STRUCTURE.md) for commerce.                         |
-| Compensation (§7A) | **Nothing new**                           | Statements reuse pg-boss for the monthly job, `src/lib/money.ts` for every integer, and `src/lib/canonical-hash.ts` plus the existing `project_chain_head` lock to freeze a finalized period. Zero added dependencies.                                                                                                         |
+| Concern            | Pick                                      | Why / reuse                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Server framework   | **Express 5**                             | Same app, four more routers.                                                                                                                                                                                                                                                                                                                                      |
+| Language           | **TypeScript** (strict, ESM `#src/*`)     | Shared shapes with the frontend.                                                                                                                                                                                                                                                                                                                                  |
+| Database ORM       | **Drizzle ORM**                           | New tables in `src/db/schema.ts`; `pnpm db:generate && db:migrate`.                                                                                                                                                                                                                                                                                               |
+| Database           | **PostgreSQL** via `pg`                   | FKs, enums, partial + unique indexes, `bigint` money.                                                                                                                                                                                                                                                                                                             |
+| Validation         | **zod**                                   | Inline `.safeParse()` in the controller → `422` (prevailing style).                                                                                                                                                                                                                                                                                               |
+| Image storage      | **Cloudinary** (`src/lib/cloudinary.ts`)  | Project covers, avatars — reuse the product-image helpers.                                                                                                                                                                                                                                                                                                        |
+| Image processing   | **sharp** (`src/lib/image.ts`)            | Reuse `validateAndNormalizeImage`; also the EXIF reader for §9 receipt forensics.                                                                                                                                                                                                                                                                                 |
+| Daily-log video    | **A YouTube link** (`src/lib/youtube.ts`) | Reuse the STUDIO §9 path verbatim: parse the URL to an 11-char id, prove it with one free oEmbed call, store the id. The backend never touches video bytes, and neither does any provider we pay. Video is **optional** — a log may be text-only.                                                                                                                 |
+| Rate limiting      | **express-rate-limit**                    | New named limiters per §4a.                                                                                                                                                                                                                                                                                                                                       |
+| **Job runner**     | **pg-boss**                               | Postgres-backed queue, installed with §6. Same database, same transaction, no new infrastructure. §8 and §9 cannot exist without it.                                                                                                                                                                                                                              |
+| **LLM analysis**   | **`gemini-3.5-flash-lite`, AI Studio**    | One structured-output call per daily log returns the transcript, the summary chips and the extracted claims together — two jobs would be two calls against a free quota. Plain `fetch`, no SDK, injectable for tests, `temperature: 0`, `thinkingLevel: low`. Absent key → `skipped_unconfigured`, never a fabricated verdict.                                    |
+| Workshop files     | **An external link**                      | Deferred from S3 on cost. The member pastes a Drive/Dropbox/GitHub/OneDrive/Figma/Notion URL; the server allowlists the host and stores the URL. `sizeBytes` is **NULL**, never a client claim. `source = 'hosted'` + `objectKey` stay in the schema, unwritten, for [Appendix A](#appendix-a--deferred-paid-infrastructure).                                     |
+| Payments           | **None. Deliberately.**                   | No payment SDK, no provider account, no webhook route, no balance. §7A computes what is owed and the parties settle it themselves. Custody is a licensing decision, not a dependency choice (§7A.6); the ledger design lives in [ESCROW_LEDGER_STRUCTURE.md](ESCROW_LEDGER_STRUCTURE.md) for commerce.                                                            |
+| Compensation (§7A) | **Nothing new**                           | ✅ Shipped with zero added dependencies. Statements reuse pg-boss for the two daily jobs, `src/lib/money.ts` for every integer, `src/lib/canonical-hash.ts` plus the existing `project_chain_head` lock to freeze a period, and `Intl` for month boundaries in a named zone — a tzdata package would be 400 kB to answer a question the platform already answers. |
 
 **Money is integer cents everywhere, in `bigint` columns** (§4b). **Equity is integer basis
 points.** No `numeric`, no floats, ever.
@@ -250,7 +277,8 @@ qatoto-backend/
 │   │   ├── research-projects.routes.ts        # NEW — projects, team, roles, applications, invites
 │   │   ├── discovery.routes.ts                # NEW — problem clusters, insights, signals, talent
 │   │   ├── funding.routes.ts                  # NEW — rounds, pledges, milestones (no custody, §7)
-│   │   ├── compensation.routes.ts             # NEW — agreements, periods, statements (§7A)
+│   │   ├── compensation.routes.ts             # NEW — agreements, periods, statements,
+│   │   │                                      #       payment records (§7A)
 │   │   ├── workshop.routes.ts                 # NEW — board, files, chat, daily logs
 │   │   ├── proof-of-effort.routes.ts          # NEW — slice ledger, claims, disputes, audit
 │   │   ├── research-programs.routes.ts        # NEW — Project Immortal
@@ -265,8 +293,9 @@ qatoto-backend/
 │   │   ├── project-membership.service.ts      # NEW — requireProjectRole lives here (§4a)
 │   │   ├── discovery.service.ts               # NEW
 │   │   ├── funding.service.ts                 # NEW
-│   │   ├── compensation-periods.service.ts    # NEW — draft, finalize, freeze (§7A)
+│   │   ├── compensation-periods.service.ts    # NEW — draft, finalize, freeze, supersede (§7A)
 │   │   ├── compensation-agreements.service.ts # NEW — effective-dated, member-accepted (§7A)
+│   │   ├── compensation-payments.service.ts   # NEW — attestations, two-sided confirm (§7A)
 │   │   ├── workshop-board.service.ts          # NEW — columns, tasks, lexicographic ranks (§8)
 │   │   ├── workshop-files.service.ts          # NEW — external links, host allowlist (§8)
 │   │   ├── workshop-chat.service.ts           # NEW — keyset chat + read state (§8)
@@ -282,6 +311,10 @@ qatoto-backend/
 │   │   ├── auth.ts                            # + bearer() plugin, multi-origin passkey (§4a)
 │   │   ├── money.ts                           # NEW — THE one arithmetic module (§4c)
 │   │   ├── canonical-hash.ts                  # NEW — the audit chain hash (§4c)
+│   │   ├── compensation-period.ts             # NEW — month bounds in a named zone,
+│   │   │                                      #       proration, hourly pricing (§7A.4)
+│   │   ├── payment-instrument.ts              # NEW — keeps PANs and IBANs out of a
+│   │   │                                      #       free-text note (§7A, §17 5c)
 │   │   ├── jobs.ts                            # NEW — pg-boss bootstrap + job registry (§4e)
 │   │   ├── youtube.ts                         # REUSED from the studio domain (§8)
 │   │   ├── gemini.ts                          # NEW — the one LLM call, structured output (§8)
@@ -572,12 +605,26 @@ new infrastructure to operate.
 | `verify-effort-claim`           | on submit            | The 4-step pipeline (§9)                           |
 | `recompute-slicing-pie`         | nightly + on verdict | The equity ledger (§9)                             |
 | `sweep-dispute-windows`         | every minute         | Lock expired 24h windows (§9)                      |
-| `recompute-compensation-draft`  | nightly              | Redraw the open period's statement lines (§7A)     |
-| `close-compensation-period`     | monthly, per zone    | Open the next period, mark the last ready (§7A)    |
 | `recompute-program-stats`       | nightly              | Project Immortal stats (§10)                       |
 
-`reconcile-escrow-ledger` is **gone**, along with the surface it reconciled. Nothing in this domain
-has a provider balance to disagree with any more.
+`reconcile-escrow-ledger`, its tick and `submit-provider-transfer` are **unbound**, along with the
+surface they served. Nothing in this domain has a provider balance to disagree with any more, and
+nothing enqueues a transfer because a pledge is a commitment. The queue names survive so migration
+0016's rows stay explicable and an operator can drain anything left in flight; no worker subscribes
+and no cron fires.
+
+| Job                            | Cadence    | Purpose                                                   |
+| ------------------------------ | ---------- | --------------------------------------------------------- |
+| `close-compensation-period`    | daily tick | Open a period covering today, in the PROJECT'S zone (§7A) |
+| `recompute-compensation-draft` | nightly    | Redraw every open period's lines, idempotently (§7A)      |
+
+**Both are DAILY ticks, including the close, and that is the design rather than an accident.** §7A.3
+makes a period one calendar month in the project's OWN zone, so the roll-over lands on a different
+UTC instant for every project — 1 April begins in Kiritimati fourteen hours before Honolulu. A
+monthly cron would have to pick one instant and be wrong for everyone else, and the error would be a
+whole day of somebody's wages in the wrong statement. The close runs at 00:10 and the draft at 04:15,
+in that order: a draft that ran first would spend a day writing an elapsed month's minutes into a
+period that should already have stopped accruing.
 
 Every job: an **idempotency key**, bounded retries with exponential backoff, a dead-letter state,
 and the `(data, asOf)` purity rule from §4c. A job that cannot be safely re-run is a bug.
@@ -1090,8 +1137,8 @@ route under `/escrow/*`, `/escrow-releases/*` and `/provider-transfers/*`. Also 
 mount it would have needed.
 
 The tables and services still exist in the running backend (migration 0016, `escrow.service.ts` and
-six siblings) — see §11g's status note. **This contract does not describe them any more**, and no
-new code may call them.
+six siblings), but **nothing routes to them and no worker binds their jobs** — see §11g. This
+contract does not describe them, and no new code may call them.
 
 ---
 
@@ -1307,9 +1354,13 @@ No apportionment happens here — §9.4 already guarantees each snapshot's share
 
 ```text
 [project's month rolls over, in ITS time zone]
-close-compensation-period
+close-compensation-period                DAILY tick, acting per project's own zone
   → the open period's status stays `open` but it stops accruing; a new period opens
   → NOTHING is frozen yet. A founder has not seen it.
+  → MORE THAN ONE PERIOD MAY BE `open`: an unfinalized March beside an accruing April.
+    The unique index is per project PER MONTH for exactly this reason.
+  → it WALKS month by month rather than jumping to today, so a worker down for a
+    quarter produces three periods rather than one three-month period.
 
 recompute-compensation-draft            nightly, (data, asOf)-pure per §4c
   → redraws every line of every open period from scratch, idempotently
@@ -1321,7 +1372,8 @@ POST …/compensation-periods/:id/finalize        founder
   → recomputes synchronously one last time, freezes every line, computes statementHash over
     the canonical serialization of (period, lines sorted by (memberId, kind)), appends ONE
     project_audit_entry in the same transaction, under the same project_chain_head lock
-  → status = 'finalized'
+  → status = 'finalized', and the NEXT month opens in that same transaction — a project
+    with no open period is a project silently losing effort out of every statement
 
 POST …/compensation-periods/:id/countersign     a DIFFERENT admin or the platform auditor
   → 422 SELF_COUNTERSIGN_FORBIDDEN if it is the finalizer, even for a founder
@@ -1478,7 +1530,9 @@ what this section adds is that the **statement** is itself personal data with th
 access rights, and that §9.10's "four further obligations, none of which exist yet" are now
 compliance items with dates attached, not backlog.
 
-**7. Feasibility: high, and it is net less code.** Every input already exists —
+**7. Feasibility: high, and it was net less code.** ✅ **Shipped.** The addition was four tables,
+six enums, two jobs and twelve endpoints; the removal deleted nine routes, three job bindings, 268
+lines of controller and a 605-line smoke script. Every input already existed —
 `slice_ledger_entry.effortMinutes` with `occurredAt` and `memberId`,
 `member_fair_market_rate.paidCashRateCentsPerHour`, `equity_snapshot_share`, `project_chain_head`
 for the lock and the chain, `project_audit_entry` for the freeze. The addition is four tables, two
@@ -1486,9 +1540,9 @@ enums, two jobs and eight endpoints, every one of them reusing a pattern that al
 effective-dated / accept / lock trigger from `member_fair_market_rate` (migration 0014), the hash
 chain from §9.9, the idempotent nightly recompute from `recompute-equity-snapshot`.
 
-The removal side **deletes** work: no payment SDK, no webhook route, no raw-body mount, no provider
+The removal side **deleted** work: no payment SDK, no webhook route, no raw-body mount, no provider
 reconciliation, no AML program, no licensing project. That is the rare change where the compliant
-option is also the smaller one.
+option was also the smaller one.
 
 ### The rejected-keys list
 
@@ -2334,16 +2388,19 @@ app.use("/", integrationCallbackRouter); // ✅ shipped — GET /integrations/:p
 
 // Same prefix a fourth time, declared AFTER all three: projectFundingRouter owns
 // /:projectSlug's /funding-rounds, /milestones, /compensation and /investor-confidence.
-// Its /escrow/* subtree is superseded — see §11g.
-app.use("/research-projects", projectFundingRouter); // ⚠️ shipped, escrow half superseded — §7
+// Its /escrow/* subtree is RETIRED — those four paths 404 now (§11g).
+app.use("/research-projects", projectFundingRouter); // ✅ shipped — §7
+// Same prefix a FIFTH time, declared after all four: compensationRouter owns
+// /:projectSlug's /compensation-agreements/*, /compensation-periods/*,
+// /compensation-period-lines/* and /members/:memberUserId/compensation-agreement.
+app.use("/research-projects", compensationRouter); // ✅ shipped — §7A
 // Root-mounted for the same reason researchCatalogRouter is: a backer arriving from a
 // deal-flow list holds a round id and has no reason to know which project owns it.
 // Owns /funding-rounds, /pledges, /milestones and /funding/deals. Its /escrow-releases
-// and /provider-transfers subtrees are superseded — see §11g.
-app.use("/", fundingRouter); // ⚠️ shipped, escrow half superseded — §7
+// and /provider-transfers subtrees are RETIRED (§11g).
+app.use("/", fundingRouter); // ✅ shipped — §7
 
-// NOT YET IN src/app.ts — neither has a router to mount:
-// app.use("/research-projects", compensationRouter);     // ⏳ pending — §7A
+// NOT YET IN src/app.ts — no router to mount:
 // app.use("/research-programs", researchProgramsRouter); // ⏳ pending — §10
 ```
 
@@ -2361,21 +2418,21 @@ Unless stated otherwise every route is `requireAuth`, every project-scoped route
 
 Four states, checked against the actual route files in `src/routes/`, not against intent:
 
-| State             | Meaning                                                                                  |
-| ----------------- | ---------------------------------------------------------------------------------------- |
-| ✅ **Shipped**    | Routed, controlled, serviced, migrated. Reachable on `pnpm dev` today.                   |
-| ⏳ **Pending**    | Spec'd below, in scope for this project, **not built yet** — §16 orders when.            |
-| 🚫 **Deferred**   | Spec'd below but **will not be built** against a paid provider — see Appendix A instead. |
-| ⚠️ **Superseded** | Built and running, but **no longer part of this contract**. Reachable; do not extend.    |
+| State           | Meaning                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| ✅ **Shipped**  | Routed, controlled, serviced, migrated. Reachable on `pnpm dev` today.                   |
+| ⏳ **Pending**  | Spec'd below, in scope for this project, **not built yet** — §16 orders when.            |
+| 🚫 **Deferred** | Spec'd below but **will not be built** against a paid provider — see Appendix A instead. |
+| 🗑️ **Retired**  | Unmounted. The routes 404; the tables and services survive uncalled. Do not re-bind.     |
 
-| Subsection                                | Domain                           | Status     | Backing files                                                                                              |
-| ----------------------------------------- | -------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
-| [11a](#11a-projects-team-roles-5)         | Projects, team, roles (§5)       | ✅ Shipped | `research-projects.routes.ts`, `research-catalog.routes.ts`                                                |
-| [11b](#11b-discovery-6)                   | Discovery (§6)                   | ✅ Shipped | `discovery.routes.ts`                                                                                      |
-| [11d](#11d-workshop-and-daily-logs-8)     | Workshop & daily logs (§8)       | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A                 |
-| [11e](#11e-proof-of-effort-9)             | Proof of Effort (§9)             | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015 |
-| [11f](#11f-project-immortal-10)           | Project Immortal (§10)           | ⏳ Pending | none — no `research-programs.routes.ts` exists                                                             |
-| [11g](#11g-funding-and-compensation-7-7a) | Funding & compensation (§7, §7A) | ⚠️ Mixed   | `funding.routes.ts` ships funding; the escrow subtree is superseded; §7A has no router yet                 |
+| Subsection                                | Domain                           | Status     | Backing files                                                                                                               |
+| ----------------------------------------- | -------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
+| [11a](#11a-projects-team-roles-5)         | Projects, team, roles (§5)       | ✅ Shipped | `research-projects.routes.ts`, `research-catalog.routes.ts`                                                                 |
+| [11b](#11b-discovery-6)                   | Discovery (§6)                   | ✅ Shipped | `discovery.routes.ts`                                                                                                       |
+| [11d](#11d-workshop-and-daily-logs-8)     | Workshop & daily logs (§8)       | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A                                  |
+| [11e](#11e-proof-of-effort-9)             | Proof of Effort (§9)             | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015                  |
+| [11f](#11f-project-immortal-10)           | Project Immortal (§10)           | ⏳ Pending | none — no `research-programs.routes.ts` exists                                                                              |
+| [11g](#11g-funding-and-compensation-7-7a) | Funding & compensation (§7, §7A) | ✅ Shipped | `funding.routes.ts`, `compensation.routes.ts`, `compensation.controller.ts`, three services, two jobs, migrations 0017–0019 |
 
 Each subsection below opens with one line stating its state. **§11c is gone** — it described funding
 and escrow together, and escrow has left this contract. Its funding rows and the §7A rows that
@@ -2531,10 +2588,10 @@ needs the platform `moderator` role from §4a Layer 3, which also does not exist
 
 ### 11g. Funding and compensation (§7, §7A)
 
-**⚠️ Mixed, and the split is the point.** Funding rounds, pledges and milestones are **✅ shipped**
-and stay. The escrow subtree is **⚠️ superseded** — still routed, still reachable, no longer part of
-this contract. Compensation statements are **⏳ pending** — no `compensation.routes.ts`, no
-controller, no service, no migration.
+**✅ Shipped in full, and the split is still the point.** Funding rounds, pledges and milestones
+ship as records of intent. Compensation statements ship as §7A. The escrow subtree is **🗑️
+retired** — its nine routes 404, its three jobs are unbound, and its tables and services survive
+unreachable so migration 0016's rows stay explicable.
 
 This subsection replaces the old §11c, which described funding and escrow as one thing. They were
 never one thing: one is a record of who committed to back a project, the other was a money rail.
@@ -2559,11 +2616,11 @@ Backed by `funding.routes.ts`, `funding.controller.ts` / `funding-error-response
 | `GET …/compensation`                                             | —                                       | Locked §9 rate, advertised offers, and — once §7A lands — payments read from `compensation_payment_record` instead of approved escrow releases. `200`                     |
 | `GET …/investor-confidence`                                      | —                                       | Returns `asOf`. **`404` when never computed** — never a fabricated `0`. `200` · `404`                                                                                     |
 
-#### Superseded — the escrow subtree (§7)
+#### Retired — the escrow subtree (§7)
 
-Routed and reachable today; **outside this contract**. No new code may call these, no client may
-depend on them, and they are the first thing to remove when the backend catches up to this doc
-(§11g's closing note). The design behind them is preserved in
+**These nine paths return `404`.** The handlers are deleted, the routes are unmounted, and the
+three jobs behind them (`submit-provider-transfer`, `reconcile-escrow-ledger` and its tick) are
+unbound with no cron. The design behind them is preserved in
 [ESCROW_LEDGER_STRUCTURE.md](ESCROW_LEDGER_STRUCTURE.md) for the commerce domain.
 
 ```text
@@ -2577,10 +2634,31 @@ POST /provider-transfers/:transferId/settle · /fail
 `POST /webhooks/payments/stripe` was never built and now never will be. There is still no webhook
 router and no raw-body mount anywhere in `src/app.ts`, and there must not be one.
 
-#### Pending — compensation statements (§7A)
+**The tables and services are still on disk and in the database**, uncalled: `escrow_account`,
+`escrow_journal_entry`, `escrow_posting`, `escrow_release`, `provider_transfer`,
+`provider_webhook_event`, `reconciliation_discrepancy`, migration 0016 and seven services. Dropping
+them would discard rows the append-only triggers exist to protect, and the queue names survive so
+an operator can drain anything left in flight. **Do not re-bind them.** Putting Qatoto back in the
+position of holding someone else's money is a licensing decision taken with counsel (§7A.6), not a
+code change.
 
-Nothing below exists. `requireIdentifiedUser` on every write (§4a); every project-scoped route
-re-checks membership in the service and fails `404` (§4a).
+#### Shipped — compensation statements (§7A)
+
+**Every row below is routed and reachable today**, backed by `compensation.routes.ts`,
+`compensation.controller.ts` / `compensation-error-response.ts`, three services
+(`compensation-agreements`, `compensation-periods`, `compensation-payments`), two jobs
+(`close-compensation-period` and `recompute-compensation-draft`, each with a daily tick),
+`src/lib/compensation-period.ts` and migrations 0017–0019.
+
+`requireIdentifiedUser` on every write (§4a); every project-scoped route re-checks membership in
+the service and fails `404` (§4a).
+
+**Two rows differ from the table as originally drafted**, both deliberate:
+
+| Change                                                                                         | Why                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`GET …/compensation-agreements` takes `?memberId=` as a USER id**, not a `project_member.id` | Every other route in this domain addresses a person by their public user id (`…/members/:memberUserId/…`). A filter keyed on the internal membership id would be the only place a client had to know one. |
+| **`…/export` requires `admin`**, not `contributor`                                             | A CSV of every member's gross pay is the whole team's compensation in one file. Reading your own statement needs `contributor`; exporting everyone's does not follow from it.                             |
 
 | Method & path                                                          | Body / input                                                                                         | Behavior & statuses                                                                                                                                                  |
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2601,11 +2679,12 @@ re-checks membership in the service and fails `404` (§4a).
 finalized statement is corrected by superseding it. And there is no endpoint that marks a line
 `paid` directly: payment is an attestation plus a confirmation, or it is not evidence (§7A.5).
 
-**When the backend catches up to this doc**, the order is: add §7A, migrate
-`escrowReleaseAmountInCents` → `plannedPayoutInCents`, point `compensation.service.ts`'s `paidOut`
-at `compensation_payment_record`, set `PLATFORM_FEE_BASIS_POINTS` to `0`, reject the two retired
-`earnedAsPolicy` values on write, and only then retire the escrow subtree. Retiring it first would
-leave shipped cash strands pointing at a policy with no mechanism behind it.
+**The backend has caught up to this doc**, in the order it prescribed: §7A landed first, then
+`escrowReleaseAmountInCents` → `plannedPayoutInCents` (migration 0019), then
+`compensation.service.ts`'s `paidOut` repointed at `compensation_payment_record`, then
+`PLATFORM_FEE_BASIS_POINTS` to `0`, then the two retired `earnedAsPolicy` values refused by both
+Zod and a CHECK — and only then the escrow subtree. Retiring it first would have left shipped cash
+strands pointing at a policy with no mechanism behind it.
 
 ---
 
@@ -2636,9 +2715,9 @@ leave shipped cash strands pointing at a policy with no mechanism behind it.
 
 ### Pledge → commitment (§7)
 
-**✅ Shipped**, minus the escrow half. `pnpm db:smoke-funding-escrow` still drives the shipped
-sequence including the two attacks; the settlement and release steps it exercises are superseded
-(§11g) and the smoke script goes when they do.
+**✅ Shipped.** `pnpm db:smoke-funding` drives the sequence including the two attacks. It replaced
+`db:smoke-funding-escrow` when the escrow subtree retired: six of that script's nine steps described
+authorization, provider submission, settlement and release, none of which exist any more.
 
 ```text
 POST /funding-rounds/:id/pledges { amountInCents }                          ✅
@@ -2646,6 +2725,13 @@ POST /funding-rounds/:id/pledges { amountInCents }                          ✅
   → 201: a COMMITMENT is recorded. No card is charged. No funds are held. No fee is taken.
   → the response says "commitment recorded", never "payment succeeded" — a client that
     says otherwise is lying to a backer about where their money is
+  → raisedAmountInCents and backersCount move HERE, in the pledge's own transaction.
+    escrow_settlement.service.ts used to be their only writer, gated on an auditor
+    settling a transfer; with no custody there is no settlement step, and leaving them
+    there would freeze every funding page at zero raised forever.
+
+POST /pledges/:id/cancel                                                    ✅
+  → both counters come back down, in the cancellation's own transaction
 ```
 
 `raisedAmountInCents` and `backersCount` are sums of committed pledges and every read projection
@@ -2655,7 +2741,9 @@ release that used to follow this trace are gone from this contract — see §7 a
 
 ### Verified work → month-end statement → payment (§9 → §7A)
 
-**⏳ Pending — none of this is built.** It is the flow the whole domain exists to produce.
+**✅ Shipped in full**, and `pnpm db:smoke-compensation` drives exactly this sequence against a real
+database — including the asymmetry at the bottom, which is the assertion the whole section exists
+to make true.
 
 ```text
 [once, at the start]
@@ -2897,13 +2985,17 @@ Do **not** implement the domains in parallel — §9 defines the numbers every o
 | **5. Discovery** (§6)             | Clusters, scoring jobs, insights, talent                                                                                                                                                                                        | Independent; deferrable without blocking anything                                                                                                |
 | **6. Project Immortal** (§10)     | Branches, papers, posts, moderation                                                                                                                                                                                             | Largest surface, lowest coupling. Needs the moderator role first                                                                                 |
 
-**Do §7A next.** It is the shortest path from what is already built to something a founder would
-actually open every month, it depends on nothing unbuilt, and it deletes more surface than it adds.
+**§7A shipped, and it did delete more surface than it added** — nine escrow routes, three jobs, one
+smoke script and 268 lines of controller went with it.
 
-Two items belong beside it rather than after it, because both are compliance rather than polish
-(§7A.6): the **dispute / override UI** (§14), which is the human-intervention path Art. 22 and AI Act
-Art. 14 require to be reachable, and the **integration-consent screen**, which is the lawful-basis
-and transparency surface for worker monitoring.
+**Do the two compliance items next**, ahead of §5 and §6, because both are compliance rather than
+polish (§7A.6) and both are now the only things standing between the shipped backend and a lawful
+deployment in the EU: the **dispute / override UI** (§14), which is the human-intervention path Art.
+22 and AI Act Art. 14 require to be REACHABLE — a backend endpoint nobody can find is not human
+oversight — and the **integration-consent screen**, which is the lawful-basis and transparency
+surface for worker monitoring.
+
+**Then §10 (Project Immortal)**, which is the only backend section still unbuilt.
 
 This matches PROOF_OF_EFFORT_SPEC.md §1's sequencing: the AI Chief of Staff (§9 + §7A) comes first;
 reward crowdfunding (§7) is optional and later; equity crowdfunding stays API-disabled until the
@@ -2929,30 +3021,42 @@ db:verify-proof-of-effort-constraints` then EXERCISES all 38 database-level guar
 4. **The tampering test the user asked for.** ✅ Fetch a round, edit `amountInCents` in DevTools to
    a different currency's magnitude, replay the pledge — assert the server records its own value and
    that every rejected key in §7A returns `422`. `funding.controller.schemas.test.ts` asserts the
-   rejected keys against every funding body plus that exact payload, and `db:smoke-funding-escrow`
-   proves the server re-bounds the amount against the round's own min/max. Repeat it against a
-   §7A statement line, where there is **no amount field at all** to tamper with. Still to repeat
-   against the native clients with a proxy.
-5. **Four-eyes test.** ✅ for escrow release, ⏳ for §7A. `pnpm db:smoke-funding-escrow` runs the
-   shipped form: the requester attempts to approve → `422 SELF_APPROVAL_FORBIDDEN`; an outsider →
-   `403`; a second, non-self-granted `admin` → approved. A founder granting themselves `admin` is
-   rejected by `project_member_role_granted_by_ck` at the column level, and `resolveApproverStanding`
-   refuses an `admin` row with no recorded grantor. **The same three assertions must be ported to
-   `finalize` → `countersign` (§7A.5)** — that is where two-person control now lives, and the escrow
-   version goes when the subtree does.
-   5a. **The wage rule, which is the one with a statute behind it (§0, §7A.6 item 2).** Verify a claim
-   to `flagged_for_review`, then finalize the period covering it and assert the member's
-   `cash_hourly` line is **identical** to the same period computed from a `verified` claim — only
-   `verificationNote` and the `equity_delta` line differ. Then grep the compensation service for any
-   path where `effortVerificationStatus` reaches `grossAmountInCents`; there must be none.
-   5b. **Statement determinism and freeze.** Run `recompute-compensation-draft` 100 times with rows
-   shuffled and assert byte-identical lines. Finalize, then attempt an `UPDATE` on a finalized line
-   and assert the trigger rejects it. Tamper with a line in SQL and assert
-   `…/compensation-periods/:id/verify` returns **`409 STATEMENT_CHAIN_BROKEN`** naming that period.
-   5c. **Payment records store nothing sensitive.** Post a `referenceNote` containing a 16-digit
-   card-shaped string and an `accountNumber` key; assert `422` on the key and rejection or redaction
-   of the value. Then sweep the schema: no column in this domain holds an account number, IBAN, UPI
-   handle or card detail (§13).
+   rejected keys against every funding body plus that exact payload, and `db:smoke-funding`
+   proves the server re-bounds the amount against the round's own min/max. ✅ Repeated against a
+   §7A statement line, where there is **no amount field at all** to tamper with:
+   `compensation.controller.schemas.test.ts` asserts all 38 rejected keys against every §7A body
+   plus a positive control, and the finalize body carries an acknowledgement string and nothing
+   else. Still to repeat against the native clients with a proxy.
+5. **Four-eyes test.** ✅ Ported to `finalize` → `countersign`, which is where two-person control
+   now lives; the escrow version went with the subtree. `pnpm db:smoke-compensation` runs all three
+   assertions: the finalizer attempts to countersign → `422 SELF_COUNTERSIGN_FORBIDDEN`, **even for
+   a founder**; a plain contributor → `403 COUNTERSIGNER_NOT_AUTHORIZED`; a second, non-self-granted
+   `admin` → signed. A founder granting themselves `admin` is rejected by
+   `project_member_role_granted_by_ck` at the column level, and `resolveSecondSignatoryStanding`
+   refuses an `admin` row with no recorded grantor. `db:verify-compensation-constraints` additionally
+   proves `compensation_period_countersign_ck` rejects a self-countersignature at the COLUMN level,
+   so a psql prompt cannot step around the service.
+   5a. **The wage rule, which is the one with a statute behind it (§0, §7A.6 item 2).** ✅
+   `db:smoke-compensation` gives two members identical work in one month, one `verified` and one
+   `flagged_for_review`, and asserts their `cash_hourly` lines are byte-identical — same minutes,
+   same gross, same currency — with only `verificationNote` differing. The grep half is clean too:
+   every mention of `verificationStatus` in the compensation services is inside
+   `buildVerificationNotes`, which takes no amount and returns strings.
+   5b. **Statement determinism and freeze.** ✅ `db:smoke-compensation` runs the draft 20 times and
+   asserts byte-identical lines, then tampers with a finalized line (with the freeze trigger
+   disabled, the honest shape of the threat) and asserts the chain breaks naming that period.
+   `db:verify-compensation-constraints` proves the trigger itself rejects the `UPDATE`, and that an
+   OPEN period's line stays writable — the positive control, without which "everything is rejected"
+   would pass.
+   5c. **Payment records store nothing sensitive.** ✅ `db:smoke-compensation` posts a
+   `referenceNote` containing a card-shaped number and asserts `422`;
+   `compensation.controller.schemas.test.ts` asserts the `accountNumber`, `iban`, `upiId` and
+   `paymentMethodId` KEYS are refused, and `payment-instrument.test.ts` asserts the VALUES are — a
+   rejected-key list is defeated by putting the number in a field that is allowed.
+   `db:verify-compensation-constraints` sweeps the whole schema and finds exactly one such column,
+   `provider_transfer.payout_destination_id`, on a retired escrow table: never client-supplied,
+   nullable, and unwritten now that nothing pays anyone. The sweep excludes the retired tables and
+   then asserts the exclusion is exactly that column, so the carve-out is bounded rather than silent.
 6. **The analysis path, against the real provider.** ✅ `pnpm db:smoke-daily-log-analysis` is the
    only proof in the repo that reaches Gemini: `gemini.test.ts` injects `fetch`, `db:smoke-workshop`
    asserts only that a submit receipt is not a verdict, and `db:smoke-proof-of-effort` writes its
@@ -2975,16 +3079,16 @@ db:verify-proof-of-effort-constraints` then EXERCISES all 38 database-level guar
 8. **Zero-trust sweep.** `grep` every Zod schema for `userId|equity|slice|Cents|score|verdict|status`
    and confirm each hit is one of the two documented negotiated-input exceptions.
 9. **Cascade sweep.** ✅ For every FK into a financial or audit table, assert `onDelete` is
-   `restrict` or `set null`. `db:verify-escrow-constraints` checks 33 of them against a
-   hand-maintained expectation AND sweeps the catalog for any cascade at all, so a table added later
-   without updating the list still fails — extend the expectation with §7A's four tables. Then
-   delete a test user with statement history and confirm it fails loudly.
+   `restrict` or `set null`. `db:verify-escrow-constraints` checks 33 of them and
+   `db:verify-compensation-constraints` checks §7A's 19, each against a hand-maintained expectation
+   AND a catalog sweep for any cascade at all, so a table added later without updating the list
+   still fails. Both then delete a test user with statement history and confirm it fails loudly.
 10. **Coverage sweep.** Every route in [R_AND_D_STRUCTURE.md](R_AND_D_STRUCTURE.md) §3 and every
     action in its §8/§9 maps to a named endpoint in §11.
 
 ```bash
-# The core zero-trust smoke test. `pnpm db:smoke-funding-escrow` drives all of this and
-# 28 more assertions against a real database; these three are the hand-runnable form.
+# The core zero-trust smoke test. `pnpm db:smoke-funding` drives all of this and 13 more
+# assertions against a real database; these three are the hand-runnable form.
 curl -X POST https://localhost:8000/research-projects -b cookies.txt \
   -H 'content-type: application/json' \
   -d '{"name":"SolarChill","tagline":"Solar cold rooms","categoryId":"<id>",
@@ -2998,6 +3102,14 @@ curl -X POST https://localhost:8000/funding-rounds/<id>/pledges -b cookies.txt \
 curl -X POST https://localhost:8000/funding-rounds/<id>/pledges -b cookies.txt \
   -H 'content-type: application/json' -d '{"amountInCents":5000,"currency":"CNY","backerUserId":"someone-else"}'
 # → 422, both unknown keys rejected by .strict()
+```
+
+**The §7A gates, all runnable today:**
+
+```bash
+pnpm db:verify-compensation-constraints   # 71 database-level guarantees, positive controls included
+pnpm db:smoke-compensation                # §12's trace end to end, including the §17 5a wage rule
+pnpm db:smoke-funding                     # the commitment path and the two attacks
 ```
 
 ---
@@ -3083,11 +3195,17 @@ are all good engineering and none of it is wasted. It is retargeted at **commerc
 buyer↔seller hold is a real requirement — and even there Qatoto mirrors a licensed provider (Razorpay
 Route, Cashfree Easy Split, Stripe Connect, Mangopay) rather than custodying anything itself.
 
-**What is still running in the backend.** Migration 0016, `escrow.service.ts`,
-`escrow-settlement.service.ts`, `escrow-releases.service.ts`, `escrow-provider-adapter.service.ts`,
-`reconcile-escrow-ledger`, and the routes listed in §11g's superseded block. They work; they are
-reachable; they are **outside this contract**. §11g gives the order for retiring them, and the order
-matters — retiring them before §7A exists would leave shipped cash strands pointing at a payout
+**What is still in the backend, and what is not.** The routes are **gone** — all nine 404, the
+handlers are deleted, and `submit-provider-transfer`, `reconcile-escrow-ledger` and its tick are
+unbound with no cron. Migration 0016, its seven tables and the services
+(`escrow.service.ts`, `escrow-settlement.service.ts`, `escrow-releases.service.ts`,
+`escrow-provider-adapter.service.ts` and the two jobs) are still on disk and in the database,
+**uncalled**.
+
+They stay because dropping the tables would discard rows the append-only triggers exist to protect,
+and because `db:verify-escrow-constraints` still proves those triggers work. **Do not re-bind
+them.** §11g's retirement order was followed exactly — §7A first, then the four catch-up items, then
+the subtree — because retiring it first would have left shipped cash strands pointing at a payout
 mechanism with nothing behind it.
 
 **What was never built and now never will be.** `POST /webhooks/payments/stripe`, the Stripe SDK,
