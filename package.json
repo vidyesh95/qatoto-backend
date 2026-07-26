@@ -44,6 +44,7 @@
     "db:smoke-discovery": "tsx --conditions=development scripts/smoke-discovery-pipeline.ts",
     "db:smoke-workshop": "tsx --conditions=development scripts/smoke-workshop-pipeline.ts",
     "db:smoke-daily-log-analysis": "tsx --conditions=development scripts/smoke-daily-log-analysis.ts",
+    "db:smoke-daily-log-feed": "tsx --conditions=development scripts/smoke-daily-log-feed.ts",
     "db:smoke-proof-of-effort": "tsx --conditions=development scripts/smoke-proof-of-effort.ts",
     "db:smoke-funding": "tsx --conditions=development scripts/smoke-funding.ts",
     "db:smoke-compensation": "tsx --conditions=development scripts/smoke-compensation.ts",
