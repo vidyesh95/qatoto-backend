@@ -1801,6 +1801,16 @@ connection budget the request path needs for a surface the frontend does not hav
 in `workshop-chat.tsx` is a decorative `div` (§14). The cursor is `(sentAt, id)`, so the polling a
 client does today and the stream it gets later read the same rows in the same order.
 
+**`sent_at` is `timestamp(3)`, and that is a correctness requirement rather than a storage choice.**
+The cursor is encoded with `Date.getTime()` — milliseconds — and the column was originally declared
+with microsecond precision. A cursor coarser than its column cannot express its own boundary: the
+next page asks for `sent_at < <ms>` OR `sent_at = <ms>`, and a message whose true instant carries
+microseconds matches neither, so it is **unreachable on every page**. `postMessage` never sets
+`sentAt`, so the default `now()` supplied exactly that precision and the defect was live rather than
+theoretical — `db:smoke-workshop` lost one message per page boundary until migration 0021 (§17 items
+11a and 11b). Any column that feeds a keyset cursor in this domain carries the same requirement;
+`daily_log.submitted_at` was narrowed with it.
+
 Messages are **soft-deleted** (`deletedAt`), because a hard delete punches a hole in a keyset cursor
 and a client paging backwards silently skips a page.
 
@@ -2532,7 +2542,7 @@ Four states, checked against the actual route files in `src/routes/`, not agains
 | [11e](#11e-proof-of-effort-9)             | Proof of Effort (§9)             | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015                  |
 | [11f](#11f-project-immortal-10)           | Project Immortal (§10)           | ⏳ Pending | none — no `research-programs.routes.ts` exists                                                                              |
 | [11g](#11g-funding-and-compensation-7-7a) | Funding & compensation (§7, §7A) | ✅ Shipped | `funding.routes.ts`, `compensation.routes.ts`, `compensation.controller.ts`, three services, two jobs, migrations 0017–0019 |
-| [11h](#11h-cross-project-reads-8-7a)      | Cross-project reads (§8, §7A)    | ✅ Shipped | `workshop.routes.ts`'s `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`, `governance-summary.service.ts`, `src/lib/daily-log-cursor.ts`, migration 0020 |
+| [11h](#11h-cross-project-reads-8-7a)      | Cross-project reads (§8, §7A)    | ✅ Shipped | `workshop.routes.ts`'s `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`, `governance-summary.service.ts`, `src/lib/daily-log-cursor.ts`, `scripts/smoke-daily-log-feed.ts`, migrations 0020–0021 |
 | [11i](#11i-go-to-market-6-family)         | Go-to-market (§6-family)         | ✅ Shipped | `suppliers.routes.ts`, `suppliers.controller.ts`, `suppliers.service.ts`, `launch-readiness.service.ts`, migration 0020 |
 
 Each subsection below opens with one line stating its state. **§11c is gone** — it described funding
@@ -2792,7 +2802,8 @@ strands pointing at a policy with no mechanism behind it.
 
 **✅ Shipped in full.** Three root-mounted reads, backed by `workshop.routes.ts`'s
 `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`,
-`governance-summary.service.ts`, `src/lib/daily-log-cursor.ts` and migration 0020.
+`governance-summary.service.ts`, `src/lib/daily-log-cursor.ts` and migrations 0020–0021, and
+exercised end to end by `scripts/smoke-daily-log-feed.ts`.
 
 These exist because §4c's `/build-log` and `/governance` stage pages are **cross-project by
 definition** and every §8 and §7A read before them was project-scoped. Root-mounted for the same
@@ -3382,8 +3393,39 @@ db:verify-proof-of-effort-constraints` then EXERCISES all 38 database-level guar
     orders and limits over `daily_log` **alone** and attaches authors and project chips in two
     bounded follow-up queries — the `attachCompensation` shape. Same fixture: **12.5 ms → 3.4 ms**,
     and the sort is over narrow unjoined rows.
-    **Still to run by hand:** page `/daily-logs` twice as a member of two projects and assert no row
-    repeats or vanishes across the boundary — the one claim a planner check cannot make.
+    **The paging claim is now discharged, and finding it a fixture uncovered a real bug.** ✅
+    `pnpm db:smoke-daily-log-feed` seeds one caller, four projects, membership in three, and logs
+    whose `logDate`s interleave across them — **the first multi-project fixture in this repo, and
+    the first execution of the feed's cursor anywhere.** Fourteen assertions: completeness and
+    strict ordering at five page sizes including `limit=1`, membership scoping, draft exclusion,
+    `?projectSlug=` and `?chipKind=` paging _completely_ rather than merely correctly, an
+    unreachable slug returning an empty page rather than a `404`, and a malformed cursor refused
+    rather than silently restarting.
+    Two logs deliberately share a day **and** a byte-identical `submittedAt`, leaving `id` as the
+    only discriminator. That case cannot be built through the service at all — `submitDailyLog`
+    stamps `new Date()` per call, so N submits always land on N distinct milliseconds — which is why
+    the fixture rows are hand-written, the same reason `db:smoke-proof-of-effort` hand-writes its
+    claim rows.
+    11a. **A millisecond cursor over a microsecond column drops rows** (migration 0021). Both
+    cross-project cursors encode their instant with `getTime()` — milliseconds — while their columns
+    stored microseconds. A cursor coarser than its column cannot express the boundary: the next page
+    asks for `instant < <ms>` OR `instant = <ms>`, and a row whose true value carries microseconds
+    matches neither, so it is **unreachable on every page** rather than merely misordered.
+    On `daily_log` this was latent — `submitDailyLog` writes `new Date()`, so all 32 rows were
+    millisecond-exact and the cursor was correct by accident of one write path. **On
+    `workshop_chat_message` it was live**: `postMessage` never sets `sentAt`, so the column default
+    `now()` supplied full microsecond precision. Both columns are now `timestamp(3)`, which is
+    stronger than the CHECK this started as — a CHECK would have rejected every chat insert, because
+    the value comes from the column's own `defaultNow()`. `editedAt` and `deletedAt` feed no cursor
+    and keep microseconds.
+    11b. **The assertion that should have caught it could not**, and that is the more useful lesson.
+    `smoke-workshop-pipeline.ts`'s header has always claimed the chat cursor "neither repeats nor
+    skips a row", but the body compared two pages for overlap and stopped there — a cursor dropping
+    one row per page passes that. Its fixture also posted each message in its own round trip, so no
+    two ever shared a millisecond. It now batch-inserts (`now()` is fixed per statement, so the rows
+    tie exactly) and walks the whole history asserting set-equality. Before the migration it reads
+    `expected=11 walked=10 distinct=10 missing=1`; after it, `missing=0`. **A regression test that
+    has never been red proves nothing**, and this one was red first.
 
 ```bash
 # The core zero-trust smoke test. `pnpm db:smoke-funding` drives all of this and 13 more
@@ -3416,6 +3458,8 @@ pnpm db:smoke-funding                     # the commitment path and the two atta
 ```bash
 pnpm db:seed-supplier-capabilities        # the 20-row vocabulary; migration 0020 creates the table only
 pnpm db:verify-go-to-market-constraints   # migration 0020's guarantees, R1 on product included
+pnpm db:smoke-daily-log-feed              # the cross-project cursor: 14 assertions, 5 page sizes
+pnpm db:smoke-workshop                    # includes the chat cursor's no-SKIP assertion
 pnpm test                                 # the cursor codec and both zero-trust schema suites
 ```
 
@@ -3651,6 +3695,9 @@ one.
   `src/lib/daily-log-cursor.ts` with its own test. **The index serves the filter, not the
   ordering** — `project_id IN (subquery)` plans as a semi-join, so the `ORDER BY` sorts; §17 item 11
   records the measurement and why that bound is accepted rather than indexed around.
+  **`submitted_at` is `timestamp(3)` because the cursor carries milliseconds** (§17 item 11a). A
+  microsecond column under a millisecond cursor makes rows unreachable rather than merely
+  misordered, and `db:smoke-daily-log-feed` asserts the rounding along with the paging.
 - **The page is ordered and limited over `daily_log` alone**, with authors and project chips
   attached in two bounded follow-up queries. The obvious joined form made join cost scale with the
   caller's whole history rather than with the page — 2,815 rows joined to return 21, on a
