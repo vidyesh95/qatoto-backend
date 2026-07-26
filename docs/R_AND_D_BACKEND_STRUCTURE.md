@@ -582,6 +582,51 @@ export const effortVerificationStatusEnum = pgEnum("effort_verification_status",
 ]);
 
 export const trendDirectionEnum = pgEnum("trend_direction", ["up", "down", "flat"]);
+
+// --- Go-to-market (§11i). DECLARED WITH THE §6 FAMILY IN CODE, not in the shared block: they
+// are read by one domain, which is where discoveryRegionKind and talentAvailability also sit.
+// Appendix B asked for them "in §4d with everything else"; they are documented here and
+// declared beside their tables, which is the convention every other single-domain enum follows.
+
+// How far a supplier listing has been checked. NEVER CLIENT-SETTABLE, and absent from the
+// create schema entirely — a directory whose rows assert their own trust level is worse than
+// no directory. Only a platform moderator moves it.
+export const supplierVerificationStateEnum = pgEnum("supplier_verification_state", [
+    "unverified",
+    "documents_pending",
+    "verified",
+    "suspended",
+]);
+
+export const supplierCapabilityKindEnum = pgEnum("supplier_capability_kind", [
+    "manufacturing",
+    "assembly",
+    "tooling",
+    "packaging",
+    "logistics",
+    "certification",
+    "design",
+    "sourcing",
+]);
+
+// `no_contact` exists because a curated directory lists entities that never asked to be
+// listed. A row a moderator added from public information must be able to say "reference only"
+// rather than becoming an inbox nobody consented to.
+export const supplierContactPolicyEnum = pgEnum("supplier_contact_policy", [
+    "via_platform",
+    "direct_email",
+    "no_contact",
+]);
+
+// A project's OWN record of who it approached. `contracted` means "this team says they signed
+// something"; nothing here feeds a supplier's verificationState, or the directory would be
+// forgeable one self-report at a time.
+export const projectSupplierEngagementStatusEnum = pgEnum("project_supplier_engagement_status", [
+    "considering",
+    "contacted",
+    "contracted",
+    "ended",
+]);
 ```
 
 ### 4e. The job runner
@@ -1038,6 +1083,10 @@ is always renderable with its freshness bound and is reproducible from the same 
 | `talent_profile`                 | Opt-in directory projection of a `user`                                    |
 | `talent_profile_skill`           | Join to `discovery_skill`                                                  |
 | `talent_compensation_ask`        | The applicant-side mirror of `open_role_compensation`                      |
+| `supplier`                       | A manufacturing partner. Moderator-authored — §11i                         |
+| `supplier_capability`            | Seeded capability vocabulary, `discovery_skill`'s shape exactly            |
+| `supplier_capability_link`       | Join to the vocabulary, `talent_profile_skill`'s shape exactly             |
+| `project_supplier_engagement`    | Which project engaged which supplier — the launch-ready rail's provenance  |
 
 `MarketInsight.statValue` is the sneakiest field on the surface — the mocks carry `"+34%"`,
 `"68M people"`, `"3× coverage"` and `"-22%"` in one column. It decomposes into
@@ -1051,6 +1100,39 @@ formats both the magnitude and the locale.
 > **A live frontend bug this surfaces.** `talent-filter-grid.tsx` filters skills with
 > `skills.some((skill) => skill.includes(chipText))` — a substring match, so a "Water" chip matches
 > "Water Polo". Moving to `discovery_skill` slugs fixes it by construction.
+
+### The go-to-market four (§11i)
+
+The supplier directory is **the same kind of thing** as the talent directory and the cluster map —
+a curated, filterable catalogue over a controlled vocabulary — so it is modelled on them rather
+than invented. `supplier_capability` copies `discovery_skill` (seeded, `isActive` retirement, **no
+moderation status**, because with no `POST` there is no spam surface to moderate);
+`supplier_capability_link` copies `talent_profile_skill` (composite PK, `cascade` from the owner,
+`restrict` on the taxonomy). `project_supplier_engagement` takes `restrict` into
+`research_project`, per R1.
+
+Three decisions worth naming, because each closed a question the appendix left open:
+
+- **Writes are platform `moderator` only**, checked in-service by `requirePlatformCapability` before
+  any id is read. There is **no user-submission path**: a self-serve, immediately-public supplier
+  listing needs a moderation queue, a rate limiter and an abuse story, and none of that is worth
+  building before the first real supplier exists.
+- **`verificationState` is absent from the create schema.** A new listing is always `unverified`,
+  and only a moderator moves it. A directory whose rows assert their own trust level is worse than
+  no directory.
+- **There is no price column on `supplier`.** §4b requires a currency beside every money column and
+  derives it from the **project**, never a request body — and a supplier belongs to no project, so
+  a directory-level price would have to invent one. `leadTimeDays` and `minimumOrderQuantity` are
+  unit-free integers and stay; a quote belongs to an engagement, priced in that project's currency.
+
+**The structural gap this closed.** `product` (`schema.ts`, STORE §4) carried exactly one FK,
+`sellerId → user`, so "this project shipped this listing" was not expressible at all. It now carries
+a nullable `researchProjectId` with `onDelete: "restrict"` (R1). That column is R&D's **only**
+contribution to the store domain: listing creation stays in the studio's own flow, and a research
+route that proxied a product create "for convenience" would duplicate validation, pricing and
+ownership checks the store already re-validates. The column is documented in
+[STORE_BACKEND_STRUCTURE.md](STORE_BACKEND_STRUCTURE.md) §4, where `product` actually lives —
+Appendix B originally assigned it to the studio doc, which owns `video`, not `product`.
 
 ### Server-side filtering
 
@@ -2394,11 +2476,28 @@ app.use("/research-projects", projectFundingRouter); // ✅ shipped — §7
 // /:projectSlug's /compensation-agreements/*, /compensation-periods/*,
 // /compensation-period-lines/* and /members/:memberUserId/compensation-agreement.
 app.use("/research-projects", compensationRouter); // ✅ shipped — §7A
+// Same prefix a SIXTH time, declared after all five: projectGoToMarketRouter owns
+// /:projectSlug/launch-readiness (§11i). Still no collision, same reason.
+app.use("/research-projects", projectGoToMarketRouter); // ✅ shipped — §11i
 // Root-mounted for the same reason researchCatalogRouter is: a backer arriving from a
 // deal-flow list holds a round id and has no reason to know which project owns it.
 // Owns /funding-rounds, /pledges, /milestones and /funding/deals. Its /escrow-releases
 // and /provider-transfers subtrees are RETIRED (§11g).
 app.use("/", fundingRouter); // ✅ shipped — §7
+
+// --- The four §4c STAGE ROUTES' cross-project halves (§11h, §11i, Appendix B). All
+// root-mounted for one reason: a visitor arriving from a landing-page stage card has not
+// picked a project and holds no slug. That is the whole point of the pages — team
+// building, daily logs and governance lived only as tabs INSIDE a project, so someone who
+// had not chosen one could not reach them at all.
+//
+// /daily-logs is MEMBER-SCOPED, derived from project_member in SQL;
+// /daily-logs/streak-leaderboard is public.
+app.use("/", dailyLogFeedRouter); // ✅ shipped — §8, §11h
+// /governance/summary. Aggregates and mechanics, never people.
+app.use("/", governanceRouter); // ✅ shipped — §7A, §11h
+// /suppliers, /supplier-capabilities, /launch-ready-projects.
+app.use("/", supplierRouter); // ✅ shipped — §11i
 
 // NOT YET IN src/app.ts — no router to mount:
 // app.use("/research-programs", researchProgramsRouter); // ⏳ pending — §10
@@ -2433,6 +2532,8 @@ Four states, checked against the actual route files in `src/routes/`, not agains
 | [11e](#11e-proof-of-effort-9)             | Proof of Effort (§9)             | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015                  |
 | [11f](#11f-project-immortal-10)           | Project Immortal (§10)           | ⏳ Pending | none — no `research-programs.routes.ts` exists                                                                              |
 | [11g](#11g-funding-and-compensation-7-7a) | Funding & compensation (§7, §7A) | ✅ Shipped | `funding.routes.ts`, `compensation.routes.ts`, `compensation.controller.ts`, three services, two jobs, migrations 0017–0019 |
+| [11h](#11h-cross-project-reads-8-7a)      | Cross-project reads (§8, §7A)    | ✅ Shipped | `workshop.routes.ts`'s `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`, `governance-summary.service.ts`, `src/lib/daily-log-cursor.ts`, migration 0020 |
+| [11i](#11i-go-to-market-6-family)         | Go-to-market (§6-family)         | ✅ Shipped | `suppliers.routes.ts`, `suppliers.controller.ts`, `suppliers.service.ts`, `launch-readiness.service.ts`, migration 0020 |
 
 Each subsection below opens with one line stating its state. **§11c is gone** — it described funding
 and escrow together, and escrow has left this contract. Its funding rows and the §7A rows that
@@ -2459,7 +2560,7 @@ subsection that mixes states, and says so per row.
 | `PATCH` · `DELETE /research-projects/:projectSlug/members/:memberId`                | `{ projectRole?, roleTitle? }`                                                               | Founder only. `founder` can never be assigned. `200` · `403`                                                   |
 | `DELETE /research-projects/:projectSlug/members/me`                                 | —                                                                                            | Sets `left`, never deletes. `200`                                                                              |
 | `GET` · `POST` · `PATCH` · `DELETE /research-projects/:projectSlug/roles[/:roleId]` | `OpenRoleSchema` + compensation strands                                                      | Maintainer+. `200`/`201` · `422`                                                                               |
-| `GET /open-roles`                                                                   | `?commitment=&skill=&minEquityBasisPoints=&page=`                                            | Cross-project rail + `/talent`. `200`                                                                          |
+| `GET /open-roles`                                                                   | `?commitment=&skill=&minEquityBasisPoints=&page=`                                            | Cross-project rail + `/talent` + `/team-building`. Carries `projectSlug`, `projectName`, `projectStage`, `projectCoverImageUrl`, `currency` and the strands, so a role card needs no second call |
 | `POST /research-projects/:projectSlug/applications`                                 | `{ openRoleId?, shortPitch, selectedSkills[], statedCommitment, expectedCompensationNote? }` | `kind` **server-derived**. Skills validated as a subset. `201` · `409` · `422`                                 |
 | `POST …/applications/:id/accept` · `/decline` · `/withdraw`                         | `{ note? }`                                                                                  | Accept creates the member row + increments `slotsFilledCount` in one txn. `200`                                |
 | `POST /research-projects/:projectSlug/invites` (+ `/accept`, `/decline`, `DELETE`)  | `{ inviteeUserId, openRoleId?, message? }`                                                   | Talent-page "Invite". `201` · `409`                                                                            |
@@ -2479,6 +2580,7 @@ reachable today.
 | `GET /discovery/problem-reports/mine`                             | `?page=`                                                                          | `200`                                                                                                                                                                           |
 | `GET` · `POST /discovery/categories`                              | `{ label }`                                                                       | User-minted lands `pending`. `201` · `409` · `429`                                                                                                                              |
 | `GET /discovery/regions` · `/market-insights` · `/demand-signals` | `?region=&category=&page=`                                                        | Knowledge hub. `200`                                                                                                                                                            |
+| `GET /discovery/skills`                                           | —                                                                                 | **The canonical skill vocabulary** behind every skill chip on `/talent` and `/team-building`. Slug **equality**, which is what retires the `skills.some(s => s.includes(…))` substring bug (§6). Not paginated — a facet list is not a feed. `200` |
 | `GET /discovery/talent`                                           | `?commitment=&skill=&availability=&region=&page=`                                 | Server-side filtering (§6). `200`                                                                                                                                               |
 | `GET` · `PUT` · `DELETE /discovery/talent/me`                     | `TalentProfileSchema`                                                             | Opt-in directory record. `200`                                                                                                                                                  |
 | `POST /discovery/talent/me/publish` · `/unpublish`                | —                                                                                 | Visibility toggle. `200`                                                                                                                                                        |
@@ -2686,6 +2788,145 @@ finalized statement is corrected by superseding it. And there is no endpoint tha
 Zod and a CHECK — and only then the escrow subtree. Retiring it first would have left shipped cash
 strands pointing at a policy with no mechanism behind it.
 
+### 11h. Cross-project reads (§8, §7A)
+
+**✅ Shipped in full.** Three root-mounted reads, backed by `workshop.routes.ts`'s
+`dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`,
+`governance-summary.service.ts`, `src/lib/daily-log-cursor.ts` and migration 0020.
+
+These exist because §4c's `/build-log` and `/governance` stage pages are **cross-project by
+definition** and every §8 and §7A read before them was project-scoped. Root-mounted for the same
+reason `/open-roles` is: someone arriving from a stage card has not picked a project and holds no
+slug.
+
+| Method & path                        | Body / input                                | Behavior & statuses                                                                                                                                                                                                     |
+| ------------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /daily-logs`                    | `?projectSlug=&chipKind=&cursor=&limit=`    | **Member-scoped.** `WHERE projectId IN (caller's active memberships)`, derived from `project_member` in SQL. Keyset `(logDate, submittedAt, id)`; submitted logs only. `200` · `401` · `422 CURSOR_MALFORMED`           |
+| `GET /daily-logs/streak-leaderboard` | —                                           | **Public.** Top 20 active projects by `dailyLogStreakDays`, each with `statsComputedAt` and `lastDailyLogDate`. `200`                                                                                                   |
+| `GET /governance/summary`            | `?page=&limit=`                             | **Public aggregates**, plus the caller's own open lines when signed in. Never another member's figures. `200`                                                                                                           |
+
+**The visibility decision on `/daily-logs`, and it is the whole design.** A daily log is private to
+its project's members, and every project-scoped read enforces that with
+`requireProjectRole(…, "contributor")` failing `404`. Making the surface cross-project could not be
+allowed to quietly relax it, so the feed is **Appendix B2 option (a)**: the caller's own
+memberships, and nothing else. A logged-out visitor gets `401`, and the page renders its explainer,
+its legend and the public leaderboard with an **empty** feed — not a fabricated one.
+
+**There is no `?projectIds=` and there must never be one.** A client-supplied project list on a
+private feed is a client-supplied authorization input (§0). `projectSlug` narrows the caller's own
+set and can only ever shrink it; a slug they are not a member of yields an **empty page, not a
+404**, because a facet that 404s tells a stranger which slugs exist (§6).
+
+**The cursor is three columns wide** — `(logDate DESC, submittedAt DESC, id DESC)` — and each is
+load-bearing. `logDate` is the day CLAIMED and `submittedAt` is when it was filed; they differ on
+any backfilled log, so neither substitutes for the other. `id` ends it because two members can
+submit for the same day inside one millisecond, and a cursor on a non-unique key skips rows (§4c
+rule 4). Backed by `daily_log_feed_idx` on `(projectId, logDate, submittedAt, id)`, partial on
+`status = 'submitted'` — which is also what guarantees `submittedAt` is NOT NULL on every row the
+cursor addresses.
+
+**`chipKind` filters in SQL**, as a correlated `EXISTS` against `daily_log_ai_summary_chip` with
+`daily_log_ai_summary_chip_kind_logId_idx` behind it. **No denormalized `chipKinds` column was
+added** — that would have meant a migration, a change to `analyze-daily-log` and a backfill of every
+log already analyzed, to serve a filter an index serves today. Filtering after the fetch was never
+an option: a predicate applied to one fetched page silently short-pages the cursor.
+
+**The streak leaderboard is public and the feed is not**, and the asymmetry is the point: a streak
+count over an already-public project is project metadata, while a log is a member's work record. No
+person is named and no log content appears. `statsComputedAt` ships on every row because a streak
+decays at midnight in the project's own zone **with no write** — the nightly job notices hours
+later, so a leaderboard implying live numbers is lying.
+
+**`effortVerificationStatus` is the six-value enum** on every feed row (§8), with `isEffortVerified`
+derived beside it. This page's legend is the most visible place the frontend's boolean (§15)
+contradicts the wire.
+
+#### The privacy decision on `/governance/summary`
+
+A month-end statement line names a person and what they are owed. Pay data is personal data under
+the GDPR and specially sensitive in several member states; §7A already keeps account numbers out of
+the system entirely. So the cross-project surface renders **aggregates and mechanics, never people**:
+
+- **Per-member statement lines stay on the per-project tab** (§5.5), behind membership, with the
+  finalize / countersign / record-payment / confirm / export actions. Nothing moved.
+- **The rollup carries counts, not names.** Per-project period counts by status, countersigned
+  count, and aggregate committed funding. No member id, no user id, no name, no per-member amount.
+- **The caller's own lines are the one exception.** A member may always see their own, on any
+  surface — reached only through their own `project_member` rows.
+- **The worked example the frontend spec wants is authored sample data.** The backend is not asked
+  to supply a real member's row for it and does not.
+
+**`attachOptionalUser`, not `requireAuth`,** because this page publishes the three §7A.6 copy rules
+and must render signed out. Those rules ship **with the payload** as
+`disclosureKeys: ["platform_holds_no_funds", "verification_never_reduces_cash",
+"statement_is_gross_only"]` — **keys, not English sentences**, for the reason §4d gives about
+`earnedAsLabel`: prose from the server forces three native clients to render un-localizable
+strings. `GROSS_ONLY_NOTICE` travels beside them, as it already does on the export.
+
+**No field on this page may imply a rail, a hold, a charge or a fee.** `committedFundingInCents` is
+the sum of `funding_round.raisedAmountInCents`, which is a counter moved inside the pledge
+transaction and means **committed** — no card, no custody. **`investor-confidence` is `null` when
+never computed** (§11g), never coerced to `0`, which would publish "no confidence" as a finding
+about the project rather than about the job.
+
+**Read-only, and the absences are deliberate.** There is no `/finalize`, `/countersign`,
+`/payments`, `/confirm` or `/export` on this router. Every one is actor-scoped and stays where the
+actor's role is already resolved from the slug; re-exposing them here would mean re-deriving the
+actor from a body.
+
+### 11i. Go-to-market (§6-family)
+
+**✅ Shipped in full**, backed by `suppliers.routes.ts` (two routers), `suppliers.controller.ts`,
+`suppliers.service.ts`, `launch-readiness.service.ts`, `scripts/seed-supplier-capabilities.ts`,
+`scripts/verify-go-to-market-constraints.ts` and migration 0020.
+
+| Method & path                                              | Body / input                                                  | Behavior & statuses                                                                                                                                                        |
+| ---------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /suppliers`                                           | `?capability=&region=&verificationState=&page=&limit=`        | Public. Repeated `capability` means **AND** — `GROUP BY … HAVING count(distinct …) = n`, matched by slug equality. `200`                                                    |
+| `GET /suppliers/:supplierSlug`                             | —                                                             | Public detail + capabilities. An inactive listing is `404`, identical to one that never existed. `200` · `404`                                                              |
+| `GET /supplier-capabilities`                               | —                                                             | The seeded vocabulary behind the filter chips. Not paginated. `200`                                                                                                        |
+| `POST /suppliers`                                          | `{ slug, name, summary?, regionSlug?, contactPolicy?, websiteUrl?, leadTimeDays?, minimumOrderQuantity?, capabilitySlugs[] }` | Platform `moderator` only. **No `verificationState`** — a new row is always `unverified`. `201` · `403` · `409 SUPPLIER_SLUG_TAKEN` · `422` |
+| `PATCH /suppliers/:supplierId`                             | Same minus `slug`, plus `verificationState` and `isActive`    | Platform `moderator` only. **The slug is unwritable** — it is the public identity a client has already linked to. `200` · `403` · `404` · `422`                             |
+| `GET /launch-ready-projects`                               | `?page=&limit=`                                               | Active projects at `stage = go_to_market` + what each **actually listed**, via `product.researchProjectId`. `200`                                                           |
+| `GET /research-projects/:projectSlug/launch-readiness`     | —                                                             | Member only → else `404`. Six derived items, `met` / `not_met` / `waived`, plus `asOf`. `200`                                                                               |
+
+**A public directory is a spam surface**, so the write side was decided before the routes existed:
+platform `moderator` only, with `requirePlatformCapability(…, "moderate_taxonomy")` running
+**before any id or slug is read**, which is what keeps its `403` from becoming an id oracle (§4a
+Layer 3). There is **no user-submission path and no `pending` state** — Appendix B floated
+mirroring `discovery/categories`, and that shape needs a moderation queue, a rate limiter and an
+abuse story that are not worth building before the first real supplier exists. `isActive` is
+retirement, not moderation. The capability vocabulary is **seeded**, exactly as `discovery_skill`
+is, so there is no `POST /supplier-capabilities` either.
+
+**Launch readiness is derived, not stored — there is no readiness table and no body that sets a
+state.** Six items, computed from `research_project.stage`, `project_stats`
+(`verifiedEffortMinutesTotal`, `allocatedEquityBasisPoints`), the §9.11 `pie_bake_event`, the
+project's supplier engagements, and whether an active listing exists:
+
+`stage_is_go_to_market` · `verified_effort_recorded` · `equity_allocated` · `cap_table_baked` ·
+`supplier_engaged` · `store_listing_exists`
+
+Each carries an `observedCount` — **an integer, never prose**, so three clients localize their own
+copy. **`NULL` reads as `not_met`, never as `0`**: `project_stats`'s job-computed columns are
+nullable with no default precisely so "no job has run" stays distinguishable from "the job ran and
+found nothing" (§5), and a checklist that coerced them would report a pipeline gap as a finding
+about the project.
+
+> **A correction to Appendix B, recorded rather than papered over.** B4 says the checklist "reuses
+> the `met` / `not_met` / `waived` shape §9.11's pre-bake checklist already established". **§9.11
+> established no such thing** — it specifies a typed acknowledgement, an `expectedSnapshotId` and a
+> `409 UNSETTLED_ALLOCATIONS` refusal, which `pie-bake.service.ts` implements as three sequential
+> gates returning an error union. `met`/`not_met`/`waived` appeared nowhere in the codebase. The
+> tri-state is therefore **authored in `launch-readiness.service.ts`**, and the instruction that
+> mattered is honoured: three states, not four. **`waived` is currently unreachable** — there is no
+> waiver table and no endpoint that grants one. It stays in the union because a waiver, when it
+> lands, is a recorded decision by a named person rather than a fourth flavour of `met`.
+
+**Listing creation is not an R&D endpoint.** The CTA from `/launch-ready-projects` points at
+`/studio/products` and the studio's existing create flow does the work. R&D contributes
+`product.researchProjectId` and nothing else.
+
 ---
 
 ## 12. How a request flows
@@ -2861,9 +3102,12 @@ POST …/allocation-proposals/:id/dispute  → slices freeze in escrow, OUTSIDE 
 
 ## 14. Frontend-behind-backend gaps
 
-> **The mirror of this section is [Appendix B](#appendix-b--what-the-four-rd-stage-routes-need-built-4c)** —
-> the four cross-project stage routes the frontend specs (R_AND_D_STRUCTURE.md §4c) and what the
-> backend owes them. Two of those four are blocked on a visibility/privacy decision, not on code.
+> **The mirror of this section is [Appendix B](#appendix-b--the-four-rd-stage-routes-4c-shipped)** —
+> the four cross-project stage routes the frontend specs (R_AND_D_STRUCTURE.md §4c). **All four are
+> now built** (§11h, §11i), including the two that were blocked on a visibility/privacy decision
+> rather than on code; the appendix records what each decision was and what shipped on it. Every one
+> of the four is therefore now a row in this section rather than in that one — the backend is ahead
+> of the frontend on all of them.
 
 Backend supported, no UI yet:
 
@@ -2879,6 +3123,15 @@ Backend supported, no UI yet:
   hash-chain framing is decoration.
 - **Override / review.** No surface for a founder to review a flagged step and override it.
 - **Project edit.** `GET` + `PATCH` exist; there is no edit entry point.
+- **The four §4c stage routes.** All four backends shipped (Appendix B): `/team-building` is served
+  by five endpoints, `/build-log` by `GET /daily-logs` + the streak leaderboard, `/governance` by
+  `GET /governance/summary`, and `/go-to-market` by the §11i supplier and readiness reads. **No page
+  calls any of them yet.** Three notes the UI has to honour: the build-log feed is **member-scoped**,
+  so a signed-out visitor gets the explainer, the legend and the leaderboard with an **empty** feed —
+  never a fabricated one; the governance page's per-member walkthrough must be **authored sample
+  data**, because the backend deliberately returns nobody else's line; and the readiness checklist's
+  `waived` state is representable but never produced today, so the UI must not imply a waiver path
+  exists.
 - **Tiered / multi-currency funding, paper moderation queue, talent profile editing.**
 
 Two of these have stopped being UX debt and become **compliance gaps**, and they should be read that
@@ -2986,11 +3239,18 @@ Do **not** implement the domains in parallel — §9 defines the numbers every o
 | **3. Proof of Effort** (§9) ✅    | Rate lock → claims → pipeline → disputes → ledger → snapshots → bake                                                                                                                                                            | **Shipped.** The hardest and highest-value. Its patterns are the ones §7A copies                                                                 |
 | **4. Funding** (§7) ✅            | Rounds, pledges, milestones — as records of intent                                                                                                                                                                              | **Shipped**, escrow half now superseded. **Crowdfunding only** — equity/venture stay flag-disabled; they are securities offerings (§7A.6 item 4) |
 | **4a. Compensation** (§7A) ⏳     | Agreements → accept → nightly draft → close → finalize → countersign → payment records → export                                                                                                                                 | **The product.** Depends only on §9, which shipped. Nothing else blocks it, and it is what makes every daily log worth logging                   |
+| **5a. Go-to-market** (§11i) ✅    | Supplier directory, seeded capability vocabulary, engagements, derived launch readiness, `product.researchProjectId`                                                                                                             | **Shipped.** A new domain beside §5 and just as independent — deferrable, blocking nothing. Migration 0020                                       |
 | **5. Discovery** (§6)             | Clusters, scoring jobs, insights, talent                                                                                                                                                                                        | Independent; deferrable without blocking anything                                                                                                |
 | **6. Project Immortal** (§10)     | Branches, papers, posts, moderation                                                                                                                                                                                             | Largest surface, lowest coupling. Needs the moderator role first                                                                                 |
 
 **§7A shipped, and it did delete more surface than it added** — nine escrow routes, three jobs, one
 smoke script and 268 lines of controller went with it.
+
+**Appendix B's four stage routes shipped too**, in the placement it prescribed: B1 was a projection
+widening on `/open-roles` plus a §11b row; B2 and B3 folded into the already-shipped §8 and §7A
+surfaces as one root-mounted read each (§11h); B4 landed as **phase 5a**, a new domain beside §5,
+independent and blocking nothing. All of it is behind the two compliance items below, which remain
+the only things between the shipped backend and a lawful EU deployment.
 
 **Do the two compliance items next**, ahead of §5 and §6, because both are compliance rather than
 polish (§7A.6) and both are now the only things standing between the shipped backend and a lawful
@@ -3097,6 +3357,22 @@ db:verify-proof-of-effort-constraints` then EXERCISES all 38 database-level guar
    still fails. Both then delete a test user with statement history and confirm it fails loudly.
 10. **Coverage sweep.** Every route in [R_AND_D_STRUCTURE.md](R_AND_D_STRUCTURE.md) §3 and every
     action in its §8/§9 maps to a named endpoint in §11.
+11. **The four stage routes (Appendix B).** ✅ `pnpm db:verify-go-to-market-constraints` exercises
+    migration 0020's guarantees against real rows inside a rolled-back transaction: the `supplier`
+    slug UNIQUE that makes a duplicate listing a `409`, the slug and lead-time CHECKs, the
+    `direct_email`-needs-a-website implication, the `restrict` that stops a curated capability
+    vanishing under a listing that claims it, the one-engagement-per-pair unique, and **R1 on
+    `product.research_project_id`** — a project with a linked listing must refuse to delete.
+    `daily-log-cursor.test.ts` proves the three-column cursor round-trips and rejects twelve
+    malformed forms, because a codec that loses a field either skips a member's log or repeats it.
+    `daily-logs.controller.schemas.test.ts` asserts the feed's query refuses `projectIds`, `userId`,
+    `memberId`, `includeAllProjects` and `status` — every key that would turn a private feed's
+    membership filter into a client-supplied input — and `suppliers.controller.schemas.test.ts`
+    asserts `verificationState` is refused on create and `slug` on update.
+    **Still to run by hand:** `EXPLAIN ANALYZE` the feed against a seeded multi-project set and
+    confirm `daily_log_feed_idx` is chosen with no sort node above the index scan; and page
+    `/daily-logs` twice as a member of two projects, asserting no row repeats or vanishes across the
+    boundary.
 
 ```bash
 # The core zero-trust smoke test. `pnpm db:smoke-funding` drives all of this and 13 more
@@ -3122,6 +3398,28 @@ curl -X POST https://localhost:8000/funding-rounds/<id>/pledges -b cookies.txt \
 pnpm db:verify-compensation-constraints   # 71 database-level guarantees, positive controls included
 pnpm db:smoke-compensation                # §12's trace end to end, including the §17 5a wage rule
 pnpm db:smoke-funding                     # the commitment path and the two attacks
+```
+
+**The Appendix B gates, all runnable today:**
+
+```bash
+pnpm db:seed-supplier-capabilities        # the 20-row vocabulary; migration 0020 creates the table only
+pnpm db:verify-go-to-market-constraints   # migration 0020's guarantees, R1 on product included
+pnpm test                                 # the cursor codec and both zero-trust schema suites
+```
+
+The member-scoping attack, hand-runnable:
+
+```bash
+# Signed in as a member of exactly one project, ask for another project's logs.
+curl 'https://localhost:8000/daily-logs?projectSlug=someone-elses-project' -b cookies.txt
+# → 200 with an EMPTY page. Not 403 (which would confirm the slug exists) and not 404.
+
+curl 'https://localhost:8000/daily-logs?projectIds=prj_a&projectIds=prj_b' -b cookies.txt
+# → 422. The key exists in no schema; membership is a subquery over project_member.
+
+curl 'https://localhost:8000/daily-logs?cursor=garbage' -b cookies.txt
+# → 422 CURSOR_MALFORMED, never a silent first page.
 ```
 
 ---
@@ -3244,193 +3542,236 @@ in the same order. Adding the stream changes no table and no cursor.
 
 ---
 
-## Appendix B — What the four R&D stage routes need built (§4c)
+## Appendix B — The four R&D stage routes (§4c), shipped
 
-§14 lists the surfaces where the **backend is ahead of the frontend**. This appendix is the mirror:
-[R_AND_D_STRUCTURE.md §4c](R_AND_D_STRUCTURE.md) specs four **stage routes** the frontend does not
-have yet, and this is what the backend owes them. None of the four exists on disk on either side —
-this is a build list, not a changelog.
+§14 lists the surfaces where the **backend is ahead of the frontend**. This appendix was its mirror:
+[R_AND_D_STRUCTURE.md §4c](R_AND_D_STRUCTURE.md) specs four **stage routes** the frontend did not
+have, and this recorded what the backend owed them. **All four are now built.** This is a changelog,
+not a build list.
 
-The four, and why they exist: the landing page's stages strip had six cards and three of them pointed
-at in-page anchors, two at the _same_ anchor. Team building, daily logs and governance lived only as
-tabs **inside** a project, so a visitor who had not picked one could not reach them at all. Each
-stage now gets a cross-project page.
+The four, and why they exist: the landing page's stages strip had six cards and three of them
+pointed at in-page anchors, two at the _same_ anchor. Team building, daily logs and governance lived
+only as tabs **inside** a project, so a visitor who had not picked one could not reach them at all.
+Each stage now has a cross-project page and a backend to serve it.
 
-| Stage route (frontend) | What it renders                                       | Backend state                                                     |
-| ---------------------- | ----------------------------------------------------- | ----------------------------------------------------------------- |
-| `/team-building` (03)  | Every open role + teams forming + talent spotlight    | ✅ **Nothing to build** — four shipped endpoints cover it, see B1 |
-| `/build-log` (04)      | Cross-project daily-log feed + streak leaderboard     | ⛔ **Blocked on a visibility decision**, then one endpoint — B2   |
-| `/governance` (05)     | Commitments + a month-end statement + accountability  | ⛔ **Blocked on a privacy decision**, then one endpoint — B3      |
-| `/go-to-market` (06)   | Suppliers/ODM + launch readiness → `/studio/products` | ⏳ **A new domain** — no table, no route, no migration — B4       |
+| Stage route (frontend) | What it renders                                       | Backend state                                                        |
+| ---------------------- | ----------------------------------------------------- | -------------------------------------------------------------------- |
+| `/team-building` (03)  | Every open role + teams forming + talent spotlight    | ✅ **Shipped** — four existing endpoints + one widened projection, B1 |
+| `/build-log` (04)      | Cross-project daily-log feed + streak leaderboard     | ✅ **Shipped** — two root-mounted reads, §11h, B2                     |
+| `/governance` (05)     | Commitments + a month-end statement + accountability  | ✅ **Shipped** — one read-only aggregate, §11h, B3                    |
+| `/go-to-market` (06)   | Suppliers/ODM + launch readiness → `/studio/products` | ✅ **Shipped** — a new domain, §11i, migration 0020, B4               |
 
-Two of the four are blocked on a **decision, not on code**. Both decisions are about who may see
-someone else's data, both were introduced by making a per-project surface cross-project, and neither
-can be resolved by writing the endpoint and seeing what happens. Read B2 and B3 before estimating.
+**Two of the four were blocked on a decision, not on code.** Both were about who may see someone
+else's data, both were introduced by making a per-project surface cross-project, and neither could
+be resolved by writing the endpoint and seeing what happened. Both decisions are recorded below with
+what was built on them.
 
-### B1. `/team-building` — already served; fix the §11b table instead
+### What this appendix got wrong, corrected in the build
 
-Everything this page needs is routed and reachable today:
+Recorded rather than quietly fixed, because each was a claim the implementation had to disprove:
+
+| The appendix said                                                                | What is actually true                                                                                                                                                                                              |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/open-roles` needs `coverImageSrc`                                              | The column is **`coverImageUrl`**. `coverImageSrc` exists nowhere in `src/`, on either side                                                                                                                        |
+| B1 is "write no new code"                                                        | `OPEN_ROLE_VIEW_COLUMNS` carried neither `stage` nor the cover, so the widening the appendix itself asks for two paragraphs later **was** required. The doc row was not the only gap                                |
+| §9.11 established a `met`/`not_met`/`waived` checklist                           | It established no checklist at all. §9.11 specifies an acknowledgement, an `expectedSnapshotId` and a `409 UNSETTLED_ALLOCATIONS`; `pie-bake.service.ts` implements three sequential gates. The tri-state is new here |
+| `product` belongs to `STUDIO_BACKEND_STRUCTURE.md`                               | It is documented in **`STORE_BACKEND_STRUCTURE.md` §4**. The studio doc owns `video`. The FK note went to the store doc                                                                                            |
+| Supplier submissions should land `pending` "exactly like `discovery/categories`" | Built **moderator-only, with no submission path and no moderation state** — the appendix's own next sentence argues for exactly that, and a queue nobody needs yet is a surface to defend                          |
+| `supplier` should carry `…InCents` fields                                        | **No price column exists.** §4b derives currency from the project, and a supplier has none. A quote belongs to an engagement                                                                                       |
+
+### B1. `/team-building` — one widened projection, one doc row
+
+Everything this page needs was already routed:
 
 | Need                      | Endpoint                                                         | §   |
 | ------------------------- | ---------------------------------------------------------------- | --- |
 | Every open role, filtered | `GET /open-roles?commitment=&skill=&minEquityBasisPoints=&page=` | 11a |
 | Teams forming             | `GET /research-projects?stage=team_building&page=`               | 11a |
 | Talent spotlight          | `GET /discovery/talent?…&page=`                                  | 11b |
-| Skill filter chips        | `GET /discovery/skills`                                          | —   |
+| Skill filter chips        | `GET /discovery/skills`                                          | 11b |
 | Apply to a role           | `POST /research-projects/:projectSlug/applications`              | 11a |
 
-**One documentation bug to fix, not a code gap.** `GET /discovery/skills` is **shipped** —
-`discovery.routes.ts:76`, `attachOptionalUser`, `catalogController.listSkills` — and it is **missing
-from §11b's table**. It is the canonical source for the skill chips on this page and on `/talent`,
-and it is the endpoint that retires the `skills.some((skill) => skill.includes(chipText))` substring
-bug (§6). Add the row to §11b; write no new code.
+**The documentation bug is fixed.** `GET /discovery/skills` was shipped —
+`discovery.routes.ts:76`, `attachOptionalUser`, `catalogController.listSkills` — and missing from
+§11b's table. It now has a row. It is the canonical source for the skill chips on this page and on
+`/talent`, and the endpoint that retires the `skills.some((skill) => skill.includes(chipText))`
+substring bug (§6).
 
-**The one thing to check before building the page**, because it decides whether the page needs a
-second call per card: `GET /open-roles`'s projection must already carry the project's `name`,
-`coverImageSrc`, `stage` and the role's compensation strands. If it returns bare role rows, the grid
-either N+1s or renders a card with a missing project — widen the projection, do not add a second
-endpoint.
+**And the projection was widened, which was a code gap the appendix half-noticed.** The check it
+demanded — does `/open-roles` carry enough for a card without a second call? — came back **no**:
+`OPEN_ROLE_VIEW_COLUMNS` had `projectSlug`, `projectName` and `currency`, but neither `stage` nor
+the cover. Both now join off the `researchProject` join that was already there, so the grid neither
+N+1s nor renders a card with a missing project. **No second endpoint was added**, per the appendix's
+own instruction.
 
 `stage=team_building` is `snake_case` on the wire (§4d). The frontend mocks still say
 `"team-building"`; that is on the §15 migration list, and this filter is one of the places it bites.
 
-### B2. `/build-log` — decide visibility first, then one root-mounted endpoint
+### B2. `/build-log` — decided (a), then built two root-mounted reads
 
-**The blocker.** Daily logs are **private to the project's members** and the enforcement is real, not
-aspirational: `listDailyLogs` opens with `requireMemberOrRespond` (`daily-logs.controller.ts:107`)
-and every `/workshop/*` route runs `requireProjectRole(…, "contributor")` with failure → `404` (§8).
-A cross-project feed rendered to a logged-out visitor contradicts that outright. There is no endpoint
-to write until this is answered:
+**The blocker, and how it was resolved.** Daily logs are private to the project's members and the
+enforcement is real: `listDailyLogs` opens with `requireMemberOrRespond`
+(`daily-logs.controller.ts`) and every `/workshop/*` route runs
+`requireProjectRole(…, "contributor")` with failure → `404` (§8). A cross-project feed rendered to a
+logged-out visitor contradicts that outright.
 
-| Option                                                                           | Cost                                                                                                                  | Verdict                                                                                 |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| **(a) "My projects" feed** — logs from projects the caller is a member of        | One root route. No new column, no policy change, no migration                                                         | **Recommended.** Ships now and is honestly scoped                                       |
-| (b) Per-log or per-project `logVisibility` — an opt-in public track              | New column + migration + a default, and **every log ever written defaults private** — an opt-in nobody has opted into | Later, if a public build-in-public feed is actually wanted. Do not retrofit it silently |
-| (c) Public feed of analysis only — chips and counts, no narrative, no transcript | A separate projection, and it still leaks who is working on what and when                                             | Rejected — the metadata is the sensitive part for worker monitoring (§9.10)             |
+**Option (a) shipped** — the "my projects" feed. One root route, no new column, no policy change,
+and honestly scoped. (b), a per-log `logVisibility` opt-in, would have defaulted **every log ever
+written** to private — an opt-in nobody has opted into — and remains available later if a genuine
+build-in-public feed is wanted. (c), a public feed of analysis chips only, stays **rejected**: the
+metadata is the sensitive part for worker monitoring (§9.10).
 
-Under (a) the page is member-scoped and the stage card must say so; a stranger sees the explainer,
-the legend and the leaderboard, and an empty feed with a sign-in prompt — **not** a fabricated one.
+Under (a) the page is member-scoped and the stage card must say so. A stranger sees the explainer,
+the legend and the leaderboard, and an **empty** feed with a sign-in prompt — never a fabricated
+one.
 
-**Then the work, all of it small:**
+**What was built** (full table in [§11h](#11h-cross-project-reads-8-7a)):
 
-- **`GET /daily-logs`, root-mounted** on the `researchCatalogRouter` pattern (a member arriving from
-  the stage page holds no project slug — the same reason `/open-roles` is root-mounted, §11).
-  `?projectSlug=&chipKind=&cursor=&limit=`. `requireAuth`; the WHERE clause is
-  `projectId IN (caller's active memberships)` — **derived server-side from `project_member`, never
-  from a client-supplied project list.**
-- **Keyset across projects.** Per-project ordering will not do: the cursor is
-  `(logDate DESC, submittedAt DESC, id DESC)` and it must end in a unique column (§4c). Needs a
-  composite index spanning `(projectId, logDate, submittedAt, id)` — merging six projects client-side
-  is the thing CLAUDE.md §Performance forbids, and it is unbounded on a two-year-old project set.
-- **Chip-kind filter.** The four `AiSummaryChipKind`s live in the analysis child rows. Filtering a
-  cross-project feed on them either joins per page or gets a denormalized `chipKinds` array column on
-  `daily_log` written by the `analyze-daily-log` job. Decide when the index plan is written; do not
-  filter in the service after fetching.
-- **Each row carries its project.** The frontend must not fabricate a project chip. The projection
-  returns `projectSlug` + `projectName` + `coverImageSrc` alongside the log.
-- **The streak leaderboard is free.** `project_stats.dailyLogStreakDays` is already job-computed and
-  stored, with `lastDailyLogDate`, `projectTimeZone` and `statsComputedAt` beside it (§5). Return
-  `statsComputedAt` and let the client render "as of" — a streak decays at midnight with no write, so
-  a leaderboard that implies live numbers is lying.
-- **`effortVerificationStatus` is the six-value enum** (§8), not a boolean. The legend on this page is
-  the most visible place the frontend's `isEffortVerified: boolean` (§15) will contradict the wire.
+- **`GET /daily-logs`, root-mounted** on the `researchCatalogRouter` pattern — as a second named
+  export from `workshop.routes.ts`, mirroring §7's `fundingRouter` / `projectFundingRouter` split:
+  one domain, one route file, two mounts. `?projectSlug=&chipKind=&cursor=&limit=`, `requireAuth`,
+  and the WHERE clause is `projectId IN (caller's active memberships)` — **a subquery over
+  `project_member`, never a client-supplied project list.** There is no `?projectIds=`, and
+  `.strict()` turns one into a 422 rather than an ignored parameter.
+- **Keyset across projects**, `(logDate DESC, submittedAt DESC, id DESC)`, ending in a unique column
+  (§4c rule 4). Backed by a new composite `daily_log_feed_idx` on
+  `(projectId, logDate, submittedAt, id)`, partial on `status = 'submitted'`. Merging six projects
+  client-side is the thing CLAUDE.md §Performance forbids, and the codec lives in
+  `src/lib/daily-log-cursor.ts` with its own test.
+- **The chip-kind filter is a correlated `EXISTS`**, with `daily_log_ai_summary_chip_kind_logId_idx`
+  behind it. The denormalized `chipKinds` column the appendix floated was **not** added: it would
+  have cost a migration, a change to `analyze-daily-log` and a backfill of every analyzed log, to
+  serve what an index serves. Filtering in the service after fetching was never an option — it
+  short-pages the cursor.
+- **Each row carries its project** — `projectSlug`, `projectName`, `projectCoverImageUrl`,
+  `projectStage`. The frontend fabricates no project chip.
+- **The streak leaderboard was free**, and is its own **public** endpoint:
+  `GET /daily-logs/streak-leaderboard`. `project_stats.dailyLogStreakDays` is already job-computed
+  and stored, with `lastDailyLogDate`, `projectTimeZone` and `statsComputedAt` beside it (§5). All
+  four ship, and the client renders "as of" — a streak decays at midnight with no write, so a
+  leaderboard implying live numbers is lying.
+- **`effortVerificationStatus` ships as the six-value enum** (§8), not a boolean. The legend on this
+  page is the most visible place the frontend's `isEffortVerified: boolean` (§15) contradicts the
+  wire.
 
-### B3. `/governance` — decide what a stranger may see, then one aggregate read
+### B3. `/governance` — decided aggregates-only, then one aggregate read
 
-**The blocker, and it is the more serious of the two.** A month-end statement line names a person and
-what they are owed. Pay data is personal data under the GDPR and treated as specially sensitive in
-several member states; §7A already keeps account numbers out of the system entirely. Making the
-per-project governance tab **cross-project and public** would publish per-member cash figures to
-anyone with the URL. That is not a scoping detail to settle in review — it decides the endpoint.
+**The blocker, and it was the more serious of the two.** A month-end statement line names a person
+and what they are owed. Pay data is personal data under the GDPR and treated as specially sensitive
+in several member states; §7A already keeps account numbers out of the system entirely. Making the
+per-project governance tab cross-project and public would have published per-member cash figures to
+anyone with the URL.
 
-The resolution the frontend spec already assumes, and the one to build:
+**The resolution the frontend spec assumed is what shipped:**
 
-- **Per-member statement lines stay on the per-project tab** (§5.5), behind membership, with the
-  finalize / countersign / record-payment / confirm / export actions. Nothing moves.
-- **The cross-project page renders aggregates and mechanics, not people.** Project-level totals,
-  how many periods are finalized, how many countersigned — plus a **worked example that is authored
-  sample data, not a real member's row**. The frontend spec already calls it a walkthrough; the
-  backend must not be asked to supply a real person for it.
-- **The caller's own lines are the one exception.** A member may always see their own, on any surface.
+- **Per-member statement lines stayed on the per-project tab** (§5.5), behind membership, with the
+  finalize / countersign / record-payment / confirm / export actions. Nothing moved.
+- **The cross-project page renders aggregates and mechanics, not people.** Per-project period counts
+  by status, countersigned counts, aggregate committed funding. No member id, no user id, no name,
+  no per-member amount is in the projection. The worked example the frontend spec calls a
+  walkthrough is **authored sample data** — the backend was not asked to supply a real member's row
+  and does not.
+- **The caller's own lines are the one exception.** A member may always see their own, on any
+  surface, reached only through their own `project_member` rows.
 
-**Then the work:**
+**What was built:**
 
-- **`GET /governance/summary`** (or a cross-project projection on the compensation router):
-  per-project period counts by status, aggregate committed funding, and the caller's own open lines.
-  Read-only. **No `/finalize`, `/countersign`, `/payments` or `/export` from this page** — those are
-  actor-scoped and belong where the actor's role is already resolved.
-- **Funding is already served.** `GET /funding/deals` is root-mounted and shipped (§11g) and covers
-  the commitments overview. Raised totals are sums of **committed** pledges and the response labels
-  must keep saying so.
-- **The three copy rules ship with the payload, not just in the UI.** Qatoto holds no funds and
-  charges nobody · a verification verdict never reduces cash · a statement is **gross only** (§7A.6).
-  This page states them publicly, so no field on it may imply a rail, a hold, a charge or a fee.
-- **`investor-confidence` 404s when never computed** (§11g). The aggregate must skip those projects,
-  never coerce a missing signal to `0`.
+- **`GET /governance/summary`**, root-mounted as a second named export from
+  `compensation.routes.ts`: per-project period counts by status, aggregate committed funding, and
+  the caller's own open lines. Read-only. **No `/finalize`, `/countersign`, `/payments` or
+  `/export`** — those are actor-scoped and stay where the actor's role is already resolved.
+- **`attachOptionalUser`, not `requireAuth`**, because the page states the copy rules publicly and
+  must render signed out. A visitor gets aggregates and disclosures with an empty `callerOpenLines`.
+- **Funding was already served.** `GET /funding/deals` is root-mounted and shipped (§11g) and covers
+  the commitments overview. Raised totals are sums of **committed** pledges and the field names say
+  so.
+- **The three copy rules ship with the payload**, as `disclosureKeys` — **keys, not English
+  sentences**, for the reason §4d gives about `earnedAsLabel`: server prose forces three native
+  clients to render un-localizable strings. `GROSS_ONLY_NOTICE` travels beside them. No field on
+  this page implies a rail, a hold, a charge or a fee.
+- **`investor-confidence` is `null` when never computed** (§11g). The aggregate skips those projects
+  rather than coercing a missing signal to `0`.
 
-### B4. `/go-to-market` — a new domain, and the only genuinely unbuilt one
+### B4. `/go-to-market` — the new domain, built end to end
 
-Nothing exists: no table, no route, no migration, no §11 subsection. Four pieces, in dependency
-order.
+Nothing existed: no table, no route, no migration, no §11 subsection. All four pieces shipped, in
+dependency order, under **[§11i](#11i-go-to-market-6-family)** and migration 0020.
 
-**1. The supplier / ODM directory.** New tables under §6's discovery family, because it is the same
-kind of thing — a curated, filterable, server-scored catalogue:
+**1. The supplier / ODM directory.** Four tables under §6's discovery family, because it is the same
+kind of thing — a curated, filterable catalogue over a controlled vocabulary:
 
-| Table                         | Purpose                                                                                |
-| ----------------------------- | -------------------------------------------------------------------------------------- |
-| `supplier`                    | Name, region FK to `discovery_region`, verification state, contact policy              |
-| `supplier_capability`         | Join to a capability taxonomy — reuse `discovery_skill`'s shape, do not free-text it   |
-| `project_supplier_engagement` | Optional: which project engaged which supplier, for the launch-ready rail's provenance |
+| Table                         | Purpose                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------- |
+| `supplier`                    | Name, slug, region FK to `discovery_region`, verification state, contact policy         |
+| `supplier_capability`         | The capability taxonomy — `discovery_skill`'s shape exactly, seeded, never free-texted  |
+| `supplier_capability_link`    | The join — `talent_profile_skill`'s shape exactly                                       |
+| `project_supplier_engagement` | Which project engaged which supplier, for the launch-ready rail's provenance            |
 
-Author every field in §4b wire format from the start — `leadTimeDays`, `minimumOrderQuantity`,
-`…InCents` with the currency derived from the project, never from a request body. It has no legacy
-importers, so §15 never has to touch it. New enums (`supplier_verification_state`,
-`supplier_capability_kind`) get declared in §4d with everything else, `snake_case`.
+Every field is §4b wire format from the start — `leadTimeDays`, `minimumOrderQuantity` — so §15 never
+has to touch this domain. **There is deliberately no `…InCents` column**: §4b derives currency from
+the project and a supplier belongs to none, so a directory-level price would have to invent one. A
+quote belongs to an engagement, priced in that project's currency. The four new enums
+(`supplier_verification_state`, `supplier_capability_kind`, `supplier_contact_policy`,
+`project_supplier_engagement_status`) are `snake_case` and documented in §4d; they are **declared
+beside their tables** in `schema.ts`, which is where every other single-domain enum sits.
 
-**A public directory is a spam surface.** Decide who may create a `supplier` row before the route
-exists: platform `moderator` only (the §4a role §11b's `/discovery/admin/*` rows already use) is the
-cheap correct answer, with user submissions landing `pending` exactly like `discovery/categories`
-does. A self-serve, immediately-public supplier listing needs a moderation queue, a rate limiter and
-an abuse story, and none of that is worth building before the first real supplier exists.
+**A public directory is a spam surface, so the write side was decided before the route existed.**
+Platform `moderator` only — the §4a role §11b's `/discovery/admin/*` rows use — with
+`requirePlatformCapability(…, "moderate_taxonomy")` running **before any id is read**, so the `403`
+is not an id oracle. **No user-submission path and no `pending` state were built.** The appendix
+suggested mirroring `discovery/categories`; its own next sentence gives the reason not to, and that
+argument won: a self-serve, immediately-public listing needs a moderation queue, a rate limiter and
+an abuse story, and none of that is worth building before the first real supplier exists. `isActive`
+is retirement, not moderation, exactly as on `discovery_skill`.
 
-**2. Launch readiness is derived, not stored.** The checklist reuses the `met` / `not_met` /
-`waived` shape §9.11's pre-bake checklist already established — **do not invent a fourth state and do
-not add a table**. Its inputs all exist: `research_project.stage`, `project_stats`
-(`verifiedEffortMinutesTotal`, `allocatedEquityBasisPoints`), the §9.11 bake state, and whether a
-listing exists (piece 3). It is a computed projection on an existing read.
+**2. Launch readiness is derived, not stored — no table, no fourth state.** Six items over
+`met` / `not_met` / `waived`, computed from `research_project.stage`, `project_stats`
+(`verifiedEffortMinutesTotal`, `allocatedEquityBasisPoints`), the §9.11 bake event, the project's
+engagements, and whether an active listing exists. `NULL` reads as `not_met`, never as `0`.
 
-**3. The missing relation: a research project has no link to a store product.** This is the real
-structural gap. `/go-to-market`'s whole purpose is the handoff to `/studio/products`, and the
-`product` table (`schema.ts:281`) carries **no FK to `research_project`** — so "this project shipped
-this listing" is not expressible, the launch-ready rail cannot show what a project actually launched,
-and the readiness checklist cannot tell whether a listing exists. A nullable
-`product.researchProjectId` FK (`onDelete: "restrict"`, per the R1 rule at `schema.ts:394`) closes it.
+> **The shape was authored here, not inherited.** This appendix said §9.11 "already established" it.
+> §9.11 does not mention a checklist, `met`, `not_met` or `waived`, and neither does any file in
+> `src/` — `pie-bake.service.ts` implements three sequential gates returning a typed error union
+> instead. So `launch-readiness.service.ts` introduces the tri-state, honouring the instruction that
+> actually mattered: **three states, not four.** `waived` is representable and **currently
+> unreachable** — no waiver table, no endpoint that grants one. It stays in the union because a
+> waiver is a recorded decision by a named person, not a fourth flavour of `met`.
 
-**It crosses a document boundary**, so it needs an owner: `product` belongs to
-[STUDIO_BACKEND_STRUCTURE.md](STUDIO_BACKEND_STRUCTURE.md), not to this contract. Add the column
-there and reference it here; do not fork a second product concept inside R&D.
+**3. The missing relation is closed.** `product` (`schema.ts`) carried exactly one FK,
+`sellerId → user`, so "this project shipped this listing" was not expressible at all — the
+launch-ready rail could not show what a project launched and the readiness checklist could not tell
+whether a listing existed. `product.researchProjectId` is now a nullable FK with
+`onDelete: "restrict"`, per the R1 rule.
 
-**4. Listing creation is not an R&D endpoint.** The CTA links to `/studio/products` and the studio's
-existing create flow does the work. R&D contributes the FK and nothing else. Resist the version of
-this that proxies a product create through a research route "for convenience" — it duplicates
-validation, pricing and ownership checks that the studio already owns and re-validates.
+**It crosses a document boundary, so it has an owner**: the column is documented in
+[STORE_BACKEND_STRUCTURE.md](STORE_BACKEND_STRUCTURE.md) §4, where `product` actually lives. This
+appendix originally assigned it to the studio doc, which owns `video`. No second product concept was
+forked inside R&D.
+
+**4. Listing creation is not an R&D endpoint**, and was not built as one. The CTA links to
+`/studio/products` and the studio's existing create flow does the work. R&D contributes the FK and
+nothing else — the "proxy a product create through a research route for convenience" version was
+resisted, because it duplicates validation, pricing and ownership checks the studio already owns and
+re-validates.
 
 ### Cross-cutting, all four
 
-- **§11 gains rows, and one gains a subsection.** B1 needs a `/discovery/skills` row in §11b. B2 and
-  B3 need rows in a new `11h` (cross-project reads) or in 11d/11g respectively. B4 needs its own
-  subsection — call it **§11i, Go-to-market (§6-family)** — plus a `⏳ Pending` row in §11's status
-  table and a `supplierRouter` line in the `src/app.ts` block, root-mounted like
-  `researchCatalogRouter`.
+- **§11 gained rows and two subsections.** B1's `/discovery/skills` row is in §11b. B2 and B3 are in
+  the new **§11h** (cross-project reads). B4 has **§11i, Go-to-market (§6-family)**, plus rows in
+  §11's status table and four new mounts in the `src/app.ts` block — three root-mounted like
+  `researchCatalogRouter`, and `projectGoToMarketRouter` as the sixth router on `/research-projects`.
 - **§16 build order.** These sit **after** the two compliance items (dispute/override UI and the
   integration-consent screen), which remain the only things between the shipped backend and a lawful
-  EU deployment. Suggested placement: B1 needs nothing; B2 and B3 fold into the existing §8 and §7A
-  phases as small additions; B4 is a new phase beside §5 (Discovery) — independent, deferrable,
-  blocking nothing.
-- **Zero-trust holds unchanged (§0, §13).** Not one of these four routes takes a number from a
-  client. Membership on `/build-log` is derived from `project_member`; readiness on `/go-to-market`
-  is computed from stored signals; the governance aggregate is computed from finalized periods. A
-  filter chip is a query param, never a control — and `404`, not `403`, remains the not-authorized
-  answer everywhere (§11), so a stranger cannot probe which projects exist by watching a feed shrink.
-- **Keyset pagination and server-side filtering** apply to all four lists (§6, §13). The frontend
-  filters client-side over mock arrays today; none of that may survive.
+  EU deployment. As placed: B1 was a projection widening, B2 and B3 folded into the existing §8 and
+  §7A phases, and B4 became **phase 5a**, beside §5 (Discovery) — independent and blocking nothing.
+- **Zero-trust held unchanged (§0, §13).** Not one of these routes takes a number from a client.
+  Membership on `/build-log` is a subquery over `project_member`; readiness on `/go-to-market` is
+  computed from stored signals; the governance aggregate is computed from finalized periods; a
+  supplier's `verificationState` is absent from the create schema entirely. A filter chip is a query
+  param, never a control — and `404`, not `403`, remains the not-authorized answer everywhere
+  (§11), so a stranger cannot probe which projects exist by watching a feed shrink. The one `403` is
+  the platform-capability refusal, which names a capability and no resource and is decided before
+  any id is read.
+- **Keyset pagination and server-side filtering** apply to all four lists (§6, §13). `/daily-logs`
+  is keyset; the three catalogue reads are offset with an `ORDER BY` ending in a unique column. The
+  frontend's client-side filtering over mock arrays survives in none of them.

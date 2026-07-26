@@ -219,6 +219,22 @@ export const product = pgTable(
         sellerId: text("seller_id")
             .notNull()
             .references(() => user.id, { onDelete: "cascade" }),
+        // THE R&D → STORE HANDOFF. Nullable, because most listings are not the output of an
+        // R&D project and never will be. When it IS set, this column is the only place
+        // "this project shipped this listing" is expressible — without it the R&D
+        // /go-to-market launch-ready rail cannot show what a project actually launched, and
+        // its readiness checklist cannot tell whether a listing exists at all.
+        //
+        // `restrict`, per R_AND_D_BACKEND_STRUCTURE.md §4f rule R1: a project that has
+        // shipped a product is not deletable. There is no DELETE endpoint for a project
+        // anyway — archive is terminal.
+        //
+        // Declared before `researchProject` appears in schema.ts; `references()` takes a
+        // callback and resolves lazily, the same mechanism discovery_region's self-FK uses.
+        researchProjectId: text("research_project_id").references(
+            (): AnyPgColumn => researchProject.id,
+            { onDelete: "restrict" },
+        ),
         title: text("title").notNull(),
         brand: text("brand"),
         category: productCategoryEnum("category").notNull(),
@@ -246,12 +262,33 @@ export const product = pgTable(
     (table) => [
         index("product_sellerId_idx").on(table.sellerId),
         index("product_status_idx").on(table.status),
+        // "What did this project launch?" — the R&D launch-ready rail's lookup. Partial,
+        // because the overwhelming majority of listings have no research project behind them.
+        index("product_researchProjectId_idx")
+            .on(table.researchProjectId)
+            .where(sql`research_project_id IS NOT NULL`),
         // A seller can't reuse one SKU across their own listings. Postgres UNIQUE permits many
         // NULLs, so SKU stays optional.
         uniqueIndex("product_seller_sku_unq").on(table.sellerId, table.sku),
     ],
 );
 ```
+
+> **`researchProjectId` is the only column R&D contributes here, and it is set by the studio's own
+> create flow, never by a research route.** It arrived with migration 0020 alongside
+> R_AND_D_BACKEND_STRUCTURE.md §11i's supplier directory, and that appendix originally assigned the
+> column to `STUDIO_BACKEND_STRUCTURE.md` — which owns `video`, not `product`. It belongs here.
+>
+> **There is no product-create endpoint on any R&D router**, and there must not be one. The
+> `/go-to-market` page's CTA links to `/studio/products` and the wizard below does the work;
+> proxying a create through a research route "for convenience" would duplicate the validation,
+> pricing and ownership checks §6 and §7 already own and re-validate.
+>
+> The column is **not client-writable through any endpoint documented here yet** — §6's
+> `CreateProductSchema` does not list it, so `.strict()` refuses it. Whichever create flow eventually
+> sets it must derive the project from proven membership, never from a request body: a seller who
+> could name any `researchProjectId` could attach their listing to someone else's project and appear
+> on that project's launch-ready rail.
 
 > **Why `keyFeatures` is a `text[]` column, not a table.** Key features are a handful of tiny,
 > order-preserving display strings with no identity, relationships, or queries of their own. A
