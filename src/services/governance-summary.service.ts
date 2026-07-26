@@ -213,9 +213,7 @@ async function loadLatestConfidenceByProject(
  * calls "what you are currently accruing"; a finalized statement is read on the project's
  * own tab where the hash and the countersignature live.
  */
-async function loadCallerOpenLines(
-  callerUserId: string,
-): Promise<readonly GovernanceCallerLine[]> {
+async function loadCallerOpenLines(callerUserId: string): Promise<readonly GovernanceCallerLine[]> {
   const rows = await db
     .select({
       projectSlug: researchProject.slug,
@@ -306,11 +304,13 @@ export async function getGovernanceSummary(
 
   const pageProjectIds = projectRows.map((row) => row.projectId);
 
-  const [committedFundingByProject, latestConfidenceByProject, callerOpenLines] = await Promise.all([
-    loadCommittedFundingByProject(pageProjectIds),
-    loadLatestConfidenceByProject(pageProjectIds),
-    callerUserId === null ? Promise.resolve([]) : loadCallerOpenLines(callerUserId),
-  ]);
+  const [committedFundingByProject, latestConfidenceByProject, callerOpenLines] = await Promise.all(
+    [
+      loadCommittedFundingByProject(pageProjectIds),
+      loadLatestConfidenceByProject(pageProjectIds),
+      callerUserId === null ? Promise.resolve([]) : loadCallerOpenLines(callerUserId),
+    ],
+  );
 
   return {
     asOf: new Date(),

@@ -7,12 +7,8 @@ vi.mock("#src/services/suppliers.service.js", () => ({}));
 vi.mock("#src/services/launch-readiness.service.js", () => ({}));
 vi.mock("#src/services/project-membership.service.js", () => ({}));
 
-const {
-  CreateSupplierSchema,
-  LaunchReadyProjectsQuerySchema,
-  ListSuppliersQuerySchema,
-  UpdateSupplierSchema,
-} = await import("#src/controllers/suppliers.controller.js");
+const { CreateSupplierSchema, LaunchReadyProjectsQuerySchema, ListSuppliersQuerySchema, UpdateSupplierSchema } =
+  await import("#src/controllers/suppliers.controller.js");
 
 /**
  * R_AND_D_BACKEND_STRUCTURE.md §11i's rejected-keys list, §0 and §13.
@@ -112,9 +108,7 @@ describe("CreateSupplierSchema", () => {
 
   it("rejects a currency — there is no project here to derive one from", () => {
     expect(CreateSupplierSchema.safeParse({ ...validBody, currency: "USD" }).success).toBe(false);
-    expect(CreateSupplierSchema.safeParse({ ...validBody, currencyCode: "USD" }).success).toBe(
-      false,
-    );
+    expect(CreateSupplierSchema.safeParse({ ...validBody, currencyCode: "USD" }).success).toBe(false);
   });
 });
 
@@ -177,9 +171,7 @@ describe("ListSuppliersQuerySchema", () => {
   });
 
   it("rejects an unknown verificationState rather than yielding an empty page", () => {
-    expect(ListSuppliersQuerySchema.safeParse({ verificationState: "trusted" }).success).toBe(
-      false,
-    );
+    expect(ListSuppliersQuerySchema.safeParse({ verificationState: "trusted" }).success).toBe(false);
   });
 
   it("rejects more than ten capability chips", () => {

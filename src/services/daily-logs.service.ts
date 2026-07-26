@@ -14,10 +14,7 @@ import {
   user,
   projectMember,
 } from "#src/db/schema.js";
-import {
-  decodeDailyLogFeedCursor,
-  encodeDailyLogFeedCursor,
-} from "#src/lib/daily-log-cursor.js";
+import { decodeDailyLogFeedCursor, encodeDailyLogFeedCursor } from "#src/lib/daily-log-cursor.js";
 import { streakAfterLog, type IsoDate } from "#src/lib/daily-log-streak.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
@@ -290,9 +287,13 @@ export async function listDailyLogFeed(
   callerUserId: string,
   options: DailyLogFeedOptions = {},
 ): Promise<Result<DailyLogFeedPage, DailyLogError>> {
-  const pageSize = Math.min(Math.max(options.limit ?? FEED_DEFAULT_PAGE_SIZE, 1), FEED_MAX_PAGE_SIZE);
+  const pageSize = Math.min(
+    Math.max(options.limit ?? FEED_DEFAULT_PAGE_SIZE, 1),
+    FEED_MAX_PAGE_SIZE,
+  );
 
-  const decodedCursor = options.cursor === undefined ? null : decodeDailyLogFeedCursor(options.cursor);
+  const decodedCursor =
+    options.cursor === undefined ? null : decodeDailyLogFeedCursor(options.cursor);
   if (options.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "CURSOR_MALFORMED" } };
   }
@@ -519,9 +520,7 @@ export async function listDailyLogStreakLeaderboard(): Promise<readonly DailyLog
     .limit(STREAK_LEADERBOARD_SIZE);
 
   return rows.flatMap((row) =>
-    row.dailyLogStreakDays === null
-      ? []
-      : [{ ...row, dailyLogStreakDays: row.dailyLogStreakDays }],
+    row.dailyLogStreakDays === null ? [] : [{ ...row, dailyLogStreakDays: row.dailyLogStreakDays }],
   );
 }
 

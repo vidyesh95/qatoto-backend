@@ -2535,7 +2535,9 @@ export const supplier = pgTable(
     uniqueIndex("supplier_slug_unq").on(table.slug),
     // The directory read: listed suppliers, ordered by name, ending in a unique column
     // (§4c rule 4).
-    index("supplier_active_name_idx").on(table.name, table.id).where(sql`is_active`),
+    index("supplier_active_name_idx")
+      .on(table.name, table.id)
+      .where(sql`is_active`),
     index("supplier_regionId_idx").on(table.regionId),
     index("supplier_verificationState_idx").on(table.verificationState),
     check("supplier_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
@@ -2549,10 +2551,7 @@ export const supplier = pgTable(
     // "Email them directly" is not actionable without somewhere to find the address.
     // Written as an explicit implication rather than the boolean-ordering trick
     // (`a <= b`), which is valid Postgres and unreadable at review time.
-    check(
-      "supplier_contact_ck",
-      sql`contact_policy <> 'direct_email' OR website_url IS NOT NULL`,
-    ),
+    check("supplier_contact_ck", sql`contact_policy <> 'direct_email' OR website_url IS NOT NULL`),
   ],
 );
 

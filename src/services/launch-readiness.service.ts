@@ -112,9 +112,7 @@ export async function computeLaunchReadiness(
     db
       .select({ total: sql<number>`count(*)::int` })
       .from(product)
-      .where(
-        and(eq(product.researchProjectId, projectId), eq(product.status, "active")),
-      ),
+      .where(and(eq(product.researchProjectId, projectId), eq(product.status, "active"))),
   ]);
 
   const items: readonly LaunchReadinessItem[] = [

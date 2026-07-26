@@ -46,12 +46,9 @@ describe("ListDailyLogFeedQuerySchema", () => {
     expect(parsed.success).toBe(false);
   });
 
-  it.each(["blocker", "progress", "velocity", "suggestion"])(
-    "accepts the %s chip kind",
-    (chipKind) => {
-      expect(ListDailyLogFeedQuerySchema.safeParse({ chipKind }).success).toBe(true);
-    },
-  );
+  it.each(["blocker", "progress", "velocity", "suggestion"])("accepts the %s chip kind", (chipKind) => {
+    expect(ListDailyLogFeedQuerySchema.safeParse({ chipKind }).success).toBe(true);
+  });
 
   it("rejects an unknown chipKind rather than returning an empty page", () => {
     // An empty page would read as "no blockers this week", which is a claim about the

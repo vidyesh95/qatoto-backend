@@ -138,7 +138,9 @@ function recordWalk(
   const unexpected = walkedIds.filter((id) => !expected.has(id));
 
   const keys = walked.rows.map(orderKeyOf);
-  const outOfOrder = keys.filter((key, index) => index > 0 && key >= (keys[index - 1] ?? "")).length;
+  const outOfOrder = keys.filter(
+    (key, index) => index > 0 && key >= (keys[index - 1] ?? ""),
+  ).length;
 
   record(
     label,
@@ -264,24 +266,102 @@ async function main(): Promise<void> {
     const tiedInstant = new Date("2026-02-01T09:00:00.000Z");
     const plan: readonly Omit<SeededLog, "id">[] = [
       // Day 1 — three projects, three different instants.
-      { projectIndex: 0, logDate: isoDaysAgo(1), submittedAt: new Date("2026-02-05T10:00:00.000Z"), status: "submitted", chipKind: "blocker" },
-      { projectIndex: 1, logDate: isoDaysAgo(1), submittedAt: new Date("2026-02-05T11:00:00.000Z"), status: "submitted", chipKind: null },
-      { projectIndex: 2, logDate: isoDaysAgo(1), submittedAt: new Date("2026-02-05T12:00:00.000Z"), status: "submitted", chipKind: "progress" },
+      {
+        projectIndex: 0,
+        logDate: isoDaysAgo(1),
+        submittedAt: new Date("2026-02-05T10:00:00.000Z"),
+        status: "submitted",
+        chipKind: "blocker",
+      },
+      {
+        projectIndex: 1,
+        logDate: isoDaysAgo(1),
+        submittedAt: new Date("2026-02-05T11:00:00.000Z"),
+        status: "submitted",
+        chipKind: null,
+      },
+      {
+        projectIndex: 2,
+        logDate: isoDaysAgo(1),
+        submittedAt: new Date("2026-02-05T12:00:00.000Z"),
+        status: "submitted",
+        chipKind: "progress",
+      },
       // Day 2 — TWO PROJECTS SHARING AN INSTANT TO THE MILLISECOND. Only `id` separates them.
-      { projectIndex: 0, logDate: isoDaysAgo(2), submittedAt: tiedInstant, status: "submitted", chipKind: "blocker" },
-      { projectIndex: 1, logDate: isoDaysAgo(2), submittedAt: tiedInstant, status: "submitted", chipKind: null },
+      {
+        projectIndex: 0,
+        logDate: isoDaysAgo(2),
+        submittedAt: tiedInstant,
+        status: "submitted",
+        chipKind: "blocker",
+      },
+      {
+        projectIndex: 1,
+        logDate: isoDaysAgo(2),
+        submittedAt: tiedInstant,
+        status: "submitted",
+        chipKind: null,
+      },
       // Day 3 — interleaved back the other way.
-      { projectIndex: 2, logDate: isoDaysAgo(3), submittedAt: new Date("2026-02-03T08:00:00.000Z"), status: "submitted", chipKind: "progress" },
-      { projectIndex: 0, logDate: isoDaysAgo(3), submittedAt: new Date("2026-02-03T09:00:00.000Z"), status: "submitted", chipKind: null },
+      {
+        projectIndex: 2,
+        logDate: isoDaysAgo(3),
+        submittedAt: new Date("2026-02-03T08:00:00.000Z"),
+        status: "submitted",
+        chipKind: "progress",
+      },
+      {
+        projectIndex: 0,
+        logDate: isoDaysAgo(3),
+        submittedAt: new Date("2026-02-03T09:00:00.000Z"),
+        status: "submitted",
+        chipKind: null,
+      },
       // Day 4 and 5 — depth, so several page sizes cross a boundary mid-project.
-      { projectIndex: 1, logDate: isoDaysAgo(4), submittedAt: new Date("2026-02-02T08:00:00.000Z"), status: "submitted", chipKind: "blocker" },
-      { projectIndex: 2, logDate: isoDaysAgo(4), submittedAt: new Date("2026-02-02T09:00:00.000Z"), status: "submitted", chipKind: null },
-      { projectIndex: 0, logDate: isoDaysAgo(5), submittedAt: new Date("2026-02-01T08:00:00.000Z"), status: "submitted", chipKind: "progress" },
+      {
+        projectIndex: 1,
+        logDate: isoDaysAgo(4),
+        submittedAt: new Date("2026-02-02T08:00:00.000Z"),
+        status: "submitted",
+        chipKind: "blocker",
+      },
+      {
+        projectIndex: 2,
+        logDate: isoDaysAgo(4),
+        submittedAt: new Date("2026-02-02T09:00:00.000Z"),
+        status: "submitted",
+        chipKind: null,
+      },
+      {
+        projectIndex: 0,
+        logDate: isoDaysAgo(5),
+        submittedAt: new Date("2026-02-01T08:00:00.000Z"),
+        status: "submitted",
+        chipKind: "progress",
+      },
       // A DRAFT in a member project. Never a feed row.
-      { projectIndex: 1, logDate: isoDaysAgo(6), submittedAt: null, status: "draft", chipKind: null },
+      {
+        projectIndex: 1,
+        logDate: isoDaysAgo(6),
+        submittedAt: null,
+        status: "draft",
+        chipKind: null,
+      },
       // The FOREIGN project, on dates that collide with the member projects'.
-      { projectIndex: 3, logDate: isoDaysAgo(1), submittedAt: new Date("2026-02-05T10:30:00.000Z"), status: "submitted", chipKind: "blocker" },
-      { projectIndex: 3, logDate: isoDaysAgo(2), submittedAt: tiedInstant, status: "submitted", chipKind: "progress" },
+      {
+        projectIndex: 3,
+        logDate: isoDaysAgo(1),
+        submittedAt: new Date("2026-02-05T10:30:00.000Z"),
+        status: "submitted",
+        chipKind: "blocker",
+      },
+      {
+        projectIndex: 3,
+        logDate: isoDaysAgo(2),
+        submittedAt: tiedInstant,
+        status: "submitted",
+        chipKind: "progress",
+      },
     ];
 
     const seeded: SeededLog[] = plan.map((entry, index) => ({
@@ -293,9 +373,7 @@ async function main(): Promise<void> {
       seeded.map((entry) => {
         const projectId = projectIds[entry.projectIndex] ?? "";
         const authorMemberId =
-          entry.projectIndex === 3
-            ? foreignMember.id
-            : (memberIdByProjectId.get(projectId) ?? "");
+          entry.projectIndex === 3 ? foreignMember.id : (memberIdByProjectId.get(projectId) ?? "");
 
         return {
           id: entry.id,

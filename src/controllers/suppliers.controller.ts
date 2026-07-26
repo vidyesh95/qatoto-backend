@@ -7,9 +7,9 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/discovery-error-response.js";
-import * as membershipService from "#src/services/project-membership.service.js";
 import { respondProjectError } from "#src/controllers/project-error-response.js";
 import * as readinessService from "#src/services/launch-readiness.service.js";
+import * as membershipService from "#src/services/project-membership.service.js";
 import * as suppliersService from "#src/services/suppliers.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 

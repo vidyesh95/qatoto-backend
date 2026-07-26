@@ -157,10 +157,7 @@ async function attachCapabilities(
       kind: supplierCapability.kind,
     })
     .from(supplierCapabilityLink)
-    .innerJoin(
-      supplierCapability,
-      eq(supplierCapability.id, supplierCapabilityLink.capabilityId),
-    )
+    .innerJoin(supplierCapability, eq(supplierCapability.id, supplierCapabilityLink.capabilityId))
     .where(
       inArray(
         supplierCapabilityLink.supplierId,
@@ -281,9 +278,7 @@ async function resolveCapabilityIds(
   return { success: true, value: rows.map((row) => row.id) };
 }
 
-async function resolveRegionId(
-  regionSlug: string,
-): Promise<Result<string, SupplierError>> {
+async function resolveRegionId(regionSlug: string): Promise<Result<string, SupplierError>> {
   const [row] = await db
     .select({ id: discoveryRegion.id })
     .from(discoveryRegion)
@@ -404,9 +399,7 @@ export async function updateSupplier(
   }
 
   const resolvedCapabilityIds =
-    input.capabilitySlugs === undefined
-      ? null
-      : await resolveCapabilityIds(input.capabilitySlugs);
+    input.capabilitySlugs === undefined ? null : await resolveCapabilityIds(input.capabilitySlugs);
   if (resolvedCapabilityIds !== null && !resolvedCapabilityIds.success) {
     return resolvedCapabilityIds;
   }
@@ -439,9 +432,11 @@ export async function updateSupplier(
         .where(eq(supplierCapabilityLink.supplierId, supplierId));
 
       if (resolvedCapabilityIds.value.length > 0) {
-        await tx.insert(supplierCapabilityLink).values(
-          resolvedCapabilityIds.value.map((capabilityId) => ({ supplierId, capabilityId })),
-        );
+        await tx
+          .insert(supplierCapabilityLink)
+          .values(
+            resolvedCapabilityIds.value.map((capabilityId) => ({ supplierId, capabilityId })),
+          );
       }
     }
   });
