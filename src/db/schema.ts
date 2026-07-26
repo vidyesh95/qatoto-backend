@@ -3338,10 +3338,24 @@ export const workshopFile = pgTable(
 /**
  * One team-chat message.
  *
- * `sentAt` is the PAGINATION CURSOR as well as a display field, which is why it is
- * explicit microsecond precision and why every index ends in `id` (§4c rule 4): two
- * messages sharing a microsecond must still have a total order, or a keyset page either
- * repeats a row or skips one.
+ * `sentAt` is the PAGINATION CURSOR as well as a display field, which is why every index
+ * ends in `id` (§4c rule 4): two messages sharing an instant must still have a total order,
+ * or a keyset page either repeats a row or skips one.
+ *
+ * AND WHY IT IS `precision: 3`, WHICH IS NOT A DETAIL. This column was declared with
+ * microsecond precision, and `workshop-chat.service.ts` encodes the cursor as
+ * `sentAt.getTime()` — MILLISECONDS. A cursor coarser than its column cannot express the
+ * boundary: the next page asks for `sent_at < <ms>` OR `sent_at = <ms>`, and a row whose
+ * true value carries microseconds matches neither. The row is not duplicated or
+ * misordered, it is UNREACHABLE ON EVERY PAGE.
+ *
+ * It was reproducible, not theoretical. `now()` is fixed for the duration of a statement,
+ * so a multi-row insert gives every row a byte-identical microsecond `sent_at`, and
+ * `db:smoke-workshop` lost exactly one message per page boundary. Rounding at the column
+ * makes the stored value always exactly representable in the milliseconds the cursor
+ * carries, so `defaultNow()` keeps working and the guarantee lives in the type rather than
+ * in a comment someone has to remember. `editedAt` and `deletedAt` are display-only and
+ * feed no cursor, so they keep microsecond precision.
  *
  * Deletes are SOFT for the same reason — a hard delete punches a hole in a cursor, and a
  * client paging backwards silently loses a page.
@@ -3359,7 +3373,7 @@ export const workshopChatMessage = pgTable(
       .notNull()
       .references(() => projectMember.id, { onDelete: "restrict" }),
     messageText: text("message_text").notNull(),
-    sentAt: timestamp("sent_at", { precision: 6 }).defaultNow().notNull(),
+    sentAt: timestamp("sent_at", { precision: 3 }).defaultNow().notNull(),
     editedAt: timestamp("edited_at", { precision: 6 }),
     deletedAt: timestamp("deleted_at", { precision: 6 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -3420,7 +3434,19 @@ export const dailyLog = pgTable(
     logDate: date("log_date", { mode: "string" }).notNull(),
     narrative: text("narrative"),
     status: dailyLogStatusEnum("status").default("draft").notNull(),
-    submittedAt: timestamp("submitted_at"),
+    /**
+     * `precision: 3`, and it is load-bearing for the same reason `workshop_chat_message`'s
+     * `sent_at` is: this column is the SECOND TERM OF THE CROSS-PROJECT FEED'S KEYSET
+     * CURSOR (§11h), and `src/lib/daily-log-cursor.ts` encodes it as `getTime()` —
+     * milliseconds. A microsecond column under a millisecond cursor makes rows between the
+     * truncated boundary and the true value unreachable on every page.
+     *
+     * `submitDailyLog` writes `new Date()`, so nothing in the application has ever produced
+     * a sub-millisecond value here. That made it correct by accident of one write path,
+     * which a backfill, an import or a `defaultNow()` would have quietly broken. The type
+     * is now the guarantee.
+     */
+    submittedAt: timestamp("submitted_at", { precision: 3 }),
     // --- Video. Server-derived in every field; a client that sends one gets a 422.
     videoSource: dailyLogVideoSourceEnum("video_source").default("none").notNull(),
     youtubeVideoId: text("youtube_video_id"),

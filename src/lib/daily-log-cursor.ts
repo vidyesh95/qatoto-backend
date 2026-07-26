@@ -12,8 +12,18 @@
  *
  * WHY THE ORDERING NEEDS ALL THREE. `logDate` alone ties every time two members log the
  * same day. `(logDate, submittedAt)` still ties when two members submit inside the same
- * millisecond — Postgres stores microseconds, JS `Date` carries milliseconds — and a
- * cursor on a non-unique key SKIPS ROWS. Ending on `id` makes the tie total (§4c rule 4).
+ * millisecond, and a cursor on a non-unique key SKIPS ROWS. Ending on `id` makes the tie
+ * total (§4c rule 4).
+ *
+ * THE CURSOR CARRIES MILLISECONDS, AND THE COLUMN IS `timestamp(3)` BECAUSE OF IT. The
+ * instant below is encoded with `Date.getTime()`. Postgres timestamps default to
+ * MICROSECOND precision, and a cursor coarser than its column cannot express the boundary:
+ * a row whose true value lies between the truncated cursor and the next millisecond matches
+ * neither `submittedAt < cursor` nor `submittedAt = cursor`, so it is never returned on any
+ * page. `daily_log.submitted_at` is therefore declared `precision: 3`; the dependency runs
+ * both ways and is stated at both ends. The identical hazard was live on
+ * `workshop_chat_message.sent_at`, where `defaultNow()` really did write microseconds —
+ * `db:smoke-workshop` reproduces it.
  *
  * OPAQUE BY CONVENTION, NOT BY ENCRYPTION, exactly as workshop chat's is: the cursor
  * carries no authorization and reveals nothing a member paging their own feed cannot

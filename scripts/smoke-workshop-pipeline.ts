@@ -244,6 +244,68 @@ async function main(): Promise<void> {
       `page1=${firstIds.length} page2=${secondIds.length} overlap=${overlap.length}`,
     );
 
+    /**
+     * THE OTHER HALF, which this file's header has always claimed and never checked: the
+     * cursor must not SKIP a row either.
+     *
+     * A no-repeat assertion passes trivially for a cursor that drops rows — which is what
+     * the loop above could not detect, for two reasons. It posts each message in its own
+     * round trip, so every `sent_at` lands on a different millisecond; and it only compares
+     * two pages for overlap, never asking whether the pages together contain everything.
+     *
+     * A BATCH INSERT IS WHAT MAKES THE HAZARD REPRODUCIBLE. `now()` is fixed for the
+     * duration of a statement, so every row in one multi-row insert carries a
+     * byte-identical `sent_at` — including its microseconds, which are non-zero for
+     * essentially every call. If the cursor's precision is coarser than the column's, the
+     * next page's predicate matches none of the tied rows and the rest of the history
+     * becomes unreachable.
+     */
+    const batchedTexts = ["Batched A", "Batched B", "Batched C", "Batched D"];
+    await db.insert(workshopChatMessage).values(
+      batchedTexts.map((messageText) => ({
+        projectId,
+        authorMemberId: memberId,
+        messageText,
+      })),
+    );
+
+    const expectedIds = await db
+      .select({ id: workshopChatMessage.id })
+      .from(workshopChatMessage)
+      .where(eq(workshopChatMessage.projectId, projectId));
+
+    const walkedIds: string[] = [];
+    let walkCursor: string | null = null;
+    let walkPageCount = 0;
+
+    // The cap is a deadlock guard: a cursor that fails to advance would otherwise spin
+    // forever returning the same page.
+    while (walkPageCount < 50) {
+      const page: Awaited<ReturnType<typeof chatService.listMessages>> =
+        await chatService.listMessages(projectId, {
+          limit: 3,
+          ...(walkCursor === null ? {} : { cursor: walkCursor }),
+        });
+      if (!page.success) break;
+
+      walkedIds.push(...page.value.messages.map((message) => message.id));
+      walkPageCount += 1;
+      walkCursor = page.value.nextCursor;
+      if (walkCursor === null) break;
+    }
+
+    const walkedUnique = new Set(walkedIds);
+    const missingCount = expectedIds.filter((row) => !walkedUnique.has(row.id)).length;
+
+    record(
+      "the chat cursor pages without SKIPPING a row",
+      walkedIds.length === expectedIds.length &&
+        walkedUnique.size === expectedIds.length &&
+        missingCount === 0,
+      `expected=${expectedIds.length} walked=${walkedIds.length} ` +
+        `distinct=${walkedUnique.size} missing=${missingCount} pages=${walkPageCount}`,
+    );
+
     // --- Daily logs and the streak.
 
     const yesterdayLog = await logsService.createDailyLog(projectId, memberId, {

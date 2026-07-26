@@ -57,7 +57,15 @@ export interface ChatPage {
 }
 
 /**
- * The cursor is `<epochMicroseconds>_<messageId>` — the exact pair the index is built on.
+ * The cursor is `<epochMilliseconds>_<messageId>` — the exact pair the index is built on.
+ *
+ * IT SAID MICROSECONDS FOR A LONG TIME, AND THAT ONE WRONG WORD HID A BUG. `getTime()`
+ * returns milliseconds; `sent_at` was declared with microsecond precision. A cursor coarser
+ * than its column cannot express the boundary, so any row whose true instant carried
+ * microseconds matched neither `sent_at < cursor` nor `sent_at = cursor` and became
+ * unreachable on every page. `workshop_chat_message.sent_at` is now `timestamp(3)`, which
+ * makes the stored value exactly representable in what this function emits — see the
+ * column's own note in schema.ts.
  *
  * Opaque by convention rather than by encryption: it carries no authorization and reveals
  * nothing a member reading the channel cannot already see. Encoding it would only make it
