@@ -11,6 +11,7 @@ import {
 import * as agreementsService from "#src/services/compensation-agreements.service.js";
 import * as paymentsService from "#src/services/compensation-payments.service.js";
 import * as periodsService from "#src/services/compensation-periods.service.js";
+import * as governanceService from "#src/services/governance-summary.service.js";
 import * as membershipService from "#src/services/project-membership.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
@@ -571,4 +572,47 @@ export async function confirmCompensationPayment(req: Request, res: Response): P
     return;
   }
   respondOk(res, "Payment receipt confirmed.", confirmed.value);
+}
+
+// ---------------------------------------------------------------------------
+// Governance — the CROSS-PROJECT read (§11h, Appendix B3)
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /governance/summary` — aggregates, mechanics, and the caller's own lines.
+ *
+ * `attachOptionalUser`, NOT `requireAuth`, and that is deliberate: this page states the
+ * three §7A.6 copy rules publicly, so it has to render for a signed-out visitor. What it
+ * renders for them is aggregates and disclosure keys with an empty `callerOpenLines` — not
+ * a fabricated example and not somebody else's row.
+ *
+ * NOTHING HERE NAMES A PERSON. The projection carries no member id, no user id, no name
+ * and no per-member amount. The single exception is the caller's own lines, which reach
+ * the response only through their own `project_member` rows.
+ *
+ * READ-ONLY. There is no finalize, countersign, payment or export on this router; each is
+ * actor-scoped and stays where the actor's role is already resolved.
+ */
+export const GovernanceSummaryQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+  })
+  .strict();
+
+export async function getGovernanceSummary(req: Request, res: Response): Promise<void> {
+  const parsedQuery = GovernanceSummaryQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  // `attachOptionalUser` leaves `req.user` undefined for a visitor; the service takes null
+  // and returns no caller lines. There is no request field that supplies a user id.
+  const summary = await governanceService.getGovernanceSummary(
+    req.user?.id ?? null,
+    parsedQuery.data,
+  );
+
+  respondOk(res, "Governance summary loaded.", summary);
 }

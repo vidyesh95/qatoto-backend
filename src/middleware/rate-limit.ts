@@ -601,3 +601,24 @@ export const paymentRecordLimiter = rateLimit({
   handler: rateLimitExceededHandler,
   keyGenerator: userKey,
 });
+
+/**
+ * POST /suppliers · PATCH /suppliers/:supplierId (§11i).
+ *
+ * NOT AN ANTI-ABUSE BOUND — the caller already holds `moderate_taxonomy`, so this is a
+ * blast-radius bound, the same reasoning `escrowSettlementLimiter` records. A moderator
+ * curating a directory in one sitting adds a handful of listings; a compromised staff
+ * session should not be able to rewrite the whole catalogue before anyone notices.
+ *
+ * Deliberately keyed on `req.user.id` like every other limiter here, which means it runs
+ * AFTER `requireAuth` and BEFORE the in-service capability check. A non-moderator therefore
+ * spends their own budget discovering they are not staff, rather than the moderator's.
+ */
+export const supplierWriteLimiter = rateLimit({
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: rateLimitExceededHandler,
+  keyGenerator: userKey,
+});

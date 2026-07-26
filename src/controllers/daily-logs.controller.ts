@@ -77,6 +77,26 @@ export const ListDailyLogsQuerySchema = z
   .object({ limit: z.coerce.number().int().min(1).max(100).optional() })
   .strict();
 
+/**
+ * The CROSS-PROJECT feed's query (§11h, Appendix B2).
+ *
+ * THE KEY THAT IS ABSENT IS THE POINT: there is no `projectIds`, no `userId`, and no
+ * `includeAllProjects`. `.strict()` refuses all three with a 422 rather than letting one
+ * become an authorization input (§0). The membership set is derived from `project_member`
+ * inside the service; `projectSlug` can only NARROW the caller's own set.
+ *
+ * `chipKind` is the four-value `AiSummaryChipKind`, enumerated here so an unknown chip is
+ * a 422 rather than an empty page a client would read as "no blockers this week".
+ */
+export const ListDailyLogFeedQuerySchema = z
+  .object({
+    projectSlug: z.string().trim().min(1).max(120).optional(),
+    chipKind: z.enum(["blocker", "progress", "velocity", "suggestion"]).optional(),
+    cursor: z.string().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+  })
+  .strict();
+
 interface DailyLogCaller {
   readonly context: membershipService.ProjectMemberContext;
   readonly userId: string;
@@ -120,6 +140,63 @@ export async function listDailyLogs(req: Request, res: Response): Promise<void> 
     statusCode: 200,
     message: "Daily logs loaded.",
     data: logs,
+  } satisfies ApiResponse);
+}
+
+/**
+ * GET /daily-logs — the caller's CROSS-PROJECT feed, root-mounted (§11h).
+ *
+ * Root-mounted because a member arriving from the `/build-log` stage page holds no project
+ * slug — the same reason `/open-roles` is root-mounted (§11).
+ *
+ * NO `requireProjectRole` HERE, and its absence is not a gap: there is no project in the
+ * URL to prove membership against. The service derives the membership set from
+ * `project_member` in SQL, so a caller with no memberships gets an empty page and a caller
+ * with six gets exactly those six.
+ */
+export async function listDailyLogFeed(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = ListDailyLogFeedQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const feed = await logsService.listDailyLogFeed(req.user.id, parsedQuery.data);
+  if (!feed.success) {
+    respondWorkshopError(res, feed.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Build log loaded.",
+    data: feed.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * GET /daily-logs/streak-leaderboard — public, and deliberately so.
+ *
+ * A streak count over an already-public project is project metadata; a log is a member's
+ * work record. The feed above is members-only for that reason and this is not.
+ *
+ * Every row carries `statsComputedAt`. A streak decays at midnight with no write, so a
+ * leaderboard that implies live numbers is lying (§5).
+ */
+export async function listDailyLogStreakLeaderboard(_req: Request, res: Response): Promise<void> {
+  const standings = await logsService.listDailyLogStreakLeaderboard();
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Streak leaderboard loaded.",
+    data: standings,
   } satisfies ApiResponse);
 }
 

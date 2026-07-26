@@ -68,6 +68,19 @@ export interface OpenRoleView {
   readonly id: string;
   readonly projectSlug: string;
   readonly projectName: string;
+  /**
+   * The project's stage and cover, CARRIED ON THE ROLE ROW (Appendix B1).
+   *
+   * `/team-building`'s grid renders a project card per open role. Without these two the
+   * grid either fires a second request per card or renders a card with a missing project —
+   * so the projection widens rather than a second endpoint appearing. Both come off the
+   * `researchProject` join that already exists for `projectSlug`; no extra query.
+   *
+   * The column is `coverImageUrl`. Appendix B called it `coverImageSrc`, which exists
+   * nowhere in this codebase.
+   */
+  readonly projectStage: (typeof researchProject.$inferSelect)["stage"];
+  readonly projectCoverImageUrl: string | null;
   readonly roleTitle: string;
   readonly skills: readonly string[];
   readonly commitment: (typeof projectOpenRole.$inferSelect)["commitment"];
@@ -500,6 +513,8 @@ const OPEN_ROLE_VIEW_COLUMNS = {
   id: projectOpenRole.id,
   projectSlug: researchProject.slug,
   projectName: researchProject.name,
+  projectStage: researchProject.stage,
+  projectCoverImageUrl: researchProject.coverImageUrl,
   roleTitle: projectOpenRole.roleTitle,
   skills: projectOpenRole.skills,
   commitment: projectOpenRole.commitment,

@@ -3,6 +3,7 @@ import type { Response } from "express";
 import type { DiscoveryModerationError } from "#src/services/discovery-moderation.service.js";
 import type { ProblemClusterError } from "#src/services/problem-clusters.service.js";
 import type { ResearchCategoryError } from "#src/services/research-categories.service.js";
+import type { SupplierError } from "#src/services/suppliers.service.js";
 import type { TalentProfileError } from "#src/services/talent-profiles.service.js";
 
 /**
@@ -45,7 +46,12 @@ export type DiscoveryDomainError =
   | DiscoveryModerationError
   // Composed, NOT redeclared: `POST /discovery/categories` runs the same service over the
   // same table as `POST /research-categories`, so it must fail identically.
-  | ResearchCategoryError;
+  | ResearchCategoryError
+  // §11i's supplier directory is a §6-family catalogue with the SAME status policy — its
+  // moderator refusal is the identical `PLATFORM_CAPABILITY_REQUIRED` decided before any
+  // id is read. A second mapper would have had to restate that policy and could then drift
+  // from it.
+  | SupplierError;
 
 /**
  * Maps a discovery error to its HTTP shape. Does NOT touch `res` — a pure function, so it
@@ -64,6 +70,10 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
       return { statusCode: 404, message: "You do not have a talent profile yet." };
     case "MERGE_PROPOSAL_NOT_FOUND":
       return { statusCode: 404, message: "Merge proposal not found." };
+    case "SUPPLIER_NOT_FOUND":
+      // An inactive listing answers identically to one that never existed — retiring a
+      // supplier must not leave a probe that says "this slug used to be here".
+      return { statusCode: 404, message: "Supplier not found." };
     case "CATEGORY_NOT_FOUND":
       return {
         statusCode: 404,
@@ -125,6 +135,20 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
         message: "That compensation range is invalid.",
         errors: { compensationAsks: [`Maximum is below minimum for ${error.kind}.`] },
       };
+    case "SUPPLIER_CAPABILITY_UNKNOWN":
+      // Names the offending slugs, exactly as SKILL_NOT_FOUND does. The caller here is
+      // already a moderator, so there is nothing left to leak by being specific.
+      return {
+        statusCode: 422,
+        message: "Capabilities must come from the canonical capability list.",
+        errors: { capabilitySlugs: [...error.capabilitySlugs] },
+      };
+    case "SUPPLIER_REGION_UNKNOWN":
+      return {
+        statusCode: 422,
+        message: "That region does not exist.",
+        errors: { regionSlug: [`Unknown region "${error.regionSlug}".`] },
+      };
     case "MERGE_TARGET_INVALID":
       return {
         statusCode: 422,
@@ -146,6 +170,14 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
         statusCode: 409,
         message: "A category with that name already exists.",
         errors: { label: [`Resolves to the existing slug "${error.slug}".`] },
+      };
+    case "SUPPLIER_SLUG_TAKEN":
+      // The UNIQUE on `supplier.slug` IS the de-duplication mechanism (§6): a collision is
+      // a 409, never a silently suffixed second row for the same supplier.
+      return {
+        statusCode: 409,
+        message: "A supplier with that slug already exists.",
+        errors: { slug: [`"${error.slug}" is already listed.`] },
       };
     case "CATEGORY_ALREADY_DECIDED":
       return { statusCode: 409, message: `That category is already ${error.status}.` };

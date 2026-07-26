@@ -289,6 +289,30 @@ export const product = pgTable(
     sellerId: text("seller_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
+    /**
+     * THE R&D → STORE HANDOFF (R_AND_D_BACKEND_STRUCTURE.md §11i, Appendix B4).
+     *
+     * Nullable, because most listings are not the output of an R&D project and never
+     * will be. When it IS set, this column is the only place "this project shipped this
+     * listing" is expressible — without it the `/go-to-market` launch-ready rail cannot
+     * show what a project actually launched, and the readiness checklist cannot tell
+     * whether a listing exists at all.
+     *
+     * `restrict`, per R1 below: a project that has shipped a product is not deletable,
+     * and there is no DELETE endpoint for a project anyway — archive is terminal.
+     *
+     * THE COLUMN LIVES HERE; NOTHING ELSE CROSSES THE BOUNDARY. R&D contributes this FK
+     * and stops. Listing creation stays in the studio's own flow — a research route that
+     * proxied a product create "for convenience" would duplicate the validation, pricing
+     * and ownership checks the store already owns and re-validates.
+     *
+     * Declared before `researchProject` appears below; `references()` takes a callback and
+     * resolves lazily, the same mechanism `discovery_region.parentRegionId` relies on.
+     */
+    researchProjectId: text("research_project_id").references(
+      (): AnyPgColumn => researchProject.id,
+      { onDelete: "restrict" },
+    ),
     title: text("title").notNull(),
     brand: text("brand"),
     category: productCategoryEnum("category").notNull(),
@@ -318,6 +342,11 @@ export const product = pgTable(
   (table) => [
     index("product_sellerId_idx").on(table.sellerId),
     index("product_status_idx").on(table.status),
+    // "What did this project launch?" — the launch-ready rail's lookup. Partial, because
+    // the overwhelming majority of listings have no research project behind them.
+    index("product_researchProjectId_idx")
+      .on(table.researchProjectId)
+      .where(sql`research_project_id IS NOT NULL`),
     // A seller can't reuse one SKU across their own listings. Postgres UNIQUE
     // permits many NULLs, so SKU stays optional.
     uniqueIndex("product_seller_sku_unq").on(table.sellerId, table.sku),
@@ -691,6 +720,56 @@ export const talentAvailabilityEnum = pgEnum("talent_availability", [
 export const talentProfileVisibilityEnum = pgEnum("talent_profile_visibility", [
   "private",
   "published",
+]);
+
+// --- Go-to-market (§11i, Appendix B4). Declared here with the rest of the §6 family
+//     because they belong to one domain, the same placement discoveryRegionKind gets.
+
+/**
+ * How far a supplier listing has been checked, and by whom it may be trusted.
+ *
+ * DEFAULTS TO `unverified` AND IS NEVER CLIENT-SETTABLE. A directory whose rows can
+ * assert their own trust level is worse than no directory: the whole value of the field is
+ * that only a platform moderator moves it.
+ */
+export const supplierVerificationStateEnum = pgEnum("supplier_verification_state", [
+  "unverified", // listed, nothing checked
+  "documents_pending", // a moderator has asked for paperwork
+  "verified", // a moderator confirmed the entity exists and does what it claims
+  "suspended", // listed but withdrawn from results pending a decision
+]);
+
+/** What a supplier can actually do. A curated vocabulary, never free text (§6). */
+export const supplierCapabilityKindEnum = pgEnum("supplier_capability_kind", [
+  "manufacturing",
+  "assembly",
+  "tooling",
+  "packaging",
+  "logistics",
+  "certification",
+  "design",
+  "sourcing",
+]);
+
+/**
+ * How a supplier has agreed to be approached.
+ *
+ * `no_contact` exists because a curated directory will list entities that never asked to
+ * be listed. A row a moderator added from public information must be able to say "reference
+ * only" rather than becoming an inbox nobody consented to.
+ */
+export const supplierContactPolicyEnum = pgEnum("supplier_contact_policy", [
+  "via_platform",
+  "direct_email",
+  "no_contact",
+]);
+
+/** A project's own record of who it has approached. Never a claim about the supplier. */
+export const projectSupplierEngagementStatusEnum = pgEnum("project_supplier_engagement_status", [
+  "considering",
+  "contacted",
+  "contracted",
+  "ended",
 ]);
 
 /**
@@ -2356,6 +2435,194 @@ export const talentCompensationAsk = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------------------
+// Go-to-market — the supplier / ODM directory (§11i, Appendix B4).
+//
+// A §6-FAMILY DOMAIN, not a new kind of thing: a curated, filterable catalogue with a
+// controlled vocabulary, exactly like the talent directory and the problem-cluster map.
+// It is modelled on those two rather than invented, which is why `supplier_capability`
+// wears `discovery_skill`'s shape and `supplier_capability_link` wears
+// `talent_profile_skill`'s.
+//
+// A PUBLIC DIRECTORY IS A SPAM SURFACE, so the write side is decided before the route
+// exists: platform `moderator` only, checked in-service via `requirePlatformCapability`
+// BEFORE any id is read. There is deliberately NO user-submission path and therefore no
+// moderation status column — a self-serve, immediately-public supplier listing needs a
+// moderation queue, a rate limiter and an abuse story, and none of that is worth building
+// before the first real supplier exists. `is_active` is the retirement mechanism, the same
+// answer `discovery_skill` gives, and it is not a moderation state.
+//
+// AUTHORED IN §4b WIRE FORMAT FROM THE START. This domain has no legacy importers, so §15
+// never has to touch it: `leadTimeDays` and `minimumOrderQuantity` are integers with
+// explicit units in their names, and every enum value is snake_case (§4d).
+//
+// AND THERE IS NO PRICE COLUMN ON `supplier`. §4b requires a currency beside every money
+// column and derives that currency from the PROJECT, never from a request body — and a
+// supplier belongs to no project, so an indicative price here would have to invent one.
+// A quote belongs to an engagement between a specific project and a supplier, priced in
+// that project's currency. Appendix B's `…InCents` note is answered by omitting the column
+// rather than by inventing a directory-level currency.
+// ---------------------------------------------------------------------------
+
+/**
+ * The capability vocabulary. SEEDED, with no write endpoint.
+ *
+ * Same reasoning as `discovery_skill` verbatim: no POST means no spam surface means no
+ * moderation status, and the difference from `research_category` is deliberate rather than
+ * an oversight. Slug equality is what `?capability=` matches on — never a substring, which
+ * is the class of bug §6 exists to make unrepresentable.
+ */
+export const supplierCapability = pgTable(
+  "supplier_capability",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    label: text("label").notNull(),
+    kind: supplierCapabilityKindEnum("kind").notNull(),
+    // Retirement WITHOUT a DELETE: supplier_capability_link references this with
+    // `restrict`, so a curated capability can never vanish out from under a listing.
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("supplier_capability_slug_unq").on(table.slug),
+    index("supplier_capability_active_label_idx")
+      .on(table.label, table.id)
+      .where(sql`is_active`),
+    check("supplier_capability_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
+    check("supplier_capability_label_ck", sql`char_length(label) BETWEEN 1 AND 80`),
+  ],
+);
+
+/** A manufacturing partner. Moderator-authored; every field below is server-owned. */
+export const supplier = pgTable(
+  "supplier",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // UNIQUE, and the uniqueness IS the de-duplication mechanism: a collision is a 409,
+    // never a silent `-2` suffix. `research_project.slug` auto-suffixes because two
+    // founders may legitimately pick one name; two rows for one supplier is a data bug.
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    summary: text("summary"),
+    // `restrict` — the seeded region taxonomy must not vanish under a listing that filters
+    // on it. Nullable: a supplier with no confirmed region is honest, "global" is not.
+    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    verificationState: supplierVerificationStateEnum("verification_state")
+      .default("unverified")
+      .notNull(),
+    contactPolicy: supplierContactPolicyEnum("contact_policy").default("no_contact").notNull(),
+    // Host-allowlisted before storage, like every third-party URL in this schema — it is a
+    // string a client will put in an href.
+    websiteUrl: text("website_url"),
+    // Integer days and integer units (§4b). No floats, and no currency to derive.
+    leadTimeDays: integer("lead_time_days"),
+    minimumOrderQuantity: integer("minimum_order_quantity"),
+    isActive: boolean("is_active").default(true).notNull(),
+    // R2: attribution that must never block an account deletion.
+    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("supplier_slug_unq").on(table.slug),
+    // The directory read: listed suppliers, ordered by name, ending in a unique column
+    // (§4c rule 4).
+    index("supplier_active_name_idx").on(table.name, table.id).where(sql`is_active`),
+    index("supplier_regionId_idx").on(table.regionId),
+    index("supplier_verificationState_idx").on(table.verificationState),
+    check("supplier_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
+    check("supplier_name_ck", sql`char_length(name) BETWEEN 1 AND 120`),
+    check("supplier_summary_ck", sql`summary IS NULL OR char_length(summary) <= 2000`),
+    check(
+      "supplier_quantities_ck",
+      sql`(lead_time_days IS NULL OR lead_time_days BETWEEN 0 AND 3650)
+          AND (minimum_order_quantity IS NULL OR minimum_order_quantity >= 0)`,
+    ),
+    // "Email them directly" is not actionable without somewhere to find the address.
+    // Written as an explicit implication rather than the boolean-ordering trick
+    // (`a <= b`), which is valid Postgres and unreadable at review time.
+    check(
+      "supplier_contact_ck",
+      sql`contact_policy <> 'direct_email' OR website_url IS NOT NULL`,
+    ),
+  ],
+);
+
+/** Which capabilities a supplier claims. `talent_profile_skill`'s shape exactly. */
+export const supplierCapabilityLink = pgTable(
+  "supplier_capability_link",
+  {
+    // Cascade: the link is part of the listing and has no life without it.
+    supplierId: text("supplier_id")
+      .notNull()
+      .references(() => supplier.id, { onDelete: "cascade" }),
+    // `restrict` — a curated capability must not vanish out from under a listing.
+    capabilityId: text("capability_id")
+      .notNull()
+      .references(() => supplierCapability.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.supplierId, table.capabilityId] }),
+    // The `?capability=` reverse lookup.
+    index("supplier_capability_link_capabilityId_idx").on(table.capabilityId),
+  ],
+);
+
+/**
+ * Which project engaged which supplier — the launch-ready rail's provenance.
+ *
+ * A PROJECT'S OWN RECORD, never a claim about the supplier. `contracted` here means "this
+ * team says they signed something", and no field on this row feeds a supplier's
+ * `verificationState`: letting one project's self-report raise another party's trust level
+ * would make the directory forgeable one row at a time.
+ */
+export const projectSupplierEngagement = pgTable(
+  "project_supplier_engagement",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // R1 — every FK into research_project is `restrict`.
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    supplierId: text("supplier_id")
+      .notNull()
+      .references(() => supplier.id, { onDelete: "restrict" }),
+    status: projectSupplierEngagementStatusEnum("status").default("considering").notNull(),
+    note: text("note"),
+    // `restrict`: membership is never hard-deleted anyway (§4a), and this row records who
+    // on the team made the call.
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => projectMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // One engagement row per pair. Re-approaching the same supplier moves the status; it
+    // does not file a second row.
+    uniqueIndex("project_supplier_engagement_project_supplier_unq").on(
+      table.projectId,
+      table.supplierId,
+    ),
+    index("project_supplier_engagement_supplierId_idx").on(table.supplierId),
+    check("project_supplier_engagement_note_ck", sql`note IS NULL OR char_length(note) <= 2000`),
+  ],
+);
+
 /**
  * Dead-lettered background jobs, captured for a human.
  *
@@ -2709,6 +2976,46 @@ export const talentCompensationAskRelations = relations(talentCompensationAsk, (
     references: [talentProfile.userId],
   }),
 }));
+
+// --- Go-to-market (§11i). Child-side only, matching the convention above.
+
+export const supplierRelations = relations(supplier, ({ one, many }) => ({
+  region: one(discoveryRegion, {
+    fields: [supplier.regionId],
+    references: [discoveryRegion.id],
+  }),
+  capabilityLinks: many(supplierCapabilityLink),
+  engagements: many(projectSupplierEngagement),
+}));
+
+export const supplierCapabilityLinkRelations = relations(supplierCapabilityLink, ({ one }) => ({
+  supplier: one(supplier, {
+    fields: [supplierCapabilityLink.supplierId],
+    references: [supplier.id],
+  }),
+  capability: one(supplierCapability, {
+    fields: [supplierCapabilityLink.capabilityId],
+    references: [supplierCapability.id],
+  }),
+}));
+
+export const projectSupplierEngagementRelations = relations(
+  projectSupplierEngagement,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [projectSupplierEngagement.projectId],
+      references: [researchProject.id],
+    }),
+    supplier: one(supplier, {
+      fields: [projectSupplierEngagement.supplierId],
+      references: [supplier.id],
+    }),
+    createdByMember: one(projectMember, {
+      fields: [projectSupplierEngagement.createdByMemberId],
+      references: [projectMember.id],
+    }),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // R&D §8 — the Virtual Workshop and daily logs.
@@ -3158,6 +3465,16 @@ export const dailyLog = pgTable(
       .on(table.authorMemberId, table.submitIdempotencyKey)
       .where(sql`submit_idempotency_key IS NOT NULL`),
     index("daily_log_projectId_logDate_idx").on(table.projectId, table.logDate, table.id),
+    // THE CROSS-PROJECT FEED INDEX (Appendix B2). `GET /daily-logs` filters on the
+    // caller's memberships and orders `(logDate DESC, submittedAt DESC, id DESC)` across
+    // every one of them at once, so the project-leading index above cannot serve it —
+    // that one can order WITHIN a project, and merging six projects in the service is
+    // exactly what §13 forbids. Partial on `submitted` because drafts never enter the
+    // feed, which also keeps `submitted_at` NOT NULL for every row the cursor addresses
+    // (daily_log_submitted_ck).
+    index("daily_log_feed_idx")
+      .on(table.projectId, table.logDate, table.submittedAt, table.id)
+      .where(sql`status = 'submitted'`),
     // The operator's queue: logs whose analysis is stuck or was never run.
     index("daily_log_analysisStatus_idx")
       .on(table.analysisStatus, table.id)
@@ -3245,6 +3562,11 @@ export const dailyLogAiSummaryChip = pgTable(
       table.dailyLogId,
       table.sequenceNumber,
     ),
+    // The `?chipKind=` filter on the cross-project feed (Appendix B2) is a correlated
+    // EXISTS, so it probes THIS table by kind and joins back on the log id. The unique
+    // above is log-leading and cannot serve that direction. Filtering after the fetch
+    // instead would page a feed against a predicate applied to only one page of it.
+    index("daily_log_ai_summary_chip_kind_logId_idx").on(table.kind, table.dailyLogId),
     check("daily_log_ai_summary_chip_label_ck", sql`char_length(label) BETWEEN 1 AND 80`),
     check(
       "daily_log_ai_summary_chip_confidence_ck",

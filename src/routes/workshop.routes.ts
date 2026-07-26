@@ -2,6 +2,7 @@ import express from "express";
 
 import * as dailyLogsController from "#src/controllers/daily-logs.controller.js";
 import * as workshopController from "#src/controllers/workshop.controller.js";
+import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { parseCompactJsonBody } from "#src/middleware/json-body.js";
 import {
   chatMessageLimiter,
@@ -226,5 +227,34 @@ router.delete(
   dailyLogWriteLimiter,
   dailyLogsController.deleteDailyLog,
 );
+
+/**
+ * §8's CROSS-PROJECT half, root-mounted (§11h, Appendix B2).
+ *
+ * A second router from this file rather than a second file, mirroring the funding domain's
+ * `fundingRouter` / `projectFundingRouter` split: one domain, one route file, two mounts.
+ * Root-mounted because a member arriving from the `/build-log` stage page holds no project
+ * slug — the same reason `researchCatalogRouter` and `fundingRouter` mount at `/`.
+ *
+ * NO `requireProjectRole` ON EITHER ROUTE, and neither is a hole:
+ *   - `/daily-logs` has no project in the URL to prove membership against, so the service
+ *     derives the caller's membership set from `project_member` in SQL instead. There is
+ *     no request field that can widen it.
+ *   - `/daily-logs/streak-leaderboard` is public on purpose. A streak count over an
+ *     already-public project is project metadata; a log is a member's work record.
+ *
+ * ROUTE ORDER: the literal `/daily-logs/streak-leaderboard` is declared FIRST. Nothing
+ * parameterised follows it today, and the rule is stated here so nobody later adds
+ * `/daily-logs/:logId` above it.
+ */
+export const dailyLogFeedRouter = express.Router();
+
+dailyLogFeedRouter.get(
+  "/daily-logs/streak-leaderboard",
+  attachOptionalUser,
+  dailyLogsController.listDailyLogStreakLeaderboard,
+);
+
+dailyLogFeedRouter.get("/daily-logs", requireAuth, dailyLogsController.listDailyLogFeed);
 
 export default router;

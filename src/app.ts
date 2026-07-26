@@ -12,7 +12,7 @@ import { parseLongFormJsonBody } from "#src/middleware/json-body.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import authRouter from "#src/routes/auth.routes.js";
-import compensationRouter from "#src/routes/compensation.routes.js";
+import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
@@ -26,9 +26,10 @@ import proofOfEffortRouter, {
 import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
 import researchProjectsRouter from "#src/routes/research-projects.routes.js";
 import seriesRouter from "#src/routes/series.routes.js";
+import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
 import videosRouter from "#src/routes/videos.routes.js";
-import workshopRouter from "#src/routes/workshop.routes.js";
+import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.js";
 
 const app = express();
 
@@ -149,6 +150,14 @@ app.use("/research-projects", projectFundingRouter);
 // compensation statement holding an id and no project, so proving membership from the URL
 // is both possible and correct here.
 app.use("/research-projects", compensationRouter);
+// Same prefix a SIXTH time, declared after all five: the go-to-market router owns
+// /:projectSlug/launch-readiness (§11i). Still no collision, for the same reason — a
+// single-segment "/:projectSlug" never swallows a deeper path.
+//
+// The readiness checklist is DERIVED from research_project.stage, project_stats, the §9.11
+// bake event, the project's supplier engagements and its linked store listings. Nothing is
+// stored and no body sets a state, so there is no field a client could assert "ready" with.
+app.use("/research-projects", projectGoToMarketRouter);
 app.use("/discovery", discoveryRouter);
 // Creator Studio. The anime review queue is nested at /videos/admin/review rather than a
 // root /admin, matching /discovery/admin/* — one domain's moderation surface should not
@@ -159,6 +168,24 @@ app.use("/series", seriesRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,
 // exactly as the spec mounts the funding router at "/".
 app.use("/", researchCatalogRouter);
+// The four §4c STAGE ROUTES' cross-project halves (Appendix B), all root-mounted for the
+// one reason: a visitor arriving from a landing-page stage card has not picked a project
+// and holds no slug. That is the whole point of the pages — team building, daily logs and
+// governance previously lived only as tabs INSIDE a project, so someone who had not chosen
+// one could not reach them at all.
+//
+// `/daily-logs` and `/daily-logs/streak-leaderboard` (§8, §11h). The feed is scoped to the
+// caller's OWN memberships, derived from `project_member` in SQL — there is no request
+// field that widens it. The leaderboard is public: a streak count over an already-public
+// project is project metadata, while a log is a member's work record.
+app.use("/", dailyLogFeedRouter);
+// `/governance/summary` (§7A, §11h). Aggregates and mechanics, never people — a month-end
+// statement line names someone and what they are owed, and that stays behind membership on
+// the per-project tab. The caller's own lines are the one exception.
+app.use("/", governanceRouter);
+// `/suppliers`, `/supplier-capabilities` and `/launch-ready-projects` (§6-family, §11i).
+// Root-mounted like researchCatalogRouter — a supplier directory belongs to no project.
+app.use("/", supplierRouter);
 // §7's id-keyed half: /funding-rounds, /pledges, /milestones, /escrow-releases,
 // /provider-transfers and /funding/deals. Root-mounted because a backer arriving from a
 // deal-flow list holds a round id and has no reason to know which project owns it — the

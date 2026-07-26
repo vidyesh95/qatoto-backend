@@ -534,3 +534,156 @@ export const BASELINE_DISCOVERY_SKILLS: readonly BaselineDiscoverySkill[] = [
     categoryId: null,
   },
 ];
+
+/**
+ * The baseline supplier capability vocabulary (§11i, Appendix B4).
+ *
+ * SEEDED, WITH NO WRITE ENDPOINT — `discovery_skill`'s reasoning verbatim. There is no
+ * `POST /supplier-capabilities` in §11i, so there is no spam surface here and therefore no
+ * moderation status. Retirement is `isActive = false`, never a DELETE, because
+ * `supplier_capability_link` references this table with `restrict`.
+ *
+ * These slugs are what `?capability=` matches BY EQUALITY. That is the whole reason the
+ * table exists rather than a `text[]` on `supplier`: a substring match would make a
+ * "tooling" chip select "retooling", the exact bug class §6 removes.
+ *
+ * Adding one later means appending here and re-running `pnpm db:seed-supplier-capabilities`
+ * — not hand-writing another migration.
+ */
+export interface BaselineSupplierCapability {
+  readonly id: string;
+  readonly slug: string;
+  readonly label: string;
+  readonly kind:
+    | "manufacturing"
+    | "assembly"
+    | "tooling"
+    | "packaging"
+    | "logistics"
+    | "certification"
+    | "design"
+    | "sourcing";
+}
+
+export const BASELINE_SUPPLIER_CAPABILITIES: readonly BaselineSupplierCapability[] = [
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000001",
+    slug: "injection-moulding",
+    label: "Injection Moulding",
+    kind: "manufacturing",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000002",
+    slug: "cnc-machining",
+    label: "CNC Machining",
+    kind: "manufacturing",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000003",
+    slug: "sheet-metal-fabrication",
+    label: "Sheet Metal Fabrication",
+    kind: "manufacturing",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000004",
+    slug: "pcb-assembly",
+    label: "PCB Assembly",
+    kind: "assembly",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000005",
+    slug: "final-assembly",
+    label: "Final Assembly",
+    kind: "assembly",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000006",
+    slug: "cable-harnessing",
+    label: "Cable Harnessing",
+    kind: "assembly",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000007",
+    slug: "tool-and-die",
+    label: "Tool and Die",
+    kind: "tooling",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000008",
+    slug: "rapid-prototyping",
+    label: "Rapid Prototyping",
+    kind: "tooling",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000009",
+    slug: "retail-packaging",
+    label: "Retail Packaging",
+    kind: "packaging",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000010",
+    slug: "protective-packaging",
+    label: "Protective Packaging",
+    kind: "packaging",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000011",
+    slug: "freight-forwarding",
+    label: "Freight Forwarding",
+    kind: "logistics",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000012",
+    slug: "customs-brokerage",
+    label: "Customs Brokerage",
+    kind: "logistics",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000013",
+    slug: "warehousing",
+    label: "Warehousing",
+    kind: "logistics",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000014",
+    slug: "ce-marking",
+    label: "CE Marking",
+    kind: "certification",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000015",
+    slug: "fcc-testing",
+    label: "FCC Testing",
+    kind: "certification",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000016",
+    slug: "rohs-reach-compliance",
+    label: "RoHS / REACH Compliance",
+    kind: "certification",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000017",
+    slug: "industrial-design",
+    label: "Industrial Design",
+    kind: "design",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000018",
+    slug: "design-for-manufacture",
+    label: "Design for Manufacture",
+    kind: "design",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000019",
+    slug: "component-sourcing",
+    label: "Component Sourcing",
+    kind: "sourcing",
+  },
+  {
+    id: "d5f4b0c3-0000-4000-8000-000000000020",
+    slug: "raw-material-sourcing",
+    label: "Raw Material Sourcing",
+    kind: "sourcing",
+  },
+];

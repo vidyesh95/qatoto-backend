@@ -141,6 +141,13 @@
       "when": 1785001656577,
       "tag": "0019_planned_payout_rename",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1785053128859,
+      "tag": "0020_material_colossus",
+      "breakpoints": true
     }
   ]
 }

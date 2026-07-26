@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
 import { fromDrizzle } from "pg-boss";
 
 import { config } from "#src/config/index.js";
@@ -10,9 +10,14 @@ import {
   dailyLogExtractedClaim,
   dailyLogTranscriptSegment,
   projectStats,
+  researchProject,
   user,
   projectMember,
 } from "#src/db/schema.js";
+import {
+  decodeDailyLogFeedCursor,
+  encodeDailyLogFeedCursor,
+} from "#src/lib/daily-log-cursor.js";
 import { streakAfterLog, type IsoDate } from "#src/lib/daily-log-streak.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
@@ -53,7 +58,10 @@ export type DailyLogError =
   | { type: "DAILY_LOG_ALREADY_SUBMITTED" }
   | { type: "DAILY_LOG_EMPTY" }
   | { type: "NOT_THE_AUTHOR" }
-  | { type: "LOG_DATE_IN_FUTURE"; logDate: string };
+  | { type: "LOG_DATE_IN_FUTURE"; logDate: string }
+  // The cross-project feed's keyset (Appendix B2). Already mapped to 422 by
+  // `workshop-error-response.ts`, which the chat router reaches through the same switch.
+  | { type: "CURSOR_MALFORMED" };
 
 export type DailyLogAnalysisStatus = (typeof dailyLog.$inferSelect)["analysisStatus"];
 export type EffortVerificationStatus = (typeof dailyLog.$inferSelect)["effortVerificationStatus"];
@@ -222,6 +230,230 @@ export async function listDailyLogs(
     .limit(limit);
 
   return rows.map(toLogView);
+}
+
+// ---------------------------------------------------------------------------
+// The CROSS-PROJECT feed (§11h, Appendix B2) — `/build-log`.
+//
+// THE VISIBILITY DECISION, and it is the whole design. A daily log is private to its
+// project's members and the enforcement is real, not aspirational: every project-scoped
+// read above runs `requireProjectRole(…, "contributor")` and fails 404. Making the surface
+// cross-project could not be allowed to quietly relax that, so this feed is scoped to the
+// caller's OWN memberships — Appendix B2 option (a). A logged-out visitor gets 401 and the
+// page renders its explainer, its legend and the public leaderboard below with an empty
+// feed. It must not render a fabricated one.
+//
+// THE MEMBERSHIP SET IS A SUBQUERY, NEVER A PARAMETER. There is no `?projectIds=` and
+// there must never be one: a client-supplied project list on a private feed is a
+// client-supplied authorization input (§0, §13). `?projectSlug=` narrows the caller's own
+// set and can only ever shrink it.
+// ---------------------------------------------------------------------------
+
+/** Feed rows carry their project, so no client has to fabricate a project chip. */
+export interface DailyLogFeedRow extends DailyLogView {
+  readonly projectSlug: string;
+  readonly projectName: string;
+  /** The column is `coverImageUrl`; Appendix B called it `coverImageSrc`, which is not a thing. */
+  readonly projectCoverImageUrl: string | null;
+  readonly projectStage: (typeof researchProject.$inferSelect)["stage"];
+}
+
+export interface DailyLogFeedPage {
+  readonly logs: readonly DailyLogFeedRow[];
+  /** Opaque, and the only thing a client sends back. Null at the end of history. */
+  readonly nextCursor: string | null;
+}
+
+export interface DailyLogFeedOptions {
+  readonly projectSlug?: string | undefined;
+  readonly chipKind?: (typeof dailyLogAiSummaryChip.$inferSelect)["kind"] | undefined;
+  readonly cursor?: string | undefined;
+  readonly limit?: number | undefined;
+}
+
+const FEED_DEFAULT_PAGE_SIZE = 20;
+const FEED_MAX_PAGE_SIZE = 50;
+
+/**
+ * One page of the caller's cross-project feed.
+ *
+ * ORDERING IS THREE COLUMNS AND ENDS IN A UNIQUE ONE (§4c rule 4). `logDate` is the day
+ * claimed and `submittedAt` is when it was filed; they differ on any backfilled log, so
+ * neither substitutes for the other. `id` breaks the remaining ties — without it the
+ * cursor skips rows whenever two members submit for the same day inside one millisecond.
+ *
+ * SUBMITTED LOGS ONLY. A draft is unfinished work belonging to one author, not a feed
+ * item, and `daily_log_submitted_ck` guarantees `submittedAt` is NOT NULL exactly on the
+ * rows this predicate admits — which is what lets the cursor address it at all.
+ */
+export async function listDailyLogFeed(
+  callerUserId: string,
+  options: DailyLogFeedOptions = {},
+): Promise<Result<DailyLogFeedPage, DailyLogError>> {
+  const pageSize = Math.min(Math.max(options.limit ?? FEED_DEFAULT_PAGE_SIZE, 1), FEED_MAX_PAGE_SIZE);
+
+  const decodedCursor = options.cursor === undefined ? null : decodeDailyLogFeedCursor(options.cursor);
+  if (options.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "CURSOR_MALFORMED" } };
+  }
+
+  // Derived server-side from `project_member`, in SQL, on every request. A membership
+  // revoked a second ago stops returning rows on the next page, not on the next login.
+  const callerProjectIds = db
+    .select({ projectId: projectMember.projectId })
+    .from(projectMember)
+    .where(and(eq(projectMember.userId, callerUserId), eq(projectMember.status, "active")));
+
+  const conditions = [
+    inArray(dailyLog.projectId, callerProjectIds),
+    eq(dailyLog.status, "submitted"),
+    // Redundant against the CHECK, and deliberately kept: it is what makes the compiler's
+    // `Date | null` narrow to `Date` for the cursor below without an assertion.
+    isNotNull(dailyLog.submittedAt),
+  ];
+
+  if (options.projectSlug !== undefined) {
+    // A slug the caller is not a member of yields an EMPTY PAGE, not a 404. The catalogue
+    // convention (§6): a facet that 404s tells a stranger which slugs exist.
+    conditions.push(eq(researchProject.slug, options.projectSlug));
+  }
+
+  if (options.chipKind !== undefined) {
+    const requestedChipKind = options.chipKind;
+    // Filtered IN SQL, never in the service after fetching — a predicate applied to one
+    // fetched page silently returns short pages and breaks the cursor's page-size
+    // contract. Backed by `daily_log_ai_summary_chip_kind_logId_idx`.
+    conditions.push(
+      sql`EXISTS (SELECT 1 FROM ${dailyLogAiSummaryChip}
+                  WHERE ${dailyLogAiSummaryChip.dailyLogId} = ${dailyLog.id}
+                    AND ${dailyLogAiSummaryChip.kind} = ${requestedChipKind})`,
+    );
+  }
+
+  if (decodedCursor !== null) {
+    // The standard row-comparison, one term per ordering column: strictly older day, OR
+    // the same day filed earlier, OR the same day and instant with a smaller id.
+    conditions.push(
+      or(
+        lt(dailyLog.logDate, decodedCursor.logDate),
+        and(
+          eq(dailyLog.logDate, decodedCursor.logDate),
+          lt(dailyLog.submittedAt, decodedCursor.submittedAt),
+        ),
+        and(
+          eq(dailyLog.logDate, decodedCursor.logDate),
+          eq(dailyLog.submittedAt, decodedCursor.submittedAt),
+          lt(dailyLog.id, decodedCursor.id),
+        ),
+      ) ?? sql`true`,
+    );
+  }
+
+  const rows = await db
+    .select({
+      log: dailyLog,
+      authorName: user.name,
+      authorAvatarImageUrl: user.image,
+      projectSlug: researchProject.slug,
+      projectName: researchProject.name,
+      projectCoverImageUrl: researchProject.coverImageUrl,
+      projectStage: researchProject.stage,
+    })
+    .from(dailyLog)
+    .innerJoin(projectMember, eq(projectMember.id, dailyLog.authorMemberId))
+    .innerJoin(user, eq(user.id, projectMember.userId))
+    .innerJoin(researchProject, eq(researchProject.id, dailyLog.projectId))
+    .where(and(...conditions))
+    .orderBy(desc(dailyLog.logDate), desc(dailyLog.submittedAt), desc(dailyLog.id))
+    // One extra row, purely to answer "is there another page?" without a COUNT.
+    .limit(pageSize + 1);
+
+  const pageRows = rows.slice(0, pageSize);
+  const lastRow = pageRows.at(-1);
+  const hasMore = rows.length > pageSize && lastRow !== undefined;
+
+  return {
+    success: true,
+    value: {
+      logs: pageRows.map((row) => ({
+        ...toLogView(row),
+        projectSlug: row.projectSlug,
+        projectName: row.projectName,
+        projectCoverImageUrl: row.projectCoverImageUrl,
+        projectStage: row.projectStage,
+      })),
+      nextCursor:
+        hasMore && lastRow.log.submittedAt !== null
+          ? encodeDailyLogFeedCursor({
+              logDate: lastRow.log.logDate,
+              submittedAt: lastRow.log.submittedAt,
+              id: lastRow.log.id,
+            })
+          : null,
+    },
+  };
+}
+
+export interface DailyLogStreakStanding {
+  readonly projectSlug: string;
+  readonly projectName: string;
+  readonly projectCoverImageUrl: string | null;
+  readonly projectStage: (typeof researchProject.$inferSelect)["stage"];
+  readonly dailyLogStreakDays: number;
+  readonly lastDailyLogDate: string | null;
+  readonly projectTimeZone: string;
+  /**
+   * WHY THIS FIELD IS NOT OPTIONAL. A streak decays at midnight in the project's own zone
+   * with NO WRITE — the nightly job is what notices, hours later. A leaderboard rendered
+   * without an "as of" therefore asserts a number that may already be stale as if it were
+   * live. The client renders the timestamp; the server refuses to imply it is now.
+   */
+  readonly statsComputedAt: Date | null;
+}
+
+const STREAK_LEADERBOARD_SIZE = 20;
+
+/**
+ * The public streak leaderboard behind `/build-log`.
+ *
+ * PUBLIC, unlike the feed above, and the asymmetry is the point: a streak count over an
+ * already-public project is project metadata, while a log is a member's work record. No
+ * person is named here and no log content appears.
+ *
+ * Nothing is computed on read. `dailyLogStreakDays` is written in the submit transaction
+ * and decayed by `recompute-daily-log-streaks`; this endpoint only orders what is stored.
+ */
+export async function listDailyLogStreakLeaderboard(): Promise<readonly DailyLogStreakStanding[]> {
+  const rows = await db
+    .select({
+      projectSlug: researchProject.slug,
+      projectName: researchProject.name,
+      projectCoverImageUrl: researchProject.coverImageUrl,
+      projectStage: researchProject.stage,
+      dailyLogStreakDays: projectStats.dailyLogStreakDays,
+      lastDailyLogDate: projectStats.lastDailyLogDate,
+      projectTimeZone: projectStats.projectTimeZone,
+      statsComputedAt: projectStats.statsComputedAt,
+    })
+    .from(projectStats)
+    .innerJoin(researchProject, eq(researchProject.id, projectStats.projectId))
+    .where(
+      and(
+        // Drafts and archived projects are not public surfaces (§5).
+        eq(researchProject.status, "active"),
+        // NULL means "no job has computed this yet", which is not a zero-length streak.
+        isNotNull(projectStats.dailyLogStreakDays),
+      ),
+    )
+    // Ends in a unique column (§4c rule 4) — many projects share a streak length.
+    .orderBy(desc(projectStats.dailyLogStreakDays), desc(projectStats.projectId))
+    .limit(STREAK_LEADERBOARD_SIZE);
+
+  return rows.flatMap((row) =>
+    row.dailyLogStreakDays === null
+      ? []
+      : [{ ...row, dailyLogStreakDays: row.dailyLogStreakDays }],
+  );
 }
 
 /** One log with everything the analysis produced, in stable order. */

@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as compensationController from "#src/controllers/compensation.controller.js";
+import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { parseCompactJsonBody } from "#src/middleware/json-body.js";
 import {
   chainVerifyLimiter,
@@ -180,6 +181,31 @@ router.post(
   paymentRecordLimiter,
   requireIdentifiedUser,
   compensationController.confirmCompensationPayment,
+);
+
+/**
+ * §7A's CROSS-PROJECT half, root-mounted (§11h, Appendix B3).
+ *
+ * A second router from this file rather than a second file, exactly as §7's funding domain
+ * splits `fundingRouter` from `projectFundingRouter`: one domain, one route file, two
+ * mounts. Root-mounted because someone arriving from the `/governance` stage page holds no
+ * project slug and has not picked a project — that is the whole reason the page exists.
+ *
+ * `attachOptionalUser`, NOT `requireAuth`. This page publishes the three §7A.6 copy rules,
+ * so it must render signed out. What a visitor gets is aggregates plus those rules, with
+ * an empty `callerOpenLines` — never a fabricated example, never anyone else's figures.
+ *
+ * ONE ROUTE, AND IT IS A READ. `/finalize`, `/countersign`, `/payments`, `/confirm` and
+ * `/export` are deliberately absent from this router: every one is actor-scoped and stays
+ * on the project-scoped router above, where the actor's role is already resolved from the
+ * slug. Re-exposing them here would mean re-deriving the actor from a body.
+ */
+export const governanceRouter = express.Router();
+
+governanceRouter.get(
+  "/governance/summary",
+  attachOptionalUser,
+  compensationController.getGovernanceSummary,
 );
 
 export default router;
