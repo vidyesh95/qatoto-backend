@@ -3369,10 +3369,21 @@ db:verify-proof-of-effort-constraints` then EXERCISES all 38 database-level guar
     `memberId`, `includeAllProjects` and `status` — every key that would turn a private feed's
     membership filter into a client-supplied input — and `suppliers.controller.schemas.test.ts`
     asserts `verificationState` is refused on create and `slug` on update.
-    **Still to run by hand:** `EXPLAIN ANALYZE` the feed against a seeded multi-project set and
-    confirm `daily_log_feed_idx` is chosen with no sort node above the index scan; and page
-    `/daily-logs` twice as a member of two projects, asserting no row repeats or vanishes across the
-    boundary.
+    **The planner check was run, and it corrected this document.** Against a caller in seven
+    projects with 2,800 submitted logs, `daily_log_feed_idx` **is** chosen — but an earlier draft of
+    this step also predicted "no sort node above the index scan", and that was wrong.
+    `project_id IN (subquery)` plans as a semi-join, so Postgres will not merge per-project index
+    scans into an ordered path: **the index serves the filter, not the ordering, and the `ORDER BY`
+    always sorts the caller's matching set.** That bound is stated rather than papered over; the
+    honest fix if it ever hurts is a denormalized feed ordering, not another index.
+    What the measurement did expose was avoidable and is fixed: the joined form hash-joined **2,815
+    rows** through `project_member` and `user` before the top-N sort discarded all but 21, so join
+    cost scaled with the caller's whole history instead of with the page. `listDailyLogFeed` now
+    orders and limits over `daily_log` **alone** and attaches authors and project chips in two
+    bounded follow-up queries — the `attachCompensation` shape. Same fixture: **12.5 ms → 3.4 ms**,
+    and the sort is over narrow unjoined rows.
+    **Still to run by hand:** page `/daily-logs` twice as a member of two projects and assert no row
+    repeats or vanishes across the boundary — the one claim a planner check cannot make.
 
 ```bash
 # The core zero-trust smoke test. `pnpm db:smoke-funding` drives all of this and 13 more
@@ -3637,7 +3648,13 @@ one.
   (§4c rule 4). Backed by a new composite `daily_log_feed_idx` on
   `(projectId, logDate, submittedAt, id)`, partial on `status = 'submitted'`. Merging six projects
   client-side is the thing CLAUDE.md §Performance forbids, and the codec lives in
-  `src/lib/daily-log-cursor.ts` with its own test.
+  `src/lib/daily-log-cursor.ts` with its own test. **The index serves the filter, not the
+  ordering** — `project_id IN (subquery)` plans as a semi-join, so the `ORDER BY` sorts; §17 item 11
+  records the measurement and why that bound is accepted rather than indexed around.
+- **The page is ordered and limited over `daily_log` alone**, with authors and project chips
+  attached in two bounded follow-up queries. The obvious joined form made join cost scale with the
+  caller's whole history rather than with the page — 2,815 rows joined to return 21, on a
+  seven-project fixture.
 - **The chip-kind filter is a correlated `EXISTS`**, with `daily_log_ai_summary_chip_kind_logId_idx`
   behind it. The denormalized `chipKinds` column the appendix floated was **not** added: it would
   have cost a migration, a change to `analyze-daily-log` and a backfill of every analyzed log, to
