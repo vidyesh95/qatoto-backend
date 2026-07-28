@@ -10,12 +10,15 @@ import {
   researchCategory,
   researchProject,
 } from "#src/db/schema.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
   DISCOVERY_CATEGORY_REF_COLUMNS,
   DISCOVERY_REGION_REF_COLUMNS,
   type DiscoveryCategoryRef,
   type DiscoveryRegionRef,
 } from "#src/services/discovery-catalog.service.js";
+import { requirePlatformCapability } from "#src/services/platform-role.service.js";
+import type { Result } from "#src/types/index.js";
 
 /**
  * The Civic Pulse problem map (R_AND_D_BACKEND_STRUCTURE.md §6, §11b).
@@ -37,6 +40,247 @@ export type ProblemClusterError =
   | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
   | { type: "CATEGORY_NOT_APPROVED"; categoryId: string }
   | { type: "VIEWPORT_INCOMPLETE" };
+
+/**
+ * The cluster↔project link write path (§11j.1, §11j.4).
+ *
+ * A SEPARATE ERROR UNION FROM `ProblemClusterError`, and it deliberately does NOT compose
+ * `PlatformAccessError`: this route never emits a 403, and composing the type would let a
+ * later edit return one without anybody noticing.
+ */
+export type ProblemClusterLinkError =
+  // Payload identical to `ProblemClusterError`'s — shared literal, shared shape.
+  | { type: "CLUSTER_NOT_FOUND"; clusterId: string }
+  | { type: "CLUSTER_NOT_LINKABLE"; status: "merged" | "hidden" }
+  | { type: "LINK_DENIED" }
+  | { type: "LINK_SOURCE_NOT_PERMITTED"; source: ProblemClusterLinkSource }
+  | { type: "ALREADY_LINKED" }
+  | { type: "ORIGIN_ALREADY_SET" }
+  | { type: "LINK_NOT_FOUND" };
+
+export type ProblemClusterLinkSource = (typeof problemClusterProjectLink.$inferSelect)["source"];
+
+export interface ClusterProjectLinkInput {
+  readonly projectId: string;
+  readonly source: ProblemClusterLinkSource;
+}
+
+export interface ClusterProjectLinkView {
+  readonly clusterId: string;
+  readonly projectId: string;
+  readonly projectSlug: string;
+  readonly projectName: string;
+  readonly source: ProblemClusterLinkSource;
+  readonly linkedByUserId: string | null;
+  readonly createdAt: Date;
+}
+
+/**
+ * WHO MAY ASSERT WHICH `source` — one rule, used by both verbs.
+ *
+ * You may assert exactly the sources your standing produces. A founder writes `origin` or
+ * `founder_declared`; a moderator writes `moderator`.
+ *
+ * A FOUNDER MAY ASSERT `origin`, and should: "this project was born from that cluster" is a
+ * claim about the project's own history that nobody else is positioned to make. The partial
+ * unique index `problem_cluster_project_link_origin_unq` is what bounds it to one, which is
+ * precisely why the table exists instead of a scalar `research_project.originProblemClusterId`.
+ *
+ * A MODERATOR ASSERTING `origin` IS REFUSED, not silently downgraded — forging provenance
+ * quietly is worse than refusing loudly. `discovery-moderation.service.ts` already demotes
+ * `origin` → `founder_declared` when a merge repoints links, so the two writers agree about
+ * who owns that claim.
+ */
+function permittedLinkSources(isFounder: boolean): readonly ProblemClusterLinkSource[] {
+  return isFounder ? ["origin", "founder_declared"] : ["moderator"];
+}
+
+/**
+ * `POST /discovery/problem-clusters/:clusterId/project-links` (§11j.1, §11j.4).
+ *
+ * THE SECOND DEAD END. `problem_cluster_project_link` had three readers — a cluster's linked
+ * projects, `recompute-opportunity-scores` and `recompute-demand-signals` — and the only
+ * writer was `discovery-moderation.service.ts`, which REPOINTS links that already exist when
+ * a merge is decided. Nothing could create one, so every cluster's linked-project list was
+ * empty, `relatedProjectCount` was always 0, and that input to the opportunity score was
+ * dead weight in the formula.
+ *
+ * THE DUAL AUTHORIZATION, AND WHY IT IS 404 RATHER THAN §11j.4's STATED 403.
+ * Staff standing is probed FIRST — still before any id is read — but its failure is demoted
+ * to a boolean instead of returning, because a project's founder is legitimately not staff.
+ * That keeps the ordering property that makes `/discovery/admin/*` safe while letting the
+ * founder path run.
+ *
+ * A 403 cannot be correct here. Founder-ness cannot be decided without reading
+ * `input.projectId`, so any 403/404 split on this route would disclose whether that project
+ * exists to anyone holding a session. §11i's 403 is legitimate precisely BECAUSE it is
+ * decided before any id is read; that property does not hold on this route, so the status
+ * does not transfer. §11j.4 inherited the `403` from the row above it in the same table.
+ * Recorded here as a correction rather than followed.
+ */
+export async function linkProjectToCluster(
+  actorUserId: string,
+  clusterId: string,
+  input: ClusterProjectLinkInput,
+): Promise<Result<ClusterProjectLinkView, ProblemClusterLinkError>> {
+  // 1. STANDING FIRST, before any id is read — but NOT fatal. See the note above.
+  const staffResult = await requirePlatformCapability(actorUserId, "moderate_clusters");
+  const isModerator = staffResult.success;
+
+  // 2. Resource and access decided by ONE predicate over ONE row, so the two
+  //    authorizations cannot disagree. "No such project" and "you are neither its founder
+  //    nor staff" are the SAME error, which is `requireProjectRole`'s discipline.
+  const [project] = await db
+    .select({ id: researchProject.id, founderUserId: researchProject.founderUserId })
+    .from(researchProject)
+    .where(eq(researchProject.id, input.projectId));
+
+  const isFounder = project !== undefined && project.founderUserId === actorUserId;
+  if (!project || !(isFounder || isModerator)) {
+    return { success: false, error: { type: "LINK_DENIED" } };
+  }
+
+  // 3. The cluster. Its id and status are already public — `findProblemCluster` returns a
+  //    merged cluster with a 200 and its `mergedIntoClusterId` — so naming them leaks
+  //    nothing that a public read does not already give away.
+  const [cluster] = await db
+    .select({ status: problemCluster.status })
+    .from(problemCluster)
+    .where(eq(problemCluster.id, clusterId));
+
+  if (!cluster) {
+    return { success: false, error: { type: "CLUSTER_NOT_FOUND", clusterId } };
+  }
+  if (cluster.status !== "active") {
+    // A merged cluster's links get REPOINTED by moderation, never added to; a hidden one is
+    // withdrawn from the map and must not accrue new provenance.
+    return { success: false, error: { type: "CLUSTER_NOT_LINKABLE", status: cluster.status } };
+  }
+
+  // 4. Source vocabulary.
+  if (!permittedLinkSources(isFounder).includes(input.source)) {
+    return { success: false, error: { type: "LINK_SOURCE_NOT_PERMITTED", source: input.source } };
+  }
+
+  try {
+    await db.insert(problemClusterProjectLink).values({
+      clusterId,
+      projectId: input.projectId,
+      source: input.source,
+      linkedByUserId: actorUserId,
+    });
+  } catch (error: unknown) {
+    if (isUniqueViolation(error)) {
+      // TWO constraints raise 23505 on this insert: the composite PK (this exact pair is
+      // already linked) and `problem_cluster_project_link_origin_unq` (this project already
+      // has an origin cluster, a DIFFERENT one). Re-read to say which, rather than adding a
+      // constraint-name reader to the shared pg-errors.ts — one extra query, on the failure
+      // path only, and deterministic.
+      const [existingPair] = await db
+        .select({ projectId: problemClusterProjectLink.projectId })
+        .from(problemClusterProjectLink)
+        .where(
+          and(
+            eq(problemClusterProjectLink.clusterId, clusterId),
+            eq(problemClusterProjectLink.projectId, input.projectId),
+          ),
+        );
+
+      return {
+        success: false,
+        error: existingPair ? { type: "ALREADY_LINKED" } : { type: "ORIGIN_ALREADY_SET" },
+      };
+    }
+    throw error;
+  }
+
+  const created = await findClusterProjectLink(clusterId, input.projectId);
+  if (!created) {
+    throw new Error("linkProjectToCluster: inserted link could not be read back");
+  }
+  return { success: true, value: created };
+}
+
+async function findClusterProjectLink(
+  clusterId: string,
+  projectId: string,
+): Promise<ClusterProjectLinkView | null> {
+  const [row] = await db
+    .select({
+      clusterId: problemClusterProjectLink.clusterId,
+      projectId: problemClusterProjectLink.projectId,
+      projectSlug: researchProject.slug,
+      projectName: researchProject.name,
+      source: problemClusterProjectLink.source,
+      linkedByUserId: problemClusterProjectLink.linkedByUserId,
+      createdAt: problemClusterProjectLink.createdAt,
+    })
+    .from(problemClusterProjectLink)
+    .innerJoin(researchProject, eq(researchProject.id, problemClusterProjectLink.projectId))
+    .where(
+      and(
+        eq(problemClusterProjectLink.clusterId, clusterId),
+        eq(problemClusterProjectLink.projectId, projectId),
+      ),
+    );
+
+  return row ?? null;
+}
+
+/**
+ * `DELETE /discovery/problem-clusters/:clusterId/project-links/:projectId` (§11j.4).
+ *
+ * THE SAME PERMISSION RULE, INVERTED: you may remove a link whose `source` you would have
+ * been permitted to assert. So a founder cannot delete a moderator's curation link, and a
+ * moderator cannot delete a founder's `origin` claim out from under them — each party can
+ * retract only its own statement.
+ *
+ * A hard delete: the composite-PK row has no inbound FKs, and a retracted claim about
+ * provenance is not a record worth keeping.
+ */
+export async function unlinkProjectFromCluster(
+  actorUserId: string,
+  clusterId: string,
+  projectId: string,
+): Promise<Result<{ readonly deleted: true }, ProblemClusterLinkError>> {
+  // 1. STANDING FIRST, non-fatal — same shape as the create.
+  const staffResult = await requirePlatformCapability(actorUserId, "moderate_clusters");
+  const isModerator = staffResult.success;
+
+  const [project] = await db
+    .select({ id: researchProject.id, founderUserId: researchProject.founderUserId })
+    .from(researchProject)
+    .where(eq(researchProject.id, projectId));
+
+  const isFounder = project !== undefined && project.founderUserId === actorUserId;
+  if (!project || !(isFounder || isModerator)) {
+    return { success: false, error: { type: "LINK_DENIED" } };
+  }
+
+  const existing = await findClusterProjectLink(clusterId, projectId);
+  if (!existing) {
+    return { success: false, error: { type: "LINK_NOT_FOUND" } };
+  }
+
+  // The rule applied to the STORED source, not to anything the caller sent.
+  if (!permittedLinkSources(isFounder).includes(existing.source)) {
+    return {
+      success: false,
+      error: { type: "LINK_SOURCE_NOT_PERMITTED", source: existing.source },
+    };
+  }
+
+  await db
+    .delete(problemClusterProjectLink)
+    .where(
+      and(
+        eq(problemClusterProjectLink.clusterId, clusterId),
+        eq(problemClusterProjectLink.projectId, projectId),
+      ),
+    );
+
+  return { success: true, value: { deleted: true } };
+}
 
 /**
  * Snaps a published centroid to a ~111 m grid.

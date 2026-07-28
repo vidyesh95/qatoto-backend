@@ -70,6 +70,23 @@ export const ClusterIdParamSchema = z.object({ clusterId: z.uuid() }).strict();
 export const SubmissionIdParamSchema = z.object({ submissionId: z.uuid() }).strict();
 
 /**
+ * `POST /discovery/problem-clusters/:clusterId/project-links` (§11j.4).
+ *
+ * THE WIRE ENUM IS THE WHOLE COLUMN ENUM, not the subset the caller is allowed to use. A
+ * narrower enum would mean the server silently rewrote a moderator's `origin` into
+ * `moderator` — forging provenance quietly, which is worse than refusing loudly. Who may
+ * assert which value is decided in the service, and a disallowed one is a typed 422.
+ *
+ * `linkedByUserId` and `createdAt` are absent: the actor comes from the session.
+ */
+export const CreateClusterProjectLinkSchema = z
+  .object({
+    projectId: z.string().trim().min(1).max(64),
+    source: z.enum(["origin", "founder_declared", "moderator"]),
+  })
+  .strict();
+
+/**
  * ABSENT BY CONSTRUCTION, each rejected by `.strict()` as a 422: `countryCode`
  * (server-geocoded — CLAUDE.md §0 names client-supplied country as untrustworthy, and here
  * it feeds the opportunity score), `reportCount`, `distinctReporterCount`,
@@ -320,6 +337,87 @@ export async function getMyProblemReport(req: Request, res: Response): Promise<v
     statusCode: 200,
     message: "Report retrieved successfully",
     data: submission,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * POST /discovery/problem-clusters/:clusterId/project-links (§11j.1, §11j.4).
+ *
+ * The project's FOUNDER, or a platform moderator. Every refusal is a 404 — see the service
+ * for why a 403 cannot be correct on this route.
+ */
+export async function linkProjectToCluster(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedParams = ClusterIdParamSchema.safeParse({
+    clusterId: firstParam(req.params.clusterId ?? ""),
+  });
+  if (!parsedParams.success) {
+    respondValidationFailed(res, parsedParams.error);
+    return;
+  }
+
+  const parsedBody = CreateClusterProjectLinkSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const linked = await clustersService.linkProjectToCluster(
+    req.user.id,
+    parsedParams.data.clusterId,
+    parsedBody.data,
+  );
+
+  if (!linked.success) {
+    respondDiscoveryError(res, linked.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 201,
+    message: "Project linked to problem cluster",
+    data: linked.value,
+  };
+  res.status(201).json(response);
+}
+
+/** DELETE …/project-links/:projectId — retract a link you were entitled to assert (§11j.4). */
+export async function unlinkProjectFromCluster(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedParams = ClusterIdParamSchema.safeParse({
+    clusterId: firstParam(req.params.clusterId ?? ""),
+  });
+  if (!parsedParams.success) {
+    respondValidationFailed(res, parsedParams.error);
+    return;
+  }
+
+  const unlinked = await clustersService.unlinkProjectFromCluster(
+    req.user.id,
+    parsedParams.data.clusterId,
+    firstParam(req.params.projectId ?? ""),
+  );
+
+  if (!unlinked.success) {
+    respondDiscoveryError(res, unlinked.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Project unlinked from problem cluster",
+    data: unlinked.value,
   };
   res.status(200).json(response);
 }

@@ -2,7 +2,10 @@ import type { Response } from "express";
 
 import type { DiscoveryModerationError } from "#src/services/discovery-moderation.service.js";
 import type { MarketInsightError } from "#src/services/market-insights.service.js";
-import type { ProblemClusterError } from "#src/services/problem-clusters.service.js";
+import type {
+  ProblemClusterError,
+  ProblemClusterLinkError,
+} from "#src/services/problem-clusters.service.js";
 import type { ResearchCategoryError } from "#src/services/research-categories.service.js";
 import type { SupplierError } from "#src/services/suppliers.service.js";
 import type { TalentProfileError } from "#src/services/talent-profiles.service.js";
@@ -58,7 +61,11 @@ export type DiscoveryDomainError =
   // is read, and it REUSES this file's REGION_NOT_FOUND / CATEGORY_NOT_FOUND /
   // CATEGORY_NOT_APPROVED / ALREADY_PUBLISHED / NOT_PUBLISHED arms rather than adding
   // near-duplicates beside them.
-  | MarketInsightError;
+  | MarketInsightError
+  // §11j.4's cluster↔project link writes. NOT composing PlatformAccessError, deliberately:
+  // that route never emits a 403, and the union not carrying the variant is what keeps a
+  // later edit from introducing one.
+  | ProblemClusterLinkError;
 
 /**
  * Maps a discovery error to its HTTP shape. Does NOT touch `res` — a pure function, so it
@@ -79,6 +86,15 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
       return { statusCode: 404, message: "Report not found." };
     case "MARKET_INSIGHT_NOT_FOUND":
       return { statusCode: 404, message: "Market insight not found." };
+    // BYTE-IDENTICAL to CLUSTER_NOT_FOUND above, and that is the entire point: on the
+    // project-link routes, "no such project", "you are not its founder" and "you are not
+    // staff" must be one answer. Founder-ness cannot be decided without reading the project
+    // id, so a 403/404 split there would disclose whether that project exists (§11j.4's
+    // stated 403 does not survive that requirement — see linkProjectToCluster).
+    case "LINK_DENIED":
+      return { statusCode: 404, message: "Problem cluster not found." };
+    case "LINK_NOT_FOUND":
+      return { statusCode: 404, message: "That project is not linked to this cluster." };
     case "TALENT_PROFILE_NOT_FOUND":
       return { statusCode: 404, message: "You do not have a talent profile yet." };
     // The OTHER person's-profile 404, and a separate variant because the sentence above is
@@ -119,6 +135,18 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
         message: "A map viewport needs all four bounds.",
         errors: {
           form: ["Send min/max latitude AND min/max longitude together, or none of them."],
+        },
+      };
+    // 422 rather than a silent downgrade: a moderator asserting `origin`, or a founder
+    // asserting `moderator`, is refused loudly. Rewriting provenance quietly is worse.
+    case "LINK_SOURCE_NOT_PERMITTED":
+      return {
+        statusCode: 422,
+        message: "You may not assert that link source.",
+        errors: {
+          source: [
+            `"${error.source}" is not a source your standing can claim. A project's founder declares "origin" or "founder_declared"; a moderator records "moderator".`,
+          ],
         },
       };
     case "REGION_NOT_FOUND":
@@ -206,6 +234,21 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
     // publish`). "Your profile is already published" was correct when only one reached
     // here and is a lie on the other path — the same constraint recorded for
     // CATEGORY_LABEL_TAKEN below.
+    case "ALREADY_LINKED":
+      return { statusCode: 409, message: "That project is already linked to this cluster." };
+    // The OTHER 23505 on the same insert: `problem_cluster_project_link_origin_unq` allows
+    // one origin cluster per project, which is what replaces the scalar column §5 describes.
+    case "ORIGIN_ALREADY_SET":
+      return {
+        statusCode: 409,
+        message:
+          "This project already names a different cluster as its origin. Unlink that one first, or link this as a declared connection instead.",
+      };
+    case "CLUSTER_NOT_LINKABLE":
+      return {
+        statusCode: 409,
+        message: `A ${error.status} cluster cannot take new project links.`,
+      };
     case "ALREADY_PUBLISHED":
       return { statusCode: 409, message: "That is already published." };
     case "NOT_PUBLISHED":

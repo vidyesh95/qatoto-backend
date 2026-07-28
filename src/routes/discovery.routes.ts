@@ -49,6 +49,33 @@ router.get(
   clustersController.getProblemCluster,
 );
 
+/**
+ * The cluster↔project links (§11j.1, §11j.4) — the second write-path dead end.
+ *
+ * `requireIdentifiedUser` IS applied here, unlike the `/admin/*` routes above: this write is
+ * reachable by a non-staff founder, and the link feeds `linkedProjectCount` in the
+ * opportunity score — a ranking-signal input, which is that guard's stated trigger.
+ *
+ * The FOUNDER of the project, or a moderator. Every refusal is a 404; see the service for
+ * why a 403 cannot be correct on a route whose authorization depends on reading a project id.
+ */
+router.post(
+  "/problem-clusters/:clusterId/project-links",
+  requireAuth,
+  discoveryModerationLimiter,
+  requireIdentifiedUser,
+  parseCompactJsonBody,
+  clustersController.linkProjectToCluster,
+);
+
+router.delete(
+  "/problem-clusters/:clusterId/project-links/:projectId",
+  requireAuth,
+  discoveryModerationLimiter,
+  requireIdentifiedUser,
+  clustersController.unlinkProjectFromCluster,
+);
+
 // --- Problem reports. `/mine` is a literal and is declared FIRST.
 router.get("/problem-reports/mine", requireAuth, clustersController.listMyProblemReports);
 router.post(
