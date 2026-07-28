@@ -4076,6 +4076,16 @@ export const projectAuditEventKindEnum = pgEnum("project_audit_event_kind", [
   // --- that already serializes the audit, ledger and escrow counters (§7A.5).
   "compensation_agreement_proposed",
   "compensation_agreement_accepted",
+  // The two ways a proposal dies, and they are ONE status with TWO events. The status
+  // column has four values and `declined` is not among them, so both land on `withdrawn`
+  // — "a proposal nobody accepted", which is what the enum above already says it means.
+  // The audit kind is therefore the only thing that records WHO ended it, and that
+  // distinction is the whole point: a member refusing terms and a founder retracting an
+  // offer are different events with different consequences, and §7A.6 needs to tell them
+  // apart. It is also the only place the decline note and the withdrawal reason survive —
+  // neither has a column on `member_cash_compensation_agreement`.
+  "compensation_agreement_declined",
+  "compensation_agreement_withdrawn",
   "compensation_period_opened",
   "compensation_period_finalized",
   "compensation_period_countersigned",
