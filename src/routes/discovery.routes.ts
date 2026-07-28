@@ -2,6 +2,7 @@ import express from "express";
 
 import * as catalogController from "#src/controllers/discovery-catalog.controller.js";
 import * as moderationController from "#src/controllers/discovery-moderation.controller.js";
+import * as vocabularyController from "#src/controllers/discovery-vocabulary.controller.js";
 import * as marketInsightsController from "#src/controllers/market-insights.controller.js";
 import * as clustersController from "#src/controllers/problem-clusters.controller.js";
 import * as talentController from "#src/controllers/talent-profiles.controller.js";
@@ -228,6 +229,76 @@ router.delete(
   requireAuth,
   discoveryModerationLimiter,
   marketInsightsController.deleteMarketInsight,
+);
+
+/**
+ * The controlled vocabularies (§11j.4) — `discovery_skill` and `discovery_region`.
+ *
+ * §11j.4 itself calls these "lower priority, and arguably not a defect": both tables are
+ * seeded, and no runtime write path is a legitimate answer for a controlled vocabulary. What
+ * these add is correcting and extending them without a deploy, still moderator-only.
+ *
+ * `slug` is frozen on both PATCHes and `global` is not an accepted region kind — see the
+ * controller for why each of those closes something.
+ */
+router.get(
+  "/admin/skills",
+  requireAuth,
+  discoveryModerationLimiter,
+  vocabularyController.listSkills,
+);
+
+router.post(
+  "/admin/skills",
+  requireAuth,
+  discoveryModerationLimiter,
+  parseCompactJsonBody,
+  vocabularyController.createSkill,
+);
+
+router.patch(
+  "/admin/skills/:skillId",
+  requireAuth,
+  discoveryModerationLimiter,
+  parseCompactJsonBody,
+  vocabularyController.updateSkill,
+);
+
+router.delete(
+  "/admin/skills/:skillId",
+  requireAuth,
+  discoveryModerationLimiter,
+  vocabularyController.deleteSkill,
+);
+
+router.get(
+  "/admin/regions",
+  requireAuth,
+  discoveryModerationLimiter,
+  vocabularyController.listRegions,
+);
+
+router.post(
+  "/admin/regions",
+  requireAuth,
+  discoveryModerationLimiter,
+  parseCompactJsonBody,
+  vocabularyController.createRegion,
+);
+
+router.patch(
+  "/admin/regions/:regionId",
+  requireAuth,
+  discoveryModerationLimiter,
+  parseCompactJsonBody,
+  vocabularyController.updateRegion,
+);
+
+router.delete(
+  "/admin/regions/:regionId",
+  requireAuth,
+  discoveryModerationLimiter,
+  vocabularyController.deleteRegion,
 );
 
 router.post(

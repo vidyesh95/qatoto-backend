@@ -43,6 +43,7 @@
     "db:verify-compensation-constraints": "tsx --conditions=development scripts/verify-compensation-constraints.ts",
     "db:smoke-discovery": "tsx --conditions=development scripts/smoke-discovery-pipeline.ts",
     "db:smoke-cluster-links": "tsx --conditions=development scripts/smoke-cluster-project-links.ts",
+    "db:smoke-vocabulary": "tsx --conditions=development scripts/smoke-discovery-vocabulary.ts",
     "db:smoke-workshop": "tsx --conditions=development scripts/smoke-workshop-pipeline.ts",
     "db:smoke-daily-log-analysis": "tsx --conditions=development scripts/smoke-daily-log-analysis.ts",
     "db:smoke-daily-log-feed": "tsx --conditions=development scripts/smoke-daily-log-feed.ts",

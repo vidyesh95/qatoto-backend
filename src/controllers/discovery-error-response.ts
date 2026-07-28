@@ -1,6 +1,7 @@
 import type { Response } from "express";
 
 import type { DiscoveryModerationError } from "#src/services/discovery-moderation.service.js";
+import type { DiscoveryVocabularyError } from "#src/services/discovery-vocabulary.service.js";
 import type { MarketInsightError } from "#src/services/market-insights.service.js";
 import type {
   ProblemClusterError,
@@ -65,7 +66,10 @@ export type DiscoveryDomainError =
   // §11j.4's cluster↔project link writes. NOT composing PlatformAccessError, deliberately:
   // that route never emits a 403, and the union not carrying the variant is what keeps a
   // later edit from introducing one.
-  | ProblemClusterLinkError;
+  | ProblemClusterLinkError
+  // §11j.4's controlled-vocabulary authoring. Same policy again — moderator-gated,
+  // capability decided before any id is read.
+  | DiscoveryVocabularyError;
 
 /**
  * Maps a discovery error to its HTTP shape. Does NOT touch `res` — a pure function, so it
@@ -86,6 +90,10 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
       return { statusCode: 404, message: "Report not found." };
     case "MARKET_INSIGHT_NOT_FOUND":
       return { statusCode: 404, message: "Market insight not found." };
+    case "DISCOVERY_SKILL_NOT_FOUND":
+      return { statusCode: 404, message: "Skill not found." };
+    case "DISCOVERY_REGION_NOT_FOUND":
+      return { statusCode: 404, message: "Region not found." };
     // BYTE-IDENTICAL to CLUSTER_NOT_FOUND above, and that is the entire point: on the
     // project-link routes, "no such project", "you are not its founder" and "you are not
     // staff" must be one answer. Founder-ness cannot be decided without reading the project
@@ -234,6 +242,31 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
     // publish`). "Your profile is already published" was correct when only one reached
     // here and is a lie on the other path — the same constraint recorded for
     // CATEGORY_LABEL_TAKEN below.
+    case "SKILL_SLUG_TAKEN":
+      return {
+        statusCode: 409,
+        message: `The slug "${error.slug}" is already in use.`,
+        errors: { slug: ["Already taken."] },
+      };
+    case "REGION_SLUG_TAKEN":
+      return {
+        statusCode: 409,
+        message: `The slug "${error.slug}" is already in use.`,
+        errors: { slug: ["Already taken."] },
+      };
+    // DELETE is the mistake-eraser, not the retirement path — so the message names the
+    // alternative rather than only refusing.
+    case "SKILL_HAS_REFERENCES":
+      return {
+        statusCode: 409,
+        message: `${error.profileCount} talent ${error.profileCount === 1 ? "profile cites" : "profiles cite"} this skill, so it cannot be deleted. Retire it with isActive: false instead.`,
+      };
+    case "REGION_HAS_REFERENCES":
+      return {
+        statusCode: 409,
+        message:
+          "Something still references this region — a talent profile, supplier, cluster, insight or child region — so it cannot be deleted.",
+      };
     case "ALREADY_LINKED":
       return { statusCode: 409, message: "That project is already linked to this cluster." };
     // The OTHER 23505 on the same insert: `problem_cluster_project_link_origin_unq` allows
