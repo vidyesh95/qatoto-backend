@@ -2,6 +2,7 @@ import express from "express";
 
 import * as catalogController from "#src/controllers/discovery-catalog.controller.js";
 import * as moderationController from "#src/controllers/discovery-moderation.controller.js";
+import * as marketInsightsController from "#src/controllers/market-insights.controller.js";
 import * as clustersController from "#src/controllers/problem-clusters.controller.js";
 import * as talentController from "#src/controllers/talent-profiles.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
@@ -144,6 +145,64 @@ router.post(
   parseCompactJsonBody,
   moderationController.decideCategory,
 );
+/**
+ * Market-insight AUTHORING (§11j.4) — what makes `market_insight` writable at all.
+ *
+ * Until these existed the table had two readers and no writer anywhere in the repo, so
+ * `/knowledge-hub` and the landing rail rendered empty on every environment, forever.
+ *
+ * `/publish` and `/unpublish` are LITERALS and are declared before the bare `/:insightId`
+ * verbs. They exist as routes rather than as a PATCH key because `publishedAt` is
+ * server-owned — an insight must never go live as a side effect of a typo fix.
+ *
+ * No `requireIdentifiedUser`, matching the three shipped `/discovery/admin/*` routes:
+ * `platformRole` lives on `user` and is never exposed on the session, so an anonymous
+ * account cannot hold one. The capability is checked IN-SERVICE, before any id is read.
+ */
+router.get(
+  "/admin/market-insights",
+  requireAuth,
+  discoveryModerationLimiter,
+  marketInsightsController.listMarketInsightsForModerator,
+);
+
+router.post(
+  "/admin/market-insights",
+  requireAuth,
+  discoveryModerationLimiter,
+  parseCompactJsonBody,
+  marketInsightsController.createMarketInsight,
+);
+
+router.post(
+  "/admin/market-insights/:insightId/publish",
+  requireAuth,
+  discoveryModerationLimiter,
+  marketInsightsController.setMarketInsightPublished(true),
+);
+
+router.post(
+  "/admin/market-insights/:insightId/unpublish",
+  requireAuth,
+  discoveryModerationLimiter,
+  marketInsightsController.setMarketInsightPublished(false),
+);
+
+router.patch(
+  "/admin/market-insights/:insightId",
+  requireAuth,
+  discoveryModerationLimiter,
+  parseCompactJsonBody,
+  marketInsightsController.updateMarketInsight,
+);
+
+router.delete(
+  "/admin/market-insights/:insightId",
+  requireAuth,
+  discoveryModerationLimiter,
+  marketInsightsController.deleteMarketInsight,
+);
+
 router.post(
   "/admin/merge-proposals/:proposalId/decide",
   requireAuth,

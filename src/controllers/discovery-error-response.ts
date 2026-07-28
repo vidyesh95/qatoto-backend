@@ -1,6 +1,7 @@
 import type { Response } from "express";
 
 import type { DiscoveryModerationError } from "#src/services/discovery-moderation.service.js";
+import type { MarketInsightError } from "#src/services/market-insights.service.js";
 import type { ProblemClusterError } from "#src/services/problem-clusters.service.js";
 import type { ResearchCategoryError } from "#src/services/research-categories.service.js";
 import type { SupplierError } from "#src/services/suppliers.service.js";
@@ -51,7 +52,13 @@ export type DiscoveryDomainError =
   // moderator refusal is the identical `PLATFORM_CAPABILITY_REQUIRED` decided before any
   // id is read. A second mapper would have had to restate that policy and could then drift
   // from it.
-  | SupplierError;
+  | SupplierError
+  // §11j.4's authoring surface over `market_insight`. Same status policy again — its
+  // moderator refusal is the identical PLATFORM_CAPABILITY_REQUIRED decided before any id
+  // is read, and it REUSES this file's REGION_NOT_FOUND / CATEGORY_NOT_FOUND /
+  // CATEGORY_NOT_APPROVED / ALREADY_PUBLISHED / NOT_PUBLISHED arms rather than adding
+  // near-duplicates beside them.
+  | MarketInsightError;
 
 /**
  * Maps a discovery error to its HTTP shape. Does NOT touch `res` — a pure function, so it
@@ -70,6 +77,8 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
     // the WHERE clause, so someone else's is indistinguishable from one that never existed.
     case "SUBMISSION_NOT_FOUND":
       return { statusCode: 404, message: "Report not found." };
+    case "MARKET_INSIGHT_NOT_FOUND":
+      return { statusCode: 404, message: "Market insight not found." };
     case "TALENT_PROFILE_NOT_FOUND":
       return { statusCode: 404, message: "You do not have a talent profile yet." };
     // The OTHER person's-profile 404, and a separate variant because the sentence above is
@@ -192,10 +201,15 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
       return { statusCode: 409, message: `That category is already ${error.status}.` };
     case "MERGE_PROPOSAL_ALREADY_DECIDED":
       return { statusCode: 409, message: `That proposal is already ${error.status}.` };
+    // RESOURCE-NEUTRAL WORDING, because two domains now share these literals: a talent
+    // profile (`/talent/me/publish`) and a market insight (`/admin/market-insights/:id/
+    // publish`). "Your profile is already published" was correct when only one reached
+    // here and is a lie on the other path — the same constraint recorded for
+    // CATEGORY_LABEL_TAKEN below.
     case "ALREADY_PUBLISHED":
-      return { statusCode: 409, message: "Your profile is already published." };
+      return { statusCode: 409, message: "That is already published." };
     case "NOT_PUBLISHED":
-      return { statusCode: 409, message: "Your profile is not published." };
+      return { statusCode: 409, message: "That is not published." };
 
     default: {
       // Adding a variant to any discovery service union without handling it here breaks
