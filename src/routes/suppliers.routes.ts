@@ -96,10 +96,18 @@ supplierRouter.patch(
 );
 
 /**
- * The project-scoped half: one derived read, behind membership.
+ * The project-scoped half: the readiness read, plus the engagement CRM behind one of its
+ * gates (§11i, §11j.5).
  *
  * The checklist exposes `project_stats` and the bake state — a project's private operating
- * numbers — so membership is proven from the slug and failure is 404, never 403.
+ * numbers — so membership is proven from the slug and failure is 404, never 403. The
+ * engagement rows are the same kind of thing: who this team is talking to is its own
+ * business, and a distinguishable refusal would enumerate project slugs.
+ *
+ * The engagement writes are MAINTAINER-GATED AND MODERATOR-FREE, which is the opposite of
+ * the directory writes above — those check a platform capability first. `supplierWriteLimiter`
+ * is shared between them deliberately: on the directory it bounds the blast radius of a
+ * compromised staff session, and here it bounds ordinary per-account abuse.
  */
 export const projectGoToMarketRouter = express.Router();
 
@@ -107,6 +115,42 @@ projectGoToMarketRouter.get(
   "/:projectSlug/launch-readiness",
   requireAuth,
   suppliersController.getLaunchReadiness,
+);
+
+// --- Supplier engagements. `/supplier-engagements` is two segments after the slug and
+// --- `/:engagementId` is three, so neither can swallow the other; a literal added under
+// --- `/supplier-engagements/` later must be declared above the `/:engagementId` routes.
+
+projectGoToMarketRouter.get(
+  "/:projectSlug/supplier-engagements",
+  requireAuth,
+  suppliersController.listSupplierEngagements,
+);
+
+projectGoToMarketRouter.post(
+  "/:projectSlug/supplier-engagements",
+  requireAuth,
+  supplierWriteLimiter,
+  requireIdentifiedUser,
+  parseCompactJsonBody,
+  suppliersController.createSupplierEngagement,
+);
+
+projectGoToMarketRouter.patch(
+  "/:projectSlug/supplier-engagements/:engagementId",
+  requireAuth,
+  supplierWriteLimiter,
+  requireIdentifiedUser,
+  parseCompactJsonBody,
+  suppliersController.updateSupplierEngagement,
+);
+
+projectGoToMarketRouter.delete(
+  "/:projectSlug/supplier-engagements/:engagementId",
+  requireAuth,
+  supplierWriteLimiter,
+  requireIdentifiedUser,
+  suppliersController.deleteSupplierEngagement,
 );
 
 export default supplierRouter;

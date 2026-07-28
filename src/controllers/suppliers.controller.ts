@@ -7,9 +7,11 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/discovery-error-response.js";
+import { respondGoToMarketError } from "#src/controllers/go-to-market-error-response.js";
 import { respondProjectError } from "#src/controllers/project-error-response.js";
 import * as readinessService from "#src/services/launch-readiness.service.js";
 import * as membershipService from "#src/services/project-membership.service.js";
+import * as engagementsService from "#src/services/supplier-engagements.service.js";
 import * as suppliersService from "#src/services/suppliers.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
@@ -30,6 +32,17 @@ import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
  * is worse than no directory. And `slug` is absent from the UPDATE schema because it is
  * the public identity a client has already linked to; renaming it silently breaks every
  * stored reference, which is why `research_project` freezes its slug at publish too.
+ *
+ * THE ENGAGEMENT BODIES REJECT `verificationState`, `supplierSlug`, `isActive`,
+ * `createdByMemberId` and `projectId` — and the first of those is the one that matters.
+ * §6's rule is that nothing on a project-scoped route may feed a supplier's trust level:
+ * `contracted` means THIS TEAM SAYS IT SIGNED SOMETHING, and the only party attesting is
+ * the one that benefits. `.strict()` is the first of three enforcements; the service
+ * touching exactly one table is the second; the test asserting it is the third.
+ *
+ * `supplierId` is additionally absent from the engagement UPDATE schema: the unique
+ * (projectId, supplierId) makes that pair the row's identity, so re-pointing it is a delete
+ * plus a create rather than an edit.
  *
  * READINESS IS COMPUTED, NEVER SUBMITTED. There is no POST that sets an item's state and no
  * body that carries one: `state` is derived from `research_project.stage`, `project_stats`,
@@ -319,4 +332,190 @@ export async function getLaunchReadiness(req: Request, res: Response): Promise<v
     message: "Launch readiness computed.",
     data: readiness,
   } satisfies ApiResponse);
+}
+
+// --- Supplier engagements — a project's private manufacturing CRM (§11j.5).
+
+const ENGAGEMENT_STATUSES = ["considering", "contacted", "contracted", "ended"] as const;
+
+/**
+ * `verificationState` is ABSENT here and that is the §6 rule, not an oversight: a project
+ * declaring itself `contracted` must never move the supplier's public trust level.
+ */
+export const CreateSupplierEngagementSchema = z
+  .object({
+    supplierId: z.string().trim().min(1).max(64),
+    status: z.enum(ENGAGEMENT_STATUSES).default("considering"),
+    // `project_supplier_engagement_note_ck` is `char_length(note) <= 2000`, so the schema
+    // and the constraint agree and an over-long note is a 422 rather than a 500.
+    note: z.string().trim().max(2000).optional(),
+  })
+  .strict();
+
+/** `supplierId` is absent: the (projectId, supplierId) pair is the row's identity. */
+export const UpdateSupplierEngagementSchema = z
+  .object({
+    status: z.enum(ENGAGEMENT_STATUSES).optional(),
+    note: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict();
+
+export const ListSupplierEngagementsQuerySchema = z
+  .object({
+    status: z.enum(ENGAGEMENT_STATUSES).optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+
+/**
+ * Maintainer+ on the project in the path, or the same 404 a stranger gets.
+ *
+ * Never 403: the engagement list is a project's private supplier CRM, and a distinguishable
+ * refusal would let anyone holding a session enumerate project slugs.
+ */
+async function requireEngagementRoleOrRespond(
+  req: Request,
+  res: Response,
+): Promise<membershipService.ProjectMemberContext | null> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return null;
+  }
+
+  const projectSlug = firstParam(req.params.projectSlug ?? "");
+  const accessResult = await membershipService.requireProjectRole(
+    projectSlug,
+    req.user.id,
+    "maintainer",
+  );
+
+  if (!accessResult.success) {
+    respondGoToMarketError(res, accessResult.error);
+    return null;
+  }
+  return accessResult.value;
+}
+
+/** GET /research-projects/:projectSlug/supplier-engagements — maintainer+ (§11j.5). */
+export async function listSupplierEngagements(req: Request, res: Response): Promise<void> {
+  const context = await requireEngagementRoleOrRespond(req, res);
+  if (!context) return;
+
+  const parsedQuery = ListSupplierEngagementsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const { status, page, limit } = parsedQuery.data;
+  const engagementsPage = await engagementsService.listSupplierEngagements(context, {
+    status,
+    page,
+    limit,
+  });
+
+  const response: PaginatedResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Supplier engagements retrieved successfully",
+    data: [...engagementsPage.rows],
+    pagination: {
+      page,
+      limit,
+      total: engagementsPage.total,
+      totalPages: Math.ceil(engagementsPage.total / limit),
+    },
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * POST /research-projects/:projectSlug/supplier-engagements — maintainer+ (§11j.5).
+ *
+ * The write that makes `supplier_engaged` reachable at all. Launch readiness is derived on
+ * read, so the gate flips to `met` on the very next GET — no job, no recompute.
+ */
+export async function createSupplierEngagement(req: Request, res: Response): Promise<void> {
+  const context = await requireEngagementRoleOrRespond(req, res);
+  if (!context) return;
+
+  const parsedBody = CreateSupplierEngagementSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const created = await engagementsService.createSupplierEngagement(context, parsedBody.data);
+  if (!created.success) {
+    respondGoToMarketError(res, created.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 201,
+    message: "Supplier engagement recorded",
+    data: created.value,
+  };
+  res.status(201).json(response);
+}
+
+/** PATCH …/supplier-engagements/:engagementId — maintainer+ (§11j.5). */
+export async function updateSupplierEngagement(req: Request, res: Response): Promise<void> {
+  const context = await requireEngagementRoleOrRespond(req, res);
+  if (!context) return;
+
+  const parsedBody = UpdateSupplierEngagementSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const engagementId = firstParam(req.params.engagementId ?? "");
+  const updated = await engagementsService.updateSupplierEngagement(
+    context,
+    engagementId,
+    parsedBody.data,
+  );
+
+  if (!updated.success) {
+    respondGoToMarketError(res, updated.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Supplier engagement updated",
+    data: updated.value,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * DELETE …/supplier-engagements/:engagementId — maintainer+ (§11j.5).
+ *
+ * A hard delete, for a row filed against the wrong supplier. Ending an engagement is
+ * `PATCH { status: "ended" }`, which deliberately KEEPS `supplier_engaged` met.
+ */
+export async function deleteSupplierEngagement(req: Request, res: Response): Promise<void> {
+  const context = await requireEngagementRoleOrRespond(req, res);
+  if (!context) return;
+
+  const engagementId = firstParam(req.params.engagementId ?? "");
+  const deleted = await engagementsService.deleteSupplierEngagement(context, engagementId);
+
+  if (!deleted.success) {
+    respondGoToMarketError(res, deleted.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Supplier engagement deleted",
+    data: deleted.value,
+  };
+  res.status(200).json(response);
 }

@@ -6,9 +6,16 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("#src/services/suppliers.service.js", () => ({}));
 vi.mock("#src/services/launch-readiness.service.js", () => ({}));
 vi.mock("#src/services/project-membership.service.js", () => ({}));
+vi.mock("#src/services/supplier-engagements.service.js", () => ({}));
 
-const { CreateSupplierSchema, LaunchReadyProjectsQuerySchema, ListSuppliersQuerySchema, UpdateSupplierSchema } =
-  await import("#src/controllers/suppliers.controller.js");
+const {
+  CreateSupplierEngagementSchema,
+  CreateSupplierSchema,
+  LaunchReadyProjectsQuerySchema,
+  ListSuppliersQuerySchema,
+  UpdateSupplierEngagementSchema,
+  UpdateSupplierSchema,
+} = await import("#src/controllers/suppliers.controller.js");
 
 /**
  * R_AND_D_BACKEND_STRUCTURE.md §11i's rejected-keys list, §0 and §13.
@@ -197,5 +204,78 @@ describe("LaunchReadyProjectsQuerySchema", () => {
 
   it("rejects a stage filter — the rail is go_to_market by definition", () => {
     expect(LaunchReadyProjectsQuerySchema.safeParse({ stage: "building_mvp" }).success).toBe(false);
+  });
+});
+
+/**
+ * §11j.5's hard rule: NOTHING on a project-scoped route may feed a supplier's
+ * `verificationState`.
+ *
+ * WHY THIS BLOCK EXISTS SEPARATELY. `contracted` means *this team says it signed
+ * something* — a self-report whose only attesting party is the one that benefits. If that
+ * could move the public directory's trust level, the directory becomes forgeable one
+ * self-report at a time, and every buyer downstream is reading a number the seller wrote.
+ *
+ * The rule is enforced three ways and this is the third: `.strict()` refuses the key,
+ * `supplier-engagements.service.ts` writes exactly one table and it is not `supplier`, and
+ * this test proves the first of those rather than asserting it in a comment.
+ */
+describe("supplier engagement bodies", () => {
+  const ENGAGEMENT_REJECTED_KEYS = [
+    "verificationState",
+    "supplierSlug",
+    "isActive",
+    "createdByMemberId",
+    "projectId",
+    "id",
+    "createdAt",
+    "updatedAt",
+  ] as const;
+
+  it.each(ENGAGEMENT_REJECTED_KEYS)("CREATE rejects a client-supplied %s", (key) => {
+    const parsed = CreateSupplierEngagementSchema.safeParse({
+      supplierId: "sup_1",
+      status: "contracted",
+      [key]: key === "isActive" ? true : "verified",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it.each(ENGAGEMENT_REJECTED_KEYS)("UPDATE rejects a client-supplied %s", (key) => {
+    const parsed = UpdateSupplierEngagementSchema.safeParse({
+      status: "contracted",
+      [key]: key === "isActive" ? true : "verified",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  /**
+   * The (projectId, supplierId) pair is the row's identity — a unique index enforces it —
+   * so re-pointing an engagement is a delete plus a create, never an edit.
+   */
+  it("UPDATE rejects supplierId, because the pair is the row's identity", () => {
+    const parsed = UpdateSupplierEngagementSchema.safeParse({ supplierId: "sup_2" });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("CREATE defaults status to considering, the weakest claim", () => {
+    const parsed = CreateSupplierEngagementSchema.safeParse({ supplierId: "sup_1" });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.status).toBe("considering");
+  });
+
+  it("refuses a note past the 2000-char CHECK, as a 422 rather than a 500", () => {
+    const parsed = CreateSupplierEngagementSchema.safeParse({
+      supplierId: "sup_1",
+      note: "x".repeat(2001),
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("accepts every shipped engagement status and nothing else", () => {
+    for (const status of ["considering", "contacted", "contracted", "ended"]) {
+      expect(UpdateSupplierEngagementSchema.safeParse({ status }).success).toBe(true);
+    }
+    expect(UpdateSupplierEngagementSchema.safeParse({ status: "verified" }).success).toBe(false);
   });
 });
