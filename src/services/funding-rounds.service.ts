@@ -4,6 +4,7 @@ import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { fundingRound, fundingRoundPledge, researchProject, user } from "#src/db/schema.js";
 import { BASIS_POINTS_TOTAL, divRoundHalfAwayFromZero } from "#src/lib/money.js";
+import { isForeignKeyViolation } from "#src/lib/pg-errors.js";
 // NOTHING FROM escrow.service.ts OR escrow-provider-adapter.service.ts IS IMPORTED HERE
 // ANY MORE, and the absence is the point (§7A.6). A pledge is a commitment: no journal
 // entry, no posting, no provider transfer, no job. If a future edit needs one of those
@@ -56,7 +57,12 @@ export type FundingError =
   | { type: "PLEDGE_ABOVE_MAXIMUM"; maximumInCents: string }
   | { type: "SELF_PLEDGE_FORBIDDEN" }
   | { type: "PLEDGE_NOT_CANCELLABLE"; status: (typeof fundingRoundPledge.$inferSelect)["status"] }
-  | { type: "NOT_THE_BACKER" };
+  | { type: "NOT_THE_BACKER" }
+  | { type: "ROUND_NOT_EDITABLE"; status: FundingRoundStatus }
+  | { type: "ROUND_HAS_REFERENCES" }
+  | { type: "ROUND_GOAL_INVALID" }
+  | { type: "ROUND_BOUNDS_INVALID"; minimumInCents: string; maximumInCents: string }
+  | { type: "ROUND_WINDOW_INVALID"; opensAt: Date; closesAt: Date };
 
 /**
  * `percentageFunded` IS NOT A COLUMN and not a request field (§7). Computed on read, so it
@@ -317,6 +323,158 @@ export async function openFundingRound(
 }
 
 /** `POST /funding-rounds/:roundId/close` — terminal for pledging; pledges keep settling. */
+export interface UpdateFundingRoundInput {
+  readonly title?: string | undefined;
+  readonly summary?: string | null | undefined;
+  readonly goalAmountInCents?: bigint | undefined;
+  readonly minimumPledgeInCents?: bigint | undefined;
+  readonly maximumPledgeInCents?: bigint | null | undefined;
+  readonly opensAt?: Date | null | undefined;
+  readonly closesAt?: Date | null | undefined;
+}
+
+/**
+ * `PATCH /funding-rounds/:roundId` — corrects a DRAFT round (§11j.3).
+ *
+ * Create, open and close all shipped and no update existed, so a typo in a goal amount was
+ * permanent.
+ *
+ * "EVER OPENED" IS `status !== "draft"`, NOT A TIMESTAMP TEST. There is no `openedAt`
+ * column, and `opensAt` cannot stand in for one: `createFundingRound` writes it straight
+ * from the body, so a round that was never opened can carry a non-null `opensAt` — and a
+ * scheduled round would then be uneditable for the wrong reason. `openFundingRound` is the
+ * only writer that leaves `draft` and nothing returns a round to it, so `draft` ⟺ never
+ * opened. The counters are checked too, belt and braces: they move only in
+ * `escrow-settlement.service.ts`, so a non-zero one on a `draft` row means something has
+ * already happened that an edit must not silently re-price.
+ *
+ * THE THREE CHECKS ARE RE-DERIVED ON THE MERGED TUPLE, not on the input. Sending only
+ * `maximumPledgeInCents`, below the STORED minimum, satisfies every per-field rule and still
+ * violates `funding_round_bounds_ck` — which would surface as an unhandled 23514 and a 500.
+ * Each is proven here so the caller gets a typed 422 naming the pair that conflicts:
+ *   `funding_round_goal_ck`   — goal > 0. `"0"` passes CentsStringSchema, so Zod cannot.
+ *   `funding_round_bounds_ck` — minimum >= 1 AND (maximum IS NULL OR maximum >= minimum).
+ *   `funding_round_window_ck` — closesAt > opensAt when both are present.
+ */
+export async function updateFundingRound(
+  roundId: string,
+  input: UpdateFundingRoundInput,
+): Promise<Result<FundingRoundView, FundingError>> {
+  const existing = await findRoundWithProject(roundId);
+  if (!existing) {
+    return { success: false, error: { type: "ROUND_NOT_FOUND", roundId } };
+  }
+
+  const current = existing.round;
+  if (current.status !== "draft" || current.raisedAmountInCents > 0n || current.backersCount > 0) {
+    return { success: false, error: { type: "ROUND_NOT_EDITABLE", status: current.status } };
+  }
+
+  // The tuple as it WOULD be after the patch — every CHECK is about the row, not the input.
+  const mergedGoal = input.goalAmountInCents ?? current.goalAmountInCents;
+  const mergedMinimum = input.minimumPledgeInCents ?? current.minimumPledgeInCents;
+  const mergedMaximum =
+    input.maximumPledgeInCents === undefined
+      ? current.maximumPledgeInCents
+      : input.maximumPledgeInCents;
+  const mergedOpensAt = input.opensAt === undefined ? current.opensAt : input.opensAt;
+  const mergedClosesAt = input.closesAt === undefined ? current.closesAt : input.closesAt;
+
+  if (mergedGoal <= 0n) {
+    return { success: false, error: { type: "ROUND_GOAL_INVALID" } };
+  }
+  if (mergedMinimum < 1n || (mergedMaximum !== null && mergedMaximum < mergedMinimum)) {
+    return {
+      success: false,
+      error: {
+        type: "ROUND_BOUNDS_INVALID",
+        minimumInCents: mergedMinimum.toString(),
+        maximumInCents: mergedMaximum?.toString() ?? "null",
+      },
+    };
+  }
+  if (mergedOpensAt !== null && mergedClosesAt !== null && mergedClosesAt <= mergedOpensAt) {
+    return {
+      success: false,
+      error: { type: "ROUND_WINDOW_INVALID", opensAt: mergedOpensAt, closesAt: mergedClosesAt },
+    };
+  }
+
+  const [updated] = await db
+    .update(fundingRound)
+    .set({
+      ...(input.title === undefined ? {} : { title: input.title }),
+      ...(input.summary === undefined ? {} : { summary: input.summary }),
+      goalAmountInCents: mergedGoal,
+      minimumPledgeInCents: mergedMinimum,
+      maximumPledgeInCents: mergedMaximum,
+      opensAt: mergedOpensAt,
+      closesAt: mergedClosesAt,
+    })
+    // Re-asserted: the round must still be a draft when the write lands.
+    .where(and(eq(fundingRound.id, roundId), eq(fundingRound.status, "draft")))
+    .returning();
+
+  if (!updated) {
+    return { success: false, error: { type: "ROUND_NOT_EDITABLE", status: current.status } };
+  }
+  return { success: true, value: toRoundView(updated, existing.projectSlug) };
+}
+
+/**
+ * `DELETE /funding-rounds/:roundId` — withdraws a DRAFT round (§11j.3).
+ *
+ * A round that has ever opened is CANCELLED OR CLOSED, never deleted: people saw it, and
+ * some of them may have decided something because of it. Only a draft nobody could pledge
+ * against can be taken back.
+ *
+ * REFUSED TWO WAYS, and the second is the one that actually holds. The explicit count is
+ * for the message; `funding_round_pledge.round_id` is `restrict`, so a pledge landing
+ * between the count and the delete still cannot orphan itself — the FK violation is
+ * translated to the same 409. Pledges of EVERY status count, `cancelled` and `failed`
+ * included: §11j.3 says "carries a pledge", and a cancelled pledge is still a record that
+ * somebody committed and changed their mind.
+ */
+export async function deleteFundingRound(
+  roundId: string,
+): Promise<Result<{ readonly deleted: true }, FundingError>> {
+  const existing = await findRoundWithProject(roundId);
+  if (!existing) {
+    return { success: false, error: { type: "ROUND_NOT_FOUND", roundId } };
+  }
+  if (existing.round.status !== "draft") {
+    return { success: false, error: { type: "ROUND_HAS_REFERENCES" } };
+  }
+
+  const [pledgeCount] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(fundingRoundPledge)
+    .where(eq(fundingRoundPledge.roundId, roundId));
+
+  if ((pledgeCount?.total ?? 0) > 0) {
+    return { success: false, error: { type: "ROUND_HAS_REFERENCES" } };
+  }
+
+  try {
+    const [deleted] = await db
+      .delete(fundingRound)
+      .where(and(eq(fundingRound.id, roundId), eq(fundingRound.status, "draft")))
+      .returning({ id: fundingRound.id });
+
+    if (!deleted) {
+      return { success: false, error: { type: "ROUND_HAS_REFERENCES" } };
+    }
+  } catch (error: unknown) {
+    // A pledge landed between the count and the delete. `restrict` caught it.
+    if (isForeignKeyViolation(error)) {
+      return { success: false, error: { type: "ROUND_HAS_REFERENCES" } };
+    }
+    throw error;
+  }
+
+  return { success: true, value: { deleted: true } };
+}
+
 export async function closeFundingRound(
   roundId: string,
   actorUserId: string,

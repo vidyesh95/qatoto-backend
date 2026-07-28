@@ -101,6 +101,30 @@ router.post(
   fundingController.createPledge,
 );
 
+/**
+ * PATCH · DELETE /funding-rounds/:roundId — founder only; drafts only (§11j.3).
+ *
+ * No `requireIdentifiedUser`, matching `createFundingRound` and the milestone writes: this
+ * router's rule (see the header) puts that guard on writes that COMMIT someone — pledges —
+ * not on round planning, which is already behind a project role an anonymous account cannot
+ * hold. Declared after the `/open`, `/close`, `/backers`, `/pledge-options` and `/pledges`
+ * routes, all of which are one segment deeper and cannot collide.
+ */
+router.patch(
+  "/funding-rounds/:roundId",
+  requireAuth,
+  fundingRoundWriteLimiter,
+  parseCompactJsonBody,
+  fundingController.updateFundingRound,
+);
+
+router.delete(
+  "/funding-rounds/:roundId",
+  requireAuth,
+  fundingRoundWriteLimiter,
+  fundingController.deleteFundingRound,
+);
+
 // --- Pledges. `/mine` is a LITERAL and MUST precede `/:pledgeId/…`.
 
 router.get("/pledges/mine", requireAuth, fundingController.listMyPledges);
@@ -136,6 +160,14 @@ router.post(
   requireAuth,
   fundingRoundWriteLimiter,
   fundingController.completeMilestone,
+);
+
+/** DELETE /milestones/:milestoneId — refused once done, cancelled, or cited (§11j.3). */
+router.delete(
+  "/milestones/:milestoneId",
+  requireAuth,
+  fundingRoundWriteLimiter,
+  fundingController.deleteMilestone,
 );
 
 router.put(

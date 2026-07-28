@@ -91,6 +91,29 @@ export const CreateFundingRoundSchema = z
  * Every other figure a client might send is derived server-side from the round, and every
  * one of §7's 27 rejected keys is absent from this object, so `.strict()` answers 422.
  */
+/**
+ * `PATCH /funding-rounds/:roundId` (§11j.3) — a draft correction, nothing more.
+ *
+ * `type` IS ABSENT and stays absent: the enabled-types gate is re-checked at open, and a
+ * round that could change type after creation would sidestep it. `currency`,
+ * `raisedAmountInCents`, `backersCount`, `status` and `closedAt` are absent because all
+ * five are server-owned — `.strict()` turns any of them into a 422.
+ *
+ * A `"0"` goal parses here and is refused by the SERVICE: `CentsStringSchema` bounds the
+ * shape, not the value, and `funding_round_goal_ck` is what the number has to satisfy.
+ */
+export const UpdateFundingRoundSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200).optional(),
+    summary: z.string().trim().max(2_000).nullable().optional(),
+    goalAmountInCents: CentsStringSchema.optional(),
+    minimumPledgeInCents: CentsStringSchema.optional(),
+    maximumPledgeInCents: CentsStringSchema.nullable().optional(),
+    opensAt: z.iso.datetime().nullable().optional(),
+    closesAt: z.iso.datetime().nullable().optional(),
+  })
+  .strict();
+
 export const CreatePledgeSchema = z.object({ amountInCents: CentsStringSchema }).strict();
 
 export const MilestoneSchema = z
@@ -533,6 +556,104 @@ export async function createMilestone(req: Request, res: Response): Promise<void
     return;
   }
   respondCreated(res, "Milestone created.", created.value);
+}
+
+/**
+ * PATCH /funding-rounds/:roundId — founder only (§11j.3).
+ *
+ * FOUNDER, not `admin` as on open/close, and the divergence is deliberate: opening a round
+ * is the decision that makes money solicitable, which an admin may take; editing the terms
+ * of a draft is authorship of the offer itself.
+ */
+export async function updateFundingRound(req: Request, res: Response): Promise<void> {
+  const roundId = firstParam(req.params.roundId ?? "");
+  const existing = await roundsService.findRoundWithProject(roundId);
+
+  const caller = await requireRoleForProjectOrRespond(
+    req,
+    res,
+    existing?.projectSlug ?? null,
+    "founder",
+  );
+  if (!caller) return;
+
+  const parsedBody = UpdateFundingRoundSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const { data } = parsedBody;
+  const updated = await roundsService.updateFundingRound(roundId, {
+    ...(data.title === undefined ? {} : { title: data.title }),
+    ...(data.summary === undefined ? {} : { summary: data.summary }),
+    ...(data.goalAmountInCents === undefined
+      ? {}
+      : { goalAmountInCents: BigInt(data.goalAmountInCents) }),
+    ...(data.minimumPledgeInCents === undefined
+      ? {}
+      : { minimumPledgeInCents: BigInt(data.minimumPledgeInCents) }),
+    ...(data.maximumPledgeInCents === undefined
+      ? {}
+      : {
+          maximumPledgeInCents:
+            data.maximumPledgeInCents === null ? null : BigInt(data.maximumPledgeInCents),
+        }),
+    ...(data.opensAt === undefined
+      ? {}
+      : { opensAt: data.opensAt === null ? null : new Date(data.opensAt) }),
+    ...(data.closesAt === undefined
+      ? {}
+      : { closesAt: data.closesAt === null ? null : new Date(data.closesAt) }),
+  });
+
+  if (!updated.success) {
+    respondFundingError(res, updated.error);
+    return;
+  }
+  respondOk(res, "Funding round updated.", updated.value);
+}
+
+/** DELETE /funding-rounds/:roundId — founder only; a draft nobody pledged against (§11j.3). */
+export async function deleteFundingRound(req: Request, res: Response): Promise<void> {
+  const roundId = firstParam(req.params.roundId ?? "");
+  const existing = await roundsService.findRoundWithProject(roundId);
+
+  const caller = await requireRoleForProjectOrRespond(
+    req,
+    res,
+    existing?.projectSlug ?? null,
+    "founder",
+  );
+  if (!caller) return;
+
+  const deleted = await roundsService.deleteFundingRound(roundId);
+  if (!deleted.success) {
+    respondFundingError(res, deleted.error);
+    return;
+  }
+  respondOk(res, "Funding round deleted.", deleted.value);
+}
+
+/** DELETE /milestones/:milestoneId — maintainer+, matching the other milestone writes (§11j.3). */
+export async function deleteMilestone(req: Request, res: Response): Promise<void> {
+  const milestoneId = firstParam(req.params.milestoneId ?? "");
+  const existing = await milestonesService.findMilestoneWithProject(milestoneId);
+
+  const caller = await requireRoleForProjectOrRespond(
+    req,
+    res,
+    existing?.projectSlug ?? null,
+    "maintainer",
+  );
+  if (!caller) return;
+
+  const deleted = await milestonesService.deleteMilestone(caller.context.projectId, milestoneId);
+  if (!deleted.success) {
+    respondFundingError(res, deleted.error);
+    return;
+  }
+  respondOk(res, "Milestone deleted.", deleted.value);
 }
 
 /**

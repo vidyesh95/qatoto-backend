@@ -18,6 +18,7 @@ const {
   CreatePledgeSchema,
   MilestoneSchema,
   MilestoneVarianceSchema,
+  UpdateFundingRoundSchema,
   UpdateMilestoneSchema,
 } = await import("#src/controllers/funding.controller.js");
 
@@ -263,5 +264,65 @@ describe("the §17 step 8 zero-trust sweep", () => {
         ).toBe(false);
       }
     }
+  });
+});
+
+/**
+ * `PATCH /funding-rounds/:roundId` (§11j.3) — the round-edit body.
+ *
+ * `type` is the entry that matters most. `ENABLED_FUNDING_ROUND_TYPES` is re-checked when a
+ * round OPENS, so a round whose type could change after creation would let a founder create
+ * an enabled type, edit it to a disabled one, and open it — routing around a gate that
+ * exists for regulatory reasons. It is absent from the schema, and this asserts it.
+ */
+describe("UpdateFundingRoundSchema", () => {
+  it("rejects `type`, so the enabled-types gate cannot be sidestepped", () => {
+    expect(UpdateFundingRoundSchema.safeParse({ type: "equity" }).success).toBe(false);
+    expect(UpdateFundingRoundSchema.safeParse({ title: "Seed round", type: "venture" }).success).toBe(false);
+  });
+
+  it.each(REJECTED_KEYS)("rejects `%s`", (rejectedKey) => {
+    expect(
+      UpdateFundingRoundSchema.safeParse({
+        title: "Seed round",
+        [rejectedKey]: "attacker-supplied",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects every server-owned counter and lifecycle field", () => {
+    for (const forged of [
+      { status: "open" },
+      { raisedAmountInCents: "100000" },
+      { backersCount: 12 },
+      { closedAt: new Date().toISOString() },
+      { currency: "CNY" },
+      { projectId: "prj_other" },
+      { id: "rnd_other" },
+    ]) {
+      expect(UpdateFundingRoundSchema.safeParse({ ...forged }).success).toBe(false);
+    }
+  });
+
+  it("accepts a partial patch, including an empty one", () => {
+    expect(UpdateFundingRoundSchema.safeParse({}).success).toBe(true);
+    expect(UpdateFundingRoundSchema.safeParse({ title: "Renamed" }).success).toBe(true);
+    expect(UpdateFundingRoundSchema.safeParse({ maximumPledgeInCents: null }).success).toBe(true);
+    expect(UpdateFundingRoundSchema.safeParse({ closesAt: null }).success).toBe(true);
+  });
+
+  it("takes money as a decimal STRING and refuses a JSON number", () => {
+    expect(UpdateFundingRoundSchema.safeParse({ goalAmountInCents: "500000" }).success).toBe(true);
+    expect(UpdateFundingRoundSchema.safeParse({ goalAmountInCents: 500_000 }).success).toBe(false);
+    expect(UpdateFundingRoundSchema.safeParse({ goalAmountInCents: "5000.5" }).success).toBe(false);
+  });
+
+  /**
+   * The boundary between what Zod can prove and what the service must. `"0"` is a
+   * well-formed cent string and violates `funding_round_goal_ck`; the schema accepting it is
+   * what makes the service's guard load-bearing rather than belt-and-braces.
+   */
+  it('accepts "0" for a goal, which the SERVICE then refuses', () => {
+    expect(UpdateFundingRoundSchema.safeParse({ goalAmountInCents: "0" }).success).toBe(true);
   });
 });

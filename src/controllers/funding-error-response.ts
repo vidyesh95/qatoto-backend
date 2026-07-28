@@ -107,6 +107,29 @@ export function mapFundingErrorToResponse(error: FundingDomainError): {
       return { statusCode: 409, message: "This round is already open." };
     case "ROUND_TERMINAL":
       return { statusCode: 409, message: `A ${error.status} round can no longer be changed.` };
+    // Only a DRAFT is editable. `status` here is never "draft" in practice — the guard also
+    // refuses a draft carrying pledge counters, which is a data-repair case, not a client one.
+    case "ROUND_NOT_EDITABLE":
+      return {
+        statusCode: 409,
+        message: `A ${error.status} round can no longer be edited. Only a draft round can be changed.`,
+      };
+    // Named after ROLE_HAS_REFERENCES, and it points at the alternative rather than just
+    // refusing: a round that has been opened is cancelled or closed, never deleted.
+    // §11j.3 named a compensation_period_line citation here; no such FK exists — see
+    // `deleteMilestone`. What actually blocks is an escrow_release row, which can survive
+    // from migration 0016 even though those routes are retired.
+    case "MILESTONE_HAS_REFERENCES":
+      return {
+        statusCode: 409,
+        message: "This milestone is cited by an escrow release and cannot be deleted.",
+      };
+    case "ROUND_HAS_REFERENCES":
+      return {
+        statusCode: 409,
+        message:
+          "This round has been opened or carries a pledge, so it cannot be deleted. Close or cancel it instead.",
+      };
     case "ROUND_CLOSED_FOR_PLEDGES":
       return {
         statusCode: 409,
@@ -198,6 +221,37 @@ export function mapFundingErrorToResponse(error: FundingDomainError): {
         statusCode: 422,
         message: "That pledge is above this round's maximum.",
         errors: { amountInCents: [`Maximum ${error.maximumInCents} cents.`] },
+      };
+    // The three CHECK constraints, proven in-service on the MERGED tuple so a partial patch
+    // returns a typed 422 rather than a 23514 surfacing as a 500 (§11j.3).
+    case "ROUND_GOAL_INVALID":
+      return {
+        statusCode: 422,
+        message: "A funding goal must be greater than zero.",
+        errors: { goalAmountInCents: ["Must be greater than zero."] },
+      };
+    case "ROUND_BOUNDS_INVALID":
+      return {
+        statusCode: 422,
+        message: "The pledge bounds conflict.",
+        errors: {
+          // Both are named, because the conflict is between them: sending only a maximum
+          // that falls below the STORED minimum is the case this exists for.
+          minimumPledgeInCents: [`Resolved to ${error.minimumInCents}; must be at least 1.`],
+          maximumPledgeInCents: [
+            `Resolved to ${error.maximumInCents}; must be at least the minimum.`,
+          ],
+        },
+      };
+    case "ROUND_WINDOW_INVALID":
+      return {
+        statusCode: 422,
+        message: "The round window closes before it opens.",
+        errors: {
+          closesAt: [
+            `Resolved to ${error.closesAt.toISOString()}; must be after ${error.opensAt.toISOString()}.`,
+          ],
+        },
       };
     case "ROUND_INCOMPLETE_FOR_OPEN":
       return {

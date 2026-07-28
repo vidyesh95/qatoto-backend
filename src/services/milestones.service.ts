@@ -1,8 +1,9 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { milestone, milestoneVariance, researchProject } from "#src/db/schema.js";
+import { escrowRelease, milestone, milestoneVariance, researchProject } from "#src/db/schema.js";
 import { basisPointsOf } from "#src/lib/money.js";
+import { isForeignKeyViolation } from "#src/lib/pg-errors.js";
 import type {
   ProjectAccessError,
   ProjectMemberContext,
@@ -31,6 +32,7 @@ export type MilestoneStatus = (typeof milestone.$inferSelect)["status"];
 export type MilestoneError =
   | ProjectAccessError
   | { type: "MILESTONE_NOT_FOUND"; milestoneId: string }
+  | { type: "MILESTONE_HAS_REFERENCES" }
   | { type: "MILESTONE_TERMINAL"; status: MilestoneStatus }
   | { type: "MILESTONE_ALREADY_COMPLETE" }
   | { type: "MILESTONE_ORDER_TAKEN"; orderIndex: number };
@@ -146,6 +148,83 @@ export async function getMilestone(
     return { success: false, error: { type: "MILESTONE_NOT_FOUND", milestoneId } };
   }
   return { success: true, value: toMilestoneView(row.milestone, row.variance) };
+}
+
+/**
+ * `DELETE /milestones/:milestoneId` — removes a milestone nobody has acted on (§11j.3).
+ *
+ * §11j.3 SAYS "refuse once the milestone is `done` or is cited by a statement line", AND
+ * THE SECOND HALF DESCRIBES A RELATIONSHIP THE SCHEMA DOES NOT HAVE. `compensation_period_line`
+ * references the period, the project, the member, the source agreement, the source rate and
+ * the two snapshots — and nothing else; `compensation-periods.service.ts` never reads this
+ * table. A §7A statement draws from agreements and rates, not from milestones. The guard
+ * implemented here is the one the schema actually supports, and the three referencing
+ * columns each get the treatment their `onDelete` implies:
+ *
+ *   `milestone_variance.milestone_id`      restrict  — the milestone's OWN child (PK+FK).
+ *                                                      Deleted in the same transaction; a
+ *                                                      milestone's variance is not evidence
+ *                                                      about anything else.
+ *   `escrow_release.milestone_id`          restrict  — a genuine citation. Rows can exist
+ *                                                      from migration 0016 even though the
+ *                                                      routes are retired, so this refuses.
+ *   `escrow_journal_entry.linked_milestone_id` set null — deliberately does NOT block:
+ *                                                      deleting a milestone must never
+ *                                                      delete financial history.
+ *
+ * `done` is refused through the existing `MILESTONE_ALREADY_COMPLETE`, whose message already
+ * says the right thing, and `cancelled` through `MILESTONE_TERMINAL`.
+ *
+ * A side effect worth naming: `investor-confidence.service.ts` counts milestones by status,
+ * so deleting one silently changes the next confidence snapshot's delivery score. That is
+ * correct — a milestone that should not have existed should not be counted — but it is not
+ * retroactive, and older snapshots keep the number they were computed with.
+ */
+export async function deleteMilestone(
+  projectId: string,
+  milestoneId: string,
+): Promise<Result<{ readonly deleted: true }, MilestoneError>> {
+  const [existing] = await db
+    .select({ status: milestone.status })
+    .from(milestone)
+    .where(and(eq(milestone.id, milestoneId), eq(milestone.projectId, projectId)));
+
+  if (!existing) {
+    return { success: false, error: { type: "MILESTONE_NOT_FOUND", milestoneId } };
+  }
+  if (existing.status === "done") {
+    return { success: false, error: { type: "MILESTONE_ALREADY_COMPLETE" } };
+  }
+  if (existing.status === "cancelled") {
+    return { success: false, error: { type: "MILESTONE_TERMINAL", status: existing.status } };
+  }
+
+  const [releaseCount] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(escrowRelease)
+    .where(eq(escrowRelease.milestoneId, milestoneId));
+
+  if ((releaseCount?.total ?? 0) > 0) {
+    return { success: false, error: { type: "MILESTONE_HAS_REFERENCES" } };
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      // The milestone's own child first — `restrict` would otherwise reject the parent.
+      await tx.delete(milestoneVariance).where(eq(milestoneVariance.milestoneId, milestoneId));
+      await tx
+        .delete(milestone)
+        .where(and(eq(milestone.id, milestoneId), eq(milestone.projectId, projectId)));
+    });
+  } catch (error: unknown) {
+    // An escrow release landed between the count and the delete. `restrict` caught it.
+    if (isForeignKeyViolation(error)) {
+      return { success: false, error: { type: "MILESTONE_HAS_REFERENCES" } };
+    }
+    throw error;
+  }
+
+  return { success: true, value: { deleted: true } };
 }
 
 export async function listProjectMilestones(projectId: string): Promise<readonly MilestoneView[]> {
