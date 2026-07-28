@@ -60,6 +60,14 @@ router.post(
   clustersController.createProblemReport,
 );
 
+/**
+ * GET /discovery/problem-reports/:submissionId — the caller's own report (§11j.2).
+ *
+ * MUST stay below `/problem-reports/mine`, which is a literal in the same param position.
+ * Declared above it, the shipped list would resolve as a submission whose id is "mine".
+ */
+router.get("/problem-reports/:submissionId", requireAuth, clustersController.getMyProblemReport);
+
 // --- Taxonomy. CANONICAL; `/research-categories` aliases these same handlers.
 router.get("/categories", attachOptionalUser, catalogController.listCategories);
 router.post(
@@ -109,6 +117,17 @@ router.post(
   talentController.unpublishMyTalentProfile,
 );
 router.get("/talent", requireAuth, talentController.listTalent);
+
+/**
+ * GET /discovery/talent/:talentUserIdOrHandle — the detail read behind a `/talent` card.
+ *
+ * DECLARED LAST IN THIS BLOCK, AND THAT IS NOT COSMETIC. Every `/talent/me` path above is a
+ * literal in the same param position. Move this line above any of them and
+ * `GET /discovery/talent/me` stops resolving to the caller's own profile and starts
+ * resolving as "the user whose handle is `me`" — a silent, permanent break of a shipped
+ * route that no type or test outside this file would catch.
+ */
+router.get("/talent/:talentUserIdOrHandle", requireAuth, talentController.getTalentProfile);
 
 // --- Platform moderation. The capability check is IN-SERVICE, not middleware (§4a Layer 3)
 //     — and it runs BEFORE any id is read, so these routes are not id oracles.

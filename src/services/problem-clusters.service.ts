@@ -33,6 +33,7 @@ import {
 
 export type ProblemClusterError =
   | { type: "CLUSTER_NOT_FOUND"; clusterId: string }
+  | { type: "SUBMISSION_NOT_FOUND"; submissionId: string }
   | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
   | { type: "CATEGORY_NOT_APPROVED"; categoryId: string }
   | { type: "VIEWPORT_INCOMPLETE" };
@@ -507,6 +508,50 @@ export interface MyProblemSubmissionPage {
   readonly total: number;
 }
 
+/** Shared by the list and the detail read so the two shapes cannot drift. */
+const MY_PROBLEM_SUBMISSION_COLUMNS = {
+  submissionId: problemSubmission.id,
+  title: problemSubmission.title,
+  description: problemSubmission.description,
+  category: DISCOVERY_CATEGORY_REF_COLUMNS,
+  locationText: problemSubmission.locationText,
+  countryCode: problemSubmission.countryCode,
+  latitudeMicrodegrees: problemSubmission.latitudeMicrodegrees,
+  longitudeMicrodegrees: problemSubmission.longitudeMicrodegrees,
+  clusteringStatus: problemSubmission.status,
+  clusterId: problemSubmission.clusterId,
+  clusterTitle: problemCluster.title,
+  geocodeFailureReason: problemSubmission.geocodeFailureReason,
+  submittedAt: problemSubmission.createdAt,
+} as const;
+
+/**
+ * `GET /discovery/problem-reports/:submissionId` — the caller's OWN report (§11j.2).
+ *
+ * THE `reporterUserId` PREDICATE IS THE AUTHORIZATION. It sits in the WHERE clause, so
+ * someone else's submission reads as absent and answers the same 404 as an id that never
+ * existed — there is no 403 to distinguish the two, and therefore no way to probe which
+ * submission ids exist. Same rule and same reason as the list below.
+ */
+export async function findMyProblemSubmission(
+  reporterUserId: string,
+  submissionId: string,
+): Promise<MyProblemSubmissionView | null> {
+  const [row] = await db
+    .select(MY_PROBLEM_SUBMISSION_COLUMNS)
+    .from(problemSubmission)
+    .innerJoin(researchCategory, eq(problemSubmission.categoryId, researchCategory.id))
+    .leftJoin(problemCluster, eq(problemSubmission.clusterId, problemCluster.id))
+    .where(
+      and(
+        eq(problemSubmission.id, submissionId),
+        eq(problemSubmission.reporterUserId, reporterUserId),
+      ),
+    );
+
+  return row ? { ...row, submittedAt: row.submittedAt.toISOString() } : null;
+}
+
 /**
  * The caller's own reports.
  *
@@ -527,21 +572,7 @@ export async function listMyProblemSubmissions(
 
   const [rows, [totalRow]] = await Promise.all([
     db
-      .select({
-        submissionId: problemSubmission.id,
-        title: problemSubmission.title,
-        description: problemSubmission.description,
-        category: DISCOVERY_CATEGORY_REF_COLUMNS,
-        locationText: problemSubmission.locationText,
-        countryCode: problemSubmission.countryCode,
-        latitudeMicrodegrees: problemSubmission.latitudeMicrodegrees,
-        longitudeMicrodegrees: problemSubmission.longitudeMicrodegrees,
-        clusteringStatus: problemSubmission.status,
-        clusterId: problemSubmission.clusterId,
-        clusterTitle: problemCluster.title,
-        geocodeFailureReason: problemSubmission.geocodeFailureReason,
-        submittedAt: problemSubmission.createdAt,
-      })
+      .select(MY_PROBLEM_SUBMISSION_COLUMNS)
       .from(problemSubmission)
       .innerJoin(researchCategory, eq(problemSubmission.categoryId, researchCategory.id))
       .leftJoin(problemCluster, eq(problemSubmission.clusterId, problemCluster.id))

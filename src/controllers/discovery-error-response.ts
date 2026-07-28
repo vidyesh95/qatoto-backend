@@ -66,8 +66,17 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
     // --- 404: lookups. Indistinguishable from "you may not see this".
     case "CLUSTER_NOT_FOUND":
       return { statusCode: 404, message: "Problem cluster not found." };
+    // Also what ANOTHER reporter's submission returns: the read is scoped to the caller in
+    // the WHERE clause, so someone else's is indistinguishable from one that never existed.
+    case "SUBMISSION_NOT_FOUND":
+      return { statusCode: 404, message: "Report not found." };
     case "TALENT_PROFILE_NOT_FOUND":
       return { statusCode: 404, message: "You do not have a talent profile yet." };
+    // The OTHER person's-profile 404, and a separate variant because the sentence above is
+    // addressed to the owner. Covers "no such user" and "their profile is unpublished"
+    // with one message, so the directory cannot be used to enumerate private profiles.
+    case "TALENT_PROFILE_UNAVAILABLE":
+      return { statusCode: 404, message: "Talent profile not found." };
     case "MERGE_PROPOSAL_NOT_FOUND":
       return { statusCode: 404, message: "Merge proposal not found." };
     case "SUPPLIER_NOT_FOUND":

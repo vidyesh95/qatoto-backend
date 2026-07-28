@@ -66,6 +66,9 @@ export const ListProblemClustersQuerySchema = z
 
 export const ClusterIdParamSchema = z.object({ clusterId: z.uuid() }).strict();
 
+/** Same precedent as above: a malformed id 422s before any query runs. */
+export const SubmissionIdParamSchema = z.object({ submissionId: z.uuid() }).strict();
+
 /**
  * ABSENT BY CONSTRUCTION, each rejected by `.strict()` as a 422: `countryCode`
  * (server-geocoded — CLAUDE.md §0 names client-supplied country as untrustworthy, and here
@@ -274,6 +277,49 @@ export async function listMyProblemReports(req: Request, res: Response): Promise
       total: page.total,
       totalPages: Math.ceil(page.total / parsedQuery.data.limit),
     },
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * GET /discovery/problem-reports/:submissionId — the caller's own report (§11j.2).
+ *
+ * The read half of `/problem-reports/mine`, which returns the list. Someone else's
+ * submission answers the same 404 as one that never existed: the scoping is a WHERE
+ * predicate in the service, not a check after the row is loaded.
+ */
+export async function getMyProblemReport(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedParams = SubmissionIdParamSchema.safeParse({
+    submissionId: firstParam(req.params.submissionId ?? ""),
+  });
+  if (!parsedParams.success) {
+    respondValidationFailed(res, parsedParams.error);
+    return;
+  }
+
+  const submission = await clustersService.findMyProblemSubmission(
+    req.user.id,
+    parsedParams.data.submissionId,
+  );
+
+  if (!submission) {
+    respondDiscoveryError(res, {
+      type: "SUBMISSION_NOT_FOUND",
+      submissionId: parsedParams.data.submissionId,
+    });
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Report retrieved successfully",
+    data: submission,
   };
   res.status(200).json(response);
 }

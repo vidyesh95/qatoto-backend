@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import {
+  firstParam,
   respondDiscoveryError,
   respondUnauthenticated,
   respondValidationFailed,
@@ -142,6 +143,39 @@ export async function listTalent(req: Request, res: Response): Promise<void> {
       total: page.total,
       totalPages: Math.ceil(page.total / parsedQuery.data.limit),
     },
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * GET /discovery/talent/:talentUserIdOrHandle — one published profile (§11j.2).
+ *
+ * `requireAuth`, matching the list rather than the rest of `/discovery`, and for the reason
+ * stated there: this is the one §6 read family that returns other people's personal data.
+ *
+ * ROUTE ORDER IS LOAD-BEARING for this handler — see the declaration in
+ * `discovery.routes.ts`. Declared above `/talent/me`, it would swallow the caller's own
+ * profile read as a lookup of the handle "me".
+ */
+export async function getTalentProfile(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const talentUserIdOrHandle = firstParam(req.params.talentUserIdOrHandle ?? "");
+  const found = await talentService.findPublishedTalentProfile(talentUserIdOrHandle);
+
+  if (!found.success) {
+    respondDiscoveryError(res, found.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Talent profile retrieved successfully",
+    data: found.value,
   };
   res.status(200).json(response);
 }

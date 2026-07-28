@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -13,6 +13,7 @@ import {
   DISCOVERY_REGION_REF_COLUMNS,
   type DiscoveryRegionRef,
 } from "#src/services/discovery-catalog.service.js";
+import { normalizeHandle } from "#src/services/handle.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -30,6 +31,11 @@ import type { Result } from "#src/types/index.js";
 
 export type TalentProfileError =
   | { type: "TALENT_PROFILE_NOT_FOUND" }
+  // DISTINCT from the variant above, which means "you have no profile yet" and is answered
+  // to the OWNER on `/talent/me`. This one is a lookup of somebody else's, where the same
+  // sentence would be nonsense — and where an unpublished profile and a nonexistent one
+  // must be indistinguishable.
+  | { type: "TALENT_PROFILE_UNAVAILABLE" }
   | { type: "SKILL_NOT_FOUND"; skillSlugs: readonly string[] }
   | { type: "REGION_NOT_FOUND"; regionId: string }
   | { type: "DUPLICATE_COMPENSATION_KIND"; kind: string }
@@ -366,6 +372,56 @@ export interface TalentListPage {
  * what a row of filter chips means. Matching is on SLUG EQUALITY, which is the structural
  * fix for the live substring bug where a "Water" chip matched "Water Polo".
  */
+/**
+ * `GET /discovery/talent/:talentUserIdOrHandle` — one PUBLISHED directory profile (§11j.2).
+ *
+ * The `/talent` list shipped without anywhere for its cards to link to. This is that
+ * target, and it returns `TalentProfileView` — the LIST element's shape — never
+ * `TalentProfileMeView`, whose `visibility`, `publishedAt` and completeness fields belong
+ * to the owner and nobody else.
+ *
+ * THE `visibility = 'published'` PREDICATE IS THE AUTHORIZATION. An unpublished profile
+ * reads as absent, so the route cannot be used to discover who has a private one — the
+ * same reason `listTalentProfiles` filters on it rather than hiding rows after the fact.
+ *
+ * ID OR HANDLE IN ONE QUERY. `user.handle` is stored normalized (lowercase, no leading
+ * `@`), so the input is normalized before comparison or `@Alice` and `Alice` both 404.
+ * `validateHandle` is deliberately NOT used as a gate: a raw user id fails the handle
+ * regex and must still resolve.
+ */
+export async function findPublishedTalentProfile(
+  talentUserIdOrHandle: string,
+): Promise<Result<TalentProfileView, TalentProfileError>> {
+  const [row] = await db
+    .select(TALENT_PROFILE_COLUMNS)
+    .from(talentProfile)
+    .innerJoin(user, eq(talentProfile.userId, user.id))
+    .leftJoin(discoveryRegion, eq(talentProfile.regionId, discoveryRegion.id))
+    .where(
+      and(
+        eq(talentProfile.visibility, "published"),
+        or(
+          eq(talentProfile.userId, talentUserIdOrHandle),
+          eq(user.handle, normalizeHandle(talentUserIdOrHandle)),
+        ),
+      ),
+    );
+
+  if (!row) {
+    return { success: false, error: { type: "TALENT_PROFILE_UNAVAILABLE" } };
+  }
+
+  const { skillsByUser, askRowsByUser } = await loadSkillsAndAsks([row.userId]);
+  return {
+    success: true,
+    value: toTalentProfileView(
+      row,
+      skillsByUser.get(row.userId) ?? [],
+      askRowsByUser.get(row.userId) ?? [],
+    ),
+  };
+}
+
 export async function listTalentProfiles(filter: TalentListFilter): Promise<TalentListPage> {
   const conditions = [eq(talentProfile.visibility, "published")];
   if (filter.commitment) conditions.push(eq(talentProfile.commitment, filter.commitment));
