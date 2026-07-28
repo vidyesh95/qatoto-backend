@@ -5,7 +5,11 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { physicalWorkReceipt, receiptForensicsCheck } from "#src/db/schema.js";
-import { uploadPhysicalReceipt, type CloudinaryError } from "#src/lib/cloudinary.js";
+import {
+  deletePhysicalReceipt as deleteStoredReceipt,
+  uploadPhysicalReceipt,
+  type CloudinaryError,
+} from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
@@ -54,6 +58,7 @@ export type PhysicalReceiptError =
   | CloudinaryError
   | { type: "DUPLICATE_RECEIPT"; contentSha256: string }
   | { type: "RECEIPT_NOT_FOUND"; receiptId: string }
+  | { type: "RECEIPT_CITED"; claimId: string }
   | { type: "RECEIPT_FILE_MISSING" };
 
 export type ReceiptKind = (typeof physicalWorkReceipt.$inferSelect)["receiptKind"];
@@ -360,6 +365,93 @@ export async function findOwnReceipt(
     );
 
   return owned ? findReceipt(projectId, owned.id) : null;
+}
+
+/**
+ * `DELETE …/physical-receipts/:receiptId` — removes a mis-uploaded receipt (§11j.3).
+ *
+ * UPLOADER-ONLY, AND IT IS A WHERE PREDICATE RATHER THAN A 403. Another member's receipt is
+ * indistinguishable from one that never existed, exactly as on the detail read.
+ *
+ * REFUSED ONCE CITED. `claimId` is stamped by `submitEffortClaim`, and from that moment the
+ * bytes are evidence behind a slice award — deleting them would leave a verified claim
+ * pointing at nothing.
+ *
+ * THE ROW IS LOCKED `FOR UPDATE` AND RE-READ INSIDE THE TRANSACTION, which is the same
+ * device `raiseDispute` uses and it is what makes the citation check sound. Checking
+ * `claimId` outside the transaction and deleting inside it leaves a window where a claim
+ * lands in between and the delete destroys evidence that is, by then, cited. The lock makes
+ * a concurrent `submitEffortClaim` wait for this transaction to finish, so the two
+ * serialize instead of racing.
+ *
+ * THE FORENSICS ROWS GO FIRST. `receipt_forensics_check.receipt_id` is `restrict` and
+ * `uploadReceipt` writes up to four rows per receipt, so deleting the receipt alone raises a
+ * foreign-key violation. They are the receipt's own children — its EXIF and hash findings —
+ * not an independent citation, so the right answer is to remove them in the same
+ * transaction rather than refuse on them.
+ *
+ * THE BYTES GO LAST, OUTSIDE THE TRANSACTION. See `deletePhysicalReceipt` in
+ * `lib/cloudinary.ts`: a failure there is logged and swallowed, because the row is the
+ * record and an orphaned asset is a cleanup problem rather than a reason to resurrect
+ * evidence the caller asked to destroy.
+ */
+export async function deleteReceipt(
+  projectId: string,
+  memberId: string,
+  receiptId: string,
+): Promise<Result<{ readonly deleted: true }, PhysicalReceiptError>> {
+  const outcome = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({
+        claimId: physicalWorkReceipt.claimId,
+        storedImagePublicId: physicalWorkReceipt.storedImagePublicId,
+      })
+      .from(physicalWorkReceipt)
+      .where(
+        and(
+          eq(physicalWorkReceipt.id, receiptId),
+          eq(physicalWorkReceipt.projectId, projectId),
+          eq(physicalWorkReceipt.memberId, memberId),
+        ),
+      )
+      .for("update");
+
+    if (!locked) {
+      return { kind: "not-found" } as const;
+    }
+    if (locked.claimId !== null) {
+      return { kind: "cited", claimId: locked.claimId } as const;
+    }
+
+    // Children first — `restrict` would otherwise reject the parent delete outright.
+    await tx.delete(receiptForensicsCheck).where(eq(receiptForensicsCheck.receiptId, receiptId));
+    await tx.delete(physicalWorkReceipt).where(eq(physicalWorkReceipt.id, receiptId));
+
+    return { kind: "deleted", storedImagePublicId: locked.storedImagePublicId } as const;
+  });
+
+  switch (outcome.kind) {
+    case "not-found":
+      return { success: false, error: { type: "RECEIPT_NOT_FOUND", receiptId } };
+    case "cited":
+      return { success: false, error: { type: "RECEIPT_CITED", claimId: outcome.claimId } };
+    case "deleted": {
+      if (outcome.storedImagePublicId !== null) {
+        const purged = await deleteStoredReceipt(outcome.storedImagePublicId);
+        if (!purged.success) {
+          // Deliberately not surfaced: the row is gone and the caller's request succeeded.
+          console.error(
+            `deleteReceipt: row ${receiptId} deleted but its stored image could not be purged (${purged.error.type})`,
+          );
+        }
+      }
+      return { success: true, value: { deleted: true } };
+    }
+    default: {
+      const exhaustiveCheck: never = outcome;
+      throw new Error(`deleteReceipt: unhandled outcome ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
 }
 
 /**

@@ -152,6 +152,50 @@ export async function addFileLink(
   }
 }
 
+export interface UpdateFileLinkInput {
+  readonly fileName?: string | undefined;
+  readonly fileKind?: WorkshopFileKind | undefined;
+}
+
+/**
+ * Renames a link, or re-files it under another kind (§11j.3).
+ *
+ * `externalUrl` IS NOT UPDATABLE and appears in no input type. A changed target is a new
+ * file, not an edit — repointing a link would silently move what a §9 claim cites while
+ * keeping the row's id, uploader and timestamp.
+ *
+ * Nothing here can trip a constraint: `workshop_file_source_shape_ck` governs `source`,
+ * `external_url`, `size_bytes` and `object_key`, none of which this input can touch, and
+ * `workshop_file_projectId_externalUrl_unq` keys on the immutable URL — so a rename can
+ * never collide. `updatedAt` moves itself through `$onUpdate`.
+ */
+export async function updateFileLink(
+  projectId: string,
+  fileId: string,
+  input: UpdateFileLinkInput,
+): Promise<Result<WorkshopFileView, WorkshopFileError>> {
+  const [updated] = await db
+    .update(workshopFile)
+    .set({
+      ...(input.fileName === undefined ? {} : { fileName: input.fileName }),
+      ...(input.fileKind === undefined ? {} : { fileKind: input.fileKind }),
+    })
+    .where(
+      and(
+        eq(workshopFile.id, fileId),
+        eq(workshopFile.projectId, projectId),
+        // A removed file is not in the list the caller was looking at.
+        isNull(workshopFile.removedAt),
+      ),
+    )
+    .returning();
+
+  if (!updated) {
+    return { success: false, error: { type: "FILE_NOT_FOUND", fileId } };
+  }
+  return { success: true, value: toFileView(updated) };
+}
+
 /**
  * Soft-removes a link.
  *

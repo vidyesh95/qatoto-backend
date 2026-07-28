@@ -976,6 +976,31 @@ export async function listPhysicalReceipts(req: Request, res: Response): Promise
 }
 
 /**
+ * DELETE …/physical-receipts/:receiptId — the uploader only (§11j.3).
+ *
+ * Uploader scoping is a WHERE predicate in the service, so another member's receipt answers
+ * the same 404 as one that never existed. A receipt already cited by an effort claim is a
+ * 409: at that point the bytes are evidence.
+ */
+export async function deletePhysicalReceipt(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const receiptId = firstParam(req.params.receiptId ?? "");
+  const deleted = await receiptsService.deleteReceipt(
+    caller.context.projectId,
+    caller.context.memberId,
+    receiptId,
+  );
+
+  if (!deleted.success) {
+    respondProofOfEffortError(res, deleted.error);
+    return;
+  }
+  respondOk(res, "Receipt deleted.", deleted.value);
+}
+
+/**
  * GET …/physical-receipts/:receiptId — the caller's OWN receipt (§11j.2).
  *
  * Scoped to `memberId` for the same reason the list is: another member's receipt reads as

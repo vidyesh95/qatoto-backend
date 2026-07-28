@@ -467,6 +467,38 @@ export function physicalReceiptPublicId(projectId: string, contentSha256: string
 }
 
 /**
+ * Removes a receipt's stored bytes (§11j.3).
+ *
+ * CALLED AFTER THE DATABASE TRANSACTION COMMITS, never inside it. A remote call cannot
+ * participate in a Postgres transaction: if Cloudinary is slow the transaction holds locks
+ * on evidence rows, and if it fails after the rows are gone there is nothing to roll back
+ * to. The row is the record; the bytes are a copy. An orphaned asset is a cleanup job's
+ * problem, whereas a rolled-back delete that already destroyed the image is data loss.
+ */
+export async function deletePhysicalReceipt(
+  publicId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(publicId, {
+      invalidate: true,
+    });
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
+
+/**
  * Upload a receipt from an already-validated, re-encoded buffer.
  *
  * The buffer MUST be normalized by the caller first (CLAUDE.md §1.1) — this layer trusts

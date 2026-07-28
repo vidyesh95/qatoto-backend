@@ -18,6 +18,7 @@ const {
   MoveTaskSchema,
   PostChatMessageSchema,
   ReorderColumnsSchema,
+  UpdateFileLinkSchema,
   UpdateTaskSchema,
 } = await import("#src/controllers/workshop.controller.js");
 
@@ -283,5 +284,58 @@ describe("daily-log schemas refuse every pipeline and verdict field", () => {
         analysisStatus: "succeeded",
       }),
     ).toBe(false);
+  });
+});
+
+/**
+ * §11j.3's file PATCH, and the one assertion that IS the guarantee.
+ *
+ * "A changed target is a new file, not an edit." Nothing in `workshop-files.service.ts`
+ * checks that — `updateFileLink` simply has no branch for `externalUrl`, because the schema
+ * never lets one through. This block is therefore the whole enforcement of the rule, not a
+ * restatement of it: delete these expectations and repointing a link at a different
+ * document becomes possible while keeping the row's id, uploader and timestamp — silently
+ * moving what a §9 effort claim cites.
+ */
+describe("UpdateFileLinkSchema", () => {
+  it("rejects externalUrl — the URL is immutable, and this test is why", () => {
+    expect(accepts(UpdateFileLinkSchema, { externalUrl: "https://drive.google.com/other" })).toBe(false);
+    expect(
+      accepts(UpdateFileLinkSchema, {
+        fileName: "Renamed spec",
+        externalUrl: "https://drive.google.com/other",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects every other server-owned field", () => {
+    expect(
+      acceptedFields(UpdateFileLinkSchema, {}, [
+        "sizeBytes",
+        "contentSha256",
+        "source",
+        "externalHost",
+        "storageProvider",
+        "objectKey",
+        "uploadedByMemberId",
+        "removedAt",
+        "removedByUserId",
+        "projectId",
+        "id",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("accepts a rename, a re-kind, either alone, and an empty patch", () => {
+    expect(accepts(UpdateFileLinkSchema, { fileName: "Enclosure rev C" })).toBe(true);
+    expect(accepts(UpdateFileLinkSchema, { fileKind: "cad_model" })).toBe(true);
+    expect(accepts(UpdateFileLinkSchema, { fileName: "Spec", fileKind: "document" })).toBe(true);
+    expect(accepts(UpdateFileLinkSchema, {})).toBe(true);
+  });
+
+  it("bounds fileName at the 200-char CHECK, so an over-long name is a 422 not a 500", () => {
+    expect(accepts(UpdateFileLinkSchema, { fileName: "x".repeat(200) })).toBe(true);
+    expect(accepts(UpdateFileLinkSchema, { fileName: "x".repeat(201) })).toBe(false);
+    expect(accepts(UpdateFileLinkSchema, { fileName: "" })).toBe(false);
   });
 });

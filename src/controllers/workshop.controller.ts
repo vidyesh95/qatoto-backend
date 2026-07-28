@@ -93,6 +93,25 @@ export const AddFileLinkSchema = z
   })
   .strict();
 
+/**
+ * `PATCH …/workshop/files/:fileId` (§11j.3) — rename, or re-file under another kind.
+ *
+ * `externalUrl` IS ABSENT, AND `.strict()` IS THE WHOLE ENFORCEMENT. "A changed target is a
+ * new file, not an edit": repointing a link would silently move what a §9 effort claim
+ * cites, so the URL is immutable and no service branch is needed to say so. `sizeBytes`,
+ * `source`, `externalHost`, `uploadedByMemberId`, `removedAt` and `removedByUserId` are
+ * absent for the same reason — all server-owned.
+ *
+ * The `max(200)` matches `workshop_file_fileName_ck` exactly, so an over-long name is a 422
+ * rather than a CHECK violation surfacing as a 500.
+ */
+export const UpdateFileLinkSchema = z
+  .object({
+    fileName: z.string().trim().min(1).max(200).optional(),
+    fileKind: z.enum(FILE_KINDS).optional(),
+  })
+  .strict();
+
 export const PostChatMessageSchema = z
   .object({ messageText: z.string().trim().min(1).max(4_000) })
   .strict();
@@ -410,6 +429,43 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
     statusCode: 200,
     message: "Files loaded.",
     data: files,
+  } satisfies ApiResponse);
+}
+
+/**
+ * PATCH /research-projects/:projectSlug/workshop/files/:fileId — any member (§11j.3).
+ *
+ * Any member, matching the DELETE beside it rather than the POST: creating a link mints §9
+ * evidence and must be accountable, whereas renaming an existing one mints nothing. The URL
+ * stays immutable — see `UpdateFileLinkSchema`.
+ */
+export async function updateFileLink(req: Request, res: Response): Promise<void> {
+  const caller = await requireMemberOrRespond(req, res);
+  if (!caller) return;
+
+  const parsedBody = UpdateFileLinkSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const fileId = firstParam(req.params.fileId ?? "");
+  const updated = await filesService.updateFileLink(
+    caller.context.projectId,
+    fileId,
+    parsedBody.data,
+  );
+
+  if (!updated.success) {
+    respondWorkshopError(res, updated.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "File updated.",
+    data: updated.value,
   } satisfies ApiResponse);
 }
 

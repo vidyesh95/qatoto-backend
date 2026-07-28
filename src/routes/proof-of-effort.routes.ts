@@ -250,6 +250,15 @@ router.get(
   proofOfEffortController.getPhysicalReceipt,
 );
 
+/** DELETE …/physical-receipts/:receiptId — uploader only; 409 once cited (§11j.3). */
+router.delete(
+  "/:projectSlug/physical-receipts/:receiptId",
+  requireAuth,
+  effortClaimLimiter,
+  requireIdentifiedUser,
+  proofOfEffortController.deletePhysicalReceipt,
+);
+
 /** POST …/physical-receipts — server-measured in every field. 202, 409, 413. */
 router.post(
   "/:projectSlug/physical-receipts",

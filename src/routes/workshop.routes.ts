@@ -137,6 +137,17 @@ router.post(
   workshopController.addFileLink,
 );
 
+/** PATCH …/workshop/files/:fileId — rename or re-kind. The URL is immutable (§11j.3). */
+router.patch(
+  "/:projectSlug/workshop/files/:fileId",
+  requireAuth,
+  workshopFileCreateLimiter,
+  // No requireIdentifiedUser, matching the DELETE below: that guard is on the POST because
+  // CREATING a link mints §9 evidence. A rename mints nothing.
+  parseCompactJsonBody,
+  workshopController.updateFileLink,
+);
+
 router.delete(
   "/:projectSlug/workshop/files/:fileId",
   requireAuth,

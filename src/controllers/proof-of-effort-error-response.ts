@@ -105,6 +105,13 @@ export function mapProofOfEffortErrorToResponse(error: ProofOfEffortDomainError)
       };
 
     // --- 409: the lifecycle conflicts, which this domain is largely made of.
+    // Once a claim cites a receipt the bytes are evidence behind a slice award, and
+    // deleting them would leave a verified claim pointing at nothing (§11j.3).
+    case "RECEIPT_CITED":
+      return {
+        statusCode: 409,
+        message: `That receipt is cited by effort claim ${error.claimId} and is now part of its evidence.`,
+      };
     case "RETROACTIVE_RATE_CHANGE":
       return {
         statusCode: 409,
