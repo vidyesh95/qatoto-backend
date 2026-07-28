@@ -76,6 +76,10 @@ export function mapProofOfEffortErrorToResponse(error: ProofOfEffortDomainError)
       return { statusCode: 404, message: "Equity snapshot not found." };
     case "LEDGER_ENTRY_NOT_FOUND":
       return { statusCode: 404, message: "Ledger entry not found." };
+    // Reached from TWO unions with one payload — `EffortClaimError` (a claim cited a
+    // receipt id that is not citable) and `PhysicalReceiptError` (the uploader-scoped
+    // detail read). Another member's receipt lands here too: the read is scoped to
+    // `memberId`, so someone else's is indistinguishable from one that never existed.
     case "RECEIPT_NOT_FOUND":
       return { statusCode: 404, message: "Receipt not found." };
     case "GRANT_NOT_FOUND":

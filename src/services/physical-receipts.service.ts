@@ -53,6 +53,7 @@ export type PhysicalReceiptError =
   | ImageValidationError
   | CloudinaryError
   | { type: "DUPLICATE_RECEIPT"; contentSha256: string }
+  | { type: "RECEIPT_NOT_FOUND"; receiptId: string }
   | { type: "RECEIPT_FILE_MISSING" };
 
 export type ReceiptKind = (typeof physicalWorkReceipt.$inferSelect)["receiptKind"];
@@ -328,6 +329,37 @@ export async function findReceipt(
     createdAt: receipt.createdAt,
     forensics,
   };
+}
+
+/**
+ * `GET …/physical-receipts/:receiptId` — one receipt, scoped to its UPLOADER (§11j.2).
+ *
+ * `findReceipt` scopes to the project only, which is right for the internal callers that
+ * have already proven whose receipt it is. It is NOT right for a route: every active
+ * member can reach this path, and a project-scoped read would hand any of them any other
+ * member's evidence — the same leak `listUnclaimedReceipts` is scoped to avoid.
+ *
+ * DELIBERATELY UNLIKE THE LIST in one respect: no `claimId IS NULL` filter. The list shows
+ * what is still available to cite; this shows a receipt the caller owns, and a receipt
+ * already cited by a claim is exactly the one a claim page needs to open.
+ */
+export async function findOwnReceipt(
+  projectId: string,
+  memberId: string,
+  receiptId: string,
+): Promise<PhysicalReceiptView | null> {
+  const [owned] = await db
+    .select({ id: physicalWorkReceipt.id })
+    .from(physicalWorkReceipt)
+    .where(
+      and(
+        eq(physicalWorkReceipt.id, receiptId),
+        eq(physicalWorkReceipt.projectId, projectId),
+        eq(physicalWorkReceipt.memberId, memberId),
+      ),
+    );
+
+  return owned ? findReceipt(projectId, owned.id) : null;
 }
 
 /**

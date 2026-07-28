@@ -124,6 +124,9 @@ router.delete(
 
 router.get("/:projectSlug/workshop/files", requireAuth, workshopController.listFiles);
 
+/** GET …/workshop/files/:fileId — member only. A removed file reads as absent (§11j.2). */
+router.get("/:projectSlug/workshop/files/:fileId", requireAuth, workshopController.getFile);
+
 /** A linked file is evidence §9 can point at, so the caller must be an accountable one. */
 router.post(
   "/:projectSlug/workshop/files",

@@ -130,28 +130,45 @@ async function requireRoleOrRespond(
   return accessResult.value;
 }
 
-/** GET /research-projects/:projectSlug/roles — public for a published project. */
-export async function listRoles(req: Request, res: Response): Promise<void> {
+/**
+ * The read-side visibility gate, shared by the list and the detail read.
+ *
+ * A draft's roles are visible only to its members — the same rule as the project detail
+ * route, so reading roles cannot be used to confirm a draft slug exists. Extracted rather
+ * than repeated because the two routes must never disagree about it: a detail read with a
+ * laxer gate than its list is a way to enumerate drafts one role id at a time.
+ */
+async function resolveRoleVisibleProjectOrRespond(
+  req: Request,
+  res: Response,
+): Promise<membershipService.ProjectRef | null> {
   const projectSlug = firstParam(req.params.projectSlug ?? "");
   const project = await membershipService.findProjectBySlug(projectSlug);
 
   if (!project) {
     respondProjectError(res, { type: "NOT_FOUND", projectRef: projectSlug });
-    return;
+    return null;
   }
 
-  // A draft's roles are visible only to its members — the same rule as the project
-  // detail route, so listing roles cannot be used to confirm a draft slug exists.
   if (project.projectStatus === "draft") {
-    if (!req.user) {
-      respondProjectError(res, { type: "NOT_FOUND", projectRef: projectSlug });
-      return;
-    }
-    const isMember = await membershipService.isActiveProjectMember(project.projectId, req.user.id);
+    const isMember =
+      req.user !== undefined &&
+      (await membershipService.isActiveProjectMember(project.projectId, req.user.id));
+
     if (!isMember) {
       respondProjectError(res, { type: "NOT_FOUND", projectRef: projectSlug });
-      return;
+      return null;
     }
+  }
+
+  return project;
+}
+
+/** GET /research-projects/:projectSlug/roles — public for a published project. */
+export async function listRoles(req: Request, res: Response): Promise<void> {
+  const project = await resolveRoleVisibleProjectOrRespond(req, res);
+  if (!project) {
+    return;
   }
 
   const roles = await rolesService.listOpenRolesForProject(project.projectId);
@@ -161,6 +178,35 @@ export async function listRoles(req: Request, res: Response): Promise<void> {
     statusCode: 200,
     message: "Roles retrieved successfully",
     data: roles,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * GET /research-projects/:projectSlug/roles/:roleId — public for a published project.
+ *
+ * Same visibility gate and same payload shape as the list above (§11j.2), so a role card
+ * that links to its own detail page gets the identical object back.
+ */
+export async function getRole(req: Request, res: Response): Promise<void> {
+  const project = await resolveRoleVisibleProjectOrRespond(req, res);
+  if (!project) {
+    return;
+  }
+
+  const roleId = firstParam(req.params.roleId ?? "");
+  const role = await rolesService.findProjectOpenRoleView(project.projectId, roleId);
+
+  if (!role) {
+    respondProjectError(res, { type: "ROLE_NOT_FOUND", roleId });
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Role retrieved successfully",
+    data: role,
   };
   res.status(200).json(response);
 }

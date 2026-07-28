@@ -535,6 +535,34 @@ export async function createMilestone(req: Request, res: Response): Promise<void
   respondCreated(res, "Milestone created.", created.value);
 }
 
+/**
+ * GET /milestones/:milestoneId — member only (§11j.2).
+ *
+ * `contributor`, matching the project-scoped list rather than the maintainer floor the
+ * writes use: the doc row says "member only", and a milestone is something every member
+ * is meant to see. A nonexistent id and a milestone on a project the caller cannot see are
+ * the same 404 — `requireRoleForProjectOrRespond` maps the `null` slug to one.
+ */
+export async function getMilestone(req: Request, res: Response): Promise<void> {
+  const milestoneId = firstParam(req.params.milestoneId ?? "");
+  const existing = await milestonesService.findMilestoneWithProject(milestoneId);
+
+  const caller = await requireRoleForProjectOrRespond(
+    req,
+    res,
+    existing?.projectSlug ?? null,
+    "contributor",
+  );
+  if (!caller) return;
+
+  const found = await milestonesService.getMilestone(caller.context.projectId, milestoneId);
+  if (!found.success) {
+    respondFundingError(res, found.error);
+    return;
+  }
+  respondOk(res, "Milestone loaded.", found.value);
+}
+
 export async function updateMilestone(req: Request, res: Response): Promise<void> {
   const milestoneId = firstParam(req.params.milestoneId ?? "");
   const existing = await milestonesService.findMilestoneWithProject(milestoneId);

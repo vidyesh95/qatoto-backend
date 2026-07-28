@@ -231,6 +231,13 @@ router.get(
   proofOfEffortController.listPhysicalReceipts,
 );
 
+/** GET …/physical-receipts/:receiptId — uploader-scoped exactly as the list is (§11j.2). */
+router.get(
+  "/:projectSlug/physical-receipts/:receiptId",
+  requireAuth,
+  proofOfEffortController.getPhysicalReceipt,
+);
+
 /** POST …/physical-receipts — server-measured in every field. 202, 409, 413. */
 router.post(
   "/:projectSlug/physical-receipts",

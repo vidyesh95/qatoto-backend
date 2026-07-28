@@ -852,6 +852,30 @@ export async function listPhysicalReceipts(req: Request, res: Response): Promise
   );
 }
 
+/**
+ * GET …/physical-receipts/:receiptId — the caller's OWN receipt (§11j.2).
+ *
+ * Scoped to `memberId` for the same reason the list is: another member's receipt reads as
+ * absent, so this cannot be used to discover which photographs exist to cite.
+ */
+export async function getPhysicalReceipt(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const receiptId = firstParam(req.params.receiptId ?? "");
+  const receipt = await receiptsService.findOwnReceipt(
+    caller.context.projectId,
+    caller.context.memberId,
+    receiptId,
+  );
+
+  if (!receipt) {
+    respondProofOfEffortError(res, { type: "RECEIPT_NOT_FOUND", receiptId });
+    return;
+  }
+  respondOk(res, "Receipt loaded.", receipt);
+}
+
 // --- Integration consent. A TRIPLE — (project, member, provider) — never a pair.
 
 /** `GET …/integrations` — the caller's own grants, never anyone else's, never a token. */

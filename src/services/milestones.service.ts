@@ -124,6 +124,30 @@ export async function findMilestoneWithProject(
   return row ?? null;
 }
 
+/**
+ * One milestone, scoped to its project (§11j.2).
+ *
+ * NOT `findMilestoneWithProject`, which returns the bare row without its variance and is
+ * keyed on the id alone — it exists to resolve id → slug BEFORE membership is proven, and
+ * a caller must never see its output. This is the read that runs after, and it returns the
+ * same shape as a `listProjectMilestones` element so a list card and a detail page agree.
+ */
+export async function getMilestone(
+  projectId: string,
+  milestoneId: string,
+): Promise<Result<MilestoneView, MilestoneError>> {
+  const [row] = await db
+    .select({ milestone, variance: milestoneVariance })
+    .from(milestone)
+    .leftJoin(milestoneVariance, eq(milestoneVariance.milestoneId, milestone.id))
+    .where(and(eq(milestone.id, milestoneId), eq(milestone.projectId, projectId)));
+
+  if (!row) {
+    return { success: false, error: { type: "MILESTONE_NOT_FOUND", milestoneId } };
+  }
+  return { success: true, value: toMilestoneView(row.milestone, row.variance) };
+}
+
 export async function listProjectMilestones(projectId: string): Promise<readonly MilestoneView[]> {
   const rows = await db
     .select({ milestone, variance: milestoneVariance })

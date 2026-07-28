@@ -128,6 +128,15 @@ router.delete("/:projectSlug/members/:memberId", requireAuth, projectsController
 /** GET /research-projects/:projectSlug/roles */
 router.get("/:projectSlug/roles", attachOptionalUser, rolesController.listRoles);
 
+/**
+ * GET /research-projects/:projectSlug/roles/:roleId — `attachOptionalUser`, matching the
+ * list above, because it shares the list's draft gate (§11j.2).
+ *
+ * No literal lives under `/roles` on a GET today. One added later — `/roles/open`, say —
+ * must be declared ABOVE this line or it resolves as a role whose id is "open".
+ */
+router.get("/:projectSlug/roles/:roleId", attachOptionalUser, rolesController.getRole);
+
 /** POST /research-projects/:projectSlug/roles — maintainer+. */
 router.post(
   "/:projectSlug/roles",

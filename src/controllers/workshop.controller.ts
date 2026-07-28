@@ -413,6 +413,27 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
   } satisfies ApiResponse);
 }
 
+/** GET /research-projects/:projectSlug/workshop/files/:fileId — member only (§11j.2). */
+export async function getFile(req: Request, res: Response): Promise<void> {
+  const caller = await requireMemberOrRespond(req, res);
+  if (!caller) return;
+
+  const fileId = firstParam(req.params.fileId ?? "");
+  const fileResult = await filesService.findFile(caller.context.projectId, fileId);
+
+  if (!fileResult.success) {
+    respondWorkshopError(res, fileResult.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "File loaded.",
+    data: fileResult.value,
+  } satisfies ApiResponse);
+}
+
 export async function addFileLink(req: Request, res: Response): Promise<void> {
   const caller = await requireMemberOrRespond(req, res);
   if (!caller) return;

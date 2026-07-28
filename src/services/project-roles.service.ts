@@ -565,6 +565,34 @@ export async function findOpenRoleById(roleId: string): Promise<OpenRoleView | n
   return view ?? null;
 }
 
+/**
+ * One role, scoped to the project that owns it (§11j.2).
+ *
+ * NOT `findOpenRoleById`, which is keyed on the role id ALONE. A caller who can see
+ * project A could hand it a role id belonging to project B and read it, because nothing
+ * in that query ties the role to the slug in the URL. Scoping here means a role id from
+ * another project reads as absent — the same 404 as a role that never existed.
+ *
+ * Returns the SAME shape as a `listOpenRolesForProject` element, strands included, so a
+ * detail page and a list card render from one type.
+ */
+export async function findProjectOpenRoleView(
+  projectId: string,
+  roleId: string,
+): Promise<OpenRoleView | null> {
+  const [row] = await db
+    .select(OPEN_ROLE_VIEW_COLUMNS)
+    .from(projectOpenRole)
+    .innerJoin(researchProject, eq(researchProject.id, projectOpenRole.projectId))
+    .where(and(eq(projectOpenRole.id, roleId), eq(projectOpenRole.projectId, projectId)));
+
+  if (!row) {
+    return null;
+  }
+  const [view] = await attachCompensation([row]);
+  return view ?? null;
+}
+
 export async function listOpenRolesForProject(projectId: string): Promise<readonly OpenRoleView[]> {
   const rows = await db
     .select(OPEN_ROLE_VIEW_COLUMNS)

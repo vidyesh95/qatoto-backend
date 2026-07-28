@@ -115,6 +115,13 @@ router.post(
 
 // --- Milestones, keyed on their own id. Creation and listing are project-scoped and live
 // --- on the other router.
+//
+// There is no literal under `/milestones/` today. A `GET /milestones/mine` added later
+// MUST be declared above the read below, exactly as `/pledges/mine` is above
+// `/pledges/:pledgeId/cancel`, or it resolves as a milestone whose id is "mine".
+
+/** GET /milestones/:milestoneId — member only (§11j.2). */
+router.get("/milestones/:milestoneId", requireAuth, fundingController.getMilestone);
 
 router.patch(
   "/milestones/:milestoneId",

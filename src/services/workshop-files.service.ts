@@ -81,6 +81,34 @@ export async function listFiles(projectId: string): Promise<readonly WorkshopFil
 }
 
 /**
+ * One file, scoped to its project (§11j.2).
+ *
+ * A removed file reads as ABSENT rather than as a tombstone, which is the same predicate
+ * `listFiles` and `removeFileLink` both use. The row survives for the §9 claims that may
+ * cite it and for the partial unique index; it is not a thing a member can still open.
+ */
+export async function findFile(
+  projectId: string,
+  fileId: string,
+): Promise<Result<WorkshopFileView, WorkshopFileError>> {
+  const [row] = await db
+    .select()
+    .from(workshopFile)
+    .where(
+      and(
+        eq(workshopFile.id, fileId),
+        eq(workshopFile.projectId, projectId),
+        isNull(workshopFile.removedAt),
+      ),
+    );
+
+  if (!row) {
+    return { success: false, error: { type: "FILE_NOT_FOUND", fileId } };
+  }
+  return { success: true, value: toFileView(row) };
+}
+
+/**
  * Adds a link. The URL is parsed, host-allowlisted and NORMALIZED before it is stored —
  * the client's raw string never reaches a column and never reaches another member's
  * browser.
