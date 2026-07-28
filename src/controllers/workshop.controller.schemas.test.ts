@@ -310,18 +310,18 @@ describe("UpdateFileLinkSchema", () => {
 
   it("rejects every other server-owned field", () => {
     expect(
-      acceptedFields(UpdateFileLinkSchema, {}, [
-        "sizeBytes",
-        "contentSha256",
-        "source",
-        "externalHost",
-        "storageProvider",
-        "objectKey",
-        "uploadedByMemberId",
-        "removedAt",
-        "removedByUserId",
-        "projectId",
-        "id",
+      acceptedFields(UpdateFileLinkSchema, { fileName: "Renamed spec" }, [
+        { sizeBytes: 1024 },
+        { contentSha256: "a".repeat(64) },
+        { source: "hosted" },
+        { externalHost: "drive.google.com" },
+        { storageProvider: "s3_compatible" },
+        { objectKey: "workshop/forged" },
+        { uploadedByMemberId: "mem_other" },
+        { removedAt: new Date().toISOString() },
+        { removedByUserId: "usr_other" },
+        { projectId: "prj_other" },
+        { id: "wsf_other" },
       ]),
     ).toEqual([]);
   });
