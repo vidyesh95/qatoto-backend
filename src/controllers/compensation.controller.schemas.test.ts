@@ -15,12 +15,14 @@ vi.mock("#src/services/project-membership.service.js", () => ({}));
 const {
   AgreementQuerySchema,
   CountersignPeriodSchema,
+  DeclineAgreementSchema,
   ExportQuerySchema,
   FinalizePeriodSchema,
   PeriodListQuerySchema,
   ProposeCompensationAgreementSchema,
   RecordPaymentSchema,
   SupersedePeriodSchema,
+  WithdrawAgreementSchema,
 } = await import("#src/controllers/compensation.controller.js");
 
 /**
@@ -244,5 +246,55 @@ describe("query schemas", () => {
   it("AgreementQuerySchema filters by member and nothing else", () => {
     expect(AgreementQuerySchema.safeParse({ memberId: "usr_1" }).success).toBe(true);
     expect(AgreementQuerySchema.safeParse({ status: "active" }).success).toBe(false);
+  });
+});
+
+/**
+ * The two endings of a proposed agreement (§11j.3).
+ *
+ * BOTH WRITE `withdrawn`, because `compensationAgreementStatusEnum` has no `declined`, and
+ * the audit kind added in migration 0022 is what records who ended it. Neither note has a
+ * column on `member_cash_compensation_agreement`; both live in the audit entry alone.
+ */
+describe("agreement decline and withdraw bodies", () => {
+  const SERVER_OWNED_ON_ENDINGS = [
+    { status: "withdrawn" },
+    { acceptedAt: new Date().toISOString() },
+    { acceptedByUserId: "usr_other" },
+    { memberId: "mem_other" },
+    { projectId: "prj_other" },
+    { monthlyAmountInCents: "500000" },
+    { hourlyRateCentsPerHour: "12000" },
+    { currencyCode: "CNY" },
+    { effectiveFrom: "2026-01-01" },
+  ] as const;
+
+  it.each(SERVER_OWNED_ON_ENDINGS)("decline rejects %o", (forged) => {
+    expect(DeclineAgreementSchema.safeParse({ ...forged }).success).toBe(false);
+  });
+
+  it.each(SERVER_OWNED_ON_ENDINGS)("withdraw rejects %o", (forged) => {
+    expect(WithdrawAgreementSchema.safeParse({ reasonNote: "Role scope changed.", ...forged }).success).toBe(false);
+  });
+
+  /**
+   * A member turning an offer down should not have to justify it — the refusal is the
+   * signal. A founder retracting one must, or the retraction is fiat with extra steps.
+   */
+  it("makes the decline note optional and the withdrawal reason required", () => {
+    expect(DeclineAgreementSchema.safeParse({}).success).toBe(true);
+    expect(DeclineAgreementSchema.safeParse({ note: "Rate is below my floor." }).success).toBe(true);
+
+    expect(WithdrawAgreementSchema.safeParse({}).success).toBe(false);
+    expect(WithdrawAgreementSchema.safeParse({ reasonNote: "" }).success).toBe(false);
+    expect(WithdrawAgreementSchema.safeParse({ reasonNote: "   " }).success).toBe(false);
+    expect(WithdrawAgreementSchema.safeParse({ reasonNote: "Role scope changed." }).success).toBe(true);
+  });
+
+  it("bounds both notes", () => {
+    expect(DeclineAgreementSchema.safeParse({ note: "x".repeat(1_000) }).success).toBe(true);
+    expect(DeclineAgreementSchema.safeParse({ note: "x".repeat(1_001) }).success).toBe(false);
+    expect(WithdrawAgreementSchema.safeParse({ reasonNote: "x".repeat(2_000) }).success).toBe(true);
+    expect(WithdrawAgreementSchema.safeParse({ reasonNote: "x".repeat(2_001) }).success).toBe(false);
   });
 });

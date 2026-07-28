@@ -112,6 +112,30 @@ export const ProposeCompensationAgreementSchema = z
  * accepted agreement and their own recorded minutes, in the same transaction that freezes
  * it. The acknowledgement exists so an accidental double-click cannot reach the freeze.
  */
+/**
+ * `POST …/compensation-agreements/:agreementId/decline` (§11j.3) — the member's refusal.
+ *
+ * The note is OPTIONAL: a member who does not want to explain why they turned down an offer
+ * should not be forced to, and the refusal itself is the signal the founder needs. Parsed
+ * from `optionalBody(req)`, because body-parser leaves `req.body` undefined on a bodyless
+ * POST and Express 5 does not default it to `{}`.
+ *
+ * There is NO column for this note — it survives only as `project_audit_entry.detailNote`.
+ */
+export const DeclineAgreementSchema = z
+  .object({ note: z.string().trim().min(1).max(1_000).optional() })
+  .strict();
+
+/**
+ * `POST …/compensation-agreements/:agreementId/withdraw` (§11j.3) — the founder's retraction.
+ *
+ * `reasonNote` is REQUIRED, mirroring `SupersedePeriodSchema` field for field: retracting an
+ * offer somebody is deciding about, with no stated basis, is founder fiat with extra steps.
+ */
+export const WithdrawAgreementSchema = z
+  .object({ reasonNote: z.string().trim().min(1).max(2_000) })
+  .strict();
+
 export const FinalizePeriodSchema = z.object({ acknowledgement: z.string() }).strict();
 
 export const CountersignPeriodSchema = z
@@ -289,6 +313,77 @@ export async function proposeCompensationAgreement(req: Request, res: Response):
  * junior member on the project, and the service then checks they are the agreement's own
  * subject. A higher role floor would stop members accepting their own pay.
  */
+/**
+ * POST …/compensation-agreements/:agreementId/decline — THE SUBJECT ONLY (§11j.3).
+ *
+ * `contributor` is the floor for the same reason `accept` uses it: the person being paid is
+ * usually the most junior member on the project. The service then proves they are the
+ * agreement's subject and refuses anyone else with a 403.
+ */
+export async function declineCompensationAgreement(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const parsedBody = DeclineAgreementSchema.safeParse(optionalBody(req));
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const agreementId = firstParam(req.params.agreementId ?? "");
+  const declined = await agreementsService.declineCashAgreement(
+    caller.context,
+    agreementId,
+    caller.userId,
+    caller.context.memberRole,
+    parsedBody.data.note,
+  );
+
+  if (!declined.success) {
+    respondCompensationError(res, declined.error);
+    return;
+  }
+  respondOk(
+    res,
+    // Says where the note went, because the client will not find it on the row.
+    "Compensation agreement declined. The proposal is closed and your note is recorded in the audit trail.",
+    declined.value,
+  );
+}
+
+/**
+ * POST …/compensation-agreements/:agreementId/withdraw — FOUNDER only (§11j.3).
+ *
+ * The endpoint that finally reaches `withdrawn`, a value shipped in the enum since §7A with
+ * nothing able to produce it. Refused once accepted: a live agreement is superseded by a
+ * later effective-dated one, never retracted.
+ */
+export async function withdrawCompensationAgreement(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "founder");
+  if (!caller) return;
+
+  const parsedBody = WithdrawAgreementSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const agreementId = firstParam(req.params.agreementId ?? "");
+  const withdrawn = await agreementsService.withdrawCashAgreement(
+    caller.context,
+    agreementId,
+    caller.userId,
+    caller.context.memberRole,
+    parsedBody.data.reasonNote,
+  );
+
+  if (!withdrawn.success) {
+    respondCompensationError(res, withdrawn.error);
+    return;
+  }
+  respondOk(res, "Compensation agreement withdrawn.", withdrawn.value);
+}
+
 export async function acceptCompensationAgreement(req: Request, res: Response): Promise<void> {
   const caller = await requireRoleOrRespond(req, res, "contributor");
   if (!caller) return;

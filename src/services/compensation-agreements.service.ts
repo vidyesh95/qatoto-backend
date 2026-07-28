@@ -423,6 +423,237 @@ export async function acceptCashAgreement(
  * sees every agreement, including superseded and withdrawn proposals. A history only the
  * founder can see is not transparency, it is a filing cabinet.
  */
+/**
+ * Loads an agreement scoped to its project, for the two endings below.
+ *
+ * BOTH COLUMNS, always: an agreement id from another project must be indistinguishable
+ * from a nonexistent one, or this becomes a cross-tenant probe.
+ */
+async function findAgreementForEnding(
+  projectId: string,
+  agreementId: string,
+): Promise<
+  | {
+      readonly agreement: typeof memberCashCompensationAgreement.$inferSelect;
+      readonly memberUserId: string;
+      readonly name: string;
+    }
+  | undefined
+> {
+  const [row] = await db
+    .select({
+      agreement: memberCashCompensationAgreement,
+      memberUserId: projectMember.userId,
+      name: user.name,
+    })
+    .from(memberCashCompensationAgreement)
+    .innerJoin(projectMember, eq(projectMember.id, memberCashCompensationAgreement.memberId))
+    .innerJoin(user, eq(user.id, projectMember.userId))
+    .where(
+      and(
+        eq(memberCashCompensationAgreement.id, agreementId),
+        eq(memberCashCompensationAgreement.projectId, projectId),
+      ),
+    );
+
+  return row;
+}
+
+/**
+ * Ends a `proposed` agreement, writing `withdrawn` and appending the audit kind that says
+ * WHO ended it (§11j.3).
+ *
+ * BOTH ENDINGS WRITE THE SAME STATUS, AND THAT IS NOT A COMPROMISE.
+ * `compensationAgreementStatusEnum` has four values and `declined` is not among them; the
+ * column's own comment defines `withdrawn` as "a proposal nobody accepted", which is
+ * exactly what a member's refusal and a founder's retraction each produce. What the status
+ * genuinely cannot record is who acted, and §7A.6 needs that — so migration 0022 added
+ * `compensation_agreement_declined` and `compensation_agreement_withdrawn` and the audit
+ * entry carries the distinction.
+ *
+ * THE NOTE HAS NO COLUMN. `member_cash_compensation_agreement` has `rationaleNote` — the
+ * PROPOSAL's basis — and nothing for a decline note or a withdrawal reason. Both survive as
+ * `project_audit_entry.detailNote` or not at all, which is why the audit append here is not
+ * optional the way it is for a funding-round edit.
+ *
+ * `member_cash_comp_agreement_lifecycle_ck` requires `status <> 'withdrawn' OR accepted_at
+ * IS NULL`, which a `proposed` row satisfies by construction, and the
+ * `qatoto_cash_agreement_accept_only` trigger permits `proposed → withdrawn` because its
+ * amount-freeze branch fires only when `OLD.status <> 'proposed'`. Neither ending can trip
+ * `member_cash_comp_agreement_active_unq`, since neither writes `active`.
+ */
+async function endProposedAgreement(
+  projectId: string,
+  agreementId: string,
+  actorUserId: string,
+  actorRoleSnapshot: string,
+  ending: {
+    readonly eventKind: "compensation_agreement_declined" | "compensation_agreement_withdrawn";
+    readonly actionLabel: string;
+    readonly detailNote?: string | undefined;
+  },
+  row: {
+    readonly agreement: typeof memberCashCompensationAgreement.$inferSelect;
+    readonly memberUserId: string;
+    readonly name: string;
+  },
+): Promise<Result<CompensationAgreementView, CompensationAgreementError>> {
+  const updated = await db.transaction(async (tx) => {
+    const endedAt = new Date();
+
+    const [next] = await tx
+      .update(memberCashCompensationAgreement)
+      .set({ status: "withdrawn" })
+      // Re-asserted inside the transaction: an accept may have landed between the read and
+      // this write, and the loser of that race must answer 409 rather than overwrite it.
+      .where(
+        and(
+          eq(memberCashCompensationAgreement.id, agreementId),
+          eq(memberCashCompensationAgreement.status, "proposed"),
+        ),
+      )
+      .returning();
+
+    if (!next) {
+      return null;
+    }
+
+    await appendAuditEntry(tx, {
+      projectId,
+      eventKind: ending.eventKind,
+      actorUserId,
+      actorRoleSnapshot,
+      actionLabel: ending.actionLabel,
+      targetLabel: `agreement ${agreementId}`,
+      // The ONLY durable home for the note — there is no column for it.
+      ...(ending.detailNote === undefined ? {} : { detailNote: ending.detailNote }),
+      payload: {
+        agreementId,
+        memberId: next.memberId,
+        engagementKind: next.engagementKind,
+        monthlyAmountInCents: next.monthlyAmountInCents,
+        hourlyRateCentsPerHour: next.hourlyRateCentsPerHour,
+        currencyCode: next.currencyCode,
+        effectiveFrom: next.effectiveFrom,
+      },
+      occurredAt: endedAt,
+    });
+
+    return next;
+  });
+
+  if (!updated) {
+    return { success: false, error: { type: "AGREEMENT_ALREADY_ACCEPTED" } };
+  }
+
+  return {
+    success: true,
+    value: toAgreementView(updated, {
+      memberId: updated.memberId,
+      userId: row.memberUserId,
+      name: row.name,
+    }),
+  };
+}
+
+/**
+ * `POST …/compensation-agreements/:agreementId/decline` — the MEMBER says no (§11j.3).
+ *
+ * Propose and accept shipped without it, so a proposal the member did not want sat
+ * `proposed` forever and the founder had no signal to renegotiate against.
+ *
+ * The subject only — 403 `NOT_THE_AGREEMENT_SUBJECT`, decided AFTER membership is proven,
+ * which is what licenses a 403 rather than a 404 here.
+ */
+export async function declineCashAgreement(
+  context: { readonly projectId: string },
+  agreementId: string,
+  decliningUserId: string,
+  actorRoleSnapshot: string,
+  note?: string,
+): Promise<Result<CompensationAgreementView, CompensationAgreementError>> {
+  const row = await findAgreementForEnding(context.projectId, agreementId);
+  if (!row) {
+    return { success: false, error: { type: "AGREEMENT_NOT_FOUND", agreementId } };
+  }
+  if (row.memberUserId !== decliningUserId) {
+    return { success: false, error: { type: "NOT_THE_AGREEMENT_SUBJECT" } };
+  }
+  if (row.agreement.status === "active" || row.agreement.status === "superseded") {
+    return { success: false, error: { type: "AGREEMENT_ALREADY_ACCEPTED" } };
+  }
+  if (row.agreement.status !== "proposed") {
+    return {
+      success: false,
+      error: { type: "AGREEMENT_NOT_PROPOSED", status: row.agreement.status },
+    };
+  }
+
+  return endProposedAgreement(
+    context.projectId,
+    agreementId,
+    decliningUserId,
+    actorRoleSnapshot,
+    {
+      eventKind: "compensation_agreement_declined",
+      actionLabel: "Declined their cash compensation agreement",
+      detailNote: note,
+    },
+    row,
+  );
+}
+
+/**
+ * `POST …/compensation-agreements/:agreementId/withdraw` — the FOUNDER retracts (§11j.3).
+ *
+ * THIS IS THE ENDPOINT THAT FINALLY REACHES `withdrawn`. The value has shipped in
+ * `compensationAgreementStatusEnum` since §7A landed with no state machine able to produce
+ * it, which is exactly the class of defect §11j exists to enumerate. After this,
+ * `listAgreementsOverlapping`'s `or(active, superseded)` filter genuinely excludes rows
+ * rather than describing a case that could not occur.
+ *
+ * REFUSED ONCE ACCEPTED. A live agreement is SUPERSEDED by a later effective-dated one,
+ * never withdrawn — retracting something a member already accepted and worked under would
+ * erase the basis on which they were paid.
+ *
+ * `reasonNote` is REQUIRED, mirroring `SupersedePeriodSchema`: a retraction with no stated
+ * basis is founder fiat with extra steps.
+ */
+export async function withdrawCashAgreement(
+  context: { readonly projectId: string },
+  agreementId: string,
+  withdrawingUserId: string,
+  actorRoleSnapshot: string,
+  reasonNote: string,
+): Promise<Result<CompensationAgreementView, CompensationAgreementError>> {
+  const row = await findAgreementForEnding(context.projectId, agreementId);
+  if (!row) {
+    return { success: false, error: { type: "AGREEMENT_NOT_FOUND", agreementId } };
+  }
+  if (row.agreement.status === "active" || row.agreement.status === "superseded") {
+    return { success: false, error: { type: "AGREEMENT_ALREADY_ACCEPTED" } };
+  }
+  if (row.agreement.status !== "proposed") {
+    return {
+      success: false,
+      error: { type: "AGREEMENT_NOT_PROPOSED", status: row.agreement.status },
+    };
+  }
+
+  return endProposedAgreement(
+    context.projectId,
+    agreementId,
+    withdrawingUserId,
+    actorRoleSnapshot,
+    {
+      eventKind: "compensation_agreement_withdrawn",
+      actionLabel: "Withdrew a proposed cash compensation agreement",
+      detailNote: reasonNote,
+    },
+    row,
+  );
+}
+
 export async function listAgreementHistory(
   projectId: string,
   memberUserId?: string,

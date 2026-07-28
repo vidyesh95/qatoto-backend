@@ -87,6 +87,37 @@ router.post(
   compensationController.acceptCompensationAgreement,
 );
 
+/**
+ * `POST …/compensation-agreements/:agreementId/decline` — THE SUBJECT ONLY (§11j.3).
+ *
+ * Propose and accept shipped without a way to say no, so a proposal the member did not want
+ * sat `proposed` forever. `parseCompactJsonBody` because `{ note? }` is a body; `/accept`
+ * has none.
+ */
+router.post(
+  "/:projectSlug/compensation-agreements/:agreementId/decline",
+  requireAuth,
+  compensationAgreementLimiter,
+  requireIdentifiedUser,
+  parseCompactJsonBody,
+  compensationController.declineCompensationAgreement,
+);
+
+/**
+ * `POST …/compensation-agreements/:agreementId/withdraw` — FOUNDER only (§11j.3).
+ *
+ * The only endpoint that reaches `withdrawn`. Refused once accepted — a live agreement is
+ * superseded, never retracted.
+ */
+router.post(
+  "/:projectSlug/compensation-agreements/:agreementId/withdraw",
+  requireAuth,
+  compensationAgreementLimiter,
+  requireIdentifiedUser,
+  parseCompactJsonBody,
+  compensationController.withdrawCompensationAgreement,
+);
+
 // --- Periods. An open one accrues; a finalized one is frozen and hash-chained.
 
 router.get(
