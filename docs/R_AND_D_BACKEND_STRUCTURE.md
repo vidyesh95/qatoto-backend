@@ -193,30 +193,61 @@ If you remember nothing else from this file, remember §0.
 
 ## 1. What the frontend expects
 
-Ten routes, all under `(home)`, all rendering mocks today. The contract each one needs:
+**Fourteen routes**, all under `(home)`, and **ten of them fetch this backend today**. An earlier
+draft of this section said "ten routes, all rendering mocks"; both halves of that sentence have
+been false since frontend phases 1–3 wired the pipeline. The corrected inventory, with the
+transport each page actually uses:
 
-| Route                                                    | Surface                    | Needs from the backend                                                       |
-| -------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
-| `/research-and-development`                              | Pipeline landing           | Project rail, top problem clusters, market insights, open roles              |
-| `/research-and-development/new`                          | 4-step idea wizard         | Create a `draft` project from `NewIdeaDraft`                                 |
-| `/research-and-development/project/[id]`                 | Detail, 5 tabs             | Project + team + milestones + daily logs + funding + compensation statements |
-| `/research-and-development/project/[id]/workshop`        | Boards / Files / Chat      | Kanban, file store, team chat                                                |
-| `/research-and-development/project/[id]/proof-of-effort` | Slicing Pie ledger, 5 tabs | Slice breakdown, verification runs, disputes, optimization, audit trail      |
-| `/research-and-development/problem-map`                  | Civic Pulse                | Problem clusters with geo + opportunity scores                               |
-| `/research-and-development/knowledge-hub`                | Market intel               | Insights + demand-signal leaderboard                                         |
-| `/research-and-development/talent`                       | Talent directory           | Filterable talent profiles + open roles                                      |
-| `/research-and-development/funding`                      | Investor deal flow         | Open rounds + investor-confidence signal                                     |
-| `/research-and-development/projects/project-immortal`    | Moonshot program           | Branch tree, papers, posts, ideas, contributors, stats                       |
+| Route                                                    | Surface                    | Transport       | Needs from the backend                                                                |
+| -------------------------------------------------------- | -------------------------- | --------------- | ------------------------------------------------------------------------------------- |
+| `/research-and-development`                              | Pipeline landing           | ✅ server-fetch | Project rail, top problem clusters, market insights, open roles                       |
+| `/research-and-development/new`                          | 4-step idea wizard         | ⬜ **no fetch** | Create a `draft` project from `NewIdeaDraft` — the submit is a local no-op            |
+| `/research-and-development/problem-map`                  | Civic Pulse                | ✅ server-fetch | Problem clusters with geo + opportunity scores                                        |
+| `/research-and-development/knowledge-hub`                | Market intel               | ✅ server-fetch | Insights + demand-signal leaderboard                                                  |
+| `/research-and-development/talent`                       | Talent directory           | ✅ server-fetch | Filterable talent profiles + open roles                                               |
+| `/research-and-development/team-building` (§4c)          | Cross-project roles        | ✅ server-fetch | Open roles + teams forming + skill vocabulary + talent spotlight                      |
+| `/research-and-development/build-log` (§4c)              | Cross-project log feed     | ✅ server-fetch | Member-scoped keyset feed + public streak leaderboard                                 |
+| `/research-and-development/funding`                      | Investor deal flow         | ✅ server-fetch | Open rounds + investor-confidence signal                                              |
+| `/research-and-development/governance` (§4c)             | Commitments + statements   | 🟥 **mock**     | Aggregate governance summary — the backend read ships, nothing calls it               |
+| `/research-and-development/go-to-market` (§4c)           | Suppliers + launch ready   | ✅ server-fetch | Supplier directory, capability vocabulary, launch-ready rail                          |
+| `/research-and-development/projects/project-immortal`    | Moonshot program           | 🟥 **mock**     | Branch tree, papers, posts, ideas, contributors, stats — **no backend at all**        |
+| `/research-and-development/project/[id]`                 | Detail, 4 tabs             | ✅ server-fetch | Project + team + roles + milestones + daily logs + funding                            |
+| `/research-and-development/project/[id]/workshop`        | Boards / Files / Chat      | ✅ server-fetch | Kanban, file store, team chat                                                         |
+| `/research-and-development/project/[id]/proof-of-effort` | Slicing Pie ledger, 6 tabs | 🟥 **mock**     | Slice breakdown, verification runs, disputes, integrations, optimization, audit trail |
+
+Read that table with three corrections in mind, each of which a previous draft got wrong:
+
+- **`/project/[id]` has four tabs, not five.** Overview, Daily Logs, Team, Funding. The Governance
+  tab was **deleted** in frontend phase 2, not merely left unwired — it was bound to a mock project
+  shape the detail page had stopped reading, and its funding half still rendered
+  `escrowReleaseAmount`, a field this contract retired (§7, §14).
+- **`/project/[id]/proof-of-effort` has six tabs, not five** — the integration-consent tab is the
+  sixth, and it is the §9.10 lawful-basis surface, so it is the one that must not be forgotten.
+- **`[id]` is a slug, not an id** (§5). The segment is named `id`; the value in it is
+  `projectSlug`. Both `project/[id]` (dynamic) and `projects/project-immortal` (a literal segment
+  under a different, plural parent) exist — they are two trees, not one.
+
+**Every call is a `GET`.** The R&D frontend issues no `POST`, `PATCH` or `DELETE` anywhere: 22 read
+endpoints out of the 195 routes this contract ships, and zero writes. Every `sheets/*.tsx` — apply
+to a role, back a project, edit a project, edit a talent profile, post an idea, raise a dispute,
+report a problem — holds local form state and posts nowhere. That single fact is what §14 is a
+list of.
+
+**The full per-route endpoint matrix is [Appendix C](#appendix-c--the-research-and-development-wiring-map)**,
+which also lists the backend surface no page calls yet. This table says what each page needs;
+Appendix C says what it currently asks for.
 
 ### The wire-format contract
 
-The frontend types today carry **pre-formatted display strings** — `"$6,000"`, `"62%"`,
-`"148 hrs"`, `"1.8 MB"`, `"Locks in 9h 14m"`. Every file header under
+The frontend's **mock-only** types still carry **pre-formatted display strings** — `"$6,000"`,
+`"62%"`, `"148 hrs"`, `"1.8 MB"`, `"Locks in 9h 14m"`. Every file header under
 `src/types/research-and-development/` states this as deliberate: _"every figure arrives as a
 pre-computed display string."_
 
-**That changes.** The backend sends **raw integers in explicitly named units**, and each client
-formats:
+**That changed, and for the wired surfaces it has already happened.** The backend sends **raw
+integers in explicitly named units**, and each client formats. Every one of the ten wired routes
+above parses responses through Zod schemas in `src/lib/rnd/*.schemas.ts` that speak exactly this
+format; the string-carrying tree survives only behind the three mock pages (§15):
 
 | Kind         | Wire field     | Unit                                                        |
 | ------------ | -------------- | ----------------------------------------------------------- |
@@ -2475,39 +2506,34 @@ Mounted in `src/app.ts`, after `express.json()`. There is **no webhook router an
 mount** — the three providers that would have signed a webhook are all deferred (Appendix A), and
 adding a raw-body branch for a route that does not exist is a security surface bought for nothing.
 
+**This block is transcribed from `src/app.ts` in declaration order** — for an Express app the order
+IS the routing table, so a block that reads well but orders differently from the file documents an
+app that does not exist. Verify it with `rg -n '^app\.use' src/app.ts`.
+
 ```ts
-// … parseLongFormJsonBody for /research-projects and /discovery, then express.json() …
-app.use("/research-projects", researchProjectsRouter); // ✅ shipped — §5
+// … parseLongFormJsonBody for /research-projects, /discovery and /videos, then express.json() …
+app.use("/research-projects", researchProjectsRouter); // :129 ✅ shipped — §5
 // Same prefix, declared AFTER: workshopRouter owns /:projectSlug/workshop/* and
 // /:projectSlug/daily-logs/*. No collision — researchProjectsRouter's "/:projectSlug"
 // matches that one segment exactly and never swallows a deeper path.
-app.use("/research-projects", workshopRouter); // ✅ shipped — §8
-app.use("/discovery", discoveryRouter); // ✅ shipped — §6
+app.use("/research-projects", workshopRouter); // :133 ✅ shipped — §8
 // Same prefix again, declared AFTER both: proofOfEffortRouter owns /:projectSlug's
 // /effort-claims/*, /equity/*, /allocation-proposals/*, /disputes/*, /audit-trail/*,
 // /physical-receipts, /integrations/*, /pie-bake, /slice-ledger and /proof-of-effort.
-app.use("/research-projects", proofOfEffortRouter); // ✅ shipped — §9
-app.use("/", researchCatalogRouter); // ✅ shipped — /open-roles, /research-categories (§5)
-// Root-mounted because a provider's redirect URI is fixed at app-registration time and
-// cannot carry a project slug; the project and member come out of the signed state (§9.10).
-app.use("/", integrationCallbackRouter); // ✅ shipped — GET /integrations/:provider/callback
-
-// Same prefix a fourth time, declared AFTER all three: projectFundingRouter owns
-// /:projectSlug's /funding-rounds, /milestones, /compensation and /investor-confidence.
+app.use("/research-projects", proofOfEffortRouter); // :138 ✅ shipped — §9
+// Same prefix a fourth time: projectFundingRouter owns /:projectSlug's /funding-rounds,
+// /milestones, /compensation and /investor-confidence.
 // Its /escrow/* subtree is RETIRED — those four paths 404 now (§11g).
-app.use("/research-projects", projectFundingRouter); // ✅ shipped — §7
-// Same prefix a FIFTH time, declared after all four: compensationRouter owns
-// /:projectSlug's /compensation-agreements/*, /compensation-periods/*,
-// /compensation-period-lines/* and /members/:memberUserId/compensation-agreement.
-app.use("/research-projects", compensationRouter); // ✅ shipped — §7A
-// Same prefix a SIXTH time, declared after all five: projectGoToMarketRouter owns
-// /:projectSlug/launch-readiness (§11i). Still no collision, same reason.
-app.use("/research-projects", projectGoToMarketRouter); // ✅ shipped — §11i
-// Root-mounted for the same reason researchCatalogRouter is: a backer arriving from a
-// deal-flow list holds a round id and has no reason to know which project owns it.
-// Owns /funding-rounds, /pledges, /milestones and /funding/deals. Its /escrow-releases
-// and /provider-transfers subtrees are RETIRED (§11g).
-app.use("/", fundingRouter); // ✅ shipped — §7
+app.use("/research-projects", projectFundingRouter); // :144 ✅ shipped — §7
+// A FIFTH time: compensationRouter owns /:projectSlug's /compensation-agreements/*,
+// /compensation-periods/*, /compensation-period-lines/* and
+// /members/:memberUserId/compensation-agreement.
+app.use("/research-projects", compensationRouter); // :154 ✅ shipped — §7A
+// A SIXTH time: projectGoToMarketRouter owns /:projectSlug/launch-readiness and
+// /:projectSlug/supplier-engagements/* (§11i, §11j.1). Still no collision, same reason.
+app.use("/research-projects", projectGoToMarketRouter); // :162 ✅ shipped — §11i
+app.use("/discovery", discoveryRouter); // :163 ✅ shipped — §6, and §11j's admin subtree
+app.use("/", researchCatalogRouter); // :172 ✅ shipped — /open-roles, /research-categories (§5)
 
 // --- The four §4c STAGE ROUTES' cross-project halves (§11h, §11i, Appendix B). All
 // root-mounted for one reason: a visitor arriving from a landing-page stage card has not
@@ -2517,15 +2543,34 @@ app.use("/", fundingRouter); // ✅ shipped — §7
 //
 // /daily-logs is MEMBER-SCOPED, derived from project_member in SQL;
 // /daily-logs/streak-leaderboard is public.
-app.use("/", dailyLogFeedRouter); // ✅ shipped — §8, §11h
+app.use("/", dailyLogFeedRouter); // :183 ✅ shipped — §8, §11h
 // /governance/summary. Aggregates and mechanics, never people.
-app.use("/", governanceRouter); // ✅ shipped — §7A, §11h
+app.use("/", governanceRouter); // :187 ✅ shipped — §7A, §11h
 // /suppliers, /supplier-capabilities, /launch-ready-projects.
-app.use("/", supplierRouter); // ✅ shipped — §11i
+app.use("/", supplierRouter); // :190 ✅ shipped — §11i
+
+// Root-mounted for the inverse of the stage routes' reason: an invitee or an applicant
+// holds no slug either, and finding WHICH project wants them is the entire point.
+// Owns GET /applications/mine and GET /invites/mine (§11j.2).
+app.use("/", applicationInboxRouter); // :197 ✅ shipped — §11j
+// Root-mounted for the same reason researchCatalogRouter is: a backer arriving from a
+// deal-flow list holds a round id and has no reason to know which project owns it.
+// Owns /funding-rounds, /pledges, /milestones and /funding/deals. Its /escrow-releases
+// and /provider-transfers subtrees are RETIRED (§11g).
+app.use("/", fundingRouter); // :208 ✅ shipped — §7
+// Root-mounted because a provider's redirect URI is fixed at app-registration time and
+// cannot carry a project slug; the project and member come out of the signed state (§9.10).
+app.use("/", integrationCallbackRouter); // :212 ✅ shipped — GET /integrations/:provider/callback
 
 // NOT YET IN src/app.ts — no router to mount:
 // app.use("/research-programs", researchProgramsRouter); // ⏳ pending — §10
 ```
+
+**Every R&D router is mounted.** There is no orphaned route file: all six named exports
+(`applicationInboxRouter`, `dailyLogFeedRouter`, `integrationCallbackRouter`,
+`projectFundingRouter`, `governanceRouter`, `projectGoToMarketRouter`) are bound alongside their
+files' default exports. The only R&D-adjacent code with no route reaching it is the retired escrow
+subtree (§11g) and `src/middleware/validate.ts`.
 
 **Path convention, applied uniformly:** project-scoped resources nest under
 `/research-projects/:projectSlug/…`. The public identity in a URL is always the **slug** (§5);
@@ -2533,9 +2578,23 @@ internal ids appear in payloads and in child path segments. Literal segments (`/
 are declared **before** `/:projectSlug` so they are never swallowed as a param — the same rule as the
 users router's `/me` and the products router's `/mine`.
 
-Unless stated otherwise every route is `requireAuth`, every project-scoped route additionally runs
-`requireProjectRole` (§4a), and every mutation touching money/equity/effort adds
+Unless stated otherwise every route is `requireAuth`, every project-scoped route additionally
+enforces `requireProjectRole` (§4a), and every mutation touching money/equity/effort adds
 `requireIdentifiedUser` (§4a).
+
+**Two structural facts about that sentence, which earlier drafts left implied and wrong:**
+
+- **`requireProjectRole` is NOT middleware.** It is a service function —
+  `src/services/project-membership.service.ts:114` — called **inside** the controller. That is
+  deliberate and it is §3.3: middleware can only `next(err)` or write a response, whereas the
+  authorization check has three outcomes a controller needs to distinguish (no such project, not a
+  member, insufficient role) and must collapse them into one `404` **after** deciding, not before.
+  A `Result` return is the only shape that lets the controller both know which case it hit and
+  answer with one indistinguishable refusal. Read the route tables below as
+  `requireAuth` + an in-controller membership gate, not as a middleware chain.
+- **`src/middleware/validate.ts` is dead code**, imported by zero files. Boundary parsing in this
+  domain is controller-inline `safeParse` (§3.1), as `src/controllers/project-error-response.ts:52`
+  records. Do not wire it up to "be consistent" — the inline form is the convention here.
 
 ### Implementation status, per subsection
 
@@ -3308,32 +3367,89 @@ POST …/allocation-proposals/:id/dispute  → slices freeze in escrow, OUTSIDE 
 > `/build-log` reads `GET /daily-logs` and the streak leaderboard. All of it is **reads only** — every
 > row about a WRITE below still stands.
 >
-> Two things the wiring proved that this document did not say:
-> **`GET /:projectSlug/disputes` and a list form of `GET /:projectSlug/effort-claims` do not exist**
-> (§11e lists no such routes and `src/routes/proof-of-effort.routes.ts` has neither), and **signed-out
-> is `401`, not `404`**, on `…/workshop` and `/daily-logs` — the 404-not-403 rule governs signed-in
-> non-members, and a client has to render both.
+> One thing the wiring proved that this document did not say: **signed-out is `401`, not `404`**, on
+> `…/workshop` and `/daily-logs` — the 404-not-403 rule governs signed-in non-members, and a client
+> has to render both.
 
-Backend supported, no UI yet:
+### The section in one number
 
-- **Workshop writes.** Still owed, and the gap is now cleaner rather than smaller: phase 3 **deleted**
-  the decorative add-task, move-task, upload-file and send-message affordances instead of wiring them,
-  because each wrote to `useState` and posted nowhere. The board, files and chat now render real data
-  and offer no controls at all, which is honest but not finished.
-- **Dispute and consensus.** No dispute button, no vote UI, no quorum progress, no "who raised it".
-  **And the backend half is incomplete too**, which this section previously did not say: raise, vote,
-  withdraw and resolve all ship, but there is **no read** — no `GET …/disputes`, no
-  `GET …/disputes/:id`, and no service function behind either ([§11j.2](#11j2-missing-reads--the-data-exists-and-nothing-can-fetch-it)).
-  The UI cannot be built until that lands, so this row is blocked on both sides rather than one.
-- **Integration consent.** The entire connect / scope / revoke flow has **no frontend at all** —
-  the single largest missing screen, and §9 cannot function without it.
-- **Rate lock.** The fair market rate is the foundation of every number on the Proof-of-Effort page,
-  and there is no UI to propose, review, lock, or view its history.
-- **Pie bake.** No bake action, no pre-bake checklist, no frozen-cap-table view.
-- **Chain verification.** No "Verify chain" action, no hash-input inspector. Without it, the
+**The frontend calls 22 endpoints. This backend ships 195 R&D routes, and none of the calls is a
+write.** Everything below is a prose expansion of that sentence; [Appendix
+C](#appendix-c--the-research-and-development-wiring-map) is its checkable form, listing the
+per-route matrix and the whole uncalled surface by domain.
+
+### What this section got wrong, corrected against the build
+
+Recorded rather than quietly overwritten, in Appendix B's format, because each was a claim the code
+disproves and each one changed a sequencing decision downstream:
+
+| The doc said                                                                             | What is actually true                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| §1: "Ten routes … all rendering mocks today"                                             | **Fourteen** routes; ten server-fetch, three mock, one fetches nothing at all                                                                                                                       |
+| §1: `/project/[id]` has 5 tabs                                                           | **Four** — the Governance tab was deleted in frontend phase 2, not left unwired                                                                                                                     |
+| §1: `/project/[id]/proof-of-effort` has 5 tabs                                           | **Six** — the sixth is integration consent, the §9.10 lawful-basis surface                                                                                                                          |
+| §14: "`GET …/disputes` and a list form of `GET …/effort-claims` do not exist"            | **All three ship** — `proof-of-effort.routes.ts:126` (`GET …/effort-claims`), `:176` (`GET …/disputes`), `:178` (`GET …/disputes/:disputeId`). §11j closed them, and this section contradicted §11j |
+| §14: the dispute row is "blocked on both sides"                                          | Blocked on the **frontend only**. That moves the Art. 22 / AI Act Art. 14 compliance item from "needs backend work" to "needs a screen" (§16)                                                       |
+| §11: the mount block lists every mount                                                   | `applicationInboxRouter` (`src/app.ts:197`) was missing, and the block's order had drifted from the file — for Express the order IS the routing table                                               |
+| §11: "every project-scoped route additionally runs `requireProjectRole`" (as middleware) | It is a **service** called in-controller (`project-membership.service.ts:114`) so it can return a `Result`; `src/middleware/validate.ts` is dead code                                               |
+| §15: the frontend types "must change shape"                                              | Half already did — `src/lib/rnd/*.schemas.ts` speaks the §1 wire format for every wired surface, and the string-carrying tree is now mock-only                                                      |
+
+Backend supported, no UI yet — each row now names the page that would host it:
+
+- **The whole of `/project/[id]/proof-of-effort` — the single largest gap on the surface.** The
+  page is **100% mock**: it reads `MOCK_RESEARCH_PROJECTS`, `MOCK_PROJECT_PROOF_OF_EFFORT_LEDGERS`
+  and `MOCK_PROJECT_OVERSIGHT`, and its `generateStaticParams` enumerates six hardcoded slugs, so
+  a real project slug 404s on a page whose backend has been shipped since §9. **Thirty-eight routes
+  back it** (`proof-of-effort.routes.ts`), and every bullet that follows is one of its six tabs.
+  This is not six separate gaps; it is one page that was never wired.
+- **Slice ledger, verification pipeline, audit trail** — tab 1, 2 and 6. `GET …/slice-ledger`,
+  `GET …/effort-claims`, `GET …/effort-claims/:claimId`, `GET …/proof-of-effort`,
+  `GET …/audit-trail` and `GET …/audit-trail/:entryId/hash-input` all ship and none is called.
+- **Dispute and consensus** — tab 3. No dispute button, no vote UI, no quorum progress, no "who
+  raised it". **This row was previously recorded as blocked on both sides; that is wrong.** Raise,
+  vote, withdraw and resolve ship, and so do the reads — `GET …/disputes`
+  (`proof-of-effort.routes.ts:176`) and `GET …/disputes/:disputeId` (`:178`), closed by
+  [§11j.2](#11j2-missing-reads--the-data-exists-and-nothing-can-fetch-it). **The backend half is
+  complete. This is a screen, not a subsystem.**
+- **Integration consent** — tab 4, and still the single most consequential missing screen. The
+  connect / scope / revoke flow (`GET …/integrations`, `POST …/integrations/:provider/authorize-url`,
+  `DELETE …/integrations/:provider`, plus the root-mounted callback) has **no frontend at all**, and
+  §9 cannot function without it. The frontend's own tab component even imports its provider labels
+  from `@/mocks/…-oversight-mocks`.
+- **Optimization** — tab 5. `GET`/`POST …/optimization-suggestions` and the accept/dismiss pair
+  ship; nothing calls them.
+- **Chain verification.** No "Verify chain" action, no hash-input inspector, on either
+  `GET …/audit-trail/verify` or `GET …/compensation-periods/:periodId/verify`. Without a caller the
   hash-chain framing is decoration.
+- **Rate lock.** The fair market rate is the foundation of every number on that page, and there is
+  no UI to propose, review, lock, or view its history — four shipped routes, zero callers.
+- **Pie bake.** No bake action, no pre-bake checklist, no frozen-cap-table view.
 - **Override / review.** No surface for a founder to review a flagged step and override it.
-- **Project edit.** `GET` + `PATCH` exist; there is no edit entry point.
+- **Workshop writes** — `/project/[id]/workshop`. The page reads `…/workshop` and renders board,
+  files and chat from real data, then offers **no controls at all**: phase 3 **deleted** the
+  decorative add-task, move-task, upload-file and send-message affordances rather than wire them,
+  because each wrote to `useState` and posted nowhere. Honest, but 15 shipped write routes — four
+  on columns, four on tasks, three on files, four on chat — are unreachable.
+- **The idea wizard writes nothing.** `/research-and-development/new` is a four-step client
+  component whose submit flips local state to a confirmation screen. `POST /research-projects`
+  shipped with §5 and `POST …/publish` with it; a user can complete the wizard and no row is
+  created. It is the only page in the section whose gap is a **single** endpoint.
+- **Project edit.** `GET` + `PATCH /research-projects/:projectSlug` exist, plus cover upload and
+  delete; there is no edit entry point. `edit-project-sheet.tsx` is props-only.
+- **Talent profile editing.** `GET|PUT|DELETE /discovery/talent/me` and
+  `POST /discovery/talent/me/publish|unpublish` all ship. `/talent` reads the directory and
+  `edit-talent-profile-sheet.tsx` is props-only, so a member can see the directory they cannot
+  join.
+- **Applications and invites.** `GET /applications/mine` and `GET /invites/mine` shipped with §11j
+  precisely so an invitee holding no slug could find what they were invited to. **No page calls
+  either**, and `apply-role-sheet.tsx` posts nowhere — so `/team-building` and `/talent` show roles
+  nobody can apply for.
+- **Funding writes.** Rounds, pledges, milestones and variance all have write paths (§11g);
+  `/funding` reads `GET /funding/deals` only, and `back-project-sheet.tsx` is props-only.
+- **Problem reporting.** `POST /discovery/problem-reports` ships and `report-problem-sheet.tsx` on
+  `/problem-map` posts nowhere, so the Opportunity Map renders reports it cannot accept.
+- **The entire `/discovery/admin/*` subtree** — 17 moderation routes for categories, market
+  insights, skills, regions and merge proposals (§11j.4). There is no moderator UI of any kind.
 - **The four §4c stage routes — three of four now call their backend.** `/team-building` and
   `/go-to-market` wired in phase 1; `/build-log` wired in phase 3 and reads `GET /daily-logs` plus the
   streak leaderboard. **`/governance` is the one still on mock data**, and it is phase 5's job.
@@ -3348,21 +3464,29 @@ Backend supported, no UI yet:
   funding half still rendered `escrowReleaseAmount`, a field this contract retired. The panels it hosted
   (`compensation-agreements-panel`, `compensation-statement-panel`) survive unmounted, and phase 5
   remounts them against `…/compensation-agreements` and `…/compensation-periods`.
-- **Tiered / multi-currency funding, paper moderation queue, talent profile editing.**
+- **`/projects/project-immortal` is mock, and is the one row here that is NOT a frontend gap.** No
+  backend exists to call: no `/research-programs` route, no controller, no service, no table (§10,
+  §11f). It is the only mock page whose fix is backend work, and it is last in §16 for that reason.
+- **Tiered / multi-currency funding, paper moderation queue.**
 
 Two of these have stopped being UX debt and become **compliance gaps**, and they should be read that
 way in planning:
 
 - **Dispute and consensus** plus **override / review** are the GDPR Art. 22 contestability path and
   the EU AI Act Art. 14 human-oversight control (§9.8, §7A.6 item 5). A backend that offers human
-  intervention through an endpoint no screen calls does not, in practice, offer it.
+  intervention through an endpoint no screen calls does not, in practice, offer it. **Both are now
+  purely frontend work** — the dispute reads that were the backend half landed with §11j.
 - **Integration consent** is the lawful-basis and transparency surface for worker monitoring (§9.10).
   It is already listed as the largest missing screen; it is also the one with a regulator behind it.
 
-The entire §7A surface is missing too, and it is the product's headline output: no agreement
-proposal or acceptance, no statement view, no finalize or countersign action, no payment
-acknowledgment, no export. The `governance-tab.tsx` that rendered an escrow ledger this contract no
-longer describes has been **deleted** rather than corrected — see the bullet above.
+The entire §7A surface is missing too, and it is the product's headline output: **fifteen shipped
+routes with zero callers** — no agreement proposal, acceptance, decline or withdraw; no statement
+view; no finalize, countersign or supersede action; no payment record or confirmation; no export;
+no chain verify. The `governance-tab.tsx` that rendered an escrow ledger this contract no longer
+describes has been **deleted** rather than corrected — see the bullet above. `/governance`, the
+cross-project half, renders `MOCK_GOVERNANCE_SUMMARY` while `GET /governance/summary` (§11h) ships
+and answers — and it deep-links to `project/solar-cold-storage`, a **mock slug** that resolves to
+nothing on a real database.
 
 Frontend-side work the contract forces:
 
@@ -3386,9 +3510,39 @@ Frontend-side work the contract forces:
 
 ---
 
-## 15. Frontend types that must change shape
+## 15. Frontend types that must change shape — half of them already did
 
 Not just values — **shapes**. Every one is a compile error the migration must work through.
+
+### Where the migration actually stands
+
+The frontend now runs **two type systems side by side, deliberately**
+(`src/types/research-and-development.ts:1-11` says so in its own header):
+
+| System                                                   | Populates                           | Wire format                                                                                       |
+| -------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **`src/lib/rnd/*.schemas.ts`** — Zod, `z.infer`'d        | the ten wired routes                | ✅ **Already §1-compliant.** Raw integers, `…InCents` / `…BasisPoints` / `…Minutes`, ISO instants |
+| **`src/types/research-and-development/`** — hand-written | the three mock pages, and only them | 🟥 Still pre-formatted display strings                                                            |
+
+Seven schema modules exist and each retires one paragraph of the migration list below:
+`projects`, `catalog`, `discovery`, `funding`, `daily-logs`, `suppliers`, `workshop`. So:
+
+- **`project.ts`, `discovery.ts`, `workshop.ts` — migrated for the wired subset.** The paragraphs
+  below still describe the hand-written originals, and are kept because the mock pages still import
+  them and because they record WHY each shape changed. Read them as history for those three files,
+  not as a to-do.
+- **`proof-of-effort.ts`, `compensation.ts`, `oversight.ts`, `immortal.ts` — untouched**, entirely
+  pre-rendered strings, because their pages are still mocks (§14). These four are the whole
+  remaining migration.
+
+**The hazard the split creates, and it is not theoretical:** eight type names exist in **both**
+trees with different shapes — `OpenRole`, `MarketInsight`, `TalentProfile`, `Milestone`,
+`FundingRound`, `SupplierCapability`, `ProjectStage`, `RoleCommitment`. A wired component that
+imports one of these from `@/types/research-and-development` compiles and then renders a
+`"$6,000"`-shaped field that the server never sent. **Wired components import from
+`@/lib/rnd/*.schemas`; nothing else.**
+
+### The per-file migration record
 
 **`project.ts`** — `TeamMember` (`equityShare: "62%"` → `equityBasisPoints: 6200`;
 `effortHoursLogged: 148` → `verifiedEffortMinutes: 8880`; `joinedDate` → `joinedAt` ISO; `id` slug →
@@ -3484,15 +3638,22 @@ deployment in the EU: the **dispute / override UI** (§14), which is the human-i
 oversight — and the **integration-consent screen**, which is the lawful-basis and transparency
 surface for worker monitoring.
 
-**Then [§11j](#11j-gaps--what-the-rd-surface-still-needs), the gap list**, which is what closes out
-"R&D is complete apart from Project Immortal". Inside it the order is not flat:
+**Both are now purely frontend work.** The dispute reads that were the backend half of the first
+item shipped with §11j — `GET …/disputes` and `GET …/disputes/:disputeId`
+(`proof-of-effort.routes.ts:176`, `:178`) — so nothing in this repo blocks either screen. See
+[Appendix C](#appendix-c--the-research-and-development-wiring-map) §C3 for what else is in the same
+position.
+
+**[§11j](#11j-gaps--what-the-rd-surface-still-needs), the gap list, has since shipped in full**, so
+the ordering below is a record of how it was sequenced rather than a plan. It closed out "R&D is
+complete apart from Project Immortal". Inside it the order was not flat:
 
 1. **§11j.1's three write-path dead ends first** — `market_insight`, `problem_cluster_project_link`
    and `project_supplier_engagement`. A permanently empty read outranks an absent one, because a
    surface that renders an empty state looks built and reports nothing. Two of the three are already
    visible as "dark" rows in the frontend's own §18, mis-attributed there to frontend work.
-2. **Then §11j.2's dispute reads**, which are the backend half of the Art. 22 / Art. 14 compliance
-   item above — that item cannot be closed without them.
+2. **Then §11j.2's dispute reads**, which were the backend half of the Art. 22 / Art. 14 compliance
+   item above — that item could not be closed without them. They shipped; the item is now a screen.
 3. **Then the remaining reads and lifecycle holes** (§11j.2, §11j.3), which are ordinary product
    gaps: `GET /invites/mine` is the sharpest, since an invite nobody can find is an invite nobody
    can accept.
@@ -4068,3 +4229,123 @@ re-validates.
 - **Keyset pagination and server-side filtering** apply to all four lists (§6, §13). `/daily-logs`
   is keyset; the three catalogue reads are offset with an `ORDER BY` ending in a unique column. The
   frontend's client-side filtering over mock arrays survives in none of them.
+
+---
+
+## Appendix C — The `/research-and-development` wiring map
+
+**What this appendix is for.** §1 says what each page NEEDS. §11 says what the backend SHIPS. Until
+this appendix existed, nothing in the file said what each page **currently asks for**, so
+"frontend-behind-backend" (§14) was an assertion rather than a measurement. Every row below is
+verifiable in one grep, and the commands are at the bottom.
+
+Counted on the tree at `qatoto-frontend/src/app/(home)/research-and-development/`, against
+`src/routes/` here. Base URL on the client is `NEXT_PUBLIC_API_URL ?? http://localhost:8000`
+(`src/lib/api.ts`); the pages run on `localhost:3000`.
+
+**The headline:** **22 endpoints called · 195 R&D routes shipped · 0 writes.**
+
+### C1. Route → endpoint matrix
+
+Every call is a `GET`, issued from a server component through `getJson` / `getPaginated` /
+`getCursorPaginated` (`src/lib/http.ts`), with the session cookie forwarded by
+`callerRequestOptions()` (`src/lib/server-http.ts`) under `cache: "no-store"`. There is no React
+Query and no client-side data layer in this domain.
+
+| Route                           | Transport       | Endpoints it calls                                                                                                                                                     | Owner § |
+| ------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `/`                             | ✅ server-fetch | `GET /research-projects?limit=12` · `GET /discovery/problem-clusters?sort=opportunity&limit=4` · `GET /discovery/market-insights?limit=5` · `GET /open-roles?limit=12` | 11a·11b |
+| `/new`                          | ⬜ no fetch     | — (submit flips local state; `POST /research-projects` is never called)                                                                                                | 11a     |
+| `/problem-map`                  | ✅ server-fetch | `GET /discovery/problem-clusters?sort=opportunity&limit=50[&category]` · `GET /research-categories?status=approved`                                                    | 11b·11a |
+| `/knowledge-hub`                | ✅ server-fetch | `GET /discovery/market-insights?limit=24` · `GET /discovery/demand-signals?limit=20`                                                                                   | 11b     |
+| `/talent`                       | ✅ server-fetch | `GET /discovery/talent?limit=24[&commitment][&availability][&skill…]` · `GET /discovery/skills` · `GET /open-roles?limit=12`                                           | 11b·11a |
+| `/team-building`                | ✅ server-fetch | `GET /open-roles?limit=36[&commitment][&skill]` · `GET /research-projects?stage=team_building&limit=12` · `GET /discovery/skills` · `GET /discovery/talent?limit=4`    | 11a·11b |
+| `/build-log`                    | ✅ server-fetch | `GET /daily-logs?limit=30` (keyset) · `GET /daily-logs/streak-leaderboard`                                                                                             | 11h     |
+| `/funding`                      | ✅ server-fetch | `GET /funding/deals?limit=24[&roundType][&stage]`                                                                                                                      | 11g     |
+| `/governance`                   | 🟥 mock         | — (`GET /governance/summary` ships and is never called)                                                                                                                | 11h     |
+| `/go-to-market`                 | ✅ server-fetch | `GET /suppliers?limit=24[&capability…][&region][&verificationState]` · `GET /supplier-capabilities` · `GET /launch-ready-projects?limit=12`                            | 11i     |
+| `/projects/project-immortal`    | 🟥 mock         | — (**no backend exists**)                                                                                                                                              | 11f ⏳  |
+| `/project/[id]`                 | ✅ server-fetch | `GET /research-projects/{slug}` **first**, then `…/roles` · `…/milestones` · `…/daily-logs?limit=30` · `…/funding-rounds` · `…/investor-confidence`                    | 11a·11g |
+| `/project/[id]/workshop`        | ✅ server-fetch | `GET /research-projects/{slug}` then `GET /research-projects/{slug}/workshop`                                                                                          | 11a·11d |
+| `/project/[id]/proof-of-effort` | 🟥 mock         | — (**38 routes** ship behind this page; none is called)                                                                                                                | 11e     |
+
+Three ordering facts in that table are load-bearing, not incidental:
+
+- **`/project/[id]` resolves the PUBLIC detail read alone first**, `404` → `notFound()`, and only
+  then fires the five member-scoped reads concurrently. That sequence is what makes the
+  `restricted` render state safe (§14): a stranger learns nothing from the child reads because the
+  parent already decided whether the project is real.
+- **`/project/[id]/workshop` is two sequential reads** for the same reason — the public detail
+  supplies the roster the private payload's author ids resolve against.
+- **`generateStaticParams` on `/project/[id]` and `…/workshop` calls `GET /research-projects/slugs`**
+  — the one endpoint whose entire purpose is build-time, and the one route in §11a with no auth
+  middleware at all. `…/proof-of-effort` reads six hardcoded mock slugs instead, which is why a
+  real slug 404s there.
+
+### C2. Frontend wrappers defined but never called
+
+Four endpoint functions exist in `src/lib/rnd/` with no caller. Each is a page that could render
+more **without one line of new backend work** — the cheapest surface on the roadmap:
+
+| Wrapper                     | Endpoint                                               | Where it would land                                                                                  |
+| --------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `getProblemCluster`         | `GET /discovery/problem-clusters/:clusterId`           | A cluster detail view off `/problem-map`; there is no page                                           |
+| `listDiscoveryRegions`      | `GET /discovery/regions`                               | The region filter on `/problem-map` and `/go-to-market`                                              |
+| `getSupplier`               | `GET /suppliers/:supplierSlug`                         | A supplier detail view off `/go-to-market`                                                           |
+| `getProjectLaunchReadiness` | `GET /research-projects/:projectSlug/launch-readiness` | The `/go-to-market` checklist, which renders static copy today because the page holds no slug (§11i) |
+
+So: **26 wrappers written, 22 called.**
+
+### C3. Backend surface with no frontend caller
+
+Grouped by domain. This is §14's claim in countable form, and the source of §16's remaining order:
+
+| Domain                             | Shipped | Called | Uncalled surface                                                                                                                   |
+| ---------------------------------- | ------: | -----: | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Projects, team, roles (§11a)       |      38 |      4 | every write: create, publish, stage, cover, members, applications, invites, watch                                                  |
+| Application inbox (§11j.2)         |       2 |      0 | `GET /applications/mine`, `GET /invites/mine` — built so an invitee holding no slug could find their invite; nothing links to them |
+| Workshop & daily logs (§11d, §11h) |      29 |      4 | all 15 board/file/chat writes; per-project log create, submit, transcript                                                          |
+| Proof of Effort (§11e)             |      38 |      0 | **the entire domain** — claims, rates, disputes, integrations, pie bake, audit trail                                               |
+| Funding (§11g)                     |      22 |      4 | rounds open/close/update, pledges, milestones, variance, `GET /pledges/mine`                                                       |
+| Compensation (§7A, §11g, §11h)     |      15 |      0 | **the entire domain** — agreements, periods, finalize, countersign, payments, export, `GET /governance/summary`                    |
+| Discovery public (§11b)            |      20 |      5 | problem-report create, cluster detail, regions, cluster project-links, talent profile read/write/publish                           |
+| Discovery admin (§11j.4)           |      17 |      0 | **the entire moderation surface** — categories, insights, skills, regions, merge proposals                                         |
+| Go-to-market (§11i, §11j.1)        |      11 |      3 | supplier create/update, supplier detail, all five supplier-engagement routes, launch readiness                                     |
+| Catalog (§11a)                     |       3 |      2 | `POST /research-categories`                                                                                                        |
+| **Total**                          | **195** | **22** |                                                                                                                                    |
+| Project Immortal (§11f)            |       0 |      0 | nothing shipped and nothing called — the only row where the frontend is ahead of this backend                                      |
+
+**Read the two `0 called` rows as one fact, not two.** Proof of Effort and Compensation are the
+product's headline output (§0, §7A, §9): 53 shipped routes, one mock page and one deleted tab
+between them, and zero requests. Everything else on this list is an ordinary gap.
+
+### C4. Verifying this appendix
+
+It is prose about two repos, so it decays silently unless re-derived. Each claim, and the command
+that checks it:
+
+```bash
+# 14 routes — must print exactly 14 page.tsx paths
+find "$FRONTEND/src/app/(home)/research-and-development" -name page.tsx | sort
+
+# Transport per page — 'mock' must appear on exactly three
+rg -n '^// TRANSPORT:' "$FRONTEND/src/components/home/research-and-development/"
+
+# ZERO writes — must return nothing at all
+rg -n 'sendJson|sendForm' "$FRONTEND/src/lib/rnd/"
+
+# 26 wrappers, of which 4 have no caller outside src/lib/rnd/
+rg -c '^export (async )?function' "$FRONTEND/src/lib/rnd/"*.api.ts
+
+# The mount block in §11, in declaration order
+rg -n '^app\.use' src/app.ts
+
+# Route counts per file, the Shipped column of C3
+for f in research-projects workshop proof-of-effort funding compensation discovery suppliers research-catalog; do
+  printf '%s %s\n' "$(grep -cE '^(router|[a-zA-Z]+Router)\.(get|post|patch|put|delete)\(' "src/routes/$f.routes.ts")" "$f"
+done
+```
+
+`$FRONTEND` is the Next.js repo. Its own `docs/R_AND_D_STRUCTURE.md` §13, §18 and §19 document the
+same wiring from the client side; when the two disagree, **`src/routes/` here is the authority**
+(§0 — the backend is the source of truth, including about itself).
