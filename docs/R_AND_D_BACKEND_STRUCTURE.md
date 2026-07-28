@@ -7,6 +7,20 @@
 > [STUDIO_BACKEND_STRUCTURE.md](STUDIO_BACKEND_STRUCTURE.md) (video) — same voice, same layering,
 > same envelope — scoped to the whole `/research-and-development` surface.
 >
+> ---
+>
+> ⚠️ **THIS FILE EXISTS IN TWO REPOS AND THEY MUST BE KEPT BYTE-IDENTICAL.**
+> `qatoto-backend/docs/` and `qatoto-frontend/docs/`. **The backend copy is canonical** — it sits
+> beside the `src/routes/` this document describes, so an endpoint table edited there is edited next
+> to the code that proves it.
+>
+> They have drifted once already, in both directions at the same time: the backend copy gained six
+> §11a rows and one §11b row that the frontend copy never saw, while the frontend copy gained a §14
+> rewrite the backend copy never saw. Neither side noticed, because each looked internally
+> consistent. **After editing either copy, run `diff` between them and reconcile before committing.**
+>
+> ---
+>
 > **Goal:** run Qatoto's concept-to-consumer pipeline server-side — post an idea, form a team for
 > equity, log daily work, have that work _verified_ into a dynamic equity ledger, and **produce a
 > month-end statement of exactly what each member is owed in cash and in equity** — with the backend
@@ -2534,21 +2548,26 @@ Four states, checked against the actual route files in `src/routes/`, not agains
 | 🚫 **Deferred** | Spec'd below but **will not be built** against a paid provider — see Appendix A instead. |
 | 🗑️ **Retired**  | Unmounted. The routes 404; the tables and services survive uncalled. Do not re-bind.     |
 
-| Subsection                                | Domain                           | Status     | Backing files                                                                                                                                                                                                       |
-| ----------------------------------------- | -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [11a](#11a-projects-team-roles-5)         | Projects, team, roles (§5)       | ✅ Shipped | `research-projects.routes.ts`, `research-catalog.routes.ts`                                                                                                                                                         |
-| [11b](#11b-discovery-6)                   | Discovery (§6)                   | ✅ Shipped | `discovery.routes.ts`                                                                                                                                                                                               |
-| [11d](#11d-workshop-and-daily-logs-8)     | Workshop & daily logs (§8)       | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A                                                                                                                          |
-| [11e](#11e-proof-of-effort-9)             | Proof of Effort (§9)             | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015                                                                                                          |
-| [11f](#11f-project-immortal-10)           | Project Immortal (§10)           | ⏳ Pending | none — no `research-programs.routes.ts` exists                                                                                                                                                                      |
-| [11g](#11g-funding-and-compensation-7-7a) | Funding & compensation (§7, §7A) | ✅ Shipped | `funding.routes.ts`, `compensation.routes.ts`, `compensation.controller.ts`, three services, two jobs, migrations 0017–0019                                                                                         |
-| [11h](#11h-cross-project-reads-8-7a)      | Cross-project reads (§8, §7A)    | ✅ Shipped | `workshop.routes.ts`'s `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`, `governance-summary.service.ts`, `src/lib/daily-log-cursor.ts`, `scripts/smoke-daily-log-feed.ts`, migrations 0020–0021 |
-| [11i](#11i-go-to-market-6-family)         | Go-to-market (§6-family)         | ✅ Shipped | `suppliers.routes.ts`, `suppliers.controller.ts`, `suppliers.service.ts`, `launch-readiness.service.ts`, migration 0020                                                                                             |
+| Subsection                                        | Domain                              | Status     | Backing files                                                                                                                                                                                                       |
+| ------------------------------------------------- | ----------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [11a](#11a-projects-team-roles-5)                 | Projects, team, roles (§5)          | ✅ Shipped | `research-projects.routes.ts`, `research-catalog.routes.ts`                                                                                                                                                         |
+| [11b](#11b-discovery-6)                           | Discovery (§6)                      | ✅ Shipped | `discovery.routes.ts`                                                                                                                                                                                               |
+| [11d](#11d-workshop-and-daily-logs-8)             | Workshop & daily logs (§8)          | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A                                                                                                                          |
+| [11e](#11e-proof-of-effort-9)                     | Proof of Effort (§9)                | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015                                                                                                          |
+| [11f](#11f-project-immortal-10)                   | Project Immortal (§10)              | ⏳ Pending | none — no `research-programs.routes.ts` exists                                                                                                                                                                      |
+| [11g](#11g-funding-and-compensation-7-7a)         | Funding & compensation (§7, §7A)    | ✅ Shipped | `funding.routes.ts`, `compensation.routes.ts`, `compensation.controller.ts`, three services, two jobs, migrations 0017–0019                                                                                         |
+| [11h](#11h-cross-project-reads-8-7a)              | Cross-project reads (§8, §7A)       | ✅ Shipped | `workshop.routes.ts`'s `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`, `governance-summary.service.ts`, `src/lib/daily-log-cursor.ts`, `scripts/smoke-daily-log-feed.ts`, migrations 0020–0021 |
+| [11i](#11i-go-to-market-6-family)                 | Go-to-market (§6-family)            | ✅ Shipped | `suppliers.routes.ts`, `suppliers.controller.ts`, `suppliers.service.ts`, `launch-readiness.service.ts`, migration 0020                                                                                             |
+| [11j](#11j-gaps--what-the-rd-surface-still-needs) | **Gaps** — everything above's holes | ⏳ Pending | none — this subsection IS the gap list. Read it before concluding an endpoint is missing by accident                                                                                                                |
 
 Each subsection below opens with one line stating its state. **§11c is gone** — it described funding
 and escrow together, and escrow has left this contract. Its funding rows and the §7A rows that
 replace its escrow rows are both in [§11g](#11g-funding-and-compensation-7-7a), which is the only
 subsection that mixes states, and says so per row.
+
+**§11j is the inverse of every subsection above it** — it enumerates what is NOT built, so that
+"R&D is complete apart from Project Immortal" has a checkable definition. It also records, in
+§11j.6, every verb that is missing **on purpose**; check there before treating an absence as a bug.
 
 ### 11a. Projects, team, roles (§5)
 
@@ -2563,19 +2582,24 @@ subsection that mixes states, and says so per row.
 | `GET /research-projects/:projectSlug`                                               | —                                                                                            | Detail. Draft → owner only, else `404`                                                                                                                                                           |
 | `PATCH /research-projects/:projectSlug`                                             | `UpdateProjectSchema` (no `status`, no `stage`, no equity grant)                             | Partial update. `200` · `422` · `404`                                                                                                                                                            |
 | `POST /research-projects/:projectSlug/cover`                                        | multipart, field `cover`                                                                     | sharp validate + normalize → Cloudinary. `200` · `413` · `422` · `502`                                                                                                                           |
+| `DELETE /research-projects/:projectSlug/cover`                                      | —                                                                                            | Maintainer+ → else `404`. **Refused while the project is published** — `409 COVER_REQUIRED_WHILE_PUBLISHED`. No cover set is `200 { deleted: false }`, never a `404`                             |
 | `POST /research-projects/:projectSlug/publish`                                      | —                                                                                            | Server-side completeness gate; materializes seed roles; freezes the slug. `200` · `422 INCOMPLETE_FOR_PUBLISH`                                                                                   |
 | `POST /research-projects/:projectSlug/unpublish` · `/archive`                       | —                                                                                            | `active` ↔ `draft`; archive is terminal. `200`                                                                                                                                                   |
 | `PATCH /research-projects/:projectSlug/stage`                                       | `{ stage }`                                                                                  | Dedicated route — writes a `project_stage_transition` audit row. `200`                                                                                                                           |
+| `GET /research-projects/:projectSlug/stage-history`                                 | —                                                                                            | The read half of the row above — the append-only `project_stage_transition` log. Member only → else `404`. Not paginated; a transition list is not a feed. `200`                                 |
 | `GET /research-projects/:projectSlug/team`                                          | —                                                                                            | Roster; `name`/`avatar` joined from `user`. `200`                                                                                                                                                |
 | `PATCH` · `DELETE /research-projects/:projectSlug/members/:memberId`                | `{ projectRole?, roleTitle? }`                                                               | Founder only. `founder` can never be assigned. `200` · `403`                                                                                                                                     |
 | `DELETE /research-projects/:projectSlug/members/me`                                 | —                                                                                            | Sets `left`, never deletes. `200`                                                                                                                                                                |
 | `GET` · `POST` · `PATCH` · `DELETE /research-projects/:projectSlug/roles[/:roleId]` | `OpenRoleSchema` + compensation strands                                                      | Maintainer+. `200`/`201` · `422`                                                                                                                                                                 |
+| `POST /research-projects/:projectSlug/roles/:roleId/close` · `/reopen`              | —                                                                                            | Maintainer+. **Editorial, and independent of capacity** — `slotsFilledCount` is untouched. What `409 ROLE_HAS_REFERENCES` points a caller to instead of `DELETE`. `200`                          |
 | `GET /open-roles`                                                                   | `?commitment=&skill=&minEquityBasisPoints=&page=`                                            | Cross-project rail + `/talent` + `/team-building`. Carries `projectSlug`, `projectName`, `projectStage`, `projectCoverImageUrl`, `currency` and the strands, so a role card needs no second call |
+| `GET /research-projects/:projectSlug/applications`                                  | `?status=&page=&limit=`                                                                      | Maintainer+ → else `404`. The founder-facing inbox behind the row below. Paginated. `200`                                                                                                        |
 | `POST /research-projects/:projectSlug/applications`                                 | `{ openRoleId?, shortPitch, selectedSkills[], statedCommitment, expectedCompensationNote? }` | `kind` **server-derived**. Skills validated as a subset. `201` · `409` · `422`                                                                                                                   |
 | `POST …/applications/:id/accept` · `/decline` · `/withdraw`                         | `{ note? }`                                                                                  | Accept creates the member row + increments `slotsFilledCount` in one txn. `200`                                                                                                                  |
+| `GET /research-projects/:projectSlug/invites`                                       | `?status=&page=&limit=`                                                                      | Maintainer+ → else `404`. Same page shape as applications. `200`                                                                                                                                 |
 | `POST /research-projects/:projectSlug/invites` (+ `/accept`, `/decline`, `DELETE`)  | `{ inviteeUserId, openRoleId?, message? }`                                                   | Talent-page "Invite". `201` · `409`                                                                                                                                                              |
 | `POST` · `DELETE /research-projects/:projectSlug/watch`                             | —                                                                                            | Idempotent; counter in the same txn. `200`                                                                                                                                                       |
-| `GET /research-categories`                                                          | `?status=approved`                                                                           | Approved facets only. `200`                                                                                                                                                                      |
+| `GET` · `POST /research-categories`                                                 | `?status=approved` · `{ label }`                                                             | Approved facets only. **`POST` is a route-level alias of `/discovery/categories`** — same controller, service, table and limiter _instance_, so it is no rate-limit bypass. `200`/`201` · `429`  |
 
 ### 11b. Discovery (§6)
 
@@ -2595,6 +2619,7 @@ reachable today.
 | `GET` · `PUT` · `DELETE /discovery/talent/me`                     | `TalentProfileSchema`                                                             | Opt-in directory record. `200`                                                                                                                                                                                                                     |
 | `POST /discovery/talent/me/publish` · `/unpublish`                | —                                                                                 | Visibility toggle. `200`                                                                                                                                                                                                                           |
 | `POST /discovery/admin/categories/:id/decide`                     | `{ decision, note? }`                                                             | Platform `moderator` only (§4a). `200` · `403`                                                                                                                                                                                                     |
+| `GET /discovery/admin/merge-proposals`                            | `?page=&limit=`                                                                   | The moderator queue behind the row below. The capability is checked **in-service, before any id is read**, so the `403` names no id (§4a Layer 3). `200` · `403`                                                                                   |
 | `POST /discovery/admin/merge-proposals/:id/decide`                | `{ decision }`                                                                    | Cluster dedup queue. `200` · `403`                                                                                                                                                                                                                 |
 
 ### 11d. Workshop and daily logs (§8)
@@ -2938,6 +2963,108 @@ about the project.
 `/studio/products` and the studio's existing create flow does the work. R&D contributes
 `product.researchProjectId` and nothing else.
 
+### 11j. Gaps — what the R&D surface still needs
+
+**⏳ Pending — nothing in this subsection is built.** Every other §11 subsection describes what
+ships; this one describes what does not, so that "complete for R&D, except Project Immortal" has a
+definition rather than a feeling.
+
+Compiled by reading `src/routes/`, `src/services/` and `src/db/schema.ts` — **not** by reading the
+tables above. Ground truth at the time of writing: **213 HTTP verb routes**, 111 of them under
+`/research-projects` and 19 under `/discovery`.
+
+**Project Immortal (§10 / [§11f](#11f-project-immortal-10)) is deliberately out of scope here.** It
+is a whole unbuilt domain rather than a gap in a built one, it needs the platform `moderator` role
+first, and §16 already orders it last. Nothing below refers to `/research-programs/*`.
+
+Read §11j.6 before adding anything. A missing verb in this domain is as often a decision as an
+omission, and several of them are load-bearing.
+
+#### 11j.1 Write-path dead ends — read the three of these first
+
+These are a different kind of defect from a missing endpoint, and they are the reason this
+subsection leads with a table that specifies nothing. In each case the table ships, a reader ships,
+and **no code path anywhere in the repo can put a row in it**. The surface is not "empty until
+someone uses it" — it is empty permanently, and it looks built from the outside.
+
+| Table                          | Who reads it                                                                                                            | Who can write it                                                                                                        | What is therefore always true                                                                                                                   |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `market_insight`               | `GET /discovery/market-insights` (§11b) — the knowledge hub **and** the landing rail                                    | **Nobody.** No route, no job, no seed. `db:seed-discovery-lookups` writes only `discovery_region` and `discovery_skill` | `/knowledge-hub` and the landing insights rail render empty, on every environment, forever                                                      |
+| `problem_cluster_project_link` | `problem-clusters.service.ts` (a cluster's linked projects), `recompute-opportunity-scores`, `recompute-demand-signals` | Only `discovery-moderation.service.ts`, which **re-points links that already exist** when a merge proposal is decided   | A cluster's linked-project list is empty and `relatedProjectCount` is `0`, so that input to the opportunity score is dead weight in the formula |
+| `project_supplier_engagement`  | `launch-readiness.service.ts`, `suppliers.service.ts`'s `countProjectSupplierEngagements`                               | **Nobody.** No route, no create or update service                                                                       | The `supplier_engaged` launch-readiness gate (§11i) reports `not_met` for every project that will ever exist                                    |
+
+Their write halves are specified in §11j.4 and §11j.5. This table is the index, not a second spec.
+
+**Two of the three have a visible frontend consequence today**, and both were mis-attributed to the
+frontend before this subsection existed. `/knowledge-hub` renders an empty state that reads as "no
+insights yet" rather than "no insight can be created". And the project Overview tab's Civic Pulse
+origin link and demand-evidence chips are dark because `ResearchProjectDetailView` exposes no link —
+which is downstream of there being no way to create one (R_AND_D_STRUCTURE.md §18).
+
+#### 11j.2 Missing reads — the data exists and nothing can fetch it
+
+| Method & path                                                                | Body / input                   | Behavior & statuses                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET …/:projectSlug/disputes` · `GET …/disputes/:disputeId`                  | `?status=&page=`               | **The compliance one.** Raise, vote, withdraw and resolve all ship; there is **no read at all**, and no `listDisputes` / `getDispute` service function to build one on. §14 and §7A.6 item 5 call the dispute UI the GDPR Art. 22 contestability path and the EU AI Act Art. 14 human-oversight control — neither can be built against write-only endpoints. Today a dispute is reachable only as an `activeDisputeId` on an allocation proposal, which yields an id and nothing else. Member only → else `404`. `200` |
+| `GET …/:projectSlug/effort-claims`                                           | `?status=&memberUserId=&page=` | List. Only `GET …/effort-claims/:claimId` ships, so a member cannot enumerate their own claims and the Proof-of-Effort verification tab has no index to render. `200`                                                                                                                                                                                                                                                                                                                                                  |
+| `GET /discovery/talent/:talentUserIdOrHandle`                                | —                              | Directory detail. `listTalentProfiles` and `findMyTalentProfile` ship; **there is no read for anyone else's profile**, so a talent card on `/talent` has nowhere to link. Unpublished → `404`. `200`                                                                                                                                                                                                                                                                                                                   |
+| `GET /applications/mine`                                                     | `?status=&page=`               | Root-mounted, `requireAuth`. An applicant cannot see what they applied to — `…/:projectSlug/applications` is the founder's inbox and is maintainer-gated. `200`                                                                                                                                                                                                                                                                                                                                                        |
+| `GET /invites/mine`                                                          | `?status=&page=`               | Root-mounted, `requireAuth`. **An invitee cannot find an invite addressed to them**, and `/accept` and `/decline` both need an `inviteId` they have no way to obtain. The talent-page invite flow terminates nowhere without this. `200`                                                                                                                                                                                                                                                                               |
+| `GET …/:projectSlug/applications/:applicationId` · `GET …/invites/:inviteId` | —                              | Detail reads behind the two lists. Applicant/invitee or maintainer+ → else `404`. `200`                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `GET …/:projectSlug/roles/:roleId`                                           | —                              | Single role. `attachOptionalUser`, matching the list. `200`                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `GET …/:projectSlug/physical-receipts/:receiptId`                            | —                              | Single receipt, caller-scoped exactly as the list is. `200`                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `GET …/:projectSlug/workshop/files/:fileId`                                  | —                              | Single file. Member only → else `404`. `200`                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `GET /milestones/:milestoneId`                                               | —                              | Single milestone; the project-scoped list ships. Member only. `200`                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `GET /discovery/problem-reports/:submissionId`                               | —                              | The caller's own submission; `/mine` returns the list. Own row only → else `404`. `200`                                                                                                                                                                                                                                                                                                                                                                                                                                |
+
+#### 11j.3 Lifecycle holes — an enum value or state nothing can reach
+
+| Method & path                                          | Body / input                                                                                                  | Behavior & statuses                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PATCH /funding-rounds/:roundId`                       | `{ title?, summary?, goalAmountInCents?, minimumPledgeInCents?, maximumPledgeInCents?, opensAt?, closesAt? }` | **A draft round can never be edited.** Create, open and close ship; there is no `updateFundingRound` anywhere in `src/`. A typo in a goal amount is currently permanent. Founder only. Refused once the round has ever opened — `409 ROUND_NOT_EDITABLE`. Re-checks `ENABLED_FUNDING_ROUND_TYPES` if `type` were ever editable, which it is not. `200` · `409` · `422` |
+| `DELETE /funding-rounds/:roundId`                      | —                                                                                                             | A draft round can never be withdrawn. Must refuse once it carries a pledge or has ever opened — `409 ROUND_HAS_REFERENCES`, the same shape as `ROLE_HAS_REFERENCES`. `200` · `409`                                                                                                                                                                                     |
+| `DELETE /milestones/:milestoneId`                      | —                                                                                                             | No delete path exists. Refuse once the milestone is `done` or is cited by a statement line. `200` · `409`                                                                                                                                                                                                                                                              |
+| `POST …/compensation-agreements/:agreementId/decline`  | `{ note? }`                                                                                                   | **The member declines a proposal.** Propose and accept ship; there is no way to say no, so a proposal sits `proposed` forever. The member only → else `403`. `200`                                                                                                                                                                                                     |
+| `POST …/compensation-agreements/:agreementId/withdraw` | `{ reasonNote }`                                                                                              | The proposer retracts. `compensationAgreementStatusEnum` (`schema.ts:511`) declares **`withdrawn`** and **no endpoint reaches it** — a value in a shipped enum that no state machine can produce. Founder only. Refused once `active`; a live agreement is superseded, never withdrawn. `200` · `409`                                                                  |
+| `DELETE …/:projectSlug/physical-receipts/:receiptId`   | —                                                                                                             | A mis-uploaded receipt is permanent today. Must refuse once cited by an effort claim — the bytes are evidence at that point. Uploader only. `200` · `409 RECEIPT_CITED`                                                                                                                                                                                                |
+| `PATCH …/:projectSlug/workshop/files/:fileId`          | `{ fileName?, fileKind? }`                                                                                    | Rename or re-kind a linked file. The URL stays immutable — a changed target is a new file, not an edit. Minor. `200`                                                                                                                                                                                                                                                   |
+
+#### 11j.4 Discovery authoring — the moderator surface §11b never got
+
+| Method & path                                                                           | Body / input                                                                                                                   | Behavior & statuses                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST` · `PATCH` · `DELETE /discovery/admin/market-insights[/:insightId]`               | `{ title, categoryId?, regionId?, statKind, statValueMilli, statUnitKey, trendDirection, sourceName, sourceUrl?, observedAt }` | Platform `moderator`, with `requirePlatformCapability` running **before any id is read** so the `403` is not an id oracle (§4a Layer 3) — the same shape the shipped `/discovery/admin/*` rows use. **This is what makes `market_insight` writable at all** (§11j.1). The wire shape is already settled by §6 and §15: `statKind` + `statValueMilli` + `statUnitKey`, never a `"+34%"` string. `201`/`200` · `403` · `422` |
+| `POST` · `DELETE /discovery/problem-clusters/:clusterId/project-links[/:projectId]`     | `{ projectId, source }`                                                                                                        | Links a project to a cluster, writing `problem_cluster_project_link` with its `source`. The project's founder, or a moderator. **The missing half of the second dead end** (§11j.1), and the only thing that would let a cluster show what it produced or a project show where it came from. `201` · `403` · `409 ALREADY_LINKED`                                                                                          |
+| `POST` · `PATCH` · `DELETE /discovery/admin/skills[/:skillId]` · `/regions[/:regionId]` | `{ slug, displayLabel, … }`                                                                                                    | **Lower priority, and arguably not a defect.** Both vocabularies are seeded by `db:seed-discovery-lookups` and have no runtime write path — which is a legitimate answer for a controlled vocabulary, and exactly why `supplier_capability` deliberately has no `POST` either (§11i). Listed for completeness. Retirement is `isActive`, not `DELETE`. `201`/`200` · `403`                                                 |
+
+#### 11j.5 Go-to-market — the engagement CRUD §11i left out
+
+| Method & path                                                                                            | Body / input                    | Behavior & statuses                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET` · `POST` · `PATCH` · `DELETE /research-projects/:projectSlug/supplier-engagements[/:engagementId]` | `{ supplierId, status, note? }` | Maintainer+ → else `404`. `status` is the shipped `project_supplier_engagement_status` enum — `considering` / `contacted` / `contracted` / `ended`. **The missing half of the third dead end** (§11j.1): without it `supplier_engaged` can never be `met`, so the launch-readiness checklist has a gate no project can pass. §6 already fixes the semantics and they are not negotiable — `contracted` means _this team says it signed something_, and **nothing here may feed a supplier's `verificationState`**, or the public directory becomes forgeable one self-report at a time. One engagement per (project, supplier) pair, already enforced by a unique index. `201`/`200` · `409` |
+
+#### 11j.6 Deliberately absent — do not "fix" these
+
+Every row is a decision with a reason and a section behind it. A verb missing from this domain is as
+often a settled argument as an oversight, and this table exists so the argument is not had twice.
+
+| Absent verb                                                              | Why, and where it is settled                                                                                                                        |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PATCH` / `DELETE` on `slice_ledger_entry`, `project_audit_entry`        | Append-only, enforced four ways — revoked grants, triggers, service discipline and the hash chain. A correction is a reversing entry (§4f, §9.1)    |
+| `PATCH` on a finalized `compensation_period` or any of its lines         | A finalized statement is corrected by **superseding** it. Editing would invalidate the statement hash and every hash chained after it (§7A.5, §11g) |
+| Any endpoint that marks a statement line `paid`                          | Payment is an attestation plus a member confirmation, or it is not evidence (§7A.5)                                                                 |
+| `UPDATE` on a locked `member_fair_market_rate`                           | Trigger-frozen at lock. A rate that can move retroactively re-prices every hour already logged against it (§9.1, §9.6)                              |
+| `DELETE /suppliers/:supplierId`                                          | `isActive: false` is retirement. Moderation is not deletion, and a deleted supplier orphans the engagements that cite it (§11i)                     |
+| `POST /supplier-capabilities`                                            | Seeded vocabulary, exactly like `discovery_skill`. No submission path means no spam surface to moderate (§11i)                                      |
+| An unbake endpoint                                                       | Recovery from a bake is a manual, audited, out-of-band operation. `pie_bake_event` is unique per project, once ever (§9.11)                         |
+| `consensusAdjustedMinutes` on dispute resolve                            | Settled as §9.12 option (a). A human-supplied number overruling the formula is majority-fiat wearing a quorum, and §9.1 exists to rule it out       |
+| Every `/escrow/*`, `/escrow-releases/*` and `/provider-transfers/*` path | 🗑️ Retired on **legal** grounds, not cost — a budget does not bring them back. Do not re-bind (§7, §11g, Appendix A3)                               |
+| `POST /webhooks/payments/stripe`, and any raw-body mount                 | Never built and never will be. There is no webhook router in `src/app.ts` and there must not be one (§7A.6 item 1)                                  |
+| `GET …/workshop/chat/stream` (SSE)                                       | Deferred on the 20-connection Postgres budget, not on cost. The keyset cursor is the seam that makes it a later insert (Appendix A4)                |
+| `GET …/daily-logs/:logId/playback-token`                                 | No playback token exists — the bytes live on youtube.com, so there is nothing to mint (§8, Appendix A1)                                             |
+| `POST …/workshop/files` with bytes                                       | Files are external links. `sizeBytes` stays NULL because nobody measured them (§8, Appendix A2)                                                     |
+| Everything under `/research-programs/*`                                  | Project Immortal, §10 / §11f. Out of scope for this subsection and last in §16                                                                      |
+
 ---
 
 ## 12. How a request flows
@@ -3119,12 +3246,30 @@ POST …/allocation-proposals/:id/dispute  → slices freeze in escrow, OUTSIDE 
 > rather than on code; the appendix records what each decision was and what shipped on it. Every one
 > of the four is therefore now a row in this section rather than in that one — the backend is ahead
 > of the frontend on all of them.
+>
+> **Frontend phases 2 and 3 are now wired** (R_AND_D_STRUCTURE.md §18), which closes several rows
+> below and sharpens the rest. `/project/[id]` reads the detail, team, roles, milestones,
+> funding-rounds and investor-confidence endpoints; `/project/[id]/workshop` reads `…/workshop`;
+> `/build-log` reads `GET /daily-logs` and the streak leaderboard. All of it is **reads only** — every
+> row about a WRITE below still stands.
+>
+> Two things the wiring proved that this document did not say:
+> **`GET /:projectSlug/disputes` and a list form of `GET /:projectSlug/effort-claims` do not exist**
+> (§11e lists no such routes and `src/routes/proof-of-effort.routes.ts` has neither), and **signed-out
+> is `401`, not `404`**, on `…/workshop` and `/daily-logs` — the 404-not-403 rule governs signed-in
+> non-members, and a client has to render both.
 
 Backend supported, no UI yet:
 
-- **Workshop writes.** The kanban is not draggable and the chat composer is a decorative `div`. No
-  create-task, move-task, upload-file, or send-message affordance exists.
+- **Workshop writes.** Still owed, and the gap is now cleaner rather than smaller: phase 3 **deleted**
+  the decorative add-task, move-task, upload-file and send-message affordances instead of wiring them,
+  because each wrote to `useState` and posted nowhere. The board, files and chat now render real data
+  and offer no controls at all, which is honest but not finished.
 - **Dispute and consensus.** No dispute button, no vote UI, no quorum progress, no "who raised it".
+  **And the backend half is incomplete too**, which this section previously did not say: raise, vote,
+  withdraw and resolve all ship, but there is **no read** — no `GET …/disputes`, no
+  `GET …/disputes/:id`, and no service function behind either ([§11j.2](#11j2-missing-reads--the-data-exists-and-nothing-can-fetch-it)).
+  The UI cannot be built until that lands, so this row is blocked on both sides rather than one.
 - **Integration consent.** The entire connect / scope / revoke flow has **no frontend at all** —
   the single largest missing screen, and §9 cannot function without it.
 - **Rate lock.** The fair market rate is the foundation of every number on the Proof-of-Effort page,
@@ -3134,15 +3279,20 @@ Backend supported, no UI yet:
   hash-chain framing is decoration.
 - **Override / review.** No surface for a founder to review a flagged step and override it.
 - **Project edit.** `GET` + `PATCH` exist; there is no edit entry point.
-- **The four §4c stage routes.** All four backends shipped (Appendix B): `/team-building` is served
-  by five endpoints, `/build-log` by `GET /daily-logs` + the streak leaderboard, `/governance` by
-  `GET /governance/summary`, and `/go-to-market` by the §11i supplier and readiness reads. **No page
-  calls any of them yet.** Three notes the UI has to honour: the build-log feed is **member-scoped**,
-  so a signed-out visitor gets the explainer, the legend and the leaderboard with an **empty** feed —
-  never a fabricated one; the governance page's per-member walkthrough must be **authored sample
-  data**, because the backend deliberately returns nobody else's line; and the readiness checklist's
-  `waived` state is representable but never produced today, so the UI must not imply a waiver path
-  exists.
+- **The four §4c stage routes — three of four now call their backend.** `/team-building` and
+  `/go-to-market` wired in phase 1; `/build-log` wired in phase 3 and reads `GET /daily-logs` plus the
+  streak leaderboard. **`/governance` is the one still on mock data**, and it is phase 5's job.
+  The three notes the UI had to honour held up: the build-log feed is **member-scoped**, so a
+  signed-out visitor gets the explainer, the legend and the leaderboard with an **empty** feed and a
+  sign-in prompt — never a fabricated one; the governance page's per-member walkthrough must stay
+  **authored sample data**, because the backend deliberately returns nobody else's line; and the
+  readiness checklist's `waived` state is representable but never produced today, so the UI must not
+  imply a waiver path exists.
+- **Per-project compensation has no host screen at all right now.** The frontend's Governance TAB was
+  removed in phase 2: it was bound to a mock project shape the detail page stopped reading, and its
+  funding half still rendered `escrowReleaseAmount`, a field this contract retired. The panels it hosted
+  (`compensation-agreements-panel`, `compensation-statement-panel`) survive unmounted, and phase 5
+  remounts them against `…/compensation-agreements` and `…/compensation-periods`.
 - **Tiered / multi-currency funding, paper moderation queue, talent profile editing.**
 
 Two of these have stopped being UX debt and become **compliance gaps**, and they should be read that
@@ -3156,19 +3306,28 @@ way in planning:
 
 The entire §7A surface is missing too, and it is the product's headline output: no agreement
 proposal or acceptance, no statement view, no finalize or countersign action, no payment
-acknowledgment, no export. `governance-tab.tsx` renders an escrow ledger that this contract no
-longer describes.
+acknowledgment, no export. The `governance-tab.tsx` that rendered an escrow ledger this contract no
+longer describes has been **deleted** rather than corrected — see the bullet above.
 
 Frontend-side work the contract forces:
 
 - **Pagination everywhere.** `ProjectProofOfEffortLedger` is a flat object with unbounded arrays. A
-  two-year-old project has thousands of entries.
+  two-year-old project has thousands of entries. Phases 2–3 took the first bite: `GET /daily-logs`
+  is keyset-paged behind `getCursorPaginated`, and the per-project log read is capped at a `limit`.
+  **No page renders a "load more" control yet**, so a `nextCursor` is currently parsed and dropped.
 - **Async states.** Claim submission returns `202`, not a verdict. The UI assumes verdicts exist
-  synchronously; it needs pending states plus polling or SSE.
+  synchronously; it needs pending states plus polling or SSE. Phase 3 wired the read half of this
+  correctly — `effortVerificationStatus` renders all six states, so `queued` and `running` no longer
+  look like a refusal.
 - **Idempotency keys** on claim submit, receipt upload and dispute raise, or a retried request on a
-  flaky mobile connection duplicates.
+  flaky mobile connection duplicates. Untouched — nothing writes yet.
 - **Multiple verification attempts.** `ClaimVerificationRun` models one run; re-verification
   produces attempt 2+ and the UI would show stale results.
+- **A member-scoped read needs a fourth render state**, which phases 2–3 had to add: not just
+  loading / error / empty / ready, but **restricted**. `MemberScopedListViewState` collapses `401`
+  and `404` into one `restricted` variant while keeping `isSignInRequired`, so a stranger gets a
+  sign-in prompt and a signed-in non-member gets "this is the team's" — and neither answer reveals
+  whether the child resource exists. It is only safe because the PUBLIC parent read resolves first.
 
 ---
 
@@ -3270,7 +3429,22 @@ deployment in the EU: the **dispute / override UI** (§14), which is the human-i
 oversight — and the **integration-consent screen**, which is the lawful-basis and transparency
 surface for worker monitoring.
 
-**Then §10 (Project Immortal)**, which is the only backend section still unbuilt.
+**Then [§11j](#11j-gaps--what-the-rd-surface-still-needs), the gap list**, which is what closes out
+"R&D is complete apart from Project Immortal". Inside it the order is not flat:
+
+1. **§11j.1's three write-path dead ends first** — `market_insight`, `problem_cluster_project_link`
+   and `project_supplier_engagement`. A permanently empty read outranks an absent one, because a
+   surface that renders an empty state looks built and reports nothing. Two of the three are already
+   visible as "dark" rows in the frontend's own §18, mis-attributed there to frontend work.
+2. **Then §11j.2's dispute reads**, which are the backend half of the Art. 22 / Art. 14 compliance
+   item above — that item cannot be closed without them.
+3. **Then the remaining reads and lifecycle holes** (§11j.2, §11j.3), which are ordinary product
+   gaps: `GET /invites/mine` is the sharpest, since an invite nobody can find is an invite nobody
+   can accept.
+4. **§11j.4's skills/regions rows last, if at all** — a seeded vocabulary with no runtime write path
+   is a legitimate design, not a defect.
+
+**Then §10 (Project Immortal)**, which is the only backend section still entirely unbuilt.
 
 This matches PROOF_OF_EFFORT_SPEC.md §1's sequencing: the AI Chief of Staff (§9 + §7A) comes first;
 reward crowdfunding (§7) is optional and later; equity crowdfunding stays API-disabled until the
