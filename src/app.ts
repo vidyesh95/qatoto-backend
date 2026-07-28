@@ -24,7 +24,9 @@ import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
 import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
-import researchProjectsRouter from "#src/routes/research-projects.routes.js";
+import researchProjectsRouter, {
+  applicationInboxRouter,
+} from "#src/routes/research-projects.routes.js";
 import seriesRouter from "#src/routes/series.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
@@ -186,6 +188,13 @@ app.use("/", governanceRouter);
 // `/suppliers`, `/supplier-capabilities` and `/launch-ready-projects` (§6-family, §11i).
 // Root-mounted like researchCatalogRouter — a supplier directory belongs to no project.
 app.use("/", supplierRouter);
+// `/applications/mine` and `/invites/mine` (§5, §11j.2). Root-mounted because neither
+// question is about one project: an applicant asks what they applied to, an invitee asks
+// who invited them, and neither holds a slug. The project-scoped lists on
+// researchProjectsRouter are the FOUNDER's inbox and are maintainer-gated, so they can
+// never answer either — which is why an invitee previously had no way to obtain the
+// inviteId that /accept and /decline both require.
+app.use("/", applicationInboxRouter);
 // §7's id-keyed half: /funding-rounds, /pledges, /milestones, /escrow-releases,
 // /provider-transfers and /funding/deals. Root-mounted because a backer arriving from a
 // deal-flow list holds a round id and has no reason to know which project owns it — the

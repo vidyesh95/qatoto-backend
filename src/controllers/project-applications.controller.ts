@@ -461,3 +461,203 @@ export async function revokeInvite(req: Request, res: Response): Promise<void> {
   };
   res.status(200).json(response);
 }
+
+/**
+ * GET /applications/mine — root-mounted, `requireAuth` (§11j.2).
+ *
+ * There is no `userId` query parameter and there must never be one (§13): the filter is
+ * `req.user.id`. The project-scoped list is the founder's inbox and is maintainer-gated,
+ * so it can never answer this question for the person who applied.
+ */
+export async function listMyApplications(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = ListApplicationsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const { status, page, limit } = parsedQuery.data;
+  const applicationsPage = await applicationsService.listMyApplications(req.user.id, {
+    status,
+    page,
+    limit,
+  });
+
+  const response: PaginatedResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Your applications retrieved successfully",
+    data: [...applicationsPage.rows],
+    pagination: {
+      page,
+      limit,
+      total: applicationsPage.total,
+      totalPages: Math.ceil(applicationsPage.total / limit),
+    },
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * GET /invites/mine — root-mounted, `requireAuth` (§11j.2).
+ *
+ * The read that makes the talent-page invite flow terminate somewhere: `/accept` and
+ * `/decline` both need an `inviteId`, and the invitee previously had no way to obtain one.
+ */
+export async function listMyInvites(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = ListInvitesQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const { status, page, limit } = parsedQuery.data;
+  const invitesPage = await applicationsService.listMyInvites(req.user.id, {
+    status,
+    page,
+    limit,
+  });
+
+  const response: PaginatedResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Your invites retrieved successfully",
+    data: [...invitesPage.rows],
+    pagination: {
+      page,
+      limit,
+      total: invitesPage.total,
+      totalPages: Math.ceil(invitesPage.total / limit),
+    },
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * Resolves a project for a caller who is EITHER a maintainer of it OR the counterparty of
+ * the row being read (§11j.2) — the one dual-standing read in this file.
+ *
+ * Maintainer standing is tried first and, when it holds, wins outright: it covers drafts,
+ * which is the founder inbox's whole job. When it does not, the caller may still be the
+ * applicant or invitee, so the project is resolved WITHOUT a membership requirement and the
+ * row's own counterparty column decides.
+ *
+ * `findProjectBySlug`, NOT `resolvePublicProjectOrRespond`: the latter 404s a draft, which
+ * would hide an applicant's own application the moment a founder unpublishes — punishing
+ * the applicant for something only the founder did.
+ *
+ * Returns the project plus whether maintainer standing was proven; every failure path
+ * writes the same 404 and returns null, so "no such project", "not a maintainer" and "not
+ * your row" are indistinguishable.
+ */
+async function resolveCounterpartyProjectOrRespond(
+  req: Request,
+  res: Response,
+): Promise<{
+  readonly project: membershipService.ProjectRef;
+  readonly isMaintainer: boolean;
+} | null> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return null;
+  }
+
+  const projectSlug = firstParam(req.params.projectSlug ?? "");
+  const accessResult = await membershipService.requireProjectRole(
+    projectSlug,
+    req.user.id,
+    "maintainer",
+  );
+
+  if (accessResult.success) {
+    return {
+      project: {
+        projectId: accessResult.value.projectId,
+        projectSlug: accessResult.value.projectSlug,
+        projectStatus: accessResult.value.projectStatus,
+        founderUserId: accessResult.value.founderUserId,
+        currency: accessResult.value.currency,
+      },
+      isMaintainer: true,
+    };
+  }
+
+  const project = await membershipService.findProjectBySlug(projectSlug);
+  if (!project) {
+    respondProjectError(res, { type: "NOT_FOUND", projectRef: projectSlug });
+    return null;
+  }
+  return { project, isMaintainer: false };
+}
+
+/**
+ * GET /research-projects/:projectSlug/applications/:applicationId (§11j.2).
+ *
+ * The applicant or a maintainer+; everything else, including an id belonging to another
+ * project, is the same 404.
+ */
+export async function getApplication(req: Request, res: Response): Promise<void> {
+  const resolved = await resolveCounterpartyProjectOrRespond(req, res);
+  if (!resolved) {
+    return;
+  }
+
+  const applicationId = firstParam(req.params.applicationId ?? "");
+  const application = await applicationsService.findApplicationById(
+    resolved.project.projectId,
+    applicationId,
+  );
+
+  // A non-maintainer sees ONLY their own row, and a row that is not theirs answers exactly
+  // as one that does not exist.
+  if (!application || (!resolved.isMaintainer && application.applicantUserId !== req.user?.id)) {
+    respondProjectError(res, { type: "APPLICATION_NOT_FOUND", applicationId });
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Application retrieved successfully",
+    data: application,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * GET /research-projects/:projectSlug/invites/:inviteId (§11j.2).
+ *
+ * The invitee or a maintainer+. Same shape and same reasoning as `getApplication`.
+ */
+export async function getInvite(req: Request, res: Response): Promise<void> {
+  const resolved = await resolveCounterpartyProjectOrRespond(req, res);
+  if (!resolved) {
+    return;
+  }
+
+  const inviteId = firstParam(req.params.inviteId ?? "");
+  const invite = await applicationsService.findInviteById(resolved.project.projectId, inviteId);
+
+  if (!invite || (!resolved.isMaintainer && invite.inviteeUserId !== req.user?.id)) {
+    respondProjectError(res, { type: "INVITE_NOT_FOUND", inviteId });
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Invite retrieved successfully",
+    data: invite,
+  };
+  res.status(200).json(response);
+}

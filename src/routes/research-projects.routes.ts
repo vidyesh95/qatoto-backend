@@ -169,6 +169,18 @@ router.delete("/:projectSlug/roles/:roleId", requireAuth, rolesController.delete
 /** GET /research-projects/:projectSlug/applications — maintainer+. */
 router.get("/:projectSlug/applications", requireAuth, applicationsController.listApplications);
 
+/**
+ * GET …/applications/:applicationId — the APPLICANT or a maintainer+ (§11j.2).
+ *
+ * Declared above the `/accept`, `/decline` and `/withdraw` siblings for tidiness only;
+ * those are POSTs one segment deeper and cannot collide with this GET.
+ */
+router.get(
+  "/:projectSlug/applications/:applicationId",
+  requireAuth,
+  applicationsController.getApplication,
+);
+
 /** POST /research-projects/:projectSlug/applications — `kind` is server-derived. */
 router.post(
   "/:projectSlug/applications",
@@ -208,6 +220,9 @@ router.post(
 
 /** GET /research-projects/:projectSlug/invites — maintainer+. */
 router.get("/:projectSlug/invites", requireAuth, applicationsController.listInvites);
+
+/** GET …/invites/:inviteId — the INVITEE or a maintainer+ (§11j.2). */
+router.get("/:projectSlug/invites/:inviteId", requireAuth, applicationsController.getInvite);
 
 /** POST /research-projects/:projectSlug/invites — maintainer+. */
 router.post(
@@ -259,5 +274,31 @@ router.delete(
   projectWatchLimiter,
   projectsController.unwatchProject,
 );
+
+/**
+ * The counterparty's own inbox, ROOT-MOUNTED (§11j.2).
+ *
+ * A second router from this file, exactly as `funding.routes.ts` exports
+ * `projectFundingRouter` and `compensation.routes.ts` exports `governanceRouter`. It is
+ * root-mounted because neither question is about one project: an applicant asks "what did I
+ * apply to", an invitee asks "who invited me", and neither holds a slug.
+ *
+ * This is what makes the invite flow terminate somewhere. `…/invites/:inviteId/accept` and
+ * `/decline` need an `inviteId`; the project-scoped list that carries one is
+ * maintainer-gated, so until now the only party who could act on an invite was the only
+ * party who could not find it.
+ *
+ * Both paths are literal, so mount order among the root routers is not load-bearing — and
+ * nothing else at the root owns `/applications` or `/invites`.
+ */
+export const applicationInboxRouter = express.Router();
+
+applicationInboxRouter.get(
+  "/applications/mine",
+  requireAuth,
+  applicationsController.listMyApplications,
+);
+
+applicationInboxRouter.get("/invites/mine", requireAuth, applicationsController.listMyInvites);
 
 export default router;

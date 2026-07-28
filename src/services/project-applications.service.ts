@@ -270,6 +270,168 @@ export interface ListApplicationsFilter {
   readonly limit: number;
 }
 
+/**
+ * The project identity every cross-project row has to carry (§11j.2).
+ *
+ * A `/mine` row is rendered on a screen that spans projects, so it must name its own —
+ * slug to link, name and cover to render, stage to badge. `OPEN_ROLE_VIEW_COLUMNS`
+ * (`project-roles.service.ts`) is the precedent and the reason: a cross-project card that
+ * needs a second call per row to learn where it belongs is an N+1 by construction.
+ */
+const OWNING_PROJECT_COLUMNS = {
+  projectSlug: researchProject.slug,
+  projectName: researchProject.name,
+  projectStage: researchProject.stage,
+  projectCoverImageUrl: researchProject.coverImageUrl,
+} as const;
+
+export interface MyApplicationView {
+  readonly id: string;
+  readonly kind: (typeof projectApplication.$inferSelect)["kind"];
+  readonly status: (typeof projectApplication.$inferSelect)["status"];
+  readonly projectSlug: string;
+  readonly projectName: string;
+  readonly projectStage: (typeof researchProject.$inferSelect)["stage"];
+  readonly projectCoverImageUrl: string | null;
+  readonly openRoleId: string | null;
+  readonly roleTitleSnapshot: string | null;
+  readonly shortPitch: string;
+  readonly selectedSkills: readonly string[];
+  readonly statedCommitment: (typeof projectApplication.$inferSelect)["statedCommitment"];
+  readonly expectedCompensationNote: string | null;
+  /** The founder's note back, which is the whole reason an applicant opens this screen. */
+  readonly reviewNote: string | null;
+  readonly decidedAt: Date | null;
+  readonly expiresAt: Date | null;
+  readonly createdAt: Date;
+}
+
+export interface MyInviteView {
+  readonly id: string;
+  readonly status: (typeof projectInvite.$inferSelect)["status"];
+  readonly projectSlug: string;
+  readonly projectName: string;
+  readonly projectStage: (typeof researchProject.$inferSelect)["stage"];
+  readonly projectCoverImageUrl: string | null;
+  readonly invitedByUserId: string;
+  /** The INVITER, not the invitee: on this screen the caller IS the invitee. */
+  readonly invitedByName: string;
+  readonly invitedByAvatarImageUrl: string | null;
+  readonly openRoleId: string | null;
+  readonly roleTitle: string | null;
+  readonly message: string | null;
+  readonly respondedAt: Date | null;
+  readonly expiresAt: Date | null;
+  readonly createdAt: Date;
+}
+
+/**
+ * `GET /applications/mine` — everything the caller applied to (§11j.2).
+ *
+ * THERE IS NO `userId` PARAMETER AND THERE MUST NEVER BE ONE (§13). The filter is the
+ * session id, exactly as on `/pledges/mine` and `/problem-reports/mine`. The project-scoped
+ * `…/:projectSlug/applications` is the FOUNDER's inbox and is maintainer-gated; it can
+ * never answer this question for the person who applied.
+ *
+ * NO PROJECT-STATUS FILTER, deliberately. A draft project's application stays visible to
+ * the applicant — they are its counterparty, and hiding it would strand the one person
+ * entitled to see it. That is the dead end §11j.2 describes, not a leak: they already know
+ * the project exists, because they applied to it.
+ */
+export async function listMyApplications(
+  applicantUserId: string,
+  filter: ListApplicationsFilter,
+): Promise<{ readonly rows: readonly MyApplicationView[]; readonly total: number }> {
+  const conditions = [eq(projectApplication.applicantUserId, applicantUserId)];
+  if (filter.status) {
+    conditions.push(eq(projectApplication.status, filter.status));
+  }
+  const predicate = and(...conditions);
+
+  const [rows, [totals]] = await Promise.all([
+    db
+      .select({
+        id: projectApplication.id,
+        kind: projectApplication.kind,
+        status: projectApplication.status,
+        ...OWNING_PROJECT_COLUMNS,
+        openRoleId: projectApplication.openRoleId,
+        roleTitleSnapshot: projectApplication.roleTitleSnapshot,
+        shortPitch: projectApplication.shortPitch,
+        selectedSkills: projectApplication.selectedSkills,
+        statedCommitment: projectApplication.statedCommitment,
+        expectedCompensationNote: projectApplication.expectedCompensationNote,
+        reviewNote: projectApplication.reviewNote,
+        decidedAt: projectApplication.decidedAt,
+        expiresAt: projectApplication.expiresAt,
+        createdAt: projectApplication.createdAt,
+      })
+      .from(projectApplication)
+      .innerJoin(researchProject, eq(researchProject.id, projectApplication.projectId))
+      .where(predicate)
+      // §4c rule 4 — ends in a unique column.
+      .orderBy(desc(projectApplication.createdAt), desc(projectApplication.id))
+      .limit(filter.limit)
+      .offset((filter.page - 1) * filter.limit),
+    db.select({ value: count() }).from(projectApplication).where(predicate),
+  ]);
+
+  return { rows, total: totals?.value ?? 0 };
+}
+
+/**
+ * `GET /invites/mine` — every invite addressed to the caller (§11j.2).
+ *
+ * THE ONE THAT MAKES THE INVITE FLOW TERMINATE SOMEWHERE. `/invites/:inviteId/accept` and
+ * `/decline` both need an `inviteId`, and until this read existed an invitee had no way to
+ * obtain one — the project-scoped list is maintainer-gated, so the only party who can act
+ * on an invite was the only party who could not find it.
+ *
+ * Joined to the INVITER for the display name; the invitee is the caller.
+ */
+export async function listMyInvites(
+  inviteeUserId: string,
+  filter: {
+    readonly status?: (typeof projectInvite.$inferSelect)["status"] | undefined;
+    readonly page: number;
+    readonly limit: number;
+  },
+): Promise<{ readonly rows: readonly MyInviteView[]; readonly total: number }> {
+  const conditions = [eq(projectInvite.inviteeUserId, inviteeUserId)];
+  if (filter.status) {
+    conditions.push(eq(projectInvite.status, filter.status));
+  }
+  const predicate = and(...conditions);
+
+  const [rows, [totals]] = await Promise.all([
+    db
+      .select({
+        id: projectInvite.id,
+        status: projectInvite.status,
+        ...OWNING_PROJECT_COLUMNS,
+        invitedByUserId: projectInvite.invitedByUserId,
+        invitedByName: user.name,
+        invitedByAvatarImageUrl: user.image,
+        openRoleId: projectInvite.openRoleId,
+        roleTitle: projectInvite.roleTitle,
+        message: projectInvite.message,
+        respondedAt: projectInvite.respondedAt,
+        expiresAt: projectInvite.expiresAt,
+        createdAt: projectInvite.createdAt,
+      })
+      .from(projectInvite)
+      .innerJoin(researchProject, eq(researchProject.id, projectInvite.projectId))
+      .innerJoin(user, eq(user.id, projectInvite.invitedByUserId))
+      .where(predicate)
+      .orderBy(desc(projectInvite.createdAt), desc(projectInvite.id))
+      .limit(filter.limit)
+      .offset((filter.page - 1) * filter.limit),
+    db.select({ value: count() }).from(projectInvite).where(predicate),
+  ]);
+
+  return { rows, total: totals?.value ?? 0 };
+}
+
 export async function listApplications(
   projectId: string,
   filter: ListApplicationsFilter,
