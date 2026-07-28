@@ -391,6 +391,106 @@ export interface ClaimDetailView {
   }[];
 }
 
+/**
+ * One row of `GET …/effort-claims` (§11j.2).
+ *
+ * DELIBERATELY NOT `ClaimDetailView`. That view fans out to runs, steps and evidence — four
+ * queries per claim — which is right for one claim and catastrophic for a page of twenty.
+ * A verification-tab index needs who, when, how much and what the verdict was; the moment a
+ * reader opens one, the detail read supplies the rest.
+ */
+export interface ClaimSummaryView {
+  readonly id: string;
+  readonly memberId: string;
+  readonly memberUserId: string;
+  readonly memberName: string;
+  readonly sourceKind: (typeof effortClaim.$inferSelect)["sourceKind"];
+  readonly claimedForDate: string;
+  readonly claimSummary: string;
+  readonly groundedMinutes: number | null;
+  readonly groundedCashInCents: string | null;
+  readonly overriddenMinutes: number | null;
+  readonly verificationStatus: (typeof effortClaim.$inferSelect)["verificationStatus"];
+  readonly verdictReachedAt: Date | null;
+  readonly createdAt: Date;
+}
+
+export interface ListClaimsFilter {
+  readonly status?: (typeof effortClaim.$inferSelect)["verificationStatus"] | undefined;
+  readonly memberUserId?: string | undefined;
+  readonly page: number;
+  readonly limit: number;
+}
+
+export interface ClaimPage {
+  readonly rows: readonly ClaimSummaryView[];
+  readonly total: number;
+}
+
+/**
+ * `GET …/effort-claims` — the project's claims, newest claimed-date first (§11j.2).
+ *
+ * ANY MEMBER SEES ANY MEMBER'S CLAIMS, which matches `listAllocationProposals` and §9's
+ * transparency posture: the whole point of Proof of Effort is that the people sharing a pie
+ * can audit what everyone else was credited for. The filter is `memberUserId` — the public
+ * user id, as on `…/members/:memberUserId/fair-market-rate` — not the internal `memberId`.
+ *
+ * `effort_claim_projectId_claimedForDate_idx` on (projectId, claimedForDate, id) matches
+ * this ORDER BY exactly.
+ */
+export async function listClaims(projectId: string, filter: ListClaimsFilter): Promise<ClaimPage> {
+  const conditions = [eq(effortClaim.projectId, projectId)];
+  if (filter.status !== undefined) {
+    conditions.push(eq(effortClaim.verificationStatus, filter.status));
+  }
+  if (filter.memberUserId !== undefined) {
+    // Filtered on the join, not with a second query: `projectMember` is already joined to
+    // resolve the display name.
+    conditions.push(eq(projectMember.userId, filter.memberUserId));
+  }
+  const predicate = and(...conditions);
+
+  const baseQuery = db
+    .select({ claim: effortClaim, memberUserId: projectMember.userId, memberName: user.name })
+    .from(effortClaim)
+    .innerJoin(projectMember, eq(projectMember.id, effortClaim.memberId))
+    .innerJoin(user, eq(user.id, projectMember.userId));
+
+  const [rows, [totalRow]] = await Promise.all([
+    baseQuery
+      .where(predicate)
+      // §4c rule 4 — ends in a unique column.
+      .orderBy(desc(effortClaim.claimedForDate), desc(effortClaim.id))
+      .limit(filter.limit)
+      .offset((filter.page - 1) * filter.limit),
+    db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(effortClaim)
+      .innerJoin(projectMember, eq(projectMember.id, effortClaim.memberId))
+      .where(predicate),
+  ]);
+
+  return {
+    rows: rows.map((row) => ({
+      id: row.claim.id,
+      memberId: row.claim.memberId,
+      memberUserId: row.memberUserId,
+      memberName: row.memberName,
+      sourceKind: row.claim.sourceKind,
+      claimedForDate: row.claim.claimedForDate,
+      claimSummary: row.claim.claimSummary,
+      groundedMinutes: row.claim.groundedMinutes,
+      // §4b — bigint crosses the wire as a decimal string, never a JSON number.
+      groundedCashInCents: row.claim.groundedCashInCents?.toString() ?? null,
+      overriddenMinutes: row.claim.overriddenMinutes,
+      verificationStatus: row.claim.verificationStatus,
+      verdictReachedAt: row.claim.verdictReachedAt,
+      createdAt: row.claim.createdAt,
+    })),
+    total: totalRow?.total ?? 0,
+  };
+}
+
 /** `GET …/effort-claims/:claimId` — claim + all runs + steps in `stepOrder` + evidence. */
 export async function findClaimDetail(
   projectId: string,

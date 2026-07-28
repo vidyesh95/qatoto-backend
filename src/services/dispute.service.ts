@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -605,6 +605,136 @@ export async function resolveDispute(
 }
 
 /** One dispute with its votes, ordered canonically. */
+export interface ListDisputesFilter {
+  readonly status?: (typeof dispute.$inferSelect)["status"] | undefined;
+  readonly page: number;
+  readonly limit: number;
+}
+
+export interface DisputePage {
+  readonly rows: readonly DisputeView[];
+  readonly total: number;
+}
+
+/**
+ * `GET …/disputes` — the project's disputes, newest first (§11j.2).
+ *
+ * THE COMPLIANCE READ. Raise, vote, withdraw and resolve all shipped without it, which
+ * left a dispute reachable only as an `activeDisputeId` on an allocation proposal — an id
+ * and nothing else. §14 and §7A.6 name the dispute UI as the GDPR Art. 22 contestability
+ * path and the EU AI Act Art. 14 human-oversight control, and neither can be built against
+ * write-only endpoints.
+ *
+ * ONE QUERY FOR THE PAGE, ONE FOR ALL ITS VOTES. Calling `findDispute` per row would be
+ * 2N+1 queries for a screen that shows every dispute on a project.
+ *
+ * No dedup is needed or wanted on a `status=open` filter: `dispute_proposalId_open_unq` is
+ * a partial unique index over exactly that predicate, so at most one open dispute per
+ * proposal exists by construction.
+ */
+export async function listDisputes(
+  projectId: string,
+  filter: ListDisputesFilter,
+): Promise<DisputePage> {
+  const conditions = [eq(dispute.projectId, projectId)];
+  if (filter.status !== undefined) {
+    conditions.push(eq(dispute.status, filter.status));
+  }
+  const predicate = and(...conditions);
+
+  const [rows, [totalRow]] = await Promise.all([
+    db
+      .select({ dispute, raisedByName: user.name })
+      .from(dispute)
+      .innerJoin(projectMember, eq(projectMember.id, dispute.raisedByMemberId))
+      .innerJoin(user, eq(user.id, projectMember.userId))
+      .where(predicate)
+      // §4c rule 4 — ends in a unique column so two disputes raised in the same
+      // millisecond never swap places between pages.
+      .orderBy(desc(dispute.createdAt), desc(dispute.id))
+      .limit(filter.limit)
+      .offset((filter.page - 1) * filter.limit),
+    db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(dispute)
+      .where(predicate),
+  ]);
+
+  if (rows.length === 0) {
+    return { rows: [], total: totalRow?.total ?? 0 };
+  }
+
+  const votes = await db
+    .select({
+      disputeId: disputeVote.disputeId,
+      voterMemberId: disputeVote.voterMemberId,
+      voterName: user.name,
+      position: disputeVote.position,
+      note: disputeVote.note,
+      castAt: disputeVote.castAt,
+    })
+    .from(disputeVote)
+    .innerJoin(projectMember, eq(projectMember.id, disputeVote.voterMemberId))
+    .innerJoin(user, eq(user.id, projectMember.userId))
+    .where(
+      inArray(
+        disputeVote.disputeId,
+        rows.map((row) => row.dispute.id),
+      ),
+    )
+    .orderBy(asc(disputeVote.castAt), asc(disputeVote.id));
+
+  return {
+    rows: rows.map((row) =>
+      toDisputeView(
+        row.dispute,
+        row.raisedByName,
+        votes.filter((vote) => vote.disputeId === row.dispute.id),
+      ),
+    ),
+    total: totalRow?.total ?? 0,
+  };
+}
+
+/** Shared by the list and the detail read so the two shapes cannot drift. */
+function toDisputeView(
+  row: typeof dispute.$inferSelect,
+  raisedByName: string,
+  votes: readonly DisputeView["votes"][number][],
+): DisputeView {
+  return {
+    id: row.id,
+    proposalId: row.proposalId,
+    raisedByMemberId: row.raisedByMemberId,
+    raisedByName,
+    disputeNote: row.disputeNote,
+    status: row.status,
+    quorumMemberCount: row.quorumMemberCount,
+    resolution: row.resolution,
+    resolutionNote: row.resolutionNote,
+    resolvedAt: row.resolvedAt,
+    scopedWindowStartsAt: row.scopedWindowStartsAt,
+    scopedWindowEndsAt: row.scopedWindowEndsAt,
+    createdAt: row.createdAt,
+    votes,
+  };
+}
+
+/**
+ * `GET …/disputes/:disputeId` — the `Result`-returning half of {@link findDispute}, so a
+ * controller can hand a miss straight to the mapper (§11j.2).
+ */
+export async function getDispute(
+  projectId: string,
+  disputeId: string,
+): Promise<Result<DisputeView, DisputeError>> {
+  const found = await findDispute(projectId, disputeId);
+  if (!found) {
+    return { success: false, error: { type: "DISPUTE_NOT_FOUND", disputeId } };
+  }
+  return { success: true, value: found };
+}
+
 export async function findDispute(
   projectId: string,
   disputeId: string,
@@ -632,20 +762,5 @@ export async function findDispute(
     .where(eq(disputeVote.disputeId, disputeId))
     .orderBy(asc(disputeVote.castAt), asc(disputeVote.id));
 
-  return {
-    id: row.dispute.id,
-    proposalId: row.dispute.proposalId,
-    raisedByMemberId: row.dispute.raisedByMemberId,
-    raisedByName: row.raisedByName,
-    disputeNote: row.dispute.disputeNote,
-    status: row.dispute.status,
-    quorumMemberCount: row.dispute.quorumMemberCount,
-    resolution: row.dispute.resolution,
-    resolutionNote: row.dispute.resolutionNote,
-    resolvedAt: row.dispute.resolvedAt,
-    scopedWindowStartsAt: row.dispute.scopedWindowStartsAt,
-    scopedWindowEndsAt: row.dispute.scopedWindowEndsAt,
-    createdAt: row.dispute.createdAt,
-    votes,
-  };
+  return toDisputeView(row.dispute, row.raisedByName, votes);
 }

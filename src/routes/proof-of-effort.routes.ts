@@ -122,6 +122,9 @@ router.post(
 // --- Claims. `/effort-claims/:claimId/steps/:stepId/override` and `/reverify` are more
 // --- specific than `/effort-claims/:claimId`, and Express matches in declaration order.
 
+/** GET …/effort-claims — member only; any member sees any member's claims (§11j.2). */
+router.get("/:projectSlug/effort-claims", requireAuth, proofOfEffortController.listEffortClaims);
+
 /** POST …/effort-claims — no minutes, no cash, no verdict, no slices. 202. */
 router.post(
   "/:projectSlug/effort-claims",
@@ -164,6 +167,15 @@ router.get(
   requireAuth,
   proofOfEffortController.listAllocationProposals,
 );
+
+// The dispute READS (§11j.2). No collision with the write subtree below: `/votes`,
+// `/withdraw` and `/resolve` are POSTs one segment deeper. There is no literal under
+// `/disputes` today — a `GET …/disputes/summary` added later MUST be declared above
+// `/disputes/:disputeId` or it resolves as a dispute whose id is "summary".
+
+router.get("/:projectSlug/disputes", requireAuth, proofOfEffortController.listDisputes);
+
+router.get("/:projectSlug/disputes/:disputeId", requireAuth, proofOfEffortController.getDispute);
 
 /** POST …/allocation-proposals/:proposalId/dispute — any active member, inside the window. */
 router.post(

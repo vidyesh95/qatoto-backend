@@ -22,7 +22,7 @@ import * as auditService from "#src/services/project-audit.service.js";
 import * as membershipService from "#src/services/project-membership.service.js";
 import * as allocationService from "#src/services/slice-allocation.service.js";
 import * as ledgerService from "#src/services/slice-ledger.service.js";
-import type { ApiResponse } from "#src/types/index.js";
+import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /**
  * Proof of Effort (R_AND_D_BACKEND_STRUCTURE.md §9, §11e).
@@ -152,6 +152,36 @@ export const ProposalListQuerySchema = z
     status: z.enum(["open", "disputed", "locked", "consensus_reached"]).optional(),
     page: z.coerce.number().int().min(1).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
+/**
+ * `GET …/disputes` (§11j.2). The three values are `disputeStatusEnum` verbatim.
+ *
+ * `page`/`limit` carry DEFAULTS here, unlike the schema above, because these two lists
+ * answer with a `PaginatedResponse` and the envelope's `pagination` block has to state the
+ * page it actually served — which means the controller, not the service, must know it.
+ */
+export const DisputeListQuerySchema = z
+  .object({
+    status: z.enum(["open", "withdrawn", "consensus_reached"]).optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+
+/** `GET …/effort-claims` (§11j.2). The six values are `effortVerificationStatusEnum`. */
+export const EffortClaimListQuerySchema = z
+  .object({
+    status: z
+      .enum(["not_run", "queued", "running", "verified", "flagged_for_review", "unverified"])
+      .optional(),
+    // The PUBLIC user id, matching `…/members/:memberUserId/fair-market-rate`. There is no
+    // `memberId` key and no `projectId` key: the project comes from the path, and the
+    // internal member id is not a thing a client should be holding.
+    memberUserId: z.string().trim().min(1).max(64).optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
   })
   .strict();
 
@@ -297,6 +327,99 @@ export async function listAllocationProposals(req: Request, res: Response): Prom
     "Allocation proposals loaded.",
     await allocationService.listAllocationProposals(caller.context.projectId, parsedQuery.data),
   );
+}
+
+/**
+ * GET /research-projects/:projectSlug/disputes — member only (§11j.2).
+ *
+ * The read half of a domain that shipped raise, vote, withdraw and resolve without one.
+ * §14 and §7A.6 name this the GDPR Art. 22 contestability path and the EU AI Act Art. 14
+ * human-oversight control; neither is buildable against write-only endpoints.
+ */
+export async function listDisputes(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const parsedQuery = DisputeListQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const { page, limit, status } = parsedQuery.data;
+  const disputePage = await disputeService.listDisputes(caller.context.projectId, {
+    ...(status === undefined ? {} : { status }),
+    page,
+    limit,
+  });
+
+  const response: PaginatedResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Disputes loaded.",
+    data: [...disputePage.rows],
+    pagination: {
+      page,
+      limit,
+      total: disputePage.total,
+      totalPages: Math.ceil(disputePage.total / limit),
+    },
+  };
+  res.status(200).json(response);
+}
+
+/** GET /research-projects/:projectSlug/disputes/:disputeId — member only (§11j.2). */
+export async function getDispute(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const disputeId = firstParam(req.params.disputeId ?? "");
+  const found = await disputeService.getDispute(caller.context.projectId, disputeId);
+
+  if (!found.success) {
+    respondProofOfEffortError(res, found.error);
+    return;
+  }
+  respondOk(res, "Dispute loaded.", found.value);
+}
+
+/**
+ * GET /research-projects/:projectSlug/effort-claims — member only (§11j.2).
+ *
+ * Any member may list any member's claims, matching the allocation-proposal read above and
+ * §9's transparency posture: people sharing one pie can audit what each was credited for.
+ */
+export async function listEffortClaims(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const parsedQuery = EffortClaimListQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const { page, limit, status, memberUserId } = parsedQuery.data;
+  const claimPage = await claimsService.listClaims(caller.context.projectId, {
+    ...(status === undefined ? {} : { status }),
+    ...(memberUserId === undefined ? {} : { memberUserId }),
+    page,
+    limit,
+  });
+
+  const response: PaginatedResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Effort claims loaded.",
+    data: [...claimPage.rows],
+    pagination: {
+      page,
+      limit,
+      total: claimPage.total,
+      totalPages: Math.ceil(claimPage.total / limit),
+    },
+  };
+  res.status(200).json(response);
 }
 
 // --- The fair market rate. The one place a number legitimately enters via a body.
