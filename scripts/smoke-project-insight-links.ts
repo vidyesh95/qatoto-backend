@@ -197,11 +197,7 @@ async function main(): Promise<void> {
     ]);
 
     // 1. Stranger: identical refusal for a REAL project slug and a GARBAGE one.
-    const strangerReal = await linkMarketInsightToProject(
-      strangerId,
-      projSlug,
-      publishedInsightId,
-    );
+    const strangerReal = await linkMarketInsightToProject(strangerId, projSlug, publishedInsightId);
     const strangerFake = await linkMarketInsightToProject(
       strangerId,
       `${P}-nonexistent`,
@@ -250,7 +246,9 @@ async function main(): Promise<void> {
 
     // 5. The chips read back, newest first, and carry the headline.
     const withChips = await findResearchProjectBySlug(projSlug, null);
-    const chipIds = withChips.success ? withChips.value.relatedInsights.map((i) => i.insightId) : [];
+    const chipIds = withChips.success
+      ? withChips.value.relatedInsights.map((i) => i.insightId)
+      : [];
     record(
       "relatedInsights renders both citations",
       withChips.success &&
