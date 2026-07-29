@@ -41,6 +41,9 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts"],
+  /* `src/test-support/**` is test-only and must not reach dist/. It lives under src/ so
+     the suites can import it through the #src/* map like everything else, and it is
+     excluded here rather than moved because tsconfig.test.json re-includes it. */
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/test-support/**"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
