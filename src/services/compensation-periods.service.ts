@@ -32,6 +32,7 @@ import {
 } from "#src/lib/compensation-period.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { listAgreementsOverlapping } from "#src/services/compensation-agreements.service.js";
+import { enqueueNotifications } from "#src/services/notifications.service.js";
 import {
   advanceStatementChainHead,
   allocateCompensationSequenceNumber,
@@ -1142,6 +1143,28 @@ export async function finalizePeriod(
 
     await advanceStatementChainHead(tx, context.projectId, { periodId, statementHash });
 
+    // EVERY MEMBER WITH A LINE. This is the product's headline output — a statement of
+    // exactly what a person is owed — and until now the only way to learn it existed was
+    // to open the page and look (§11l.2). Distinct user ids, because a member with a cash
+    // line and an equity line has two lines and one statement.
+    await enqueueNotifications(
+      tx,
+      finalizedByUserId,
+      [...new Set(lines.map((line) => line.memberUserId))].map((memberUserId) => ({
+        recipientUserId: memberUserId,
+        kind: "compensation_period_finalized" as const,
+        projectId: context.projectId,
+        // Ids and dates only. The AMOUNT is deliberately absent: it is on the statement,
+        // behind membership, and a payload is a thing that ends up in logs and push
+        // previews (§7A.6, §11h).
+        payload: {
+          periodId,
+          periodStartDate: period.periodStartDate,
+          periodEndDate: period.periodEndDate,
+        },
+      })),
+    );
+
     await appendAuditEntry(tx, {
       projectId: context.projectId,
       eventKind: "compensation_period_finalized",
@@ -1242,6 +1265,19 @@ export async function countersignPeriod(
       return null;
     }
 
+    // The finalizer, who is never the countersigner — `SELF_COUNTERSIGN_FORBIDDEN` is
+    // checked above, so this fan-out cannot be a self-notification.
+    if (period.finalizedByUserId !== null) {
+      await enqueueNotifications(tx, countersignedByUserId, [
+        {
+          recipientUserId: period.finalizedByUserId,
+          kind: "compensation_period_countersigned",
+          projectId: context.projectId,
+          payload: { periodId },
+        },
+      ]);
+    }
+
     await appendAuditEntry(tx, {
       projectId: context.projectId,
       eventKind: "compensation_period_countersigned",
@@ -1308,6 +1344,10 @@ export async function supersedePeriod(
     return { success: false, error: { type: "PERIOD_ALREADY_SUPERSEDED" } };
   }
 
+  // Read OUTSIDE the transaction, and only to address the notification: the superseded
+  // period's lines are frozen, so nothing can change between this read and the write.
+  const supersededLines = await readLines(periodId);
+
   const replacement = await db.transaction(async (tx) => {
     const successor = await openPeriod(
       tx,
@@ -1331,6 +1371,20 @@ export async function supersedePeriod(
     if (!marked) {
       return null;
     }
+
+    // Everyone who had a line on the statement being corrected. A supersede rewrites what
+    // a person was told they were owed, which is the one correction they must not learn
+    // about by noticing the number changed (§4f — corrections supersede, never edit).
+    await enqueueNotifications(
+      tx,
+      actorUserId,
+      [...new Set(supersededLines.map((line) => line.memberUserId))].map((memberUserId) => ({
+        recipientUserId: memberUserId,
+        kind: "compensation_period_superseded" as const,
+        projectId: context.projectId,
+        payload: { periodId, supersededByPeriodId: successor.id },
+      })),
+    );
 
     await appendAuditEntry(tx, {
       projectId: context.projectId,

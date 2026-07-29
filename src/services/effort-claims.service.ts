@@ -21,6 +21,7 @@ import {
 } from "#src/lib/slice-math.js";
 import { decideClaimVerdict, type VerificationStepStatus } from "#src/lib/verdict.js";
 import { findEffectiveRate } from "#src/services/fair-market-rate.service.js";
+import { enqueueNotifications } from "#src/services/notifications.service.js";
 import { appendAuditEntry } from "#src/services/project-audit.service.js";
 import type { ProjectAccessError } from "#src/services/project-membership.service.js";
 import { openAllocationProposal, settleProposal } from "#src/services/slice-allocation.service.js";
@@ -955,6 +956,30 @@ export async function finalizeClaimVerdict(runId: string): Promise<void> {
         .update(dailyLog)
         .set({ effortVerificationStatus: verdict })
         .where(eq(dailyLog.id, claim.dailyLogId));
+    }
+
+    // The claimant. A SYSTEM ACTOR — `actorUserId` is null here, exactly as it is on the
+    // audit entry below, because the pipeline reached this verdict and no person did.
+    //
+    // Sent for EVERY terminal verdict, not only the bad ones: `verified` is the one that
+    // opens a 24-hour dispute window (§9.8), and a member who is never told it opened
+    // cannot use it. Telling people only about failures is how a contestability right
+    // becomes decorative.
+    const [claimant] = await tx
+      .select({ userId: projectMember.userId })
+      .from(projectMember)
+      .where(eq(projectMember.id, claim.memberId));
+
+    if (claimant) {
+      await enqueueNotifications(tx, null, [
+        {
+          recipientUserId: claimant.userId,
+          kind: "effort_claim_verdict_reached",
+          projectId: claim.projectId,
+          actorUserId: null,
+          payload: { claimId: claim.id, runId, verdict },
+        },
+      ]);
     }
 
     await appendAuditEntry(tx, {

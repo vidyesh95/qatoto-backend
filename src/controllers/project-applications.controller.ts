@@ -447,7 +447,13 @@ export async function revokeInvite(req: Request, res: Response): Promise<void> {
   }
 
   const inviteId = firstParam(req.params.inviteId ?? "");
-  const revokeResult = await applicationsService.revokeInvite(context.projectId, inviteId);
+  // The actor is passed so the notification can name who revoked it — and so the service
+  // can drop a self-notification if a maintainer ever revokes their own invite.
+  const revokeResult = await applicationsService.revokeInvite(
+    context.projectId,
+    inviteId,
+    req.user?.id ?? "",
+  );
   if (!revokeResult.success) {
     respondProjectError(res, revokeResult.error);
     return;

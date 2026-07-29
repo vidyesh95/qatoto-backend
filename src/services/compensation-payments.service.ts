@@ -10,6 +10,7 @@ import {
 } from "#src/db/schema.js";
 import { containsPaymentInstrument } from "#src/lib/payment-instrument.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { enqueueNotifications } from "#src/services/notifications.service.js";
 import { appendAuditEntry } from "#src/services/project-audit.service.js";
 import type { ProjectAccessError } from "#src/services/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
@@ -199,6 +200,19 @@ export async function recordPayment(
         throw new Error("recordPayment: insert returned no row");
       }
 
+      // The member is the one who has to CONFIRM it, and until they do the UI shows the
+      // payment as unconfirmed rather than paid (§7A.5). A confirmation nobody is asked
+      // for is a statement line that stays open forever.
+      await enqueueNotifications(tx, recordedByUserId, [
+        {
+          recipientUserId: line.memberUserId,
+          kind: "compensation_payment_recorded",
+          projectId: context.projectId,
+          // No amount: it is on the line, behind membership.
+          payload: { paymentId: inserted.id, lineId },
+        },
+      ]);
+
       await appendAuditEntry(tx, {
         projectId: context.projectId,
         eventKind: "compensation_payment_recorded",
@@ -306,6 +320,17 @@ export async function confirmPayment(
     if (!next) {
       return null;
     }
+
+    // Back to whoever attested the payment. The founder is waiting on exactly this — it
+    // is what turns "recorded" into evidence that both sides agree (§7A.5).
+    await enqueueNotifications(tx, confirmingUserId, [
+      {
+        recipientUserId: next.recordedByUserId,
+        kind: "compensation_payment_confirmed",
+        projectId: context.projectId,
+        payload: { paymentId, lineId },
+      },
+    ]);
 
     await appendAuditEntry(tx, {
       projectId: context.projectId,

@@ -12,6 +12,7 @@ import {
   user,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { enqueueNotifications } from "#src/services/notifications.service.js";
 import type { ProjectAccessError } from "#src/services/project-membership.service.js";
 import { syncOpenRoleCount } from "#src/services/project-roles.service.js";
 import type { Result } from "#src/types/index.js";
@@ -232,6 +233,20 @@ export async function createApplication(
         .update(projectStats)
         .set({ pendingApplicationCount: sql`${projectStats.pendingApplicationCount} + 1` })
         .where(eq(projectStats.projectId, projectId));
+
+      // THE FOUNDER, not every maintainer. A fan-out to the whole maintainer roster is a
+      // fan-out whose size a stranger controls — anyone can apply to a public project, and
+      // a ten-maintainer team would take ten rows per application. The founder is the one
+      // accountable for the inbox; a per-role subscription is a feature to add when
+      // somebody asks for it, not a default that scales with an unauthenticated action.
+      await enqueueNotifications(tx, applicantUserId, [
+        {
+          recipientUserId: project.founderUserId,
+          kind: "project_application_received",
+          projectId,
+          payload: { applicationId: row.id, kind },
+        },
+      ]);
 
       return row.id;
     });
@@ -624,6 +639,17 @@ export async function acceptApplication(
       })
       .where(eq(projectStats.projectId, projectId));
 
+    // IN THE TRANSACTION, not after it (§11l.2). An applicant told they were accepted by a
+    // fan-out that ran after a rollback has been told something false.
+    await enqueueNotifications(tx, reviewerUserId, [
+      {
+        recipientUserId: application.applicantUserId,
+        kind: "project_application_accepted",
+        projectId,
+        payload: { applicationId },
+      },
+    ]);
+
     return { kind: "accepted" } as const;
   });
 
@@ -678,7 +704,10 @@ export async function declineApplication(
           eq(projectApplication.status, "pending"),
         ),
       )
-      .returning({ id: projectApplication.id });
+      .returning({
+        id: projectApplication.id,
+        applicantUserId: projectApplication.applicantUserId,
+      });
 
     if (rows.length > 0) {
       await tx
@@ -687,6 +716,19 @@ export async function declineApplication(
           pendingApplicationCount: sql`GREATEST(${projectStats.pendingApplicationCount} - 1, 0)`,
         })
         .where(eq(projectStats.projectId, projectId));
+
+      // A decline that reaches nobody is the same silence as no decision at all — the
+      // applicant refreshes `/applications/mine` for weeks (§11l.2).
+      await enqueueNotifications(
+        tx,
+        reviewerUserId,
+        rows.map((row) => ({
+          recipientUserId: row.applicantUserId,
+          kind: "project_application_declined" as const,
+          projectId,
+          payload: { applicationId },
+        })),
+      );
     }
     return rows.length;
   });
@@ -847,22 +889,40 @@ export async function createInvite(
   }
 
   try {
-    const [created] = await db
-      .insert(projectInvite)
-      .values({
-        projectId,
-        inviteeUserId: input.inviteeUserId,
-        invitedByUserId,
-        openRoleId: input.openRoleId ?? null,
-        roleTitle,
-        message: input.message ?? null,
-        expiresAt: expiryInstant(),
-      })
-      .returning({ id: projectInvite.id });
+    // THE INSERT AND THE NOTIFICATION ARE ONE TRANSACTION (§11l.2). An invite is the
+    // sharpest case in the domain: §11j.2 built `GET /invites/mine` because an invite
+    // nobody can find is an invite nobody can accept, and an invite nobody is TOLD about
+    // is the same dead end one step earlier. A unique violation still rolls the whole
+    // thing back and is caught below.
+    const created = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(projectInvite)
+        .values({
+          projectId,
+          inviteeUserId: input.inviteeUserId,
+          invitedByUserId,
+          openRoleId: input.openRoleId ?? null,
+          roleTitle,
+          message: input.message ?? null,
+          expiresAt: expiryInstant(),
+        })
+        .returning({ id: projectInvite.id });
 
-    if (!created) {
-      throw new Error("createInvite: insert returned no row");
-    }
+      if (!row) {
+        throw new Error("createInvite: insert returned no row");
+      }
+
+      await enqueueNotifications(tx, invitedByUserId, [
+        {
+          recipientUserId: input.inviteeUserId,
+          kind: "project_invite_received",
+          projectId,
+          payload: { inviteId: row.id, openRoleId: input.openRoleId ?? null, roleTitle },
+        },
+      ]);
+
+      return row;
+    });
 
     const view = await findInviteById(projectId, created.id);
     if (!view) {
@@ -933,6 +993,8 @@ export async function acceptInvite(
       .select({
         status: projectInvite.status,
         inviteeUserId: projectInvite.inviteeUserId,
+        // Selected for the acceptance notification: the inviter is who it goes to.
+        invitedByUserId: projectInvite.invitedByUserId,
         openRoleId: projectInvite.openRoleId,
         roleTitle: projectInvite.roleTitle,
         expiresAt: projectInvite.expiresAt,
@@ -1045,6 +1107,17 @@ export async function acceptInvite(
       .set({ teamMemberCount: sql`${projectStats.teamMemberCount} + 1` })
       .where(eq(projectStats.projectId, projectId));
 
+    // The inviter is the one waiting on the answer. An invite is a two-sided
+    // conversation and until now only one side could see it move (§11l.2).
+    await enqueueNotifications(tx, inviteeUserId, [
+      {
+        recipientUserId: invite.invitedByUserId,
+        kind: "project_invite_accepted",
+        projectId,
+        payload: { inviteId },
+      },
+    ]);
+
     return { kind: "accepted" } as const;
   });
 
@@ -1079,24 +1152,46 @@ export async function acceptInvite(
   return { success: true, value: view };
 }
 
-/** Declines an invite. Invitee only, matched in the WHERE clause. */
+/**
+ * Declines an invite. Invitee only, matched in the WHERE clause.
+ *
+ * WRAPPED IN A TRANSACTION for the notification (§11l.2), which is the only reason it needs
+ * one: the update is a single statement and was atomic already. The enqueue has to be
+ * inside it, because a fan-out after the commit can announce a decline that was rolled
+ * back and one before it can be lost.
+ */
 export async function declineInvite(
   projectId: string,
   inviteId: string,
   inviteeUserId: string,
 ): Promise<Result<InviteView, ProjectApplicationError>> {
-  const rows = await db
-    .update(projectInvite)
-    .set({ status: "declined", respondedAt: new Date() })
-    .where(
-      and(
-        eq(projectInvite.id, inviteId),
-        eq(projectInvite.projectId, projectId),
-        eq(projectInvite.inviteeUserId, inviteeUserId),
-        eq(projectInvite.status, "pending"),
-      ),
-    )
-    .returning({ id: projectInvite.id });
+  const rows = await db.transaction(async (tx) => {
+    const declined = await tx
+      .update(projectInvite)
+      .set({ status: "declined", respondedAt: new Date() })
+      .where(
+        and(
+          eq(projectInvite.id, inviteId),
+          eq(projectInvite.projectId, projectId),
+          eq(projectInvite.inviteeUserId, inviteeUserId),
+          eq(projectInvite.status, "pending"),
+        ),
+      )
+      .returning({ id: projectInvite.id, invitedByUserId: projectInvite.invitedByUserId });
+
+    await enqueueNotifications(
+      tx,
+      inviteeUserId,
+      declined.map((row) => ({
+        recipientUserId: row.invitedByUserId,
+        kind: "project_invite_declined" as const,
+        projectId,
+        payload: { inviteId },
+      })),
+    );
+
+    return declined;
+  });
 
   if (rows.length === 0) {
     return { success: false, error: { type: "INVITE_NOT_FOUND", inviteId } };
@@ -1113,18 +1208,36 @@ export async function declineInvite(
 export async function revokeInvite(
   projectId: string,
   inviteId: string,
+  revokedByUserId: string,
 ): Promise<Result<{ readonly revoked: true }, ProjectApplicationError>> {
-  const rows = await db
-    .update(projectInvite)
-    .set({ status: "revoked", respondedAt: new Date() })
-    .where(
-      and(
-        eq(projectInvite.id, inviteId),
-        eq(projectInvite.projectId, projectId),
-        eq(projectInvite.status, "pending"),
-      ),
-    )
-    .returning({ id: projectInvite.id });
+  const rows = await db.transaction(async (tx) => {
+    const revoked = await tx
+      .update(projectInvite)
+      .set({ status: "revoked", respondedAt: new Date() })
+      .where(
+        and(
+          eq(projectInvite.id, inviteId),
+          eq(projectInvite.projectId, projectId),
+          eq(projectInvite.status, "pending"),
+        ),
+      )
+      .returning({ id: projectInvite.id, inviteeUserId: projectInvite.inviteeUserId });
+
+    // Told BEFORE they try to accept it. A revoked invite that stays visible in
+    // `/invites/mine` ends in an `INVITE_NOT_PENDING` the invitee cannot explain.
+    await enqueueNotifications(
+      tx,
+      revokedByUserId,
+      revoked.map((row) => ({
+        recipientUserId: row.inviteeUserId,
+        kind: "project_invite_revoked" as const,
+        projectId,
+        payload: { inviteId },
+      })),
+    );
+
+    return revoked;
+  });
 
   if (rows.length === 0) {
     return { success: false, error: { type: "INVITE_NOT_FOUND", inviteId } };

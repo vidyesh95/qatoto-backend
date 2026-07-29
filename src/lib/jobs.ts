@@ -75,6 +75,12 @@ export const JOB_NAMES = {
   recomputeCompensationDraft: "recompute-compensation-draft",
   closeCompensationPeriodTick: "close-compensation-period-tick",
   closeCompensationPeriod: "close-compensation-period",
+  // §11l.2's fan-out. ON DEMAND, never scheduled: a notification is queued in the same
+  // transaction as the fact it announces, so there is no window for a tick to sweep. The
+  // job exists at all because delivery talks to an email provider, and a third-party HTTP
+  // call inside the transaction that finalizes a compensation statement is not a trade
+  // anyone should make.
+  deliverNotification: "deliver-notification",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -124,6 +130,15 @@ const WindowedAsOfPayloadSchema = z
     // self-describing and re-derivable.
     windowStartsAt: AsOfSchema,
     windowEndsAt: AsOfSchema,
+  })
+  .strict();
+
+const DeliverNotificationPayloadSchema = z
+  .object({
+    // The notification id and NOTHING else. The recipient, the kind and the payload are
+    // read from the row — a job payload carrying an email address would be a field an
+    // operator could edit to redirect somebody else's statement notification.
+    notificationId: z.uuid(),
   })
   .strict();
 
@@ -525,6 +540,19 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeCompensationDraft),
     },
   },
+  [JOB_NAMES.deliverNotification]: {
+    name: JOB_NAMES.deliverNotification,
+    payloadSchema: DeliverNotificationPayloadSchema,
+    queueOptions: {
+      // `standard`, not `singleton`: two notifications are two disjoint rows and there is
+      // no reason to serialize them. The per-row idempotency key is what collapses a
+      // retried enqueue of the SAME notification.
+      policy: "standard",
+      ...STANDARD_RETRY,
+      expireInSeconds: 300,
+      deadLetter: deadLetterNameFor(JOB_NAMES.deliverNotification),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -811,6 +839,7 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.closeCompensationPeriod]: ProjectScopedAsOfPayloadSchema,
   [JOB_NAMES.recomputeCompensationDraftTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeCompensationDraft]: ProjectScopedAsOfPayloadSchema,
+  [JOB_NAMES.deliverNotification]: DeliverNotificationPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -889,4 +918,9 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.closeCompensationPeriod}:${asOfIso}:${projectId ?? "all"}`,
   recomputeCompensationDraft: (asOfIso: string, projectId: string | null): string =>
     `${JOB_NAMES.recomputeCompensationDraft}:${asOfIso}:${projectId ?? "all"}`,
+  // Keyed on the NOTIFICATION row, which is already unique per recipient per event. A
+  // retried enqueue inside the same transaction collapses; two genuinely different
+  // notifications never do, even for the same event and the same recipient.
+  deliverNotification: (notificationId: string): string =>
+    `${JOB_NAMES.deliverNotification}:${notificationId}`,
 } as const;

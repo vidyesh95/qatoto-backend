@@ -7,6 +7,7 @@ import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
 import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
+import { handleDeliverNotification } from "#src/jobs/deliver-notification.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
 import { handleRecomputeCompensationDraft } from "#src/jobs/recompute-compensation-draft.js";
 import { handleRecomputeDailyLogStreaks } from "#src/jobs/recompute-daily-log-streaks.js";
@@ -323,6 +324,14 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeCompensationDraft,
     workOptions,
     runJob(JOB_NAMES.recomputeCompensationDraft, handleRecomputeCompensationDraft),
+  );
+
+  // --- §11l notifications. On demand, never scheduled: the row is written in the same
+  // --- transaction as the fact it announces, and this job carries only the email copy.
+  await boss.work(
+    JOB_NAMES.deliverNotification,
+    workOptions,
+    runJob(JOB_NAMES.deliverNotification, handleDeliverNotification),
   );
 
   // THE DEAD-LETTER QUEUES DELIBERATELY HAVE NO ALWAYS-ON WORKERS.

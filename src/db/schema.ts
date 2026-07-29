@@ -7401,6 +7401,142 @@ export const compensationPaymentRecordRelations = relations(
 );
 
 // ---------------------------------------------------------------------------
+// Notifications (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 1).
+//
+// WHY THIS TABLE EXISTS. Every state transition in this schema that concerns a
+// person other than the actor was, until now, discoverable only by that person
+// deciding to look: an invite by opening `/invites/mine`, a finalized statement of
+// what they are owed by refreshing a page. Two comments in `rate-limit.ts` already
+// assumed a notification system that did not exist.
+//
+// IT CARRIES KEYS AND IDS, NEVER PROSE. `kind` plus a `payloadJson` of ids and
+// integers, exactly as §11h's `disclosureKeys` does and for the same reason: server
+// prose ships one language and one currency format to three first-class clients
+// (§1, §4d). The client renders the sentence.
+//
+// `payloadJson` is TEXT, not jsonb — the same choice `project_audit_entry` records:
+// jsonb reorders keys, and a payload that reorders is one a client cannot diff and a
+// test cannot fixture.
+//
+// FK ACTIONS DIFFER FROM THE AUDIT TABLES, DELIBERATELY. A notification is a
+// courtesy, not evidence: deleting the recipient deletes their notifications
+// (`cascade`), where an audit entry holds the actor with `restrict` because the
+// ledger must stay explicable. The actor is `set null` for the same reason
+// `linkedByUserId` is — the fact that something happened outlives the account that
+// did it.
+// ---------------------------------------------------------------------------
+
+export const notificationKindEnum = pgEnum("notification_kind", [
+  // §5 — team formation.
+  "project_invite_received",
+  "project_invite_revoked",
+  // The inviter's half. An invite is a two-sided conversation and the person who sent it
+  // is the one waiting on the answer.
+  "project_invite_accepted",
+  "project_invite_declined",
+  "project_application_received",
+  "project_application_accepted",
+  "project_application_declined",
+  // §7A — the compensation lifecycle. The finalized statement is the product's
+  // headline output and was, before this, delivered by hoping somebody refreshed.
+  "compensation_agreement_proposed",
+  "compensation_agreement_accepted",
+  "compensation_agreement_declined",
+  "compensation_agreement_withdrawn",
+  "compensation_period_finalized",
+  "compensation_period_countersigned",
+  "compensation_period_superseded",
+  "compensation_payment_recorded",
+  "compensation_payment_confirmed",
+  // §9 — the things that move equity, including the two nobody was ever told about:
+  // a dispute freezes another member's slices, and a verdict withholds them.
+  "dispute_raised",
+  "dispute_resolved",
+  "effort_claim_verdict_reached",
+]);
+
+/**
+ * Delivery state for the OPTIONAL email copy. The in-app row is the notification;
+ * email is a second channel that may be absent, and `skipped_unconfigured` says so
+ * out loud rather than leaving a row that looks unsent — the same distinction
+ * `daily_log_analysis_status` draws for a missing Gemini key.
+ */
+export const notificationEmailStatusEnum = pgEnum("notification_email_status", [
+  "queued",
+  "sent",
+  "skipped_unconfigured",
+  "failed",
+]);
+
+export const notification = pgTable(
+  "notification",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    recipientUserId: text("recipient_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    kind: notificationKindEnum("kind").notNull(),
+    // Nullable because not every notification is about a project — the enum has no
+    // such member today, and the column is what keeps that door open without a
+    // migration.
+    projectId: text("project_id").references(() => researchProject.id, { onDelete: "cascade" }),
+    // NULL for a system actor: a verdict is reached by the pipeline, and a period is
+    // opened by a nightly job. Same convention as `project_audit_entry.actorUserId`.
+    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+    /** Canonical JSON of IDS AND INTEGERS. No sentences, no amounts pre-formatted. */
+    payloadJson: text("payload_json").default("{}").notNull(),
+    readAt: timestamp("read_at"),
+    emailStatus: notificationEmailStatusEnum("email_status").default("queued").notNull(),
+    emailSentAt: timestamp("email_sent_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // The keyset index: (recipient, createdAt, id) matches the feed's ORDER BY
+    // exactly, ending in a unique column so a page boundary neither duplicates nor
+    // skips (§4c rule 4).
+    index("notification_recipientUserId_createdAt_idx").on(
+      table.recipientUserId,
+      table.createdAt,
+      table.id,
+    ),
+    // The unread badge is read on every page load in every client. A partial index
+    // keeps it proportional to what is unread rather than to what has ever been sent.
+    index("notification_recipientUserId_unread_idx")
+      .on(table.recipientUserId, table.createdAt, table.id)
+      .where(sql`read_at IS NULL`),
+    index("notification_projectId_idx").on(table.projectId, table.id),
+    // The delivery job's own queue view.
+    index("notification_emailStatus_idx").on(table.emailStatus, table.createdAt),
+    check(
+      "notification_payload_ck",
+      sql`char_length(payload_json) BETWEEN 2 AND 4000 AND payload_json LIKE '{%'`,
+    ),
+    // A sent email has an instant; anything else does not. Without this a `failed`
+    // row can carry a `sent_at` and the delivery report reads as a success.
+    check("notification_email_sent_ck", sql`(email_status = 'sent') = (email_sent_at IS NOT NULL)`),
+  ],
+);
+
+export const notificationRelations = relations(notification, ({ one }) => ({
+  recipient: one(user, {
+    fields: [notification.recipientUserId],
+    references: [user.id],
+    relationName: "notificationRecipient",
+  }),
+  actor: one(user, {
+    fields: [notification.actorUserId],
+    references: [user.id],
+    relationName: "notificationActor",
+  }),
+  project: one(researchProject, {
+    fields: [notification.projectId],
+    references: [researchProject.id],
+  }),
+}));
+
+// ---------------------------------------------------------------------------
 // Creator Studio video domain. See docs/STUDIO_BACKEND_STRUCTURE.md §0-§13.
 //
 // APPENDIX A (self-hosted video via Livepeer) IS DEFERRED AND NOT BUILT. Nothing

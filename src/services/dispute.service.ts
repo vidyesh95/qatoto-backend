@@ -11,6 +11,7 @@ import {
   user,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { enqueueNotifications } from "#src/services/notifications.service.js";
 import { appendAuditEntry } from "#src/services/project-audit.service.js";
 import type { ProjectAccessError } from "#src/services/project-membership.service.js";
 import { settleProposal } from "#src/services/slice-allocation.service.js";
@@ -141,6 +142,14 @@ export async function raiseDispute(
         and(eq(projectMember.projectId, context.projectId), eq(projectMember.status, "active")),
       );
 
+    // Whose allocation this is. Read from the PROPOSAL's member rather than passed in:
+    // the person raising the dispute is usually not the person it is about.
+    const [subject] = await tx
+      .select({ userId: projectMember.userId })
+      .from(projectMember)
+      .where(eq(projectMember.id, proposal.memberId));
+    const subjectUserId = subject?.userId ?? null;
+
     const [created] = await tx
       .insert(dispute)
       .values({
@@ -169,6 +178,20 @@ export async function raiseDispute(
         escrowedSlices: proposal.proposedSlices,
       })
       .where(eq(sliceAllocationProposal.id, proposalId));
+
+    // THE MEMBER WHOSE SLICES JUST FROZE. This is the sharpest silence §11l.2 names: a
+    // dispute moves someone else's equity into `escrowedSlices` and, until now, told them
+    // nothing. `subjectUserId` is read from the proposal's member, not from the actor.
+    if (subjectUserId !== null) {
+      await enqueueNotifications(tx, actorUserId, [
+        {
+          recipientUserId: subjectUserId,
+          kind: "dispute_raised",
+          projectId: context.projectId,
+          payload: { disputeId: created.id, proposalId, claimId: proposal.claimId },
+        },
+      ]);
+    }
 
     await appendAuditEntry(tx, {
       projectId: context.projectId,
@@ -497,6 +520,17 @@ export async function resolveDispute(
   await db.transaction(async (tx) => {
     const resolvedAt = new Date();
 
+    const [subject] = await tx
+      .select({ userId: projectMember.userId })
+      .from(projectMember)
+      .where(eq(projectMember.id, proposal.memberId));
+    const [raiser] = await tx
+      .select({ userId: projectMember.userId })
+      .from(projectMember)
+      .where(eq(projectMember.id, row.raisedByMemberId));
+    const subjectUserId = subject?.userId ?? null;
+    const raiserUserId = raiser?.userId ?? null;
+
     await tx
       .update(dispute)
       .set({
@@ -513,6 +547,23 @@ export async function resolveDispute(
           : { scopedWindowEndsAt: input.scopedWindowEndsAt }),
       })
       .where(eq(dispute.id, disputeId));
+
+    // BOTH SIDES: the member whose allocation was contested, and whoever raised it. A
+    // resolution that only the resolver can see is the §9.8 human-oversight loop closing
+    // in private. `enqueueNotifications` drops the actor's own row, so an automatic
+    // resolution (actor null) reaches both and a manual one reaches the other party.
+    await enqueueNotifications(
+      tx,
+      options.isAutomatic === true ? null : actorUserId,
+      [subjectUserId, raiserUserId]
+        .filter((userId): userId is string => userId !== null)
+        .map((userId) => ({
+          recipientUserId: userId,
+          kind: "dispute_resolved" as const,
+          projectId: context.projectId,
+          payload: { disputeId, proposalId: row.proposalId, resolution: input.resolution },
+        })),
+    );
 
     await appendAuditEntry(tx, {
       projectId: context.projectId,

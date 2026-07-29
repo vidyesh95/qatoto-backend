@@ -8,6 +8,7 @@ import {
   user,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { enqueueNotifications } from "#src/services/notifications.service.js";
 import { appendAuditEntry } from "#src/services/project-audit.service.js";
 import type { ProjectAccessError } from "#src/services/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
@@ -212,6 +213,17 @@ export async function proposeCashAgreement(
         throw new Error("proposeCashAgreement: insert returned no row");
       }
 
+      // The member is the counterparty and the only person who can accept it. A proposal
+      // nobody is told about sits `proposed` until someone happens to look (§11l.2).
+      await enqueueNotifications(tx, proposedByUserId, [
+        {
+          recipientUserId: memberUserId,
+          kind: "compensation_agreement_proposed",
+          projectId: context.projectId,
+          payload: { agreementId: inserted.id, engagementKind: input.engagementKind },
+        },
+      ]);
+
       await appendAuditEntry(tx, {
         projectId: context.projectId,
         eventKind: "compensation_agreement_proposed",
@@ -380,6 +392,17 @@ export async function acceptCashAgreement(
       return null;
     }
 
+    // The proposer is waiting on this answer, and is never the accepter — rule 3 of this
+    // service is that the member alone accepts, so a self-notification cannot arise here.
+    await enqueueNotifications(tx, acceptingUserId, [
+      {
+        recipientUserId: next.proposedByUserId,
+        kind: "compensation_agreement_accepted",
+        projectId: context.projectId,
+        payload: { agreementId },
+      },
+    ]);
+
     await appendAuditEntry(tx, {
       projectId: context.projectId,
       eventKind: "compensation_agreement_accepted",
@@ -517,6 +540,23 @@ async function endProposedAgreement(
     if (!next) {
       return null;
     }
+
+    // WHICHEVER PARTY DID NOT ACT. A decline is the member's and goes to the proposer; a
+    // withdrawal is the proposer's and goes to the member. Deriving the recipient from
+    // the actor rather than from the event kind is what keeps the two endings — which
+    // write the same `withdrawn` status (§11j.3) — from needing two code paths.
+    await enqueueNotifications(tx, actorUserId, [
+      {
+        recipientUserId:
+          actorUserId === row.memberUserId ? next.proposedByUserId : row.memberUserId,
+        kind:
+          ending.eventKind === "compensation_agreement_declined"
+            ? "compensation_agreement_declined"
+            : "compensation_agreement_withdrawn",
+        projectId,
+        payload: { agreementId },
+      },
+    ]);
 
     await appendAuditEntry(tx, {
       projectId,
