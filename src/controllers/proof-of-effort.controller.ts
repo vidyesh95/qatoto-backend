@@ -331,10 +331,7 @@ export async function listSliceLedger(req: Request, res: Response): Promise<void
     return;
   }
 
-  const ledger = await ledgerService.listLedgerEntries(
-    caller.context.projectId,
-    parsedQuery.data,
-  );
+  const ledger = await ledgerService.listLedgerEntries(caller.context.projectId, parsedQuery.data);
 
   // `data` STAYS THE ARRAY, and `nextSequence` rides alongside it — the shape
   // `PaginatedResponse` already uses for `pagination`. Moving the rows under an envelope

@@ -79,6 +79,33 @@ const envSchema = z.object({
   // demand is steady and concurrent rather than request-shaped.
   WORKER_DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(4),
   JOBS_SCHEMA: z.string().min(1).default("pgboss"),
+  /**
+   * Whether `bearer()` accepts ONLY the signed `<token>.<hmac>` form (§4a, §11l.2 item 11).
+   *
+   * Default `false`, which is today's behaviour and is why this is a flag rather than a
+   * flip: with the default a RAW session token is accepted, so the value in `session.token`
+   * is itself a working credential — anyone who can merely READ the database can replay a
+   * row and become that user. `true` closes that.
+   *
+   * IT MUST BE `true` BEFORE THE FIRST MOBILE RELEASE, and flipping it after invalidates
+   * every token in Keychain / EncryptedSharedPreferences and logs every mobile user out.
+   * Today, with no native client shipped, it is free.
+   */
+  BEARER_REQUIRE_SIGNATURE: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+  /**
+   * Whether `/openapi.json`, `/docs` and `/redoc` are served (§11l.2 item 8).
+   *
+   * They were public in every environment, unauthenticated, and they enumerate the entire
+   * route surface. That is a reasonable trade in development and a free reconnaissance
+   * gift in production, so the default follows the environment.
+   */
+  DOCS_ENABLED: z
+    .string()
+    .optional()
+    .transform((value) => value !== "false"),
   // How many jobs one worker process runs concurrently. Kept low by default because the
   // recompute jobs run full-table scans, and the worker shares a database with the API.
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),

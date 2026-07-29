@@ -4,9 +4,30 @@ import helmet, { contentSecurityPolicy } from "helmet";
 import redocExpressMiddleware from "redoc-express";
 import swaggerUi from "swagger-ui-express";
 
+import { config } from "#src/config/index.js";
 import { openApiSpec } from "#src/docs/openapi.js";
 
 const router = express.Router();
+
+/**
+ * THE WHOLE DOC SURFACE IS GATED (§11l.2 item 8).
+ *
+ * `/openapi.json`, `/docs` and `/redoc` were served unauthenticated in every environment,
+ * and between them they enumerate the entire route surface — every path, every parameter
+ * name, every admin subtree. That is a reasonable trade while building and free
+ * reconnaissance in production.
+ *
+ * `DOCS_ENABLED` defaults to on, so nothing changes for a developer; a production
+ * deployment sets `DOCS_ENABLED=false` and the routes stop existing rather than answering
+ * 403 — a 403 confirms the surface is there.
+ */
+router.use((req, res, next) => {
+  if (!config.DOCS_ENABLED) {
+    next("router");
+    return;
+  }
+  next();
+});
 
 // The global helmet() in app.ts sets a strict default CSP that blocks Swagger UI's
 // and ReDoc's inline <script>/<style> tags (no nonce support in swagger-ui-express).

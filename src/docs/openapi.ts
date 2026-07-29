@@ -1,3 +1,5 @@
+import { buildRndPathItems } from "#src/docs/openapi-rnd.js";
+
 /**
  * Hand-authored OpenAPI 3.0 description of the endpoints this codebase owns
  * (auth.controller / users.controller / handle.controller / index router).
@@ -102,7 +104,15 @@ const cookieAuthNote =
   "Session cookie set by Better Auth (httpOnly, signed). Sent automatically by the " +
   'browser on same-origin fetches made with `credentials: "include"`.';
 
-export const openApiSpec = {
+/**
+ * ⚠️ THIS FILE COVERS AUTH, USERS, HANDLES AND DISCOVERY IN FULL — and nothing else by
+ * hand. The R&D surface is merged in from `openapi-rnd.ts`, which DERIVES its paths from
+ * the mounted routers so it cannot drift (§11l.2 item 8).
+ *
+ * Read the two halves for what they are: the entries below carry request and response
+ * schemas; the derived ones carry paths, verbs, parameters and a pointer to the contract.
+ */
+const handWrittenSpec = {
   openapi: "3.0.3",
   info: {
     title: "Qatoto API",
@@ -926,4 +936,26 @@ export const openApiSpec = {
       },
     },
   },
+};
+
+/**
+ * The document served at `/openapi.json`.
+ *
+ * The R&D paths are merged AFTER the hand-written ones, so a hand-written entry for the
+ * same path wins — the detailed description of `/discovery/market-insights` stays, and the
+ * derived inventory fills every gap around it.
+ */
+export const openApiSpec = {
+  ...handWrittenSpec,
+  tags: [
+    ...handWrittenSpec.tags,
+    {
+      name: "Research and development",
+      description:
+        "The §11 surface, derived from src/routes/ rather than hand-written. Paths, verbs " +
+        "and parameters are exact; bodies and responses are the Zod schemas the " +
+        "controllers export (docs/R_AND_D_BACKEND_STRUCTURE.md §11).",
+    },
+  ],
+  paths: { ...buildRndPathItems(), ...handWrittenSpec.paths },
 };
