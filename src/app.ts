@@ -3,7 +3,6 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import helmet from "helmet";
-import logger from "morgan";
 
 import { config } from "#src/config/index.js";
 import { auth } from "#src/lib/auth.js";
@@ -11,6 +10,7 @@ import { errorHandler } from "#src/middleware/error-handler.js";
 import { parseLongFormJsonBody } from "#src/middleware/json-body.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
+import { requestLog } from "#src/middleware/request-log.js";
 import authRouter from "#src/routes/auth.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
@@ -54,8 +54,9 @@ app.use(
 // Request tracing
 app.use(requestId);
 
-// Logging
-app.use(logger("dev"));
+// Logging. Structured JSON lines carrying `req.requestId`, which morgan's format
+// string could not reach — see src/middleware/request-log.ts (§11l.2 item 6).
+app.use(requestLog);
 
 // Better Auth handler — MUST mount before express.json(); it parses its own
 // request bodies off the raw stream. A body parser ahead of it consumes the

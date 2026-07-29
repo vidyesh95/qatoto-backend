@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { rateLimit, type Options } from "express-rate-limit";
+import { ipKeyGenerator, rateLimit, type Options } from "express-rate-limit";
 
 import type { ApiResponse } from "#src/types/index.js";
 
@@ -77,12 +77,24 @@ export const signupCompleteIpLimiter = rateLimit({
 const ONE_MINUTE_MS = 60 * 1000;
 
 /**
- * Authenticated-user key for per-account buckets. `requireAuth` runs before this
- * limiter and sets `req.user`, so the id is always present on the routes that use
- * it; the empty-string fallback only guards against misordering.
+ * Authenticated-user key for per-account buckets. `requireAuth` runs before this limiter
+ * and sets `req.user`, so the id is always present on the routes that use it.
+ *
+ * ⚠️ THE FALLBACK USED TO BE `""` AND THAT WAS A SHARED BUCKET (§11l.2 item 7). Every
+ * unauthenticated caller keyed to the same empty string, so on any route where the ordering
+ * was ever wrong — or where a limiter was mounted before `requireAuth` — one client could
+ * exhaust the window for every anonymous caller at once. Harmless today because every
+ * limiter using this key sits behind `requireAuth`; a self-inflicted denial of service the
+ * first time one does not.
+ *
+ * The fallback is now the IP, through `ipKeyGenerator`, which is the helper
+ * express-rate-limit exports precisely so an IPv6 caller is keyed by its /56 subnet rather
+ * than by a single address it can trivially rotate within.
  */
 function userKey(req: Request): string {
-  return req.user?.id ?? "";
+  const userId = req.user?.id;
+  if (userId !== undefined) return userId;
+  return ipKeyGenerator(req.ip ?? "");
 }
 
 /**
