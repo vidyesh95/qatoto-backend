@@ -34,7 +34,14 @@ vi.mock("#src/db/index.js", () => {
     return [];
   });
   const insert = vi.fn<(...args: readonly unknown[]) => unknown>(() => ({ values }));
-  return { db: { select, insert }, pool: { query: vi.fn(), end: vi.fn() }, query: vi.fn() };
+  return {
+    db: { select, insert },
+    pool: {
+      query: vi.fn<(...args: readonly unknown[]) => unknown>(),
+      end: vi.fn<() => unknown>(),
+    },
+    query: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  };
 });
 
 const handler = vi.fn<(...args: readonly unknown[]) => unknown>();

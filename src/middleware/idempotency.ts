@@ -71,7 +71,7 @@ function stableStringify(value: unknown): string {
   // agnostic about.
   const entries = Object.entries(value)
     .filter(([, entryValue]) => entryValue !== undefined)
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`);
 
   return `{${entries.join(",")}}`;
