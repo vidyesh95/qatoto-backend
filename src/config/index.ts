@@ -33,6 +33,24 @@ const envSchema = z.object({
   BREVO_API_KEY: z.string().min(1).optional(),
   BREVO_SENDER_EMAIL: z.email().optional(),
   BREVO_SENDER_NAME: z.string().min(1).default("Qatoto"),
+  /**
+   * Whether the notification job may actually SEND email (§11l.2 item 1).
+   *
+   * WHY THIS EXISTS, and it is not hypothetical. The smoke scripts create fixture users
+   * with addresses like `<uuid>@x.test`, and every fixture claim, dispute and statement now
+   * fans out a notification. With a worker running against the same database and a real
+   * BREVO_API_KEY in `.env`, one `pnpm db:smoke-proof-of-effort` run put 135 transactional
+   * emails to nonexistent domains through a live provider — invisible from the script's
+   * own output, because delivery happens in the worker.
+   *
+   * Bounces to fabricated domains cost sending reputation, and the loss is not recoverable
+   * by deleting rows afterwards.
+   *
+   * So: the in-app notification is ALWAYS written — it is the notification — and email is
+   * opt-in per environment. Default ON in production, OFF everywhere else, so a developer
+   * has to choose to send rather than choose not to.
+   */
+  NOTIFICATION_EMAIL_ENABLED: z.string().optional(),
   // Cloudinary credentials for avatar uploads. Optional like Brevo: absent in
   // dev means the photo endpoints return NOT_CONFIGURED instead of crashing boot.
   CLOUDINARY_CLOUD_NAME: z.string().min(1).optional(),
@@ -226,6 +244,18 @@ export type Config = z.infer<typeof envSchema>;
 // already depends silently on the process running in UTC — this assertion makes that
 // dependency explicit and loud instead of producing timestamps that are wrong by the
 // host's offset. Production only: a developer's laptop is not in UTC and must boot.
+/**
+ * Email sending is ON in production and OFF everywhere else unless explicitly enabled.
+ *
+ * Derived here rather than in the schema because the default depends on `NODE_ENV`, which
+ * the schema cannot see while parsing a sibling field. `NOTIFICATION_EMAIL_ENABLED=true`
+ * turns it on in development — deliberately awkward, so a developer chooses to send.
+ */
+export const isNotificationEmailEnabled =
+  config.NOTIFICATION_EMAIL_ENABLED === undefined
+    ? config.NODE_ENV === "production"
+    : config.NOTIFICATION_EMAIL_ENABLED === "true";
+
 if (config.NODE_ENV === "production" && process.env.TZ !== "UTC") {
   throw new Error(
     `TZ must be "UTC" in production (received ${process.env.TZ ?? "unset"}): ` +

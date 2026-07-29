@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 
-import { config } from "#src/config/index.js";
+import { config, isNotificationEmailEnabled } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { notification, researchProject, user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
@@ -97,7 +97,15 @@ export async function handleDeliverNotification(rawPayload: unknown): Promise<vo
   // dedup record, and `queued` is the only state this handler acts on.
   if (row.emailStatus !== "queued") return;
 
-  if (!config.BREVO_API_KEY || !config.BREVO_SENDER_EMAIL) {
+  // NOT CONFIGURED, or configured and deliberately switched off for this environment.
+  //
+  // The second half is what stops a smoke run from emailing: fixture users carry addresses
+  // like `<uuid>@x.test`, every fixture claim and dispute fans out a notification, and a
+  // worker running against the same database with a real key will happily post all of them
+  // to a live provider. Bounces to fabricated domains cost sending reputation, and no
+  // amount of deleting rows afterwards gets it back. `skipped_unconfigured` covers both
+  // cases honestly: this deployment is not set up to send.
+  if (!isNotificationEmailEnabled || !config.BREVO_API_KEY || !config.BREVO_SENDER_EMAIL) {
     await db
       .update(notification)
       .set({ emailStatus: "skipped_unconfigured" })

@@ -42,30 +42,46 @@ const rec = (l: string, p: boolean, d: string) => {
   console.log(`${p ? "PASS" : "FAIL"}  ${l} — ${d}`);
 };
 
+/**
+ * The moderator fixture is STABLE across runs, and it is not deletable.
+ *
+ * Every vocabulary write now appends to the platform audit chain (§11l.2 item 2), whose
+ * `actor_user_id` FK is `restrict` and whose rows are append-only by trigger. Together those
+ * mean a user who has ever moderated ANYTHING can never be deleted — which is the point of
+ * both rules and is exactly what the teardown below used to attempt.
+ *
+ * A fresh random moderator per run would therefore accumulate one undeletable user row every
+ * time this script is run. One fixed id, reused, accumulates none.
+ */
+const VOCABULARY_SMOKE_MODERATOR_ID = "00000000-0000-4000-8000-0000000a0c01";
+
 async function main(): Promise<void> {
-  const modId = randomUUID(),
-    profileUserId = randomUUID();
+  const modId = VOCABULARY_SMOKE_MODERATOR_ID;
+  const profileUserId = randomUUID();
   const rootId = randomUUID(),
     citedRegionId = randomUUID(),
     freeRegionId = randomUUID();
   const citedSkillId = randomUUID(),
     freeSkillId = randomUUID();
   try {
-    await db.insert(user).values([
-      {
+    // Upsert, because the moderator survives every previous run (see the constant above).
+    await db
+      .insert(user)
+      .values({
         id: modId,
         name: "vocab-mod",
         email: `${modId}@x.test`,
         emailVerified: true,
         platformRole: "moderator",
-      },
-      {
-        id: profileUserId,
-        name: "vocab-talent",
-        email: `${profileUserId}@x.test`,
-        emailVerified: true,
-      },
-    ]);
+      })
+      .onConflictDoUpdate({ target: user.id, set: { platformRole: "moderator" } });
+
+    await db.insert(user).values({
+      id: profileUserId,
+      name: "vocab-talent",
+      email: `${profileUserId}@x.test`,
+      emailVerified: true,
+    });
     await db.insert(discoveryRegion).values([
       {
         id: rootId,
@@ -160,7 +176,11 @@ async function main(): Promise<void> {
       .delete(discoveryRegion)
       .where(inArray(discoveryRegion.id, [citedRegionId, freeRegionId]));
     await db.delete(discoveryRegion).where(eq(discoveryRegion.id, rootId));
-    await db.delete(user).where(inArray(user.id, [modId, profileUserId]));
+    // ONLY the talent profile's user. The moderator is deliberately left: it now owns
+    // append-only platform audit entries behind a `restrict` FK, so deleting it is refused
+    // by Postgres — correctly. It is a fixed id precisely so this leaves one row, not one
+    // per run.
+    await db.delete(user).where(eq(user.id, profileUserId));
   }
   const failed = out.filter((a) => !a.p).length;
   console.log(failed === 0 ? `\nAll ${out.length} assertions passed.` : `\n${failed} FAILED.`);
