@@ -46,8 +46,17 @@ describe("derived R&D OpenAPI paths", () => {
       if (expected.length === 0) continue;
 
       for (const operation of Object.values(pathItem)) {
-        const parameters = (operation as { parameters?: { name: string }[] }).parameters ?? [];
-        expect(parameters.map((parameter) => parameter.name)).toEqual(expected);
+        // Read through a guard rather than an assertion: the spec is untyped by design —
+        // it is JSON on the way out — so a claim about its shape here would be a claim,
+        // and this test exists to check.
+        const parameters =
+          typeof operation === "object" && operation !== null && "parameters" in operation ? operation.parameters : [];
+        const names = Array.isArray(parameters)
+          ? parameters.map((parameter) =>
+              typeof parameter === "object" && parameter !== null && "name" in parameter ? String(parameter.name) : "",
+            )
+          : [];
+        expect(names).toEqual(expected);
       }
     }
   });
@@ -66,6 +75,6 @@ describe("derived R&D OpenAPI paths", () => {
     expect(callback).toBeDefined();
     // A provider's redirect arrives with no cookie; requiring one in the spec would tell a
     // client generator to attach credentials that cannot exist (§9.10).
-    expect((callback as { security?: unknown }).security).toBeUndefined();
+    expect(typeof callback === "object" && callback !== null && "security" in callback).toBe(false);
   });
 });
