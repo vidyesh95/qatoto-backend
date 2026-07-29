@@ -41,6 +41,7 @@
     "db:verify-proof-of-effort-constraints": "tsx --conditions=development scripts/verify-proof-of-effort-constraints.ts",
     "db:verify-escrow-constraints": "tsx --conditions=development scripts/verify-escrow-constraints.ts",
     "db:verify-compensation-constraints": "tsx --conditions=development scripts/verify-compensation-constraints.ts",
+    "db:verify-platform-audit-constraints": "tsx --conditions=development scripts/verify-platform-audit-constraints.ts",
     "db:smoke-discovery": "tsx --conditions=development scripts/smoke-discovery-pipeline.ts",
     "db:smoke-cluster-links": "tsx --conditions=development scripts/smoke-cluster-project-links.ts",
     "db:smoke-vocabulary": "tsx --conditions=development scripts/smoke-discovery-vocabulary.ts",

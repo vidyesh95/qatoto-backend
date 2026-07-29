@@ -8,6 +8,7 @@ import {
   contentReviewAction,
   video,
 } from "#src/db/schema.js";
+import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
@@ -229,6 +230,16 @@ export async function approveAnimeEpisode(
       action: "approve",
     });
 
+    await appendPlatformAuditEntry(tx, {
+      eventKind: "content_review_approved",
+      actorUserId,
+      actorRoleSnapshot: capabilityResult.value.platformRole,
+      actionLabel: "Approved a video in review",
+      targetLabel: `video ${videoId}`,
+      payload: { videoId },
+      occurredAt: new Date(),
+    });
+
     return { updated, releasedAt: releasedEpisode?.releasedAt ?? null };
   });
 
@@ -283,6 +294,21 @@ export async function rejectAnimeEpisode(
       reviewerId: capabilityResult.value.staffUserId,
       action: "reject",
       reason,
+    });
+
+    // `content_review_action` is this domain's record of record and stays so. The
+    // platform chain records it a second time for a different reader: one log that
+    // answers "what has this moderator done", across taxonomy, directory and content,
+    // rather than three tables somebody has to know to join (§11l.2).
+    await appendPlatformAuditEntry(tx, {
+      eventKind: "content_review_rejected",
+      actorUserId,
+      actorRoleSnapshot: capabilityResult.value.platformRole,
+      actionLabel: "Rejected a video in review",
+      targetLabel: `video ${videoId}`,
+      detailNote: reason,
+      payload: { videoId },
+      occurredAt: new Date(),
     });
 
     return updated;

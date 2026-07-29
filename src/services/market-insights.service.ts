@@ -10,6 +10,7 @@ import {
   type DiscoveryCategoryRef,
   type DiscoveryRegionRef,
 } from "#src/services/discovery-catalog.service.js";
+import { recordPlatformAction } from "#src/services/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
@@ -301,23 +302,40 @@ export async function createMarketInsight(
 
   assertStatIsStorable(input.stat, "createMarketInsight");
 
-  const [inserted] = await db
-    .insert(marketInsight)
-    .values({
-      headline: input.headline,
-      summary: input.summary ?? null,
-      statKind: input.stat.statKind,
-      statValueMilli: input.stat.statValueMilli,
-      statUnitKey: input.stat.statUnitKey,
-      trendDirection: input.stat.trendDirection,
-      regionId: input.regionId,
-      categoryId: input.categoryId,
-      sourceName: input.sourceName,
-      sourceUrl: input.sourceUrl ?? null,
-      sourcePublishedDate: input.sourcePublishedDate,
-      createdByUserId: actorUserId,
-    })
-    .returning({ id: marketInsight.id });
+  const [inserted] = await recordPlatformAction(
+    async (tx) =>
+      tx
+        .insert(marketInsight)
+        .values({
+          headline: input.headline,
+          summary: input.summary ?? null,
+          statKind: input.stat.statKind,
+          statValueMilli: input.stat.statValueMilli,
+          statUnitKey: input.stat.statUnitKey,
+          trendDirection: input.stat.trendDirection,
+          regionId: input.regionId,
+          categoryId: input.categoryId,
+          sourceName: input.sourceName,
+          sourceUrl: input.sourceUrl ?? null,
+          sourcePublishedDate: input.sourcePublishedDate,
+          createdByUserId: actorUserId,
+        })
+        .returning({ id: marketInsight.id }),
+    (rows) => {
+      const row = rows[0];
+      return row === undefined
+        ? null
+        : {
+            eventKind: "market_insight_created",
+            actorUserId,
+            actorRoleSnapshot: capabilityResult.value.platformRole,
+            actionLabel: "Created a market insight",
+            targetLabel: `insight ${row.id}`,
+            payload: { insightId: row.id, regionId: input.regionId, categoryId: input.categoryId },
+            occurredAt: new Date(),
+          };
+    },
+  );
 
   if (!inserted) {
     throw new Error("createMarketInsight: insert returned no row");
@@ -442,10 +460,25 @@ export async function setMarketInsightPublished(
     return { success: false, error: { type: "NOT_PUBLISHED" } };
   }
 
-  await db
-    .update(marketInsight)
-    .set({ publishedAt: shouldPublish ? new Date() : null })
-    .where(eq(marketInsight.id, insightId));
+  await recordPlatformAction(
+    async (tx) =>
+      tx
+        .update(marketInsight)
+        .set({ publishedAt: shouldPublish ? new Date() : null })
+        .where(eq(marketInsight.id, insightId)),
+    () => ({
+      // Publishing is what makes an insight citable and puts it on the landing rail;
+      // UNPUBLISHING is the one that darkens a chip on somebody else's project (§11k.2).
+      // Both belong in the log for the same reason: they change what strangers see.
+      eventKind: shouldPublish ? "market_insight_published" : "market_insight_unpublished",
+      actorUserId,
+      actorRoleSnapshot: capabilityResult.value.platformRole,
+      actionLabel: shouldPublish ? "Published a market insight" : "Unpublished a market insight",
+      targetLabel: `insight ${insightId}`,
+      payload: { insightId, published: shouldPublish },
+      occurredAt: new Date(),
+    }),
+  );
 
   const view = await findAdminView(insightId);
   if (!view) {
@@ -484,10 +517,24 @@ export async function deleteMarketInsight(
 
   // 2. Resources second.
   try {
-    const [deleted] = await db
-      .delete(marketInsight)
-      .where(eq(marketInsight.id, insightId))
-      .returning({ id: marketInsight.id });
+    const [deleted] = await recordPlatformAction(
+      async (tx) =>
+        tx.delete(marketInsight).where(eq(marketInsight.id, insightId)).returning({
+          id: marketInsight.id,
+        }),
+      (rows) =>
+        rows[0] === undefined
+          ? null
+          : {
+              eventKind: "market_insight_deleted",
+              actorUserId,
+              actorRoleSnapshot: capabilityResult.value.platformRole,
+              actionLabel: "Deleted a market insight",
+              targetLabel: `insight ${insightId}`,
+              payload: { insightId },
+              occurredAt: new Date(),
+            },
+    );
 
     if (!deleted) {
       return { success: false, error: { type: "MARKET_INSIGHT_NOT_FOUND", insightId } };

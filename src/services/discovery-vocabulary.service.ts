@@ -9,6 +9,7 @@ import {
   talentProfileSkill,
 } from "#src/db/schema.js";
 import { isForeignKeyViolation, isUniqueViolation } from "#src/lib/pg-errors.js";
+import { recordPlatformAction } from "#src/services/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
@@ -175,14 +176,29 @@ export async function createDiscoverySkill(
   }
 
   try {
-    const [inserted] = await db
-      .insert(discoverySkill)
-      .values({
-        slug: input.slug,
-        label: input.displayLabel,
-        categoryId: input.categoryId ?? null,
-      })
-      .returning(SKILL_VIEW_COLUMNS);
+    const [inserted] = await recordPlatformAction(
+      async (tx) =>
+        tx
+          .insert(discoverySkill)
+          .values({
+            slug: input.slug,
+            label: input.displayLabel,
+            categoryId: input.categoryId ?? null,
+          })
+          .returning(SKILL_VIEW_COLUMNS),
+      (rows) =>
+        rows[0] === undefined
+          ? null
+          : {
+              eventKind: "discovery_skill_created",
+              actorUserId,
+              actorRoleSnapshot: capabilityResult.value.platformRole,
+              actionLabel: "Created a discovery skill",
+              targetLabel: `skill ${input.slug}`,
+              payload: { slug: input.slug, categoryId: input.categoryId ?? null },
+              occurredAt: new Date(),
+            },
+    );
 
     if (!inserted) {
       throw new Error("createDiscoverySkill: insert returned no row");
@@ -224,15 +240,32 @@ export async function updateDiscoverySkill(
     if (!category.success) return { success: false, error: category.error };
   }
 
-  const [updated] = await db
-    .update(discoverySkill)
-    .set({
-      ...(input.displayLabel === undefined ? {} : { label: input.displayLabel }),
-      ...(input.categoryId === undefined ? {} : { categoryId: input.categoryId }),
-      ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
-    })
-    .where(eq(discoverySkill.id, skillId))
-    .returning(SKILL_VIEW_COLUMNS);
+  const [updated] = await recordPlatformAction(
+    async (tx) =>
+      tx
+        .update(discoverySkill)
+        .set({
+          ...(input.displayLabel === undefined ? {} : { label: input.displayLabel }),
+          ...(input.categoryId === undefined ? {} : { categoryId: input.categoryId }),
+          ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
+        })
+        .where(eq(discoverySkill.id, skillId))
+        .returning(SKILL_VIEW_COLUMNS),
+    (rows) =>
+      rows[0] === undefined
+        ? null
+        : {
+            eventKind: "discovery_skill_updated",
+            actorUserId,
+            actorRoleSnapshot: capabilityResult.value.platformRole,
+            actionLabel: "Updated a discovery skill",
+            targetLabel: `skill ${skillId}`,
+            // `isActive: false` IS retirement here (§11j.6), so it is the field worth
+            // recording: it removes a chip from every talent filter.
+            payload: { skillId, isActive: input.isActive ?? null },
+            occurredAt: new Date(),
+          },
+  );
 
   if (!updated) {
     return { success: false, error: { type: "DISCOVERY_SKILL_NOT_FOUND", skillId } };
@@ -260,10 +293,24 @@ export async function deleteDiscoverySkill(
 
   // 2. Resources second.
   try {
-    const [deleted] = await db
-      .delete(discoverySkill)
-      .where(eq(discoverySkill.id, skillId))
-      .returning({ id: discoverySkill.id });
+    const [deleted] = await recordPlatformAction(
+      async (tx) =>
+        tx.delete(discoverySkill).where(eq(discoverySkill.id, skillId)).returning({
+          id: discoverySkill.id,
+        }),
+      (rows) =>
+        rows[0] === undefined
+          ? null
+          : {
+              eventKind: "discovery_skill_deleted",
+              actorUserId,
+              actorRoleSnapshot: capabilityResult.value.platformRole,
+              actionLabel: "Deleted a discovery skill",
+              targetLabel: `skill ${skillId}`,
+              payload: { skillId },
+              occurredAt: new Date(),
+            },
+    );
 
     if (!deleted) {
       return { success: false, error: { type: "DISCOVERY_SKILL_NOT_FOUND", skillId } };
@@ -324,16 +371,31 @@ export async function createDiscoveryRegion(
   }
 
   try {
-    const [inserted] = await db
-      .insert(discoveryRegion)
-      .values({
-        slug: input.slug,
-        label: input.displayLabel,
-        kind: input.kind,
-        countryCode: input.kind === "country" ? input.countryCode : null,
-        parentRegionId: input.parentRegionId,
-      })
-      .returning(REGION_VIEW_COLUMNS);
+    const [inserted] = await recordPlatformAction(
+      async (tx) =>
+        tx
+          .insert(discoveryRegion)
+          .values({
+            slug: input.slug,
+            label: input.displayLabel,
+            kind: input.kind,
+            countryCode: input.kind === "country" ? input.countryCode : null,
+            parentRegionId: input.parentRegionId,
+          })
+          .returning(REGION_VIEW_COLUMNS),
+      (rows) =>
+        rows[0] === undefined
+          ? null
+          : {
+              eventKind: "discovery_region_created",
+              actorUserId,
+              actorRoleSnapshot: capabilityResult.value.platformRole,
+              actionLabel: "Created a discovery region",
+              targetLabel: `region ${input.slug}`,
+              payload: { slug: input.slug, kind: input.kind },
+              occurredAt: new Date(),
+            },
+    );
 
     if (!inserted) {
       throw new Error("createDiscoveryRegion: insert returned no row");
@@ -373,11 +435,26 @@ export async function updateDiscoveryRegionLabel(
   }
 
   // 2. Resources second.
-  const [updated] = await db
-    .update(discoveryRegion)
-    .set({ label: displayLabel })
-    .where(eq(discoveryRegion.id, regionId))
-    .returning(REGION_VIEW_COLUMNS);
+  const [updated] = await recordPlatformAction(
+    async (tx) =>
+      tx
+        .update(discoveryRegion)
+        .set({ label: displayLabel })
+        .where(eq(discoveryRegion.id, regionId))
+        .returning(REGION_VIEW_COLUMNS),
+    (rows) =>
+      rows[0] === undefined
+        ? null
+        : {
+            eventKind: "discovery_region_updated",
+            actorUserId,
+            actorRoleSnapshot: capabilityResult.value.platformRole,
+            actionLabel: "Relabelled a discovery region",
+            targetLabel: `region ${regionId}`,
+            payload: { regionId, displayLabel },
+            occurredAt: new Date(),
+          },
+  );
 
   if (!updated) {
     return { success: false, error: { type: "DISCOVERY_REGION_NOT_FOUND", regionId } };
@@ -417,10 +494,24 @@ export async function deleteDiscoveryRegion(
   }
 
   try {
-    const [deleted] = await db
-      .delete(discoveryRegion)
-      .where(eq(discoveryRegion.id, regionId))
-      .returning({ id: discoveryRegion.id });
+    const [deleted] = await recordPlatformAction(
+      async (tx) =>
+        tx.delete(discoveryRegion).where(eq(discoveryRegion.id, regionId)).returning({
+          id: discoveryRegion.id,
+        }),
+      (rows) =>
+        rows[0] === undefined
+          ? null
+          : {
+              eventKind: "discovery_region_deleted",
+              actorUserId,
+              actorRoleSnapshot: capabilityResult.value.platformRole,
+              actionLabel: "Deleted a discovery region",
+              targetLabel: `region ${regionId}`,
+              payload: { regionId },
+              occurredAt: new Date(),
+            },
+    );
 
     if (!deleted) {
       return { success: false, error: { type: "DISCOVERY_REGION_NOT_FOUND", regionId } };

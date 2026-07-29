@@ -19,6 +19,7 @@ import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.
 import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
 import notificationsRouter from "#src/routes/notifications.routes.js";
+import platformAuditRouter from "#src/routes/platform-audit.routes.js";
 import playlistsRouter from "#src/routes/playlists.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
 import proofOfEffortRouter, {
@@ -200,6 +201,10 @@ app.use("/", applicationInboxRouter);
 // is — an inbox belongs to a person, not to a project, and somebody arriving from an email
 // has not picked one. Caller-scoped in SQL on every route; there is no `?userId=`.
 app.use("/", notificationsRouter);
+// The platform moderation log (§11l.2). Root-mounted at /admin/audit-trail rather than
+// under /discovery/admin, because it spans taxonomy, the supplier directory, content
+// review and role grants — filing it under one would imply the others are not covered.
+app.use("/", platformAuditRouter);
 // §7's id-keyed half: /funding-rounds, /pledges, /milestones, /escrow-releases,
 // /provider-transfers and /funding/deals. Root-mounted because a backer arriving from a
 // deal-flow list holds a round id and has no reason to know which project owns it — the

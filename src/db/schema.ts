@@ -7401,6 +7401,140 @@ export const compensationPaymentRecordRelations = relations(
 );
 
 // ---------------------------------------------------------------------------
+// The PLATFORM audit chain (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 2).
+//
+// WHY A SECOND CHAIN. `project_audit_entry` hangs off `project_chain_head`, which
+// is keyed by project — correctly, because a slice award, a rate lock and a
+// statement all belong to one. A moderator approving a category, merging two
+// clusters or rewriting the supplier directory belongs to NO project, and until
+// now that meant it belonged to nothing: `requirePlatformCapability` gated 25 call
+// sites and not one of them recorded that a decision had been made.
+//
+// The cluster merge is the sharpest case. `discovery-moderation.service.ts`
+// re-points every link and downgrades `origin` to `founder_declared`, and the code
+// itself calls that irreversible. It left no trace of who decided it.
+//
+// SAME DISCIPLINE AS §9's CHAIN, deliberately: one lock, a gapless sequence, a
+// canonical-JSON hash over a fixed field set, and append-only enforced by TRIGGERS
+// rather than by service discipline (§4f). The differences are two, and both
+// follow from there being no project:
+//
+//   * `actorUserId` is NOT NULL. A platform action always has a human behind it —
+//     there is no nightly job that approves a category. `project_audit_entry`
+//     allows null because the verification pipeline and the sweep are system
+//     actors there.
+//   * The head is a SINGLETON row rather than one per project, pinned by a CHECK
+//     to a single id. Serializing every moderation decision behind one lock is
+//     acceptable precisely because there are few of them and they are typed by
+//     hand; a project's ledger could not tolerate it.
+// ---------------------------------------------------------------------------
+
+export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
+  // Taxonomy and vocabulary — `discovery-moderation` and `discovery-vocabulary`.
+  "taxonomy_category_approved",
+  "taxonomy_category_rejected",
+  "cluster_merge_approved",
+  "cluster_merge_rejected",
+  "discovery_skill_created",
+  "discovery_skill_updated",
+  "discovery_skill_deleted",
+  "discovery_region_created",
+  "discovery_region_updated",
+  "discovery_region_deleted",
+  // The knowledge hub — `market-insights`.
+  "market_insight_created",
+  "market_insight_updated",
+  "market_insight_deleted",
+  "market_insight_published",
+  "market_insight_unpublished",
+  // The public supplier directory — `suppliers`.
+  "supplier_created",
+  "supplier_updated",
+  // Content moderation — `content-review`.
+  "content_review_approved",
+  "content_review_rejected",
+  // Who made this person a moderator, and when. Granted out of band by
+  // `pnpm db:grant-platform-role`, which wrote nothing at all before this.
+  "platform_role_granted",
+  "platform_role_revoked",
+]);
+
+/**
+ * The singleton head. One row, one lock, one sequence.
+ *
+ * `id` is pinned to `'global'` by a CHECK rather than left free: a second row would
+ * be a second chain, and two chains over one table is a chain nobody can walk.
+ */
+export const platformChainHead = pgTable(
+  "platform_chain_head",
+  {
+    id: text("id").primaryKey().default("global"),
+    lastAuditSequenceNumber: integer("last_audit_sequence_number").default(0).notNull(),
+    headEntryHash: text("head_entry_hash"),
+    headEntryId: text("head_entry_id"),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  () => [
+    check("platform_chain_head_singleton_ck", sql`id = 'global'`),
+    check(
+      "platform_chain_head_sequence_ck",
+      sql`last_audit_sequence_number >= 0
+          AND (last_audit_sequence_number = 0) = (head_entry_hash IS NULL)
+          AND (head_entry_hash IS NULL OR head_entry_hash ~ '^[0-9a-f]{64}$')`,
+    ),
+  ],
+);
+
+export const platformAuditEntry = pgTable(
+  "platform_audit_entry",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    sequenceNumber: integer("sequence_number").notNull(),
+    eventKind: platformAuditEventKindEnum("event_kind").notNull(),
+    // NOT NULL, unlike the project chain's. See the block comment above.
+    actorUserId: text("actor_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    /** The role AT THE TIME. A snapshot, never a join — roles are revocable. */
+    actorRoleSnapshot: text("actor_role_snapshot").notNull(),
+    actionLabel: text("action_label").notNull(),
+    targetLabel: text("target_label").notNull(),
+    detailNote: text("detail_note").default("").notNull(),
+    /** Canonical JSON. TEXT, not jsonb — jsonb reorders keys and the hash would move. */
+    payloadJson: text("payload_json").notNull(),
+    occurredAt: timestamp("occurred_at").notNull(),
+    previousEntryHash: text("previous_entry_hash"),
+    entryHash: text("entry_hash").notNull(),
+    hashAlgorithmVersion: text("hash_algorithm_version").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("platform_audit_entry_sequence_unq").on(table.sequenceNumber),
+    index("platform_audit_entry_occurredAt_idx").on(table.occurredAt, table.id),
+    index("platform_audit_entry_eventKind_idx").on(table.eventKind, table.sequenceNumber),
+    index("platform_audit_entry_actorUserId_idx").on(table.actorUserId, table.sequenceNumber),
+    check("platform_audit_entry_sequence_ck", sql`sequence_number >= 1`),
+    check("platform_audit_entry_hash_ck", sql`entry_hash ~ '^[0-9a-f]{64}$'`),
+    // The genesis rule: entry 1 has no predecessor and every other entry has one.
+    check(
+      "platform_audit_entry_link_ck",
+      sql`(sequence_number = 1) = (previous_entry_hash IS NULL)`,
+    ),
+    check(
+      "platform_audit_entry_labels_ck",
+      sql`char_length(action_label) BETWEEN 1 AND 200
+          AND char_length(target_label) BETWEEN 1 AND 200
+          AND char_length(detail_note) <= 2000`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Notifications (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 1).
 //
 // WHY THIS TABLE EXISTS. Every state transition in this schema that concerns a

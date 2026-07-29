@@ -26,6 +26,7 @@ import { eq } from "drizzle-orm";
 
 import { db, pool } from "#src/db/index.js";
 import { user } from "#src/db/schema.js";
+import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import type { PlatformRole } from "#src/services/platform-role.service.js";
 
 const ASSIGNABLE_ROLES = ["moderator", "auditor", "admin"] as const;
@@ -81,11 +82,43 @@ async function main(): Promise<void> {
     return;
   }
 
-  const [updatedUser] = await db
-    .update(user)
-    .set({ platformRole: nextPlatformRole })
-    .where(eq(user.id, existingUser.id))
-    .returning({ email: user.email, platformRole: user.platformRole });
+  const [updatedUser] = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(user)
+      .set({ platformRole: nextPlatformRole })
+      .where(eq(user.id, existingUser.id))
+      .returning({ email: user.email, platformRole: user.platformRole });
+
+    if (rows.length > 0) {
+      // "Who made this person a moderator, and when" had NO ANSWER IN THE DATABASE before
+      // this (§11l.2 item 2). The grant is deliberately not reachable over HTTP, which
+      // makes it the one privileged action with no request log behind it either.
+      //
+      // THE ACTOR IS THE SUBJECT, and that is a limitation worth stating rather than
+      // hiding: this script runs from a shell with database credentials and has no
+      // session, so the chain records WHO WAS GRANTED and when, not who typed the
+      // command. The operator's identity lives in the shell history and the deploy log.
+      // A `--granted-by=` flag would look like an answer and be an unverified string.
+      await appendPlatformAuditEntry(tx, {
+        eventKind: nextPlatformRole === null ? "platform_role_revoked" : "platform_role_granted",
+        actorUserId: existingUser.id,
+        actorRoleSnapshot: existingUser.platformRole ?? "none",
+        actionLabel:
+          nextPlatformRole === null ? "Revoked a platform role" : "Granted a platform role",
+        targetLabel: `user ${existingUser.id}`,
+        detailNote: `${existingUser.platformRole ?? "none"} -> ${nextPlatformRole ?? "none"}`,
+        payload: {
+          subjectUserId: existingUser.id,
+          previousRole: existingUser.platformRole ?? "none",
+          nextRole: nextPlatformRole ?? "none",
+          grantedByShell: true,
+        },
+        occurredAt: new Date(),
+      });
+    }
+
+    return rows;
+  });
 
   if (!updatedUser) {
     throw new Error(`Update affected no rows for ${emailArgument} — the row vanished mid-update.`);

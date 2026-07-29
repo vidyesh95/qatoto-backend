@@ -8,6 +8,10 @@ import {
   problemSubmission,
 } from "#src/db/schema.js";
 import {
+  appendPlatformAuditEntry,
+  recordPlatformAction,
+} from "#src/services/platform-audit.service.js";
+import {
   requirePlatformCapability,
   type PlatformAccessError,
 } from "#src/services/platform-role.service.js";
@@ -72,13 +76,41 @@ export async function decideCategory(
     return { success: false, error: { type: "CATEGORY_ALREADY_DECIDED", status: currentStatus } };
   }
 
-  const updated = await applyCategoryDecision({
-    categoryId,
-    nextStatus: input.decision === "approve" ? "approved" : "rejected",
-    // Only set on approval, and only when the moderator chose one — the write skips the
-    // column entirely otherwise rather than resetting it to the default.
-    pinIconKey: input.decision === "approve" ? input.pinIconKey : undefined,
-  });
+  const decidedAt = new Date();
+  const updated = await recordPlatformAction(
+    async () =>
+      applyCategoryDecision({
+        categoryId,
+        nextStatus: input.decision === "approve" ? "approved" : "rejected",
+        // Only set on approval, and only when the moderator chose one — the write skips
+        // the column entirely otherwise rather than resetting it to the default.
+        pinIconKey: input.decision === "approve" ? input.pinIconKey : undefined,
+      }),
+    (row) =>
+      row === null
+        ? // Lost the race with another moderator. Nothing was decided, so nothing is
+          // recorded — an audit entry for a write that matched no row is a false trail.
+          null
+        : {
+            eventKind:
+              input.decision === "approve"
+                ? "taxonomy_category_approved"
+                : "taxonomy_category_rejected",
+            actorUserId,
+            actorRoleSnapshot: capabilityResult.value.platformRole,
+            actionLabel:
+              input.decision === "approve" ? "Approved a category" : "Rejected a category",
+            targetLabel: `category ${categoryId}`,
+            ...(input.note === undefined ? {} : { detailNote: input.note }),
+            payload: {
+              categoryId,
+              decision: input.decision,
+              // Present only on the approve arm of the union — a reject has no pin to set.
+              pinIconKey: input.decision === "approve" ? (input.pinIconKey ?? null) : null,
+            },
+            occurredAt: decidedAt,
+          },
+  );
 
   if (!updated) {
     // Lost a race with another moderator between the status read and the write; the
@@ -146,21 +178,43 @@ export async function decideMergeProposal(
   const decidedAt = new Date();
 
   if (input.decision === "reject") {
-    const [rejected] = await db
-      .update(problemClusterMergeProposal)
-      .set({
-        status: "rejected",
-        decidedByUserId: actorUserId,
-        decidedAt,
-        decisionNote: input.note ?? null,
-      })
-      .where(
-        and(
-          eq(problemClusterMergeProposal.id, proposalId),
-          eq(problemClusterMergeProposal.status, "pending"),
-        ),
-      )
-      .returning();
+    const rejected = await recordPlatformAction(
+      async (tx) => {
+        const [row] = await tx
+          .update(problemClusterMergeProposal)
+          .set({
+            status: "rejected",
+            decidedByUserId: actorUserId,
+            decidedAt,
+            decisionNote: input.note ?? null,
+          })
+          .where(
+            and(
+              eq(problemClusterMergeProposal.id, proposalId),
+              eq(problemClusterMergeProposal.status, "pending"),
+            ),
+          )
+          .returning();
+        return row ?? null;
+      },
+      (row) =>
+        row === null
+          ? null
+          : {
+              eventKind: "cluster_merge_rejected",
+              actorUserId,
+              actorRoleSnapshot: capabilityResult.value.platformRole,
+              actionLabel: "Rejected a cluster merge proposal",
+              targetLabel: `merge proposal ${proposalId}`,
+              ...(input.note === undefined ? {} : { detailNote: input.note }),
+              payload: {
+                proposalId,
+                sourceClusterId: proposal.sourceClusterId,
+                targetClusterId: proposal.targetClusterId,
+              },
+              occurredAt: decidedAt,
+            },
+    );
 
     if (!rejected) {
       return {
@@ -292,6 +346,27 @@ export async function decideMergeProposal(
     if (!decided) {
       throw new Error("decideMergeProposal: proposal vanished mid-transaction");
     }
+
+    // THE SHARPEST CASE §11l.2 NAMES. This transaction repoints every submission,
+    // downgrades `origin` links, marks the source absorbed and invalidates a score — and
+    // the function's own comment calls it unrecoverable. Until this line it left no
+    // record of who decided it.
+    await appendPlatformAuditEntry(tx, {
+      eventKind: "cluster_merge_approved",
+      actorUserId,
+      actorRoleSnapshot: capabilityResult.value.platformRole,
+      actionLabel: "Approved a cluster merge",
+      targetLabel: `merge proposal ${proposalId}`,
+      ...(input.note === undefined ? {} : { detailNote: input.note }),
+      payload: {
+        proposalId,
+        sourceClusterId: proposal.sourceClusterId,
+        targetClusterId: proposal.targetClusterId,
+        repointedLinkCount: BigInt(sourceLinks.length),
+      },
+      occurredAt: decidedAt,
+    });
+
     return decided;
   });
 

@@ -17,12 +17,8 @@ import { buildTestApp } from "#src/test-support/test-app.js";
 stubServerEnvironment();
 
 vi.mock("dotenv/config", () => ({}));
-vi.mock("#src/db/index.js", async () =>
-  (await import("#src/test-support/database-mock.js")).databaseModuleMock(),
-);
-vi.mock("#src/lib/auth.js", async () =>
-  (await import("#src/test-support/auth-mock.js")).authModuleMock(),
-);
+vi.mock("#src/db/index.js", async () => (await import("#src/test-support/database-mock.js")).databaseModuleMock());
+vi.mock("#src/lib/auth.js", async () => (await import("#src/test-support/auth-mock.js")).authModuleMock());
 
 const listNotifications = vi.fn<(...args: readonly unknown[]) => unknown>();
 const countUnread = vi.fn<(...args: readonly unknown[]) => unknown>();
@@ -124,10 +120,7 @@ describe("notification routes", () => {
 
       expect(response.status).toBe(200);
       expect(response.body.data).toEqual({ markedCount: 3 });
-      expect(markReadThrough).toHaveBeenCalledWith(
-        TEST_SESSION_USER.id,
-        "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
-      );
+      expect(markReadThrough).toHaveBeenCalledWith(TEST_SESSION_USER.id, "3f2504e0-4f89-41d3-9a0c-0305e82c3301");
     });
 
     it("answers 404 for another person's notification id", async () => {
@@ -146,12 +139,10 @@ describe("notification routes", () => {
     });
 
     it("rejects a body that names a recipient", async () => {
-      const response = await request(app)
-        .post("/notifications/read")
-        .send({
-          throughNotificationId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
-          recipientUserId: "someone-else",
-        });
+      const response = await request(app).post("/notifications/read").send({
+        throughNotificationId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+        recipientUserId: "someone-else",
+      });
 
       expect(response.status).toBe(422);
       expect(markReadThrough).not.toHaveBeenCalled();

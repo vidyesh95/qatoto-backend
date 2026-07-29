@@ -12,6 +12,7 @@ import {
   supplierCapabilityLink,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
@@ -348,6 +349,24 @@ export async function createSupplier(
           })),
         );
       }
+
+      // The public directory is the one surface a moderator edits that STRANGERS read as
+      // fact — a verification state here is what a founder trusts when picking a supplier
+      // (§11i). Who created a listing was recorded on the row; who did what to it after
+      // was recorded nowhere (§11l.2).
+      await appendPlatformAuditEntry(tx, {
+        eventKind: "supplier_created",
+        actorUserId,
+        actorRoleSnapshot: capabilityResult.value.platformRole,
+        actionLabel: "Created a supplier listing",
+        targetLabel: `supplier ${input.slug}`,
+        payload: {
+          supplierId: inserted.id,
+          slug: input.slug,
+          capabilityCount: BigInt(resolvedCapabilityIds.value.length),
+        },
+        occurredAt: new Date(),
+      });
     });
   } catch (error: unknown) {
     // The UNIQUE on `slug` IS the de-duplication mechanism; a collision is a 409, never a
@@ -439,6 +458,23 @@ export async function updateSupplier(
           );
       }
     }
+
+    await appendPlatformAuditEntry(tx, {
+      eventKind: "supplier_updated",
+      actorUserId,
+      actorRoleSnapshot: capabilityResult.value.platformRole,
+      actionLabel: "Updated a supplier listing",
+      targetLabel: `supplier ${existing.slug}`,
+      payload: {
+        supplierId,
+        // The two fields whose change matters to somebody other than the moderator: a
+        // verification state is a claim strangers rely on, and `isActive: false` is how a
+        // listing is retired (§11j.6 — deletion is not the mechanism).
+        verificationState: input.verificationState ?? null,
+        isActive: input.isActive ?? null,
+      },
+      occurredAt: new Date(),
+    });
   });
 
   return findSupplierBySlug(existing.slug);
