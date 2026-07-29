@@ -9,6 +9,17 @@
     "module": "NodeNext",
     "moduleResolution": "nodenext",
     "customConditions": ["development"],
+    /* REDUNDANT FOR tsc, LOAD-BEARING FOR oxlint. package.json's "imports" map sends
+       #src/* to ./src/*.ts under the "development" condition and to ./dist/*.js
+       otherwise, and the line above is what makes tsc take the source branch.
+       oxlint's resolver does NOT honour customConditions: it took the default branch
+       and read dist/, so `pnpm lint` reported phantom "not found in imported
+       namespace" errors for every export added since the last `pnpm build` — a lint
+       result that depended on build staleness. It DOES honour "paths", so this pins
+       both to the source. Nothing else changes: "paths" never rewrites an emitted
+       specifier, so the built dist/ still resolves through the "imports" map's
+       default branch at runtime. */
+    "paths": { "#src/*": ["./src/*"] },
     "resolveJsonModule": true,
 
     /* Emit — tsc builds src/ -> dist/ */
