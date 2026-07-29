@@ -358,6 +358,44 @@ async function createBarrenLog(
   return log.id;
 }
 
+/**
+ * Refuses to run while a WORKER is connected to the same database.
+ *
+ * WHY THIS GUARD EXISTS, learned the expensive way. This script drives the four pipeline
+ * stages inline because the worker is supposed to be off (see `runPipelineInline`). With one
+ * running, both race: the worker dequeues `ground-artifacts` for the same claims and its
+ * `finalize-verdict` holds `SELECT … FOR UPDATE` on the allocation proposal — so the
+ * script's sweep, which uses `SKIP LOCKED`, silently settles one window instead of two.
+ *
+ * The result is five assertions failing with numbers that look like a formula bug
+ * ("1 entries; the verified one is ? slices") and nothing anywhere saying "a worker is
+ * running". Diagnosing it from the output alone takes an hour; `pg_stat_activity` answers
+ * it in a second.
+ */
+async function assertNoWorkerIsRunning(): Promise<boolean> {
+  const result = await pool.query<{ n: string }>(
+    `SELECT count(*)::text AS n
+       FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND pid <> pg_backend_pid()
+        AND query LIKE '%pgboss.job%'
+        AND query LIKE '%FROM pgboss.job_common j%'`,
+  );
+
+  if (Number(result.rows[0]?.n ?? 0) > 0) {
+    console.error(
+      "\nREFUSING TO RUN: a pg-boss worker is connected to this database.\n\n" +
+        "  This script invokes the §9 pipeline stages INLINE. A running worker dequeues the\n" +
+        "  same jobs and holds row locks the sweep then skips, which fails five assertions\n" +
+        "  with numbers that look like a formula bug.\n\n" +
+        "  Stop `pnpm dev:worker` and run this again.\n",
+    );
+    process.exitCode = 1;
+    return false;
+  }
+  return true;
+}
+
 async function main(): Promise<void> {
   const fixtures = await createFixtures();
   if (!fixtures) {
@@ -821,14 +859,23 @@ async function main(): Promise<void> {
   );
 }
 
-main()
-  .then(async () => {
-    console.log(
-      failureCount === 0
-        ? "\nProof-of-Effort pipeline verified end to end."
-        : `\n${failureCount} assertion(s) FAILED.`,
-    );
-    if (failureCount > 0) process.exitCode = 1;
+assertNoWorkerIsRunning()
+  .then(async (isClear) => {
+    if (!isClear) return false;
+    await main();
+    return true;
+  })
+  .then(async (didRun) => {
+    // Only report when the suite actually ran. Printing "verified end to end" after the
+    // guard refused would be the exact false green this script exists to prevent.
+    if (didRun) {
+      console.log(
+        failureCount === 0
+          ? "\nProof-of-Effort pipeline verified end to end."
+          : `\n${failureCount} assertion(s) FAILED.`,
+      );
+      if (failureCount > 0) process.exitCode = 1;
+    }
     await stopSendOnlyBoss();
     await pool.end();
     return undefined;
