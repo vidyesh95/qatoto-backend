@@ -2618,6 +2618,7 @@ Four states, checked against the actual route files in `src/routes/`, not agains
 | [11h](#11h-cross-project-reads-8-7a)              | Cross-project reads (§8, §7A)       | ✅ Shipped | `workshop.routes.ts`'s `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`, `governance-summary.service.ts`, `src/lib/daily-log-cursor.ts`, `scripts/smoke-daily-log-feed.ts`, migrations 0020–0021 |
 | [11i](#11i-go-to-market-6-family)                 | Go-to-market (§6-family)            | ✅ Shipped | `suppliers.routes.ts`, `suppliers.controller.ts`, `suppliers.service.ts`, `launch-readiness.service.ts`, migration 0020                                                                                             |
 | [11j](#11j-gaps--what-the-rd-surface-still-needs) | **Gaps** — everything above's holes | ✅ Shipped | `market-insights.*`, `discovery-vocabulary.*`, `supplier-engagements.service.ts`, `go-to-market-error-response.ts`, `lib/market-insight-stat.ts`, `applicationInboxRouter`, migration 0022, two smoke scripts       |
+| [11k](#11k-gaps-found-after-11j-shipped)          | **Gaps** found after §11j shipped   | ✅ Shipped | `research-projects.service.ts`'s `findOriginCluster` / `findRelatedInsights`, `project-insight-links.service.ts`, `market_insight_project_link`, migration 0023, `scripts/smoke-project-insight-links.ts`           |
 
 Each subsection below opens with one line stating its state. **§11c is gone** — it described funding
 and escrow together, and escrow has left this contract. Its funding rows and the §7A rows that
@@ -3085,13 +3086,35 @@ next GET after the first POST. The columns above describe what WAS true, and are
 failure mode they name — a table with readers, no writer, and no outward sign of either — is worth
 recognising again.
 
+**Closed means WRITABLE, and that is all it means.** A row reaching a table is not the same as a
+reader exposing it, and the "Who reads it" column above is per-TABLE, not per-SURFACE. That
+distinction is the whole reason [§11k](#11k-gaps-found-after-11j-shipped) exists: when this
+subsection was written, two of the three had no read path on the surface that would render them —
+`problem_cluster_project_link` was read by the cluster detail view and two recompute jobs and by
+nothing on the project side, and `market_insight` had no project relation to read at all. **Both
+are now shipped**, and the paragraphs below are kept because the failure mode they name — calling a
+table "closed" when only half of it is — is worth recognising again.
+
 Their write halves are specified in §11j.4 and §11j.5. This table is the index, not a second spec.
 
-**Two of the three have a visible frontend consequence today**, and both were mis-attributed to the
-frontend before this subsection existed. `/knowledge-hub` renders an empty state that reads as "no
-insights yet" rather than "no insight can be created". And the project Overview tab's Civic Pulse
-origin link and demand-evidence chips are dark because `ResearchProjectDetailView` exposes no link —
-which is downstream of there being no way to create one (R_AND_D_STRUCTURE.md §18).
+**All three visible frontend consequences are gone, and two of them needed §11k to finish.**
+`/knowledge-hub`'s empty state — which read as "no insights yet" rather than "no insight can be
+created" — was fixed by §11j.4 alone: insights are writable there and readable by §11b.
+
+The project Overview tab's **Civic Pulse origin link and demand-evidence chips were still dark
+after §11j, for a different reason than this subsection first gave.** They were attributed to there
+being no way to create the link; there was one, and they stayed dark, because the cause was never
+the write:
+
+- **Origin link** — `problem_cluster_project_link` was writable with `source = 'origin'`, but
+  `ResearchProjectDetailView` exposed no `originCluster`. The row could exist and the detail read
+  would not mention it. **Shipped** as `findOriginCluster`
+  ([§11k.1](#11k1-the-origin-cluster-is-unreachable-from-the-project-side)).
+- **Demand-evidence chips** — there was no project ↔ `market_insight` relation anywhere.
+  `marketInsightRelations` carried region, category and createdBy, and no table joined an insight
+  to a project. That needed a migration, not a field. **Shipped** as `market_insight_project_link`
+  and `relatedInsights`
+  ([§11k.2](#11k2-a-project-cannot-cite-a-market-insight--there-is-no-relation)).
 
 #### 11j.2 Missing reads — the data exists and nothing can fetch it
 
@@ -3178,6 +3201,152 @@ often a settled argument as an oversight, and this table exists so the argument 
 | `GET …/daily-logs/:logId/playback-token`                                 | No playback token exists — the bytes live on youtube.com, so there is nothing to mint (§8, Appendix A1)                                             |
 | `POST …/workshop/files` with bytes                                       | Files are external links. `sizeBytes` stays NULL because nobody measured them (§8, Appendix A2)                                                     |
 | Everything under `/research-programs/*`                                  | Project Immortal, §10 / §11f. Out of scope for this subsection and last in §16                                                                      |
+
+### 11k. Gaps found after §11j shipped
+
+**✅ Shipped — both items.** §11j was the inverse of every other subsection: a list of what did not
+exist, so that "complete for R&D, except Project Immortal" had a definition. It shipped, and then
+the definition was checked against the code rather than against §11j, which is how these two
+surfaced. Both were the **read** halves of dead ends §11j closed the write half of
+([§11j.1](#11j1-write-path-dead-ends--read-the-three-of-these-first)), and neither was a new
+feature — each was the second half of one already agreed.
+
+Compiled the same way §11j was: by reading `src/services/research-projects.service.ts`,
+`src/db/schema.ts` and `src/services/discovery-moderation.service.ts`, not by reading §11j.
+
+**Two things the build found that this section did not predict**, both recorded here rather than
+absorbed silently:
+
+1. **§11k.2's `restrict` FK made `market_insight` a referenced parent for the first time**, and
+   `deleteMarketInsight`'s own comment opened with "nothing in the schema has an FK into
+   `market_insight`". It is no longer true. A cited insight now refuses deletion with
+   **`409 MARKET_INSIGHT_CITED`** — the 23503 translated, not pre-counted, because a `SELECT
+   count(*)` before the delete still loses to a citation committed between the two statements —
+   and the message points the moderator at `/unpublish`. `cascade` was the alternative and is
+   wrong: erasing an insight a project cites would silently rewrite the basis that project stated
+   publicly.
+2. **`relatedInsights` filters `publishedAt IS NOT NULL` on the READ as well as the write**, which
+   this section specified but for the wrong reason. It is not belt-and-braces over the write's
+   published-only check: `/unpublish` moves `published_at` back to NULL on an insight that is
+   ALREADY cited, and the link row survives that deliberately so republishing restores the chip
+   instead of making the founder cite it again. Without the read filter that window is the one
+   place in the domain where a draft insight leaks.
+
+#### 11k.1 The origin cluster is unreachable from the project side
+
+**✅ Shipped as specified. No new endpoint. No migration. No new column.** Everything needed was
+already in the schema; the detail projection simply did not select it.
+
+**First, the name is wrong, and correcting it is the point of this row.**
+`R_AND_D_STRUCTURE.md` §18 calls the missing field `originProblemReportId`. It is neither a
+problem report nor a scalar. `schema.ts:2084` already models the relation and says what it
+replaces, in its own comment:
+
+```ts
+// "Born from" is 1:1 — at most one ORIGIN cluster per project, enforced by Postgres
+// rather than by hope. This is what replaces the scalar column.
+uniqueIndex("problem_cluster_project_link_origin_unq")
+  .on(table.projectId)
+  .where(sql`source = 'origin'`),
+```
+
+**Do not add the column.** A project's origin is the `problem_cluster_project_link` row whose
+`source` is `'origin'`, and Postgres already guarantees there is at most one.
+
+| Change                                                             | Where                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------ |
+| `readonly originCluster: { clusterId, title } \| null` on the view | `ResearchProjectDetailView`, `research-projects.service.ts`  |
+| A third promise in the `Promise.all` that already fans out         | `loadProjectDetail`, same file (§11k.2's read is the fourth) |
+| `findOriginCluster(projectId)`, joining on `source = 'origin'`     | new private function beside `hasWatched`, same file          |
+
+```ts
+async function findOriginCluster(projectId: string) {
+    const [row] = await db
+        .select({ clusterId: problemCluster.id, title: problemCluster.title })
+        .from(problemClusterProjectLink)
+        .innerJoin(problemCluster, eq(problemCluster.id, problemClusterProjectLink.clusterId))
+        .where(
+            and(
+                eq(problemClusterProjectLink.projectId, projectId),
+                eq(problemClusterProjectLink.source, "origin"),
+                ne(problemCluster.status, "hidden"),
+            ),
+        )
+        .limit(1);
+    return row ?? null;
+}
+```
+
+**Three constraints, each a silent bug if skipped:**
+
+- **Clusters have no slug.** `schema.ts:1810` — _"No slug: §11b addresses clusters by id, which
+  saves an entire collision-suffix mechanism for an entity nobody links to by name."_ The field
+  carries `clusterId` and `title`. A client links with the id, exactly as `/problem-map` does.
+- **`ne(status, "hidden")` is required, not defensive.** The project detail read is public;
+  `problemClusterStatusEnum` is `active | merged | hidden` and `hidden` means moderator-hidden and
+  excluded from public reads. Omitting the filter makes the project detail the one endpoint that
+  discloses a hidden cluster.
+- **`merged` needs no handling at all.** `discovery-moderation.service.ts:221` re-points links to
+  the surviving cluster when a merge is approved, and downgrades `origin` → `founder_declared` as
+  it does — an absorbed cluster is not what the project was born from. So `originCluster` becomes
+  `null` after a merge. That is correct; do not resolve `mergedIntoClusterId` to keep the link
+  alive.
+
+The `.limit(1)` is exact rather than a guess, because of the partial unique index above.
+
+**The write half already ships** and needs nothing:
+`POST /discovery/problem-clusters/:clusterId/project-links` with `{ source: "origin" }`,
+founder-only (`problem-clusters.service.ts:95` decides which sources a caller's standing permits),
+`409 ORIGIN_ALREADY_SET` on the second attempt (§11j.4).
+
+#### 11k.2 A project cannot cite a market insight — there is no relation
+
+**✅ Shipped**, with one addition the section did not anticipate — the `restrict` FK's consequence
+for `deleteMarketInsight`, recorded in this subsection's opening.
+
+The Overview tab's demand-evidence chips had nothing to read. `marketInsightRelations` joined an
+insight to its region, its category and its author, and **no table anywhere joined one to a
+project**. Unlike §11k.1 this was not a projection gap; the data did not exist to project.
+
+Note `researchProject.demandEvidenceNotes` already exists and is already on the detail view
+(`research-projects.service.ts:124`). It is founder-authored free text and it is **not** a
+substitute — a chip cites a moderated insight the reader can open, prose cites nothing.
+
+**The table**, mirroring `problemClusterProjectLink` rather than inventing a shape: composite
+primary key `(projectId, insightId)`, `linkedByUserId` with `onDelete: "set null"`, `createdAt`, an
+index on `insightId` for the reverse read. Shipped as `market_insight_project_link`, migration 0023,
+with both parent FKs `onDelete: "restrict"` — which is what turns a moderator's hard delete of a
+cited insight into a `409` rather than an erasure.
+
+**It takes no `source` enum.** `problem_cluster_project_link` needs one because `origin` is
+semantically distinct from `founder_declared` and only Postgres can enforce the 1:1. A cited
+insight has no such distinction and no such cardinality — add the column only if some surface must
+tell a founder's citation from a moderator's, which no chip does.
+
+| Method & path                                                                       | Body / input    | Behavior & statuses                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ✅ `POST` · `DELETE /research-projects/:projectSlug/market-insight-links[/:insightId]` | `{ insightId }` | The project's founder, or a moderator. **Every refusal is one `404`** — the same reasoning §11j.4's corrected project-link row records: founder-ness cannot be decided without reading the id, so a 403/404 split discloses that the project exists. An unpublished insight is refused the same way, for the same reason. Shipped as `201`/`200` · `404 INSIGHT_LINK_DENIED` · `404 INSIGHT_LINK_NOT_FOUND` (DELETE only, reachable only after authorization passes) · `409 INSIGHT_ALREADY_LINKED`. **DELETE does not re-check `publishedAt`** — an insight can be unpublished after being cited, and a citation nobody can retract is a row stuck in the schema. **Either party may remove either party's link**: with no `source` column there is nothing to attribute a row to, and deriving an owner from the nullable `linkedByUserId` would break when the account is deleted. |
+
+**The read**: `relatedInsights: readonly { insightId, headline }[]` on
+`ResearchProjectDetailView`, fanned out beside §11k.1's `findOriginCluster`, and **filtered to
+`publishedAt IS NOT NULL`**. The public insight read hard-filters that already (§11j.4 is why
+`/discovery/admin/market-insights` had to exist at all); a detail view that skipped the filter
+would be the single place in the domain where a draft insight leaks — and the window that makes
+that concrete is the post-citation `/unpublish`, not the write, as this subsection's opening
+records. Ordered `publishedAt DESC, id DESC`, matching the knowledge hub, because an unordered read
+of a chip row reshuffles between requests (§4c rule 4).
+
+#### 11k.3 Order
+
+**✅ Done, in the order stated. §11k.1 first** — one field, one join and no migration, against a
+schema that already held the data, and half of what §11j.1 claimed was finished — **then §11k.2**,
+a table, a migration, two verbs and a read. Both shipped in one commit because they share
+`loadProjectDetail`'s fan-out. §10 (Project Immortal) is now the only backend section still
+entirely unbuilt, and stays last in §16.
+
+Proved by `pnpm db:smoke-insight-links` — 10 assertions against a real database, including the two
+that only Postgres can settle: a stranger and a founder-holding-a-draft get byte-identical
+refusals, and a cited insight refuses deletion with `409` rather than a 500.
 
 ---
 
@@ -3660,6 +3829,10 @@ complete apart from Project Immortal". Inside it the order was not flat:
 4. **§11j.4's skills/regions rows last, if at all** — a seeded vocabulary with no runtime write path
    is a legitimate design, not a defect.
 
+**[§11k](#11k-gaps-found-after-11j-shipped) has since shipped too**, in the order it stated. It was
+the part of §11j.1 that shipping the write halves did not finish: **§11k.1** — one projection
+field, one join, no migration — **then §11k.2**, a table, migration 0023, two verbs and a read.
+
 **Then §10 (Project Immortal)**, which is the only backend section still entirely unbuilt.
 
 This matches PROOF_OF_EFFORT_SPEC.md §1's sequencing: the AI Chief of Staff (§9 + §7A) comes first;
@@ -3851,6 +4024,14 @@ pnpm db:verify-go-to-market-constraints   # migration 0020's guarantees, R1 on p
 pnpm db:smoke-daily-log-feed              # the cross-project cursor: 14 assertions, 5 page sizes
 pnpm db:smoke-workshop                    # includes the chat cursor's no-SKIP assertion
 pnpm test                                 # the cursor codec and both zero-trust schema suites
+```
+
+**The §11k gates, all runnable today:**
+
+```bash
+pnpm db:verify-discovery-constraints      # now 15 tables — market_insight_project_link included
+pnpm db:smoke-insight-links               # §11k end to end: the id oracle, the draft leak, the restrict FK
+pnpm db:smoke-cluster-links               # the write half §11k.1 reads from, unchanged
 ```
 
 The member-scoping attack, hand-runnable:
@@ -4302,7 +4483,7 @@ Grouped by domain. This is §14's claim in countable form, and the source of §1
 
 | Domain                             | Shipped | Called | Uncalled surface                                                                                                                   |
 | ---------------------------------- | ------: | -----: | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Projects, team, roles (§11a)       |      38 |      4 | every write: create, publish, stage, cover, members, applications, invites, watch                                                  |
+| Projects, team, roles (§11a)       |      40 |      4 | every write: create, publish, stage, cover, members, applications, invites, watch, market-insight citations (§11k.2)               |
 | Application inbox (§11j.2)         |       2 |      0 | `GET /applications/mine`, `GET /invites/mine` — built so an invitee holding no slug could find their invite; nothing links to them |
 | Workshop & daily logs (§11d, §11h) |      29 |      4 | all 15 board/file/chat writes; per-project log create, submit, transcript                                                          |
 | Proof of Effort (§11e)             |      38 |      0 | **the entire domain** — claims, rates, disputes, integrations, pie bake, audit trail                                               |
@@ -4312,7 +4493,7 @@ Grouped by domain. This is §14's claim in countable form, and the source of §1
 | Discovery admin (§11j.4)           |      17 |      0 | **the entire moderation surface** — categories, insights, skills, regions, merge proposals                                         |
 | Go-to-market (§11i, §11j.1)        |      11 |      3 | supplier create/update, supplier detail, all five supplier-engagement routes, launch readiness                                     |
 | Catalog (§11a)                     |       3 |      2 | `POST /research-categories`                                                                                                        |
-| **Total**                          | **195** | **22** |                                                                                                                                    |
+| **Total**                          | **197** | **22** |                                                                                                                                    |
 | Project Immortal (§11f)            |       0 |      0 | nothing shipped and nothing called — the only row where the frontend is ahead of this backend                                      |
 
 **Read the two `0 called` rows as one fact, not two.** Proof of Effort and Compensation are the
