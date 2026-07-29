@@ -2,6 +2,7 @@ import express from "express";
 
 import * as compensationController from "#src/controllers/compensation.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
+import { idempotency } from "#src/middleware/idempotency.js";
 import { parseCompactJsonBody } from "#src/middleware/json-body.js";
 import {
   chainVerifyLimiter,
@@ -68,6 +69,7 @@ router.post(
   "/:projectSlug/members/:memberUserId/compensation-agreement",
   requireAuth,
   compensationAgreementLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   compensationController.proposeCompensationAgreement,
@@ -83,6 +85,7 @@ router.post(
   "/:projectSlug/compensation-agreements/:agreementId/accept",
   requireAuth,
   compensationAgreementLimiter,
+  idempotency(),
   requireIdentifiedUser,
   compensationController.acceptCompensationAgreement,
 );
@@ -98,6 +101,7 @@ router.post(
   "/:projectSlug/compensation-agreements/:agreementId/decline",
   requireAuth,
   compensationAgreementLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   compensationController.declineCompensationAgreement,
@@ -113,6 +117,7 @@ router.post(
   "/:projectSlug/compensation-agreements/:agreementId/withdraw",
   requireAuth,
   compensationAgreementLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   compensationController.withdrawCompensationAgreement,
@@ -140,6 +145,7 @@ router.post(
   "/:projectSlug/compensation-periods/:periodId/finalize",
   requireAuth,
   compensationPeriodDecisionLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   compensationController.finalizeCompensationPeriod,
@@ -153,6 +159,7 @@ router.post(
   "/:projectSlug/compensation-periods/:periodId/countersign",
   requireAuth,
   compensationPeriodDecisionLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   compensationController.countersignCompensationPeriod,
@@ -163,6 +170,7 @@ router.post(
   "/:projectSlug/compensation-periods/:periodId/supersede",
   requireAuth,
   compensationPeriodDecisionLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   compensationController.supersedeCompensationPeriod,

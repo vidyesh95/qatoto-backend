@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as proofOfEffortController from "#src/controllers/proof-of-effort.controller.js";
+import { idempotency } from "#src/middleware/idempotency.js";
 import { parseCompactJsonBody } from "#src/middleware/json-body.js";
 import {
   chainVerifyLimiter,
@@ -83,6 +84,7 @@ router.post(
   "/:projectSlug/fair-market-rate/lock",
   requireAuth,
   fairMarketRateLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   proofOfEffortController.lockFairMarketRate,
@@ -116,6 +118,7 @@ router.post(
   "/:projectSlug/members/:memberUserId/fair-market-rate",
   requireAuth,
   fairMarketRateLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   proofOfEffortController.proposeFairMarketRate,
@@ -126,6 +129,7 @@ router.post(
   "/:projectSlug/members/:memberUserId/fair-market-rate/:rateId/accept",
   requireAuth,
   fairMarketRateLimiter,
+  idempotency(),
   requireIdentifiedUser,
   proofOfEffortController.acceptFairMarketRate,
 );
@@ -211,6 +215,7 @@ router.post(
   "/:projectSlug/allocation-proposals/:proposalId/dispute",
   requireAuth,
   disputeLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   proofOfEffortController.raiseDispute,
@@ -220,6 +225,7 @@ router.post(
   "/:projectSlug/disputes/:disputeId/votes",
   requireAuth,
   disputeLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   proofOfEffortController.castDisputeVote,
@@ -230,6 +236,7 @@ router.post(
   "/:projectSlug/disputes/:disputeId/withdraw",
   requireAuth,
   disputeLimiter,
+  idempotency(),
   requireIdentifiedUser,
   proofOfEffortController.withdrawDispute,
 );
@@ -239,6 +246,7 @@ router.post(
   "/:projectSlug/disputes/:disputeId/resolve",
   requireAuth,
   disputeLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   proofOfEffortController.resolveDispute,
@@ -340,6 +348,7 @@ router.post(
   "/:projectSlug/pie-bake",
   requireAuth,
   fairMarketRateLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   proofOfEffortController.bakePie,

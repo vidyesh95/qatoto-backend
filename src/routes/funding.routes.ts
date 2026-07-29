@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as fundingController from "#src/controllers/funding.controller.js";
+import { idempotency } from "#src/middleware/idempotency.js";
 import { parseCompactJsonBody } from "#src/middleware/json-body.js";
 import { fundingRoundWriteLimiter, pledgeLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
@@ -93,9 +94,12 @@ router.post(
  * 201, and `raisedAmountInCents` has NOT moved. §7's 27 rejected keys all 422 here.
  */
 router.post(
+  // MONEY. A retried POST on a flaky connection must not record two commitments
+  // (§11l.2 item 3). Honour-if-present: a caller sending no key gets today's behaviour.
   "/funding-rounds/:roundId/pledges",
   requireAuth,
   pledgeLimiter,
+  idempotency(),
   requireIdentifiedUser,
   parseCompactJsonBody,
   fundingController.createPledge,

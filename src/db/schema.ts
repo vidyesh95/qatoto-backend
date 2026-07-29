@@ -7401,6 +7401,62 @@ export const compensationPaymentRecordRelations = relations(
 );
 
 // ---------------------------------------------------------------------------
+// Request idempotency (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 3).
+//
+// FOUR SURFACES ALREADY TAKE A BODY-CARRIED KEY — daily-log submit, effort claim,
+// physical receipt, payment record — each with its own column and its own unique
+// index. That shape is right where it is: the key is part of the domain row, and
+// the index is the race-safe authority.
+//
+// It does not generalize. `POST /funding-rounds/:id/pledges` records a commitment,
+// `/finalize` freezes a statement, `/dispute` freezes somebody's slices — and none
+// of them has anywhere natural to put a key. Adding a column and a partial unique
+// index to each is a migration per verb, and the list keeps growing.
+//
+// So: one table, keyed on `(user_id, idempotency_key)`, storing the RESPONSE. A
+// replay returns the original status and body rather than re-running the write.
+// The frontend already mints a key per attempt (`src/lib/rnd/idempotency.ts`) and
+// the endpoints above ignore it.
+//
+// `request_fingerprint` is what stops a key from being reused for a DIFFERENT
+// request. Without it a client that recycles one key across two pledges gets the
+// first pledge's receipt for the second and believes both landed.
+// ---------------------------------------------------------------------------
+
+export const idempotencyRecord = pgTable(
+  "idempotency_record",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // Scoped to the CALLER, not global. Two people may legitimately pick the same
+    // key, and a global unique index would let either one see the other's response.
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestMethod: text("request_method").notNull(),
+    /** The concrete path, so one key cannot be replayed against a different route. */
+    requestPath: text("request_path").notNull(),
+    /** SHA-256 of the canonicalized body. Hex, 64 chars. */
+    requestFingerprint: text("request_fingerprint").notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: text("response_body").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("idempotency_record_userId_key_unq").on(table.userId, table.idempotencyKey),
+    // For the retention sweep. A replay cache is not a ledger and must not grow forever.
+    index("idempotency_record_createdAt_idx").on(table.createdAt),
+    check("idempotency_record_key_ck", sql`char_length(idempotency_key) BETWEEN 8 AND 200`),
+    check("idempotency_record_fingerprint_ck", sql`request_fingerprint ~ '^[0-9a-f]{64}$'`),
+    // 2xx only. Recording a failure would make a retry after a transient 500 replay the
+    // 500 forever, which is the opposite of what a retry is for.
+    check("idempotency_record_status_ck", sql`response_status BETWEEN 200 AND 299`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // The PLATFORM audit chain (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 2).
 //
 // WHY A SECOND CHAIN. `project_audit_entry` hangs off `project_chain_head`, which
