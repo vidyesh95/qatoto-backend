@@ -121,13 +121,16 @@ describe("idempotency middleware", () => {
     // first pass so the replay branch is exercised against a real value rather than a
     // hand-written hash that would drift the moment the input format changes.
     await request(app).post("/probe").set("Idempotency-Key", "attempt-0000002").send({ amountInCents: "100" });
-    const recorded = insertValues.mock.calls[0]?.[0] as {
-      readonly requestFingerprint: string;
-    };
+    const recorded: unknown = insertValues.mock.calls[0]?.[0];
+    const recordedFingerprint =
+      typeof recorded === "object" && recorded !== null && "requestFingerprint" in recorded
+        ? String(recorded.requestFingerprint)
+        : "";
+    expect(recordedFingerprint).toMatch(/^[0-9a-f]{64}$/);
     vi.clearAllMocks();
 
     selectRows.push({
-      requestFingerprint: recorded.requestFingerprint,
+      requestFingerprint: recordedFingerprint,
       responseStatus: 201,
       responseBody: JSON.stringify({ status: "success", statusCode: 201, message: "original" }),
     });

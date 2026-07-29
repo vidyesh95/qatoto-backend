@@ -66,7 +66,10 @@ function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
 
-  const entries = Object.entries(value as Record<string, unknown>)
+  // `Object.entries` over an `object` already yields `[string, unknown][]`; going through
+  // a `Record` assertion would be a claim about a shape this function is deliberately
+  // agnostic about.
+  const entries = Object.entries(value)
     .filter(([, entryValue]) => entryValue !== undefined)
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`);
