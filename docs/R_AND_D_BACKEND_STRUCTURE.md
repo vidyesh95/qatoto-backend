@@ -54,23 +54,28 @@
 > still adds is an **LLM provider** for §8/§9 analysis — **Gemini on the AI Studio free tier**,
 > called with plain `fetch`, no SDK. Better Auth already owns identity; this feature owns the
 > `/research-projects/*`, `/discovery/*`, `/funding/*` and `/research-programs/*` routes. The "~60
-> new tables" this line estimated landed as **98 tables and 102 enums** in `src/db/schema.ts`, over
-> 24 migrations.
+> new tables" this line estimated landed as **102 tables and 105 enums** in `src/db/schema.ts`,
+> over 27 migrations.
 >
 > **Status:** seven domains are **✅ shipped and reachable today** — §5 (projects, team, roles,
 > applications), §6 (discovery), §7 (funding, as a record of intent), §7A (compensation
-> statements), §8 (workshop, daily logs), §9 (Proof of Effort) and §11i (go-to-market). That is
-> **197 R&D verb routes** across eight route files, all mounted:
+> statements), §8 (workshop, daily logs), §9 (Proof of Effort) and §11i (go-to-market), plus
+> §11l's three cross-cutting subsystems. That is **207 R&D verb routes** across ten route
+> files, all mounted:
 >
 > ```text
-> research-projects 42 · proof-of-effort 38 · discovery 37 · workshop 29
-> funding           22 · compensation    15 · suppliers 11 · research-catalog 3
+> research-projects 42 · proof-of-effort 42 · discovery 38 · workshop  29
+> funding           22 · compensation    15 · suppliers 11 · catalog    3
+> notifications      3 · platform-audit   2
 > ```
 >
-> 129 of them sit under `/research-projects` (six routers share that prefix) and 31 are
-> root-mounted. The app as a whole serves 255 verb routes; the other 58 are auth, store and studio.
-> Behind them: 98 tables, 102 enums, 24 migrations, 15 job files over 27 queues with 9 crons, and 16
-> smoke/verify scripts.
+> The app as a whole serves 265 verb routes; the rest are auth, store and studio. Behind them:
+> 102 tables, 105 enums, 27 migrations, 16 job files over 28 queues with 9 crons, 17
+> smoke/verify scripts, and 55 test files.
+>
+> **§11l added ten of those routes and three subsystems** — notifications, a platform-level
+> audit chain, and request idempotency. None was missing from any route in particular, which
+> is exactly why the two earlier gap lists could not see them.
 >
 > **§10 (Project Immortal) is ⏳ pending and is now the only unbuilt domain** — no route,
 > controller, service or migration exists for it. **It is no longer blocked**, either: it waited on
@@ -382,8 +387,8 @@ Route → controller → service → db, with the counts a `ls` will reproduce:
 ```text
 qatoto-backend/
 ├── src/
-│   ├── db/schema.ts                           # 8,100 lines: 98 tables, 102 enums, relations
-│   ├── routes/                                # 16 files, 255 verb routes; 8 files are R&D (197)
+│   ├── db/schema.ts                           # 8,400 lines: 102 tables, 105 enums, relations
+│   ├── routes/                                # 18 files, 265 verb routes; 10 are R&D (207)
 │   │   ├── research-projects.routes.ts        # 42 — projects, team, roles, applications, invites
 │   │   │                                      #      + applicationInboxRouter (/applications/mine,
 │   │   │                                      #        /invites/mine), root-mounted
@@ -398,6 +403,8 @@ qatoto-backend/
 │   │   │                                      #      + governanceRouter, root-mounted (§11h)
 │   │   ├── suppliers.routes.ts                # 11 — directory + projectGoToMarketRouter (§11i)
 │   │   ├── research-catalog.routes.ts         #  3 — /open-roles, /research-categories
+│   │   ├── notifications.routes.ts            #  3 — the inbox, root-mounted (§11l.2)
+│   │   ├── platform-audit.routes.ts           #  2 — /admin/audit-trail[/verify] (§11l.2)
 │   │   ├── research-programs.routes.ts        # ⏳ DOES NOT EXIST — §10 / §11f, the last domain
 │   │                                          # NO webhooks.routes.ts — nothing signature-verified
 │   │                                          # ships; see Appendix A. NO escrow routes — this
@@ -425,12 +432,17 @@ qatoto-backend/
 │   │   ├── plat platform-role (requirePlatformCapability — a SERVICE, not middleware)
 │   │   └── 🗑️  escrow · escrow-releases · escrow-settlement · escrow-provider-adapter —
 │   │            retired, imported only by each other and two unbound jobs. Do not re-bind
-│   ├── middleware/                            # 14 files. require-auth · require-identified-user ·
+│   ├── middleware/                            # 16 files. require-auth · require-identified-user ·
+│   │                                          # idempotency (§11l.2) · request-log (§11l.2) ·
 │   │                                          # attach-optional-user · rate-limit (30 limiters) ·
 │   │                                          # request-id · json-body · error-handler ·
 │   │                                          # not-found · four upload-*.ts (images only —
 │   │                                          # workshop files are links) · validate.ts (unused)
-│   ├── lib/                                   # 30 files. money · canonical-hash · slice-math ·
+│   ├── test-support/                          # NOT built into dist/. stubServerEnvironment ·
+│   │                                          # databaseModuleMock · signInAs/signOut ·
+│   │                                          # buildTestApp — the route-test tier (§11l.2)
+│   ├── lib/                                   # 33 files. money · canonical-hash · slice-math ·
+│   │                                          # logger · instant-cursor (§11l.2) ·
 │   │                                          # compensation-period · payment-instrument · jobs ·
 │   │                                          # youtube · gemini · lexorank · external-link ·
 │   │                                          # daily-log-streak · daily-log-cursor · geo ·
@@ -438,12 +450,13 @@ qatoto-backend/
 │   │                                          # market-insight-stat · receipt-forensics ·
 │   │                                          # text-similarity · verdict · as-of · ordering ·
 │   │                                          # token-encryption · github-integration · auth · …
-│   ├── jobs/                                  # 15 files over 27 queues, 9 crons (§4e)
-│   ├── docs/openapi.ts                        # 929 hand-written lines covering 27 paths,
-│   │                                          # none of them R&D (§11l.2 item 8)
+│   ├── jobs/                                  # 16 files over 28 queues, 9 crons (§4e)
+│   ├── docs/openapi.ts                        # hand-written for auth/users/handles/discovery;
+│   │   openapi-rnd.ts                         # the R&D half, DERIVED from the routers (§11l.2)
+│   │   route-inventory.ts                     # …and the router walk it derives from
 │   └── app.ts                                 # 13 R&D mounts. No raw-body mount: no webhooks
-├── drizzle/                                   # 24 migrations, 0000–0023
-└── scripts/                                   # 10 db:smoke-* · 6 db:verify-* · 11 operational
+├── drizzle/                                   # 27 migrations, 0000–0026
+└── scripts/                                   # 10 db:smoke-* · 7 db:verify-* · 12 operational
 ```
 
 `req.user` is attached by `requireAuth` (`src/middleware/require-auth.ts`) and typed via the ambient
@@ -767,21 +780,22 @@ new infrastructure to operate. Registry: `JOB_NAMES` (`src/lib/jobs.ts:36`), `SC
 whose handler fans out one message per eligible project, so the cron does no work and holds no
 transaction — which is also why the cron count (9) is lower than the queue count (27).
 
-| Queue                                                                              | Cadence (UTC)         | Purpose                                                                                |
-| ---------------------------------------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------- |
-| `geocode-and-cluster-submission`                                                   | on submit             | Geocode, then attach a submission to a cluster (§6)                                    |
-| `recompute-opportunity-scores`                                                     | `15 2 * * *` via tick | Civic Pulse ranking (§6)                                                               |
-| `recompute-demand-signals`                                                         | `45 2 * * *` via tick | Knowledge-hub leaderboard (§6)                                                         |
-| `refresh-talent-projections`                                                       | `5 * * * *` via tick  | Talent directory denormalization (§6), hourly                                          |
-| `recompute-investor-confidence`                                                    | `5 4 * * *` via tick  | Deal-flow signal (§7)                                                                  |
-| `analyze-daily-log`                                                                | on submit             | One Gemini call → transcript + chips + claims (§8)                                     |
-| `recompute-daily-log-streaks`                                                      | `25 3 * * *` via tick | Decay the streak counter on `project_stats` (§8)                                       |
-| `ground-artifacts` → `analyze-substance` → `analyze-temporal` → `finalize-verdict` | on submit, chained    | The §9 4-step pipeline — **four queues, not one**, so a stage that fails retries alone |
-| `recompute-equity-snapshot`                                                        | `45 3 * * *` via tick | The equity ledger, also enqueued on window lock (§9)                                   |
-| `sweep-dispute-windows`                                                            | `* * * * *` via tick  | Lock expired 24h windows (§9)                                                          |
-| `close-compensation-period`                                                        | `10 0 * * *` via tick | Open a period covering today, project's zone (§7A)                                     |
-| `recompute-compensation-draft`                                                     | `15 4 * * *` via tick | Redraw every open period's lines, idempotently (§7A)                                   |
-| `recompute-program-stats`                                                          | ⏳ not built          | Project Immortal stats (§10)                                                           |
+| Queue                                                                              | Cadence (UTC)         | Purpose                                                                                   |
+| ---------------------------------------------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------- |
+| `geocode-and-cluster-submission`                                                   | on submit             | Geocode, then attach a submission to a cluster (§6)                                       |
+| `recompute-opportunity-scores`                                                     | `15 2 * * *` via tick | Civic Pulse ranking (§6)                                                                  |
+| `recompute-demand-signals`                                                         | `45 2 * * *` via tick | Knowledge-hub leaderboard (§6)                                                            |
+| `refresh-talent-projections`                                                       | `5 * * * *` via tick  | Talent directory denormalization (§6), hourly                                             |
+| `recompute-investor-confidence`                                                    | `5 4 * * *` via tick  | Deal-flow signal (§7)                                                                     |
+| `analyze-daily-log`                                                                | on submit             | One Gemini call → transcript + chips + claims (§8)                                        |
+| `recompute-daily-log-streaks`                                                      | `25 3 * * *` via tick | Decay the streak counter on `project_stats` (§8)                                          |
+| `ground-artifacts` → `analyze-substance` → `analyze-temporal` → `finalize-verdict` | on submit, chained    | The §9 4-step pipeline — **four queues, not one**, so a stage that fails retries alone    |
+| `recompute-equity-snapshot`                                                        | `45 3 * * *` via tick | The equity ledger, also enqueued on window lock (§9)                                      |
+| `sweep-dispute-windows`                                                            | `* * * * *` via tick  | Lock expired 24h windows (§9)                                                             |
+| `close-compensation-period`                                                        | `10 0 * * *` via tick | Open a period covering today, project's zone (§7A)                                        |
+| `recompute-compensation-draft`                                                     | `15 4 * * *` via tick | Redraw every open period's lines, idempotently (§7A)                                      |
+| `deliver-notification`                                                             | on write              | The email copy of a notification; the row is written in the caller's transaction (§11l.2) |
+| `recompute-program-stats`                                                          | ⏳ not built          | Project Immortal stats (§10)                                                              |
 
 `reconcile-escrow-ledger`, its tick and `submit-provider-transfer` are **unbound**, along with the
 surface they served. Nothing in this domain has a provider balance to disagree with any more, and
@@ -804,12 +818,16 @@ exponential backoff (`retryLimit: 5`, `retryDelay: 30`, `retryBackoff: true`, ca
 dead-letter queue, and the `(data, asOf)` purity rule from §4c. A job that cannot be safely re-run
 is a bug.
 
-> **Two operational holes, both real and both cheap** ([§11l.2](#11l-gaps-found-after-the-frontend-caught-up)).
-> **Nothing subscribes to a dead-letter queue.** `jobs-install.ts` creates `<name>-dead` for all 27,
-> a failed job's payload is recorded in `job_failure`, and no route, job or script reads either — a
-> claim that dead-letters is a member's equity that silently never lands. And `src/worker.ts:338`
-> instructs the operator to run **`pnpm jobs:inspect-failures`**, which is not in `package.json` and
-> has no script behind it. The doc-to-code drift this file worries about runs in that direction too.
+> **✅ BOTH OPERATIONAL HOLES ARE CLOSED** ([§11l.2](#11l-gaps-found-after-the-frontend-caught-up)
+> item 10). `pnpm jobs:inspect-failures` now exists — the command `src/worker.ts:338` had been
+> advertising to operators since §9 shipped, with no script behind it. It lists unresolved
+> `job_failure` rows and per-queue dead-letter depths, and replays one by re-enqueuing its stored
+> payload (`--replay=<id>`), which is safe precisely because every handler is idempotent by
+> contract.
+>
+> **There is still no always-on dead-letter WORKER, and there must not be one:**
+> `worker.ts:328-338` records the incident where per-DLQ subscriptions exhausted a 20-connection
+> server. Draining is an operator action, deliberately.
 
 ### 4f. Append-only and cascade policy
 
@@ -2658,10 +2676,17 @@ app.use("/", fundingRouter); // :208 ✅ shipped — §7
 // Root-mounted because a provider's redirect URI is fixed at app-registration time and
 // cannot carry a project slug; the project and member come out of the signed state (§9.10).
 app.use("/", integrationCallbackRouter); // :212 ✅ shipped — GET /integrations/:provider/callback
-app.use("/", docsRouter); // :213 — /openapi.json, /docs, /redoc. NOT R&D, and it
-// documents 27 paths of which ZERO are R&D (§11l.2)
-// Then notFoundHandler (:216) and errorHandler (:217). `GET /health` is on indexRouter
-// (:124, src/routes/index.ts:25) and answers uptime only — see §11l.2 item 5.
+// §11l.2's two additions, both root-mounted. An inbox belongs to a person rather than to a
+// project — the applicationInboxRouter argument — and the moderation log spans taxonomy, the
+// supplier directory, content review and role grants, so filing it under /discovery/admin
+// would imply the other three were not covered.
+app.use("/", notificationsRouter); // ✅ shipped — §11l.2, GET/POST /notifications*
+app.use("/", platformAuditRouter); // ✅ shipped — §11l.2, GET /admin/audit-trail[/verify]
+app.use("/", docsRouter); // /openapi.json, /docs, /redoc — now gated by DOCS_ENABLED, and
+// the R&D half of the spec is DERIVED from these same routers (§11l.2 item 8).
+// Then notFoundHandler and errorHandler. `GET /health` is LIVENESS and stays dependency-free;
+// `GET /ready` pings Postgres and the pg-boss schema and answers 503 with a per-check
+// breakdown (§11l.2 item 5). Both live on indexRouter.
 
 // NOT YET IN src/app.ts — no router to mount:
 // app.use("/research-programs", researchProgramsRouter); // ⏳ pending — §10
@@ -3480,194 +3505,155 @@ refusals, and a cited insight refuses deletion with `409` rather than a 500.
 
 ### 11l. Gaps found after the frontend caught up
 
-**⏳ Not built — none of it.** This is the third inverse subsection, and it exists because the first
-two ran out of road. §11j asked _"what endpoint is missing?"_ and closed 40 verbs. §11k asked
-_"which of those has a read as well as a write?"_ and closed two. Both questions were asked from
-inside this repo. **§11l is the first one asked from outside it:** the frontend wired all seventeen
-non-mock pages against `src/routes/`, and what it could not build is
-[Appendix D](#appendix-d--what-the-frontend-needs-and-this-backend-does-not-have) — twelve entries
-written by the caller rather than the callee.
+**✅ Shipped, with three items deliberately left and one that was never a gap.** This was the
+third inverse subsection, and the first compiled from OUTSIDE this repo: §11j asked "what
+verb is missing?" and §11k asked "which of those has a read as well as a write?", both from
+`src/routes/`. §11l asked what the frontend could not build against the shipped API, and the
+answer came from [Appendix D](#appendix-d--what-the-frontend-needs-and-this-backend-does-not-have)
+— written by the caller rather than the callee.
 
-Half of what follows is therefore Appendix D, promoted from a report into a work list. The other
-half is what neither §11j nor §11k could see, because both compiled from `src/routes/` and every
-item in it is a thing that is missing from **no route in particular**: there is no notification
-anywhere, no admin audit anywhere, no route test anywhere. A gap list built by walking routes cannot
-find an absence that spans all of them.
+**⚠️ ONE ROW WAS WRONG WHEN WRITTEN, and correcting it is the most useful thing in this
+subsection.** §11l.1 and Appendix D7 said a cluster cannot show the projects it produced. It
+can, and it could before either was written: `ProblemClusterDetailView.linkedProjects`
+(`problem-clusters.service.ts:547`), joined at `:577-596` and filtered to
+`researchProject.status = 'active'` so a draft is never leaked. It shipped in commit
+`03aef53`, the SAME COMMIT as the write half — D7 was drafted before that landed and reached
+this document unverified, through the same copy-without-checking that the header's drift note
+describes. What was actually left is smaller and no screen needs it: `linkedProjectCount` on
+the LIST row, and a standalone `GET …/problem-clusters/:clusterId/projects`.
 
-Compiled by reading `src/middleware/`, `src/lib/`, `src/jobs/`, `src/docs/openapi.ts`, every
-`*.test.ts`, and Appendix D — **not** by reading §11.
+**The lesson is the one §11j.1 already recorded, pointed at a gap list rather than a table:**
+a gap that was real when written may have closed since, and a list compiled from another
+repo's notes has to be re-checked against `src/` before anything is built from it.
 
-**Nothing in [§11j.6](#11j6-deliberately-absent--do-not-fix-these) changes.** Every verb absent on
-purpose is still absent on purpose; check there first, exactly as §11j asks. Two items below
-(§11l.1's chip row and override row) are **questions**, not defects, and are marked as such — the
-right outcome for either may be a paragraph in this document rather than an endpoint.
+**Ground truth after this tranche, derived not remembered:** **207 R&D verb routes** (up from
+197), 102 tables, 105 enums, 27 migrations, 28 job queues, 55 test files.
 
 #### 11l.1 Reads the frontend had to work around
 
-Each row shipped a degraded surface rather than blocking, which is why none of them appeared as a
-bug. A degradation nobody wrote down becomes a bug report later, so each names what the screen does
-today.
+**✅ Shipped.** Four of them; the fifth was already built (above).
 
-| Gap                                                   | What exists                                                                                                                 | What the frontend does instead                                                                      | The ask                                                                                                                                                                                                                                                                                                                     |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **No market-insight detail** (D6)                     | `GET /discovery/market-insights` (list) + the `/discovery/admin/*` subtree                                                  | §11k.2's demand-evidence chips render **non-linking** — a citation you cannot open                  | `GET /discovery/market-insights/:insightId`, public, `publishedAt IS NOT NULL`, same row shape as the list. **Highest value per line of code in this table** — it is what makes a cited insight checkable, which is the whole argument for citing one                                                                       |
-| **No allocation-proposal detail** (D4)                | `GET …/allocation-proposals` (list only)                                                                                    | The dispute tab renders proposals and disputes as two lists and matches them by eye                 | `GET …/allocation-proposals/:proposalId`. The service already returns `AllocationProposalView`; this is a `findFirst`                                                                                                                                                                                                       |
-| **No roster-wide fair-market-rate read** (D2)         | `GET …/members/:memberUserId/fair-market-rate` — one member's full effective-dated history                                  | The rate panel was not built as a roster table; locked rates come from `GET …/compensation` instead | `GET …/:projectSlug/fair-market-rates` — latest row per member, member-scoped. `findEffectiveRate` already exists                                                                                                                                                                                                           |
-| **A cluster cannot show what it produced** (D7)       | `problem_cluster_project_link` is writable (§11j.4) and read by two jobs                                                    | `/problem-map/cluster/[clusterId]` renders the cluster and links back to the map, saying nothing    | `linkedProjects: { slug, name, source }[]` on `ProblemClusterView`. The project→cluster direction shipped in §11k.1, so the asymmetry is visible to anyone who follows the link                                                                                                                                             |
-| **Daily-log chips are detail-only** (D8) — a QUESTION | `?chipKind=` filters in SQL; no feed row carries chips                                                                      | `/build-log` dropped the AI half of its legend rather than teach a vocabulary the page cannot show  | Decide whether the feed row should JOIN chips for display. §11h declined a denormalized column for **filtering** and that reasoning stands; this is the other question and has a different answer                                                                                                                           |
-| **The integration catalogue is circular** (D5)        | `GET …/integrations` returns existing GRANTS only; authorize-url demands `requestedResourceIds[]`                           | Renders all five enum values, marks the granted ones, sends `requestedResourceIds: []`              | Either `GET …/integrations/available` (provider, `isConfigured`, resource vocabulary once a token exists) or an explicit §9.10 ruling that first authorization is broad-scope and narrowing is a second, post-callback step. **The second is cheaper and may be right; it is currently neither documented nor implemented** |
-| **No override queue** (D3) — a QUESTION               | `PATCH …/effort-claims/:claimId/steps/:stepId/override` — the write, with `overriddenStatus` + `overrideReason` on the step | Uses `GET …/effort-claims?status=flagged_for_review` as the queue, which is a good approximation    | **Rule on it.** If a flagged claim IS the AI Act Art. 14 oversight queue, this closes as one paragraph. If a regulator would expect a distinct record of _"a human was asked to look at this and has not yet answered"_, a filter over claims cannot express that and it needs an entity                                    |
+| Endpoint                                              | What it closes                                                                                                                                                                                                                      |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /discovery/market-insights/:insightId`           | §11k.2's demand-evidence chips rendered as NON-LINKING text — a citation nobody could open. Public and published-only, so an unpublished draft and a missing insight are the same `404` (Appendix D6)                               |
+| `GET …/:projectSlug/allocation-proposals/:proposalId` | The dispute tab matched proposals to disputes BY EYE, and a proposal that had fallen off the page could not be matched at all. Same three-way join as the list, so a detail and a row cannot look like two different proposals (D4) |
+| `GET …/:projectSlug/fair-market-rates`                | "What is an hour worth here" cost one request per teammate. One query, bucketed per member, `currentRate: null` for a member never priced — never zero, which is a different fact (D2)                                              |
+| `GET …/:projectSlug/override-queue`                   | ⚖️ **A ruling, built.** See below                                                                                                                                                                                                   |
+| `GET …/:projectSlug/integrations/available`           | ⚖️ **A ruling, built.** See below                                                                                                                                                                                                   |
 
-Also settled by the same pass and needing **no work**, recorded so they are not re-opened: D9
-(`/governance` has no sample statement **by design** — a real line names a person on a page that
-renders signed out), D11 (`locationText` is the whole geography contract; the client never sends
-coordinates, and `clusterId` is `null` on the `202`), and D12's confirmation that every §11j.6
-absence held up against a real caller.
+**The two rulings §11l left open are now settled, and both are settled BY the endpoint rather
+than in prose.**
+
+**1. The flagged-claims filter is not the oversight queue; the predicate is — and it needed a
+read, not an entity.** §11l asked whether EU AI Act Art. 14 requires a distinct record of "a
+human was asked to look at this and has not answered". It does not, because that record
+already exists: a step is awaiting a human exactly when
+
+```sql
+verification_step.status = 'flagged' AND overridden_status IS NULL
+```
+
+and that is an append-only fact with a timestamp, an author (the model, named in `modelName`
+and `promptVersion`) and a finding. A `VerificationOverrideRequest` table would duplicate all
+four and add the one failure a queue must not have — a row saying review is pending on a step
+that was answered. **What the flagged-claims filter genuinely could not express is that the
+queue is per STEP:** a claim with four steps can have one answered and one waiting, and the
+reviewer needs the one still waiting. `GET …/override-queue` is that predicate, oldest first,
+because the oldest unanswered flag is the member who has been waiting longest on equity that
+is not being minted.
+
+**2. The first integration authorization is broad-scope; narrowing is a second, post-callback
+step.** §9.10 left this implicit and the consent screen inherited a circularity:
+`GET …/integrations` returns existing GRANTS only, so a member who has never connected GitHub
+learns nothing about GitHub — not even whether this deployment has it configured — while
+`authorize-url` demands `requestedResourceIds[]`, which are the provider's own repos and
+cannot be enumerated before the OAuth round trip that grants access to enumerate them. There
+is no other orderable sequence. It is lawful-basis-compatible because the consent that matters
+is the provider's own screen, which names the scopes and is the member's to refuse.
+`GET …/integrations/available` supplies the half that was missing — every provider,
+`isConfigured`, and the caller's own grant — so `requestedResourceIds: []` is the CORRECT
+first call rather than a client shortcut.
+
+**Still open, and each is a decision rather than a build:** whether the daily-log feed row
+should JOIN its AI summary chips for DISPLAY (D8 — §11h's refusal to denormalize was about
+FILTERING, which an index serves, and this is the other question), and whether a cluster's
+list row should carry `linkedProjectCount`.
 
 #### 11l.2 Cross-cutting essentials — the absences that span every route
 
-**1. There is no notification system.** Not "it is thin" — `rg notification src/services
-src/controllers src/jobs src/db/schema.ts` returns **nothing**, and there is no table.
-`src/lib/email.ts` is one function with two call sites, both auth OTP, called on the request path
-with no queue and no retry: a transient provider 5xx loses the message silently.
+**✅ Nine of eleven shipped.** These were the items no route-walk could find, because each is
+missing from no route in particular.
 
-Two comments in this repo already assume the system exists. `rate-limit.ts:171` justifies the invite
-limiter because an invite _"lands in someone else's notifications"_, and `:378` calls chat _"the one
-§8 surface that notifies other people"_. Neither is true. What currently happens silently:
+| #   | Item               | State                                                                                                                               |
+| --- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Notifications**  | ✅ `notification` + `deliver-notification`, migration 0024, 18 kinds, 16 fan-out sites                                              |
+| 2   | **Platform audit** | ✅ `platform_audit_entry` + singleton head, migration 0025, 21 event kinds, append-only triggers, `GET /admin/audit-trail[/verify]` |
+| 3   | **Idempotency**    | ✅ `Idempotency-Key`, migration 0026, honoured on 16 money and equity writes                                                        |
+| 4   | **Keyset ledgers** | 🟡 Partly. Slice ledger and audit trail take `fromSequence`; claims and allocation proposals still page by offset — see below       |
+| 5   | **`/ready`**       | ✅ Database + pg-boss schema, `503` with a per-check breakdown. `/health` stays dependency-free                                     |
+| 6   | **Observability**  | ✅ `src/lib/logger.ts`, `req.requestId` in every line and every error body, the 5xx message scrubbed                                |
+| 7   | **Rate limiting**  | 🟡 The `""` anonymous bucket is fixed; the store is still per-process — see below                                                   |
+| 8   | **OpenAPI**        | ✅ The R&D surface is DERIVED from the routers; `/docs` gated by `DOCS_ENABLED`                                                     |
+| 9   | **Route tests**    | ✅ `src/test-support/` + five route-level suites, including the byte-identical-refusal assertion                                    |
+| 10  | **Dead letters**   | ✅ `pnpm jobs:inspect-failures`, the command `worker.ts:338` had been advertising                                                   |
+| 11  | **Signed bearer**  | ✅ `BEARER_REQUIRE_SIGNATURE`, default false. The DECISION is still owed                                                            |
 
-| Event                                                            | Who never learns                                                                            |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `project_invite` created                                         | the invitee — they must think to open `/invites/mine`                                       |
-| Application accepted / declined                                  | the applicant                                                                               |
-| Compensation agreement proposed / accepted / declined            | the counterparty, on the row that sets what they are paid                                   |
-| **Compensation period finalized / countersigned**                | every member, about **the statement of what they are owed** — the product's headline output |
-| Payment recorded, and payment confirmed                          | the member who must confirm it, and the founder waiting on that confirmation                |
-| Dispute raised / voted / resolved                                | the member whose slices a dispute just froze (§9.8)                                         |
-| Effort-claim verdict, including `flagged_for_review`             | the member whose equity it withholds                                                        |
-| Moderation decision — category, cluster merge, content rejection | the submitter. `contentReviewAction.reason` is stored "for the creator" and never delivered |
+**The three notifications that matter most**, out of eighteen kinds:
+`compensation_period_finalized` fans out to every member with a line — the product's headline
+output, previously delivered by hoping somebody refreshed; `dispute_raised` reaches the member
+whose slices just froze into `escrowedSlices`, who was told nothing; and
+`effort_claim_verdict_reached` is sent for EVERY terminal verdict rather than only the bad
+ones, because `verified` is the one that opens the 24-hour dispute window (§9.8) and a
+contestability right nobody is told about is decorative.
 
-**This is the same argument §11j.2 already accepted, one step earlier.** `GET /invites/mine` was
-built because an invite nobody can find is an invite nobody can accept. An invite nobody is **told
-about** is in the same position, and the fix is not another read. The shape that fits this
-codebase: a `notification` table plus one pg-boss queue per fan-out, written in the same transaction
-as the domain event (the §4f discipline the audit chain already uses), delivered in-app first and by
-email second — email is the part that can fail.
+**A notification is written in the SAME TRANSACTION as the fact it announces**, and carries
+KEYS AND IDS, never prose or amounts — the §11h `disclosureKeys` rule. Delivery is a separate
+job because it talks to Brevo, and a third-party HTTP call inside the transaction that
+finalizes a statement is not a trade worth making. A missing `BREVO_API_KEY` records
+`skipped_unconfigured`, not `failed`.
 
-**2. There is no platform-level audit.** `requirePlatformCapability` correctly gates 25 call sites,
-and **not one of them records that a decision was made**: `rg appendAuditEntry` over
-`discovery-moderation`, `discovery-vocabulary`, `suppliers`, `problem-clusters` and `content-review`
-returns nothing. So a moderator can approve a category, **merge two clusters — which the code itself
-calls irreversible** — rewrite the supplier directory, or unpublish a cited market insight, and
-leave no trail anywhere.
+**The platform chain differs from §9's in exactly two ways**, both following from there being
+no project: `actorUserId` is NOT NULL and unpseudonymized (a platform action is authority over
+other people's data, and the accountable answer to "who decided this" is a name), and the head
+is a singleton. `pnpm db:grant-platform-role` appends too — "who made this person a moderator"
+had no answer in the database — and records the SUBJECT as actor, because the script runs from
+a shell with no session and a `--granted-by=` flag would look like an answer while being an
+unverified string.
 
-§4f's append-only doctrine is real and is **project-scoped**: `project_audit_entry` hangs off
-`project_chain_head`, and a taxonomy decision has no project. A platform action needs a sibling —
-`platform_audit_entry`, append-only, same hash discipline, `actorUserId` NOT NULL because a platform
-action always has a human behind it. **And it must cover the grant itself**: platform roles are
-granted out-of-band by `pnpm db:grant-platform-role` with no row written, so today the question
-"who made this person a moderator, and when?" has no answer in the database.
+**What is deliberately NOT closed, and why:**
 
-**3. Idempotency is asymmetric, and the client already noticed.** Four surfaces take a body key —
-daily-log submit, effort claim, physical receipt, payment record — each with its own unique index
-and a replay-first read. Every one of these does not:
+- **Claims and allocation proposals still page by OFFSET.** `listClaims` orders
+  `(claimedForDate DESC, id DESC)` and can take the same treatment as the ledger.
+  `listAllocationProposals` orders `windowClosesAt DESC, id ASC` — a row-comparison predicate
+  over MIXED directions is subtly wrong in a way worse than the drift it would fix, so it
+  needs its ordering normalized first. Half-doing it would have been the worse outcome.
+- **The rate-limit store is still per-process.** The anonymous bucket is fixed —
+  `userKey` falls back to `ipKeyGenerator` rather than collapsing every anonymous caller into
+  `""` — but two app instances still mean double every documented limit. A Postgres-backed
+  store is the shape that fits this repo's no-new-infrastructure doctrine, and it writes on
+  the hot path for every limited request, which is a decision to take deliberately rather
+  than in passing.
+- **The OpenAPI document claims no request bodies for the R&D surface.** Paths, verbs,
+  parameters and auth are exact and derived; bodies are the controllers' Zod schemas, and
+  `z.toJSONSchema` does not always survive a `.strict()` object with a cross-field
+  refinement. A spec that quietly loosens a constraint is worse than one that omits it.
+- **`BEARER_REQUIRE_SIGNATURE` defaults to `false`.** The flag exists so the change is a
+  deploy rather than a patch; the decision is still owed, and it must be `true` before the
+  first mobile release — after, flipping it logs every mobile user out.
 
-```text
-POST /funding-rounds/:roundId/pledges          ← money; a retry appends a second commitment
-POST …/compensation-periods/:periodId/finalize · /countersign · /supersede
-POST …/members/:memberUserId/compensation-agreement · …/accept
-POST …/allocation-proposals/:proposalId/dispute · …/disputes/:disputeId/votes
-POST …/members/:memberUserId/fair-market-rate · …/accept
-```
+#### 11l.3 Order — as executed
 
-The frontend mints a key per attempt for all of them (`src/lib/rnd/idempotency.ts`) and the ones
-above **ignore it**. §14 listed idempotency as frontend-side work; it is half backend-side and this
-is the half. Two shapes work: read `Idempotency-Key` once in middleware against one dedupe table, or
-add the body field where §9 already put it. The header is the better answer precisely because the
-list above will keep growing.
+1. **The reads and the two rulings** (§11l.1). No migration, immediate frontend value.
+2. **The route-level test tier**, before anything that touched fourteen services.
+3. **Notifications, then the platform audit** — usable, then defensible.
+4. **Idempotency**, then **keyset paging** on the two append-only ledgers.
+5. **Ops**: `/ready`, log correlation, the 5xx scrub, the anonymous bucket, the dead-letter
+   drain, the derived OpenAPI, the docs gate, the bearer flag.
 
-**4. The append-only ledgers page with `OFFSET`.** Twenty-three services use `.offset()`; exactly
-two reads are keyset (the `/daily-logs` feed and workshop chat). The offset ones include
-`slice-ledger`, `project-audit`, `effort-claims`, `slice-allocation`, `equity-snapshot` and
-`funding-rounds` — that is, the append-only, high-churn tables where a row inserted between two page
-fetches shifts every subsequent page. §4c rule 4 already rules this out for a cursor; it applies
-with more force to a ledger a member is reading to check their own equity. `src/lib/daily-log-cursor.ts`
-is the pattern to copy, and the audit trail's sequence number makes it nearly free.
-
-**5. `/health` is a liveness probe wearing a health probe's name.** `src/routes/index.ts:25` returns
-`uptime` and a timestamp: no database ping, no pg-boss check, no migration-version assertion, and
-there is no `/ready` at all. With 27 queues, 9 crons and a separate worker process, "the API
-answered" says nothing about whether any work is being done — a worker that died leaves every
-verification queued and `/health` green.
-
-**6. Observability is `console.error` and a request id nobody logs.** `morgan("dev")` writes
-unstructured lines; `request-id.ts` mints `X-Request-Id`, returns it to the client, and **never puts
-it on `req` or into a log line**, so a user quoting their request id gives support a string that
-appears nowhere. There is no Sentry, no OpenTelemetry, no metrics endpoint. Separately,
-`error-handler.ts:31` echoes `err.message` verbatim **including on 500s**, so a Postgres or driver
-string can reach a hostile client — a §0 problem, not an ergonomics one.
-
-**7. Rate limiting is per-process, and anonymous callers share one bucket.** Thirty limiters, all
-using the default **in-memory** store: two app instances mean every documented limit doubles, and a
-deploy resets them. Worse, the R&D key is `req.user?.id ?? ""` (`rate-limit.ts:84`), so every
-unauthenticated caller collapses into a single bucket — harmless while every limited route sits
-behind `requireAuth`, and a self-inflicted denial of service the first time one does not. There is
-also no global limiter, so every R&D **read** — feeds, ledgers, `/governance/summary`, the
-audit-chain verifier — is unbounded.
-
-**8. The OpenAPI document covers 27 paths and none of them are R&D.** `src/docs/openapi.ts` is 929
-hand-written lines describing auth, users, handles and discovery; the entire `/research-projects`
-tree, funding, compensation, proof-of-effort, suppliers and the root-mounted reads are absent. Its
-schemas are inline literals rather than derivations of the Zod schemas that actually validate, so
-the two drift silently and the drift is invisible — a documented shape that no longer matches a
-`.strict()` body is exactly the defect Appendix D10 caught on the frontend side. Either generate the
-spec from the boundary schemas or state in-band which surface it covers. `/docs`, `/redoc` and
-`/openapi.json` are also unauthenticated.
-
-**9. There is no route-level test.** 47 vitest files and 9,252 lines, and `supertest` touches the
-real app **once**: `src/app.test.ts` asserts `GET /`, `GET /health` and a 404 with `db` mocked to
-`{}`. Nothing authenticates, hits an R&D route and asserts a status. Below that, the coverage is
-inverted relative to risk — the pure `src/lib/*` math is tested thoroughly (geo, scores, money,
-slice math, canonical hash, compensation periods), while **no service that writes money, equity or
-the hash chain has a test at all**: `compensation-periods`, `compensation-payments`,
-`slice-allocation`, `slice-ledger`, `equity-snapshot`, `dispute`, `pie-bake`, `effort-claims` and
-`project-audit` have none, and no job handler has one. The `FOR UPDATE` ordering that makes the
-audit chain safe and the zero-sum invariant on the ledger are both asserted nowhere.
-
-The ten `pnpm db:smoke-*` scripts are the de-facto integration suite and they are good — but they
-need a live database and a person to run them, so they cannot fail a build. §17 already treats them
-as the verification step; what is missing is the layer under them.
-
-**10. Dead-letter queues have no subscriber and no tooling.** Covered in §4e — 27 DLQs created, none
-read, and `worker.ts:338` points at a `pnpm jobs:inspect-failures` script that does not exist. A
-dead-lettered `finalize-verdict` is a member's equity that silently never lands.
-
-**11. `bearer({ requireSignature: true })` before native clients ship.** The single TODO in `src/`
-(`src/lib/auth.ts:301`), paired with the `set-auth-token` stripping shim at `src/app.ts:72-91`. It
-belongs in §4a as a stated precondition rather than in a code comment, because §16 Phase 0 already
-lists native clients as blocked on the auth items and this is the last of them.
-
-#### 11l.3 Order
-
-Not flat, and the ordering rule is the one §11j used: **a surface that looks built and is not
-outranks a surface that is plainly absent.**
-
-1. **§11l.1's four cheap reads** — market-insight detail, allocation-proposal detail, cluster's
-   linked projects, roster-wide rates. Each is a `findFirst` or one join against a service that
-   already has the query; together they retire four degraded screens.
-2. **Notifications, then the platform audit** (§11l.2 items 1–2). These are what make the shipped
-   surface usable and the shipped moderation defensible, in that order. Notifications first because
-   the compensation statement — the product's headline output — is currently delivered by hoping
-   somebody refreshes.
-3. **Idempotency on the money/equity writes, then keyset the ledgers** (items 3–4). Both are
-   correctness under retry and concurrency; both get harder the more rows exist.
-4. **The two questions in §11l.1** — chips on the feed row, and whether the flagged-claim filter is
-   the Art. 14 queue. Each may close as a paragraph in this document. The second is the one with a
-   regulator behind it, so it should be **answered** early even if the answer is "no work".
-5. **Ops and tests** (items 5–10): `/ready` plus a DB and worker check, the request id into the log
-   line, the 500-message scrub, a shared rate-limit store before a second instance exists, a
-   dead-letter drain, and a route-level test harness to hang the rest on.
-6. **Then §10 (Project Immortal)** — unblocked (§11f), still last, and it should land **after** item
-   2, because it adds a third moderation surface to a system that records none of them.
+**§10 (Project Immortal) remains the only entirely unbuilt section, and remains unblocked**
+(§11f). It should land AFTER §11l.2 item 2, which it now does by construction: its moderation
+queue appends to the same platform chain rather than adding a third surface that records
+nothing.
 
 ---
 
@@ -4053,7 +4039,7 @@ Do **not** implement the domains in parallel — §9 defines the numbers every o
 | **5. Discovery** (§6) ✅             | Clusters, scoring jobs, insights, talent                                                                                                                                 | **Shipped**, moderation subtree included (§11j.4)                                                                                                                     |
 | **5a. Go-to-market** (§11i) ✅       | Supplier directory, seeded capability vocabulary, engagements, derived launch readiness, `product.researchProjectId`                                                     | **Shipped.** A new domain beside §5 and just as independent — deferrable, blocking nothing. Migration 0020                                                            |
 | **6. Gaps** (§11j, §11k) ✅          | 40 verbs, then the two read halves shipping the write halves left open                                                                                                   | **Shipped.** What made "complete apart from Project Immortal" checkable                                                                                               |
-| **7. §11l** ⏳                       | Four reads → notifications + platform audit → idempotency + keyset → the two rulings → ops & tests                                                                       | **Next.** The first gap list compiled from OUTSIDE this repo, and the first whose bulk is not endpoints (§11l.3 orders it)                                            |
+| **7. §11l** ✅                       | Four reads + two rulings → notifications + platform audit → idempotency + keyset → ops & tests                                                                           | **Shipped.** Migrations 0024–0026. Three items deliberately left: two OFFSET reads, the per-process rate-limit store, request bodies in the derived spec              |
 | **8. Project Immortal** (§10) ⏳     | Branches, papers, posts, moderation                                                                                                                                      | **Last, and no longer blocked** — the moderator role shipped with §11i. Land it after §11l.2 item 2 so its moderation actions have somewhere to be recorded           |
 
 **§7A shipped, and it did delete more surface than it added** — nine escrow routes, three jobs, one
@@ -4093,10 +4079,16 @@ complete apart from Project Immortal". Inside it the order was not flat:
 the part of §11j.1 that shipping the write halves did not finish: **§11k.1** — one projection
 field, one join, no migration — **then §11k.2**, a table, migration 0023, two verbs and a read.
 
-**[§11l](#11l-gaps-found-after-the-frontend-caught-up) is next**, and it is the first gap list this
-document did not write itself — the frontend compiled it by building against `src/routes/`
-(Appendix D). Its own order is §11l.3, and the rule there is the one §11j used: a surface that looks
-built and is not outranks a surface that is plainly absent.
+**[§11l](#11l-gaps-found-after-the-frontend-caught-up) has since shipped**, in the order §11l.3
+records. It was the first gap list this document did not write itself — the frontend compiled it by
+building against `src/routes/` (Appendix D) — and the first whose bulk was not endpoints at all:
+notifications, a platform audit chain and request idempotency were each missing from no route in
+particular, which is why the two earlier lists could not see them.
+
+**One of its rows was wrong, and the correction is the reusable part.** §11l.1 and Appendix D7 said
+a cluster could not show the projects it produced; it could, and had since the same commit that
+shipped the write half. The entry was inherited from another repo's notes and never re-checked
+against `src/`. **Re-derive a gap before building it**, exactly as §11k had to re-derive §11j's.
 
 **Then §10 (Project Immortal)**, still the only backend section entirely unbuilt — and no longer
 blocked on anything, since the platform `moderator` role it waited for shipped with §11i (§11f).
@@ -4869,6 +4861,13 @@ which is the point of writing them down: a degradation nobody recorded becomes a
 
 Ordered by how much they cost, not by domain.
 
+> **✅ THIS APPENDIX IS NOW CLOSED OUT, and one of its entries was wrong.** D2, D4 and D6 shipped
+> as reads; D3 and D5 shipped as the two rulings §11l.1 records; D9, D11 and D12 were confirmed as
+> settled; D1 is §10 and is still the only unbuilt domain; D10 is a frontend defect with no backend
+> action. **D7 was already built when it was written** — `ProblemClusterDetailView.linkedProjects`
+> shipped in the same commit as the write half it says is missing — and it reached this document
+> unverified. Read the entry below with that correction in front of it.
+>
 > **This appendix is now an input, not just a record.** It lived only in the frontend's copy of this
 > file for a whole revision — which is drift 2 in the header note — and reached the canonical copy
 > with the same revision that turned it into work.
@@ -4999,7 +4998,15 @@ argument for citing it.
 
 ---
 
-### D7. A cluster cannot show the projects it produced
+### D7. ⚠️ A cluster cannot show the projects it produced — WRONG WHEN WRITTEN
+
+> **It could, and it could before this entry was drafted.**
+> `ProblemClusterDetailView.linkedProjects` (`problem-clusters.service.ts:547`) is joined at
+> `:577-596` and filtered to `researchProject.status = 'active'`, so a draft project is never
+> leaked — shipped in commit `03aef53`, the same commit as the write half. What is actually left
+> is `linkedProjectCount` on the LIST row and a standalone
+> `GET …/problem-clusters/:clusterId/projects`, neither of which any screen needs. The text below
+> is kept as written because the mis-attribution is the lesson (§11l).
 
 **Needed by:** the new `/problem-map/cluster/[clusterId]` page. The inverse direction ships —
 `ResearchProjectDetailView.originCluster` names where a project came from (§11k.1) — so the asymmetry
