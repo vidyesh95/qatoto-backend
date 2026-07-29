@@ -238,6 +238,56 @@ export async function listGrants(
   return rows.map(toGrantView);
 }
 
+export interface AvailableProviderView {
+  readonly provider: IntegrationProvider;
+  /**
+   * Whether this DEPLOYMENT can connect the provider at all — credentials present AND a
+   * token-encryption key configured. `isProviderConfigured` is the single source, so a
+   * client cannot be told a provider is available and then meet `503
+   * INTEGRATION_UNCONFIGURED` when it tries.
+   */
+  readonly isConfigured: boolean;
+  /** The caller's own grant on this project, or null when they have never connected it. */
+  readonly grant: IntegrationGrantView | null;
+}
+
+/**
+ * `GET …/integrations/available` — the provider catalogue (§11l, Appendix D5).
+ *
+ * **THE RULING THIS SETTLES.** §9.10 left the first authorization's scope implicit, and the
+ * consent screen inherited a circularity: `GET …/integrations` returns existing GRANTS only,
+ * so a member who has never connected GitHub learns nothing about GitHub — not even whether
+ * this deployment has it configured — while `POST …/integrations/:provider/authorize-url`
+ * demands `requestedResourceIds[]`, which are the provider's own repos and projects and
+ * cannot be enumerated before the OAuth round trip that would grant access to enumerate
+ * them.
+ *
+ * **The first authorization is broad-scope, and narrowing is a second, post-callback step.**
+ * That is the only orderable sequence — a member cannot choose among repositories nobody can
+ * list — and it is lawful-basis-compatible because the consent that matters is the
+ * provider's own screen, which names the scopes and is the member's to refuse. What this
+ * read adds is the half that was missing: which providers exist here, which are configured,
+ * and what the member has already connected, so the screen states facts instead of guessing.
+ * `requestedResourceIds: []` is therefore the CORRECT first call, not a client shortcut.
+ *
+ * Every enum value is returned, including the four deliberately unbuilt ones — a provider
+ * absent from the list is indistinguishable from one this deployment forgot, and
+ * `isConfigured: false` is the honest answer to both.
+ */
+export async function listAvailableProviders(
+  projectId: string,
+  memberId: string,
+): Promise<readonly AvailableProviderView[]> {
+  const grants = await listGrants(projectId, memberId);
+  const grantByProvider = new Map(grants.map((grant) => [grant.provider, grant]));
+
+  return KNOWN_PROVIDERS.map((provider) => ({
+    provider,
+    isConfigured: isProviderConfigured(provider),
+    grant: grantByProvider.get(provider) ?? null,
+  }));
+}
+
 function toGrantView(grant: typeof integrationConsentGrant.$inferSelect): IntegrationGrantView {
   return {
     id: grant.id,

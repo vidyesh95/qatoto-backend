@@ -2658,8 +2658,8 @@ app.use("/", fundingRouter); // :208 ✅ shipped — §7
 // Root-mounted because a provider's redirect URI is fixed at app-registration time and
 // cannot carry a project slug; the project and member come out of the signed state (§9.10).
 app.use("/", integrationCallbackRouter); // :212 ✅ shipped — GET /integrations/:provider/callback
-app.use("/", docsRouter);                // :213 — /openapi.json, /docs, /redoc. NOT R&D, and it
-                                         // documents 27 paths of which ZERO are R&D (§11l.2)
+app.use("/", docsRouter); // :213 — /openapi.json, /docs, /redoc. NOT R&D, and it
+// documents 27 paths of which ZERO are R&D (§11l.2)
 // Then notFoundHandler (:216) and errorHandler (:217). `GET /health` is on indexRouter
 // (:124, src/routes/index.ts:25) and answers uptime only — see §11l.2 item 5.
 

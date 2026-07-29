@@ -456,6 +456,73 @@ export async function listFairMarketRateHistory(
   return { success: true, value: rows.map((rate) => toRateView(rate, member)) };
 }
 
+export interface ProjectFairMarketRateRow {
+  readonly memberUserId: string;
+  readonly memberName: string;
+  /**
+   * The member's CURRENT rate row, newest `effectiveFrom` first — or `null` for a member
+   * who has never been proposed one.
+   *
+   * `null` is the honest answer and must render as "no rate set", never as zero: a member
+   * priced at zero and a member not yet priced are different facts, and §9 refuses to log a
+   * claim against the second (`409 RATE_NOT_LOCKED`).
+   */
+  readonly currentRate: FairMarketRateView | null;
+}
+
+/**
+ * `GET …/:projectSlug/fair-market-rates` — the roster's rates in one request.
+ *
+ * The per-member history read answers "what has this person been worth"; a slice-ledger
+ * reader asks the different question "what is an hour worth here", and answering it by
+ * calling the per-member route once per member is one round trip per teammate on a page that
+ * already issues twelve (Appendix D2).
+ *
+ * **Active members only**, unlike `listFairMarketRateHistory`: this is a roster panel, and a
+ * departed member has no current rate to state. Their history stays readable by id, because
+ * the slices it priced are still in the ledger.
+ *
+ * The `status` travels with the row so the panel can distinguish a locked rate from a
+ * proposal nobody has accepted — collapsing the two would show a number that prices nothing.
+ */
+export async function listProjectFairMarketRates(
+  projectId: string,
+): Promise<readonly ProjectFairMarketRateRow[]> {
+  const [members, rates] = await Promise.all([
+    db
+      .select({ memberId: projectMember.id, userId: projectMember.userId, name: user.name })
+      .from(projectMember)
+      .innerJoin(user, eq(user.id, projectMember.userId))
+      .where(and(eq(projectMember.projectId, projectId), eq(projectMember.status, "active")))
+      // Ends in a unique column so the roster order is stable between reads (§4c rule 4).
+      .orderBy(asc(projectMember.joinedAt), asc(projectMember.id)),
+    // ONE query for every rate in the project, newest first, bucketed below — the shape
+    // `compensation.service.ts` already uses for the same reason: a per-member query here is
+    // an N+1 over the roster.
+    db
+      .select()
+      .from(memberFairMarketRate)
+      .where(eq(memberFairMarketRate.projectId, projectId))
+      .orderBy(desc(memberFairMarketRate.effectiveFrom), desc(memberFairMarketRate.id)),
+  ]);
+
+  const newestRateByMemberId = new Map<string, RateRow>();
+  for (const rate of rates) {
+    // The query is already newest-first, so the FIRST row seen for a member is the current
+    // one and later rows are its history.
+    if (!newestRateByMemberId.has(rate.memberId)) newestRateByMemberId.set(rate.memberId, rate);
+  }
+
+  return members.map((member) => {
+    const rate = newestRateByMemberId.get(member.memberId);
+    return {
+      memberUserId: member.userId,
+      memberName: member.name,
+      currentRate: rate ? toRateView(rate, member) : null,
+    };
+  });
+}
+
 export interface EffectiveRate {
   readonly rateId: string;
   readonly fairMarketRateCentsPerHour: bigint;

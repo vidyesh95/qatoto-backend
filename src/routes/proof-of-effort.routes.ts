@@ -88,6 +88,17 @@ router.post(
   proofOfEffortController.lockFairMarketRate,
 );
 
+/**
+ * GET …/fair-market-rates — the ROSTER read (Appendix D2). Plural, and a different path
+ * from both `/fair-market-rate/lock` and the `/members/:memberUserId/...` family, so its
+ * placement is prominence rather than precedence.
+ */
+router.get(
+  "/:projectSlug/fair-market-rates",
+  requireAuth,
+  proofOfEffortController.listProjectFairMarketRates,
+);
+
 router.get(
   "/:projectSlug/members/:memberUserId/fair-market-rate",
   requireAuth,
@@ -144,6 +155,15 @@ router.post(
   proofOfEffortController.reverifyEffortClaim,
 );
 
+/**
+ * GET …/override-queue — the steps awaiting a human (§11l, Appendix D3).
+ *
+ * A LITERAL under `/:projectSlug`, and one segment deep, so it collides with nothing. It is
+ * declared beside the override write it serves rather than with the claim reads, because the
+ * two are one control: this says what is waiting, that answers it.
+ */
+router.get("/:projectSlug/override-queue", requireAuth, proofOfEffortController.listOverrideQueue);
+
 /** The only hand-edit in the domain — and it edits an AI judgement, not a number. */
 router.patch(
   "/:projectSlug/effort-claims/:claimId/steps/:stepId/override",
@@ -166,6 +186,15 @@ router.get(
   "/:projectSlug/allocation-proposals",
   requireAuth,
   proofOfEffortController.listAllocationProposals,
+);
+
+// The detail behind the list (Appendix D4). Same rule as `/disputes/:disputeId` below: a
+// literal under `/allocation-proposals` added later MUST be declared above this line, or it
+// resolves as a proposal whose id is that literal.
+router.get(
+  "/:projectSlug/allocation-proposals/:proposalId",
+  requireAuth,
+  proofOfEffortController.getAllocationProposal,
 );
 
 // The dispute READS (§11j.2). No collision with the write subtree below: `/votes`,
@@ -272,6 +301,19 @@ router.post(
 // --- Integration consent. A (project, member, provider) triple; revoke is SELF-ONLY.
 
 router.get("/:projectSlug/integrations", requireAuth, proofOfEffortController.listIntegrations);
+
+/**
+ * GET …/integrations/available — the provider catalogue (§11l, Appendix D5).
+ *
+ * `available` is a LITERAL sitting where `:provider` sits on the DELETE below. There is no
+ * `GET …/integrations/:provider` today and this must stay above one if it is ever added, or
+ * the catalogue resolves as "the provider named available".
+ */
+router.get(
+  "/:projectSlug/integrations/available",
+  requireAuth,
+  proofOfEffortController.listAvailableIntegrations,
+);
 
 router.post(
   "/:projectSlug/integrations/:provider/authorize-url",

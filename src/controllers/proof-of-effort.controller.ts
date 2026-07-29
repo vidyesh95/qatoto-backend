@@ -171,6 +171,15 @@ export const DisputeListQuerySchema = z
   .strict();
 
 /** `GET …/effort-claims` (§11j.2). The six values are `effortVerificationStatusEnum`. */
+/**
+ * No `page`, deliberately. A review queue is worked from the front; a page-2 control on it
+ * invites a reviewer to browse a backlog rather than clear it, and every row here is equity
+ * that is not being minted while it waits.
+ */
+export const OverrideQueueQuerySchema = z
+  .object({ limit: z.coerce.number().int().min(1).max(200).default(50) })
+  .strict();
+
 export const EffortClaimListQuerySchema = z
   .object({
     status: z
@@ -330,6 +339,61 @@ export async function listAllocationProposals(req: Request, res: Response): Prom
 }
 
 /**
+ * `GET …/override-queue` — the steps a human has been asked to look at and has not answered.
+ *
+ * The oversight surface the EU AI Act Art. 14 control needs to be REACHABLE (§9.8, §11l).
+ * `?status=flagged_for_review` on the claims list approximates it and cannot express the
+ * distinction that matters: a claim can have one step already answered and another still
+ * waiting, and the reviewer needs the step.
+ *
+ * Member-scoped like every other §9 read — the whole team can see what is waiting on a
+ * human, which is the same transparency posture the slice ledger and the claims list take.
+ */
+export async function listOverrideQueue(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const parsedQuery = OverrideQueueQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  respondOk(
+    res,
+    "Override queue loaded.",
+    await claimsService.listOverrideQueue(caller.context.projectId, {
+      limit: parsedQuery.data.limit,
+    }),
+  );
+}
+
+/**
+ * `GET …/allocation-proposals/:proposalId` — one proposal, member only.
+ *
+ * A dispute names its proposal by id and nothing more, so without this the dispute tab can
+ * only match the two by eye (Appendix D4). Absent and belonging-to-another-project are the
+ * same `404`: the service scopes the lookup by project, so this read cannot be used to learn
+ * that a proposal exists somewhere else.
+ */
+export async function getAllocationProposal(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  const proposalId = firstParam(req.params.proposalId ?? "");
+  const proposal = await allocationService.findAllocationProposalView(
+    caller.context.projectId,
+    proposalId,
+  );
+
+  if (!proposal) {
+    respondProofOfEffortError(res, { type: "PROPOSAL_NOT_FOUND", proposalId });
+    return;
+  }
+  respondOk(res, "Allocation proposal loaded.", proposal);
+}
+
+/**
  * GET /research-projects/:projectSlug/disputes — member only (§11j.2).
  *
  * The read half of a domain that shipped raise, vote, withdraw and resolve without one.
@@ -477,6 +541,24 @@ export async function listFairMarketRateHistory(req: Request, res: Response): Pr
     return;
   }
   respondOk(res, "Rate history loaded.", history.value);
+}
+
+/**
+ * `GET …/:projectSlug/fair-market-rates` — every active member's current rate, one request.
+ *
+ * The roster panel the slice ledger wanted (Appendix D2). Member-scoped like the per-member
+ * history beside it: §11e's transparency promise is that every member sees every rate, so
+ * this exposes no more than one call per teammate already would.
+ */
+export async function listProjectFairMarketRates(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  respondOk(
+    res,
+    "Fair market rates loaded.",
+    await rateService.listProjectFairMarketRates(caller.context.projectId),
+  );
 }
 
 /**
@@ -1035,6 +1117,28 @@ export async function listIntegrations(req: Request, res: Response): Promise<voi
     res,
     "Integrations loaded.",
     await integrationService.listGrants(caller.context.projectId, caller.context.memberId),
+  );
+}
+
+/**
+ * `GET …/integrations/available` — the provider catalogue behind the consent screen.
+ *
+ * Closes the circularity §11l records: the grants read alone cannot tell a member whether a
+ * provider they have never connected is even configured here, and the authorize-url call
+ * cannot be made without knowing that. Same membership gate as the grants read — the
+ * response carries the caller's own grants and nobody else's.
+ */
+export async function listAvailableIntegrations(req: Request, res: Response): Promise<void> {
+  const caller = await requireRoleOrRespond(req, res, "contributor");
+  if (!caller) return;
+
+  respondOk(
+    res,
+    "Available integrations loaded.",
+    await integrationService.listAvailableProviders(
+      caller.context.projectId,
+      caller.context.memberId,
+    ),
   );
 }
 

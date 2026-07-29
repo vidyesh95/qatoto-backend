@@ -364,6 +364,29 @@ export interface AllocationProposalView {
 const DEFAULT_PROPOSAL_PAGE_SIZE = 25;
 const MAXIMUM_PROPOSAL_PAGE_SIZE = 100;
 
+/**
+ * Stated once so the list and the detail cannot drift. A dispute names the proposal it
+ * contests, and a reader who opens it must see the same row the ledger listed — a field on
+ * one and not the other reads as two different proposals.
+ */
+const ALLOCATION_PROPOSAL_VIEW_COLUMNS = {
+  id: sliceAllocationProposal.id,
+  claimId: sliceAllocationProposal.claimId,
+  memberId: sliceAllocationProposal.memberId,
+  memberName: user.name,
+  verdict: sliceAllocationProposal.verdict,
+  proposedSlices: sliceAllocationProposal.proposedSlices,
+  proposedSliceNumerator: sliceAllocationProposal.proposedSliceNumerator,
+  status: sliceAllocationProposal.status,
+  windowOpensAt: sliceAllocationProposal.windowOpensAt,
+  windowClosesAt: sliceAllocationProposal.windowClosesAt,
+  escrowedSlices: sliceAllocationProposal.escrowedSlices,
+  activeDisputeId: sliceAllocationProposal.activeDisputeId,
+  settledLedgerEntryId: sliceAllocationProposal.settledLedgerEntryId,
+  claimSummary: effortClaim.claimSummary,
+  claimedForDate: effortClaim.claimedForDate,
+} as const;
+
 /** `GET …/allocation-proposals` — the transparency ledger the team actually watches. */
 export async function listAllocationProposals(
   projectId: string,
@@ -382,23 +405,7 @@ export async function listAllocationProposals(
   }
 
   const rows = await db
-    .select({
-      id: sliceAllocationProposal.id,
-      claimId: sliceAllocationProposal.claimId,
-      memberId: sliceAllocationProposal.memberId,
-      memberName: user.name,
-      verdict: sliceAllocationProposal.verdict,
-      proposedSlices: sliceAllocationProposal.proposedSlices,
-      proposedSliceNumerator: sliceAllocationProposal.proposedSliceNumerator,
-      status: sliceAllocationProposal.status,
-      windowOpensAt: sliceAllocationProposal.windowOpensAt,
-      windowClosesAt: sliceAllocationProposal.windowClosesAt,
-      escrowedSlices: sliceAllocationProposal.escrowedSlices,
-      activeDisputeId: sliceAllocationProposal.activeDisputeId,
-      settledLedgerEntryId: sliceAllocationProposal.settledLedgerEntryId,
-      claimSummary: effortClaim.claimSummary,
-      claimedForDate: effortClaim.claimedForDate,
-    })
+    .select(ALLOCATION_PROPOSAL_VIEW_COLUMNS)
     .from(sliceAllocationProposal)
     .innerJoin(effortClaim, eq(effortClaim.id, sliceAllocationProposal.claimId))
     .innerJoin(projectMember, eq(projectMember.id, sliceAllocationProposal.memberId))
@@ -413,6 +420,39 @@ export async function listAllocationProposals(
     ...row,
     proposedSliceNumerator: row.proposedSliceNumerator.toString(),
   }));
+}
+
+/**
+ * `GET …/allocation-proposals/:proposalId` — one proposal, in the shape the ledger lists.
+ *
+ * A `DisputeView` carries a `proposalId` and nothing else about the allocation it contests,
+ * so without this read the dispute tab renders two lists side by side and asks the reader to
+ * match them by eye — and a proposal that has fallen off the first page cannot be matched at
+ * all (Appendix D4).
+ *
+ * Scoped to the project on the same reasoning as `findProposal` below: an id from another
+ * project reads as absent rather than as forbidden, so this read is not a cross-project
+ * existence oracle.
+ */
+export async function findAllocationProposalView(
+  projectId: string,
+  proposalId: string,
+): Promise<AllocationProposalView | null> {
+  const [row] = await db
+    .select(ALLOCATION_PROPOSAL_VIEW_COLUMNS)
+    .from(sliceAllocationProposal)
+    .innerJoin(effortClaim, eq(effortClaim.id, sliceAllocationProposal.claimId))
+    .innerJoin(projectMember, eq(projectMember.id, sliceAllocationProposal.memberId))
+    .innerJoin(user, eq(user.id, projectMember.userId))
+    .where(
+      and(
+        eq(sliceAllocationProposal.id, proposalId),
+        eq(sliceAllocationProposal.projectId, projectId),
+      ),
+    )
+    .limit(1);
+
+  return row ? { ...row, proposedSliceNumerator: row.proposedSliceNumerator.toString() } : null;
 }
 
 /** One proposal, scoped to its project so an id from elsewhere reads as absent. */

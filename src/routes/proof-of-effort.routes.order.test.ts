@@ -1,19 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
 /**
- * Route DECLARATION ORDER on the discovery router (§11j.2).
+ * Route DECLARATION ORDER on the proof-of-effort router (§11l.1).
  *
- * WHY THIS FILE EXISTS. Express matches in declaration order, so a literal segment declared
- * BELOW a `/:param` in the same position is dead — the param swallows it. Adding
- * `/talent/:talentUserIdOrHandle` and `/problem-reports/:submissionId` put two shipped
- * routes one careless reorder away from silently resolving as something else:
+ * WHY THIS FILE EXISTS. This is the router with the most `/:param` segments in the repo —
+ * every path opens with `/:projectSlug`, and three families (`/effort-claims`, `/disputes`,
+ * `/allocation-proposals`) now carry both a list and a detail. The route file states the
+ * rule in prose at three places; nothing asserted it, and the discovery router already
+ * proved that prose is not enough (see `discovery.routes.order.test.ts`).
  *
- *   GET /discovery/talent/me           → "the user whose handle is `me`"
- *   GET /discovery/problem-reports/mine → "the submission whose id is `mine`"
- *
- * Neither breaks a type, neither breaks any other test, and both return a plausible 404
- * rather than an error — so the failure looks like missing data, not a routing bug. The
- * route files carry comments stating the rule; this asserts it.
+ * The failure this prevents is silent: a literal declared below a `/:param` in the same
+ * position resolves as a lookup whose id is that literal, returns a plausible 404, and looks
+ * like missing data rather than a routing bug.
  */
 
 vi.mock("dotenv/config", () => ({}));
@@ -38,7 +36,7 @@ vi.mock("#src/db/index.js", () => ({
 /**
  * Express does not type its layer stack, so reading declaration order means describing the
  * runtime shape. Narrowed through `unknown` and defensively — a layer with no `route` is a
- * middleware layer, not a route, and is dropped rather than assumed.
+ * middleware layer and is dropped rather than assumed.
  */
 interface RouterInternals {
   readonly stack: readonly {
@@ -61,14 +59,7 @@ function isRouterInternals(value: unknown): value is RouterInternals {
   return Array.isArray(Reflect.get(value, "stack"));
 }
 
-/** The paths this router declares, in declaration order. */
-function declaredPaths(router: unknown): readonly string[] {
-  if (!isRouterInternals(router)) throw new Error("router has no layer stack");
-  const { stack } = router;
-  return stack.map((layer) => layer.route?.path).filter((path): path is string => typeof path === "string");
-}
-
-/** The same, carrying each route's verbs — a GET cannot shadow a POST. */
+/** The routes this router declares, in declaration order, each with its verbs. */
 function declaredRoutes(router: unknown): readonly DeclaredRoute[] {
   if (!isRouterInternals(router)) throw new Error("router has no layer stack");
   const { stack } = router;
@@ -80,12 +71,10 @@ function declaredRoutes(router: unknown): readonly DeclaredRoute[] {
 }
 
 /**
- * Every later route this earlier one swallows.
- *
- * Shadowing is per-segment: an earlier path shadows a later one when they have the same
- * segment count and every earlier segment either matches or is a `:param` — with at least
- * one `:param` sitting where the later path wants a literal. That last clause is what makes
- * this a bug report rather than a duplicate-route report.
+ * Whether the earlier route swallows the later one. Same segment count, every earlier
+ * segment matching or `:param`, and at least one `:param` where the later path wants a
+ * literal — that last clause is what makes this a bug report rather than a duplicate-route
+ * report. A GET cannot shadow a POST, so the verbs must overlap.
  */
 function shadowedBy(earlier: DeclaredRoute, later: DeclaredRoute): boolean {
   if (!earlier.methods.some((method) => later.methods.includes(method))) return false;
@@ -106,41 +95,9 @@ function shadowedBy(earlier: DeclaredRoute, later: DeclaredRoute): boolean {
   return swallowsALiteral;
 }
 
-describe("discovery router declaration order", () => {
-  it.each([
-    {
-      literal: "/talent/me",
-      parameterised: "/talent/:talentUserIdOrHandle",
-      breaks: "the caller's own profile read",
-    },
-    {
-      literal: "/problem-reports/mine",
-      parameterised: "/problem-reports/:submissionId",
-      breaks: "the caller's own reports list",
-    },
-  ])(
-    "declares $literal before $parameterised, or $breaks silently resolves as a lookup",
-    async ({ literal, parameterised }) => {
-      const router = (await import("#src/routes/discovery.routes.js")).default;
-      const paths = declaredPaths(router);
-
-      const literalIndex = paths.indexOf(literal);
-      const parameterisedIndex = paths.indexOf(parameterised);
-
-      expect(literalIndex, `${literal} is not declared at all`).toBeGreaterThanOrEqual(0);
-      expect(parameterisedIndex, `${parameterised} is not declared at all`).toBeGreaterThanOrEqual(0);
-      expect(literalIndex).toBeLessThan(parameterisedIndex);
-    },
-  );
-
-  /**
-   * The rule itself, rather than the two instances of it above. The table only knows about
-   * mistakes already made; this catches the next one — including on
-   * `/market-insights/:insightId`, added for the demand-evidence chips, which is exactly the
-   * shape that swallows a future `/market-insights/<literal>`.
-   */
+describe("proof-of-effort router declaration order", () => {
   it("declares no route that swallows a later one", async () => {
-    const router = (await import("#src/routes/discovery.routes.js")).default;
+    const router = (await import("#src/routes/proof-of-effort.routes.js")).default;
     const routes = declaredRoutes(router);
 
     const collisions = routes.flatMap((earlier, index) =>
@@ -153,8 +110,38 @@ describe("discovery router declaration order", () => {
     expect(collisions).toEqual([]);
   });
 
-  it("declares the market-insight detail read", async () => {
-    const paths = declaredPaths((await import("#src/routes/discovery.routes.js")).default);
-    expect(paths).toContain("/market-insights/:insightId");
+  /**
+   * The three §11l.1 reads, asserted present. A detail route that silently stopped being
+   * declared would fail no other test in the suite: its controller keeps compiling and its
+   * service keeps its own tests.
+   */
+  it.each([
+    { path: "/:projectSlug/allocation-proposals/:proposalId", reads: "one allocation proposal" },
+    { path: "/:projectSlug/fair-market-rates", reads: "the roster's current rates" },
+    { path: "/:projectSlug/override-queue", reads: "the steps awaiting human review" },
+    { path: "/:projectSlug/integrations/available", reads: "the provider catalogue" },
+  ])("declares $path, which $reads", async ({ path }) => {
+    const router = (await import("#src/routes/proof-of-effort.routes.js")).default;
+    expect(declaredRoutes(router).map((route) => route.path)).toContain(path);
+  });
+
+  /**
+   * `/integrations/available` is a literal in the position `/integrations/:provider` fills
+   * on the DELETE, and a GET for `:provider` is the obvious next addition. Pinning the order
+   * now costs nothing; discovering it later costs a silent 404.
+   *
+   * The parameterised path is already declared — as the DELETE that revokes a grant — so
+   * both indexes are real and the assertion is a plain comparison. The verbs differ today,
+   * which is why nothing is broken; the order is what keeps it that way when a GET arrives.
+   */
+  it("declares /integrations/available before any /integrations/:provider route", async () => {
+    const router = (await import("#src/routes/proof-of-effort.routes.js")).default;
+    const paths = declaredRoutes(router).map((route) => route.path);
+
+    const literalIndex = paths.indexOf("/:projectSlug/integrations/available");
+    const parameterisedIndex = paths.indexOf("/:projectSlug/integrations/:provider");
+
+    expect(literalIndex).toBeGreaterThanOrEqual(0);
+    expect(parameterisedIndex).toBeGreaterThan(literalIndex);
   });
 });

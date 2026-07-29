@@ -112,6 +112,10 @@ router.post(
 router.get("/regions", attachOptionalUser, catalogController.listRegions);
 router.get("/skills", attachOptionalUser, catalogController.listSkills);
 router.get("/market-insights", attachOptionalUser, catalogController.listMarketInsights);
+// The detail behind §11k.2's demand-evidence chips. Two segments, so it collides with
+// neither the list above nor the `/admin/market-insights` subtree below — but a literal
+// `/market-insights/<something>` added later MUST be declared above this line.
+router.get("/market-insights/:insightId", attachOptionalUser, catalogController.getMarketInsight);
 router.get("/demand-signals", attachOptionalUser, catalogController.listDemandSignals);
 
 // --- Talent. `/talent/me` and its sub-paths are literals; all declared before `/talent`.

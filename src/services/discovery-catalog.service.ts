@@ -149,6 +149,47 @@ export interface MarketInsightPage {
 }
 
 /**
+ * The one projection both the list and the detail read select. Stated once because the two
+ * must not drift: a chip on a project's Overview tab and the row behind it on the knowledge
+ * hub are the same insight, and a field present on one and absent on the other reads to a
+ * client as a data problem rather than the two-queries problem it is.
+ */
+const MARKET_INSIGHT_VIEW_COLUMNS = {
+  id: marketInsight.id,
+  headline: marketInsight.headline,
+  summary: marketInsight.summary,
+  statKind: marketInsight.statKind,
+  statValueMilli: marketInsight.statValueMilli,
+  statUnitKey: marketInsight.statUnitKey,
+  trendDirection: marketInsight.trendDirection,
+  category: DISCOVERY_CATEGORY_REF_COLUMNS,
+  region: DISCOVERY_REGION_REF_COLUMNS,
+  sourceName: marketInsight.sourceName,
+  sourceUrl: marketInsight.sourceUrl,
+  sourcePublishedDate: marketInsight.sourcePublishedDate,
+  publishedAt: marketInsight.publishedAt,
+} as const;
+
+/**
+ * `publishedAt` is nullable on the column and NOT NULL on the wire, because every read here
+ * filters `IS NOT NULL`. A null reaching this function means the query and the projection
+ * have drifted apart. Throw rather than substitute a fallback: a fabricated epoch would ship
+ * "Jan 1 1970" to three clients and look like a data problem rather than the code problem it
+ * actually is (CLAUDE.md §3.3 — unrecoverable programmer error).
+ */
+function toMarketInsightView(
+  row: { readonly publishedAt: Date | null } & Omit<MarketInsightView, "publishedAt">,
+  caller: string,
+): MarketInsightView {
+  if (row.publishedAt === null) {
+    throw new Error(
+      `${caller}: insight ${row.id} passed the published filter with a null publishedAt`,
+    );
+  }
+  return { ...row, publishedAt: row.publishedAt.toISOString() };
+}
+
+/**
  * Published market insights, newest first.
  *
  * Only rows with a non-null `publishedAt` are visible: an unpublished draft is editorial
@@ -165,21 +206,7 @@ export async function listMarketInsights(filter: MarketInsightFilter): Promise<M
 
   const [rows, [totalRow]] = await Promise.all([
     db
-      .select({
-        id: marketInsight.id,
-        headline: marketInsight.headline,
-        summary: marketInsight.summary,
-        statKind: marketInsight.statKind,
-        statValueMilli: marketInsight.statValueMilli,
-        statUnitKey: marketInsight.statUnitKey,
-        trendDirection: marketInsight.trendDirection,
-        category: DISCOVERY_CATEGORY_REF_COLUMNS,
-        region: DISCOVERY_REGION_REF_COLUMNS,
-        sourceName: marketInsight.sourceName,
-        sourceUrl: marketInsight.sourceUrl,
-        sourcePublishedDate: marketInsight.sourcePublishedDate,
-        publishedAt: marketInsight.publishedAt,
-      })
+      .select(MARKET_INSIGHT_VIEW_COLUMNS)
       .from(marketInsight)
       .innerJoin(researchCategory, eq(marketInsight.categoryId, researchCategory.id))
       .innerJoin(discoveryRegion, eq(marketInsight.regionId, discoveryRegion.id))
@@ -197,21 +224,37 @@ export async function listMarketInsights(filter: MarketInsightFilter): Promise<M
   ]);
 
   return {
-    rows: rows.map((row) => {
-      // The WHERE clause filters on `publishedAt IS NOT NULL`, so a null here means the
-      // query and this projection have drifted apart. Throw rather than substitute a
-      // fallback: a fabricated epoch date would ship "Jan 1 1970" to three clients and
-      // look like a data problem rather than the code problem it actually is
-      // (CLAUDE.md §3.3 — unrecoverable programmer error).
-      if (row.publishedAt === null) {
-        throw new Error(
-          `listMarketInsights: insight ${row.id} passed the published filter with a null publishedAt`,
-        );
-      }
-      return { ...row, publishedAt: row.publishedAt.toISOString() };
-    }),
+    rows: rows.map((row) => toMarketInsightView(row, "listMarketInsights")),
     total: totalRow?.total ?? 0,
   };
+}
+
+/**
+ * One published market insight.
+ *
+ * The read behind a demand-evidence chip (§11k.2). A chip cites an insight so a reader can
+ * check it; without this the citation is a headline the reader cannot open, which is worse
+ * than not citing at all.
+ *
+ * **Published-only, and the filter is the authorization.** An unpublished draft is a
+ * moderator's work in progress and reads as absent here — `/discovery/admin/market-insights`
+ * is where a draft is visible, behind a platform capability. `/unpublish` moving a cited
+ * insight back to NULL therefore closes this read too, which is deliberate: the chip goes
+ * dark rather than the draft leaking (§11k, the post-citation unpublish window).
+ *
+ * Returns `null` rather than a `Result` — the whole of this file does, and the controller
+ * synthesizes the 404 (see this module's header).
+ */
+export async function findMarketInsight(insightId: string): Promise<MarketInsightView | null> {
+  const [row] = await db
+    .select(MARKET_INSIGHT_VIEW_COLUMNS)
+    .from(marketInsight)
+    .innerJoin(researchCategory, eq(marketInsight.categoryId, researchCategory.id))
+    .innerJoin(discoveryRegion, eq(marketInsight.regionId, discoveryRegion.id))
+    .where(and(eq(marketInsight.id, insightId), isNotNull(marketInsight.publishedAt)))
+    .limit(1);
+
+  return row ? toMarketInsightView(row, "findMarketInsight") : null;
 }
 
 export interface DemandSignalView {

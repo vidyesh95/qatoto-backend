@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import {
+  firstParam,
   respondDiscoveryError,
   respondUnauthenticated,
   respondValidationFailed,
@@ -53,6 +54,12 @@ export const ListMarketInsightsQuerySchema = z
     limit: z.coerce.number().int().min(1).max(50).default(20),
   })
   .strict();
+
+/**
+ * Same precedent as `ClusterIdParamSchema`: a malformed id 422s before any query runs, so a
+ * scan is never started on a value that cannot match a row.
+ */
+export const MarketInsightIdParamSchema = z.object({ insightId: z.uuid() }).strict();
 
 export const ListDemandSignalsQuerySchema = z
   .object({
@@ -190,6 +197,41 @@ export async function listMarketInsights(req: Request, res: Response): Promise<v
       total: page.total,
       totalPages: Math.ceil(page.total / parsedQuery.data.limit),
     },
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * GET /discovery/market-insights/:insightId — one published insight.
+ *
+ * The read behind §11k.2's demand-evidence chips. Public, and deliberately indistinguishable
+ * for "no such insight" and "that insight is an unpublished draft": both are `404`, because a
+ * moderator's work in progress must not be discoverable by id (§11j.4).
+ */
+export async function getMarketInsight(req: Request, res: Response): Promise<void> {
+  const parsedParams = MarketInsightIdParamSchema.safeParse({
+    insightId: firstParam(req.params.insightId ?? ""),
+  });
+  if (!parsedParams.success) {
+    respondValidationFailed(res, parsedParams.error);
+    return;
+  }
+
+  const insight = await catalogService.findMarketInsight(parsedParams.data.insightId);
+
+  if (!insight) {
+    respondDiscoveryError(res, {
+      type: "MARKET_INSIGHT_NOT_FOUND",
+      insightId: parsedParams.data.insightId,
+    });
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Market insight retrieved successfully",
+    data: insight,
   };
   res.status(200).json(response);
 }

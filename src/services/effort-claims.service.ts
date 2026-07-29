@@ -657,6 +657,116 @@ export async function requestReverification(
 }
 
 /**
+ * Not paginated by page number: a queue that needs a second page is a backlog, and the
+ * answer to a backlog is to work it, not to scroll it. A cap keeps one project's flood from
+ * becoming an unbounded response.
+ */
+const DEFAULT_OVERRIDE_QUEUE_LIMIT = 50;
+const MAXIMUM_OVERRIDE_QUEUE_LIMIT = 200;
+
+/**
+ * One row of `GET …/override-queue` — a step a human has been asked to look at and has not
+ * yet answered.
+ */
+export interface OverrideQueueRow {
+  readonly stepId: string;
+  readonly claimId: string;
+  readonly runId: string;
+  readonly attemptNumber: number;
+  readonly memberUserId: string;
+  readonly memberName: string;
+  readonly stepKind: (typeof verificationStep.$inferSelect)["stepKind"];
+  readonly stepOrder: number;
+  /** Why the pipeline stopped short of passing it. Null when the step recorded no finding. */
+  readonly findingSummary: string | null;
+  readonly scoreBps: number | null;
+  readonly confidenceBps: number | null;
+  readonly claimedForDate: string;
+  readonly claimSummary: string;
+  /** The claim's current verdict — `flagged_for_review` for every row here, by construction. */
+  readonly verificationStatus: (typeof effortClaim.$inferSelect)["verificationStatus"];
+  /** When the step finished and became a question for a person. Ends the sort. */
+  readonly flaggedAt: Date;
+}
+
+/**
+ * `GET …/:projectSlug/override-queue` — the human-oversight queue (§11l, Appendix D3).
+ *
+ * **THE RULING THIS SETTLES.** §11l.1 asked whether a distinct "a human was asked to look at
+ * this and has not yet answered" entity was needed for EU AI Act Art. 14, or whether the
+ * flagged-claims filter was already it. It is a PREDICATE, not an entity, and this read is
+ * that predicate stated once:
+ *
+ *   `verification_step.status = 'flagged'` AND `overridden_status IS NULL`
+ *
+ * A request for review is not an event somebody files — it is the pipeline flagging a step,
+ * which is already an append-only fact with a timestamp, an author (the model, named in
+ * `modelName`/`promptVersion`) and a finding. Adding a `VerificationOverrideRequest` table
+ * would duplicate all four and introduce the one failure a queue must not have: a row saying
+ * review is pending when the step it points at was answered.
+ *
+ * **It is per STEP, not per claim**, which is what `?status=flagged_for_review` on the claims
+ * list could not express: a claim with four steps can have one answered and one waiting, and
+ * a reviewer needs the one still waiting rather than the claim it belongs to. Answering a
+ * step removes it from this read in the same statement that records the answer, because the
+ * override quartet moves atomically (`verification_step_override_ck`).
+ *
+ * Oldest first: a queue is worked from the front, and the oldest unanswered flag is the one
+ * whose member has been waiting longest on equity that is not being minted. Ends in a unique
+ * column (§4c rule 4).
+ */
+export async function listOverrideQueue(
+  projectId: string,
+  options: { readonly limit?: number | undefined } = {},
+): Promise<readonly OverrideQueueRow[]> {
+  const limit = Math.min(
+    options.limit ?? DEFAULT_OVERRIDE_QUEUE_LIMIT,
+    MAXIMUM_OVERRIDE_QUEUE_LIMIT,
+  );
+
+  const rows = await db
+    .select({
+      stepId: verificationStep.id,
+      claimId: effortClaim.id,
+      runId: claimVerificationRun.id,
+      attemptNumber: claimVerificationRun.attemptNumber,
+      memberUserId: projectMember.userId,
+      memberName: user.name,
+      stepKind: verificationStep.stepKind,
+      stepOrder: verificationStep.stepOrder,
+      findingSummary: verificationStep.findingSummary,
+      scoreBps: verificationStep.scoreBps,
+      confidenceBps: verificationStep.confidenceBps,
+      claimedForDate: effortClaim.claimedForDate,
+      claimSummary: effortClaim.claimSummary,
+      verificationStatus: effortClaim.verificationStatus,
+      // `completedAt` is when the step became a question for a person; `createdAt` is when
+      // it was queued to run. COALESCE rather than either alone: a step flagged by a
+      // pipeline that crashed before stamping `completedAt` still belongs in the queue.
+      flaggedAt: sql<Date>`coalesce(${verificationStep.completedAt}, ${verificationStep.createdAt})`,
+    })
+    .from(verificationStep)
+    .innerJoin(claimVerificationRun, eq(claimVerificationRun.id, verificationStep.runId))
+    .innerJoin(effortClaim, eq(effortClaim.id, claimVerificationRun.claimId))
+    .innerJoin(projectMember, eq(projectMember.id, effortClaim.memberId))
+    .innerJoin(user, eq(user.id, projectMember.userId))
+    .where(
+      and(
+        eq(effortClaim.projectId, projectId),
+        eq(verificationStep.status, "flagged"),
+        // The whole definition of "still waiting". An answered step keeps its `flagged`
+        // status forever — the override REPLACES it for the verdict rather than editing it
+        // (§9.1) — so filtering on status alone would show answered work as pending.
+        isNull(verificationStep.overriddenStatus),
+      ),
+    )
+    .orderBy(asc(verificationStep.createdAt), asc(verificationStep.id))
+    .limit(limit);
+
+  return rows;
+}
+
+/**
  * `PATCH …/effort-claims/:claimId/steps/:stepId/override` — **the only hand-edit in the
  * domain, and it edits an AI JUDGEMENT, not a number.**
  *
