@@ -527,7 +527,7 @@ async function main(): Promise<void> {
 
   // --- 4. §17 step 6: a verdict is reached and NOTHING is in the ledger.
   const proposalsAfterVerdict = await listAllocationProposals(fixtures.projectId);
-  const ledgerAfterVerdict = await listLedgerEntries(fixtures.projectId);
+  const ledgerAfterVerdict = (await listLedgerEntries(fixtures.projectId)).rows;
   check(
     "EVERY verdict opens a window, including the unverified one",
     proposalsAfterVerdict.length === 2 &&
@@ -584,7 +584,7 @@ async function main(): Promise<void> {
   );
 
   // --- 6. The number. 480 min × 12000 cents / 3000 = 1,920 slices.
-  const ledger = await listLedgerEntries(fixtures.projectId);
+  const ledger = (await listLedgerEntries(fixtures.projectId)).rows;
   const verifiedEntry = ledger.find((entry) => entry.claimId === claim.value.claimId);
   check(
     "the verified claim posts at the formula's number",
@@ -699,7 +699,7 @@ async function main(): Promise<void> {
   const disputedProposals = await listAllocationProposals(fixtures.projectId, {
     status: "disputed",
   });
-  const ledgerDuringDispute = await listLedgerEntries(fixtures.projectId);
+  const ledgerDuringDispute = (await listLedgerEntries(fixtures.projectId)).rows;
   check(
     "disputed slices are reported as escrowed, and stay OUT of the ledger",
     disputedProposals.length === 1 &&
@@ -749,7 +749,7 @@ async function main(): Promise<void> {
     secondVote.success ? String(secondVote.value.autoResolvedAs) : secondVote.error.type,
   );
 
-  const ledgerAfterConsensus = await listLedgerEntries(fixtures.projectId);
+  const ledgerAfterConsensus = (await listLedgerEntries(fixtures.projectId)).rows;
   const releasedEntry = ledgerAfterConsensus.find(
     (entry) => entry.claimId === secondClaim.value.claimId,
   );

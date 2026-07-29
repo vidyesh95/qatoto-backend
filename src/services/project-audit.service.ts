@@ -463,10 +463,28 @@ const MAXIMUM_AUDIT_PAGE_SIZE = 200;
  * Returns every hashed column, so a client can canonicalize and verify WITHOUT trusting
  * this server's bytes.
  */
+export interface AuditTrailPage {
+  readonly rows: readonly AuditEntryView[];
+  /** The `fromSequence` to ask for next, or null at the end of the chain. */
+  readonly nextSequence: number | null;
+}
+
+/**
+ * ⚠️ RETURNS AN ENVELOPE NOW, not a bare array (§11l.2 item 4).
+ *
+ * This read was already offset-free — it range-filters on the sequence — but it returned no
+ * way to tell "that is the whole chain" from "that is one page of it". A client had to
+ * infer from `rows.length === limit`, which is wrong on the boundary case where the chain
+ * ends exactly on a page: the client asks for one more page, gets nothing, and shows an
+ * empty state for a chain that was complete.
+ *
+ * The HTTP shape is unchanged — the controller still sends the rows as `data` and rides
+ * `nextSequence` alongside, the way `PaginatedResponse` carries `pagination`.
+ */
 export async function listAuditTrail(
   projectId: string,
   options: ListAuditTrailOptions = {},
-): Promise<readonly AuditEntryView[]> {
+): Promise<AuditTrailPage> {
   const limit = Math.min(options.limit ?? DEFAULT_AUDIT_PAGE_SIZE, MAXIMUM_AUDIT_PAGE_SIZE);
 
   const filters = [eq(projectAuditEntry.projectId, projectId)];
@@ -498,9 +516,14 @@ export async function listAuditTrail(
     .leftJoin(user, eq(user.id, projectAuditEntry.actorUserId))
     .where(and(...filters))
     .orderBy(asc(projectAuditEntry.sequenceNumber))
-    .limit(limit);
+    // One extra row, purely to answer "is there another page?" without a COUNT.
+    .limit(limit + 1);
 
-  return rows;
+  const pageRows = rows.slice(0, limit);
+  const lastRow = pageRows.at(-1);
+  const hasMore = rows.length > limit && lastRow !== undefined;
+
+  return { rows: pageRows, nextSequence: hasMore ? lastRow.sequenceNumber + 1 : null };
 }
 
 export type AuditChainError =

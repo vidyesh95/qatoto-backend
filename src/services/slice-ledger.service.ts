@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { projectMember, sliceLedgerEntry, user } from "#src/db/schema.js";
@@ -339,16 +339,42 @@ export interface LedgerEntryView {
 const DEFAULT_LEDGER_PAGE_SIZE = 50;
 const MAXIMUM_LEDGER_PAGE_SIZE = 200;
 
+export interface LedgerPage {
+  readonly rows: readonly LedgerEntryView[];
+  /** The `fromSequence` to ask for next, or null at the end of the ledger. */
+  readonly nextSequence: number | null;
+}
+
 /**
  * A page of the ledger, ordered by `sequenceNumber` ASC — never `createdAt`, because two
  * rows share a millisecond and replica clocks skew (§9.4).
+ *
+ * KEYSET BY `fromSequence`, WITH `page` KEPT (§11l.2 item 4). The sequence is gapless and
+ * monotonic by construction, so it is a better cursor than any timestamp — and this is an
+ * APPEND-ONLY table, which is precisely the shape where OFFSET drifts: an entry inserted
+ * between two page fetches shifts every subsequent page by one and a reader silently skips
+ * a row. On a slice ledger that row is somebody's equity.
+ *
+ * `page` still works, unchanged, because the frontend calls this read today and §11l is
+ * additive by rule. When both are supplied `fromSequence` wins, because a caller sending a
+ * cursor has decided which mode it is in.
  */
 export async function listLedgerEntries(
   projectId: string,
-  options: { readonly page?: number | undefined; readonly limit?: number | undefined } = {},
-): Promise<readonly LedgerEntryView[]> {
+  options: {
+    readonly page?: number | undefined;
+    readonly limit?: number | undefined;
+    readonly fromSequence?: number | undefined;
+  } = {},
+): Promise<LedgerPage> {
   const limit = Math.min(options.limit ?? DEFAULT_LEDGER_PAGE_SIZE, MAXIMUM_LEDGER_PAGE_SIZE);
   const page = Math.max(options.page ?? 1, 1);
+  const isKeyset = options.fromSequence !== undefined;
+
+  const conditions = [eq(sliceLedgerEntry.projectId, projectId)];
+  if (options.fromSequence !== undefined) {
+    conditions.push(gte(sliceLedgerEntry.sequenceNumber, options.fromSequence));
+  }
 
   const rows = await db
     .select({
@@ -369,18 +395,27 @@ export async function listLedgerEntries(
     .from(sliceLedgerEntry)
     .innerJoin(projectMember, eq(projectMember.id, sliceLedgerEntry.memberId))
     .innerJoin(user, eq(user.id, projectMember.userId))
-    .where(eq(sliceLedgerEntry.projectId, projectId))
+    .where(and(...conditions))
     .orderBy(asc(sliceLedgerEntry.sequenceNumber))
-    .limit(limit)
-    .offset((page - 1) * limit);
+    // One extra row in keyset mode, purely to answer "is there another page?" without a
+    // COUNT — the same probe the daily-log feed uses.
+    .limit(isKeyset ? limit + 1 : limit)
+    .offset(isKeyset ? 0 : (page - 1) * limit);
 
-  return rows.map((row) => ({
-    ...row,
-    // Every bigint crosses the wire as a decimal string: a numerator past 2^53 loses
-    // precision the moment JSON.stringify touches it (§4b).
-    sliceNumerator: row.sliceNumerator.toString(),
-    cashInCents: row.cashInCents === null ? null : row.cashInCents.toString(),
-    unpaidRateCentsPerHour:
-      row.unpaidRateCentsPerHour === null ? null : row.unpaidRateCentsPerHour.toString(),
-  }));
+  const pageRows = isKeyset ? rows.slice(0, limit) : rows;
+  const lastRow = pageRows.at(-1);
+  const hasMore = isKeyset && rows.length > limit && lastRow !== undefined;
+
+  return {
+    rows: pageRows.map((row) => ({
+      ...row,
+      // Every bigint crosses the wire as a decimal string: a numerator past 2^53 loses
+      // precision the moment JSON.stringify touches it (§4b).
+      sliceNumerator: row.sliceNumerator.toString(),
+      cashInCents: row.cashInCents === null ? null : row.cashInCents.toString(),
+      unpaidRateCentsPerHour:
+        row.unpaidRateCentsPerHour === null ? null : row.unpaidRateCentsPerHour.toString(),
+    })),
+    nextSequence: hasMore ? lastRow.sequenceNumber + 1 : null,
+  };
 }

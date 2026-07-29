@@ -82,6 +82,22 @@ const PaginationQuerySchema = z
   })
   .strict();
 
+/**
+ * The ledger and the audit trail take a KEYSET cursor as well as a page (§11l.2 item 4).
+ *
+ * `page` is retained because the frontend calls both reads today and this tranche is
+ * additive by rule; `fromSequence` is the mode a new caller should use. Both are optional
+ * and `fromSequence` wins, because a caller sending a cursor has decided which mode it is
+ * in.
+ */
+const SequencePaginationQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+    fromSequence: z.coerce.number().int().min(1).optional(),
+  })
+  .strict();
+
 export const ProposeRateSchema = z
   .object({
     fairMarketRateCentsPerHour: CentsStringSchema,
@@ -253,7 +269,9 @@ export async function getProofOfEffortSummary(req: Request, res: Response): Prom
     // cap table has no cap table, and rendering 0% per member would be a made-up fact.
     equity: snapshot,
     openProposals,
-    recentLedgerEntries: recentLedger,
+    // `.rows`: the ledger read gained a keyset envelope (§11l.2 item 4). The SUMMARY's
+    // wire shape is unchanged — this stays a bare array of the newest entries.
+    recentLedgerEntries: recentLedger.rows,
     // Explicitly OUTSIDE the denominator, and labelled so a client cannot mistake it for
     // an allocation (§9.5).
     openRoleProjection: projection,
@@ -307,17 +325,27 @@ export async function listSliceLedger(req: Request, res: Response): Promise<void
   const caller = await requireRoleOrRespond(req, res, "contributor");
   if (!caller) return;
 
-  const parsedQuery = PaginationQuerySchema.safeParse(req.query);
+  const parsedQuery = SequencePaginationQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
     respondValidationFailed(res, parsedQuery.error);
     return;
   }
 
-  respondOk(
-    res,
-    "Slice ledger loaded.",
-    await ledgerService.listLedgerEntries(caller.context.projectId, parsedQuery.data),
+  const ledger = await ledgerService.listLedgerEntries(
+    caller.context.projectId,
+    parsedQuery.data,
   );
+
+  // `data` STAYS THE ARRAY, and `nextSequence` rides alongside it — the shape
+  // `PaginatedResponse` already uses for `pagination`. Moving the rows under an envelope
+  // key would break every caller parsing this read today, which §11l is not allowed to do.
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Slice ledger loaded.",
+    data: ledger.rows,
+    nextSequence: ledger.nextSequence,
+  });
 }
 
 /** `GET …/allocation-proposals` — `windowClosesAt` is an ISO instant, never a countdown. */
@@ -893,11 +921,17 @@ export async function listAuditTrail(req: Request, res: Response): Promise<void>
     return;
   }
 
-  respondOk(
-    res,
-    "Audit trail loaded.",
-    await auditService.listAuditTrail(caller.context.projectId, parsedQuery.data),
-  );
+  const trail = await auditService.listAuditTrail(caller.context.projectId, parsedQuery.data);
+
+  // `data` stays the array; `nextSequence` rides alongside so a client can tell the end of
+  // the chain from the end of a page (§11l.2 item 4).
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Audit trail loaded.",
+    data: trail.rows,
+    nextSequence: trail.nextSequence,
+  });
 }
 
 /**
