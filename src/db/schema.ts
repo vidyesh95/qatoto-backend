@@ -2179,6 +2179,46 @@ export const marketInsight = pgTable(
 );
 
 /**
+ * The project ↔ insight citation, behind the Overview tab's demand-evidence chips (§11k.2).
+ *
+ * WHY IT EXISTS AT ALL. `marketInsightRelations` joined an insight to its region, its
+ * category and its author, and NO table anywhere joined one to a project — so the chips had
+ * nothing to read. `researchProject.demandEvidenceNotes` is not a substitute: it is
+ * founder-authored free text, and a chip cites a moderated insight the reader can open.
+ *
+ * IT TAKES NO `source` ENUM, deliberately, and that is the one place it departs from
+ * `problemClusterProjectLink` above. That table needs one because `origin` is semantically
+ * distinct from `founder_declared` and only Postgres can enforce its 1:1. A citation has
+ * neither property — every row means the same thing, and there is no cardinality to bound.
+ * Add the column only when some surface must tell a founder's citation from a moderator's,
+ * which no chip does.
+ *
+ * BOTH FKs ARE `restrict`, matching the cluster link. A cited insight is evidence, and
+ * deleting it out from under a project that cites it would silently rewrite that project's
+ * stated basis — so `deleteMarketInsight` translates the 23503 into a 409 and points the
+ * moderator at `/unpublish` instead.
+ */
+export const marketInsightProjectLink = pgTable(
+  "market_insight_project_link",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    insightId: text("insight_id")
+      .notNull()
+      .references(() => marketInsight.id, { onDelete: "restrict" }),
+    linkedByUserId: text("linked_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectId, table.insightId] }),
+    // The PK's leading column already serves the project-side read (the chips). This one is
+    // for the reverse: which projects cite this insight.
+    index("market_insight_project_link_insightId_idx").on(table.insightId),
+  ],
+);
+
+/**
  * The knowledge-hub demand leaderboard, one row per (region, category) cell per run.
  * Append-only, job-written, and backing the frontend's `TrendingSignal`.
  *
@@ -2925,7 +2965,7 @@ export const problemClusterProjectLinkRelations = relations(
   }),
 );
 
-export const marketInsightRelations = relations(marketInsight, ({ one }) => ({
+export const marketInsightRelations = relations(marketInsight, ({ one, many }) => ({
   region: one(discoveryRegion, {
     fields: [marketInsight.regionId],
     references: [discoveryRegion.id],
@@ -2935,6 +2975,19 @@ export const marketInsightRelations = relations(marketInsight, ({ one }) => ({
     references: [researchCategory.id],
   }),
   createdBy: one(user, { fields: [marketInsight.createdByUserId], references: [user.id] }),
+  projectLinks: many(marketInsightProjectLink),
+}));
+
+export const marketInsightProjectLinkRelations = relations(marketInsightProjectLink, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [marketInsightProjectLink.projectId],
+    references: [researchProject.id],
+  }),
+  insight: one(marketInsight, {
+    fields: [marketInsightProjectLink.insightId],
+    references: [marketInsight.id],
+  }),
+  linkedBy: one(user, { fields: [marketInsightProjectLink.linkedByUserId], references: [user.id] }),
 }));
 
 export const demandSignalSnapshotRelations = relations(demandSignalSnapshot, ({ one }) => ({

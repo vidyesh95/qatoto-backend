@@ -35,6 +35,7 @@ const EXPECTED_TABLES = [
   "problem_cluster_merge_proposal",
   "problem_cluster_project_link",
   "market_insight",
+  "market_insight_project_link",
   "demand_signal_snapshot",
   "talent_profile",
   "talent_profile_skill",
@@ -94,7 +95,7 @@ async function checkSchemaObjects(): Promise<readonly CheckOutcome[]> {
 
   return [
     {
-      label: "all 14 discovery tables exist",
+      label: "all 15 discovery tables exist",
       passed: tableCount === EXPECTED_TABLES.length,
       detail: `${tableCount}/${EXPECTED_TABLES.length}`,
     },

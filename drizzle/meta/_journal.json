@@ -162,6 +162,13 @@
       "when": 1785237060843,
       "tag": "0022_abandoned_micromacro",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1785306468142,
+      "tag": "0023_conscious_lady_deathstrike",
+      "breakpoints": true
     }
   ]
 }

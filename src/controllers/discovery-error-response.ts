@@ -286,6 +286,14 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
       return { statusCode: 409, message: "That is already published." };
     case "NOT_PUBLISHED":
       return { statusCode: 409, message: "That is not published." };
+    // §11k.2's `restrict` FK, reported rather than silently erasing a project's stated
+    // evidence. Same shape as SKILL_HAS_REFERENCES: refuse, and name the alternative.
+    case "MARKET_INSIGHT_CITED":
+      return {
+        statusCode: 409,
+        message:
+          "A project cites this insight, so it cannot be deleted. Unpublish it instead to take it off the page.",
+      };
 
     default: {
       // Adding a variant to any discovery service union without handling it here breaks

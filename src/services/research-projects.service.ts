@@ -1,8 +1,12 @@
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
+  marketInsight,
+  marketInsightProjectLink,
   openRoleCompensation,
+  problemCluster,
+  problemClusterProjectLink,
   projectMember,
   projectMemberInterval,
   projectOpenRole,
@@ -138,6 +142,24 @@ export interface ResearchProjectDetailView {
   readonly updatedAt: Date;
   readonly stats: ProjectStatsView | null;
   readonly team: readonly ProjectTeamMemberView[];
+  /**
+   * "Born from Civic Pulse" (§11k.1). NOT a column — the project's origin is the
+   * `problem_cluster_project_link` row whose `source` is `'origin'`, and the partial unique
+   * index `problem_cluster_project_link_origin_unq` is what makes it at most one.
+   * R_AND_D_STRUCTURE.md §18 names a scalar `originProblemReportId`; that column does not
+   * exist and must not be added, because storing one fact in two writable places is what the
+   * link table's own header comment rejects.
+   *
+   * Carries the cluster id and no slug: clusters have none — §11b addresses them by id — so a
+   * client links with the id exactly as `/problem-map` does.
+   */
+  readonly originCluster: { readonly clusterId: string; readonly title: string } | null;
+  /**
+   * The demand-evidence chips (§11k.2) — moderated insights this project cites, PUBLISHED
+   * ONES ONLY. Distinct from `demandEvidenceNotes` above, which is founder-authored prose
+   * citing nothing a reader can open.
+   */
+  readonly relatedInsights: readonly { readonly insightId: string; readonly headline: string }[];
   /** Computed per request from the viewer, never a column. */
   readonly isWatchedByViewer: boolean;
   readonly viewerProjectRole: string | null;
@@ -375,9 +397,11 @@ async function loadProjectDetail(
     return null;
   }
 
-  const [stats, team] = await Promise.all([
+  const [stats, team, originCluster, relatedInsights] = await Promise.all([
     findProjectStats(projectId),
     listProjectTeam(projectId),
+    findOriginCluster(projectId),
+    findRelatedInsights(projectId),
   ]);
 
   // Both are properties of the VIEWER, not of the row, so they are computed per
@@ -412,9 +436,74 @@ async function loadProjectDetail(
     updatedAt: row.updatedAt,
     stats,
     team,
+    originCluster,
+    relatedInsights,
     isWatchedByViewer,
     viewerProjectRole: viewerMembership?.projectRole ?? null,
   };
+}
+
+/**
+ * The cluster this project was BORN from, or null (§11k.1).
+ *
+ * `ne(status, "hidden")` IS REQUIRED, NOT DEFENSIVE. This read is public — the detail route
+ * gates `draft` and nothing else — and `hidden` means moderator-hidden and excluded from
+ * public reads. Without the filter, the project detail becomes the one endpoint in the domain
+ * that discloses a withdrawn cluster.
+ *
+ * `merged` NEEDS NO HANDLING. `discovery-moderation.service.ts` re-points links to the
+ * surviving cluster when a merge is approved and downgrades `origin` → `founder_declared` as
+ * it does — an absorbed cluster is not what the project was born from — so this correctly
+ * returns null afterwards. Do NOT chase `mergedIntoClusterId` to keep the link alive.
+ *
+ * `.limit(1)` is exact rather than a guess: `problem_cluster_project_link_origin_unq` is a
+ * partial unique index on `(project_id) WHERE source = 'origin'`.
+ */
+async function findOriginCluster(
+  projectId: string,
+): Promise<{ readonly clusterId: string; readonly title: string } | null> {
+  const [row] = await db
+    .select({ clusterId: problemCluster.id, title: problemCluster.title })
+    .from(problemClusterProjectLink)
+    .innerJoin(problemCluster, eq(problemCluster.id, problemClusterProjectLink.clusterId))
+    .where(
+      and(
+        eq(problemClusterProjectLink.projectId, projectId),
+        eq(problemClusterProjectLink.source, "origin"),
+        ne(problemCluster.status, "hidden"),
+      ),
+    )
+    .limit(1);
+
+  return row ?? null;
+}
+
+/**
+ * The insights this project cites (§11k.2).
+ *
+ * `isNotNull(publishedAt)` IS NOT REDUNDANT with the write path's published-only check. An
+ * insight can be UNPUBLISHED after it was cited — `…/market-insights/:insightId/unpublish`
+ * moves `published_at` back to NULL and leaves the link row alone — so without this filter
+ * the project detail becomes the single place in the domain where a draft insight leaks. The
+ * link surviving the unpublish is deliberate: republishing restores the chip rather than
+ * making the founder cite it again.
+ *
+ * ORDERED, because an unordered read of a set the client renders as a row of chips
+ * reshuffles between requests (§4c rule 4). `publishedAt desc, id desc` is the order
+ * `discovery-catalog.service.ts` already gives the knowledge hub, and `publishedAt` is
+ * non-null on every row this filter admits.
+ */
+async function findRelatedInsights(
+  projectId: string,
+): Promise<readonly { readonly insightId: string; readonly headline: string }[]> {
+  return db
+    .select({ insightId: marketInsight.id, headline: marketInsight.headline })
+    .from(marketInsightProjectLink)
+    .innerJoin(marketInsight, eq(marketInsight.id, marketInsightProjectLink.insightId))
+    .where(
+      and(eq(marketInsightProjectLink.projectId, projectId), isNotNull(marketInsight.publishedAt)),
+    )
+    .orderBy(desc(marketInsight.publishedAt), desc(marketInsight.id));
 }
 
 async function hasWatched(projectId: string, userId: string): Promise<boolean> {

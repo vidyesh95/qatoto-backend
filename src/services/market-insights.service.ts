@@ -3,6 +3,7 @@ import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { discoveryRegion, marketInsight, researchCategory } from "#src/db/schema.js";
 import { findStatViolations, type MarketInsightStat } from "#src/lib/market-insight-stat.js";
+import { isForeignKeyViolation } from "#src/lib/pg-errors.js";
 import {
   DISCOVERY_CATEGORY_REF_COLUMNS,
   DISCOVERY_REGION_REF_COLUMNS,
@@ -54,7 +55,9 @@ export type MarketInsightError =
   | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
   | { type: "CATEGORY_NOT_APPROVED"; categoryId: string }
   | { type: "ALREADY_PUBLISHED" }
-  | { type: "NOT_PUBLISHED" };
+  | { type: "NOT_PUBLISHED" }
+  // §11k.2 made `market_insight` a referenced parent for the first time. See the delete.
+  | { type: "MARKET_INSIGHT_CITED" };
 
 /**
  * The moderator's view of a row, which the PUBLIC view cannot express.
@@ -454,10 +457,16 @@ export async function setMarketInsightPublished(
 /**
  * `DELETE /discovery/admin/market-insights/:insightId` — a HARD delete.
  *
- * Nothing in the schema has an FK into `market_insight`: it is not append-only, carries no
- * hash, and is not evidence about anybody's work — unlike `physical_work_receipt` or
- * `slice_ledger_entry`, which is why those refuse. `deleteTalentProfile` is the precedent
- * ("a content table, so a real delete").
+ * STILL A HARD DELETE, BUT NO LONGER AN UNCONDITIONAL ONE. This comment used to open
+ * "nothing in the schema has an FK into `market_insight`", and §11k.2 ended that:
+ * `market_insight_project_link.insight_id` is `ON DELETE restrict`, so an insight a project
+ * cites cannot be erased. That FK is the point — a cited insight IS evidence about somebody's
+ * work now, and erasing it would silently rewrite the basis a project stated publicly.
+ * `deleteTalentProfile` remains the precedent for the uncited case ("a content table, so a
+ * real delete").
+ *
+ * TRANSLATED, NOT PRE-COUNTED. The 23503 is the race-safe authority; a `SELECT count(*)`
+ * before the delete would still lose to a citation committed between the two statements.
  *
  * NO GATE ON A PUBLISHED ROW, deliberately. `/unpublish` exists to take an insight off the
  * page while KEEPING the editorial work; delete is for discarding it. Making delete refuse
@@ -474,13 +483,22 @@ export async function deleteMarketInsight(
   }
 
   // 2. Resources second.
-  const [deleted] = await db
-    .delete(marketInsight)
-    .where(eq(marketInsight.id, insightId))
-    .returning({ id: marketInsight.id });
+  try {
+    const [deleted] = await db
+      .delete(marketInsight)
+      .where(eq(marketInsight.id, insightId))
+      .returning({ id: marketInsight.id });
 
-  if (!deleted) {
-    return { success: false, error: { type: "MARKET_INSIGHT_NOT_FOUND", insightId } };
+    if (!deleted) {
+      return { success: false, error: { type: "MARKET_INSIGHT_NOT_FOUND", insightId } };
+    }
+  } catch (error: unknown) {
+    if (isForeignKeyViolation(error)) {
+      // The only inbound FK is §11k.2's citation link, so this code has exactly one meaning.
+      return { success: false, error: { type: "MARKET_INSIGHT_CITED" } };
+    }
+    throw error;
   }
+
   return { success: true, value: { deleted: true } };
 }

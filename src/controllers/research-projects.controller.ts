@@ -8,6 +8,7 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
+import * as insightLinksService from "#src/services/project-insight-links.service.js";
 import * as membershipService from "#src/services/project-membership.service.js";
 import * as projectsService from "#src/services/research-projects.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
@@ -122,6 +123,18 @@ export const ListMyProjectsQuerySchema = z
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })
   .strict();
+
+/**
+ * §11k.2. `insightId` is the ONLY key: `createdAt` and `linkedByUserId` are server-owned, and
+ * the table carries no `source` column to assert (schema.ts records why it does not).
+ *
+ * `z.uuid()` matches how `market_insight.id` is actually minted (`randomUUID()`), so a
+ * malformed id is a 422 here rather than a database round-trip ending in the same 404 every
+ * other refusal on this route produces.
+ */
+export const LinkMarketInsightSchema = z.object({ insightId: z.uuid() }).strict();
+
+const InsightIdParamSchema = z.object({ insightId: z.uuid() }).strict();
 
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>;
 export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>;
@@ -658,6 +671,81 @@ export async function unwatchProject(req: Request, res: Response): Promise<void>
     statusCode: 200,
     message: "Project unwatched",
     data: { isWatchedByViewer: false },
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * POST /research-projects/:projectSlug/market-insight-links — founder or moderator (§11k.2).
+ *
+ * NO `requireRoleOrRespond` HERE, and that is the one place this route departs from every
+ * other write in this file. That helper resolves MEMBERSHIP; this route's second accepted
+ * caller is platform staff who is not a member at all, so the dual decision lives in the
+ * service where both arms collapse into a single 404.
+ */
+export async function linkMarketInsight(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedBody = LinkMarketInsightSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const linked = await insightLinksService.linkMarketInsightToProject(
+    req.user.id,
+    firstParam(req.params.projectSlug ?? ""),
+    parsedBody.data.insightId,
+  );
+
+  if (!linked.success) {
+    respondProjectError(res, linked.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 201,
+    message: "Market insight cited",
+    data: linked.value,
+  };
+  res.status(201).json(response);
+}
+
+/** DELETE /research-projects/:projectSlug/market-insight-links/:insightId (§11k.2). */
+export async function unlinkMarketInsight(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedParams = InsightIdParamSchema.safeParse({
+    insightId: firstParam(req.params.insightId ?? ""),
+  });
+  if (!parsedParams.success) {
+    respondValidationFailed(res, parsedParams.error);
+    return;
+  }
+
+  const unlinked = await insightLinksService.unlinkMarketInsightFromProject(
+    req.user.id,
+    firstParam(req.params.projectSlug ?? ""),
+    parsedParams.data.insightId,
+  );
+
+  if (!unlinked.success) {
+    respondProjectError(res, unlinked.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Citation removed",
+    data: unlinked.value,
   };
   res.status(200).json(response);
 }

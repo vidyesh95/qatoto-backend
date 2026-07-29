@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import type { ProjectApplicationError } from "#src/services/project-applications.service.js";
+import type { ProjectInsightLinkError } from "#src/services/project-insight-links.service.js";
 import type { ProjectMemberError } from "#src/services/project-membership.service.js";
 import type { ProjectRoleError } from "#src/services/project-roles.service.js";
 import type { ResearchCategoryError } from "#src/services/research-categories.service.js";
@@ -32,7 +33,8 @@ export type ProjectDomainError =
   | ProjectRoleError
   | ProjectApplicationError
   | ProjectMemberError
-  | ResearchCategoryError;
+  | ResearchCategoryError
+  | ProjectInsightLinkError;
 
 export function respondUnauthenticated(res: Response): void {
   res.status(401).json({
@@ -107,6 +109,15 @@ export function mapProjectErrorToResponse(error: ProjectDomainError): {
       return { statusCode: 404, message: "Invite not found." };
     case "MEMBER_NOT_FOUND":
       return { statusCode: 404, message: "Member not found." };
+    // §11k.2. ONE string for four different refusals — no such project, not its founder and
+    // not staff, no such insight, and that insight is an unpublished draft. Splitting any of
+    // them turns the route into an oracle: founder-ness cannot be decided without reading the
+    // slug, and a draft insight is invisible to every public read by design.
+    case "INSIGHT_LINK_DENIED":
+      return { statusCode: 404, message: "Project or insight not found." };
+    // Reachable only after authorization passed, so it may be specific.
+    case "INSIGHT_LINK_NOT_FOUND":
+      return { statusCode: 404, message: "That insight is not linked to this project." };
 
     // --- 422: validation the schema could not do alone.
     case "CATEGORY_NOT_FOUND":
@@ -204,6 +215,8 @@ export function mapProjectErrorToResponse(error: ProjectDomainError): {
         message: "A category with that name already exists.",
         errors: { label: [`Resolves to the existing slug "${error.slug}".`] },
       };
+    case "INSIGHT_ALREADY_LINKED":
+      return { statusCode: 409, message: "This project already cites that insight." };
     case "SLUG_EXHAUSTED":
       return {
         statusCode: 409,

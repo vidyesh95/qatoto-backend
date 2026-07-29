@@ -275,6 +275,33 @@ router.delete(
   projectsController.unwatchProject,
 );
 
+// --- Demand-evidence citations (§11k.2). Founder OR moderator; every refusal is one 404,
+//     decided in the service because staff standing is not membership.
+
+/**
+ * POST /research-projects/:projectSlug/market-insight-links
+ *
+ * `requireIdentifiedUser` for the same reason the cluster-link route carries it
+ * (`discovery.routes.ts`): this write is reachable by a non-staff founder, and the citation
+ * is published on a public project page.
+ */
+router.post(
+  "/:projectSlug/market-insight-links",
+  requireAuth,
+  projectRoleWriteLimiter,
+  requireIdentifiedUser,
+  parseCompactJsonBody,
+  projectsController.linkMarketInsight,
+);
+
+/** DELETE /research-projects/:projectSlug/market-insight-links/:insightId */
+router.delete(
+  "/:projectSlug/market-insight-links/:insightId",
+  requireAuth,
+  projectRoleWriteLimiter,
+  projectsController.unlinkMarketInsight,
+);
+
 /**
  * The counterparty's own inbox, ROOT-MOUNTED (§11j.2).
  *
