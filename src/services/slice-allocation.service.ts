@@ -456,14 +456,19 @@ export async function listAllocationProposals(
     .where(and(...filters))
     // Newest window first, ending in a unique column so a page boundary is stable.
     .orderBy(desc(sliceAllocationProposal.windowClosesAt), desc(sliceAllocationProposal.id))
-    // One extra row in keyset mode, purely to answer "is there another page?" without a
-    // COUNT — the same probe the ledger and the inbox use.
-    .limit(isKeyset ? limit + 1 : limit)
+    // One extra row ALWAYS, purely to answer "is there another page?" without a COUNT — the
+    // same probe the ledger and the inbox use. Fetched in offset mode too, because a cursor a
+    // caller cannot obtain is a cursor nobody can use: `hasMore` used to be gated on
+    // `isKeyset`, so a first request — which by definition carries no cursor — got
+    // `nextCursor: null` and could never bootstrap into keyset mode.
+    .limit(limit + 1)
     .offset(isKeyset ? 0 : (page - 1) * limit);
 
-  const pageRows = isKeyset ? rows.slice(0, limit) : rows;
+  const pageRows = rows.slice(0, limit);
   const lastRow = pageRows.at(-1);
-  const hasMore = isKeyset && rows.length > limit && lastRow !== undefined;
+  // NOT gated on `isKeyset` — this read has no `pagination` block in either mode, so
+  // `nextCursor` is the only paging signal it has ever carried.
+  const hasMore = rows.length > limit && lastRow !== undefined;
 
   return {
     rows: pageRows.map((row) => ({

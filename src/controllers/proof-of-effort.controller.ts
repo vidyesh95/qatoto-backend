@@ -552,8 +552,14 @@ export async function listEffortClaims(req: Request, res: Response): Promise<voi
 
   // KEYSET MODE DROPS `pagination` RATHER THAN FAKING IT. The block's `total`/`totalPages`
   // require the COUNT this mode deliberately skips, and emitting zeroes would render as "no
-  // claims" beneath a list of claims. Offset mode is byte-identical to what shipped, so no
-  // client that has not asked for a cursor sees any change at all.
+  // claims" beneath a list of claims.
+  //
+  // OFFSET MODE CARRIES `nextCursor` TOO, and that is what makes keyset mode reachable. It
+  // used to omit it, which left the cursor with no entrance: a first request carries no
+  // cursor by definition, so a client could never obtain the one it needed to send. Both
+  // fields are honest together here — offset mode runs the COUNT, so `total` is real, and the
+  // service fetches one extra row, so `nextCursor` is real. Adding a field is additive: a
+  // client parsing `data` and `pagination` does not see it.
   if (claimPage.total === null) {
     res.status(200).json({
       status: "success",
@@ -565,7 +571,7 @@ export async function listEffortClaims(req: Request, res: Response): Promise<voi
     return;
   }
 
-  const response: PaginatedResponse = {
+  const response: PaginatedResponse & { nextCursor: string | null } = {
     status: "success",
     statusCode: 200,
     message: "Effort claims loaded.",
@@ -576,6 +582,7 @@ export async function listEffortClaims(req: Request, res: Response): Promise<voi
       total: claimPage.total,
       totalPages: Math.ceil(claimPage.total / limit),
     },
+    nextCursor: claimPage.nextCursor,
   };
   res.status(200).json(response);
 }

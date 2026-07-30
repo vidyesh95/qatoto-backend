@@ -306,15 +306,23 @@ describe("proof-of-effort routes", () => {
       expect(listClaims).not.toHaveBeenCalled();
     });
 
-    it("keeps the pagination envelope in offset mode, byte-for-byte as it shipped", async () => {
+    /**
+     * The `pagination` block is unchanged; `nextCursor` now rides alongside it.
+     *
+     * It used to be omitted here, which left keyset mode with NO ENTRANCE: a first request
+     * carries no cursor by definition, so a client could never obtain the cursor it had to
+     * send. Both fields are honest together — offset mode runs the COUNT, so `total` is real,
+     * and the service fetches one extra row, so `nextCursor` is real.
+     */
+    it("keeps the pagination envelope in offset mode and carries nextCursor alongside it", async () => {
       requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
-      listClaims.mockResolvedValue({ rows: [], total: 42, nextCursor: null });
+      listClaims.mockResolvedValue({ rows: [], total: 42, nextCursor: "2026-03-14_claim_1" });
 
       const response = await request(app).get(`${path}?page=2&limit=20`);
 
       expect(response.status).toBe(200);
       expect(response.body.pagination).toEqual({ page: 2, limit: 20, total: 42, totalPages: 3 });
-      expect(response.body.nextCursor).toBeUndefined();
+      expect(response.body.nextCursor).toBe("2026-03-14_claim_1");
     });
 
     it("drops the pagination envelope in keyset mode instead of reporting a total of zero", async () => {

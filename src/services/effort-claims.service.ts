@@ -455,6 +455,10 @@ export interface ClaimPage {
  * client that has adopted the cursor must not be silently dropped back onto the old
  * behaviour. The COUNT is skipped entirely in keyset mode — it is the more expensive half of
  * this read and answers a question the caller did not ask.
+ *
+ * `nextCursor` IS RETURNED IN BOTH MODES, and that is what makes the cursor reachable at all.
+ * A first request carries no cursor by definition, so gating the cursor on having received
+ * one left keyset mode with no entrance — see the `.limit()` note below.
  */
 export async function listClaims(projectId: string, filter: ListClaimsFilter): Promise<ClaimPage> {
   const conditions = [eq(effortClaim.projectId, projectId)];
@@ -498,9 +502,15 @@ export async function listClaims(projectId: string, filter: ListClaimsFilter): P
       .where(predicate)
       // §4c rule 4 — ends in a unique column.
       .orderBy(desc(effortClaim.claimedForDate), desc(effortClaim.id))
-      // One extra row in keyset mode, purely to answer "is there another page?" without a
-      // COUNT — the same probe the ledger and the inbox use.
-      .limit(isKeyset ? filter.limit + 1 : filter.limit)
+      // One extra row ALWAYS, purely to answer "is there another page?" without a COUNT —
+      // the same probe the ledger and the inbox use. Fetched in offset mode too, because a
+      // cursor a caller cannot obtain is a cursor nobody can use: `hasMore` used to be
+      // gated on `isKeyset`, so a first request — which by definition carries no cursor —
+      // got `nextCursor: null` and could never bootstrap into keyset mode. The
+      // keyset-ONLY reads in this repo never had that gate (`daily-logs.service.ts`,
+      // `notifications.service.ts`, `project-audit.service.ts`), which is why the
+      // daily-log feed could page and this read could not.
+      .limit(filter.limit + 1)
       .offset(isKeyset ? 0 : (filter.page - 1) * filter.limit),
     isKeyset
       ? undefined
@@ -516,9 +526,14 @@ export async function listClaims(projectId: string, filter: ListClaimsFilter): P
   ]);
 
   const totalRow = totalRows?.[0];
-  const rows = isKeyset ? selectedRows.slice(0, filter.limit) : selectedRows;
+  const rows = selectedRows.slice(0, filter.limit);
   const lastRow = rows.at(-1);
-  const hasMore = isKeyset && selectedRows.length > filter.limit && lastRow !== undefined;
+  // NOT gated on `isKeyset`. Offset mode returns `nextCursor` alongside its `pagination`
+  // block, and both are honest at once: offset mode runs the COUNT, so `total` is real, and
+  // the extra row above makes `hasMore` real. Keyset mode still drops `pagination` — that is
+  // a separate ruling (see the controller) and it is unchanged, because the block's
+  // `total`/`totalPages` need the COUNT keyset mode deliberately skips.
+  const hasMore = selectedRows.length > filter.limit && lastRow !== undefined;
 
   return {
     rows: rows.map((row) => ({
