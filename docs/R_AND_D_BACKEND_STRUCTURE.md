@@ -3581,7 +3581,7 @@ list row should carry `linkedProjectCount`.
 
 #### 11l.2 Cross-cutting essentials — the absences that span every route
 
-**✅ Nine of eleven shipped.** These were the items no route-walk could find, because each is
+**✅ All eleven shipped.** These were the items no route-walk could find, because each is
 missing from no route in particular.
 
 | #   | Item               | State                                                                                                                               |
@@ -3589,11 +3589,11 @@ missing from no route in particular.
 | 1   | **Notifications**  | ✅ `notification` + `deliver-notification`, migration 0024, 18 kinds, 16 fan-out sites                                              |
 | 2   | **Platform audit** | ✅ `platform_audit_entry` + singleton head, migration 0025, 21 event kinds, append-only triggers, `GET /admin/audit-trail[/verify]` |
 | 3   | **Idempotency**    | ✅ `Idempotency-Key`, migration 0026, honoured on 16 money and equity writes                                                        |
-| 4   | **Keyset ledgers** | 🟡 Partly. Slice ledger and audit trail take `fromSequence`; claims and allocation proposals still page by offset — see below       |
+| 4   | **Keyset ledgers** | ✅ Slice ledger and audit trail take `fromSequence`; claims and allocation proposals take a `cursor`, migration 0027 — see below    |
 | 5   | **`/ready`**       | ✅ Database + pg-boss schema, `503` with a per-check breakdown. `/health` stays dependency-free                                     |
 | 6   | **Observability**  | ✅ `src/lib/logger.ts`, `req.requestId` in every line and every error body, the 5xx message scrubbed                                |
-| 7   | **Rate limiting**  | 🟡 The `""` anonymous bucket is fixed; the store is still per-process — see below                                                   |
-| 8   | **OpenAPI**        | ✅ The R&D surface is DERIVED from the routers; `/docs` gated by `DOCS_ENABLED`                                                     |
+| 7   | **Rate limiting**  | ✅ The `""` anonymous bucket is fixed; buckets are shared through Postgres in production, migration 0028 — see below                |
+| 8   | **OpenAPI**        | ✅ DERIVED from the routers, request bodies included (71 of them); `/docs` gated by `DOCS_ENABLED`                                  |
 | 9   | **Route tests**    | ✅ `src/test-support/` + five route-level suites, including the byte-identical-refusal assertion                                    |
 | 10  | **Dead letters**   | ✅ `pnpm jobs:inspect-failures`, the command `worker.ts:338` had been advertising                                                   |
 | 11  | **Signed bearer**  | ✅ `BEARER_REQUIRE_SIGNATURE`, default false. The DECISION is still owed                                                            |
@@ -3620,26 +3620,69 @@ had no answer in the database — and records the SUBJECT as actor, because the 
 a shell with no session and a `--granted-by=` flag would look like an answer while being an
 unverified string.
 
-**What is deliberately NOT closed, and why:**
+**The three deferred items have since closed, and two of the three reasons for deferring them
+turned out to be wrong. The corrections are the reusable part:**
 
-- **Claims and allocation proposals still page by OFFSET.** `listClaims` orders
-  `(claimedForDate DESC, id DESC)` and can take the same treatment as the ledger.
-  `listAllocationProposals` orders `windowClosesAt DESC, id ASC` — a row-comparison predicate
-  over MIXED directions is subtly wrong in a way worse than the drift it would fix, so it
-  needs its ordering normalized first. Half-doing it would have been the worse outcome.
-- **The rate-limit store is still per-process.** The anonymous bucket is fixed —
-  `userKey` falls back to `ipKeyGenerator` rather than collapsing every anonymous caller into
-  `""` — but two app instances still mean double every documented limit. A Postgres-backed
-  store is the shape that fits this repo's no-new-infrastructure doctrine, and it writes on
-  the hot path for every limited request, which is a decision to take deliberately rather
-  than in passing.
-- **The OpenAPI document claims no request bodies for the R&D surface.** Paths, verbs,
-  parameters and auth are exact and derived; bodies are the controllers' Zod schemas, and
-  `z.toJSONSchema` does not always survive a `.strict()` object with a cross-field
-  refinement. A spec that quietly loosens a constraint is worse than one that omits it.
+- **Claims and allocation proposals now take a `cursor`** (migration 0027). This was deferred
+  on the grounds that a row comparison over `windowClosesAt DESC, id ASC` is "subtly wrong".
+  Mixed directions defeat only the TUPLE form `(a, b) < (x, y)`; the expanded
+  `a < x OR (a = x AND b > y)` is correct either way, and `notifications.service.ts` already
+  shipped exactly that shape. **What the mixed directions actually cost was the INDEX.**
+  Postgres reads a btree forwards or backwards, never one column each way, so no ordered scan
+  could serve that `ORDER BY` — every page, the first one included, sorted every proposal in
+  the project and then discarded the offset. `id` is an arbitrary tiebreaker, so normalizing
+  it to `DESC` fixed the drift and the sort together. `listClaims` never had that problem; its
+  index matched all along. **Listing the two reads as one item was the error** — one was a
+  latent correctness nit, the other was doing a full sort on every request.
+    - `window_closes_at` also moved to `timestamp(3)`. It is written as `now() + interval`, so
+      Postgres stored MICROSECONDS while a cursor encoding `Date.getTime()` carries
+      milliseconds, and a cursor coarser than its column steps over rows it can neither match
+      nor pass. `daily_log.submitted_at` already carried `precision: 3` for this exact reason —
+      the hazard was documented in one place and not applied in the other.
+    - Both reads are DUAL MODE: `page` still works, `cursor` wins when both arrive. Keyset mode
+      on claims skips the `COUNT` and drops the `pagination` block rather than reporting a total
+      of zero beneath a list of claims.
+- **Rate-limit buckets are shared through Postgres in production** (migration 0028). The
+  entry above understated the risk: two instances doubling every limit is true, but the
+  in-memory counters also RESET ON RESTART, so every deploy handed a fresh OTP and
+  credential-stuffing budget to anyone watching. Three things the implementation had to
+  account for that were not visible from the outside:
+    - `emailKey` derives its bucket key from the request BODY, unbounded and before any
+      validation runs. A concatenated `"namespace:key"` would let a crafted email land in
+      another limiter's bucket, and an oversized one blows the ~2704-byte btree limit. Hence a
+      composite primary key and a `sha256:` normalization above 256 characters.
+    - express-rate-limit throws `ERR_ERL_STORE_REUSE` on a shared store object, so each limiter
+      needs its own instance AND its own `prefix` — otherwise the library's double-count check
+      fires on `/signup/start`, where an IP-keyed and an email-keyed limiter stack.
+    - `connectionTimeoutMillis` is 10 s, so a bare `try`/`catch` would add ten seconds to every
+      limited request under pool exhaustion and make the limiter the outage. The circuit breaker
+      is a requirement, not a refinement.
+    - Failure policy is **fail-degraded**, not open or closed: the store falls back to
+      per-process memory, which keeps the bound and is exactly what shipped before.
+- **The OpenAPI document now carries request bodies** for all 71 R&D routes that take one.
+  The caveat was half right. `.strict()` converts cleanly — `z.toJSONSchema` emits
+  `additionalProperties: false`. What is lost is the cross-field `.refine()`, and it is lost
+  in SILENCE: a refinement is a check on `_zod.def.checks` while the converter dispatches on
+  `def.type`. **`unrepresentable: "throw"` does not catch it**, because that flag guards
+  unrepresentable TYPES. So the guard had to be built rather than configured — the lost
+  constraints are detected through Zod's `override` hook and disclosed on the operation, in
+  `description` for a human and `x-unrepresentable-constraints` for a tool, every word derived
+  from the controller's own message. Loudly loosened rather than quietly, which is what the
+  original rule actually asked for; withholding the body would have hidden twenty correct
+  field constraints to avoid overstating one.
 - **`BEARER_REQUIRE_SIGNATURE` defaults to `false`.** The flag exists so the change is a
   deploy rather than a patch; the decision is still owed, and it must be `true` before the
   first mobile release — after, flipping it logs every mobile user out.
+
+**Still open, and NOT part of the above:**
+
+- **Better Auth's own rate limiter is still per-process** (`src/lib/auth.ts`). It supports
+  `storage: "database"`, but flipping it is not a config edit: `drizzleAdapter` is built
+  without a `schema`, so a missing `rateLimit` model throws on the FIRST Better Auth request —
+  a login-path outage rather than a boot failure staging would catch. It also costs 2–4
+  queries per request against a 20-connection server. Its own change, with a real database in
+  front of it.
+- **No per-route JSON body cap in this application has ever been in effect.** See §11l.4.
 
 #### 11l.3 Order — as executed
 
@@ -3654,6 +3697,59 @@ unverified string.
 (§11f). It should land AFTER §11l.2 item 2, which it now does by construction: its moderation
 queue appends to the same platform chain rather than adding a third surface that records
 nothing.
+
+#### 11l.4 A guard that was never in effect — the per-route JSON body caps
+
+**OPEN. Found while closing §11l.2, not fixed, and deliberately not half-fixed.**
+
+`src/middleware/json-body.ts` exports two parsers — `parseCompactJsonBody` (16 kb) and
+`parseLongFormJsonBody` (128 kb) — and 77 route registrations name one of them. **Not one of
+those 77 has ever run.** body-parser sets `req._body` on the first successful parse and every
+later parser short-circuits on that flag, so whichever parser runs FIRST is the only one that
+matters, and in this application that is never the route's own:
+
+- `src/app.ts` mounts `express.json({ limit: "10kb" })` **before every router**. So for any
+  route outside the three prefixes below, the effective cap is **10 kb**, not the 16 kb its
+  chain declares.
+- Above that, `parseLongFormJsonBody` was mounted on the `/research-projects`, `/discovery`
+  and `/videos` **prefixes**. For routes under those, the effective cap is **128 kb** — eight
+  times what a `parseCompactJsonBody` route asks for.
+
+The file's own header warns about the second-parser-wins mechanism, in the direction of a
+parser mounted AFTER the global one. Both live cases are the same mechanism arriving from a
+direction the note did not consider: a parser mounted on a PREFIX voids the smaller ones
+inside it, and the GLOBAL parser voids every per-route parser everywhere. `discovery.routes.ts`
+calls its prefix mount "load-bearing, not tidiness" while the same file puts
+`parseCompactJsonBody` on twelve routes the mount silently voids — both intentions cannot hold
+at once.
+
+**WHY IT IS NOT FIXED HERE.** Deleting the prefix mounts is not the fix and is actively worse:
+it drops those three prefixes from 128 kb to the global 10 kb, which is BELOW what several
+schemas legitimately produce — a 5,000-character description is ~15 kb in Devanagari or CJK.
+That is the original non-English-users-only 413 the prefix mounts were added to prevent, and
+reintroducing it to fix a cap nobody was enforcing is a bad trade. This was attempted, caught
+by an end-to-end test, and reverted.
+
+**WHAT THE FIX HAS TO BE.** Per-route caps cannot work by stacking parsers at all, because the
+first parse wins by design. Parse ONCE at the largest cap any route needs, record the raw byte
+length in `express.json`'s `verify` hook, and enforce the per-route limit as a separate check
+against that number. That inverts the mechanism instead of fighting it, and it is the only
+shape in which a per-route cap means anything.
+
+**Sizing it is already solved.** A cap must never be set below what a route's own schema can
+produce, or the fix reintroduces the bug: a route whose worst case fits its cap can only 413 a
+body Zod would reject anyway (a 413 where a 422 would have been, same outcome), whereas a cap
+chosen by eye can reject real input. Worst-case size is derivable from the same converted JSON
+Schema §11l.2 item 8 now emits — `maxLength × 4` for the UTF-8 worst case, `maxItems` for
+arrays, with `format` and anchored-regex bounds covering `z.uuid()` and the decimal-string
+amounts. Measured across the 71 mapped bodies: **59 bounded, 12 with no derivable bound**; of
+the 59, **46 fit inside 16 kb** and **13 need long-form**. The 12 unbounded ones keep the
+larger cap, because there is nothing safe to tighten to — and adding `.max()` to those fields
+is its own change, since it can reject input that works today.
+
+`/videos` needs care in any attempt: it has no per-route parser at all, depends wholly on the
+prefix mount, and its body schemas are module-private, so it cannot be measured from outside
+and must keep 128 kb.
 
 ---
 
@@ -4039,7 +4135,7 @@ Do **not** implement the domains in parallel — §9 defines the numbers every o
 | **5. Discovery** (§6) ✅             | Clusters, scoring jobs, insights, talent                                                                                                                                 | **Shipped**, moderation subtree included (§11j.4)                                                                                                                     |
 | **5a. Go-to-market** (§11i) ✅       | Supplier directory, seeded capability vocabulary, engagements, derived launch readiness, `product.researchProjectId`                                                     | **Shipped.** A new domain beside §5 and just as independent — deferrable, blocking nothing. Migration 0020                                                            |
 | **6. Gaps** (§11j, §11k) ✅          | 40 verbs, then the two read halves shipping the write halves left open                                                                                                   | **Shipped.** What made "complete apart from Project Immortal" checkable                                                                                               |
-| **7. §11l** ✅                       | Four reads + two rulings → notifications + platform audit → idempotency + keyset → ops & tests                                                                           | **Shipped.** Migrations 0024–0026. Three items deliberately left: two OFFSET reads, the per-process rate-limit store, request bodies in the derived spec              |
+| **7. §11l** ✅                       | Four reads + two rulings → notifications + platform audit → idempotency + keyset → ops & tests                                                                           | **Shipped, all eleven.** Migrations 0024–0028. The three deferred items closed; two of their stated reasons were wrong, and §11l.2 records the corrections            |
 | **8. Project Immortal** (§10) ⏳     | Branches, papers, posts, moderation                                                                                                                                      | **Last, and no longer blocked** — the moderator role shipped with §11i. Land it after §11l.2 item 2 so its moderation actions have somewhere to be recorded           |
 
 **§7A shipped, and it did delete more surface than it added** — nine escrow routes, three jobs, one

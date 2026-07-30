@@ -10,6 +10,20 @@ import express from "express";
  * the global one is a silent no-op — the 10 kb cap has already rejected the request.
  * These must mount ABOVE `app.use(express.json({ limit: "10kb" }))`.
  *
+ * ⚠️ THE SAME RULE RUNS THE OTHER WAY, AND IT MEANS THESE PARSERS DO NOT CURRENTLY WORK
+ * (§11l.4). "First parse wins" is symmetric: the global parser in `src/app.ts` is mounted
+ * ahead of every router, so a `parseCompactJsonBody` INSIDE a router can never run — the
+ * route's real cap is 10 kb, whatever its chain says. Where a prefix-level parser was
+ * mounted above the global one, that prefix's routes got 128 kb instead, again regardless
+ * of what the route asked for. Seventy-seven registrations name one of these two parsers
+ * and not one of them is in effect.
+ *
+ * DO NOT "FIX" THIS BY DELETING THE PREFIX MOUNTS. That drops those routes to the global
+ * 10 kb, which is BELOW what several schemas legitimately produce — the non-English 413
+ * described below is exactly what the prefix mounts were added to prevent. A per-route cap
+ * cannot work by stacking parsers at all; it needs one parse at the largest cap plus a
+ * separate size check per route. §11l.4 has the shape and the measurements.
+ *
  * Why the global cap is genuinely too small: `limit` counts BYTES while
  * `z.string().max(n)` counts UTF-16 code units. A 5,000-character project description
  * is ~5 KB in ASCII but up to 15 KB in UTF-8 for Devanagari or CJK — so the global cap
