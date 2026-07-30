@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as productsController from "#src/controllers/products.controller.js";
+import { longFormBody } from "#src/middleware/json-body.js";
 import { productCreateLimiter, productImageUploadLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadProductImage } from "#src/middleware/upload-product-image.js";
@@ -20,7 +21,7 @@ const router = express.Router();
  * POST /products
  * Create a draft listing. Rate-limited per seller.
  */
-router.post("/", requireAuth, productCreateLimiter, productsController.createProduct);
+router.post("/", requireAuth, productCreateLimiter, longFormBody, productsController.createProduct);
 
 /**
  * GET /products/mine
@@ -38,7 +39,7 @@ router.get("/:id", requireAuth, productsController.getProductById);
  * PATCH /products/:id
  * Partial update of mutable fields (+ optional tier replacement).
  */
-router.patch("/:id", requireAuth, productsController.updateProduct);
+router.patch("/:id", requireAuth, longFormBody, productsController.updateProduct);
 
 /**
  * DELETE /products/:id
@@ -64,7 +65,7 @@ router.post(
  * Set the gallery order (index 0 = main image). Declared before the parameterized
  * `/:id/images/:imageId` so "reorder" is never read as an image id.
  */
-router.patch("/:id/images/reorder", requireAuth, productsController.reorderImages);
+router.patch("/:id/images/reorder", requireAuth, longFormBody, productsController.reorderImages);
 
 /**
  * DELETE /products/:id/images/:imageId

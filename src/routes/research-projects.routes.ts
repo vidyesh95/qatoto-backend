@@ -4,7 +4,7 @@ import * as applicationsController from "#src/controllers/project-applications.c
 import * as rolesController from "#src/controllers/project-roles.controller.js";
 import * as projectsController from "#src/controllers/research-projects.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
-import { parseCompactJsonBody } from "#src/middleware/json-body.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
   applicationCreateLimiter,
   inviteCreateLimiter,
@@ -46,6 +46,7 @@ router.post(
   requireAuth,
   projectCreateLimiter,
   requireIdentifiedUser,
+  longFormBody,
   projectsController.createProject,
 );
 
@@ -64,7 +65,7 @@ router.get("/mine", requireAuth, projectsController.listMyProjects);
 router.get("/:projectSlug", attachOptionalUser, projectsController.getProject);
 
 /** PATCH /research-projects/:projectSlug — maintainer+, or founder for the equity band. */
-router.patch("/:projectSlug", requireAuth, projectsController.updateProject);
+router.patch("/:projectSlug", requireAuth, longFormBody, projectsController.updateProject);
 
 /** POST /research-projects/:projectSlug/cover — multipart, field `cover`. */
 router.post(
@@ -93,12 +94,7 @@ router.post("/:projectSlug/unpublish", requireAuth, projectsController.unpublish
 router.post("/:projectSlug/archive", requireAuth, projectsController.archiveProject);
 
 /** PATCH /research-projects/:projectSlug/stage — writes an append-only audit row. */
-router.patch(
-  "/:projectSlug/stage",
-  requireAuth,
-  parseCompactJsonBody,
-  projectsController.changeStage,
-);
+router.patch("/:projectSlug/stage", requireAuth, compactBody, projectsController.changeStage);
 
 /** GET /research-projects/:projectSlug/stage-history — member-only. */
 router.get("/:projectSlug/stage-history", requireAuth, projectsController.getStageHistory);
@@ -116,7 +112,7 @@ router.patch(
   "/:projectSlug/members/:memberId",
   requireAuth,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   projectsController.updateMember,
 );
 
@@ -142,7 +138,7 @@ router.post(
   "/:projectSlug/roles",
   requireAuth,
   projectRoleWriteLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   rolesController.createRole,
 );
 
@@ -157,7 +153,7 @@ router.patch(
   "/:projectSlug/roles/:roleId",
   requireAuth,
   projectRoleWriteLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   rolesController.updateRole,
 );
 
@@ -187,7 +183,7 @@ router.post(
   requireAuth,
   applicationCreateLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  longFormBody,
   applicationsController.createApplication,
 );
 
@@ -196,7 +192,7 @@ router.post(
   "/:projectSlug/applications/:applicationId/accept",
   requireAuth,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   applicationsController.acceptApplication,
 );
 
@@ -204,7 +200,7 @@ router.post(
 router.post(
   "/:projectSlug/applications/:applicationId/decline",
   requireAuth,
-  parseCompactJsonBody,
+  compactBody,
   applicationsController.declineApplication,
 );
 
@@ -212,7 +208,7 @@ router.post(
 router.post(
   "/:projectSlug/applications/:applicationId/withdraw",
   requireAuth,
-  parseCompactJsonBody,
+  compactBody,
   applicationsController.withdrawApplication,
 );
 
@@ -230,7 +226,7 @@ router.post(
   requireAuth,
   inviteCreateLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  longFormBody,
   applicationsController.createInvite,
 );
 
@@ -290,7 +286,7 @@ router.post(
   requireAuth,
   projectRoleWriteLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   projectsController.linkMarketInsight,
 );
 

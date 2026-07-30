@@ -2,6 +2,7 @@ import express from "express";
 
 import * as adminReviewController from "#src/controllers/admin-review.controller.js";
 import * as videosController from "#src/controllers/videos.controller.js";
+import { longFormBody } from "#src/middleware/json-body.js";
 import {
   contentReviewLimiter,
   videoCreateLimiter,
@@ -35,7 +36,7 @@ const router = express.Router();
  */
 
 /** POST /videos — parse the YouTube URL, verify it via oEmbed, create the row. */
-router.post("/", requireAuth, videoCreateLimiter, videosController.createVideo);
+router.post("/", requireAuth, videoCreateLimiter, longFormBody, videosController.createVideo);
 
 /** GET /videos/mine — the caller's own videos, paginated. Literal before /:videoId. */
 router.get("/mine", requireAuth, videosController.getMyVideos);
@@ -65,6 +66,7 @@ router.post(
   "/admin/review/:videoId/reject",
   requireAuth,
   contentReviewLimiter,
+  longFormBody,
   adminReviewController.rejectReview,
 );
 
@@ -72,7 +74,7 @@ router.post(
 router.get("/:videoId", requireAuth, videosController.getVideoById);
 
 /** PATCH /videos/:videoId — partial metadata update; a changed URL is re-verified. */
-router.patch("/:videoId", requireAuth, videosController.updateVideo);
+router.patch("/:videoId", requireAuth, longFormBody, videosController.updateVideo);
 
 /** POST /videos/:videoId/thumbnail — multipart `image`, replaces the oEmbed thumbnail. */
 router.post(
@@ -84,13 +86,23 @@ router.post(
 );
 
 /** PUT /videos/:videoId/chapters — replaces the whole chapter set. */
-router.put("/:videoId/chapters", requireAuth, videosController.replaceChapters);
+router.put("/:videoId/chapters", requireAuth, longFormBody, videosController.replaceChapters);
 
 /** PUT /videos/:videoId/products — replaces the shoppable set; ownership re-verified. */
-router.put("/:videoId/products", requireAuth, videosController.replaceAttachedProducts);
+router.put(
+  "/:videoId/products",
+  requireAuth,
+  longFormBody,
+  videosController.replaceAttachedProducts,
+);
 
 /** PUT /videos/:videoId/playlists — sets which of the caller's playlists hold this video. */
-router.put("/:videoId/playlists", requireAuth, videosController.replaceVideoPlaylists);
+router.put(
+  "/:videoId/playlists",
+  requireAuth,
+  longFormBody,
+  videosController.replaceVideoPlaylists,
+);
 
 /** POST /videos/:videoId/publish — an anime episode goes to review, not live. */
 router.post("/:videoId/publish", requireAuth, videosController.publishVideo);

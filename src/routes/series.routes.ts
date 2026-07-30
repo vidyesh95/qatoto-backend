@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as seriesController from "#src/controllers/series.controller.js";
+import { longFormBody } from "#src/middleware/json-body.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 
 const router = express.Router();
@@ -23,7 +24,7 @@ const router = express.Router();
  */
 
 /** POST /series */
-router.post("/", requireAuth, seriesController.createSeries);
+router.post("/", requireAuth, longFormBody, seriesController.createSeries);
 
 /** GET /series/mine — literal before /:seriesId. */
 router.get("/mine", requireAuth, seriesController.getMySeries);
@@ -32,27 +33,38 @@ router.get("/mine", requireAuth, seriesController.getMySeries);
 router.get("/:seriesId", requireAuth, seriesController.getSeriesById);
 
 /** PATCH /series/:seriesId */
-router.patch("/:seriesId", requireAuth, seriesController.updateSeries);
+router.patch("/:seriesId", requireAuth, longFormBody, seriesController.updateSeries);
 
 /** DELETE /series/:seriesId — cascades to seasons and episodes; videos survive. */
 router.delete("/:seriesId", requireAuth, seriesController.deleteSeries);
 
 /** POST /series/:seriesId/seasons */
-router.post("/:seriesId/seasons", requireAuth, seriesController.createSeason);
+router.post("/:seriesId/seasons", requireAuth, longFormBody, seriesController.createSeason);
 
 /** PATCH /series/:seriesId/seasons/:seasonId */
-router.patch("/:seriesId/seasons/:seasonId", requireAuth, seriesController.updateSeason);
+router.patch(
+  "/:seriesId/seasons/:seasonId",
+  requireAuth,
+  longFormBody,
+  seriesController.updateSeason,
+);
 
 /** DELETE /series/:seriesId/seasons/:seasonId */
 router.delete("/:seriesId/seasons/:seasonId", requireAuth, seriesController.deleteSeason);
 
 /** POST /series/:seriesId/seasons/:seasonId/episodes */
-router.post("/:seriesId/seasons/:seasonId/episodes", requireAuth, seriesController.createEpisode);
+router.post(
+  "/:seriesId/seasons/:seasonId/episodes",
+  requireAuth,
+  longFormBody,
+  seriesController.createEpisode,
+);
 
 /** PATCH /series/:seriesId/seasons/:seasonId/episodes/:episodeId */
 router.patch(
   "/:seriesId/seasons/:seasonId/episodes/:episodeId",
   requireAuth,
+  longFormBody,
   seriesController.updateEpisode,
 );
 

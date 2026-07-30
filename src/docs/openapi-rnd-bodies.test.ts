@@ -12,7 +12,7 @@ import { stubServerEnvironment } from "#src/test-support/server-env.js";
  * red build rather than a silently undocumented endpoint.
  *
  * WHY THE DETECTOR READS HANDLER SOURCE RATHER THAN LOOKING FOR A BODY PARSER. Because the
- * parser is not a reliable signal: `src/app.ts` mounts `parseLongFormJsonBody` on three
+ * parser is not a reliable signal: `src/app.ts` mounts `longFormBody` on three
  * PREFIXES, so five routes read a body with nothing in their own `route.stack` — including
  * `post /research-projects/`, the most important body on the surface. Reference-matching the
  * parsers alone would pass while omitting it. Assertion 2 keeps the parser check as a

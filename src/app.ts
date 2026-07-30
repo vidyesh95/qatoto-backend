@@ -7,7 +7,7 @@ import helmet from "helmet";
 import { config } from "#src/config/index.js";
 import { auth } from "#src/lib/auth.js";
 import { errorHandler } from "#src/middleware/error-handler.js";
-import { parseLongFormJsonBody } from "#src/middleware/json-body.js";
+import { parseJsonBodyOnce } from "#src/middleware/json-body.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import { requestLog } from "#src/middleware/request-log.js";
@@ -93,31 +93,27 @@ app.all("/api/auth/*splat", (req, res) => {
   void authNodeHandler(req, res);
 });
 
-// R&D long-form payloads (a description + problem statement + solution summary +
-// evidence notes in one body) exceed 10 kb. MOUNTED BEFORE the global parser on
-// purpose: body-parser sets `req._body` once it has parsed, so a larger json() placed
-// AFTER would silently no-op and the 10 kb cap would still reject the request.
+// ONE JSON parse, at the 128 kb ceiling, recording the body's byte length. Each route then
+// declares its own cap with `compactBody` (16 kb) or `longFormBody` (128 kb), enforced as an
+// ordinary check against that number rather than as a second parser (§11l.4).
 //
-// The cap matters most for non-English users: `limit` counts BYTES while
-// z.string().max(n) counts UTF-16 code units, so a 5,000-character description is ~5 KB
-// in ASCII but up to 15 KB in UTF-8 for Devanagari or CJK — the global cap would reject
-// payloads Zod happily accepts, for those users only.
+// IT HAS TO WORK THIS WAY. body-parser sets `req._body` on the first successful parse and
+// every later parser short-circuits, so the first parse wins — always. Three prefix parsers
+// and a 10 kb global one used to sit here, ahead of every router, which meant not one of the
+// 77 per-route parsers inside those routers ever ran. Routes behind a prefix got 128 kb;
+// everything else got 10 kb, including routes whose schemas produce far more than that.
 //
-// This mount ALSO covers the §8 workshop router, which shares the prefix: a daily log's
-// narrative is 10,000 characters and a chat message is 4,000.
-app.use("/research-projects", parseLongFormJsonBody);
-// Same reasoning for /discovery: POST /discovery/problem-reports carries a 5,000-character
-// description, and PUT /discovery/talent/me carries a bio plus skills plus compensation
-// asks. Both are comfortably over 10 kb once the text is not ASCII.
-app.use("/discovery", parseLongFormJsonBody);
-// Same again for /videos: CreateVideoSchema permits a 5,000-character description plus
-// up to 20 sector tags, 30 tags, six 2,048-character URLs and the whole anime block.
-// MUST stay ABOVE the global express.json() below — body-parser sets `req._body` on the
-// first parse, so a larger parser mounted after it is a silent no-op.
-app.use("/videos", parseLongFormJsonBody);
-
-// Body parsing with size limits to prevent payload abuse — for YOUR routes only.
-app.use(express.json({ limit: "10kb" }));
+// The ceiling is 128 kb because `limit` counts BYTES while `z.string().max(n)` counts UTF-16
+// code units: a 5,000-character description is ~5 kb in ASCII but up to 15 kb in UTF-8 for
+// Devanagari or CJK. A cap that ignores that rejects payloads Zod accepts, for non-English
+// users only — a bug that never surfaces in English-language testing.
+//
+// THE TRADE: a 100 kb body aimed at a 16 kb route is now buffered before being rejected,
+// where a root-mounted route previously stopped at 10 kb. The ceiling is small, and the six
+// routers behind the old prefix mounts already buffered this much.
+app.use(parseJsonBodyOnce);
+// Kept for completeness and deliberately unchanged: no route in this application reads a
+// urlencoded body. Every non-JSON body is multipart, handled by multer off the raw stream.
 app.use(express.urlencoded({ extended: false, limit: "10kb" }));
 
 // Cookie parsing

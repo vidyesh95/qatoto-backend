@@ -2,6 +2,7 @@ import express from "express";
 
 import * as handleController from "#src/controllers/handle.controller.js";
 import * as usersController from "#src/controllers/users.controller.js";
+import { longFormBody } from "#src/middleware/json-body.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadAvatarPhoto } from "#src/middleware/upload-avatar.js";
 
@@ -19,7 +20,7 @@ router.get("/", usersController.getUsers);
  * is derived from the session cookie, not the request body. Declared before the
  * `/:id` route so "me" is never swallowed as an id param.
  */
-router.patch("/me", requireAuth, usersController.updateMyProfile);
+router.patch("/me", requireAuth, longFormBody, usersController.updateMyProfile);
 
 /**
  * PATCH /users/me/photo  (multipart/form-data, field `photo`)
@@ -47,7 +48,7 @@ router.get("/me/handle", requireAuth, handleController.getMyHandle);
  * Authoritative set/revert of the caller's handle (full server-side transaction).
  * Auth required; id from the session.
  */
-router.patch("/me/handle", requireAuth, handleController.updateMyHandle);
+router.patch("/me/handle", requireAuth, longFormBody, handleController.updateMyHandle);
 
 /**
  * GET /users/me/linked-accounts

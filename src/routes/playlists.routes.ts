@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as playlistsController from "#src/controllers/playlists.controller.js";
+import { longFormBody } from "#src/middleware/json-body.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 
 const router = express.Router();
@@ -16,7 +17,7 @@ const router = express.Router();
  */
 
 /** POST /playlists */
-router.post("/", requireAuth, playlistsController.createPlaylist);
+router.post("/", requireAuth, longFormBody, playlistsController.createPlaylist);
 
 /** GET /playlists/mine — literal before /:playlistId. */
 router.get("/mine", requireAuth, playlistsController.getMyPlaylists);
@@ -25,12 +26,17 @@ router.get("/mine", requireAuth, playlistsController.getMyPlaylists);
 router.get("/:playlistId", requireAuth, playlistsController.getPlaylistById);
 
 /** PATCH /playlists/:playlistId — rename, re-describe, change visibility or ordering. */
-router.patch("/:playlistId", requireAuth, playlistsController.updatePlaylist);
+router.patch("/:playlistId", requireAuth, longFormBody, playlistsController.updatePlaylist);
 
 /** DELETE /playlists/:playlistId — removes the grouping, never the videos in it. */
 router.delete("/:playlistId", requireAuth, playlistsController.deletePlaylist);
 
 /** PUT /playlists/:playlistId/videos — replaces membership AND order. */
-router.put("/:playlistId/videos", requireAuth, playlistsController.replacePlaylistVideos);
+router.put(
+  "/:playlistId/videos",
+  requireAuth,
+  longFormBody,
+  playlistsController.replacePlaylistVideos,
+);
 
 export default router;

@@ -2,7 +2,7 @@ import express from "express";
 
 import * as fundingController from "#src/controllers/funding.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
-import { parseCompactJsonBody } from "#src/middleware/json-body.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { fundingRoundWriteLimiter, pledgeLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
@@ -101,7 +101,7 @@ router.post(
   pledgeLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   fundingController.createPledge,
 );
 
@@ -118,7 +118,7 @@ router.patch(
   "/funding-rounds/:roundId",
   requireAuth,
   fundingRoundWriteLimiter,
-  parseCompactJsonBody,
+  compactBody,
   fundingController.updateFundingRound,
 );
 
@@ -155,7 +155,7 @@ router.patch(
   "/milestones/:milestoneId",
   requireAuth,
   fundingRoundWriteLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   fundingController.updateMilestone,
 );
 
@@ -178,7 +178,7 @@ router.put(
   "/milestones/:milestoneId/variance",
   requireAuth,
   fundingRoundWriteLimiter,
-  parseCompactJsonBody,
+  compactBody,
   fundingController.putMilestoneVariance,
 );
 
@@ -225,7 +225,7 @@ projectFundingRouter.post(
   "/:projectSlug/funding-rounds",
   requireAuth,
   fundingRoundWriteLimiter,
-  parseCompactJsonBody,
+  compactBody,
   fundingController.createFundingRound,
 );
 
@@ -239,7 +239,7 @@ projectFundingRouter.post(
   "/:projectSlug/milestones",
   requireAuth,
   fundingRoundWriteLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   fundingController.createMilestone,
 );
 

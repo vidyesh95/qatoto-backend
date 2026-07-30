@@ -47,7 +47,7 @@ export interface DeclaredRoute {
  *
  * SEPARATE FROM `DeclaredRoute` ON PURPOSE, and the separation is the point. `DeclaredRoute`
  * is what the EMITTER consumes, and the emitter must stay blind to handler identity: "there
- * is a `parseCompactJsonBody` in this chain" is a claim about intent, not about behaviour —
+ * is a `compactBody` in this chain" is a claim about intent, not about behaviour —
  * a parser mounted on a prefix in `src/app.ts` silently voids the ones inside it. Deriving
  * published documentation from that would publish the intent and describe the wrong server.
  *

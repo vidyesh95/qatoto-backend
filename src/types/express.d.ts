@@ -17,6 +17,15 @@ declare namespace Express {
      * `app.use` in `src/app.ts` has it.
      */
     requestId?: string;
+    /**
+     * The raw JSON body's length IN BYTES, recorded by `parseJsonBodyOnce` and read by
+     * `limitBodyBytes` to enforce a per-route cap (§11l.4).
+     *
+     * UNDEFINED means no JSON body was parsed — a bodiless request, a content type the
+     * parser does not claim, or a multipart upload multer owns. That is distinct from a
+     * body of length zero, and a cap check must treat it as "nothing to check".
+     */
+    rawBodyBytes?: number;
     user?: {
       readonly id: string;
       readonly email: string;

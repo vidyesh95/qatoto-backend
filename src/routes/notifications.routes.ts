@@ -1,7 +1,7 @@
 import express from "express";
 
 import * as notificationsController from "#src/controllers/notifications.controller.js";
-import { parseCompactJsonBody } from "#src/middleware/json-body.js";
+import { compactBody } from "#src/middleware/json-body.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 
 const router = express.Router();
@@ -40,7 +40,7 @@ router.get("/notifications", requireAuth, notificationsController.listNotificati
 router.post(
   "/notifications/read",
   requireAuth,
-  parseCompactJsonBody,
+  compactBody,
   notificationsController.markNotificationsRead,
 );
 

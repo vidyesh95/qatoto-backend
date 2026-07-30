@@ -3,7 +3,7 @@ import express from "express";
 import * as compensationController from "#src/controllers/compensation.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { idempotency } from "#src/middleware/idempotency.js";
-import { parseCompactJsonBody } from "#src/middleware/json-body.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
   chainVerifyLimiter,
   compensationAgreementLimiter,
@@ -71,7 +71,7 @@ router.post(
   compensationAgreementLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   compensationController.proposeCompensationAgreement,
 );
 
@@ -94,7 +94,7 @@ router.post(
  * `POST …/compensation-agreements/:agreementId/decline` — THE SUBJECT ONLY (§11j.3).
  *
  * Propose and accept shipped without a way to say no, so a proposal the member did not want
- * sat `proposed` forever. `parseCompactJsonBody` because `{ note? }` is a body; `/accept`
+ * sat `proposed` forever. `compactBody` because `{ note? }` is a body; `/accept`
  * has none.
  */
 router.post(
@@ -103,7 +103,7 @@ router.post(
   compensationAgreementLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   compensationController.declineCompensationAgreement,
 );
 
@@ -119,7 +119,7 @@ router.post(
   compensationAgreementLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   compensationController.withdrawCompensationAgreement,
 );
 
@@ -147,7 +147,7 @@ router.post(
   compensationPeriodDecisionLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  longFormBody,
   compensationController.finalizeCompensationPeriod,
 );
 
@@ -161,7 +161,7 @@ router.post(
   compensationPeriodDecisionLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   compensationController.countersignCompensationPeriod,
 );
 
@@ -172,7 +172,7 @@ router.post(
   compensationPeriodDecisionLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   compensationController.supersedeCompensationPeriod,
 );
 
@@ -204,7 +204,7 @@ router.post(
   requireAuth,
   paymentRecordLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   compensationController.recordCompensationPayment,
 );
 

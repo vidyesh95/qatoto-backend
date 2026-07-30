@@ -2,7 +2,7 @@ import express from "express";
 
 import * as suppliersController from "#src/controllers/suppliers.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
-import { parseCompactJsonBody } from "#src/middleware/json-body.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { supplierWriteLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
@@ -81,7 +81,7 @@ supplierRouter.post(
   requireAuth,
   supplierWriteLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  longFormBody,
   suppliersController.createSupplier,
 );
 
@@ -91,7 +91,7 @@ supplierRouter.patch(
   requireAuth,
   supplierWriteLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  longFormBody,
   suppliersController.updateSupplier,
 );
 
@@ -132,7 +132,7 @@ projectGoToMarketRouter.post(
   requireAuth,
   supplierWriteLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   suppliersController.createSupplierEngagement,
 );
 
@@ -141,7 +141,7 @@ projectGoToMarketRouter.patch(
   requireAuth,
   supplierWriteLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   suppliersController.updateSupplierEngagement,
 );
 

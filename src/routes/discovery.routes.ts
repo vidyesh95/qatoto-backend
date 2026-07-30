@@ -7,7 +7,7 @@ import * as marketInsightsController from "#src/controllers/market-insights.cont
 import * as clustersController from "#src/controllers/problem-clusters.controller.js";
 import * as talentController from "#src/controllers/talent-profiles.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
-import { parseCompactJsonBody } from "#src/middleware/json-body.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
   categoryCreateLimiter,
   discoveryModerationLimiter,
@@ -34,7 +34,7 @@ import { requireIdentifiedUser } from "#src/middleware/require-identified-user.j
  * because it is the ONLY §6 read that returns other people's personal data (name, avatar,
  * location, availability). A civic aggregate is not a roster of people.
  *
- * BODY SIZE: `app.ts` mounts `parseLongFormJsonBody` on `/discovery` ABOVE the global
+ * BODY SIZE: `app.ts` mounts `longFormBody` on `/discovery` ABOVE the global
  * 10 kb `express.json()`. That is load-bearing, not tidiness — a 5,000-character
  * description in Devanagari or CJK exceeds 10 kb in BYTES while passing a
  * `z.string().max()` that counts UTF-16 units, so without it the endpoint would reject
@@ -65,7 +65,7 @@ router.post(
   requireAuth,
   discoveryModerationLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   clustersController.linkProjectToCluster,
 );
 
@@ -86,6 +86,7 @@ router.post(
   // The sybil guard. `requireAuth` proves a session exists; the `anonymous()` plugin makes
   // that nearly free, and distinctReporterCount is the entire integrity of the score.
   requireIdentifiedUser,
+  longFormBody,
   clustersController.createProblemReport,
 );
 
@@ -104,7 +105,7 @@ router.post(
   requireAuth,
   categoryCreateLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   catalogController.createCategory,
 );
 
@@ -125,6 +126,7 @@ router.put(
   requireAuth,
   talentProfileWriteLimiter,
   requireIdentifiedUser,
+  compactBody,
   talentController.putMyTalentProfile,
 );
 router.delete(
@@ -174,7 +176,7 @@ router.post(
   "/admin/categories/:categoryId/decide",
   requireAuth,
   discoveryModerationLimiter,
-  parseCompactJsonBody,
+  compactBody,
   moderationController.decideCategory,
 );
 /**
@@ -202,7 +204,7 @@ router.post(
   "/admin/market-insights",
   requireAuth,
   discoveryModerationLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   marketInsightsController.createMarketInsight,
 );
 
@@ -224,7 +226,7 @@ router.patch(
   "/admin/market-insights/:insightId",
   requireAuth,
   discoveryModerationLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   marketInsightsController.updateMarketInsight,
 );
 
@@ -256,7 +258,7 @@ router.post(
   "/admin/skills",
   requireAuth,
   discoveryModerationLimiter,
-  parseCompactJsonBody,
+  compactBody,
   vocabularyController.createSkill,
 );
 
@@ -264,7 +266,7 @@ router.patch(
   "/admin/skills/:skillId",
   requireAuth,
   discoveryModerationLimiter,
-  parseCompactJsonBody,
+  compactBody,
   vocabularyController.updateSkill,
 );
 
@@ -286,7 +288,7 @@ router.post(
   "/admin/regions",
   requireAuth,
   discoveryModerationLimiter,
-  parseCompactJsonBody,
+  compactBody,
   vocabularyController.createRegion,
 );
 
@@ -294,7 +296,7 @@ router.patch(
   "/admin/regions/:regionId",
   requireAuth,
   discoveryModerationLimiter,
-  parseCompactJsonBody,
+  compactBody,
   vocabularyController.updateRegion,
 );
 
@@ -309,7 +311,7 @@ router.post(
   "/admin/merge-proposals/:proposalId/decide",
   requireAuth,
   discoveryModerationLimiter,
-  parseCompactJsonBody,
+  compactBody,
   moderationController.decideMergeProposal,
 );
 

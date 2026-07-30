@@ -3,7 +3,7 @@ import express from "express";
 import * as dailyLogsController from "#src/controllers/daily-logs.controller.js";
 import * as workshopController from "#src/controllers/workshop.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
-import { parseCompactJsonBody } from "#src/middleware/json-body.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
   chatMessageLimiter,
   dailyLogSubmitLimiter,
@@ -58,7 +58,7 @@ router.post(
   "/:projectSlug/workshop/columns",
   requireAuth,
   workshopBoardWriteLimiter,
-  parseCompactJsonBody,
+  compactBody,
   workshopController.createColumn,
 );
 
@@ -66,7 +66,7 @@ router.post(
   "/:projectSlug/workshop/columns/reorder",
   requireAuth,
   workshopBoardWriteLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   workshopController.reorderColumns,
 );
 
@@ -74,7 +74,7 @@ router.patch(
   "/:projectSlug/workshop/columns/:columnId",
   requireAuth,
   workshopBoardWriteLimiter,
-  parseCompactJsonBody,
+  compactBody,
   workshopController.updateColumn,
 );
 
@@ -92,7 +92,7 @@ router.post(
   "/:projectSlug/workshop/tasks",
   requireAuth,
   workshopBoardWriteLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   workshopController.createTask,
 );
 
@@ -101,7 +101,7 @@ router.post(
   "/:projectSlug/workshop/tasks/:taskId/move",
   requireAuth,
   workshopBoardWriteLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   workshopController.moveTask,
 );
 
@@ -109,7 +109,7 @@ router.patch(
   "/:projectSlug/workshop/tasks/:taskId",
   requireAuth,
   workshopBoardWriteLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   workshopController.updateTask,
 );
 
@@ -133,7 +133,7 @@ router.post(
   requireAuth,
   workshopFileCreateLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   workshopController.addFileLink,
 );
 
@@ -144,7 +144,7 @@ router.patch(
   workshopFileCreateLimiter,
   // No requireIdentifiedUser, matching the DELETE below: that guard is on the POST because
   // CREATING a link mints §9 evidence. A rename mints nothing.
-  parseCompactJsonBody,
+  compactBody,
   workshopController.updateFileLink,
 );
 
@@ -163,7 +163,7 @@ router.post(
   "/:projectSlug/workshop/chat",
   requireAuth,
   chatMessageLimiter,
-  parseCompactJsonBody,
+  compactBody,
   workshopController.postChatMessage,
 );
 
@@ -171,7 +171,7 @@ router.post(
   "/:projectSlug/workshop/chat/read",
   requireAuth,
   chatMessageLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   workshopController.markChatRead,
 );
 
@@ -179,7 +179,7 @@ router.patch(
   "/:projectSlug/workshop/chat/:messageId",
   requireAuth,
   chatMessageLimiter,
-  parseCompactJsonBody,
+  compactBody,
   workshopController.editChatMessage,
 );
 
@@ -205,7 +205,7 @@ router.post(
   requireAuth,
   dailyLogWriteLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  longFormBody,
   dailyLogsController.createDailyLog,
 );
 
@@ -221,7 +221,7 @@ router.post(
   requireAuth,
   dailyLogSubmitLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   dailyLogsController.submitDailyLog,
 );
 
@@ -231,7 +231,7 @@ router.patch(
   "/:projectSlug/daily-logs/:logId",
   requireAuth,
   dailyLogWriteLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   dailyLogsController.updateDailyLog,
 );
 

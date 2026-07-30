@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as authController from "#src/controllers/auth.controller.js";
+import { compactBody } from "#src/middleware/json-body.js";
 import {
   otpRequestEmailLimiter,
   otpRequestIpLimiter,
@@ -19,6 +20,7 @@ router.post(
   "/signup/start",
   otpRequestIpLimiter,
   otpRequestEmailLimiter,
+  compactBody,
   authController.startSignup,
 );
 
@@ -27,7 +29,12 @@ router.post(
  * Phase 2 of signup — the only place an account is created: verifies the OTP and
  * sets the password atomically, then opens the session (public). Rate limited per-IP.
  */
-router.post("/signup/complete", signupCompleteIpLimiter, authController.completeSignup);
+router.post(
+  "/signup/complete",
+  signupCompleteIpLimiter,
+  compactBody,
+  authController.completeSignup,
+);
 
 /**
  * GET /me

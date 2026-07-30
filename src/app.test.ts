@@ -66,4 +66,62 @@ describe("App Routes", () => {
       expect(res.body.message).toContain("Route not found");
     });
   });
+
+  /**
+   * Per-route body caps, end to end against the REAL app (§11l.4).
+   *
+   * NOTHING IN THIS SUITE EXERCISED A CAP BEFORE, which is why 77 dead parser registrations
+   * went unnoticed for as long as they did — every test passed just as happily with none of
+   * them in force.
+   *
+   * THE CAP SITS BEHIND `requireAuth` in the documented chain order
+   * (`auth → limiter → idempotency → requireIdentifiedUser → body limit → controller`), so a
+   * signed-out request to a guarded route answers 401 and never reaches the check. The two
+   * cases that assert a 413 therefore use routes reachable without a session; the two that
+   * assert "not 413" work on any route, since 401 is also not 413.
+   */
+  describe("per-route JSON body caps", () => {
+    /** Over 16 KB, comfortably under the 128 KB ceiling. */
+    const OVERSIZED_BODY = { note: "x".repeat(20_000) };
+
+    it("accepts a large body on PUT /playlists/:id/videos — the route that was broken", async () => {
+      // THE REGRESSION TEST. This schema takes 500 ids of 64 characters, about 33 KB of pure
+      // ASCII, and the route sat behind a 10 KB cap it never declared. It failed for every
+      // user, not only for non-English ones. A 413 here means the fix did not land.
+      const res = await request(app)
+        .put("/playlists/playlist_1/videos")
+        .send({ videoIds: Array.from({ length: 400 }, (_, index) => `video_${String(index).padStart(56, "0")}`) });
+
+      expect(res.status).not.toBe(413);
+    });
+
+    it("refuses an oversized body on a compact route, naming the cap", async () => {
+      // `/signup/start` is unauthenticated, so the cap is reachable. A body this size is one
+      // Zod would reject anyway, so the caller sees a 413 where they would have seen a 422 —
+      // the request fails either way and no working traffic changes outcome.
+      const res = await request(app).post("/signup/start").send(OVERSIZED_BODY);
+
+      expect(res.status).toBe(413);
+      expect(res.body.message).toBe("Request body exceeds the 16 KB size limit.");
+    });
+
+    it("still accepts a long-form body where the schema needs one", async () => {
+      // `POST /discovery/problem-reports` carries a 5,000-character description, ~15 KB in
+      // Devanagari or CJK. A 413 here would be the original non-English-users-only bug.
+      const res = await request(app).post("/discovery/problem-reports").send(OVERSIZED_BODY);
+
+      expect(res.status).not.toBe(413);
+    });
+
+    it("enforces the 128 KB ceiling above every per-route cap", async () => {
+      // From the parser itself rather than a route check, so it applies everywhere including
+      // routes behind auth — the body never finishes being read.
+      const res = await request(app)
+        .post("/signup/complete")
+        .send({ note: "x".repeat(200_000) });
+
+      expect(res.status).toBe(413);
+      expect(res.body.message).toBe("Request body exceeds the 128 KB size limit.");
+    });
+  });
 });

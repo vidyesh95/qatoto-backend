@@ -2,7 +2,7 @@ import express from "express";
 
 import * as proofOfEffortController from "#src/controllers/proof-of-effort.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
-import { parseCompactJsonBody } from "#src/middleware/json-body.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
   chainVerifyLimiter,
   disputeLimiter,
@@ -86,7 +86,7 @@ router.post(
   fairMarketRateLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  longFormBody,
   proofOfEffortController.lockFairMarketRate,
 );
 
@@ -120,7 +120,7 @@ router.post(
   fairMarketRateLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   proofOfEffortController.proposeFairMarketRate,
 );
 
@@ -146,7 +146,7 @@ router.post(
   requireAuth,
   effortClaimLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   proofOfEffortController.submitEffortClaim,
 );
 
@@ -155,7 +155,7 @@ router.post(
   requireAuth,
   effortClaimLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   proofOfEffortController.reverifyEffortClaim,
 );
 
@@ -174,7 +174,7 @@ router.patch(
   requireAuth,
   effortClaimLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   proofOfEffortController.overrideVerificationStep,
 );
 
@@ -217,7 +217,7 @@ router.post(
   disputeLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   proofOfEffortController.raiseDispute,
 );
 
@@ -227,7 +227,7 @@ router.post(
   disputeLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   proofOfEffortController.castDisputeVote,
 );
 
@@ -248,7 +248,7 @@ router.post(
   disputeLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  compactBody,
   proofOfEffortController.resolveDispute,
 );
 
@@ -328,7 +328,7 @@ router.post(
   requireAuth,
   fairMarketRateLimiter,
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  longFormBody,
   proofOfEffortController.createIntegrationAuthorizeUrl,
 );
 
@@ -350,7 +350,7 @@ router.post(
   fairMarketRateLimiter,
   idempotency(),
   requireIdentifiedUser,
-  parseCompactJsonBody,
+  longFormBody,
   proofOfEffortController.bakePie,
 );
 
@@ -366,7 +366,7 @@ router.post(
   "/:projectSlug/optimization-suggestions",
   requireAuth,
   effortClaimLimiter,
-  parseCompactJsonBody,
+  longFormBody,
   proofOfEffortController.createOptimizationSuggestion,
 );
 
@@ -374,7 +374,7 @@ router.post(
   "/:projectSlug/optimization-suggestions/:suggestionId/accept",
   requireAuth,
   effortClaimLimiter,
-  parseCompactJsonBody,
+  compactBody,
   proofOfEffortController.decideOptimizationSuggestion("accepted"),
 );
 
@@ -382,7 +382,7 @@ router.post(
   "/:projectSlug/optimization-suggestions/:suggestionId/dismiss",
   requireAuth,
   effortClaimLimiter,
-  parseCompactJsonBody,
+  compactBody,
   proofOfEffortController.decideOptimizationSuggestion("dismissed"),
 );
 
