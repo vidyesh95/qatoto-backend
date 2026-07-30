@@ -3634,12 +3634,12 @@ turned out to be wrong. The corrections are the reusable part:**
   it to `DESC` fixed the drift and the sort together. `listClaims` never had that problem; its
   index matched all along. **Listing the two reads as one item was the error** — one was a
   latent correctness nit, the other was doing a full sort on every request.
-    - `window_closes_at` also moved to `timestamp(3)`. It is written as `now() + interval`, so
+  - `window_closes_at` also moved to `timestamp(3)`. It is written as `now() + interval`, so
       Postgres stored MICROSECONDS while a cursor encoding `Date.getTime()` carries
       milliseconds, and a cursor coarser than its column steps over rows it can neither match
       nor pass. `daily_log.submitted_at` already carried `precision: 3` for this exact reason —
       the hazard was documented in one place and not applied in the other.
-    - Both reads are DUAL MODE: `page` still works, `cursor` wins when both arrive. Keyset mode
+  - Both reads are DUAL MODE: `page` still works, `cursor` wins when both arrive. Keyset mode
       on claims skips the `COUNT` and drops the `pagination` block rather than reporting a total
       of zero beneath a list of claims.
 - **Rate-limit buckets are shared through Postgres in production** (migration 0028). The
@@ -3647,17 +3647,17 @@ turned out to be wrong. The corrections are the reusable part:**
   in-memory counters also RESET ON RESTART, so every deploy handed a fresh OTP and
   credential-stuffing budget to anyone watching. Three things the implementation had to
   account for that were not visible from the outside:
-    - `emailKey` derives its bucket key from the request BODY, unbounded and before any
+  - `emailKey` derives its bucket key from the request BODY, unbounded and before any
       validation runs. A concatenated `"namespace:key"` would let a crafted email land in
       another limiter's bucket, and an oversized one blows the ~2704-byte btree limit. Hence a
       composite primary key and a `sha256:` normalization above 256 characters.
-    - express-rate-limit throws `ERR_ERL_STORE_REUSE` on a shared store object, so each limiter
+  - express-rate-limit throws `ERR_ERL_STORE_REUSE` on a shared store object, so each limiter
       needs its own instance AND its own `prefix` — otherwise the library's double-count check
       fires on `/signup/start`, where an IP-keyed and an email-keyed limiter stack.
-    - `connectionTimeoutMillis` is 10 s, so a bare `try`/`catch` would add ten seconds to every
+  - `connectionTimeoutMillis` is 10 s, so a bare `try`/`catch` would add ten seconds to every
       limited request under pool exhaustion and make the limiter the outage. The circuit breaker
       is a requirement, not a refinement.
-    - Failure policy is **fail-degraded**, not open or closed: the store falls back to
+  - Failure policy is **fail-degraded**, not open or closed: the store falls back to
       per-process memory, which keeps the bound and is exactly what shipped before.
 - **The OpenAPI document now carries request bodies** for all 71 R&D routes that take one.
   The caveat was half right. `.strict()` converts cleanly — `z.toJSONSchema` emits
