@@ -1,6 +1,12 @@
 import type { Request, Response } from "express";
-import { ipKeyGenerator, rateLimit, type Options } from "express-rate-limit";
+import {
+  ipKeyGenerator,
+  rateLimit,
+  type Options,
+  type RateLimitRequestHandler,
+} from "express-rate-limit";
 
+import { createRateLimitStore } from "#src/middleware/rate-limit-store.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**
@@ -45,22 +51,67 @@ function emailKey(req: Request): string {
   return typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
 }
 
-const sharedOptions = {
-  windowMs: FIFTEEN_MINUTES_MS,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-} satisfies Partial<Options>;
+interface LimiterSpec {
+  /**
+   * This limiter's bucket namespace in the shared store, and its identity there.
+   *
+   * MUST BE UNIQUE — `createRateLimitStore` throws at module load on a duplicate, because
+   * two limiters sharing a namespace would silently merge their buckets into a limit that is
+   * wrong for both. Renaming one resets that limiter's live windows exactly once.
+   */
+  readonly namespace: string;
+  readonly windowMs: number;
+  readonly limit: number;
+  /**
+   * `userKey` by default, since all but three limiters sit behind `requireAuth`. Pass `"ip"`
+   * to leave the key generator UNSET so express-rate-limit uses its own — that is what the
+   * three signup limiters have always done, and it is an absence rather than a function, so
+   * it cannot be expressed by passing something.
+   */
+  readonly keyGenerator?: ((req: Request) => string) | "ip";
+}
+
+/**
+ * The one place a limiter is built, so the shared store cannot be forgotten on one.
+ *
+ * WHY A FACTORY. Thirty-three of these repeated the same five options inline and three
+ * spread a `sharedOptions` object; adding `store:` to all of them by hand is a change that
+ * looks done at thirty-five. It also has to be a NEW store per limiter — express-rate-limit
+ * throws `ERR_ERL_STORE_REUSE` when one object is handed to two — with a distinct prefix, or
+ * the library's double-count check fires on `/signup/start`, where an IP-keyed and an
+ * email-keyed limiter stack and can produce the same key string.
+ */
+function createLimiter(spec: LimiterSpec): RateLimitRequestHandler {
+  const options: Partial<Options> = {
+    windowMs: spec.windowMs,
+    limit: spec.limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: rateLimitExceededHandler,
+    store: createRateLimitStore(spec.namespace, spec.windowMs),
+  };
+
+  // Genuinely absent rather than `undefined`, so the library applies its own default instead
+  // of us depending on its option-normalizing behaviour.
+  if (spec.keyGenerator !== "ip") {
+    options.keyGenerator = spec.keyGenerator ?? userKey;
+  }
+
+  return rateLimit(options);
+}
 
 /** /signup/start — at most 8 OTP-send requests per IP per 15 min. */
-export const otpRequestIpLimiter = rateLimit({
-  ...sharedOptions,
+export const otpRequestIpLimiter = createLimiter({
+  namespace: "otpRequestIp",
+  windowMs: FIFTEEN_MINUTES_MS,
   limit: 8,
+  keyGenerator: "ip",
 });
 
 /** /signup/start — at most 4 OTP-send requests per email per 15 min. */
-export const otpRequestEmailLimiter = rateLimit({
-  ...sharedOptions,
+export const otpRequestEmailLimiter = createLimiter({
+  namespace: "otpRequestEmail",
+  windowMs: FIFTEEN_MINUTES_MS,
   limit: 4,
   keyGenerator: emailKey,
 });
@@ -69,9 +120,11 @@ export const otpRequestEmailLimiter = rateLimit({
  * /signup/complete — at most 12 verify+create attempts per IP per 15 min.
  * Complements Better Auth's per-OTP `allowedAttempts` (3) guard on the code itself.
  */
-export const signupCompleteIpLimiter = rateLimit({
-  ...sharedOptions,
+export const signupCompleteIpLimiter = createLimiter({
+  namespace: "signupCompleteIp",
+  windowMs: FIFTEEN_MINUTES_MS,
   limit: 12,
+  keyGenerator: "ip",
 });
 
 const ONE_MINUTE_MS = 60 * 1000;
@@ -103,13 +156,10 @@ function userKey(req: Request): string {
  * user id (not IP) so one user behind a shared NAT can't starve another, and a
  * single user can't hammer the cheap SELECT unbounded.
  */
-export const handleAvailabilityLimiter = rateLimit({
+export const handleAvailabilityLimiter = createLimiter({
+  namespace: "handleAvailability",
   windowMs: ONE_MINUTE_MS,
   limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -117,13 +167,10 @@ export const handleAvailabilityLimiter = rateLimit({
  * (requireAuth runs first) so one seller can't script-spam draft rows, while a
  * shared NAT doesn't starve other sellers.
  */
-export const productCreateLimiter = rateLimit({
+export const productCreateLimiter = createLimiter({
+  namespace: "productCreate",
   windowMs: ONE_MINUTE_MS,
   limit: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -131,13 +178,10 @@ export const productCreateLimiter = rateLimit({
  * sharp decode/re-encode + Cloudinary round-trip). Cap at 60/min per seller;
  * a full 9-image listing is well within one window.
  */
-export const productImageUploadLimiter = rateLimit({
+export const productImageUploadLimiter = createLimiter({
+  namespace: "productImageUpload",
   windowMs: ONE_MINUTE_MS,
   limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 // ---------------------------------------------------------------------------
@@ -155,13 +199,10 @@ export const productImageUploadLimiter = rateLimit({
  * (project, founder member, interval, stats, genesis audit). 20/min is far above any
  * human wizard pace and well below script-spam.
  */
-export const projectCreateLimiter = rateLimit({
+export const projectCreateLimiter = createLimiter({
+  namespace: "projectCreate",
   windowMs: ONE_MINUTE_MS,
   limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -170,26 +211,20 @@ export const projectCreateLimiter = rateLimit({
  * vector. The partial unique index already caps ONE live application per role, so this
  * bounds churn across many projects.
  */
-export const applicationCreateLimiter = rateLimit({
+export const applicationCreateLimiter = createLimiter({
+  namespace: "applicationCreate",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
  * POST …/invites — an invite lands in someone else's notifications, so this is
  * outbound-to-a-third-party and is capped tighter than inbound applications.
  */
-export const inviteCreateLimiter = rateLimit({
+export const inviteCreateLimiter = createLimiter({
+  namespace: "inviteCreate",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -197,26 +232,20 @@ export const inviteCreateLimiter = rateLimit({
  * surface (§5). Rows land `pending`, so the real cost of abuse is moderator time;
  * 5 per 15 minutes is generous for a wizard step nobody legitimately repeats.
  */
-export const categoryCreateLimiter = rateLimit({
+export const categoryCreateLimiter = createLimiter({
+  namespace: "categoryCreate",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
  * POST/DELETE …/watch — idempotent and cheap, but it moves a counter, so an unbounded
  * tap loop is pointless write amplification on the hottest row in the domain.
  */
-export const projectWatchLimiter = rateLimit({
+export const projectWatchLimiter = createLimiter({
+  namespace: "projectWatch",
   windowMs: ONE_MINUTE_MS,
   limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -224,26 +253,20 @@ export const projectWatchLimiter = rateLimit({
  * Cloudinary round-trip. Mirrors productImageUploadLimiter but tighter, because a
  * project has exactly ONE cover and re-uploading it is rare.
  */
-export const projectCoverUploadLimiter = rateLimit({
+export const projectCoverUploadLimiter = createLimiter({
+  namespace: "projectCoverUpload",
   windowMs: ONE_MINUTE_MS,
   limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
  * POST …/roles — role churn is cheap but writes compensation strands too. Generous,
  * since a founder legitimately adds several roles in one sitting at publish time.
  */
-export const projectRoleWriteLimiter = rateLimit({
+export const projectRoleWriteLimiter = createLimiter({
+  namespace: "projectRoleWrite",
   windowMs: ONE_MINUTE_MS,
   limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -259,13 +282,10 @@ export const projectRoleWriteLimiter = rateLimit({
  * It also bounds outbound geocoding: every accepted report that misses the cache costs one
  * call against a 1 req/s provider budget.
  */
-export const problemReportLimiter = rateLimit({
+export const problemReportLimiter = createLimiter({
+  namespace: "problemReport",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -273,13 +293,10 @@ export const problemReportLimiter = rateLimit({
  * flips a row into a directory other people read and invite from, so an unbounded
  * publish/unpublish loop is notification amplification once §5's invite flow reads it.
  */
-export const talentProfileWriteLimiter = rateLimit({
+export const talentProfileWriteLimiter = createLimiter({
+  namespace: "talentProfileWrite",
   windowMs: ONE_MINUTE_MS,
   limit: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -289,13 +306,10 @@ export const talentProfileWriteLimiter = rateLimit({
  * source rows. Generous enough for a real moderation sitting, low enough that scripted
  * mass-approval trips it and shows up in the logs.
  */
-export const discoveryModerationLimiter = rateLimit({
+export const discoveryModerationLimiter = createLimiter({
+  namespace: "discoveryModeration",
   windowMs: ONE_MINUTE_MS,
   limit: 120,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -308,13 +322,10 @@ export const discoveryModerationLimiter = rateLimit({
  * point at one YouTube video, and defers abuse control ("one account spamming the feed
  * with one video") to exactly this limiter. Removing it re-opens that hole.
  */
-export const videoCreateLimiter = rateLimit({
+export const videoCreateLimiter = createLimiter({
+  namespace: "videoCreate",
   windowMs: ONE_MINUTE_MS,
   limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -322,13 +333,10 @@ export const videoCreateLimiter = rateLimit({
  * Cloudinary round-trip. Same shape and reasoning as projectCoverUploadLimiter: a video
  * has exactly one thumbnail and re-uploading it is rare.
  */
-export const videoThumbnailUploadLimiter = rateLimit({
+export const videoThumbnailUploadLimiter = createLimiter({
+  namespace: "videoThumbnailUpload",
   windowMs: ONE_MINUTE_MS,
   limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -336,13 +344,10 @@ export const videoThumbnailUploadLimiter = rateLimit({
  * moderator legitimately works through a queue quickly, so this is generous; it exists
  * to bound a COMPROMISED staff session, not to pace an honest one.
  */
-export const contentReviewLimiter = rateLimit({
+export const contentReviewLimiter = createLimiter({
+  namespace: "contentReview",
   windowMs: ONE_MINUTE_MS,
   limit: 120,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -353,13 +358,10 @@ export const contentReviewLimiter = rateLimit({
  * standup produces dozens of writes in a minute and none of them cost anything beyond one
  * row. This exists to bound a loop, not to pace a member.
  */
-export const workshopBoardWriteLimiter = rateLimit({
+export const workshopBoardWriteLimiter = createLimiter({
+  namespace: "workshopBoardWrite",
   windowMs: ONE_MINUTE_MS,
   limit: 120,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -370,13 +372,10 @@ export const workshopBoardWriteLimiter = rateLimit({
  * server nothing — there is no upload — which is exactly why the bound has to be about
  * the social surface rather than about load.
  */
-export const workshopFileCreateLimiter = rateLimit({
+export const workshopFileCreateLimiter = createLimiter({
+  namespace: "workshopFileCreate",
   windowMs: ONE_MINUTE_MS,
   limit: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -386,13 +385,10 @@ export const workshopFileCreateLimiter = rateLimit({
  * that notifies other people, so the ceiling is about flooding a channel rather than about
  * database cost.
  */
-export const chatMessageLimiter = rateLimit({
+export const chatMessageLimiter = createLimiter({
+  namespace: "chatMessage",
   windowMs: ONE_MINUTE_MS,
   limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -402,13 +398,10 @@ export const chatMessageLimiter = rateLimit({
  * deliberately low. Each create may also cost one outbound oEmbed call to verify a pasted
  * YouTube link, and that budget is shared with the studio's upload path.
  */
-export const dailyLogWriteLimiter = rateLimit({
+export const dailyLogWriteLimiter = createLimiter({
+  namespace: "dailyLogWrite",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -419,13 +412,10 @@ export const dailyLogWriteLimiter = rateLimit({
  * one log per claimed day, so this bounds the remaining lever: resubmitting a failed
  * analysis in a loop. Ten in fifteen minutes is far past any honest retry.
  */
-export const dailyLogSubmitLimiter = rateLimit({
+export const dailyLogSubmitLimiter = createLimiter({
+  namespace: "dailyLogSubmit",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -438,13 +428,10 @@ export const dailyLogSubmitLimiter = rateLimit({
  * fifteen minutes is far past any honest use and far below anything that would exhaust a
  * worker.
  */
-export const effortClaimLimiter = rateLimit({
+export const effortClaimLimiter = createLimiter({
+  namespace: "effortClaim",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -454,13 +441,10 @@ export const effortClaimLimiter = rateLimit({
  * raise again, forever. The original-clock rule already defeats the hostage-taking, and
  * this bounds the noise it would generate on the transparency ledger.
  */
-export const disputeLimiter = rateLimit({
+export const disputeLimiter = createLimiter({
+  namespace: "dispute",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -469,13 +453,10 @@ export const disputeLimiter = rateLimit({
  * Low on purpose. A rate is negotiated between two people over days, not adjusted in a
  * loop, and each proposal appends to an immutable hash chain that nobody can prune.
  */
-export const fairMarketRateLimiter = rateLimit({
+export const fairMarketRateLimiter = createLimiter({
+  namespace: "fairMarketRate",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 15,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -485,13 +466,10 @@ export const fairMarketRateLimiter = rateLimit({
  * demand. It is also the endpoint a monitoring dashboard polls, so the bound is generous
  * enough for a minute-by-minute check and nothing more.
  */
-export const chainVerifyLimiter = rateLimit({
+export const chainVerifyLimiter = createLimiter({
+  namespace: "chainVerify",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -505,13 +483,10 @@ export const chainVerifyLimiter = rateLimit({
  * Fifteen in fifteen minutes is far past any honest backer and far below anything that
  * would make a ledger unreadable.
  */
-export const pledgeLimiter = rateLimit({
+export const pledgeLimiter = createLimiter({
+  namespace: "pledge",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 15,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -521,13 +496,10 @@ export const pledgeLimiter = rateLimit({
  * is a normal burst — a founder laying out eight milestones in a sitting is not abuse —
  * and none of it moves money on its own.
  */
-export const fundingRoundWriteLimiter = rateLimit({
+export const fundingRoundWriteLimiter = createLimiter({
+  namespace: "fundingRoundWrite",
   windowMs: ONE_MINUTE_MS,
   limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -537,13 +509,10 @@ export const fundingRoundWriteLimiter = rateLimit({
  * payout. Neither is a thing anyone does in a loop, and both append to the ledger.
  * A low ceiling here also blunts the obvious grief: request, get rejected, request again.
  */
-export const escrowReleaseLimiter = rateLimit({
+export const escrowReleaseLimiter = createLimiter({
+  namespace: "escrowRelease",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -554,13 +523,10 @@ export const escrowReleaseLimiter = rateLimit({
  * compromised or scripted auditor session should not be able to walk the whole pending
  * queue in a second.
  */
-export const escrowSettlementLimiter = rateLimit({
+export const escrowSettlementLimiter = createLimiter({
+  namespace: "escrowSettlement",
   windowMs: ONE_MINUTE_MS,
   limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -570,13 +536,10 @@ export const escrowSettlementLimiter = rateLimit({
  * fits comfortably; a script walking every member id does not. The accept side shares the
  * bound because it is the same conversation from the other end.
  */
-export const compensationAgreementLimiter = rateLimit({
+export const compensationAgreementLimiter = createLimiter({
+  namespace: "compensationAgreement",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -588,13 +551,10 @@ export const compensationAgreementLimiter = rateLimit({
  * obvious grief — supersede, supersede, supersede — which would otherwise let one account
  * fill a project's audit chain with reversals.
  */
-export const compensationPeriodDecisionLimiter = rateLimit({
+export const compensationPeriodDecisionLimiter = createLimiter({
+  namespace: "compensationPeriodDecision",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -605,13 +565,10 @@ export const compensationPeriodDecisionLimiter = rateLimit({
  * evidence rather than a state change. The idempotency key already makes a retried POST
  * harmless, so this is an abuse bound rather than a correctness one.
  */
-export const paymentRecordLimiter = rateLimit({
+export const paymentRecordLimiter = createLimiter({
+  namespace: "paymentRecord",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 120,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });
 
 /**
@@ -626,11 +583,8 @@ export const paymentRecordLimiter = rateLimit({
  * AFTER `requireAuth` and BEFORE the in-service capability check. A non-moderator therefore
  * spends their own budget discovering they are not staff, rather than the moderator's.
  */
-export const supplierWriteLimiter = rateLimit({
+export const supplierWriteLimiter = createLimiter({
+  namespace: "supplierWrite",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: rateLimitExceededHandler,
-  keyGenerator: userKey,
 });

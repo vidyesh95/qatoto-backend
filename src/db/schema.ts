@@ -210,6 +210,48 @@ export const handleReservation = pgTable(
   ],
 );
 
+// One rate-limit window, shared by every API instance (§11l.2 item 7). The per-process
+// MemoryStore express-rate-limit ships with is not a bound once more than one instance
+// runs, and it resets on every restart — a deploy handed an attacker a fresh OTP budget.
+//
+// COMPOSITE PK, not a concatenated "namespace:key" string, and that is a security choice
+// rather than a style one. `emailKey` in src/middleware/rate-limit.ts derives its key from
+// the request BODY, so with a delimiter an email of "otpRequestIp:1.2.3.4" would land in
+// the per-IP limiter's bucket. Two columns cannot be collided that way. It also makes
+// resetAll a PK-prefix DELETE and lets `GROUP BY namespace` name the hot limiter.
+//
+// NO SURROGATE ID: nothing references a bucket, so a uuid would be dead weight and a
+// randomUUID() call on a hot path. NO created_at: the row is UPDATEd in place across many
+// windows, so it would record the first hit ever rather than this window's start — a
+// reader would take it for the window start and be wrong. The window start is
+// `expires_at` minus the limiter's windowMs. NO FK to `user`: the key is a user id OR an
+// IP OR an email, so two of the three could never satisfy one.
+//
+// This is a CACHE, not a ledger. Truncating it resets every live window and nothing else.
+export const rateLimitBucket = pgTable(
+  "rate_limit_bucket",
+  {
+    /** The limiter's own name. One namespace per limiter; duplicates throw at boot. */
+    namespace: text("namespace").notNull(),
+    /** The keyGenerator's output — a user id, an IP, or a hash of an oversized key. */
+    bucketKey: text("bucket_key").notNull(),
+    hitCount: integer("hit_count").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.namespace, table.bucketKey] }),
+    // For the retention sweep. Live keys rewrite their own row, so only ABANDONED keys
+    // accumulate — but a cache still must not grow forever.
+    index("rate_limit_bucket_expiresAt_idx").on(table.expiresAt),
+    // An assertion that the store's key normalizer ran, not a validation of user input.
+    // `emailKey` reads an unbounded body field, and a btree index row caps at ~2704 bytes,
+    // so an oversized key would be an attacker-triggerable write failure on the OTP path.
+    // The store hashes anything longer to `sha256:<hex>` before it reaches SQL.
+    check("rate_limit_bucket_key_ck", sql`char_length(bucket_key) BETWEEN 1 AND 256`),
+    check("rate_limit_bucket_hits_ck", sql`hit_count >= 0`),
+  ],
+);
+
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),
   accounts: many(account),

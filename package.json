@@ -56,6 +56,8 @@
     "db:expire-stale-project-requests": "tsx --conditions=development scripts/expire-stale-project-requests.ts",
     "db:reconcile-project-stats": "tsx --conditions=development scripts/reconcile-project-stats.ts",
     "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",
+    "db:cleanup-rate-limit-buckets": "tsx --conditions=development scripts/cleanup-expired-rate-limit-buckets.ts",
+    "db:verify-rate-limit-store": "tsx --conditions=development scripts/verify-rate-limit-store.ts",
     "db:backfill-handles": "tsx --conditions=development scripts/backfill-handles.ts",
     "db:backfill-oauth-profile": "tsx --conditions=development scripts/backfill-oauth-profile.ts",
     "db:merge-duplicate-user": "tsx --conditions=development scripts/merge-duplicate-user.ts",

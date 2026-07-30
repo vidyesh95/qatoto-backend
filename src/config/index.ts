@@ -256,6 +256,23 @@ export const isNotificationEmailEnabled =
     ? config.NODE_ENV === "production"
     : config.NOTIFICATION_EMAIL_ENABLED === "true";
 
+/**
+ * Rate-limit buckets live in Postgres in production and in process memory everywhere else
+ * (§11l.2 item 7).
+ *
+ * WHY THIS IS DERIVED AND NOT AN ENV VAR. The per-process store is not a bound at all once
+ * more than one instance is running — two instances mean double every documented limit, and
+ * the in-memory counters also reset on every restart, so a deploy hands an attacker a fresh
+ * OTP and credential-stuffing budget. That is a production property, and a flag defaulting to
+ * "off" would leave it open until somebody remembered to set it.
+ *
+ * Dev and test stay in memory ON PURPOSE, and `src/middleware/rate-limit.test.ts` depends on
+ * it: that suite mocks the database module entirely and isolates cases by IP, which only
+ * works while the counters are local. Sharing a store there would buy nothing and cost every
+ * local request a round trip.
+ */
+export const isRateLimitStoreShared = config.NODE_ENV === "production";
+
 if (config.NODE_ENV === "production" && process.env.TZ !== "UTC") {
   throw new Error(
     `TZ must be "UTC" in production (received ${process.env.TZ ?? "unset"}): ` +

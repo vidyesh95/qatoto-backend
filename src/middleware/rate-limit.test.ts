@@ -15,6 +15,14 @@ import { describe, it, expect, beforeAll, vi } from "vitest";
  * therefore uses its own `X-Forwarded-For` IP (app.ts sets `trust proxy = 1`, so
  * req.ip resolves to that value) and its own email namespace, giving every test
  * fresh per-IP and per-email buckets.
+ *
+ * STILL IN MEMORY AFTER §11l.2 item 7, and that is deliberate rather than stale.
+ * The buckets moved to Postgres in PRODUCTION ONLY (`isRateLimitStoreShared` in
+ * src/config/index.ts); dev and test stay local. This suite is why that split
+ * exists in the shape it does — it mocks the database module wholesale, and the
+ * per-IP isolation above only works while the counters are process-local.
+ * `rate-limit-store.test.ts` covers the store's own logic and
+ * `pnpm db:verify-rate-limit-store` covers its SQL against real Postgres.
  */
 
 // Mirror app.test.ts: dotenv is a no-op and env is stubbed so config + Better Auth load.
