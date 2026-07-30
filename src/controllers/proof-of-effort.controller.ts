@@ -9,7 +9,9 @@ import {
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
 import { respondProofOfEffortError } from "#src/controllers/proof-of-effort-error-response.js";
+import { decodeDateCursor } from "#src/lib/date-cursor.js";
 import { exchangeCodeForToken, fetchViewerLogin } from "#src/lib/github-integration.js";
+import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
 import * as disputeService from "#src/services/dispute.service.js";
 import * as claimsService from "#src/services/effort-claims.service.js";
 import * as snapshotService from "#src/services/equity-snapshot.service.js";
@@ -163,11 +165,17 @@ export const AuditTrailQuerySchema = z
   })
   .strict();
 
+/**
+ * `cursor` is the keyset form (§11l.2 item 4) and WINS over `page` when both arrive. `page`
+ * stays only for back-compat: offset paging drifts under concurrent inserts, so a client that
+ * has adopted the cursor must not be silently dropped back onto the old behaviour.
+ */
 export const ProposalListQuerySchema = z
   .object({
     status: z.enum(["open", "disputed", "locked", "consensus_reached"]).optional(),
     page: z.coerce.number().int().min(1).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
+    cursor: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
 
@@ -207,6 +215,9 @@ export const EffortClaimListQuerySchema = z
     memberUserId: z.string().trim().min(1).max(64).optional(),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
+    // Keyset mode (§11l.2 item 4). Wins over `page`, and swaps the `pagination` block for a
+    // `nextCursor` — see `listEffortClaims` for why the two cannot both be honest at once.
+    cursor: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
 
@@ -268,9 +279,10 @@ export async function getProofOfEffortSummary(req: Request, res: Response): Prom
     // NULL rather than a fabricated zero when no snapshot exists yet: a project with no
     // cap table has no cap table, and rendering 0% per member would be a made-up fact.
     equity: snapshot,
-    openProposals,
-    // `.rows`: the ledger read gained a keyset envelope (§11l.2 item 4). The SUMMARY's
-    // wire shape is unchanged — this stays a bare array of the newest entries.
+    // `.rows` on both: the ledger and the proposal read each gained a keyset envelope
+    // (§11l.2 item 4). The SUMMARY's wire shape is unchanged — these stay bare arrays of
+    // the newest entries, and a summary card does not page.
+    openProposals: openProposals.rows,
     recentLedgerEntries: recentLedger.rows,
     // Explicitly OUTSIDE the denominator, and labelled so a client cannot mistake it for
     // an allocation (§9.5).
@@ -356,11 +368,37 @@ export async function listAllocationProposals(req: Request, res: Response): Prom
     return;
   }
 
-  respondOk(
-    res,
-    "Allocation proposals loaded.",
-    await allocationService.listAllocationProposals(caller.context.projectId, parsedQuery.data),
-  );
+  const { cursor: rawCursor, ...pageOptions } = parsedQuery.data;
+
+  // Decoded HERE rather than in the service: CLAUDE.md §3.1 puts parsing of untrusted input
+  // at the controller boundary, so the service receives a typed cursor or nothing at all.
+  const decodedCursor = rawCursor === undefined ? undefined : decodeInstantCursor(rawCursor);
+  if (rawCursor !== undefined && decodedCursor === null) {
+    // 422 and NEVER a silent first page: a client that restarts a feed it thought it was
+    // paging shows duplicates and reports them as a backend bug (§11h).
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "Malformed cursor.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const proposals = await allocationService.listAllocationProposals(caller.context.projectId, {
+    ...pageOptions,
+    ...(decodedCursor === null || decodedCursor === undefined ? {} : { cursor: decodedCursor }),
+  });
+
+  // `data` STAYS THE ARRAY and `nextCursor` rides alongside it, exactly as the slice ledger
+  // does above. Moving the rows under an envelope key would break every client parsing this
+  // read today, which §11l is not allowed to do.
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Allocation proposals loaded.",
+    data: proposals.rows,
+    nextCursor: proposals.nextCursor,
+  });
 }
 
 /**
@@ -488,13 +526,44 @@ export async function listEffortClaims(req: Request, res: Response): Promise<voi
     return;
   }
 
-  const { page, limit, status, memberUserId } = parsedQuery.data;
+  const { page, limit, status, memberUserId, cursor: rawCursor } = parsedQuery.data;
+
+  // Decoded HERE rather than in the service: CLAUDE.md §3.1 puts parsing of untrusted input
+  // at the controller boundary, so the service receives a typed cursor or nothing at all.
+  const decodedCursor = rawCursor === undefined ? undefined : decodeDateCursor(rawCursor);
+  if (rawCursor !== undefined && decodedCursor === null) {
+    // 422 and NEVER a silent first page, the same contract the inbox and the proposal ledger
+    // answer with (§11h).
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "Malformed cursor.",
+    } satisfies ApiResponse);
+    return;
+  }
+
   const claimPage = await claimsService.listClaims(caller.context.projectId, {
     ...(status === undefined ? {} : { status }),
     ...(memberUserId === undefined ? {} : { memberUserId }),
+    ...(decodedCursor === null || decodedCursor === undefined ? {} : { cursor: decodedCursor }),
     page,
     limit,
   });
+
+  // KEYSET MODE DROPS `pagination` RATHER THAN FAKING IT. The block's `total`/`totalPages`
+  // require the COUNT this mode deliberately skips, and emitting zeroes would render as "no
+  // claims" beneath a list of claims. Offset mode is byte-identical to what shipped, so no
+  // client that has not asked for a cursor sees any change at all.
+  if (claimPage.total === null) {
+    res.status(200).json({
+      status: "success",
+      statusCode: 200,
+      message: "Effort claims loaded.",
+      data: [...claimPage.rows],
+      nextCursor: claimPage.nextCursor,
+    });
+    return;
+  }
 
   const response: PaginatedResponse = {
     status: "success",

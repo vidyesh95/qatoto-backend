@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -14,6 +14,7 @@ import {
   user,
   verificationStep,
 } from "#src/db/schema.js";
+import { encodeDateCursor, type DateCursor } from "#src/lib/date-cursor.js";
 import {
   cashSliceNumerator,
   computeSlicesAwarded,
@@ -421,11 +422,20 @@ export interface ListClaimsFilter {
   readonly memberUserId?: string | undefined;
   readonly page: number;
   readonly limit: number;
+  /** Keyset mode. Decoded by the controller (CLAUDE.md §3.1); wins over `page`. */
+  readonly cursor?: DateCursor | undefined;
 }
 
 export interface ClaimPage {
   readonly rows: readonly ClaimSummaryView[];
-  readonly total: number;
+  /**
+   * OFFSET MODE ONLY, and null in keyset mode rather than 0 — a keyset page does not know
+   * the size of the set it is walking, and reporting 0 would render as "no claims" beneath
+   * a list of claims. The controller omits the `pagination` block when this is null.
+   */
+  readonly total: number | null;
+  /** The `cursor` to ask for next, or null at the end. Always null in offset mode. */
+  readonly nextCursor: string | null;
 }
 
 /**
@@ -437,7 +447,14 @@ export interface ClaimPage {
  * user id, as on `…/members/:memberUserId/fair-market-rate` — not the internal `memberId`.
  *
  * `effort_claim_projectId_claimedForDate_idx` on (projectId, claimedForDate, id) matches
- * this ORDER BY exactly.
+ * this ORDER BY exactly — declared ASC and scanned backwards, which Postgres can do because
+ * both columns run the same direction.
+ *
+ * KEYSET WHEN GIVEN A CURSOR, OFFSET OTHERWISE (§11l.2 item 4). `page` stays for back-compat
+ * and loses to `cursor` when both arrive: offset paging drifts under concurrent inserts, so a
+ * client that has adopted the cursor must not be silently dropped back onto the old
+ * behaviour. The COUNT is skipped entirely in keyset mode — it is the more expensive half of
+ * this read and answers a question the caller did not ask.
  */
 export async function listClaims(projectId: string, filter: ListClaimsFilter): Promise<ClaimPage> {
   const conditions = [eq(effortClaim.projectId, projectId)];
@@ -449,6 +466,25 @@ export async function listClaims(projectId: string, filter: ListClaimsFilter): P
     // resolve the display name.
     conditions.push(eq(projectMember.userId, filter.memberUserId));
   }
+  // The COUNT's predicate, fixed before the cursor term is added below: a keyset page has no
+  // total, and counting the rows AFTER the cursor would answer a question nobody asked.
+  const countPredicate = and(...conditions);
+
+  const isKeyset = filter.cursor !== undefined;
+  if (filter.cursor !== undefined) {
+    // The two-term row comparison: a strictly earlier claimed-date, OR the same date with a
+    // smaller id. Many claims share one date — it is the day the work is claimed FOR — so the
+    // tiebreaker is doing real work here, not guarding a theoretical collision.
+    conditions.push(
+      or(
+        lt(effortClaim.claimedForDate, filter.cursor.calendarDate),
+        and(
+          eq(effortClaim.claimedForDate, filter.cursor.calendarDate),
+          lt(effortClaim.id, filter.cursor.id),
+        ),
+      ) ?? sql`true`,
+    );
+  }
   const predicate = and(...conditions);
 
   const baseQuery = db
@@ -457,19 +493,32 @@ export async function listClaims(projectId: string, filter: ListClaimsFilter): P
     .innerJoin(projectMember, eq(projectMember.id, effortClaim.memberId))
     .innerJoin(user, eq(user.id, projectMember.userId));
 
-  const [rows, [totalRow]] = await Promise.all([
+  const [selectedRows, totalRows] = await Promise.all([
     baseQuery
       .where(predicate)
       // §4c rule 4 — ends in a unique column.
       .orderBy(desc(effortClaim.claimedForDate), desc(effortClaim.id))
-      .limit(filter.limit)
-      .offset((filter.page - 1) * filter.limit),
-    db
-      .select({ total: sql<number>`count(*)::int` })
-      .from(effortClaim)
-      .innerJoin(projectMember, eq(projectMember.id, effortClaim.memberId))
-      .where(predicate),
+      // One extra row in keyset mode, purely to answer "is there another page?" without a
+      // COUNT — the same probe the ledger and the inbox use.
+      .limit(isKeyset ? filter.limit + 1 : filter.limit)
+      .offset(isKeyset ? 0 : (filter.page - 1) * filter.limit),
+    isKeyset
+      ? undefined
+      : db
+          .select({ total: sql<number>`count(*)::int` })
+          .from(effortClaim)
+          .innerJoin(projectMember, eq(projectMember.id, effortClaim.memberId))
+          // JOINED TO `user` LIKE THE ROW QUERY ABOVE. Without it the two predicates range
+          // over different row sets, so a claim whose user row is missing is counted but
+          // never listed — `total` over-reports and the last page renders empty.
+          .innerJoin(user, eq(user.id, projectMember.userId))
+          .where(countPredicate),
   ]);
+
+  const totalRow = totalRows?.[0];
+  const rows = isKeyset ? selectedRows.slice(0, filter.limit) : selectedRows;
+  const lastRow = rows.at(-1);
+  const hasMore = isKeyset && selectedRows.length > filter.limit && lastRow !== undefined;
 
   return {
     rows: rows.map((row) => ({
@@ -488,7 +537,10 @@ export async function listClaims(projectId: string, filter: ListClaimsFilter): P
       verdictReachedAt: row.claim.verdictReachedAt,
       createdAt: row.claim.createdAt,
     })),
-    total: totalRow?.total ?? 0,
+    total: isKeyset ? null : (totalRow?.total ?? 0),
+    nextCursor: hasMore
+      ? encodeDateCursor({ calendarDate: lastRow.claim.claimedForDate, id: lastRow.claim.id })
+      : null,
   };
 }
 

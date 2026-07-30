@@ -1,7 +1,8 @@
-import { and, asc, eq, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lt, lte, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { effortClaim, projectMember, sliceAllocationProposal, user } from "#src/db/schema.js";
+import { encodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
 import { appendAuditEntry } from "#src/services/project-audit.service.js";
 import type { ProjectAccessError } from "#src/services/project-membership.service.js";
 import { writeLedgerEntry, type LedgerContribution } from "#src/services/slice-ledger.service.js";
@@ -361,6 +362,13 @@ export interface AllocationProposalView {
   readonly claimedForDate: string;
 }
 
+/** A page of the transparency ledger, plus the cursor that continues it. */
+export interface AllocationProposalPage {
+  readonly rows: readonly AllocationProposalView[];
+  /** The `cursor` to ask for next, or null at the end of the ledger. */
+  readonly nextCursor: string | null;
+}
+
 const DEFAULT_PROPOSAL_PAGE_SIZE = 25;
 const MAXIMUM_PROPOSAL_PAGE_SIZE = 100;
 
@@ -387,21 +395,56 @@ const ALLOCATION_PROPOSAL_VIEW_COLUMNS = {
   claimedForDate: effortClaim.claimedForDate,
 } as const;
 
-/** `GET …/allocation-proposals` — the transparency ledger the team actually watches. */
+/**
+ * `GET …/allocation-proposals` — the transparency ledger the team actually watches.
+ *
+ * KEYSET WHEN GIVEN A CURSOR, OFFSET OTHERWISE (§11l.2 item 4), the same dual mode
+ * `listLedgerEntries` carries. `page` stays for back-compat and loses to `cursor` when both
+ * arrive; offset paging drifts, so a client that has adopted the cursor must not be silently
+ * dropped back onto the old behaviour.
+ *
+ * §11l.2 deferred this on the grounds that a row comparison over
+ * `windowClosesAt DESC, id ASC` is subtly wrong. Mixed directions defeat only the TUPLE form
+ * `(a, b) < (x, y)` — the expanded two-term form below is correct either way. What the mixed
+ * directions DID cost was the index: Postgres reads a btree forwards or backwards, never one
+ * column each way, so `DESC, ASC` could not be served by any ordered scan and every page
+ * sorted the whole project. `id` is an arbitrary tiebreaker, so normalizing it to DESC fixes
+ * both at once (migration 0027 adds the matching index).
+ *
+ * The cursor is DECODED BY THE CALLER, not here: CLAUDE.md §3.1 puts parsing of untrusted
+ * input at the controller boundary, so a raw cursor string never reaches this layer and this
+ * function has no parse-failure branch. (`listNotifications` decodes internally and predates
+ * that reading; it is the divergence, not this.)
+ */
 export async function listAllocationProposals(
   projectId: string,
   options: {
     readonly status?: ProposalStatus | undefined;
     readonly page?: number | undefined;
     readonly limit?: number | undefined;
+    readonly cursor?: InstantCursor | undefined;
   } = {},
-): Promise<readonly AllocationProposalView[]> {
+): Promise<AllocationProposalPage> {
   const limit = Math.min(options.limit ?? DEFAULT_PROPOSAL_PAGE_SIZE, MAXIMUM_PROPOSAL_PAGE_SIZE);
   const page = Math.max(options.page ?? 1, 1);
+  const isKeyset = options.cursor !== undefined;
 
   const filters = [eq(sliceAllocationProposal.projectId, projectId)];
   if (options.status !== undefined) {
     filters.push(eq(sliceAllocationProposal.status, options.status));
+  }
+  if (options.cursor !== undefined) {
+    // The two-term row comparison: a strictly older window, OR the same instant with a
+    // smaller id. Written out rather than as a tuple because a tuple cannot express it.
+    filters.push(
+      or(
+        lt(sliceAllocationProposal.windowClosesAt, options.cursor.instant),
+        and(
+          eq(sliceAllocationProposal.windowClosesAt, options.cursor.instant),
+          lt(sliceAllocationProposal.id, options.cursor.id),
+        ),
+      ) ?? sql`true`,
+    );
   }
 
   const rows = await db
@@ -412,14 +455,25 @@ export async function listAllocationProposals(
     .innerJoin(user, eq(user.id, projectMember.userId))
     .where(and(...filters))
     // Newest window first, ending in a unique column so a page boundary is stable.
-    .orderBy(sql`${sliceAllocationProposal.windowClosesAt} DESC`, asc(sliceAllocationProposal.id))
-    .limit(limit)
-    .offset((page - 1) * limit);
+    .orderBy(desc(sliceAllocationProposal.windowClosesAt), desc(sliceAllocationProposal.id))
+    // One extra row in keyset mode, purely to answer "is there another page?" without a
+    // COUNT — the same probe the ledger and the inbox use.
+    .limit(isKeyset ? limit + 1 : limit)
+    .offset(isKeyset ? 0 : (page - 1) * limit);
 
-  return rows.map((row) => ({
-    ...row,
-    proposedSliceNumerator: row.proposedSliceNumerator.toString(),
-  }));
+  const pageRows = isKeyset ? rows.slice(0, limit) : rows;
+  const lastRow = pageRows.at(-1);
+  const hasMore = isKeyset && rows.length > limit && lastRow !== undefined;
+
+  return {
+    rows: pageRows.map((row) => ({
+      ...row,
+      proposedSliceNumerator: row.proposedSliceNumerator.toString(),
+    })),
+    nextCursor: hasMore
+      ? encodeInstantCursor({ instant: lastRow.windowClosesAt, id: lastRow.id })
+      : null,
+  };
 }
 
 /**

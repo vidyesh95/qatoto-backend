@@ -190,6 +190,13 @@
       "when": 1785325416009,
       "tag": "0026_bent_beast",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1785388758497,
+      "tag": "0027_next_roulette",
+      "breakpoints": true
     }
   ]
 }

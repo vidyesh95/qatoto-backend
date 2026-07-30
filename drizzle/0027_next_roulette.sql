@@ -1,0 +1,34 @@
+-- ---------------------------------------------------------------------------
+-- 0027 — keyset paging for the allocation-proposal ledger
+--        (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 4, the half left open).
+--
+-- TWO CHANGES, BOTH IN SERVICE OF ONE READ. `listAllocationProposals` paged by
+-- OFFSET, which drifts: a proposal inserted between two page fetches pushes a row
+-- across the boundary and the reader never sees it. §11l.2 deferred the fix on the
+-- grounds that a row comparison over `windowClosesAt DESC, id ASC` is subtly wrong.
+-- The premise was right and the conclusion was not: mixed directions only defeat
+-- the TUPLE form `(a,b) < (x,y)`, and `id` is an arbitrary tiebreaker with no
+-- product meaning, so the ordering normalizes to all-DESC in one word.
+--
+-- WHY THE PRECISION CHANGE IS REQUIRED, not tidiness. `window_closes_at` is
+-- written as `now() + interval '24 hours'`, so Postgres stored MICROSECONDS while
+-- a JS Date — and therefore any cursor encoding one — carries only milliseconds.
+-- Two proposals 0.5 ms apart read back as the same instant and a cursor predicate
+-- of `windowClosesAt < :cursor` steps over BOTH. daily_log.submitted_at already
+-- carries precision 3 for exactly this reason; see src/lib/daily-log-cursor.ts.
+--
+-- The truncation is safe in the direction that matters: it moves a 24-hour dispute
+-- window boundary by under one millisecond, and §9.8's sweep treats the window as a
+-- minimum rather than a maximum.
+--
+-- WHY THE NEW INDEX. Neither existing index can order this read. The sweep index is
+-- partial on `status = 'open'` and does not lead with project_id;
+-- _projectId_status_idx leads with status rather than the ordering column. So every
+-- page — the first one included — sorted every proposal in the project and then
+-- discarded the offset. Declared ASC because Postgres scans a btree backwards to
+-- satisfy an all-DESC ORDER BY, which is why the equivalent index on effort_claim
+-- is declared the same way.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE "slice_allocation_proposal" ALTER COLUMN "window_closes_at" SET DATA TYPE timestamp (3);--> statement-breakpoint
+CREATE INDEX "slice_allocation_proposal_projectId_windowClosesAt_idx" ON "slice_allocation_proposal" USING btree ("project_id","window_closes_at","id");

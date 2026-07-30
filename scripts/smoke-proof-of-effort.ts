@@ -564,7 +564,7 @@ async function main(): Promise<void> {
   await verifyThroughReview(fixtures, claim.value, "claim 1");
 
   // --- 4. §17 step 6: a verdict is reached and NOTHING is in the ledger.
-  const proposalsAfterVerdict = await listAllocationProposals(fixtures.projectId);
+  const proposalsAfterVerdict = (await listAllocationProposals(fixtures.projectId)).rows;
   const ledgerAfterVerdict = (await listLedgerEntries(fixtures.projectId)).rows;
   check(
     "EVERY verdict opens a window, including the unverified one",
@@ -734,9 +734,9 @@ async function main(): Promise<void> {
     secondDispute.success ? "a SECOND dispute was accepted" : secondDispute.error.type,
   );
 
-  const disputedProposals = await listAllocationProposals(fixtures.projectId, {
-    status: "disputed",
-  });
+  const disputedProposals = (
+    await listAllocationProposals(fixtures.projectId, { status: "disputed" })
+  ).rows;
   const ledgerDuringDispute = (await listLedgerEntries(fixtures.projectId)).rows;
   check(
     "disputed slices are reported as escrowed, and stay OUT of the ledger",

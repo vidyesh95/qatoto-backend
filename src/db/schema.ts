@@ -4801,7 +4801,13 @@ export const sliceAllocationProposal = pgTable(
     }),
     status: sliceAllocationProposalStatusEnum("status").default("open").notNull(),
     windowOpensAt: timestamp("window_opens_at").defaultNow().notNull(),
-    windowClosesAt: timestamp("window_closes_at").notNull(),
+    // PRECISION 3 IS LOAD-BEARING, for the same reason daily_log.submitted_at carries it
+    // (see src/lib/daily-log-cursor.ts). This column is written as `now() + interval`, so
+    // Postgres would otherwise store MICROSECONDS while a JS Date — and therefore the
+    // keyset cursor over this column — carries only milliseconds. Two proposals 0.5 ms
+    // apart would read as the same instant, and the cursor predicate would step over both.
+    // Truncating to milliseconds moves a 24-hour dispute window by under a millisecond.
+    windowClosesAt: timestamp("window_closes_at", { precision: 3 }).notNull(),
     // Reported SEPARATELY from totalSlices so the UI can show "frozen in escrow"
     // honestly instead of implying the slices are either awarded or gone.
     escrowedSlices: integer("escrowed_slices").default(0).notNull(),
@@ -4830,6 +4836,20 @@ export const sliceAllocationProposal = pgTable(
     index("slice_allocation_proposal_projectId_status_idx").on(
       table.projectId,
       table.status,
+      table.id,
+    ),
+    // The transparency ledger's index — `listAllocationProposals` orders
+    // (windowClosesAt DESC, id DESC) within a project. Declared ASC because Postgres
+    // scans a btree backwards to satisfy an all-DESC ORDER BY, exactly as
+    // effort_claim_projectId_claimedForDate_idx does for listClaims.
+    //
+    // Neither index above can serve that read: the sweep index is partial on
+    // `status = 'open'` and does not lead with project_id, and _projectId_status_idx
+    // leads with status rather than the ordering column. Without this the read sorted
+    // every proposal in the project on EVERY page, first page included.
+    index("slice_allocation_proposal_projectId_windowClosesAt_idx").on(
+      table.projectId,
+      table.windowClosesAt,
       table.id,
     ),
     // --- The discriminated union, as CHECK constraints (§9.6). This is what makes the

@@ -41,17 +41,21 @@ vi.mock("#src/services/project-membership.service.js", () => ({
 }));
 
 const listOverrideQueue = vi.fn<(...args: readonly unknown[]) => unknown>();
+const listClaims = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listProjectFairMarketRates = vi.fn<(...args: readonly unknown[]) => unknown>();
 const findAllocationProposalView = vi.fn<(...args: readonly unknown[]) => unknown>();
+const listAllocationProposals = vi.fn<(...args: readonly unknown[]) => unknown>();
 
 vi.mock("#src/services/effort-claims.service.js", () => ({
   listOverrideQueue: (...args: readonly unknown[]) => listOverrideQueue(...args),
+  listClaims: (...args: readonly unknown[]) => listClaims(...args),
 }));
 vi.mock("#src/services/fair-market-rate.service.js", () => ({
   listProjectFairMarketRates: (...args: readonly unknown[]) => listProjectFairMarketRates(...args),
 }));
 vi.mock("#src/services/slice-allocation.service.js", () => ({
   findAllocationProposalView: (...args: readonly unknown[]) => findAllocationProposalView(...args),
+  listAllocationProposals: (...args: readonly unknown[]) => listAllocationProposals(...args),
 }));
 
 /** What `requireProjectRole` returns for a member of `solar-cold-storage`. */
@@ -195,6 +199,138 @@ describe("proof-of-effort routes", () => {
 
       expect(response.status).toBe(200);
       expect(listProjectFairMarketRates).toHaveBeenCalledWith("project_1");
+    });
+  });
+
+  /**
+   * The two reads §11l.2 item 4 left on OFFSET and this change moved to keyset.
+   *
+   * Both are DUAL MODE, and that is the property worth pinning: `page` still works, because
+   * §11l is not allowed to break a client that has not asked for anything new, and `cursor`
+   * wins when both arrive, because silently serving a drifting offset page to a client that
+   * sent a cursor is the bug this closes. The platform audit trail rejects `page` outright
+   * (see `platform-audit.routes.test.ts`); these two must not.
+   */
+  describe("GET …/allocation-proposals — the keyset ledger", () => {
+    const path = "/research-projects/solar-cold-storage/allocation-proposals";
+    const emptyPage = { rows: [], nextCursor: null };
+
+    it("decodes the cursor before the service sees it, and passes a typed instant", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+      listAllocationProposals.mockResolvedValue(emptyPage);
+
+      const response = await request(app).get(`${path}?cursor=1773479700123_proposal_1&limit=5`);
+
+      expect(response.status).toBe(200);
+      // A DECODED cursor, not the raw string: parsing untrusted input belongs at the
+      // controller boundary (CLAUDE.md §3.1), so the service never sees a client string.
+      expect(listAllocationProposals).toHaveBeenCalledWith("project_1", {
+        limit: 5,
+        cursor: { instant: new Date(1_773_479_700_123), id: "proposal_1" },
+      });
+    });
+
+    it("answers 422 for a malformed cursor rather than a silent first page", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+
+      const response = await request(app).get(`${path}?cursor=nonsense`);
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toBe("Malformed cursor.");
+      // Not called AT ALL — a first page served here is duplicate rows the client reports
+      // as a backend bug (§11h).
+      expect(listAllocationProposals).not.toHaveBeenCalled();
+    });
+
+    it("still accepts page, so a client that has not adopted the cursor is unaffected", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+      listAllocationProposals.mockResolvedValue(emptyPage);
+
+      const response = await request(app).get(`${path}?page=3&limit=10`);
+
+      expect(response.status).toBe(200);
+      expect(listAllocationProposals).toHaveBeenCalledWith("project_1", { page: 3, limit: 10 });
+    });
+
+    it("keeps data a bare array and puts nextCursor alongside it", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+      listAllocationProposals.mockResolvedValue({
+        rows: [{ id: "proposal_1" }],
+        nextCursor: "1773479700123_proposal_1",
+      });
+
+      const response = await request(app).get(path);
+
+      // The rows do NOT move under an envelope key — that would break every client parsing
+      // this read today, which is the same shape rule the slice ledger followed.
+      expect(response.body.data).toEqual([{ id: "proposal_1" }]);
+      expect(response.body.nextCursor).toBe("1773479700123_proposal_1");
+    });
+
+    it("rejects an unknown query key with 422 rather than ignoring it", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+
+      const response = await request(app).get(`${path}?projectId=other`);
+
+      expect(response.status).toBe(422);
+      expect(listAllocationProposals).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("GET …/effort-claims — the keyset claim list", () => {
+    const path = "/research-projects/solar-cold-storage/effort-claims";
+
+    it("decodes the date cursor and passes it typed, never as a Date", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+      listClaims.mockResolvedValue({ rows: [], total: null, nextCursor: null });
+
+      const response = await request(app).get(`${path}?cursor=2026-03-14_claim_1&limit=5`);
+
+      expect(response.status).toBe(200);
+      // `calendarDate` stays a STRING. Putting a date-only value through a Date is how a day
+      // shifts by one in a non-UTC zone.
+      expect(listClaims).toHaveBeenCalledWith("project_1", {
+        page: 1,
+        limit: 5,
+        cursor: { calendarDate: "2026-03-14", id: "claim_1" },
+      });
+    });
+
+    it("answers 422 for a malformed cursor rather than a silent first page", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+
+      const response = await request(app).get(`${path}?cursor=14-03-2026_claim_1`);
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toBe("Malformed cursor.");
+      expect(listClaims).not.toHaveBeenCalled();
+    });
+
+    it("keeps the pagination envelope in offset mode, byte-for-byte as it shipped", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+      listClaims.mockResolvedValue({ rows: [], total: 42, nextCursor: null });
+
+      const response = await request(app).get(`${path}?page=2&limit=20`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.pagination).toEqual({ page: 2, limit: 20, total: 42, totalPages: 3 });
+      expect(response.body.nextCursor).toBeUndefined();
+    });
+
+    it("drops the pagination envelope in keyset mode instead of reporting a total of zero", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+      listClaims.mockResolvedValue({
+        rows: [{ id: "claim_1" }],
+        total: null,
+        nextCursor: "2026-03-14_claim_1",
+      });
+
+      const response = await request(app).get(`${path}?cursor=2026-03-15_claim_9`);
+
+      // A zeroed `pagination` block would render as "no claims" beneath a list of claims.
+      expect(response.body.pagination).toBeUndefined();
+      expect(response.body.data).toEqual([{ id: "claim_1" }]);
+      expect(response.body.nextCursor).toBe("2026-03-14_claim_1");
     });
   });
 });
