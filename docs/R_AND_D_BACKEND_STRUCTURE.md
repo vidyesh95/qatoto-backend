@@ -3682,7 +3682,12 @@ turned out to be wrong. The corrections are the reusable part:**
   a login-path outage rather than a boot failure staging would catch. It also costs 2–4
   queries per request against a 20-connection server. Its own change, with a real database in
   front of it.
-- **No per-route JSON body cap in this application has ever been in effect.** See §11l.4.
+
+**Found while closing the above, and since fixed:**
+
+- **The per-route JSON body caps had never been in effect**, and six route groups were
+  rejecting bodies their own schemas accept — one of them for every user, not only for
+  non-English ones. See §11l.4.
 
 #### 11l.3 Order — as executed
 
@@ -3700,56 +3705,95 @@ nothing.
 
 #### 11l.4 A guard that was never in effect — the per-route JSON body caps
 
-**OPEN. Found while closing §11l.2, not fixed, and deliberately not half-fixed.**
+**✅ CLOSED.** Found while closing §11l.2, and it was not merely inert — it was rejecting
+requests the schemas accept.
 
-`src/middleware/json-body.ts` exports two parsers — `parseCompactJsonBody` (16 kb) and
-`parseLongFormJsonBody` (128 kb) — and 77 route registrations name one of them. **Not one of
-those 77 has ever run.** body-parser sets `req._body` on the first successful parse and every
+`src/middleware/json-body.ts` exported two parsers, `parseCompactJsonBody` (16 kb) and
+`parseLongFormJsonBody` (128 kb), and 77 route registrations named one of them. **Not one of
+those 77 ever ran.** body-parser sets `req._body` on the first successful parse and every
 later parser short-circuits on that flag, so whichever parser runs FIRST is the only one that
-matters, and in this application that is never the route's own:
+matters — and in this application that was never the route's own:
 
-- `src/app.ts` mounts `express.json({ limit: "10kb" })` **before every router**. So for any
-  route outside the three prefixes below, the effective cap is **10 kb**, not the 16 kb its
-  chain declares.
+- `src/app.ts` mounted `express.json({ limit: "10kb" })` **before every router**, so any route
+  outside the three prefixes below had a real cap of **10 kb**, not the 16 kb it declared.
 - Above that, `parseLongFormJsonBody` was mounted on the `/research-projects`, `/discovery`
-  and `/videos` **prefixes**. For routes under those, the effective cap is **128 kb** — eight
-  times what a `parseCompactJsonBody` route asks for.
+  and `/videos` **prefixes**, so routes under those had **128 kb** — eight times what a
+  `parseCompactJsonBody` route asks for.
 
-The file's own header warns about the second-parser-wins mechanism, in the direction of a
-parser mounted AFTER the global one. Both live cases are the same mechanism arriving from a
-direction the note did not consider: a parser mounted on a PREFIX voids the smaller ones
-inside it, and the GLOBAL parser voids every per-route parser everywhere. `discovery.routes.ts`
-calls its prefix mount "load-bearing, not tidiness" while the same file puts
-`parseCompactJsonBody` on twelve routes the mount silently voids — both intentions cannot hold
-at once.
+The file's own header warned about the second-parser-wins mechanism, in the direction of a
+parser mounted AFTER the global one. Both live cases were the same mechanism from a direction
+the note did not consider: a parser on a PREFIX voids the smaller ones inside it, and the
+GLOBAL parser voids every per-route parser everywhere. `discovery.routes.ts` called its prefix
+mount "load-bearing, not tidiness" while the same file put `parseCompactJsonBody` on twelve
+routes the mount silently voided — both intentions could not hold at once.
 
-**WHY IT IS NOT FIXED HERE.** Deleting the prefix mounts is not the fix and is actively worse:
-it drops those three prefixes from 128 kb to the global 10 kb, which is BELOW what several
-schemas legitimately produce — a 5,000-character description is ~15 kb in Devanagari or CJK.
-That is the original non-English-users-only 413 the prefix mounts were added to prevent, and
-reintroducing it to fix a cap nobody was enforcing is a bad trade. This was attempted, caught
-by an end-to-end test, and reverted.
+**WHAT IT COST, which the first draft of this section understated by calling the guard merely
+inert.** Six route groups were rejecting bodies their own schemas accept:
 
-**WHAT THE FIX HAS TO BE.** Per-route caps cannot work by stacking parsers at all, because the
-first parse wins by design. Parse ONCE at the largest cap any route needs, record the raw byte
-length in `express.json`'s `verify` hook, and enforce the per-route limit as a separate check
-against that number. That inverts the mechanism instead of fighting it, and it is the only
-shape in which a per-route cap means anything.
+| Route                           | Schema worst case                             | Cap it had |
+| ------------------------------- | --------------------------------------------- | ---------- |
+| `PUT /playlists/:id/videos`     | ~33 kb **in pure ASCII** (500 ids × 64 chars) | 10 kb      |
+| `POST` / `PATCH /products/:id`  | ~10.2 kb ASCII, ~30 kb non-ASCII              | 10 kb      |
+| `POST` / `PATCH /series/:id`    | ~24 kb non-ASCII                              | 10 kb      |
+| `POST` / `PATCH /playlists/:id` | ~16 kb non-ASCII                              | 10 kb      |
+| `PATCH /milestones/:id`         | ~15.6 kb non-ASCII                            | 10 kb      |
+| `POST` / `PATCH /suppliers/:id` | ~14.5 kb non-ASCII                            | 10 kb      |
 
-**Sizing it is already solved.** A cap must never be set below what a route's own schema can
-produce, or the fix reintroduces the bug: a route whose worst case fits its cap can only 413 a
-body Zod would reject anyway (a 413 where a 422 would have been, same outcome), whereas a cap
-chosen by eye can reject real input. Worst-case size is derivable from the same converted JSON
-Schema §11l.2 item 8 now emits — `maxLength × 4` for the UTF-8 worst case, `maxItems` for
-arrays, with `format` and anchored-regex bounds covering `z.uuid()` and the decimal-string
-amounts. Measured across the 71 mapped bodies: **59 bounded, 12 with no derivable bound**; of
-the 59, **46 fit inside 16 kb** and **13 need long-form**. The 12 unbounded ones keep the
-larger cap, because there is nothing safe to tighten to — and adding `.max()` to those fields
-is its own change, since it can reject input that works today.
+The playlist case failed for **everyone**. The rest failed only for users writing Devanagari,
+CJK or anything else where `limit` (bytes) and `z.string().max()` (UTF-16 code units) diverge —
+the very failure the prefix mounts existed to prevent, still live on every route they did not
+happen to cover. `PATCH /milestones/:id` is the sharpest illustration: its own create route,
+`POST /research-projects/:slug/milestones`, sat behind a prefix mount and accepted a
+description that the patch route then rejected.
 
-`/videos` needs care in any attempt: it has no per-route parser at all, depends wholly on the
-prefix mount, and its body schemas are module-private, so it cannot be measured from outside
-and must keep 128 kb.
+**DELETING THE PREFIX MOUNTS IS NOT THE FIX**, and is actively worse — it drops those routes to
+the global 10 kb, below what several schemas produce. That was attempted, caught by an
+end-to-end test, and reverted before it landed.
+
+**WHAT SHIPPED.** Per-route caps cannot work by stacking parsers, because the first parse wins
+by design, so the cap stopped being a parser. `parseJsonBodyOnce` parses once at a 128 kb
+ceiling and records the byte length through `express.json`'s `verify` hook; each route then
+declares `compactBody` (16 kb) or `longFormBody` (128 kb), which is an ordinary middleware
+check against that number. Two facts in body-parser 2.3.0 make it sound: `verify` runs only in
+`getBody`'s success branch, so the ceiling still rejects before any of it; and supplying
+`verify` puts raw-body in Buffer mode, so `buf.length` is BYTES rather than characters — which
+is the distinction the whole bug turns on. `req.rawBodyBytes` is undefined when no JSON body
+was parsed, so multipart routes pass through untouched.
+
+**CAPS ARE DERIVED, NEVER GUESSED**, and that is what made tightening ~57 routes safe. A cap is
+never below its route's own schema worst case, so anything that trips it is a body Zod would
+have rejected anyway — a 413 where a 422 would have been, same outcome, no working traffic
+changed. `src/middleware/json-body-budget.ts` computes the bound from the same converted JSON
+Schema §11l.2 item 8 emits: `maxLength × 4` for the UTF-8 worst case, `maxItems` for arrays,
+plus `format` and anchored-regex bounds so `z.uuid()` and the `^\d{1,15}$` cents strings are
+measurable rather than unbounded. Across the 71 mapped bodies: **59 bounded, 12 with no
+derivable bound**; of the 59, **46 fit 16 kb** and 13 need the ceiling. The 12 unbounded keep
+the ceiling — there is nothing safe to tighten to.
+
+The 22 non-R&D routes have module-private schemas and cannot be measured from a route file, so
+they take the ceiling, which keeps or loosens what they had. `/signup/start` and
+`/signup/complete` stay compact: unauthenticated, and their real bodies are a few hundred bytes.
+
+**THREE SWEEPS KEEP IT HONEST** (`json-body-budget.test.ts`), walking the built app's own
+router stack so the test and the application cannot disagree: every body-reading route declares
+a cap, no cap sits below its schema's budget, and every route that fits is on the compact tier.
+Two mistakes in the mechanical route pass were caught by those sweeps rather than by review, and
+both now have assertions of their own:
+
+- **A cap inserted AFTER the controller on six routes.** Registered, reachable by reference,
+  and completely inert — the controller answers first. Presence is not enough; position is
+  asserted separately.
+- **Budget sweeps matching three routes out of seventy-one.** The walk yields router-relative
+  paths while the body map is keyed by full OpenAPI ones, so almost every lookup missed and
+  both sweeps passed on the strength of it. Floors now guard every sweep, so one that stops
+  matching cannot pass by comparing zero to zero.
+
+**Two things this deliberately did not do**, both recorded as follow-up: the 20 private
+non-R&D schemas could be exported and their caps derived rather than assigned; and the
+genuinely unbounded fields — `/signup`'s password, email and name, and
+`ReorderImagesSchema.imageIds` — still have no `.max()`. The cap bounds them; the schema does
+not. Adding one can reject input that works today, which is a different risk and deserves its
+own change.
 
 ---
 

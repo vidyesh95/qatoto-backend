@@ -22,9 +22,15 @@ import type { ApiResponse } from "#src/types/index.js";
  * code units. That is the same class of bug the prefix mounts were added to fix, still live
  * on every route they did not happen to cover.
  *
- * DELETING THE PREFIX MOUNTS IS NOT THE FIX — it drops those routes to the global 10 kb,
+ * DELETING THE PREFIX MOUNTS WAS NOT THE FIX — it drops those routes to the global 10 kb,
  * which is below what several schemas legitimately produce. It was tried and reverted. A
  * per-route cap cannot work by stacking parsers at all; it has to stop being a parser.
+ *
+ * IF YOU ARE ADDING A ROUTE: put `compactBody` or `longFormBody` in its chain, before the
+ * controller and after the auth guards. A route with neither silently inherits the ceiling,
+ * and `json-body-budget.test.ts` fails the build naming it — that suite also asserts the cap
+ * is not below what the route's own Zod schema can produce, so the tier is a derived fact
+ * rather than a guess. Do not reach for a third `express.json()`; see above for why.
  *
  * SO: parse once, at the largest cap any route needs, and record the raw byte length. Each
  * route then enforces its own cap as an ordinary middleware check against that number. Two
