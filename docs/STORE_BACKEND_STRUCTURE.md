@@ -289,7 +289,7 @@ export const product = pgTable(
 > sets it must derive the project from proven membership, never from a request body: a seller who
 > could name any `researchProjectId` could attach their listing to someone else's project and appear
 > on that project's launch-ready rail.
-
+>
 > **Why `keyFeatures` is a `text[]` column, not a table.** Key features are a handful of tiny,
 > order-preserving display strings with no identity, relationships, or queries of their own. A
 > `product_key_feature` table would add a join and an id for no benefit. If features ever grow
