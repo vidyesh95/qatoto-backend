@@ -21,6 +21,9 @@ import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
 import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
+import researchProgramsRouter, {
+  researchPaperCategoryRouter,
+} from "#src/routes/research-programs.routes.js";
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/routes/research-projects.routes.js";
@@ -68,8 +71,10 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/research-projects", router: projectFundingRouter },
   { mountPath: "/research-projects", router: compensationRouter },
   { mountPath: "/research-projects", router: projectGoToMarketRouter },
+  { mountPath: "/research-programs", router: researchProgramsRouter },
   { mountPath: "/discovery", router: discoveryRouter },
   { mountPath: "/", router: researchCatalogRouter },
+  { mountPath: "/", router: researchPaperCategoryRouter },
   { mountPath: "/", router: dailyLogFeedRouter },
   { mountPath: "/", router: governanceRouter },
   { mountPath: "/", router: supplierRouter },
@@ -115,6 +120,8 @@ const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = 
   { prefix: "/applications", tag: "Projects" },
   { prefix: "/invites", tag: "Projects" },
   { prefix: "/integrations", tag: "Proof of Effort" },
+  { prefix: "/research-paper-categories", tag: "Research programs" },
+  { prefix: "/research-programs", tag: "Research programs" },
   { prefix: "/research-projects", tag: "Research projects" },
 ];
 
@@ -145,6 +152,19 @@ const NESTED_TAG_RULES: readonly { readonly segment: string; readonly tag: strin
   { segment: "supplier-engagements", tag: "Go-to-market" },
   { segment: "launch-readiness", tag: "Go-to-market" },
   { segment: "market-insight-links", tag: "Discovery" },
+  // §10. `moderation` and `reports` are program-only segments; the four content ones
+  // are too, but they are listed explicitly rather than relying on the
+  // `/research-programs` prefix rule so a future project-scoped `/papers` cannot
+  // silently inherit this tag.
+  { segment: "branches", tag: "Research programs" },
+  { segment: "papers", tag: "Research programs" },
+  { segment: "posts", tag: "Research programs" },
+  { segment: "contributors", tag: "Research programs" },
+  { segment: "product-opportunities", tag: "Research programs" },
+  { segment: "effort-logs", tag: "Research programs" },
+  { segment: "contributions", tag: "Research programs" },
+  { segment: "moderation", tag: "Research programs" },
+  { segment: "review-queue", tag: "Research programs" },
 ];
 
 function tagFor(openApiPath: string): string {

@@ -63,6 +63,12 @@ const SUBJECT_BY_KIND: Readonly<Record<(typeof notification.$inferSelect)["kind"
   dispute_raised: "A dispute was raised on an allocation",
   dispute_resolved: "A dispute was resolved",
   effort_claim_verdict_reached: "Your effort claim has a verdict",
+  // §10. "Reviewed" rather than "approved" on the paper line, because one kind carries
+  // all three verdicts and a subject that guesses which is a subject that is sometimes
+  // wrong on a lock screen.
+  research_program_published: "Your research program is now public",
+  research_program_rejected: "Your research program was not published",
+  research_program_paper_moderated: "Your research paper was reviewed",
 };
 
 export async function handleDeliverNotification(rawPayload: unknown): Promise<void> {

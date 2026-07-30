@@ -588,3 +588,151 @@ export const supplierWriteLimiter = createLimiter({
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 60,
 });
+
+// ---------------------------------------------------------------------------
+// §10 research programs (R_AND_D_BACKEND_STRUCTURE.md §10, §11f).
+//
+// This surface is PUBLIC UGC at scale — anyone signed in may create branches, upload
+// papers, post, reply, react and report — so unlike the project surfaces, most of these
+// really are anti-abuse bounds rather than blast-radius ones. Every limiter is keyed on
+// `req.user.id` (the default), which means an unauthenticated caller never reaches one.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /research-programs (§11f).
+ *
+ * Deliberately tight. A program is a public top-level entity that lands in a human
+ * moderator's review queue, so the cost of abuse is somebody's attention rather than a
+ * row — and a queue flooded faster than it can be read is a queue that stops being read.
+ * Nobody legitimately proposes four research programs in a quarter of an hour.
+ */
+export const programCreateLimiter = createLimiter({
+  namespace: "programCreate",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 3,
+});
+
+/**
+ * POST · PATCH …/branches, and POST · DELETE …/branches/:branchId/claim (§11f).
+ *
+ * One limiter for both, on purpose: a re-parent rewrites a whole subtree's `ancestorPath`
+ * in one transaction, which is the most expensive write on this surface, and a claim
+ * toggle is the cheapest. Sharing the bucket means a loop cannot spend the cheap budget to
+ * drive the expensive path.
+ */
+export const programBranchWriteLimiter = createLimiter({
+  namespace: "programBranchWrite",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
+/** POST …/papers — the metadata row. Cheap, but it consumes a DOI uniquely (§11f). */
+export const paperCreateLimiter = createLimiter({
+  namespace: "paperCreate",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/**
+ * POST …/papers/:paperId/file (§11f).
+ *
+ * The most expensive request in the domain: up to 25 MB buffered in memory, hashed, and
+ * PUT to object storage. Lower than `paperCreate` because a metadata row that never gets a
+ * file costs a row, while an upload loop costs bandwidth and storage priced per gigabyte.
+ */
+export const paperUploadLimiter = createLimiter({
+  namespace: "paperUpload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+});
+
+/** GET …/papers/:paperId/download — mints a presigned URL. Signing is cheap; a link is a capability. */
+export const paperDownloadLimiter = createLimiter({
+  namespace: "paperDownload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 120,
+});
+
+/** POST …/posts and …/posts/:postId/replies — the discussion surface (§11f). */
+export const programPostCreateLimiter = createLimiter({
+  namespace: "programPostCreate",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});
+
+/**
+ * PUT · DELETE …/posts/:postId/reaction (§11f).
+ *
+ * GENEROUS BY DESIGN, and the reason is worth stating: reactions are idempotent by verb, so
+ * a double-tap is already harmless and a user scrolling a long thread legitimately fires
+ * many. This is a bound on scripted vote manipulation, not on enthusiasm — the per-user
+ * unique index is what actually stops one person inflating a count.
+ */
+export const postReactionLimiter = createLimiter({
+  namespace: "postReaction",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
+ * POST …/posts/:postId/report · …/papers/:paperId/report (§11f).
+ *
+ * A report costs a moderator's attention, and one report per user per target is already
+ * enforced by a partial unique index — so this bounds someone walking the whole program
+ * reporting everything, which the unique index cannot see.
+ */
+export const contentReportLimiter = createLimiter({
+  namespace: "contentReport",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/**
+ * POST …/effort-logs · …/contributions (§11f).
+ *
+ * Both carry a body-level idempotency key with a unique index, so a retry is already
+ * harmless. This is an abuse bound: effort minutes feed a public stat tile, and a loop
+ * could inflate "hours logged" even though nothing about it touches equity.
+ */
+export const researchEffortLogLimiter = createLimiter({
+  namespace: "researchEffortLog",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
+/** POST /research-paper-categories — the taxonomy is a spam surface, so it is moderated and bounded. */
+export const paperCategoryCreateLimiter = createLimiter({
+  namespace: "paperCategoryCreate",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+});
+
+/**
+ * The §10 moderation writes — program, paper and post decisions, and report dismissal.
+ *
+ * NOT AN ANTI-ABUSE BOUND. The caller already holds `moderate_content`, so this is a
+ * blast-radius bound in the same spirit as `supplierWriteLimiter`: a compromised staff
+ * session should not be able to hide an entire program's discussion before anyone notices.
+ * Generous, because clearing a backlog in one sitting is the normal case.
+ *
+ * Keyed on `req.user.id` like every other limiter, so it runs after `requireAuth` and
+ * BEFORE the in-controller capability check — a non-moderator therefore spends their own
+ * budget discovering they are not staff, rather than a moderator's.
+ */
+export const programModerationLimiter = createLimiter({
+  namespace: "programModeration",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 200,
+});
+
+/**
+ * POST · PATCH …/contributors/me, and the product-opportunity writes.
+ *
+ * One bucket for a person's own participation record plus the creator-only opportunity
+ * rail: both are low-frequency, self-describing writes with no fan-out.
+ */
+export const programProfileWriteLimiter = createLimiter({
+  namespace: "programProfileWrite",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});

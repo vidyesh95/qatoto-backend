@@ -2739,7 +2739,7 @@ Four states, checked against the actual route files in `src/routes/`, not agains
 | [11b](#11b-discovery-6)                             | Discovery (§6)                      | ✅ Shipped | `discovery.routes.ts`                                                                                                                                                                                               |
 | [11d](#11d-workshop-and-daily-logs-8)               | Workshop & daily logs (§8)          | ✅ Shipped | `workshop.routes.ts`. The deferred rows a first draft had here now live only in Appendix A                                                                                                                          |
 | [11e](#11e-proof-of-effort-9)                       | Proof of Effort (§9)                | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015                                                                                                          |
-| [11f](#11f-project-immortal-10)                     | Project Immortal (§10)              | ⏳ Pending | none — no `research-programs.routes.ts` exists                                                                                                                                                                      |
+| [11f](#11f-project-immortal-10)                     | Research programmes (§10)           | ✅ Shipped | `research-programs.routes.ts`, `research-programs.controller.ts` / `research-program-error-response.ts`, eleven services, two jobs, migrations 0029–0031, `lib/object-storage.ts`, `lib/pdf.ts`                     |
 | [11g](#11g-funding-and-compensation-7-7a)           | Funding & compensation (§7, §7A)    | ✅ Shipped | `funding.routes.ts`, `compensation.routes.ts`, `compensation.controller.ts`, three services, two jobs, migrations 0017–0019                                                                                         |
 | [11h](#11h-cross-project-reads-8-7a)                | Cross-project reads (§8, §7A)       | ✅ Shipped | `workshop.routes.ts`'s `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`, `governance-summary.service.ts`, `src/lib/daily-log-cursor.ts`, `scripts/smoke-daily-log-feed.ts`, migrations 0020–0021 |
 | [11i](#11i-go-to-market-6-family)                   | Go-to-market (§6-family)            | ✅ Shipped | `suppliers.routes.ts`, `suppliers.controller.ts`, `suppliers.service.ts`, `launch-readiness.service.ts`, migration 0020                                                                                             |
@@ -2901,39 +2901,88 @@ a body carrying an hour count and a photograph has no transcript.
 
 ### 11f. Project Immortal (§10)
 
-**⏳ Pending — none of this is built, and it is now the ONLY section in that state.**
-`rg 'research-programs' src/` returns nothing: no route file, no controller, no service, no table,
-no migration. Lowest coupling of any section — it shares only the `user` table and the
-`compensation_kind` enum with everything else.
+**✅ Shipped in full, and it is no longer one programme.** `rg 'research-programs' src/` now
+returns a route file, a controller, an error mapper, eleven services, two jobs and three
+migrations. Project Immortal is ONE ROW; anybody with a full account may propose another, and it
+lands `pending` until a `moderate_content` holder publishes it — the `research_category` posture,
+applied to a top-level entity.
 
-> **⚠️ It is no longer blocked, and this subsection said it was.** The sentence _"it needs the
-> platform `moderator` role from §4a Layer 3, which also does not exist yet"_ was true when written
-> and stopped being true with §11i. The role ships: `platformRoleEnum`
-> (`src/db/schema.ts:44` — `moderator | auditor | admin`), the capability map `PLATFORM_ROLE_GRANTS`
-> and `requirePlatformCapability` (`src/services/platform-role.service.ts:48`, `:88`), **25 call
-> sites** across discovery moderation, vocabulary, market insights, clusters, suppliers and content
-> review, and `pnpm db:grant-platform-role` to grant one. §10's `/moderate`, `/moderation/queue` and
-> paper-review rows have their gate already, and it is the same gate the shipped `/discovery/admin/*`
-> subtree uses — checked **before any id is read**, so its `403` is not an id oracle (§4a Layer 3).
->
-> What §10 still needs is a decision about **where its moderation actions are recorded**, because
-> the answer today is nowhere: no moderation service in this repo writes an audit row
-> ([§11l.2](#11l-gaps-found-after-the-frontend-caught-up) item 2). Building §10's moderation queue on
-> top of that would triple the surface that decides things and leaves no trace.
+Still the lowest coupling of any section: it shares the `user` table and the `compensation_kind`
+enum with everything else, and nothing more.
 
-| Method & path                                              | Body / input                                                                                               | Behavior & statuses                                                                   |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `GET /research-programs/:programSlug` · `/stats`           | —                                                                                                          | Public. `200`                                                                         |
-| `GET` · `POST` · `PATCH …/branches[/:branchId]`            | `{ title, summary, parentBranchId }`                                                                       | `status` and `overlappingGroupCount` are **job-derived, never accepted**. `200`/`201` |
-| `POST` · `DELETE …/branches/:branchId/claim`               | —                                                                                                          | Drives `contributorCount`. `200`                                                      |
-| `GET` · `POST …/papers` → `/:paperId/file`                 | `{ title, categoryId, doi? }` → multipart                                                                  | Dedup by DOI **and** content hash. `201` · `409 DUPLICATE_PAPER` · `429`              |
-| `GET …/papers/:id/download` · `DELETE` · `POST …/moderate` | —                                                                                                          | Moderator for `/moderate`. `200` · `403`                                              |
-| `GET` · `POST …/posts[/:postId/replies]`                   | `{ title?, bodyText, parentPostId? }`                                                                      | Depth-capped. `201` · `429`                                                           |
-| `PUT` · `DELETE …/posts/:postId/reaction`                  | —                                                                                                          | **Idempotent by verb** — a double-tap is harmless. `200` · `429`                      |
-| `POST …/posts/:postId/report` · `GET …/moderation/queue`   | `{ reason }`                                                                                               | `201` · `403`                                                                         |
-| `GET` · `POST …/product-opportunities`                     | `{ productName, derivedFromBranchId, estimatedMarketSizeInCents, readinessMinMonths, readinessMaxMonths }` | `bigint` money. `201`                                                                 |
-| `GET …/contributors` · `POST`/`PATCH …/contributors/me`    | `{ compensationPreference, contributionSummary? }`                                                         | `200`/`201`                                                                           |
-| `POST …/effort-logs`                                       | `{ minutes, branchId, note }`                                                                              | `requireIdentifiedUser` + limiter. `201`                                              |
+**THREE THINGS THIS DOMAIN ADDED THAT NOTHING ELSE HAD.** Each was a genuine absence rather than
+a §10 convenience:
+
+- **Object storage.** `src/lib/object-storage.ts` speaks Backblaze B2's S3 API, and it is the
+  first non-image byte storage in the codebase. Cloudinary could not serve it — all five of its
+  upload families hardcode `resource_type: "image"` and `src/lib/image.ts` answers NOT_AN_IMAGE
+  for a PDF. The bucket is PRIVATE and downloads are 5-minute presigned URLs, which is what keeps
+  `GET …/papers/:paperId/download` authorizable and rate-limitable. `src/lib/pdf.ts` validates by
+  magic bytes rather than by adding a parser, on the same reasoning
+  `receipt-forensics.ts` gives for hand-reading EXIF.
+- **A reaction primitive, threaded content, and a user-facing content report.** None existed.
+  Reactions are `PUT`/`DELETE` and idempotent by a per-user unique index; threading is capped at
+  one reply level by a CHECK; a report is one per user per target by two partial unique indexes.
+- **`user.locationLabel`.** §10 named this as "add it or drop the field". It is added, as a
+  self-set claim: not geocoded, not verified, and read by nothing but the discussion feed. §6's
+  geo signals continue to come from `geocode_cache`.
+
+**THE TWO DERIVED SIGNALS ARE THE POINT OF THE SURFACE**, and `recompute-branch-signals` is their
+only writer. The rule is integer-only and lives in
+`src/services/research-branch-signals.service.ts`:
+
+```
+overlappingGroupCount = other branches in the programme scoring >= 3000 bp Jaccard on
+                        (title + " " + summary), via the existing lib/text-similarity.ts
+
+missing    claimCount == 0 && approvedPaperCount == 0     a gap nobody is working on
+emerging   claimCount  > 0 && approvedPaperCount == 0
+contested  approvedPaperCount > 0 && overlap >= 2         several groups, one question
+active     approvedPaperCount > 0 && overlap <  2
+```
+
+No embeddings, no pgvector, no floats — the same argument `text-similarity.ts` makes against
+`pg_trgm.similarity()`: a branch flipping to `contested` because a dependency moved would be
+indistinguishable from a real finding. The honest limit is stated in that service: Jaccard sees
+shared WORDS, not shared meaning, so the overlap count UNDER-reports and is rendered as a prompt
+to look rather than a verdict.
+
+**§11l.2 item 2 was already stale when §10 arrived.** It says no moderation service writes an
+audit row; `appendPlatformAuditEntry` exists and `discovery-moderation`, `suppliers` and
+`content-review` all call it. §10's moderation joins that convention — every decision writes a
+`platform_audit_entry` AND a queryable `research_program_moderation_action` in one transaction,
+with a unique index proving neither can exist without the other.
+
+| Method & path                                                      | Body / input                                                                                                                           | Behavior & statuses                                                                                                                                     |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /research-programs`                                           | `?q=&page=&limit=`                                                                                                                     | Public index. `published` + `archived` only, filtered in SQL. `200`                                                                                     |
+| `GET /research-programs/slugs`                                     | —                                                                                                                                      | For the frontend's `generateStaticParams`. Published slugs only. `200`                                                                                  |
+| `GET /research-programs/mine`                                      | —                                                                                                                                      | Own programmes at ANY status — the only way to see your `pending` one. `200`                                                                            |
+| `GET /research-programs/review-queue`                              | `?page=&limit=`                                                                                                                        | `pending`, OLDEST first. `moderate_content`. `200` · `403`                                                                                              |
+| `POST /research-programs`                                          | `{ title, tagline, missionStatement }`                                                                                                 | Lands `pending`. `status` is ABSENT, so `.strict()` makes self-publishing a 422. `201`                                                                  |
+| `GET …/:programSlug`                                               | —                                                                                                                                      | `pending`/`rejected` is **404** to all but its creator and staff. `200`                                                                                 |
+| `GET …/:programSlug/stats`                                         | —                                                                                                                                      | **`404` when the nightly job has never run** — never fabricated zeroes. Carries `asOf`. `200`                                                           |
+| `PATCH …/:programSlug`                                             | `{ title?, tagline?, missionStatement? }`                                                                                              | Creator only. No `slug` (linked and cited), no `status`. `200`                                                                                          |
+| `POST …/:programSlug/moderate`                                     | `{ decision, reviewerNote }`                                                                                                           | `moderate_content`. Note REQUIRED on both verdicts. Appends to the platform chain. `200` · `409 ALREADY_DECIDED`                                        |
+| `GET …/branches`                                                   | —                                                                                                                                      | The whole tree in one read, depth-first. Cap 500. `200`                                                                                                 |
+| `POST` · `PATCH …/branches[/:branchId]`                            | `{ title, summary, parentBranchId? }`                                                                                                  | `status` and `overlappingGroupCount` **never accepted**. A re-parent rewrites the subtree's `ancestorPath` in one txn. `201`/`200` · `409 BRANCH_CYCLE` |
+| `POST` · `DELETE …/branches/:branchId/claim`                       | —                                                                                                                                      | IDEMPOTENT by unique index — a double-tap is harmless. Drives `contributorCount`. `200`                                                                 |
+| `GET …/papers`                                                     | `?categoryId=&branchId=&moderationStatus=&cursor=&limit=`                                                                              | Keyset. Non-`approved` rows visible only to uploader and staff, applied in SQL. `200`                                                                   |
+| `POST …/papers`                                                    | `{ title, categoryId, branchId?, doi?, authorAffiliation?, abstractText? }`                                                            | Metadata row, `queued`. DOI normalized then deduped. `201` · `409 DUPLICATE_DOI`                                                                        |
+| `POST …/papers/:paperId/file`                                      | multipart `paper` + `{ idempotencyKey }`                                                                                               | 25 MB, PDF magic bytes, sha256 content-addressed to B2. `200` · `409 DUPLICATE_PAPER` · `413` · `422` · `502` · `503`                                   |
+| `GET …/papers/:paperId/download`                                   | —                                                                                                                                      | A 5-minute presigned URL as DATA, not a 302. `requireAuth`. `200` · `404 PAPER_FILE_MISSING`                                                            |
+| `DELETE …/papers/:paperId`                                         | —                                                                                                                                      | Uploader while `queued`, or staff. Removes the bytes too. `200` · `403` · `409`                                                                         |
+| `POST …/papers/:paperId/moderate` · `…/report`                     | `{ decision, reviewerNote, flagReasons? }` · `{ reason, detailText? }`                                                                 | Verdict is TERMINAL. `200`/`201` · `403` · `409 ALREADY_REPORTED`                                                                                       |
+| `GET …/moderation/queue` · `…/moderation/actions`                  | `?cursor=&limit=`                                                                                                                      | Open reports oldest-first + a queued-paper count, all inside `data`; and the decision log. `moderate_content`. `200` · `403`                            |
+| `POST …/reports/:reportId/dismiss`                                 | `{ reasonNote }`                                                                                                                       | Its own audited decision. `200` · `409`                                                                                                                 |
+| `GET` · `POST …/posts`                                             | `?track=&cursor=` · `{ track, title?, bodyText, branchId? }`                                                                           | ONE table for both tracks. A title is required for `informal_paper` and forbidden on `idea`. `200`/`201`                                                |
+| `GET` · `POST …/posts/:postId/replies`                             | `{ bodyText }`                                                                                                                         | Depth-capped at ONE. A reply inherits its parent's `track` AND `branchId`. `200`/`201` · `409 REPLY_DEPTH_EXCEEDED`                                     |
+| `PUT` · `DELETE …/posts/:postId/reaction`                          | —                                                                                                                                      | **Idempotent by verb.** Returns the server's count. `200`                                                                                               |
+| `POST …/posts/:postId/report` · `…/moderate`                       | `{ reason, detailText? }` · `{ decision, reasonNote }`                                                                                 | Hiding is REVERSIBLE and both directions are audited. Hiding also actions the open reports. `201`/`200` · `409`                                         |
+| `GET` · `POST …/product-opportunities` · `DELETE …/:opportunityId` | `{ productName, productDescription, derivedFromBranchId, estimatedMarketSizeInCents, readinessMin/MaxMonths }`                         | **bigint** cents as a decimal string. CREATOR-OR-STAFF, unlike everything else here. `200`/`201`                                                        |
+| `GET …/contributors` · `POST`/`PATCH …/contributors/me`            | `?role=&page=` · `{ role, compensationPreference, contributionSummary?, fundingTranche* }`                                             | `role` filtered in SQL. `role` authorizes NOTHING. `200`/`201` · `409 ALREADY_A_PARTICIPANT`                                                            |
+| `POST …/effort-logs` · `…/contributions`                           | `{ minutes, branchId?, loggedForDate, note, idempotencyKey }` · `{ kind, amountInCents?, currencyCode?, description, idempotencyKey }` | Self-reported records. Mint NOTHING. A replay is a `200` with the first row. `201` · `422`                                                              |
+| `GET` · `POST /research-paper-categories`                          | `{ label }`                                                                                                                            | Root-mounted, programme-independent. Lands `pending`. Same limiter instance on both mounts. `200`/`201` · `409`                                         |
 
 ### 11g. Funding and compensation (§7, §7A)
 
@@ -3212,9 +3261,11 @@ is 197**, 129 of them under `/research-projects` and 37 under `/discovery` — t
 counted the whole app rather than this domain, and then every later section quoted it. Appendix C4
 carries the command; run it rather than copying a number out of a paragraph.
 
-**Project Immortal (§10 / [§11f](#11f-project-immortal-10)) is deliberately out of scope here.** It
-is a whole unbuilt domain rather than a gap in a built one, it needs the platform `moderator` role
-first, and §16 already orders it last. Nothing below refers to `/research-programs/*`.
+**Research programmes (§10 / [§11f](#11f-project-immortal-10)) are out of scope here, and now for a
+different reason.** This subsection enumerates gaps in BUILT domains; §10 was a whole unbuilt one
+when this was written, and is now built in full. Nothing below refers to `/research-programs/*`, and
+the 197-route count above predates it — run Appendix C4's command rather than adding to the figure
+by hand.
 
 Read §11j.6 before adding anything. A missing verb in this domain is as often a decision as an
 omission, and several of them are load-bearing.
@@ -5023,15 +5074,28 @@ Ordered by how much they cost, not by domain.
 
 ### D1. `/research-programs/*` — the whole Project Immortal domain
 
-**The only surface the frontend cannot build at all.** Already §11f and last in §16; restated here
-because it is the single remaining `TRANSPORT: mock` file in the repo.
+**✅ CLOSED — this shipped, and it closed the last `TRANSPORT: mock` file in the frontend.**
 
-`grep -rn "research-programs" src/` in this repo returns zero hits: no route, no controller, no
-service, no migration, no table. `/research-and-development/projects/project-immortal` renders
-fabricated data and says so in its banner.
+`grep -rn "research-programs" src/` now returns a route file, a controller, eleven services and
+three migrations, and `grep -rn "TRANSPORT: mock" src/` in the frontend returns NOTHING.
 
-**Frontend today:** the page stays mock, and it is the only one. **What would unblock it:** §10's
-tables and §11f's route table, in that order.
+**What shipped beyond the route table**, because §10 and §11f between them did not name all of it:
+
+- a generic, user-creatable programme entity — Project Immortal is one row, and
+  `/research-and-development/programs/new` is the wizard that makes "programmes like it" real;
+- Backblaze B2 object storage, the first non-image bytes in the codebase (§11f);
+- a reaction primitive, depth-capped threading, and a user-facing content report — none existed;
+- `user.locationLabel`, resolving §10's "add it or drop the field";
+- `research_paper_category`, replacing a kebab-case union that lived only in the frontend;
+- `research_program_post.branchId`, which §10 did not specify: the branch panel shows a discussion
+  count and recent thread titles per node, and without that column both would have had to be
+  dropped from a surface that had them.
+
+**Two mock values could not be served and were reshaped rather than faked:** the hero's "$4.2M
+compensation pool escrowed" tile became hours logged (escrow left this codebase and no
+programme-scoped money rail exists), and `effortLabel` — which held "312 hrs logged" on nine rows
+and "Funding tranche 2 of 4" on two — split into `totalEffortMinutes` and
+`fundingTrancheIndex`/`fundingTrancheTotal`.
 
 ---
 

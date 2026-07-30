@@ -9,19 +9,23 @@ import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
 import { handleDeliverNotification } from "#src/jobs/deliver-notification.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
+import { handleRecomputeBranchSignals } from "#src/jobs/recompute-branch-signals.js";
 import { handleRecomputeCompensationDraft } from "#src/jobs/recompute-compensation-draft.js";
 import { handleRecomputeDailyLogStreaks } from "#src/jobs/recompute-daily-log-streaks.js";
 import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals.js";
 import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapshot.js";
 import { handleRecomputeInvestorConfidence } from "#src/jobs/recompute-investor-confidence.js";
 import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
+import { handleRecomputeProgramStats } from "#src/jobs/recompute-program-stats.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import {
   handleCloseCompensationPeriodTick,
   handleRecomputeCompensationDraftTick,
   handleRecomputeDailyLogStreaksTick,
   handleRecomputeDemandSignalsTick,
+  handleRecomputeBranchSignalsTick,
   handleRecomputeEquitySnapshotTick,
+  handleRecomputeProgramStatsTick,
   handleRecomputeInvestorConfidenceTick,
   handleRecomputeOpportunityScoresTick,
   handleRefreshTalentProjectionsTick,
@@ -273,6 +277,32 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeEquitySnapshot,
     workOptions,
     runJob(JOB_NAMES.recomputeEquitySnapshot, handleRecomputeEquitySnapshot),
+  );
+
+  // §10 — research programs. Both compute fields no request body may carry: the branch
+  // map's `status` + `overlappingGroupCount`, and the program's stat tiles. The SIGNALS
+  // queue is bound before the STATS one only for readability; the actual ordering that
+  // matters is by cron time (03:20 then 03:35), because the stats job counts gaps and
+  // overlap flags from the statuses the signals job derives.
+  await boss.work(
+    JOB_NAMES.recomputeBranchSignalsTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeBranchSignalsTick, handleRecomputeBranchSignalsTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeBranchSignals,
+    workOptions,
+    runJob(JOB_NAMES.recomputeBranchSignals, handleRecomputeBranchSignals),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeProgramStatsTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeProgramStatsTick, handleRecomputeProgramStatsTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeProgramStats,
+    workOptions,
+    runJob(JOB_NAMES.recomputeProgramStats, handleRecomputeProgramStats),
   );
 
   // §7 — funding.

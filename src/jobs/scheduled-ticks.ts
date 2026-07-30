@@ -304,3 +304,58 @@ export async function handleRecomputeCompensationDraftTick(
     );
   }
 }
+
+/**
+ * The §10 branch-signal tick.
+ *
+ * `programId: null` means "every published program". There is deliberately NO per-program
+ * trigger in the request path: the signals depend on inter-branch SIMILARITY, so adding one
+ * branch can change its neighbours' overlap counts too, and a targeted recompute would have
+ * to walk the whole program anyway. A nightly full pass is both simpler and honest about
+ * being nightly — the branch map is not a live view and the UI says so.
+ *
+ * FIRES BEFORE the stats tick (03:20 vs 03:35), because `recompute-program-stats` counts
+ * gaps and overlap flags from the statuses this pass derives.
+ */
+export async function handleRecomputeBranchSignalsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcDayStart(readClock());
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeBranchSignals,
+    { asOf: asOfIso, programId: null },
+    { idempotencyKey: idempotencyKeyFor.recomputeBranchSignals(asOfIso, null) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`recompute-branch-signals-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/**
+ * The §10 program-stats tick.
+ *
+ * Quantized to the UTC day, like the other recomputes. Unlike §7A's compensation close there
+ * is no per-program time zone to respect: a stat tile is a count as of a moment, not a
+ * calendar boundary, so one global day start is the correct quantization.
+ */
+export async function handleRecomputeProgramStatsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcDayStart(readClock());
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeProgramStats,
+    { asOf: asOfIso, programId: null },
+    { idempotencyKey: idempotencyKeyFor.recomputeProgramStats(asOfIso, null) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`recompute-program-stats-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}

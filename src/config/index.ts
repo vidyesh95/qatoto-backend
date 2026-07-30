@@ -56,6 +56,39 @@ const envSchema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().min(1).optional(),
   CLOUDINARY_API_KEY: z.string().min(1).optional(),
   CLOUDINARY_API_SECRET: z.string().min(1).optional(),
+  /**
+   * Backblaze B2, spoken to over its S3-compatible API. Backs the §10 research-paper
+   * PDF library — the first non-image bytes this codebase stores.
+   *
+   * WHY NOT CLOUDINARY, WHICH IS ALREADY HERE. Every one of `src/lib/cloudinary.ts`'s
+   * five upload families hardcodes `resource_type: "image"`, and `src/lib/image.ts`
+   * runs everything through sharp, which answers NOT_AN_IMAGE for a PDF. A paper is a
+   * document, and documents belong in object storage.
+   *
+   * OPTIONAL, exactly like the three Cloudinary keys above and for the same reason: a
+   * developer with no bucket must still be able to boot, and the paper-file routes
+   * answer 503 STORAGE_NOT_CONFIGURED rather than crashing at import time.
+   *
+   * THE `BLACKBLAZE_` SPELLING IS DELIBERATE and is not a typo to fix here. These
+   * names are already provisioned in the deployed environment; renaming them to
+   * `BACKBLAZE_` would break the deploy in exchange for nothing. If they are ever
+   * re-provisioned, rename in both places at once.
+   *
+   * `BLACKBLAZE_S3_KEY_NAME` is deliberately absent: it is a label shown in the B2
+   * console for humans, and the S3 API takes an access-key ID and a secret, not a
+   * nickname. Reading it would imply it mattered.
+   */
+  BLACKBLAZE_ENDPOINT: z.string().url().optional(),
+  BLACKBLAZE_BUCKET_NAME: z.string().min(1).optional(),
+  BLACKBLAZE_S3_KEY_ID: z.string().min(1).optional(),
+  BLACKBLAZE_S3_APPLICATION_KEY: z.string().min(1).optional(),
+  /**
+   * B2 encodes its region in the endpoint host (`s3.us-west-004.backblazeb2.com`), so
+   * this is normally absent and derived from `BLACKBLAZE_ENDPOINT`. Set it only when
+   * the endpoint does not follow that shape — the SDK requires *some* region string
+   * and signs with it.
+   */
+  BLACKBLAZE_REGION: z.string().min(1).optional(),
   // Extra WebAuthn ceremony origins accepted ALONGSIDE the FRONTEND_URL origin
   // (R_AND_D_BACKEND_STRUCTURE.md §4a). Android sends
   // "android:apk-key-hash:<base64url sha256 of the release signing cert>"; iOS sends

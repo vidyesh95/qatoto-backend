@@ -36,6 +36,9 @@
     "db:seed-research-categories": "tsx --conditions=development scripts/seed-research-categories.ts",
     "db:seed-discovery-lookups": "tsx --conditions=development scripts/seed-discovery-lookups.ts",
     "db:seed-supplier-capabilities": "tsx --conditions=development scripts/seed-supplier-capabilities.ts",
+    "db:seed-research-programs": "tsx --conditions=development scripts/seed-research-programs.ts",
+    "db:verify-research-program-constraints": "tsx --conditions=development scripts/verify-research-program-constraints.ts",
+    "db:smoke-research-programs": "tsx --conditions=development scripts/smoke-research-programs.ts",
     "db:verify-discovery-constraints": "tsx --conditions=development scripts/verify-discovery-constraints.ts",
     "db:verify-go-to-market-constraints": "tsx --conditions=development scripts/verify-go-to-market-constraints.ts",
     "db:verify-workshop-constraints": "tsx --conditions=development scripts/verify-workshop-constraints.ts",
@@ -53,6 +56,7 @@
     "db:smoke-proof-of-effort": "tsx --conditions=development scripts/smoke-proof-of-effort.ts",
     "db:smoke-funding": "tsx --conditions=development scripts/smoke-funding.ts",
     "db:smoke-compensation": "tsx --conditions=development scripts/smoke-compensation.ts",
+    "db:smoke-object-storage": "tsx --conditions=development scripts/smoke-object-storage.ts",
     "db:expire-stale-project-requests": "tsx --conditions=development scripts/expire-stale-project-requests.ts",
     "db:reconcile-project-stats": "tsx --conditions=development scripts/reconcile-project-stats.ts",
     "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",
@@ -68,6 +72,8 @@
     "lint:fix": "oxlint --fix"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1097.0",
+    "@aws-sdk/s3-request-presigner": "^3.1097.0",
     "@better-auth/passkey": "^1.6.25",
     "@node-rs/argon2": "^2.0.2",
     "better-auth": "^1.6.25",

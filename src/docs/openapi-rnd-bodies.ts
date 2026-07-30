@@ -67,6 +67,27 @@ import {
   UploadReceiptSchema,
 } from "#src/controllers/proof-of-effort.controller.js";
 import {
+  AttachPaperFileSchema,
+  CreateBranchSchema,
+  CreateOpportunitySchema,
+  CreatePaperCategorySchema,
+  CreatePaperSchema,
+  CreatePostSchema,
+  CreateProgramSchema,
+  CreateReplySchema,
+  DismissReportSchema,
+  JoinProgramSchema,
+  LogEffortSchema,
+  ModeratePaperSchema,
+  ModeratePostSchema,
+  ModerateProgramSchema,
+  RecordContributionSchema,
+  ReportContentSchema,
+  UpdateBranchSchema,
+  UpdateParticipationSchema,
+  UpdateProgramSchema,
+} from "#src/controllers/research-programs.controller.js";
+import {
   CreateProjectSchema,
   LinkMarketInsightSchema,
   UpdateMemberSchema,
@@ -364,6 +385,75 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
     schema: MoveTaskSchema,
     required: true,
   },
+  // --- §10 research programs (§11f) ---
+  //
+  // `required` is NOT derivable from the schema — the truth is a property of the route: a
+  // body is optional exactly when the handler reads it through `optionalBody(req)`. The two
+  // PATCHes below do; everything else parses `req.body` directly.
+  "post /research-programs/": { schema: CreateProgramSchema, required: true },
+  "patch /research-programs/{programSlug}": { schema: UpdateProgramSchema, required: false },
+  "post /research-programs/{programSlug}/moderate": {
+    schema: ModerateProgramSchema,
+    required: true,
+  },
+  "post /research-programs/{programSlug}/branches": { schema: CreateBranchSchema, required: true },
+  "patch /research-programs/{programSlug}/branches/{branchId}": {
+    schema: UpdateBranchSchema,
+    required: false,
+  },
+  "post /research-programs/{programSlug}/papers": { schema: CreatePaperSchema, required: true },
+  // The one multipart route in this domain. `binaryField` splices a
+  // `{ type: "string", format: "binary" }` property into the converted object, so
+  // `additionalProperties: false` stays correct.
+  "post /research-programs/{programSlug}/papers/{paperId}/file": {
+    schema: AttachPaperFileSchema,
+    required: true,
+    contentType: "multipart/form-data",
+    binaryField: "paper",
+  },
+  "post /research-programs/{programSlug}/papers/{paperId}/report": {
+    schema: ReportContentSchema,
+    required: true,
+  },
+  "post /research-programs/{programSlug}/papers/{paperId}/moderate": {
+    schema: ModeratePaperSchema,
+    required: true,
+  },
+  "post /research-programs/{programSlug}/posts": { schema: CreatePostSchema, required: true },
+  "post /research-programs/{programSlug}/posts/{postId}/replies": {
+    schema: CreateReplySchema,
+    required: true,
+  },
+  "post /research-programs/{programSlug}/posts/{postId}/report": {
+    schema: ReportContentSchema,
+    required: true,
+  },
+  "post /research-programs/{programSlug}/posts/{postId}/moderate": {
+    schema: ModeratePostSchema,
+    required: true,
+  },
+  "post /research-programs/{programSlug}/reports/{reportId}/dismiss": {
+    schema: DismissReportSchema,
+    required: true,
+  },
+  "post /research-programs/{programSlug}/contributors/me": {
+    schema: JoinProgramSchema,
+    required: true,
+  },
+  "patch /research-programs/{programSlug}/contributors/me": {
+    schema: UpdateParticipationSchema,
+    required: false,
+  },
+  "post /research-programs/{programSlug}/effort-logs": { schema: LogEffortSchema, required: true },
+  "post /research-programs/{programSlug}/contributions": {
+    schema: RecordContributionSchema,
+    required: true,
+  },
+  "post /research-programs/{programSlug}/product-opportunities": {
+    schema: CreateOpportunitySchema,
+    required: true,
+  },
+  "post /research-paper-categories": { schema: CreatePaperCategorySchema, required: true },
   "post /suppliers": { schema: CreateSupplierSchema, required: true },
   "put /discovery/talent/me": { schema: TalentProfileSchema, required: true },
   "put /milestones/{milestoneId}/variance": { schema: MilestoneVarianceSchema, required: true },

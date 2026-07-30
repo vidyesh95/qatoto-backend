@@ -80,6 +80,15 @@ export const JOB_NAMES = {
   // job exists at all because delivery talks to an email provider, and a third-party HTTP
   // call inside the transaction that finalizes a compensation statement is not a trade
   // anyone should make.
+  // §10's two jobs. Both DAILY, and both compute the fields no request body may carry:
+  // a program's stat tiles, and the branch map's `status` + `overlappingGroupCount`. That
+  // second one is the load-bearing case — a contributor able to mark their own branch
+  // `active`, or a rival's `missing`, would make the research map worthless, so the signals
+  // are derived here and nowhere else.
+  recomputeProgramStatsTick: "recompute-program-stats-tick",
+  recomputeProgramStats: "recompute-program-stats",
+  recomputeBranchSignalsTick: "recompute-branch-signals-tick",
+  recomputeBranchSignals: "recompute-branch-signals",
   deliverNotification: "deliver-notification",
 } as const;
 
@@ -173,6 +182,17 @@ const SubmitProviderTransferPayloadSchema = z.object({ transferId: z.uuid() }).s
 /** Same `projectId: nullable` shape as the equity snapshot, for the same reason. */
 const ProjectScopedAsOfPayloadSchema = z
   .object({ asOf: AsOfSchema, projectId: z.uuid().nullable() })
+  .strict();
+
+/**
+ * §10's payload. `programId: null` means "every published program", which is what the tick
+ * enqueues; a single id is for an on-demand recompute.
+ *
+ * SERVER-OWNED IDS ONLY, like every other payload here — a payload is exactly as forgeable
+ * as a request body.
+ */
+const ProgramScopedAsOfPayloadSchema = z
+  .object({ asOf: AsOfSchema, programId: z.uuid().nullable() })
   .strict();
 
 /**
@@ -540,6 +560,55 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeCompensationDraft),
     },
   },
+  [JOB_NAMES.recomputeProgramStatsTick]: {
+    name: JOB_NAMES.recomputeProgramStatsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeProgramStatsTick),
+    },
+  },
+  [JOB_NAMES.recomputeProgramStats]: {
+    name: JOB_NAMES.recomputeProgramStats,
+    payloadSchema: ProgramScopedAsOfPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeProgramStats),
+    },
+  },
+  [JOB_NAMES.recomputeBranchSignalsTick]: {
+    name: JOB_NAMES.recomputeBranchSignalsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeBranchSignalsTick),
+    },
+  },
+  [JOB_NAMES.recomputeBranchSignals]: {
+    name: JOB_NAMES.recomputeBranchSignals,
+    payloadSchema: ProgramScopedAsOfPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // Longer than the other recomputes: the overlap pass is O(branches²) in Jaccard
+      // comparisons per program, and a 500-node tree is 125,000 integer set intersections.
+      // Still trivial work, but the ceiling should not be the thing that kills the job.
+      expireInSeconds: 3_600,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeBranchSignals),
+    },
+  },
   [JOB_NAMES.deliverNotification]: {
     name: JOB_NAMES.deliverNotification,
     payloadSchema: DeliverNotificationPayloadSchema,
@@ -611,6 +680,13 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // statement drafted over a half-recomputed ledger is a statement that changes when
   // nothing changed.
   [JOB_NAMES.recomputeCompensationDraftTick]: "15 4 * * *",
+  // §10, and the ORDER between these two is load-bearing rather than incidental:
+  // `recompute-program-stats` counts `openGapCount` and `overlapFlagCount` FROM the branch
+  // statuses, so the signals pass must land first or the tiles report yesterday's map.
+  // Ordering here is by cron time, not by code — the same arrangement §7A's close-then-draft
+  // pair relies on.
+  [JOB_NAMES.recomputeBranchSignalsTick]: "20 3 * * *",
+  [JOB_NAMES.recomputeProgramStatsTick]: "35 3 * * *",
 };
 
 export type JobEnqueueError =
@@ -839,6 +915,10 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.closeCompensationPeriod]: ProjectScopedAsOfPayloadSchema,
   [JOB_NAMES.recomputeCompensationDraftTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeCompensationDraft]: ProjectScopedAsOfPayloadSchema,
+  [JOB_NAMES.recomputeProgramStatsTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeProgramStats]: ProgramScopedAsOfPayloadSchema,
+  [JOB_NAMES.recomputeBranchSignalsTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeBranchSignals]: ProgramScopedAsOfPayloadSchema,
   [JOB_NAMES.deliverNotification]: DeliverNotificationPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
@@ -921,6 +1001,14 @@ export const idempotencyKeyFor = {
   // Keyed on the NOTIFICATION row, which is already unique per recipient per event. A
   // retried enqueue inside the same transaction collapses; two genuinely different
   // notifications never do, even for the same event and the same recipient.
+  // Keyed on `(asOf, program)` like the other recomputes. A double cron fire inside the
+  // same UTC day dedups to one job, and both jobs are idempotent anyway — the stats job's
+  // unique index on `(programId, asOf)` makes a re-run a no-op, and the signals job
+  // recomputes from current rows rather than accumulating.
+  recomputeProgramStats: (asOfIso: string, programId: string | null): string =>
+    `${JOB_NAMES.recomputeProgramStats}:${asOfIso}:${programId ?? "all"}`,
+  recomputeBranchSignals: (asOfIso: string, programId: string | null): string =>
+    `${JOB_NAMES.recomputeBranchSignals}:${asOfIso}:${programId ?? "all"}`,
   deliverNotification: (notificationId: string): string =>
     `${JOB_NAMES.deliverNotification}:${notificationId}`,
 } as const;

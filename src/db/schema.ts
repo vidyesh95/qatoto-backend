@@ -74,6 +74,16 @@ export const user = pgTable(
     // sole authority for this (CLAUDE.md §1.1) — the client only previews the lock.
     handleChangeCount: integer("handle_change_count").default(0).notNull(),
     handleWindowStartedAt: timestamp("handle_window_started_at"),
+    // A free-text, self-set place ("Pune, India"). NULL until the user sets one.
+    //
+    // A CLAIM, NOT A FACT, and every surface that renders it must read as one. It is
+    // not geocoded, not verified, and deliberately NOT the geo signal for anything:
+    // §6's problem submissions carry their own resolved coordinates from
+    // `geocode_cache`, and CLAUDE.md §1.1 forbids trusting a client-claimed country
+    // for tax, pricing, fraud or geo-restriction. This column exists so a §10
+    // discussion post can say where its author says they are — nothing else may read
+    // it.
+    locationLabel: text("location_label"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -7575,6 +7585,19 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // `pnpm db:grant-platform-role`, which wrote nothing at all before this.
   "platform_role_granted",
   "platform_role_revoked",
+  // Research programs — `research-program-moderation` (§10). A program is public UGC
+  // at scale, so every decision that publishes it, hides a post or rejects a paper
+  // lands here. These are the only §10 rows in this chain: a branch edit or a paper
+  // upload is an ordinary member action with no staff behind it, and recording those
+  // would drown the entries that name an accountable human.
+  "research_program_published",
+  "research_program_rejected",
+  "research_program_paper_approved",
+  "research_program_paper_rejected",
+  "research_program_paper_needs_changes",
+  "research_program_post_hidden",
+  "research_program_post_restored",
+  "research_program_report_dismissed",
 ]);
 
 /**
@@ -7705,6 +7728,12 @@ export const notificationKindEnum = pgEnum("notification_kind", [
   "dispute_raised",
   "dispute_resolved",
   "effort_claim_verdict_reached",
+  // §10 — a moderator's verdict on something a person submitted. A program sits
+  // `pending` and invisible until reviewed, and a paper sits `queued`; in both cases
+  // the submitter has no way to learn the answer except by re-checking the page.
+  "research_program_published",
+  "research_program_rejected",
+  "research_program_paper_moderated",
 ]);
 
 /**
@@ -7730,9 +7759,14 @@ export const notification = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     kind: notificationKindEnum("kind").notNull(),
-    // Nullable because not every notification is about a project — the enum has no
-    // such member today, and the column is what keeps that door open without a
-    // migration.
+    // Nullable because not every notification is about a project, and the §10 program
+    // kinds are the first to prove it: `research_program_published` and its two
+    // siblings leave this NULL and carry `programId` in `payloadJson` instead. That is
+    // the door this column was left open for, walked through without a migration.
+    //
+    // There is deliberately NO `programId` column. A second nullable FK would make
+    // "exactly one of these is set" a CHECK to maintain forever, and the payload
+    // already holds ids by contract.
     projectId: text("project_id").references(() => researchProject.id, { onDelete: "cascade" }),
     // NULL for a system actor: a verdict is reached by the pipeline, and a period is
     // opened by a nightly job. Same convention as `project_audit_entry.actorUserId`.
@@ -7787,6 +7821,1317 @@ export const notificationRelations = relations(notification, ({ one }) => ({
     references: [researchProject.id],
   }),
 }));
+
+// ===========================================================================
+// §10 — RESEARCH PROGRAMS. See R_AND_D_BACKEND_STRUCTURE.md §10 and §11f.
+//
+// A PROGRAM IS NOT A PROJECT, and this is the whole reason for a separate set of
+// tables rather than a `kind` flag on `research_project` (§10 states the
+// recommendation; these tables are it). They share almost nothing structurally:
+//
+//   research_project   one founder, a closed team, a funding round, milestones,
+//                      monthly compensation statements, and a Slicing Pie ledger
+//                      over verified daily logs. Equity is the point.
+//   research_program   thousands of open contributors, a branch TREE, a public
+//                      paper library, public threaded discussion, and contribution
+//                      tracking that is NOT equity at all.
+//
+// Folding them together would mean a dozen nullable columns and an authorization
+// model that branches on kind at every call site. What they DO share is the
+// contributor compensation vocabulary (`compensation_kind`, §4d) and the `user`
+// table, and that is the correct amount of sharing.
+//
+// FIVE RULES THAT GOVERN EVERY TABLE BELOW:
+//
+//  1. THE TWO ANALYTICAL SIGNALS ARE DERIVED, NEVER SUBMITTED.
+//     `research_program_branch.status` and `.overlapping_group_count` are computed
+//     by `recompute-branch-signals` and appear in NO request body. `status =
+//     'missing'` means "the crowd wants this answered and nobody is working on it";
+//     `overlapping_group_count >= 2` means "several groups are duplicating work".
+//     Those two claims are the intellectual core of this surface, and a contributor
+//     who could mark their own branch `active`, or a rival's `missing`, would make
+//     the entire map worthless. They are the §10 analogue of §9's rule that a
+//     verdict is never a field.
+//
+//  2. A PROGRAM IS PUBLIC UGC, SO IT IS MODERATED, AND MODERATION LEAVES A TRACE.
+//     Programs land `pending` and are invisible until a `moderate_content` holder
+//     publishes them; papers land `queued`; posts can be hidden. Every one of those
+//     decisions appends to the PLATFORM chain via `appendPlatformAuditEntry` in the
+//     same transaction — the chain and its append helper already exist and three
+//     other moderation services already call it, so §10 joins that convention
+//     rather than inventing a private log.
+//
+//  3. CONTRIBUTION IS A RECORD, NOT A SETTLEMENT. `research_effort_log` and
+//     `research_contribution_ledger_entry` record what someone says they put in.
+//     No money moves, nothing is escrowed, and nothing here mints equity — escrow
+//     left this codebase (§7) and Slicing Pie is project-scoped by construction.
+//     Same posture as a funding pledge: a commitment, and the response must not
+//     imply otherwise.
+//
+//  4. COUNTS ARE INTEGERS AND INSTANTS ARE TIMESTAMPS. There is no
+//     `reaction_count_label` and no `posted_at_label`. "418" gains its thousands
+//     separator and "4 hours ago" its relative phrasing in the client, per locale
+//     (§1). The one place a count is denormalized — `reaction_count`, `reply_count`
+//     — is maintained inside the transaction that inserts the child, never
+//     recomputed on read, because a list page would otherwise be one COUNT(*) per
+//     row.
+//
+//  5. LAYOUT IS NOT DATA. There is no `left_percent` / `top_percent`. The branch
+//     tree stores `parent_branch_id` + `sibling_order` and the client runs a tidy
+//     layout, so the graph renders at any viewport on any platform — the same
+//     ruling §6 makes for `map_position`. `pinned_left_permille` /
+//     `pinned_top_permille` survive as a curator override for the handful of nodes
+//     a human wants placed deliberately, in integer per-mille, normally NULL.
+// ===========================================================================
+
+// --- Domain enums (§10). Same rule as everywhere else: these are Postgres labels,
+// --- sent verbatim in both directions, so they are snake_case and a client that
+// --- sends kebab-case gets a 422 rather than a silently ignored value.
+
+/**
+ * A program's lifecycle. `pending` is the DEFAULT and is absent from the create
+ * schema — a user-minted program is a spam surface, so it is invisible on the public
+ * index until reviewed. Exactly the posture `research_category` takes.
+ */
+export const researchProgramStatusEnum = pgEnum("research_program_status", [
+  "pending",
+  "published",
+  "rejected",
+  "archived",
+]);
+
+/**
+ * A branch's derived state. WRITTEN ONLY BY `recompute-branch-signals` — see rule 1
+ * above. `emerging` is the default because a freshly created branch has no claims and
+ * no papers yet, and the job will move it on its next run.
+ */
+export const researchProgramBranchStatusEnum = pgEnum("research_program_branch_status", [
+  "active",
+  "emerging",
+  "contested",
+  "missing",
+]);
+
+/** The five ways to contribute to a program, mirroring the §4.2b lifecycle roles. */
+export const researchProgramParticipantRoleEnum = pgEnum("research_program_participant_role", [
+  "researcher",
+  "founder_director",
+  "venture_capitalist",
+  "supplier",
+  "supporter",
+]);
+
+/** The formal track's review verdict. `needs_changes` is a request, not a refusal. */
+export const researchPaperModerationStatusEnum = pgEnum("research_paper_moderation_status", [
+  "queued",
+  "approved",
+  "rejected",
+  "needs_changes",
+]);
+
+/**
+ * The two discussion tracks. `informal_paper` is the blog-style track (titled, no
+ * citations expected); `idea` is the open netizen thread. Replies inherit their
+ * parent's track — see `research_program_post`.
+ */
+export const researchProgramPostTrackEnum = pgEnum("research_program_post_track", [
+  "informal_paper",
+  "idea",
+]);
+
+/** Why a reader flagged something. A fixed list, so reports are countable. */
+export const researchProgramReportReasonEnum = pgEnum("research_program_report_reason", [
+  "spam",
+  "plagiarism",
+  "misinformation",
+  "harassment",
+  "off_topic",
+  "other",
+]);
+
+export const researchProgramReportStatusEnum = pgEnum("research_program_report_status", [
+  "open",
+  "actioned",
+  "dismissed",
+]);
+
+export const researchProgramContentTargetKindEnum = pgEnum("research_program_content_target_kind", [
+  "paper",
+  "post",
+]);
+
+/** What a moderator did. Mirrors the eight §10 members of `platform_audit_event_kind`. */
+export const researchProgramModerationKindEnum = pgEnum("research_program_moderation_kind", [
+  "program_published",
+  "program_rejected",
+  "paper_approved",
+  "paper_rejected",
+  "paper_needs_changes",
+  "post_hidden",
+  "post_restored",
+  "report_dismissed",
+]);
+
+/**
+ * What a participant contributed, beyond logged time. `cash_commitment` is the only
+ * member that carries an amount, and it is a COMMITMENT — see rule 3.
+ */
+export const researchContributionKindEnum = pgEnum("research_contribution_kind", [
+  "cash_commitment",
+  "material",
+  "data",
+  "equipment",
+  "expertise",
+]);
+
+/**
+ * The program itself. Project Immortal is one row, seeded `published`; every other
+ * row arrives from `POST /research-programs` at `pending`.
+ *
+ * `slug` AUTO-SUFFIXES (`-2`, `-3`) rather than colliding, matching
+ * `research_project.slug` and deliberately UNLIKE `research_category.slug`: two
+ * programs may legitimately be named similarly, whereas two taxonomy nodes may not.
+ */
+export const researchProgram = pgTable(
+  "research_program",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    title: text("title").notNull(),
+    tagline: text("tagline").notNull(),
+    missionStatement: text("mission_statement").notNull(),
+    // SERVER-OWNED. Absent from every create and update schema; `.strict()` turns an
+    // attempt to self-publish into a 422 rather than letting one key bypass review.
+    status: researchProgramStatusEnum("status").default("pending").notNull(),
+    // `set null`, never cascade (§4f): deleting the person who proposed a program must
+    // not delete a program thousands of people now contribute to.
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    /** NULL until a moderator publishes. Set in the same statement as `status`. */
+    publishedAt: timestamp("published_at"),
+    // The review decision. `restrict` on the reviewer — who decided is accountability,
+    // and it must not vanish with an account.
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewerNote: text("reviewer_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_program_slug_unq").on(table.slug),
+    // The public index: published rows newest first, ending in a unique column (§4c
+    // rule 4) so a page boundary neither duplicates nor skips.
+    index("research_program_status_createdAt_idx").on(table.status, table.createdAt, table.id),
+    index("research_program_createdByUserId_idx").on(table.createdByUserId, table.id),
+    check(
+      "research_program_slug_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 80`,
+    ),
+    check(
+      "research_program_text_ck",
+      sql`char_length(title) BETWEEN 3 AND 120
+          AND char_length(tagline) BETWEEN 3 AND 200
+          AND char_length(mission_statement) BETWEEN 20 AND 4000
+          AND (reviewer_note IS NULL OR char_length(reviewer_note) BETWEEN 1 AND 2000)`,
+    ),
+    // A published row has a publish time; an unpublished one does not. The two cannot
+    // drift apart, so no reader has to decide which one to trust.
+    check(
+      "research_program_published_ck",
+      sql`(status = 'published') = (published_at IS NOT NULL)`,
+    ),
+    // A decision has a decider and a time, or none of the three exists. `pending` is
+    // the only state with no review, and `archived` follows a publish.
+    check(
+      "research_program_review_ck",
+      sql`(reviewed_by_user_id IS NULL) = (reviewed_at IS NULL)
+          AND (status = 'pending') = (reviewed_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Job-computed program stats — the four hero tiles.
+ *
+ * WHY A SNAPSHOT TABLE AND NOT COUNTERS ON `research_program`. Same reason §7's
+ * investor confidence is a snapshot: the tiles are a claim about a moment, and a
+ * counter that drifts has no `asOf` to explain itself with. `GET …/stats` is a **404
+ * when no row exists** — never a fabricated set of zeroes, which would read as "this
+ * program has no contributors" when the truth is "nobody has counted yet".
+ *
+ * THERE IS NO MONEY COLUMN, and its absence is deliberate. The mock this replaces
+ * showed "$4.2M compensation pool escrowed"; escrow left this codebase (§7), no
+ * program-scoped money rail exists, and `research_contribution_ledger_entry` holds
+ * commitments rather than balances. `total_effort_minutes` is the honest fourth tile.
+ */
+export const researchProgramStatSnapshot = pgTable(
+  "research_program_stat_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "cascade" }),
+    /** From the job payload, quantized to a UTC day start. Never a clock read. */
+    asOf: timestamp("as_of").notNull(),
+    participantCount: integer("participant_count").notNull(),
+    paperCount: integer("paper_count").notNull(),
+    branchCount: integer("branch_count").notNull(),
+    postCount: integer("post_count").notNull(),
+    /** Branches at `status = 'missing'` — the research gaps this surface exists to name. */
+    openGapCount: integer("open_gap_count").notNull(),
+    /** Branches at `overlapping_group_count >= 2` — duplicated work. */
+    overlapFlagCount: integer("overlap_flag_count").notNull(),
+    // bigint: a program with thousands of contributors logging hours for years passes
+    // the int4 ceiling in minutes long before it passes it in anything else (§4b).
+    totalEffortMinutes: bigint("total_effort_minutes", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // Re-running the job for the same `asOf` must be a no-op, not a second row.
+    uniqueIndex("research_program_stat_snapshot_asOf_unq").on(table.programId, table.asOf),
+    // The "latest snapshot" read.
+    index("research_program_stat_snapshot_latest_idx").on(table.programId, table.asOf, table.id),
+    check(
+      "research_program_stat_snapshot_counts_ck",
+      sql`participant_count >= 0 AND paper_count >= 0 AND branch_count >= 0
+          AND post_count >= 0 AND open_gap_count >= 0 AND overlap_flag_count >= 0
+          AND total_effort_minutes >= 0
+          AND open_gap_count <= branch_count
+          AND overlap_flag_count <= branch_count`,
+    ),
+  ],
+);
+
+/**
+ * The research branch tree.
+ *
+ * ADJACENCY LIST PLUS A MATERIALIZED `ancestorPath` (§10). The read pattern is
+ * "render the whole tree at once" for 12–38 nodes, so a closure table is overkill and
+ * `ltree` buys an extension for no gain at this size. The path makes a subtree query a
+ * prefix match.
+ *
+ * THE SAME COLLATION TRAP AS `workshop_task.rank`, and it is invisible until it
+ * bites: `ORDER BY` on a text column follows the database's LC_COLLATE (typically ICU
+ * en_US.UTF-8), which reorders case and punctuation, while a JS/Kotlin/Swift `a < b`
+ * compares code points. The migration forces `COLLATE "C"` on `ancestor_path`, and the
+ * CHECK below keeps its alphabet inside [0-9a-z/-] where the two orderings are
+ * provably identical.
+ */
+export const researchProgramBranch = pgTable(
+  "research_program_branch",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "cascade" }),
+    // `restrict`, NOT cascade: deleting a mid-tree branch must not silently take its
+    // whole subtree — and every paper, claim and product opportunity hanging off it —
+    // with it. A caller that wants a branch gone must re-parent its children first.
+    // NULL is the root, and a program may have several.
+    parentBranchId: text("parent_branch_id").references(
+      (): AnyPgColumn => researchProgramBranch.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    title: text("title").notNull(),
+    summary: text("summary").notNull(),
+    /** SERVER-DERIVED from the ancestor chain. In no request body. See the note above. */
+    ancestorPath: text("ancestor_path").notNull(),
+    /** Sibling ordering for the client's tidy layout. Not a global position. */
+    siblingOrder: integer("sibling_order").default(0).notNull(),
+    // DERIVED — rule 1. `recompute-branch-signals` owns both of these columns and no
+    // request body may carry either.
+    status: researchProgramBranchStatusEnum("status").default("emerging").notNull(),
+    overlappingGroupCount: integer("overlapping_group_count").default(0).notNull(),
+    // The curator override (§10). Integer per-mille rather than a float percent, and
+    // normally NULL — the client lays the tree out itself unless a human insisted.
+    // Both or neither: half a coordinate places nothing.
+    pinnedLeftPermille: integer("pinned_left_permille"),
+    pinnedTopPermille: integer("pinned_top_permille"),
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // The path identifies a node within its program, so it is also the guard against
+    // two siblings materializing the same path after a re-parent.
+    uniqueIndex("research_program_branch_path_unq").on(table.programId, table.ancestorPath),
+    index("research_program_branch_parent_idx").on(
+      table.programId,
+      table.parentBranchId,
+      table.siblingOrder,
+      table.id,
+    ),
+    // The gap/overlap reads the job feeds and the map filters on.
+    index("research_program_branch_status_idx").on(table.programId, table.status, table.id),
+    check("research_program_branch_no_self_parent_ck", sql`parent_branch_id IS DISTINCT FROM id`),
+    check(
+      "research_program_branch_text_ck",
+      sql`char_length(title) BETWEEN 3 AND 120 AND char_length(summary) BETWEEN 10 AND 2000`,
+    ),
+    // The alphabet that makes COLLATE "C" and a client-side string compare agree.
+    check(
+      "research_program_branch_path_ck",
+      sql`ancestor_path ~ '^[0-9a-z/-]+$' AND char_length(ancestor_path) BETWEEN 1 AND 800`,
+    ),
+    check(
+      "research_program_branch_counts_ck",
+      sql`sibling_order >= 0 AND overlapping_group_count >= 0`,
+    ),
+    check(
+      "research_program_branch_pin_ck",
+      sql`(pinned_left_permille IS NULL) = (pinned_top_permille IS NULL)
+          AND (pinned_left_permille IS NULL
+               OR (pinned_left_permille BETWEEN 0 AND 1000
+                   AND pinned_top_permille BETWEEN 0 AND 1000))`,
+    ),
+  ],
+);
+
+/**
+ * Who is working on which branch. This table IS `contributorCount` — the branch has
+ * no counter column, because a count that can disagree with its rows eventually does.
+ *
+ * The unique index is the whole mechanism: `POST …/claim` inserts and swallows 23505,
+ * `DELETE …/claim` deletes and does not care whether a row was there. Both are
+ * therefore idempotent, and a double-tap is harmless.
+ */
+export const researchProgramBranchClaim = pgTable(
+  "research_program_branch_claim",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    branchId: text("branch_id")
+      .notNull()
+      .references(() => researchProgramBranch.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    claimedAt: timestamp("claimed_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_program_branch_claim_unq").on(table.branchId, table.userId),
+    index("research_program_branch_claim_userId_idx").on(table.userId, table.claimedAt, table.id),
+  ],
+);
+
+/**
+ * The paper taxonomy. A TABLE, not a pgEnum, for the same reason `research_category`
+ * is one: the upload form lets a user propose a category. User-minted rows land
+ * `pending` and are excluded from public facets until a moderator approves them.
+ *
+ * `slug`'s UNIQUE **is** the de-duplication mechanism — "Longevity Biology",
+ * "longevity biology" and "Longevity-Biology" all slugify to `longevity-biology`, so
+ * the second minter takes a 23505 the service turns into a 409. Never
+ * check-then-insert, which is a TOCTOU race.
+ */
+export const researchPaperCategory = pgTable(
+  "research_paper_category",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    /** Display label as typed, e.g. "Longevity Biology". Clients render this, never the slug. */
+    label: text("label").notNull(),
+    // Reuses `research_category_status` rather than declaring a fourth
+    // approved/pending/rejected enum — it is the same three-state moderation verdict.
+    status: researchCategoryStatusEnum("status").default("pending").notNull(),
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_paper_category_slug_unq").on(table.slug),
+    index("research_paper_category_status_idx").on(table.status, table.label, table.id),
+    check(
+      "research_paper_category_text_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+          AND char_length(slug) BETWEEN 2 AND 60
+          AND char_length(label) BETWEEN 2 AND 80`,
+    ),
+  ],
+);
+
+/**
+ * The formal paper library.
+ *
+ * A ROW EXISTS BEFORE ITS BYTES DO. `POST …/papers` creates the metadata row and
+ * `POST …/papers/:id/file` attaches the PDF, so the four storage columns are nullable
+ * and move together. Splitting it lets the multipart route stay small and lets a
+ * failed upload be retried without re-minting a row and re-checking the DOI.
+ *
+ * DEDUPLICATED TWICE, by DOI **and** by content hash (§10), through two PARTIAL
+ * unique indexes. Both are needed and neither subsumes the other: the same paper
+ * re-uploaded under a new title is caught by its bytes, and the same paper uploaded
+ * as a differently-encoded PDF is caught by its DOI.
+ *
+ * `authorAffiliation` is a CLAIM by the uploader — there is no institutional
+ * verification anywhere in this codebase, and every surface that renders it must read
+ * as attribution rather than endorsement.
+ */
+export const researchProgramPaper = pgTable(
+  "research_program_paper",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "cascade" }),
+    // `set null`: a paper survives the re-organisation of the branch it was filed
+    // under. An unfiled paper is a real state the library already renders.
+    branchId: text("branch_id").references(() => researchProgramBranch.id, {
+      onDelete: "set null",
+    }),
+    title: text("title").notNull(),
+    // `restrict`: a taxonomy row every paper points at must not be deletable from
+    // under them.
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => researchPaperCategory.id, { onDelete: "restrict" }),
+    /** Normalized lowercase, no `https://doi.org/` prefix. NULL for unpublished work. */
+    doi: text("doi"),
+    /** A claim, not a verified fact — see the note above. */
+    authorAffiliation: text("author_affiliation"),
+    abstractText: text("abstract_text"),
+    uploaderUserId: text("uploader_user_id").references(() => user.id, { onDelete: "set null" }),
+    // --- The file. All four NULL until `POST …/papers/:id/file` succeeds, all four
+    // --- set together, and every one of them SERVER-MEASURED: a client that sends a
+    // --- size or a hash is rejected by `.strict()`.
+    contentSha256: text("content_sha256"),
+    fileByteSize: bigint("file_byte_size", { mode: "number" }),
+    /** The object-storage key. Content-addressed, so a retry overwrites rather than duplicates. */
+    objectStorageKey: text("object_storage_key"),
+    // Reuses the §8 enum, whose `s3_compatible` label was declared for exactly this
+    // and had no writer until now.
+    storageProvider: workshopStorageProviderEnum("storage_provider"),
+    moderationStatus: researchPaperModerationStatusEnum("moderation_status")
+      .default("queued")
+      .notNull(),
+    // A text[] with a cardinality bound, NOT jsonb. This schema has no jsonb column
+    // anywhere and rejects it by name: it reorders keys, and it reads back as
+    // `unknown`. Written by moderators and by the upload path, never by a submitter.
+    flagReasons: text("flag_reasons").array().notNull().default([]),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewerNote: text("reviewer_note"),
+    // `precision: 3`, and it is load-bearing — the same trap `workshop_chat_message.sent_at`
+    // and `daily_log.submitted_at` both carry a note about. The library is keyset-paginated
+    // on `(created_at, id)` and `src/lib/instant-cursor.ts` encodes an instant with
+    // `Date.getTime()`, i.e. MILLISECONDS. Postgres timestamps default to microsecond
+    // precision, and a cursor coarser than its column cannot express the boundary: a row
+    // whose true value falls between the truncated cursor and the next millisecond matches
+    // neither `created_at < cursor` nor `created_at = cursor`, so it is returned on NO page.
+    // The dependency runs both ways and is stated at both ends.
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // Dedup by DOI, within a program. Partial, because NULL means "no DOI" and many
+    // papers legitimately have none.
+    uniqueIndex("research_program_paper_doi_unq")
+      .on(table.programId, table.doi)
+      .where(sql`doi IS NOT NULL`),
+    // Dedup by bytes. Partial for the same reason: a metadata row with no file yet.
+    uniqueIndex("research_program_paper_content_unq")
+      .on(table.programId, table.contentSha256)
+      .where(sql`content_sha256 IS NOT NULL`),
+    // The library's keyset read, and the moderation queue's.
+    index("research_program_paper_listing_idx").on(
+      table.programId,
+      table.moderationStatus,
+      table.createdAt,
+      table.id,
+    ),
+    index("research_program_paper_categoryId_idx").on(table.categoryId, table.id),
+    index("research_program_paper_branchId_idx").on(table.branchId, table.id),
+    index("research_program_paper_uploaderUserId_idx").on(table.uploaderUserId, table.id),
+    check(
+      "research_program_paper_text_ck",
+      sql`char_length(title) BETWEEN 3 AND 300
+          AND (doi IS NULL OR (doi ~ '^10\\.[0-9]{4,9}/[^[:space:]]+$' AND char_length(doi) <= 200))
+          AND (author_affiliation IS NULL OR char_length(author_affiliation) BETWEEN 1 AND 200)
+          AND (abstract_text IS NULL OR char_length(abstract_text) BETWEEN 1 AND 5000)
+          AND (reviewer_note IS NULL OR char_length(reviewer_note) BETWEEN 1 AND 2000)`,
+    ),
+    // The four file columns are one fact and move as one.
+    check(
+      "research_program_paper_file_ck",
+      sql`(content_sha256 IS NULL) = (object_storage_key IS NULL)
+          AND (content_sha256 IS NULL) = (file_byte_size IS NULL)
+          AND (content_sha256 IS NULL) = (storage_provider IS NULL)
+          AND (content_sha256 IS NULL OR (content_sha256 ~ '^[0-9a-f]{64}$' AND file_byte_size > 0))`,
+    ),
+    // A verdict has a reviewer and a time; `queued` has neither.
+    check(
+      "research_program_paper_review_ck",
+      sql`(reviewed_by_user_id IS NULL) = (reviewed_at IS NULL)
+          AND (moderation_status = 'queued') = (reviewed_at IS NULL)`,
+    ),
+    check("research_program_paper_flags_ck", sql`cardinality(flag_reasons) <= 10`),
+  ],
+);
+
+/**
+ * ONE TABLE FOR INFORMAL POSTS, NETIZEN IDEAS **AND** REPLIES (§10), distinguished by
+ * `track` and by whether `parent_post_id` is set. They are the same thing — a piece of
+ * prose by a person, reactable and reportable — and three tables would mean three of
+ * every read, every moderation path and every reaction join.
+ *
+ * DEPTH IS CAPPED AT ONE REPLY LEVEL, and `depth` is stored rather than walked so the
+ * cap is a CHECK instead of a recursive query per insert. Unbounded threading is how a
+ * public discussion becomes unrenderable and unmoderatable at once.
+ *
+ * `reaction_count` and `reply_count` are DENORMALIZED — see rule 4. They are
+ * maintained in the transaction that inserts or deletes the child, never recomputed on
+ * read.
+ */
+export const researchProgramPost = pgTable(
+  "research_program_post",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "cascade" }),
+    // Cascade, unlike the branch tree's `restrict`: a reply genuinely has no meaning
+    // once the thing it replies to is gone, and the depth cap bounds the cascade to
+    // one level.
+    parentPostId: text("parent_post_id").references((): AnyPgColumn => researchProgramPost.id, {
+      onDelete: "cascade",
+    }),
+    /**
+     * Which branch this discussion is about. NULL for a program-wide thread.
+     *
+     * WHY IT EXISTS. The branch map shows a discussion count and the most recent thread titles
+     * per node — "154 contributors · 61 threads" — and without this column those two would have
+     * no backing and the panel would have to drop them. A thread about senolytic dosing belongs
+     * to that branch, not to the program at large.
+     *
+     * `set null`, not cascade: re-organising the tree must not delete the conversation. An
+     * unfiled thread is a real state the program-wide feed already renders.
+     *
+     * A REPLY INHERITS ITS PARENT'S, the same way `track` does — a thread cannot span two
+     * branches, and letting a reply re-file itself would move half a conversation.
+     */
+    branchId: text("branch_id").references(() => researchProgramBranch.id, {
+      onDelete: "set null",
+    }),
+    /** Inherited from the parent on a reply, so a thread cannot span both tracks. */
+    track: researchProgramPostTrackEnum("track").notNull(),
+    depth: integer("depth").default(0).notNull(),
+    /** Informal papers are titled; ideas and replies are not. Enforced below. */
+    title: text("title"),
+    bodyText: text("body_text").notNull(),
+    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
+    reactionCount: integer("reaction_count").default(0).notNull(),
+    replyCount: integer("reply_count").default(0).notNull(),
+    // Moderation. Hidden rather than deleted, so a report stays explicable and a
+    // wrong call is reversible — `post_restored` is a real audit event.
+    isHidden: boolean("is_hidden").default(false).notNull(),
+    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, { onDelete: "restrict" }),
+    hiddenAt: timestamp("hidden_at"),
+    hiddenReason: text("hidden_reason"),
+    // `precision: 3` — both the track feed and a thread's replies are keyset-paginated on
+    // `(created_at, id)`. See the identical note on `research_program_paper.created_at`;
+    // a millisecond cursor over a microsecond column drops rows off every page boundary.
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // The track feed: top-level rows, newest first, ending in a unique column.
+    index("research_program_post_feed_idx").on(
+      table.programId,
+      table.track,
+      table.createdAt,
+      table.id,
+    ),
+    // A thread's replies, oldest first.
+    index("research_program_post_parent_idx").on(table.parentPostId, table.createdAt, table.id),
+    index("research_program_post_authorUserId_idx").on(table.authorUserId, table.id),
+    // Drives the branch map's per-node discussion count and recent-thread list. Leads with
+    // `branch_id` and ends in a unique column so the "most recent N" read is an index scan.
+    index("research_program_post_branchId_idx").on(table.branchId, table.createdAt, table.id),
+    // Depth and parenthood are one fact stated twice, and they must agree.
+    check(
+      "research_program_post_depth_ck",
+      sql`depth BETWEEN 0 AND 1 AND (depth = 0) = (parent_post_id IS NULL)`,
+    ),
+    // Only a top-level informal paper carries a title; nothing else may.
+    check(
+      "research_program_post_title_ck",
+      sql`(title IS NOT NULL) = (track = 'informal_paper' AND depth = 0)
+          AND (title IS NULL OR char_length(title) BETWEEN 3 AND 200)`,
+    ),
+    check(
+      "research_program_post_body_ck",
+      sql`char_length(body_text) BETWEEN 1 AND 10000
+          AND (hidden_reason IS NULL OR char_length(hidden_reason) BETWEEN 1 AND 2000)`,
+    ),
+    check("research_program_post_counts_ck", sql`reaction_count >= 0 AND reply_count >= 0`),
+    // A reply has no replies of its own — the cap, restated where it is cheap to check.
+    check("research_program_post_leaf_ck", sql`depth = 0 OR reply_count = 0`),
+    check(
+      "research_program_post_hidden_ck",
+      sql`is_hidden = (hidden_at IS NOT NULL) AND (hidden_by_user_id IS NULL) = (hidden_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * One row per user per post. The unique index is what makes `PUT`/`DELETE …/reaction`
+ * idempotent by verb (§10) — which is why they are `PUT` and `DELETE` rather than
+ * `POST`: a double-tap on a slow connection must be harmless, not a second like.
+ */
+export const researchProgramPostReaction = pgTable(
+  "research_program_post_reaction",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    postId: text("post_id")
+      .notNull()
+      .references(() => researchProgramPost.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_program_post_reaction_unq").on(table.postId, table.userId),
+    // "Did I react to this?" across a fetched page, in one query.
+    index("research_program_post_reaction_userId_idx").on(table.userId, table.postId),
+  ],
+);
+
+/**
+ * Monetizable products derivable from a branch — the bridge from open research back to
+ * the pipeline the rest of R&D serves.
+ *
+ * `estimatedMarketSizeInCents` MUST be bigint: the mock's "$12B est. market" is
+ * `1200000000000`, which is 560× the int4 ceiling (§4b). The readiness pair replaces
+ * the mock's "Monetizable in 2–4 yrs" string, so the rail becomes sortable instead of
+ * merely readable.
+ */
+export const researchProgramProductOpportunity = pgTable(
+  "research_program_product_opportunity",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "cascade" }),
+    // `restrict`: the whole claim is "this product comes from that research". A
+    // dangling opportunity is an unsourced market projection.
+    derivedFromBranchId: text("derived_from_branch_id")
+      .notNull()
+      .references(() => researchProgramBranch.id, { onDelete: "restrict" }),
+    productName: text("product_name").notNull(),
+    productDescription: text("product_description").notNull(),
+    estimatedMarketSizeInCents: bigint("estimated_market_size_in_cents", {
+      mode: "number",
+    }).notNull(),
+    readinessMinMonths: integer("readiness_min_months").notNull(),
+    readinessMaxMonths: integer("readiness_max_months").notNull(),
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("research_program_product_opportunity_programId_idx").on(
+      table.programId,
+      table.estimatedMarketSizeInCents,
+      table.id,
+    ),
+    index("research_program_product_opportunity_branchId_idx").on(
+      table.derivedFromBranchId,
+      table.id,
+    ),
+    check(
+      "research_program_product_opportunity_text_ck",
+      sql`char_length(product_name) BETWEEN 3 AND 200
+          AND char_length(product_description) BETWEEN 10 AND 2000`,
+    ),
+    check(
+      "research_program_product_opportunity_numbers_ck",
+      sql`estimated_market_size_in_cents >= 0
+          AND readiness_min_months >= 0
+          AND readiness_max_months >= readiness_min_months
+          AND readiness_max_months <= 600`,
+    ),
+  ],
+);
+
+/**
+ * A person's participation in a program, and how they want to be compensated for it.
+ *
+ * `compensationPreference` reuses `compensation_kind` (§4d) — the one vocabulary a
+ * program shares with a project, and the correct amount of sharing.
+ *
+ * THERE IS NO `total_effort_minutes` COLUMN. It is `SUM(research_effort_log.minutes)`,
+ * computed on read and carried in the stat snapshot. A denormalized total that can
+ * disagree with the logs it summarizes is a number nobody can defend, and this surface
+ * exists to be defensible.
+ *
+ * The two tranche columns are the other half of the mock's `effortLabel`, which held
+ * "312 hrs logged" on some rows and "Funding tranche 2 of 4" on others — one field,
+ * two meanings (§10 calls this the trap). They are now separate facts.
+ */
+export const researchProgramParticipant = pgTable(
+  "research_program_participant",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    role: researchProgramParticipantRoleEnum("role").notNull(),
+    compensationPreference: compensationKindEnum("compensation_preference").notNull(),
+    contributionSummary: text("contribution_summary"),
+    /** Funding progress, for `venture_capitalist` rows. Both or neither. */
+    fundingTrancheIndex: integer("funding_tranche_index"),
+    fundingTrancheTotal: integer("funding_tranche_total"),
+    joinedAt: timestamp("joined_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_program_participant_unq").on(table.programId, table.userId),
+    // The contributors roster, filterable by role.
+    index("research_program_participant_role_idx").on(table.programId, table.role, table.id),
+    index("research_program_participant_userId_idx").on(table.userId, table.id),
+    check(
+      "research_program_participant_summary_ck",
+      sql`contribution_summary IS NULL OR char_length(contribution_summary) BETWEEN 1 AND 500`,
+    ),
+    check(
+      "research_program_participant_tranche_ck",
+      sql`(funding_tranche_index IS NULL) = (funding_tranche_total IS NULL)
+          AND (funding_tranche_index IS NULL
+               OR (funding_tranche_index >= 1
+                   AND funding_tranche_total >= funding_tranche_index
+                   AND funding_tranche_total <= 100))`,
+    ),
+  ],
+);
+
+/**
+ * Logged time on a program. NOT an effort claim (§9): nothing verifies it, nothing
+ * grounds it against an artifact, and it mints no equity. It is a self-reported record
+ * — rule 3 — and the roster labels it as one.
+ *
+ * ALL THREE FKs ARE `restrict` (§4f). Effort logged is a fact about the past; deleting
+ * a participant or a branch must not erase it. Removing someone from a program is a
+ * participant-row deletion the FK will refuse until their logs are dealt with
+ * deliberately, which is the intended friction.
+ */
+export const researchEffortLog = pgTable(
+  "research_effort_log",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "restrict" }),
+    participantId: text("participant_id")
+      .notNull()
+      .references(() => researchProgramParticipant.id, { onDelete: "restrict" }),
+    branchId: text("branch_id").references(() => researchProgramBranch.id, {
+      onDelete: "restrict",
+    }),
+    minutes: integer("minutes").notNull(),
+    /** Date-only, the §1 wire format — no "which timezone is 00:00 in?" question. */
+    loggedForDate: date("logged_for_date", { mode: "string" }).notNull(),
+    note: text("note").notNull(),
+    /**
+     * Client-minted, once per attempt. The unique index below is what makes a retried
+     * submit return the first row instead of double-counting time — two identical
+     * honest logs are two logs, so this is NOT derived from the contents.
+     */
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_effort_log_idempotency_unq").on(
+      table.participantId,
+      table.idempotencyKey,
+    ),
+    index("research_effort_log_programId_idx").on(table.programId, table.loggedForDate, table.id),
+    index("research_effort_log_participantId_idx").on(table.participantId, table.loggedForDate),
+    index("research_effort_log_branchId_idx").on(table.branchId, table.id),
+    // A day has 1440 minutes. A log claiming more is not a typo worth storing.
+    check("research_effort_log_minutes_ck", sql`minutes > 0 AND minutes <= 1440`),
+    check("research_effort_log_note_ck", sql`char_length(note) BETWEEN 1 AND 2000`),
+    check(
+      "research_effort_log_idempotency_ck",
+      sql`char_length(idempotency_key) BETWEEN 8 AND 128`,
+    ),
+  ],
+);
+
+/**
+ * Non-time contributions: cash committed, materials, data, equipment, expertise.
+ *
+ * A RECORD OF INTENT, NOT A SETTLEMENT — rule 3, and the reason this is not called a
+ * ledger of balances. `cash_commitment` carries an amount and a currency; no money
+ * moves, nothing is held, and no response built on this table may imply that it was.
+ * The mock's "$250K escrowed" becomes "$250K committed", because escrow left this
+ * codebase (§7) and re-implying it would be the one lie this surface cannot afford.
+ */
+export const researchContributionLedgerEntry = pgTable(
+  "research_contribution_ledger_entry",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "restrict" }),
+    participantId: text("participant_id")
+      .notNull()
+      .references(() => researchProgramParticipant.id, { onDelete: "restrict" }),
+    kind: researchContributionKindEnum("kind").notNull(),
+    /** bigint, and only for `cash_commitment`. See §4b on the int4 ceiling. */
+    amountInCents: bigint("amount_in_cents", { mode: "number" }),
+    /** ISO-4217. Set with an amount, absent without one. */
+    currencyCode: text("currency_code"),
+    description: text("description").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_contribution_idempotency_unq").on(
+      table.participantId,
+      table.idempotencyKey,
+    ),
+    index("research_contribution_programId_idx").on(table.programId, table.createdAt, table.id),
+    index("research_contribution_participantId_idx").on(table.participantId, table.id),
+    // An amount belongs to a cash commitment and to nothing else, and it never
+    // travels without its currency.
+    check(
+      "research_contribution_amount_ck",
+      sql`(amount_in_cents IS NOT NULL) = (kind = 'cash_commitment')
+          AND (amount_in_cents IS NULL) = (currency_code IS NULL)
+          AND (amount_in_cents IS NULL OR (amount_in_cents > 0 AND currency_code ~ '^[A-Z]{3}$'))`,
+    ),
+    check("research_contribution_description_ck", sql`char_length(description) BETWEEN 1 AND 1000`),
+    check(
+      "research_contribution_idempotency_ck",
+      sql`char_length(idempotency_key) BETWEEN 8 AND 128`,
+    ),
+  ],
+);
+
+/**
+ * A reader flagging a paper or a post.
+ *
+ * ONE REPORT PER USER PER TARGET, through two partial unique indexes — so a
+ * brigading loop cannot inflate a queue, and `409 ALREADY_REPORTED` is an honest
+ * answer rather than a silent second row.
+ */
+export const researchProgramContentReport = pgTable(
+  "research_program_content_report",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "cascade" }),
+    targetKind: researchProgramContentTargetKindEnum("target_kind").notNull(),
+    paperId: text("paper_id").references(() => researchProgramPaper.id, { onDelete: "cascade" }),
+    postId: text("post_id").references(() => researchProgramPost.id, { onDelete: "cascade" }),
+    reason: researchProgramReportReasonEnum("reason").notNull(),
+    detailText: text("detail_text"),
+    reporterUserId: text("reporter_user_id").references(() => user.id, { onDelete: "set null" }),
+    status: researchProgramReportStatusEnum("status").default("open").notNull(),
+    resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    resolvedAt: timestamp("resolved_at"),
+    // `precision: 3` — the moderation queue is keyset-paginated on `(created_at, id)`.
+    // See the note on `research_program_paper.created_at`.
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("research_program_content_report_post_unq")
+      .on(table.postId, table.reporterUserId)
+      .where(sql`post_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    uniqueIndex("research_program_content_report_paper_unq")
+      .on(table.paperId, table.reporterUserId)
+      .where(sql`paper_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    // The moderation queue: open reports, oldest first.
+    index("research_program_content_report_queue_idx").on(
+      table.programId,
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
+    // Exactly one target, and it agrees with `target_kind`. Two nullable FKs are the
+    // cost of one table serving both; this CHECK is what keeps it honest.
+    check(
+      "research_program_content_report_target_ck",
+      sql`((target_kind = 'paper') = (paper_id IS NOT NULL))
+          AND ((target_kind = 'post') = (post_id IS NOT NULL))
+          AND (paper_id IS NULL) <> (post_id IS NULL)`,
+    ),
+    check(
+      "research_program_content_report_detail_ck",
+      sql`detail_text IS NULL OR char_length(detail_text) BETWEEN 1 AND 2000`,
+    ),
+    check(
+      "research_program_content_report_resolution_ck",
+      sql`(resolved_by_user_id IS NULL) = (resolved_at IS NULL)
+          AND (status = 'open') = (resolved_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * What a moderator did, in this domain's own words.
+ *
+ * WHY THIS EXISTS ALONGSIDE `platform_audit_entry`. The platform chain is the
+ * tamper-evident record and is the authority; this table is the domain's queryable
+ * view of it — "show me every decision on this program" is one index scan here and a
+ * payload search there. Every row is written in the SAME transaction as its chain
+ * entry, so neither can exist without the other.
+ *
+ * `moderatorUserId` is `restrict`: who decided is the entire point, and it must not
+ * become NULL when an account goes.
+ */
+export const researchProgramModerationAction = pgTable(
+  "research_program_moderation_action",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // `restrict`, not cascade: the accountability record outlives the program.
+    programId: text("program_id")
+      .notNull()
+      .references(() => researchProgram.id, { onDelete: "restrict" }),
+    actionKind: researchProgramModerationKindEnum("action_kind").notNull(),
+    // `set null`: a decision stays on the record after the thing it was about is gone.
+    paperId: text("paper_id").references(() => researchProgramPaper.id, { onDelete: "set null" }),
+    postId: text("post_id").references(() => researchProgramPost.id, { onDelete: "set null" }),
+    reportId: text("report_id").references(() => researchProgramContentReport.id, {
+      onDelete: "set null",
+    }),
+    moderatorUserId: text("moderator_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    /** The role AT THE TIME, snapshotted — roles are revocable and a join would lie later. */
+    moderatorRoleSnapshot: text("moderator_role_snapshot").notNull(),
+    reasonNote: text("reason_note").notNull(),
+    /** The `platform_audit_entry` written in the same transaction. */
+    auditEntryId: text("audit_entry_id")
+      .notNull()
+      .references(() => platformAuditEntry.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("research_program_moderation_action_programId_idx").on(
+      table.programId,
+      table.createdAt,
+      table.id,
+    ),
+    index("research_program_moderation_action_moderatorUserId_idx").on(
+      table.moderatorUserId,
+      table.createdAt,
+    ),
+    uniqueIndex("research_program_moderation_action_auditEntryId_unq").on(table.auditEntryId),
+    check(
+      "research_program_moderation_action_reason_ck",
+      sql`char_length(reason_note) BETWEEN 1 AND 2000
+          AND char_length(moderator_role_snapshot) BETWEEN 1 AND 40`,
+    ),
+  ],
+);
+
+// --- §10 relations. Child-side only, same convention as §5, §6, §7, §7A, §8 and §9:
+// --- each table declares its own `one(...)` and neither `userRelations` nor
+// --- `researchProgramRelations` is edited to add a matching `many(...)`.
+
+export const researchProgramRelations = relations(researchProgram, ({ one }) => ({
+  createdBy: one(user, {
+    fields: [researchProgram.createdByUserId],
+    references: [user.id],
+    relationName: "researchProgramCreatedBy",
+  }),
+  reviewedBy: one(user, {
+    fields: [researchProgram.reviewedByUserId],
+    references: [user.id],
+    relationName: "researchProgramReviewedBy",
+  }),
+}));
+
+export const researchProgramStatSnapshotRelations = relations(
+  researchProgramStatSnapshot,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchProgramStatSnapshot.programId],
+      references: [researchProgram.id],
+    }),
+  }),
+);
+
+export const researchProgramBranchRelations = relations(researchProgramBranch, ({ one }) => ({
+  program: one(researchProgram, {
+    fields: [researchProgramBranch.programId],
+    references: [researchProgram.id],
+  }),
+  parentBranch: one(researchProgramBranch, {
+    fields: [researchProgramBranch.parentBranchId],
+    references: [researchProgramBranch.id],
+    relationName: "researchProgramBranchParent",
+  }),
+  createdBy: one(user, {
+    fields: [researchProgramBranch.createdByUserId],
+    references: [user.id],
+    relationName: "researchProgramBranchCreatedBy",
+  }),
+}));
+
+export const researchProgramBranchClaimRelations = relations(
+  researchProgramBranchClaim,
+  ({ one }) => ({
+    branch: one(researchProgramBranch, {
+      fields: [researchProgramBranchClaim.branchId],
+      references: [researchProgramBranch.id],
+    }),
+    claimant: one(user, {
+      fields: [researchProgramBranchClaim.userId],
+      references: [user.id],
+      relationName: "researchProgramBranchClaimant",
+    }),
+  }),
+);
+
+export const researchPaperCategoryRelations = relations(researchPaperCategory, ({ one }) => ({
+  createdBy: one(user, {
+    fields: [researchPaperCategory.createdByUserId],
+    references: [user.id],
+    relationName: "researchPaperCategoryCreatedBy",
+  }),
+}));
+
+export const researchProgramPaperRelations = relations(researchProgramPaper, ({ one }) => ({
+  program: one(researchProgram, {
+    fields: [researchProgramPaper.programId],
+    references: [researchProgram.id],
+  }),
+  branch: one(researchProgramBranch, {
+    fields: [researchProgramPaper.branchId],
+    references: [researchProgramBranch.id],
+  }),
+  category: one(researchPaperCategory, {
+    fields: [researchProgramPaper.categoryId],
+    references: [researchPaperCategory.id],
+  }),
+  uploader: one(user, {
+    fields: [researchProgramPaper.uploaderUserId],
+    references: [user.id],
+    relationName: "researchProgramPaperUploader",
+  }),
+  reviewedBy: one(user, {
+    fields: [researchProgramPaper.reviewedByUserId],
+    references: [user.id],
+    relationName: "researchProgramPaperReviewedBy",
+  }),
+}));
+
+export const researchProgramPostRelations = relations(researchProgramPost, ({ one }) => ({
+  program: one(researchProgram, {
+    fields: [researchProgramPost.programId],
+    references: [researchProgram.id],
+  }),
+  parentPost: one(researchProgramPost, {
+    fields: [researchProgramPost.parentPostId],
+    references: [researchProgramPost.id],
+    relationName: "researchProgramPostParent",
+  }),
+  branch: one(researchProgramBranch, {
+    fields: [researchProgramPost.branchId],
+    references: [researchProgramBranch.id],
+  }),
+  author: one(user, {
+    fields: [researchProgramPost.authorUserId],
+    references: [user.id],
+    relationName: "researchProgramPostAuthor",
+  }),
+  hiddenBy: one(user, {
+    fields: [researchProgramPost.hiddenByUserId],
+    references: [user.id],
+    relationName: "researchProgramPostHiddenBy",
+  }),
+}));
+
+export const researchProgramPostReactionRelations = relations(
+  researchProgramPostReaction,
+  ({ one }) => ({
+    post: one(researchProgramPost, {
+      fields: [researchProgramPostReaction.postId],
+      references: [researchProgramPost.id],
+    }),
+    reactor: one(user, {
+      fields: [researchProgramPostReaction.userId],
+      references: [user.id],
+      relationName: "researchProgramPostReactor",
+    }),
+  }),
+);
+
+export const researchProgramProductOpportunityRelations = relations(
+  researchProgramProductOpportunity,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchProgramProductOpportunity.programId],
+      references: [researchProgram.id],
+    }),
+    derivedFromBranch: one(researchProgramBranch, {
+      fields: [researchProgramProductOpportunity.derivedFromBranchId],
+      references: [researchProgramBranch.id],
+    }),
+    createdBy: one(user, {
+      fields: [researchProgramProductOpportunity.createdByUserId],
+      references: [user.id],
+      relationName: "researchProgramProductOpportunityCreatedBy",
+    }),
+  }),
+);
+
+export const researchProgramParticipantRelations = relations(
+  researchProgramParticipant,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchProgramParticipant.programId],
+      references: [researchProgram.id],
+    }),
+    participant: one(user, {
+      fields: [researchProgramParticipant.userId],
+      references: [user.id],
+      relationName: "researchProgramParticipantUser",
+    }),
+  }),
+);
+
+export const researchEffortLogRelations = relations(researchEffortLog, ({ one }) => ({
+  program: one(researchProgram, {
+    fields: [researchEffortLog.programId],
+    references: [researchProgram.id],
+  }),
+  participant: one(researchProgramParticipant, {
+    fields: [researchEffortLog.participantId],
+    references: [researchProgramParticipant.id],
+  }),
+  branch: one(researchProgramBranch, {
+    fields: [researchEffortLog.branchId],
+    references: [researchProgramBranch.id],
+  }),
+}));
+
+export const researchContributionLedgerEntryRelations = relations(
+  researchContributionLedgerEntry,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchContributionLedgerEntry.programId],
+      references: [researchProgram.id],
+    }),
+    participant: one(researchProgramParticipant, {
+      fields: [researchContributionLedgerEntry.participantId],
+      references: [researchProgramParticipant.id],
+    }),
+  }),
+);
+
+export const researchProgramContentReportRelations = relations(
+  researchProgramContentReport,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchProgramContentReport.programId],
+      references: [researchProgram.id],
+    }),
+    paper: one(researchProgramPaper, {
+      fields: [researchProgramContentReport.paperId],
+      references: [researchProgramPaper.id],
+    }),
+    post: one(researchProgramPost, {
+      fields: [researchProgramContentReport.postId],
+      references: [researchProgramPost.id],
+    }),
+    reporter: one(user, {
+      fields: [researchProgramContentReport.reporterUserId],
+      references: [user.id],
+      relationName: "researchProgramContentReporter",
+    }),
+    resolvedBy: one(user, {
+      fields: [researchProgramContentReport.resolvedByUserId],
+      references: [user.id],
+      relationName: "researchProgramContentReportResolvedBy",
+    }),
+  }),
+);
+
+export const researchProgramModerationActionRelations = relations(
+  researchProgramModerationAction,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchProgramModerationAction.programId],
+      references: [researchProgram.id],
+    }),
+    moderator: one(user, {
+      fields: [researchProgramModerationAction.moderatorUserId],
+      references: [user.id],
+      relationName: "researchProgramModerator",
+    }),
+    auditEntry: one(platformAuditEntry, {
+      fields: [researchProgramModerationAction.auditEntryId],
+      references: [platformAuditEntry.id],
+    }),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Creator Studio video domain. See docs/STUDIO_BACKEND_STRUCTURE.md §0-§13.

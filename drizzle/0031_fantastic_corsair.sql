@@ -1,0 +1,3 @@
+ALTER TABLE "research_program_post" ADD COLUMN "branch_id" text;--> statement-breakpoint
+ALTER TABLE "research_program_post" ADD CONSTRAINT "research_program_post_branch_id_research_program_branch_id_fk" FOREIGN KEY ("branch_id") REFERENCES "public"."research_program_branch"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "research_program_post_branchId_idx" ON "research_program_post" USING btree ("branch_id","created_at","id");

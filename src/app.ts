@@ -26,6 +26,9 @@ import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
 import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
+import researchProgramsRouter, {
+  researchPaperCategoryRouter,
+} from "#src/routes/research-programs.routes.js";
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/routes/research-projects.routes.js";
@@ -159,6 +162,11 @@ app.use("/research-projects", compensationRouter);
 // bake event, the project's supplier engagements and its linked store listings. Nothing is
 // stored and no body sets a state, so there is no field a client could assert "ready" with.
 app.use("/research-projects", projectGoToMarketRouter);
+// §10 — research programs. Its own prefix, so unlike the six routers sharing
+// "/research-projects" there is no inter-router ordering hazard here. A program is a
+// distinct entity from a project (§10): thousands of open contributors, a branch tree, a
+// public paper library and contribution tracking that is not equity.
+app.use("/research-programs", researchProgramsRouter);
 app.use("/discovery", discoveryRouter);
 // Creator Studio. The anime review queue is nested at /videos/admin/review rather than a
 // root /admin, matching /discovery/admin/* — one domain's moderation surface should not
@@ -169,6 +177,11 @@ app.use("/series", seriesRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,
 // exactly as the spec mounts the funding router at "/".
 app.use("/", researchCatalogRouter);
+// The §10 paper taxonomy, root-mounted at /research-paper-categories. Program-independent
+// on purpose — one vocabulary the whole platform shares, exactly as researchCatalogRouter's
+// /research-categories is for projects. Nesting it per-program would make "Longevity
+// Biology" mean something different in two places.
+app.use("/", researchPaperCategoryRouter);
 // The four §4c STAGE ROUTES' cross-project halves (Appendix B), all root-mounted for the
 // one reason: a visitor arriving from a landing-page stage card has not picked a project
 // and holds no slug. That is the whole point of the pages — team building, daily logs and

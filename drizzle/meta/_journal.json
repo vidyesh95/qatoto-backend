@@ -204,6 +204,27 @@
       "when": 1785389431003,
       "tag": "0028_simple_puff_adder",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1785408665911,
+      "tag": "0029_empty_tomorrow_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1785409225383,
+      "tag": "0030_easy_stranger",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1785416093304,
+      "tag": "0031_fantastic_corsair",
+      "breakpoints": true
     }
   ]
 }
