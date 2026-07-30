@@ -70,6 +70,22 @@ describe("derived R&D OpenAPI paths", () => {
     expect(paths["/admin/audit-trail/verify"]).toBeDefined();
   });
 
+  it("carries a request body where there is one, and none where there is not", () => {
+    // The §11l.2 item 8 remainder. `openapi-rnd-bodies.test.ts` enforces the map's
+    // completeness; these two are the spot check that the wiring reaches the document.
+    const submitClaim = paths["/research-projects/{projectSlug}/effort-claims"]?.["post"];
+    expect(typeof submitClaim === "object" && submitClaim !== null && "requestBody" in submitClaim).toBe(true);
+
+    // `/accept` deliberately takes no body — compensation.routes.ts:96-98 records that as a
+    // decision, so claiming one here would document a field the server ignores.
+    const acceptAgreement =
+      paths["/research-projects/{projectSlug}/compensation-agreements/{agreementId}/accept"]?.["post"];
+    expect(acceptAgreement).toBeDefined();
+    expect(typeof acceptAgreement === "object" && acceptAgreement !== null && "requestBody" in acceptAgreement).toBe(
+      false,
+    );
+  });
+
   it("marks the OAuth callback as resolvable without a session", () => {
     const callback = paths["/integrations/{provider}/callback"]?.["get"];
     expect(callback).toBeDefined();

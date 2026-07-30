@@ -1,9 +1,17 @@
+import { RND_REQUEST_BODIES } from "#src/docs/openapi-rnd-bodies.js";
 import {
+  declaredRouteChains,
   declaredRoutes,
   pathParameterNames,
   toOpenApiPath,
   type DeclaredRoute,
+  type RouteHandlerChain,
 } from "#src/docs/route-inventory.js";
+import {
+  convertBodySchema,
+  describeUnrepresentableConstraints,
+  type UnrepresentableConstraint,
+} from "#src/docs/zod-to-openapi.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
@@ -34,11 +42,22 @@ import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.
  * a path, deleting one removes it, and nobody has to remember. That is the property the
  * hand-written half does not have and cannot get.
  *
- * WHAT IT DELIBERATELY DOES NOT CLAIM. No request bodies, no response schemas — those live
- * in the controllers' Zod schemas, and translating them wholesale is a job to do schema by
- * schema rather than in one sweep (see `route-inventory.ts`). Each entry says what it
- * honestly knows: the path, the verb, the path parameters, whether a session is required,
- * and where to read the contract. An honest inventory beats a detailed fiction.
+ * REQUEST BODIES ARE NOW CLAIMED, for all 71 routes that take one. They come from
+ * `openapi-rnd-bodies.ts`, which maps a route to the very Zod schema its controller parses
+ * with, converted by `zod-to-openapi.ts`. That map is the one hand-maintained thing in a
+ * derived document, so a test walks these same routers and fails the build if a body-taking
+ * route is missing from it.
+ *
+ * WHERE A BODY IS BROADER THAN THE SERVER, THE OPERATION SAYS SO. A cross-field `.refine()`
+ * cannot be expressed in JSON Schema and Zod drops it silently, so those constraints are
+ * detected and disclosed — in the `description` for a human and in
+ * `x-unrepresentable-constraints` for a tool. Loosened loudly, which is the requirement;
+ * withholding the whole body would hide twenty correct field constraints to avoid
+ * overstating one.
+ *
+ * WHAT IT STILL DOES NOT CLAIM. Response schemas. Each entry otherwise says what it honestly
+ * knows: the path, the verb, the path parameters, the request body, whether a session is
+ * required, and where to read the rest of the contract.
  */
 
 /** The mounts, mirroring `src/app.ts` — the same routers, the same prefixes. */
@@ -60,6 +79,18 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/", router: fundingRouter },
   { mountPath: "/", router: integrationCallbackRouter },
 ];
+
+/**
+ * The same routes, carrying the handler chain Express runs for each.
+ *
+ * FOR THE AUDIT TIER ONLY — `openapi-rnd-bodies.test.ts` uses it to find every route that
+ * reads a body and check the map covers it. Exported so `RND_MOUNTS` can stay private and
+ * there is exactly one mount table; deliberately NOT consumed by the emitter below, which
+ * must derive nothing from handler identity (see `RouteHandlerChain`).
+ */
+export function rndRouteChains(): readonly RouteHandlerChain[] {
+  return RND_MOUNTS.flatMap((mount) => declaredRouteChains(mount.mountPath, mount.router));
+}
 
 /**
  * Which §11 subsection a path belongs to. Longest prefix wins, so
@@ -145,6 +176,72 @@ const CONTRACT_NOTE =
   "deliberately claims only what a router knows (§11l.2 item 8). Money is integer cents in " +
   "a decimal string, equity is integer basis points, effort is integer minutes (§1, §4b).";
 
+/**
+ * The `requestBody` for one operation, plus anything the schema could not carry.
+ *
+ * Returns nothing at all for a route with no mapped body — and also for one whose schema
+ * FAILED to convert. That second case is a soft failure on purpose: `openApiSpec` is a
+ * module-level constant, so throwing here would take `/health` down the moment somebody put
+ * a `z.date()` in a body. The description says the body was withheld and why, and
+ * `openapi-rnd-bodies.test.ts` asserts the branch is never reached — so documentation
+ * degrades in production while the build goes red.
+ */
+function buildRequestBody(routeKey: string): {
+  readonly requestBody?: Record<string, unknown>;
+  readonly descriptionSuffix?: string;
+  readonly unrepresentable?: readonly UnrepresentableConstraint[];
+} {
+  const mapped = RND_REQUEST_BODIES[routeKey];
+  if (!mapped) return {};
+
+  const converted = convertBodySchema(mapped.schema);
+  if (converted.kind === "failed") {
+    return {
+      descriptionSuffix:
+        `REQUEST BODY OMITTED — the Zod schema for this route could not be represented in ` +
+        `OpenAPI 3.0 (${converted.message}). The contract is the schema mapped for ` +
+        `"${routeKey}" in src/docs/openapi-rnd-bodies.ts.`,
+    };
+  }
+
+  const contentType = mapped.contentType ?? "application/json";
+  // The one multipart route. The file part is not in the Zod schema — multer takes it off
+  // the request before the controller parses the text fields — so it is merged in here, and
+  // `additionalProperties: false` stays correct because it is the only other permitted part.
+  const schema =
+    mapped.binaryField === undefined
+      ? converted.schema
+      : mergeBinaryField(converted.schema, mapped.binaryField);
+
+  return {
+    requestBody: { required: mapped.required, content: { [contentType]: { schema } } },
+    ...(converted.unrepresentable.length > 0
+      ? {
+          descriptionSuffix: describeUnrepresentableConstraints(converted.unrepresentable),
+          unrepresentable: converted.unrepresentable,
+        }
+      : {}),
+  };
+}
+
+/** Adds the multipart file part to a converted object schema, and to its `required` list. */
+function mergeBinaryField(
+  schema: Record<string, unknown>,
+  binaryField: string,
+): Record<string, unknown> {
+  const properties = schema["properties"];
+  const required = schema["required"];
+
+  return {
+    ...schema,
+    properties: {
+      ...(typeof properties === "object" && properties !== null ? properties : {}),
+      [binaryField]: { type: "string", format: "binary" },
+    },
+    required: [...(Array.isArray(required) ? required : []), binaryField],
+  };
+}
+
 export function buildRndPathItems(): Record<string, Record<string, unknown>> {
   const paths: Record<string, Record<string, unknown>> = {};
 
@@ -161,14 +258,23 @@ export function buildRndPathItems(): Record<string, Record<string, unknown>> {
       schema: { type: "string" },
     }));
 
-    const isPublic = PUBLICLY_RESOLVABLE.has(`${route.method} ${openApiPath}`);
+    const routeKey = `${route.method} ${openApiPath}`;
+    const isPublic = PUBLICLY_RESOLVABLE.has(routeKey);
+    const body = buildRequestBody(routeKey);
 
     const pathItem = (paths[openApiPath] ??= {});
     pathItem[route.method] = {
       tags: [tagFor(openApiPath)],
       summary: `${route.method.toUpperCase()} ${openApiPath}`,
-      description: CONTRACT_NOTE,
+      description:
+        body.descriptionSuffix === undefined
+          ? CONTRACT_NOTE
+          : `${CONTRACT_NOTE}\n\n${body.descriptionSuffix}`,
       ...(parameters.length > 0 ? { parameters } : {}),
+      ...(body.requestBody ? { requestBody: body.requestBody } : {}),
+      // The machine-readable half of the same disclosure, so a linter or a codegen plugin
+      // can act on what the prose above only states.
+      ...(body.unrepresentable ? { "x-unrepresentable-constraints": body.unrepresentable } : {}),
       ...(isPublic ? {} : { security: [{ sessionCookie: [] }] }),
       responses: {
         "200": { description: "Success. Envelope: { status, statusCode, message, data }." },
