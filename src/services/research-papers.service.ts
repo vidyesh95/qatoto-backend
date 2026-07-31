@@ -53,7 +53,6 @@ export type ResearchPaperError =
   | ProgramAccessError
   | { type: "PAPER_NOT_FOUND"; paperId: string }
   | { type: "PAPER_CATEGORY_NOT_FOUND"; categoryId: string }
-  | { type: "PAPER_CATEGORY_NOT_APPROVED"; categoryId: string }
   | { type: "BRANCH_NOT_FOUND"; branchId: string }
   | { type: "DUPLICATE_DOI"; doi: string }
   | { type: "DUPLICATE_PAPER"; contentSha256: string }
@@ -297,9 +296,16 @@ export async function findProgramPaper(input: {
 /**
  * Creates the metadata row. No file yet.
  *
- * The category must exist AND be `approved`: a paper filed under a category still awaiting
- * moderation would be invisible in every facet, which reads to its uploader as a lost
- * upload.
+ * THE CATEGORY RULE IS THE PROJECT RULE, deliberately: anything but `rejected` passes, so a
+ * category proposed moments ago is usable immediately. `createResearchProject` has always
+ * worked this way, and papers demanding `approved` made proposing one a dead end — the paper
+ * could not be filed and, until the decide route existed, the category could never be
+ * approved either. A paper lands `queued` regardless, so the same reviewer settles the paper
+ * and its category together.
+ *
+ * A `rejected` category collapses into `PAPER_CATEGORY_NOT_FOUND` rather than reporting
+ * itself, for the same reason projects do it: a rejected id must not be distinguishable from
+ * one that never existed.
  */
 export async function createProgramPaper(input: {
   readonly programId: string;
@@ -316,16 +322,10 @@ export async function createProgramPaper(input: {
     .from(researchPaperCategory)
     .where(eq(researchPaperCategory.id, input.categoryId));
 
-  if (!category) {
+  if (!category || category.status === "rejected") {
     return {
       success: false,
       error: { type: "PAPER_CATEGORY_NOT_FOUND", categoryId: input.categoryId },
-    };
-  }
-  if (category.status !== "approved") {
-    return {
-      success: false,
-      error: { type: "PAPER_CATEGORY_NOT_APPROVED", categoryId: input.categoryId },
     };
   }
 

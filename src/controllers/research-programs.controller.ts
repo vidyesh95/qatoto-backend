@@ -214,6 +214,28 @@ export const ListPaperCategoriesQuerySchema = z
   .object({ status: z.enum(["approved", "pending", "rejected"]).default("approved") })
   .strict();
 
+/**
+ * A discriminated union, mirroring §6's `DecideCategorySchema`: a rejection REQUIRES a note and
+ * an approval does not, which one flat object with an optional note could not express.
+ *
+ * No `pinIconKey` arm — that column belongs to the project taxonomy's problem map, and the
+ * paper taxonomy has no equivalent.
+ */
+export const DecidePaperCategorySchema = z.discriminatedUnion("decision", [
+  z
+    .object({
+      decision: z.literal("approve"),
+      note: z.string().trim().max(2_000).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      decision: z.literal("reject"),
+      note: z.string().trim().min(1).max(2_000),
+    })
+    .strict(),
+]);
+
 // ---------------------------------------------------------------------------
 // Posts, reactions, reports
 // ---------------------------------------------------------------------------
@@ -1114,6 +1136,36 @@ export async function createPaperCategory(req: Request, res: Response): Promise<
     return;
   }
   respondCreated(res, "Paper category submitted for review.", created.value);
+}
+
+/**
+ * `POST /research-paper-categories/:categoryId/decide` — `moderate_taxonomy`.
+ *
+ * The capability is checked inside the service, not by middleware, and before the id is read.
+ * Middleware cannot return a `Result`, so it could not take part in the exhaustive error switch
+ * that maps every domain error to its status — which is where an authorization decision belongs.
+ */
+export async function decidePaperCategory(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+  const parsedBody = DecidePaperCategorySchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    respondValidationFailed(res, parsedBody.error);
+    return;
+  }
+
+  const decided = await categoriesService.decidePaperCategory(
+    req.user.id,
+    firstParam(req.params.categoryId ?? ""),
+    parsedBody.data,
+  );
+  if (!decided.success) {
+    respondResearchProgramError(res, decided.error);
+    return;
+  }
+  respondOk(res, "Paper category decision recorded.", decided.value);
 }
 
 // ---------------------------------------------------------------------------

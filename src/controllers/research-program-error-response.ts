@@ -43,9 +43,9 @@ import type { ResearchProgramError } from "#src/services/research-programs.servi
  *         is usually a finding, not a retry** — it means the state moved, and a client that
  *         retries blindly will keep getting it.
  *
- *   422 — parse failures and cross-field validations a schema cannot express: a category
- *         that exists but is not approved, a readiness range inverted, a tranche on a
- *         non-funder, an effort date in the future, a PDF that is not a PDF.
+ *   422 — parse failures and cross-field validations a schema cannot express: a branch nested
+ *         past the depth cap, a readiness range inverted, a tranche on a non-funder, an effort
+ *         date in the future, a PDF that is not a PDF.
  *
  *   413 — handled in the multipart middleware, never here.
  *   502 / 503 — object storage. `NOT_CONFIGURED` is a 503 because the deployment is
@@ -144,6 +144,13 @@ export function mapResearchProgramErrorToResponse(error: ResearchProgramDomainEr
       return { statusCode: 409, message: "This exact file is already in this program." };
     case "PAPER_CATEGORY_LABEL_TAKEN":
       return { statusCode: 409, message: `A paper category named "${error.slug}" already exists.` };
+    case "PAPER_CATEGORY_ALREADY_DECIDED":
+      // Refused rather than replayed: a second verdict would overwrite which moderator is
+      // accountable for the first one.
+      return {
+        statusCode: 409,
+        message: `This paper category has already been reviewed and is ${error.status}.`,
+      };
     case "POST_HIDDEN":
       return { statusCode: 409, message: "This post was hidden by a moderator." };
     case "POST_ALREADY_IN_STATE":
@@ -180,13 +187,6 @@ export function mapResearchProgramErrorToResponse(error: ResearchProgramDomainEr
       return {
         statusCode: 422,
         message: "That title cannot be turned into a web address. Use letters and numbers.",
-      };
-    case "PAPER_CATEGORY_NOT_APPROVED":
-      // Filing under an unreviewed category would make the paper invisible in every facet,
-      // which reads to its uploader as a lost upload.
-      return {
-        statusCode: 422,
-        message: "That paper category is still awaiting review. Pick an approved one for now.",
       };
     case "NOT_A_PARTICIPANT":
       return {

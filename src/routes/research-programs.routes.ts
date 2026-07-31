@@ -511,3 +511,18 @@ researchPaperCategoryRouter.post(
   compactBody,
   programsController.createPaperCategory,
 );
+
+/**
+ * POST /research-paper-categories/:categoryId/decide — `moderate_taxonomy`.
+ *
+ * No capability middleware and no `requireIdentifiedUser`: the capability check lives in the
+ * service and runs BEFORE the id is read, so this route is not an id oracle. That is the same
+ * arrangement `/discovery/admin/categories/:categoryId/decide` uses.
+ */
+researchPaperCategoryRouter.post(
+  "/research-paper-categories/:categoryId/decide",
+  requireAuth,
+  programModerationLimiter,
+  compactBody,
+  programsController.decidePaperCategory,
+);

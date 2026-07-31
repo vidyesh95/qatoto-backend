@@ -3,6 +3,11 @@ import { and, asc, eq } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { researchPaperCategory } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { recordPlatformAction } from "#src/services/platform-audit.service.js";
+import {
+  requirePlatformCapability,
+  type PlatformAccessError,
+} from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -27,7 +32,10 @@ import type { Result } from "#src/types/index.js";
 
 export type ResearchPaperCategoryStatus = (typeof researchPaperCategory.$inferSelect)["status"];
 
-export type ResearchPaperCategoryError = { type: "PAPER_CATEGORY_LABEL_TAKEN"; slug: string };
+export type ResearchPaperCategoryError =
+  | { type: "PAPER_CATEGORY_LABEL_TAKEN"; slug: string }
+  | { type: "PAPER_CATEGORY_NOT_FOUND"; categoryId: string }
+  | { type: "PAPER_CATEGORY_ALREADY_DECIDED"; status: ResearchPaperCategoryStatus };
 
 export interface ResearchPaperCategoryView {
   readonly id: string;
@@ -112,7 +120,7 @@ export async function createResearchPaperCategory(
   }
 }
 
-/** Resolves one row, whatever its status. Used to validate a paper's `categoryId`. */
+/** Resolves one row, whatever its status. The status read `decidePaperCategory` decides on. */
 export async function findPaperCategoryById(
   categoryId: string,
 ): Promise<ResearchPaperCategoryView | null> {
@@ -147,4 +155,89 @@ export async function applyPaperCategoryDecision(input: {
     .returning(CATEGORY_VIEW_COLUMNS);
 
   return updated ?? null;
+}
+
+export type PaperCategoryDecisionInput =
+  | { readonly decision: "approve"; readonly note?: string }
+  | { readonly decision: "reject"; readonly note: string };
+
+/**
+ * Approves or rejects a user-proposed paper category — the §6 `decideCategory` shape, applied
+ * to the §10 taxonomy.
+ *
+ * THE ORDER OF CHECKS IS LOAD-BEARING: capability FIRST (403), resource SECOND (404).
+ * Reversed, this route becomes an id oracle — anyone with a session could tell "that category
+ * exists" from "it does not" by the status code without being staff at all.
+ *
+ * RE-DECIDING IS REFUSED, not idempotent. A second approval would stamp a new decision over
+ * the first moderator's, silently rewriting who is accountable for letting a term into the
+ * public taxonomy.
+ *
+ * THE AUDIT KINDS ARE SHARED WITH THE PROJECT TAXONOMY (`taxonomy_category_approved` /
+ * `_rejected`) rather than minted anew, because a paper-specific pair would need a migration
+ * to add an enum value. `targetLabel` and the payload carry which taxonomy it was, so the two
+ * stay tellable apart in the log.
+ */
+export async function decidePaperCategory(
+  actorUserId: string,
+  categoryId: string,
+  input: PaperCategoryDecisionInput,
+): Promise<Result<ResearchPaperCategoryView, ResearchPaperCategoryError | PlatformAccessError>> {
+  // 1. CAPABILITY FIRST — before any id is read.
+  const capabilityResult = await requirePlatformCapability(actorUserId, "moderate_taxonomy");
+  if (!capabilityResult.success) {
+    return { success: false, error: capabilityResult.error };
+  }
+
+  // 2. Resource second.
+  const existing = await findPaperCategoryById(categoryId);
+  if (existing === null) {
+    return { success: false, error: { type: "PAPER_CATEGORY_NOT_FOUND", categoryId } };
+  }
+  if (existing.status !== "pending") {
+    return {
+      success: false,
+      error: { type: "PAPER_CATEGORY_ALREADY_DECIDED", status: existing.status },
+    };
+  }
+
+  const decidedAt = new Date();
+  const updated = await recordPlatformAction(
+    async () =>
+      applyPaperCategoryDecision({
+        categoryId,
+        nextStatus: input.decision === "approve" ? "approved" : "rejected",
+      }),
+    (row) =>
+      row === null
+        ? // Lost the race with another moderator. Nothing was decided, so nothing is
+          // recorded — an audit entry for a write that matched no row is a false trail.
+          null
+        : {
+            eventKind:
+              input.decision === "approve"
+                ? "taxonomy_category_approved"
+                : "taxonomy_category_rejected",
+            actorUserId,
+            actorRoleSnapshot: capabilityResult.value.platformRole,
+            actionLabel:
+              input.decision === "approve"
+                ? "Approved a paper category"
+                : "Rejected a paper category",
+            targetLabel: `paper category ${categoryId}`,
+            ...(input.note === undefined ? {} : { detailNote: input.note }),
+            payload: { taxonomy: "research_paper_category", categoryId, decision: input.decision },
+            occurredAt: decidedAt,
+          },
+  );
+
+  if (!updated) {
+    // Lost a race between the status read and the conditional UPDATE, which matched nothing.
+    return {
+      success: false,
+      error: { type: "PAPER_CATEGORY_ALREADY_DECIDED", status: existing.status },
+    };
+  }
+
+  return { success: true, value: updated };
 }

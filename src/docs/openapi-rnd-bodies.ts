@@ -75,6 +75,7 @@ import {
   CreatePostSchema,
   CreateProgramSchema,
   CreateReplySchema,
+  DecidePaperCategorySchema,
   DismissReportSchema,
   JoinProgramSchema,
   LogEffortSchema,
@@ -454,6 +455,10 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
     required: true,
   },
   "post /research-paper-categories": { schema: CreatePaperCategorySchema, required: true },
+  "post /research-paper-categories/{categoryId}/decide": {
+    schema: DecidePaperCategorySchema,
+    required: true,
+  },
   "post /suppliers": { schema: CreateSupplierSchema, required: true },
   "put /discovery/talent/me": { schema: TalentProfileSchema, required: true },
   "put /milestones/{milestoneId}/variance": { schema: MilestoneVarianceSchema, required: true },
