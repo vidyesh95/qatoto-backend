@@ -60,8 +60,7 @@ export type DiscoveryDomainError =
   // §11j.4's authoring surface over `market_insight`. Same status policy again — its
   // moderator refusal is the identical PLATFORM_CAPABILITY_REQUIRED decided before any id
   // is read, and it REUSES this file's REGION_NOT_FOUND / CATEGORY_NOT_FOUND /
-  // CATEGORY_NOT_APPROVED / ALREADY_PUBLISHED / NOT_PUBLISHED arms rather than adding
-  // near-duplicates beside them.
+  // ALREADY_PUBLISHED / NOT_PUBLISHED arms rather than adding near-duplicates beside them.
   | MarketInsightError
   // §11j.4's cluster↔project link writes. NOT composing PlatformAccessError, deliberately:
   // that route never emits a 403, and the union not carrying the variant is what keeps a
@@ -129,14 +128,6 @@ export function mapDiscoveryErrorToResponse(error: DiscoveryDomainError): {
       return { statusCode: 403, message: "This action requires a platform staff role." };
 
     // --- 422: validation a schema could not express.
-    case "CATEGORY_NOT_APPROVED":
-      return {
-        statusCode: 422,
-        message: "That category is still awaiting review.",
-        errors: {
-          categoryId: ["Category is pending moderation and cannot be used until it is approved."],
-        },
-      };
     case "VIEWPORT_INCOMPLETE":
       return {
         statusCode: 422,

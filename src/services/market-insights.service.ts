@@ -54,7 +54,6 @@ export type MarketInsightError =
   // shape, or the mapper's exhaustive switch cannot read the field.
   | { type: "REGION_NOT_FOUND"; regionId: string }
   | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
-  | { type: "CATEGORY_NOT_APPROVED"; categoryId: string }
   | { type: "ALREADY_PUBLISHED" }
   | { type: "NOT_PUBLISHED" }
   // §11k.2 made `market_insight` a referenced parent for the first time. See the delete.
@@ -188,11 +187,10 @@ async function resolveReferences(
     .from(researchCategory)
     .where(eq(researchCategory.id, categoryId));
 
-  if (!category) {
+  // Anything but `rejected`, matching every other writer of this table. A rejected id reads
+  // as NOT_FOUND so it cannot be told apart from one that never existed.
+  if (!category || category.status === "rejected") {
     return { success: false, error: { type: "CATEGORY_NOT_FOUND", categoryId } };
-  }
-  if (category.status !== "approved") {
-    return { success: false, error: { type: "CATEGORY_NOT_APPROVED", categoryId } };
   }
 
   return { success: true, value: true };

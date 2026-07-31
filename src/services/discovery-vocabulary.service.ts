@@ -63,8 +63,7 @@ export type DiscoveryVocabularyError =
   | { type: "REGION_SLUG_TAKEN"; slug: string }
   | { type: "REGION_HAS_REFERENCES" }
   // Reused verbatim from the existing discovery unions.
-  | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
-  | { type: "CATEGORY_NOT_APPROVED"; categoryId: string };
+  | { type: "CATEGORY_NOT_FOUND"; categoryId: string };
 
 export interface DiscoverySkillAdminView {
   readonly id: string;
@@ -131,8 +130,8 @@ const REGION_VIEW_COLUMNS = {
   createdAt: discoveryRegion.createdAt,
 } as const;
 
-/** The category a skill may be filed under must exist AND be approved (§6). */
-async function requireApprovedCategory(
+/** The category a skill may be filed under must exist and not be `rejected` (§6). */
+async function requireUsableCategory(
   categoryId: string,
 ): Promise<Result<true, DiscoveryVocabularyError>> {
   const [category] = await db
@@ -140,11 +139,10 @@ async function requireApprovedCategory(
     .from(researchCategory)
     .where(eq(researchCategory.id, categoryId));
 
-  if (!category) {
+  // Anything but `rejected`, matching every other writer of this table. A rejected id reads
+  // as NOT_FOUND so it cannot be told apart from one that never existed.
+  if (!category || category.status === "rejected") {
     return { success: false, error: { type: "CATEGORY_NOT_FOUND", categoryId } };
-  }
-  if (category.status !== "approved") {
-    return { success: false, error: { type: "CATEGORY_NOT_APPROVED", categoryId } };
   }
   return { success: true, value: true };
 }
@@ -171,7 +169,7 @@ export async function createDiscoverySkill(
 
   // 2. Resources second.
   if (input.categoryId !== undefined) {
-    const category = await requireApprovedCategory(input.categoryId);
+    const category = await requireUsableCategory(input.categoryId);
     if (!category.success) return { success: false, error: category.error };
   }
 
@@ -236,7 +234,7 @@ export async function updateDiscoverySkill(
 
   // 2. Resources second.
   if (input.categoryId !== undefined && input.categoryId !== null) {
-    const category = await requireApprovedCategory(input.categoryId);
+    const category = await requireUsableCategory(input.categoryId);
     if (!category.success) return { success: false, error: category.error };
   }
 

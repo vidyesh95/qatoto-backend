@@ -125,7 +125,7 @@ export const CreateMarketInsightSchema = z
     summary: z.string().trim().max(2_000).optional(),
     stat: MarketInsightStatSchema,
     // Both are NOT NULL on the table. Ids rather than slugs, which lets the service reuse
-    // the REGION_NOT_FOUND / CATEGORY_NOT_FOUND / CATEGORY_NOT_APPROVED arms verbatim.
+    // the REGION_NOT_FOUND / CATEGORY_NOT_FOUND arms verbatim.
     regionId: z.string().trim().min(1).max(64),
     categoryId: z.string().trim().min(1).max(64),
     sourceName: z.string().trim().min(1).max(200),

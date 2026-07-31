@@ -38,7 +38,6 @@ export type ProblemClusterError =
   | { type: "CLUSTER_NOT_FOUND"; clusterId: string }
   | { type: "SUBMISSION_NOT_FOUND"; submissionId: string }
   | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
-  | { type: "CATEGORY_NOT_APPROVED"; categoryId: string }
   | { type: "VIEWPORT_INCOMPLETE" };
 
 /**
@@ -714,11 +713,11 @@ export async function checkCategoryUsable(
     .from(researchCategory)
     .where(eq(researchCategory.id, categoryId));
 
-  if (!row) {
+  // The project rule, and now the only rule on this table: anything but `rejected` is a
+  // usable foreign key. A rejected id collapses into NOT_FOUND rather than reporting itself,
+  // so it is not distinguishable from one that never existed.
+  if (!row || row.status === "rejected") {
     return { usable: false, error: { type: "CATEGORY_NOT_FOUND", categoryId } };
-  }
-  if (row.status !== "approved") {
-    return { usable: false, error: { type: "CATEGORY_NOT_APPROVED", categoryId } };
   }
   return { usable: true };
 }

@@ -197,10 +197,14 @@ describe("createProblemReport", () => {
     expect(createProblemSubmissionMock).toHaveBeenCalledExactlyOnceWith("session-user", VALID_REPORT_BODY);
   });
 
-  it("refuses a pending category, so the moderation queue is not decorative", async () => {
+  it("refuses a rejected category as a 404, indistinguishable from one that never existed", async () => {
+    // `research_category` has ONE rule across every writer: only `rejected` is refused, and it
+    // collapses into NOT_FOUND so a rejected id cannot be told apart from a bogus one. A
+    // `pending` category is deliberately accepted — it is a real row with a real id, and
+    // blocking on it is what used to make proposing a category from a form pointless.
     checkCategoryUsableMock.mockResolvedValue({
       usable: false,
-      error: { type: "CATEGORY_NOT_APPROVED", categoryId: VALID_REPORT_BODY.categoryId },
+      error: { type: "CATEGORY_NOT_FOUND", categoryId: VALID_REPORT_BODY.categoryId },
     });
 
     const { response, statusSpy } = createResponseStub();
@@ -209,7 +213,7 @@ describe("createProblemReport", () => {
       response,
     );
 
-    expect(statusSpy).toHaveBeenCalledExactlyOnceWith(422);
+    expect(statusSpy).toHaveBeenCalledExactlyOnceWith(404);
     expect(createProblemSubmissionMock).not.toHaveBeenCalled();
   });
 
