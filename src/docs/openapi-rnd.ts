@@ -17,6 +17,7 @@ import discoveryRouter from "#src/routes/discovery.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
 import notificationsRouter from "#src/routes/notifications.routes.js";
 import platformAuditRouter from "#src/routes/platform-audit.routes.js";
+import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
@@ -81,6 +82,7 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/", router: applicationInboxRouter },
   { mountPath: "/", router: notificationsRouter },
   { mountPath: "/", router: platformAuditRouter },
+  { mountPath: "/", router: platformRolesRouter },
   { mountPath: "/", router: fundingRouter },
   { mountPath: "/", router: integrationCallbackRouter },
 ];

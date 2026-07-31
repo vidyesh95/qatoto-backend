@@ -726,6 +726,23 @@ export const programModerationLimiter = createLimiter({
 });
 
 /**
+ * PUT /admin/platform-roles — granting and revoking staff roles.
+ *
+ * THE TIGHTEST LIMIT IN THIS FILE, and the reason is blast radius rather than abuse: the
+ * caller already holds `manage_platform_roles`, so this bounds what a stolen ADMIN session
+ * can do before anyone reads the audit chain. Promoting a handful of accounts is the normal
+ * case; promoting twenty in a quarter hour is an incident.
+ *
+ * Runs after `requireAuth` and before the in-service capability check, so a non-admin spends
+ * their own budget learning they are not one.
+ */
+export const platformRoleWriteLimiter = createLimiter({
+  namespace: "platformRoleWrite",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/**
  * POST · PATCH …/contributors/me, and the product-opportunity writes.
  *
  * One bucket for a person's own participation record plus the creator-only opportunity

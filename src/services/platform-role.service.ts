@@ -39,7 +39,13 @@ export type PlatformCapability =
   | "moderate_taxonomy"
   | "moderate_clusters"
   | "moderate_content"
-  | "audit_escrow";
+  | "audit_escrow"
+  /**
+   * Grant and revoke platform roles over HTTP. `admin` ONLY — deliberately not held by
+   * `moderator`, or a content moderator could promote themselves to auditor and read the
+   * escrow ledger the capability split exists to keep them out of.
+   */
+  | "manage_platform_roles";
 
 /**
  * The grant table. Explicit and total: every role lists every capability it holds, so
@@ -48,8 +54,26 @@ export type PlatformCapability =
 const PLATFORM_ROLE_GRANTS: Readonly<Record<PlatformRole, readonly PlatformCapability[]>> = {
   moderator: ["moderate_taxonomy", "moderate_clusters", "moderate_content"],
   auditor: ["audit_escrow"],
-  admin: ["moderate_taxonomy", "moderate_clusters", "moderate_content", "audit_escrow"],
+  admin: [
+    "moderate_taxonomy",
+    "moderate_clusters",
+    "moderate_content",
+    "audit_escrow",
+    "manage_platform_roles",
+  ],
 };
+
+/**
+ * What a role holds, for a caller reporting on ITSELF.
+ *
+ * A READER RATHER THAN AN EXPORT OF THE TABLE, so the grant table stays the one place any
+ * capability question is answered and cannot be copied, filtered or cached elsewhere.
+ */
+export function listPlatformCapabilitiesForRole(
+  platformRole: PlatformRole,
+): readonly PlatformCapability[] {
+  return PLATFORM_ROLE_GRANTS[platformRole];
+}
 
 /** The caller's proven staff standing. Returned so callers can stamp an actor id. */
 export interface PlatformStaffContext {

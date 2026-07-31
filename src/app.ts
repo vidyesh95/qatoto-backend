@@ -20,6 +20,7 @@ import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
 import notificationsRouter from "#src/routes/notifications.routes.js";
 import platformAuditRouter from "#src/routes/platform-audit.routes.js";
+import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import playlistsRouter from "#src/routes/playlists.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
 import proofOfEffortRouter, {
@@ -215,6 +216,9 @@ app.use("/", notificationsRouter);
 // under /discovery/admin, because it spans taxonomy, the supplier directory, content
 // review and role grants — filing it under one would imply the others are not covered.
 app.use("/", platformAuditRouter);
+// Staff role administration (§4a Layer 3). Root-mounted beside the log it writes to: a
+// grant is a platform-wide fact, not a fact about any one domain.
+app.use("/", platformRolesRouter);
 // §7's id-keyed half: /funding-rounds, /pledges, /milestones, /escrow-releases,
 // /provider-transfers and /funding/deals. Root-mounted because a backer arriving from a
 // deal-flow list holds a round id and has no reason to know which project owns it — the
