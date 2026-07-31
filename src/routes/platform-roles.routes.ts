@@ -38,12 +38,41 @@ router.get(
   platformRolesController.lookupUserForRoleGrant,
 );
 
-router.put(
-  "/admin/platform-roles",
+/**
+ * TWO-PERSON CONTROL. There is deliberately NO one-shot route that sets a role: a proposal
+ * and a countersignature by a DIFFERENT admin are two requests by two people, and a single
+ * endpoint beside them would make the pair decorative.
+ *
+ * ROUTE ORDER: `/proposals` is a literal and sits above any future
+ * `/admin/platform-roles/:something`.
+ */
+router.get(
+  "/admin/platform-roles/proposals",
+  requireAuth,
+  platformRolesController.listPlatformRoleProposals,
+);
+
+router.post(
+  "/admin/platform-roles/proposals",
   requireAuth,
   platformRoleWriteLimiter,
   compactBody,
-  platformRolesController.setPlatformRole,
+  platformRolesController.proposePlatformRoleChange,
+);
+
+router.post(
+  "/admin/platform-roles/proposals/:proposalId/countersign",
+  requireAuth,
+  platformRoleWriteLimiter,
+  compactBody,
+  platformRolesController.countersignPlatformRoleChange,
+);
+
+router.delete(
+  "/admin/platform-roles/proposals/:proposalId",
+  requireAuth,
+  platformRoleWriteLimiter,
+  platformRolesController.cancelPlatformRoleProposal,
 );
 
 export default router;

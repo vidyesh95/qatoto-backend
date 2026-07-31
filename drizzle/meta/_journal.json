@@ -225,6 +225,13 @@
       "when": 1785416093304,
       "tag": "0031_fantastic_corsair",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1785487270697,
+      "tag": "0032_blushing_george_stacy",
+      "breakpoints": true
     }
   ]
 }

@@ -69,6 +69,11 @@ const SUBJECT_BY_KIND: Readonly<Record<(typeof notification.$inferSelect)["kind"
   research_program_published: "Your research program is now public",
   research_program_rejected: "Your research program was not published",
   research_program_paper_moderated: "Your research paper was reviewed",
+  // §4a. Neither names the role: a subject line is the one part of this that lands on a
+  // lock screen and in a mail server's logs, and which staff powers an account holds is
+  // not a fact to put there. The app says what changed.
+  platform_role_change_proposed: "A staff role change is waiting for your countersignature",
+  platform_role_changed: "Your staff access on Qatoto changed",
 };
 
 export async function handleDeliverNotification(rawPayload: unknown): Promise<void> {

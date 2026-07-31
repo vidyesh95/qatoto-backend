@@ -7675,6 +7675,97 @@ export const platformAuditEntry = pgTable(
   ],
 );
 
+/**
+ * A PROPOSED platform role change, awaiting a second admin (§4a Layer 3).
+ *
+ * WHY A TABLE AND NOT A COLUMN WRITE. Granting a staff role over HTTP used to be one
+ * request by one admin. `user.platform_role` still cannot be self-granted, but a single
+ * admin could promote a second account they control and use that instead — so the
+ * self-ban was walked around with two accounts, and one compromised admin session was a
+ * platform takeover. Two-person control is the same answer §7A already gives for money:
+ * `compensation_period` is finalized by one person and countersigned by another.
+ *
+ * NOTHING HERE CHANGES A ROLE. `user.platform_role` moves only when a countersign lands,
+ * in the same transaction that stamps this row.
+ *
+ * STATUS IS DERIVED, NOT STORED. Pending is `countersigned_at IS NULL AND cancelled_at IS
+ * NULL`. A status column for a state two timestamps already imply is a second source of
+ * truth, and they disagree eventually.
+ */
+export const platformRoleGrantProposal = pgTable(
+  "platform_role_grant_proposal",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // Cascade: a proposal about a deleted account is not a decision anybody can take.
+    subjectUserId: text("subject_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // Snapshotted at propose time, so a countersign can detect that the role moved
+    // underneath it rather than silently overwriting somebody else's decision.
+    previousPlatformRole: platformRoleEnum("previous_platform_role"),
+    // NULL means REVOKE. The column is nullable on `user` for the same reason.
+    nextPlatformRole: platformRoleEnum("next_platform_role"),
+    // Restrict, not set-null: the four-eyes check below compares against this id, and a
+    // NULL would make the comparison vacuous.
+    proposedByUserId: text("proposed_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    proposedAt: timestamp("proposed_at").defaultNow().notNull(),
+    proposeNote: text("propose_note").default("").notNull(),
+    countersignedAt: timestamp("countersigned_at"),
+    countersignedByUserId: text("countersigned_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    countersignNote: text("countersign_note").default("").notNull(),
+    cancelledAt: timestamp("cancelled_at"),
+    cancelledByUserId: text("cancelled_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+  },
+  (table) => [
+    index("platform_role_grant_proposal_subject_idx").on(table.subjectUserId, table.id),
+    /**
+     * ONE LIVE PROPOSAL PER ACCOUNT. Without this, two admins can raise two proposals for
+     * the same person and countersign each other's, which is two-person control on paper
+     * and one-person control in practice.
+     */
+    uniqueIndex("platform_role_grant_proposal_one_pending_unq")
+      .on(table.subjectUserId)
+      .where(sql`countersigned_at IS NULL AND cancelled_at IS NULL`),
+    check(
+      "platform_role_grant_proposal_decision_ck",
+      sql`(countersigned_at IS NULL) = (countersigned_by_user_id IS NULL)
+          AND (cancelled_at IS NULL) = (cancelled_by_user_id IS NULL)
+          AND NOT (countersigned_at IS NOT NULL AND cancelled_at IS NOT NULL)`,
+    ),
+    /**
+     * FOUR EYES, AT THE COLUMN LEVEL — the whole point of this table.
+     *
+     * `IS DISTINCT FROM` rather than `<>`, so a NULL cannot make the comparison NULL and
+     * let the row through. Three distinct people: the subject cannot propose their own
+     * change, the proposer cannot ratify it, and the subject cannot ratify it either.
+     * Postgres refuses the row; no service has to remember to.
+     */
+    check(
+      "platform_role_grant_proposal_four_eyes_ck",
+      sql`subject_user_id <> proposed_by_user_id
+          AND (countersigned_by_user_id IS NULL
+               OR countersigned_by_user_id IS DISTINCT FROM proposed_by_user_id)
+          AND (countersigned_by_user_id IS NULL
+               OR countersigned_by_user_id IS DISTINCT FROM subject_user_id)`,
+    ),
+    // A proposal that changes nothing is not a decision to ratify.
+    check(
+      "platform_role_grant_proposal_transition_ck",
+      sql`next_platform_role IS DISTINCT FROM previous_platform_role
+          AND char_length(propose_note) <= 2000
+          AND char_length(countersign_note) <= 2000`,
+    ),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // Notifications (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 1).
 //
@@ -7734,6 +7825,12 @@ export const notificationKindEnum = pgEnum("notification_kind", [
   "research_program_published",
   "research_program_rejected",
   "research_program_paper_moderated",
+  // §4a — staff roles. A grant was previously silent: nobody was told, and the only
+  // record was an audit entry somebody had to think to read. The proposal goes to the
+  // other admins because they are who can countersign it; the outcome goes to the
+  // subject, who until now could be made a moderator without ever being told.
+  "platform_role_change_proposed",
+  "platform_role_changed",
 ]);
 
 /**

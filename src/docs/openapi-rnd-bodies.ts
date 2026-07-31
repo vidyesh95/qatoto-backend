@@ -38,7 +38,10 @@ import {
   UpdateMarketInsightSchema,
 } from "#src/controllers/market-insights.controller.js";
 import { MarkNotificationsReadSchema } from "#src/controllers/notifications.controller.js";
-import { SetPlatformRoleSchema } from "#src/controllers/platform-roles.controller.js";
+import {
+  CountersignPlatformRoleSchema,
+  ProposePlatformRoleSchema,
+} from "#src/controllers/platform-roles.controller.js";
 import {
   CreateClusterProjectLinkSchema,
   CreateProblemReportSchema,
@@ -455,7 +458,11 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
     schema: CreateOpportunitySchema,
     required: true,
   },
-  "put /admin/platform-roles": { schema: SetPlatformRoleSchema, required: true },
+  "post /admin/platform-roles/proposals": { schema: ProposePlatformRoleSchema, required: true },
+  "post /admin/platform-roles/proposals/{proposalId}/countersign": {
+    schema: CountersignPlatformRoleSchema,
+    required: false,
+  },
   "post /research-paper-categories": { schema: CreatePaperCategorySchema, required: true },
   "post /research-paper-categories/{categoryId}/decide": {
     schema: DecidePaperCategorySchema,
