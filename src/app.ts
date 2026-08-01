@@ -23,6 +23,7 @@ import platformAuditRouter from "#src/routes/platform-audit.routes.js";
 import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import playlistsRouter from "#src/routes/playlists.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
+import promotionsRouter from "#src/routes/promotions.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
@@ -129,6 +130,9 @@ app.use("/", authRouter);
 app.use("/users", usersRouter);
 app.use("/handles", handlesRouter);
 app.use("/products", productsRouter);
+// The home-page carousel. GET /promotions/slides is public; every /promotions/admin/*
+// route is gated by `manage_promotions` inside the service.
+app.use("/promotions", promotionsRouter);
 app.use("/research-projects", researchProjectsRouter);
 // Same prefix, declared AFTER: the workshop router owns /:projectSlug/workshop/* and
 // /:projectSlug/daily-logs/* (§8). No collision — researchProjectsRouter's "/:projectSlug"

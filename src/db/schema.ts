@@ -7598,6 +7598,14 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "research_program_post_hidden",
   "research_program_post_restored",
   "research_program_report_dismissed",
+  // The home-page promotional carousel — `promotions`. Every one of these puts a
+  // link in front of every visitor to the front page, or takes one away, so all
+  // five mutations are named here rather than only the destructive ones.
+  "promotional_slide_created",
+  "promotional_slide_updated",
+  "promotional_slide_reordered",
+  "promotional_slide_image_replaced",
+  "promotional_slide_deleted",
 ]);
 
 /**
@@ -9927,4 +9935,152 @@ export const animeEpisodeRelations = relations(animeEpisode, ({ one }) => ({
 export const contentReviewActionRelations = relations(contentReviewAction, ({ one }) => ({
   video: one(video, { fields: [contentReviewAction.videoId], references: [video.id] }),
   reviewer: one(user, { fields: [contentReviewAction.reviewerId], references: [user.id] }),
+}));
+
+// ---------------------------------------------------------------------------
+// Promotions — the home-page promotional carousel.
+//
+// ONE TABLE, NO OWNER. Unlike `product` or `animeSeries`, a slide has no member
+// owner: it is platform-authored merchandising, written only by a holder of the
+// `manage_promotions` capability. So there is no `ownerId`, and the 404-as-ownership
+// rule does not apply — the capability check, decided BEFORE any id is read, is the
+// whole gate (see requirePlatformCapability's ordering requirement).
+//
+// WHY `manage_promotions` AND NOT `moderate_content`. A slide is a front-page
+// placement that may point at an arbitrary external https URL. That is a phishing
+// lure wearing Qatoto's own branding, so its blast radius sits next to role
+// management, not next to deciding whether a user's video is allowed. `admin` only.
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a slide sends the visitor. A discriminator, not two nullable columns: a slide
+ * always has EXACTLY ONE destination, so one enum + one value column makes that
+ * cardinality structural rather than something an XOR check has to un-represent
+ * afterwards. It also maps 1:1 onto `z.discriminatedUnion` in the controller and onto
+ * the frontend's `<Link>` vs `<a target="_blank">` switch.
+ *
+ * snake_case labels, sent VERBATIM in both directions (CLAUDE.md wire-casing). Never
+ * "internal-path".
+ */
+export const promotionalDestinationKindEnum = pgEnum("promotional_destination_kind", [
+  "internal_path",
+  "external_url",
+]);
+
+export const promotionalSlide = pgTable(
+  "promotional_slide",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /**
+     * Cloudinary secure_url of the normalized asset, mirroring `productImage.url`.
+     *
+     * STORE WHAT CLOUDINARY RETURNED — never reconstruct this from the public id. The
+     * `/v<timestamp>/` segment changes on every overwrite, and that segment is exactly
+     * what busts the browser cache when an admin replaces a slide's image in place.
+     */
+    imageUrl: text("image_url").notNull(),
+    /**
+     * Intrinsic dimensions of the stored asset. A DELIBERATE DEVIATION from
+     * `product_image`, which stores neither: `validateAndNormalizeImage` returns them
+     * for free, and a full-bleed hero rendered without an aspect ratio is a guaranteed
+     * layout shift on the single most-visited page on the site. A product thumbnail
+     * sits in a fixed-size grid tile and does not have that problem, which is why the
+     * store table can get away without them.
+     */
+    imageWidthPx: integer("image_width_px").notNull(),
+    imageHeightPx: integer("image_height_px").notNull(),
+    /**
+     * NOT NULL, on purpose. The image sits INSIDE a link, so without alt text the link
+     * has no accessible name at all — a WCAG 2.4.4/1.1.1 failure rather than a missing
+     * nicety. Nullable would make an unlabelled slide representable.
+     */
+    altText: text("alt_text").notNull(),
+    destinationKind: promotionalDestinationKindEnum("destination_kind").notNull(),
+    /** The path or URL itself, already normalized by `parsePromotionalDestination`. */
+    destinationValue: text("destination_value").notNull(),
+    /**
+     * 0-based display order; slide 0 shows first. Contiguous, re-packed on delete —
+     * the same contract as `productImage.position`. No unique index on it: a reorder
+     * rewrites every row inside one transaction and a non-deferrable UNIQUE would fire
+     * mid-loop.
+     */
+    position: integer("position").notNull(),
+    /** The retirement switch. The row survives; the public read stops offering it. */
+    isActive: boolean("is_active").default(true).notNull(),
+    /** NULL on either side = unbounded in that direction. Absolute instants, UTC. */
+    startsAt: timestamp("starts_at"),
+    endsAt: timestamp("ends_at"),
+    /**
+     * Who touched this, for the admin list. `set null`, NOT `restrict`: the
+     * authoritative accountability record is the platform audit chain, and `restrict`
+     * would make one promo slide block a staff account deletion forever. `cascade` is
+     * worse still — it would silently delete live merchandising when someone leaves.
+     */
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    updatedByUserId: text("updated_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // The public read — live slides in order. Partial, because the overwhelming
+    // majority of reads want only the live set.
+    index("promotional_slide_live_idx")
+      .on(table.position, table.id)
+      .where(sql`is_active`),
+    // The admin read, which includes retired and out-of-window rows.
+    index("promotional_slide_position_idx").on(table.position, table.id),
+
+    check("promotional_slide_position_ck", sql`position >= 0`),
+    check("promotional_slide_alt_text_ck", sql`char_length(alt_text) BETWEEN 1 AND 200`),
+    check(
+      "promotional_slide_image_url_ck",
+      sql`char_length(image_url) <= 2048 AND image_url LIKE 'https://%'`,
+    ),
+    check(
+      "promotional_slide_image_dimensions_ck",
+      sql`image_width_px BETWEEN 1 AND 8192 AND image_height_px BETWEEN 1 AND 8192`,
+    ),
+    check(
+      "promotional_slide_window_ck",
+      sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
+    ),
+    /**
+     * THE OPEN-REDIRECT BACKSTOP.
+     *
+     * `//evil.tld/x` starts with "/" and IS an open redirect, so the internal arm has to
+     * refuse a doubled leading slash explicitly. The fine-grained parse lives in
+     * `src/lib/promotional-destination.ts` where it can return a useful message; this
+     * check exists so the bad row stays UNREPRESENTABLE even if a future code path
+     * skips the service.
+     *
+     * Written with no apostrophe inside the character class on purpose — quote-doubling
+     * inside a `sql` template is how you get a migration that generates but won't apply.
+     */
+    check(
+      "promotional_slide_destination_ck",
+      sql`(destination_kind = 'internal_path'
+             AND char_length(destination_value) BETWEEN 1 AND 512
+             AND destination_value LIKE '/%'
+             AND destination_value NOT LIKE '//%'
+             AND destination_value !~ '[[:space:][:cntrl:]]')
+          OR (destination_kind = 'external_url'
+             AND char_length(destination_value) BETWEEN 1 AND 2048
+             AND destination_value LIKE 'https://%'
+             AND destination_value !~ '[[:space:][:cntrl:]]')`,
+    ),
+  ],
+);
+
+export const promotionalSlideRelations = relations(promotionalSlide, ({ one }) => ({
+  createdBy: one(user, { fields: [promotionalSlide.createdByUserId], references: [user.id] }),
+  updatedBy: one(user, { fields: [promotionalSlide.updatedByUserId], references: [user.id] }),
 }));

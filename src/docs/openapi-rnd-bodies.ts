@@ -56,6 +56,11 @@ import {
   UpdateOpenRoleSchema,
 } from "#src/controllers/project-roles.controller.js";
 import {
+  CreatePromotionalSlideSchema,
+  ReorderPromotionalSlidesSchema,
+  UpdatePromotionalSlideSchema,
+} from "#src/controllers/promotions.controller.js";
+import {
   AuthorizeIntegrationSchema,
   BakePieSchema,
   CastVoteSchema,
@@ -410,6 +415,29 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   // The one multipart route in this domain. `binaryField` splices a
   // `{ type: "string", format: "binary" }` property into the converted object, so
   // `additionalProperties: false` stays correct.
+  // --- The home-page promotional carousel.
+  //
+  // TWO MULTIPART ENTRIES. `binaryField` splices a `{ type: "string", format: "binary" }`
+  // property into the converted object so `additionalProperties: false` stays correct.
+  // The create route carries its text parts in the SAME body, which is why its schema is
+  // a real object rather than only the file.
+  "post /promotions/admin/slides": {
+    schema: CreatePromotionalSlideSchema,
+    required: true,
+    contentType: "multipart/form-data",
+    binaryField: "image",
+  },
+  "patch /promotions/admin/slides/reorder": {
+    schema: ReorderPromotionalSlidesSchema,
+    required: true,
+  },
+  "patch /promotions/admin/slides/{slideId}": {
+    schema: UpdatePromotionalSlideSchema,
+    required: true,
+  },
+  // PATCH /promotions/admin/slides/{slideId}/image is deliberately ABSENT. It carries only
+  // the file and its controller never touches `req.body`, so it is not a body-reading
+  // route — an entry here would be an orphan the sweep reports.
   "post /research-programs/{programSlug}/papers/{paperId}/file": {
     schema: AttachPaperFileSchema,
     required: true,

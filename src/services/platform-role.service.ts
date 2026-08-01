@@ -45,7 +45,18 @@ export type PlatformCapability =
    * `moderator`, or a content moderator could promote themselves to auditor and read the
    * escrow ledger the capability split exists to keep them out of.
    */
-  | "manage_platform_roles";
+  | "manage_platform_roles"
+  /**
+   * Author the home-page promotional carousel. `admin` ONLY, and deliberately NOT folded
+   * into `moderate_content`.
+   *
+   * `moderate_content` is about DECIDING user-submitted content — approve this video,
+   * hide that post — and every `moderator` holds it. This capability PUBLISHES: a slide
+   * is a placement on the front page that may point at an arbitrary external https URL,
+   * which is a phishing lure wearing our own branding. That blast radius belongs next to
+   * role management, not next to a review queue.
+   */
+  | "manage_promotions";
 
 /**
  * The grant table. Explicit and total: every role lists every capability it holds, so
@@ -60,6 +71,7 @@ const PLATFORM_ROLE_GRANTS: Readonly<Record<PlatformRole, readonly PlatformCapab
     "moderate_content",
     "audit_escrow",
     "manage_platform_roles",
+    "manage_promotions",
   ],
 };
 

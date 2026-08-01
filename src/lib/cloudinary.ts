@@ -547,3 +547,102 @@ export async function uploadPhysicalReceipt(
     };
   }
 }
+
+/**
+ * Home-page promotional slides. ONE asset per slide, overwritten in place — the
+ * project-cover shape rather than the product-image shape, because a slide has exactly one
+ * image and replacing it should replace the asset rather than accumulate orphans.
+ *
+ * The public id is DERIVED FROM THE SLIDE ID, which is why `promotional_slide` carries no
+ * `cloudinaryPublicId` column: a column tracking a derivable value could only ever drift.
+ * That is the same argument the avatar block at the top of this file makes.
+ *
+ * ONE CONSEQUENCE WORTH STATING. Because the id is stable, `overwrite: true` replaces the
+ * bytes at the same id, and the secure_url Cloudinary returns carries a FRESH
+ * `/v<timestamp>/` segment. Callers must write that returned URL back to `image_url` —
+ * that version segment is what busts the browser cache. Reusing the stored URL after a
+ * replace serves the old image indefinitely.
+ */
+const PROMOTIONAL_SLIDE_FOLDER = "qatoto/promotional-slides";
+
+/** The stable, deterministic public id a slide's image always lives at. */
+export function promotionalSlideImagePublicId(slideId: string): string {
+  return `${PROMOTIONAL_SLIDE_FOLDER}/${slideId}`;
+}
+
+/**
+ * Upload (or overwrite) a slide's image from an already-validated/re-encoded buffer and
+ * return its canonical secure URL. The buffer MUST be checked and normalized by the caller
+ * first (CLAUDE.md §1.1) — this layer trusts it.
+ */
+export async function uploadPromotionalSlideImage(
+  slideId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: promotionalSlideImagePublicId(slideId),
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Delete a slide's image asset. Treated as success when the asset is already gone — the
+ * desired end state is reached either way.
+ */
+export async function deletePromotionalSlideImage(
+  slideId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
+      promotionalSlideImagePublicId(slideId),
+      { invalidate: true },
+    );
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}

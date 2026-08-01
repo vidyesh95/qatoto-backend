@@ -18,6 +18,7 @@ import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.
 import notificationsRouter from "#src/routes/notifications.routes.js";
 import platformAuditRouter from "#src/routes/platform-audit.routes.js";
 import platformRolesRouter from "#src/routes/platform-roles.routes.js";
+import promotionsRouter from "#src/routes/promotions.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
@@ -74,6 +75,7 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/research-projects", router: projectGoToMarketRouter },
   { mountPath: "/research-programs", router: researchProgramsRouter },
   { mountPath: "/discovery", router: discoveryRouter },
+  { mountPath: "/promotions", router: promotionsRouter },
   { mountPath: "/", router: researchCatalogRouter },
   { mountPath: "/", router: researchPaperCategoryRouter },
   { mountPath: "/", router: dailyLogFeedRouter },
@@ -104,6 +106,8 @@ export function rndRouteChains(): readonly RouteHandlerChain[] {
  * `/discovery/admin/market-insights` is moderation rather than plain discovery.
  */
 const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = [
+  { prefix: "/promotions/admin", tag: "Promotions moderation" },
+  { prefix: "/promotions", tag: "Promotions" },
   { prefix: "/discovery/admin", tag: "Discovery moderation" },
   { prefix: "/discovery", tag: "Discovery" },
   { prefix: "/admin/audit-trail", tag: "Platform audit" },
@@ -190,6 +194,9 @@ function tagFor(openApiPath: string): string {
 const PUBLICLY_RESOLVABLE = new Set([
   "get /integrations/{provider}/callback",
   "get /daily-logs/streak-leaderboard",
+  // The home-page carousel. Bare on purpose — no requireAuth AND no attachOptionalUser,
+  // because nothing about a slide depends on who is asking.
+  "get /promotions/slides",
 ]);
 
 const CONTRACT_NOTE =

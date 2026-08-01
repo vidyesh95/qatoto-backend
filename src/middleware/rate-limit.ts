@@ -753,3 +753,34 @@ export const programProfileWriteLimiter = createLimiter({
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 30,
 });
+
+/**
+ * The promotional-carousel admin writes — create, update, reorder, delete, and the admin
+ * list.
+ *
+ * ONE BUCKET for all of them: they are low-frequency staff actions against a table that
+ * holds at most a dozen rows, and splitting them would document a distinction that does
+ * not exist. Thirty a minute is far above any human merchandising pace and far below
+ * anything that could hurt.
+ */
+export const promotionalSlideWriteLimiter = createLimiter({
+  namespace: "promotionalSlideWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/**
+ * The two multipart routes — create and image replace.
+ *
+ * The expensive path: a 5 MB buffer, a sharp decode and AVIF re-encode, and a Cloudinary
+ * round trip, per request. Tighter than the write bucket because the cost is CPU and
+ * egress rather than a row.
+ *
+ * NOTE that POST /promotions/admin/slides carries ONLY this limiter, not both — stacking
+ * two limiters on one route double-counts every request against the stricter of them.
+ */
+export const promotionalSlideImageUploadLimiter = createLimiter({
+  namespace: "promotionalSlideImageUpload",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});

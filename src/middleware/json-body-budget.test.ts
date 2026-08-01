@@ -162,6 +162,11 @@ describe("per-route body caps", () => {
       // codebase. Its bytes are bounded by multer's 25 MB cap (imported from
       // `src/lib/pdf.ts` so the two cannot disagree), not by a JSON byte budget.
       import("#src/middleware/upload-research-paper.js"),
+      // The promotional-carousel image routes. The create route carries TEXT PARTS
+      // alongside the file, so without this import `isMultipart()` would not recognize
+      // it, the sweep would treat it as a JSON body-reading route, and it would be
+      // reported as missing a declared cap.
+      import("#src/middleware/upload-promotional-slide-image.js"),
     ]);
 
     const router: unknown = Reflect.get(app, "router");
