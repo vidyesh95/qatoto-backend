@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import * as usersService from "#src/services/users.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
@@ -136,7 +137,10 @@ function mapPhotoErrorToResponse(
     case "NOT_AN_IMAGE":
       return { statusCode: 422, message: "The uploaded file is not a valid image." };
     case "UNSUPPORTED_FORMAT":
-      return { statusCode: 422, message: "Photo must be a JPEG, PNG or WebP image." };
+      // The sentence lives in `image.ts` beside the allowlist it describes — six mappers
+      // spelling it out themselves is six copies to update, and the one that got missed
+      // would be telling users the wrong thing.
+      return { statusCode: 422, message: describeUnsupportedImageFormat(error.detected) };
     case "DIMENSIONS_TOO_SMALL":
       return { statusCode: 422, message: "Photo must be at least 64x64 pixels." };
     case "DIMENSIONS_TOO_LARGE":

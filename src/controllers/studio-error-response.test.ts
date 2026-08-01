@@ -38,7 +38,12 @@ const CASES: ReadonlyArray<{ readonly error: StudioDomainError; readonly statusC
   { error: { type: "ANIME_SEASON_NOT_FOUND", seasonId: "sn1" }, statusCode: 422 },
   { error: { type: "NOT_AN_ANIME_EPISODE" }, statusCode: 422 },
   { error: { type: "NOT_AN_IMAGE" }, statusCode: 422 },
-  { error: { type: "UNSUPPORTED_FORMAT", format: "gif" }, statusCode: 422 },
+  { error: { type: "UNSUPPORTED_FORMAT", detected: { kind: "other", format: "gif" } }, statusCode: 422 },
+  { error: { type: "UNSUPPORTED_FORMAT", detected: { kind: "heic" } }, statusCode: 422 },
+  {
+    error: { type: "UNSUPPORTED_FORMAT", detected: { kind: "animated", format: "webp" } },
+    statusCode: 422,
+  },
   { error: { type: "DIMENSIONS_TOO_SMALL", width: 10, height: 10 }, statusCode: 422 },
   { error: { type: "DIMENSIONS_TOO_LARGE", width: 99_999, height: 99_999 }, statusCode: 422 },
 

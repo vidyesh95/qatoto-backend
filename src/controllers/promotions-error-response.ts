@@ -1,5 +1,6 @@
 import type { Response } from "express";
 
+import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import type { PromotionalDestinationError } from "#src/lib/promotional-destination.js";
 import type { PromotionalSlideError } from "#src/services/promotions.service.js";
 
@@ -114,10 +115,10 @@ export function mapPromotionalSlideErrorToResponse(error: PromotionalSlideError)
     case "NOT_AN_IMAGE":
       return { statusCode: 422, message: "The uploaded file is not a valid image." };
     case "UNSUPPORTED_FORMAT":
-      return {
-        statusCode: 422,
-        message: `Unsupported image format: ${error.format}. Use JPEG, PNG or WebP.`,
-      };
+      // The sentence lives in `image.ts` beside the allowlist it describes — six mappers
+      // spelling it out themselves is six copies to update, and the one that got missed
+      // would be telling users the wrong thing.
+      return { statusCode: 422, message: describeUnsupportedImageFormat(error.detected) };
     case "DIMENSIONS_TOO_SMALL":
       return {
         statusCode: 422,

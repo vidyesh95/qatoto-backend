@@ -52,9 +52,17 @@ const UPDATE_CASES: ReadonlyArray<{
 }> = [
   { error: { type: "NOT_AN_IMAGE" }, statusCode: 422, message: "The uploaded file is not a valid image." },
   {
-    error: { type: "UNSUPPORTED_FORMAT", format: "gif" },
+    error: { type: "UNSUPPORTED_FORMAT", detected: { kind: "other", format: "gif" } },
     statusCode: 422,
-    message: "Photo must be a JPEG, PNG or WebP image.",
+    message: "GIF images aren't supported. Use a JPEG, PNG, WebP or AVIF image.",
+  },
+  {
+    // The one refusal a user can act on, so the message says how rather than naming a codec.
+    error: { type: "UNSUPPORTED_FORMAT", detected: { kind: "heic" } },
+    statusCode: 422,
+    message:
+      "iPhone HEIC photos aren't supported. On iPhone: Settings → Camera → Formats → " +
+      "Most Compatible, or export the photo as JPEG. Use a JPEG, PNG, WebP or AVIF image.",
   },
   {
     error: { type: "DIMENSIONS_TOO_SMALL", width: 10, height: 10 },

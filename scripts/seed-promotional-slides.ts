@@ -10,12 +10,12 @@
  * never DO UPDATE. Once an admin has edited a slide's alt text or destination, re-running
  * this must not silently revert that editorial decision.
  *
- * WHY IT DOES NOT CALL `validateAndNormalizeImage`. That function's input allowlist is
- * jpeg/png/webp and deliberately excludes avif — a rule about UNTRUSTED UPLOADS arriving
- * over HTTP from a hostile client. These bytes are neither: they are committed to the
- * frontend repo and read off local disk. So the script re-encodes with sharp directly,
- * which is the same final step the upload path performs, and skips the gate that exists to
- * refuse strangers.
+ * IT GOES THROUGH `validateAndNormalizeImage`, THE SAME GATE THE HTTP ROUTE USES. It used to
+ * bypass it and re-encode with sharp directly, because the allowlist was jpeg/png/webp and
+ * these fixtures are avif. That exception was a bug wearing a justification: it meant the
+ * seeded carousel was full of images the admin route would REFUSE as replacements, which is
+ * exactly the failure that got reported. The allowlist now accepts avif, so the exception is
+ * gone — and a seed that cannot write a value the API would reject is the point.
  *
  *   pnpm db:seed-promotional-slides [path/to/frontend/public/dummy]
  *
@@ -26,11 +26,10 @@ import "dotenv/config";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import sharp from "sharp";
-
 import { db, pool } from "#src/db/index.js";
 import { promotionalSlide } from "#src/db/schema.js";
 import { uploadPromotionalSlideImage } from "#src/lib/cloudinary.js";
+import { validateAndNormalizeImage } from "#src/lib/image.js";
 import { parsePromotionalDestination } from "#src/lib/promotional-destination.js";
 
 /** Matches SLIDE_OUTPUT_MAX_DIMENSION_PX in promotions.service.ts. */
@@ -104,18 +103,18 @@ async function prepareSlide(
   const sourcePath = path.join(imageDirectory, slide.sourceFileName);
   const sourceBytes = await readFile(sourcePath);
 
-  const encoded = await sharp(sourceBytes)
-    .rotate()
-    .resize({
-      width: SLIDE_OUTPUT_MAX_DIMENSION_PX,
-      height: SLIDE_OUTPUT_MAX_DIMENSION_PX,
-      fit: "inside",
-      withoutEnlargement: true,
-    })
-    .avif({ quality: 55 })
-    .toBuffer({ resolveWithObject: true });
+  const normalized = await validateAndNormalizeImage(sourceBytes, {
+    outputMaxDimensionPx: SLIDE_OUTPUT_MAX_DIMENSION_PX,
+    outputFormat: "avif",
+  });
+  if (!normalized.success) {
+    throw new Error(
+      `Seed image ${slide.sourceFileName} was rejected: ${normalized.error.type}. ` +
+        "The HTTP route would refuse it too.",
+    );
+  }
 
-  const uploadResult = await uploadPromotionalSlideImage(slide.id, encoded.data);
+  const uploadResult = await uploadPromotionalSlideImage(slide.id, normalized.value.buffer);
   if (!uploadResult.success) {
     throw new Error(`Cloudinary upload failed for ${slide.id}: ${uploadResult.error.type}`);
   }
@@ -123,8 +122,8 @@ async function prepareSlide(
   return {
     id: slide.id,
     imageUrl: uploadResult.value.secureUrl,
-    imageWidthPx: encoded.info.width,
-    imageHeightPx: encoded.info.height,
+    imageWidthPx: normalized.value.width,
+    imageHeightPx: normalized.value.height,
     altText: slide.altText,
     destinationValue: destination.value.normalizedValue,
     position,

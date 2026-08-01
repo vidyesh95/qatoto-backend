@@ -681,7 +681,7 @@ seeded.
 | ----------------------------------------- | ----- | ---------------------------------------------------------------------- |
 | missing `req.file`                        | `422` | No `photo` field on the multipart body.                                |
 | `NOT_AN_IMAGE`                            | `422` | Bytes don't decode as a raster image.                                  |
-| `UNSUPPORTED_FORMAT`                      | `422` | Not JPEG/PNG/WebP.                                                     |
+| `UNSUPPORTED_FORMAT`                      | `422` | Not JPEG/PNG/WebP/AVIF, or animated, or HEIC.                          |
 | `DIMENSIONS_TOO_SMALL`                    | `422` | Smaller than 64×64.                                                    |
 | `DIMENSIONS_TOO_LARGE`                    | `422` | Larger than 8192 on a side.                                            |
 | `NOT_CONFIGURED`                          | `503` | Cloudinary creds absent.                                               |

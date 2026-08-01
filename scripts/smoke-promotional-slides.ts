@@ -37,13 +37,19 @@ function record(label: string, passed: boolean, detail: string): void {
   outcomes.push({ label, passed, detail });
 }
 
-/** A real, decodable PNG — the pipeline proves the bytes, so a fake buffer would be rejected. */
-async function makeTestImage(red: number): Promise<Buffer> {
-  return sharp({
+/**
+ * A real, decodable image — the pipeline proves the bytes, so a fake buffer would be rejected.
+ *
+ * The format is a parameter because AVIF is the whole reason the replace route was broken: the
+ * shared allowlist was jpeg/png/webp, AVIF decodes as `heif`, and every AVIF upload 422'd —
+ * including the repo's own `public/dummy/*.avif` fixtures that the seed had already published
+ * to the carousel. A PNG-only harness cannot see that class of bug.
+ */
+async function makeTestImage(red: number, format: "png" | "avif" = "png"): Promise<Buffer> {
+  const pipeline = sharp({
     create: { width: 800, height: 400, channels: 3, background: { r: red, g: 80, b: 120 } },
-  })
-    .png()
-    .toBuffer();
+  });
+  return format === "avif" ? pipeline.avif({ quality: 50 }).toBuffer() : pipeline.png().toBuffer();
 }
 
 async function findStaffUserId(role: "admin" | "moderator"): Promise<string | null> {
@@ -178,6 +184,45 @@ async function main(): Promise<void> {
       "each new slide appends at the end",
       firstCreate.value.position === beforeCount && secondCreate.value.position === beforeCount + 1,
       `positions ${String(firstCreate.value.position)} then ${String(secondCreate.value.position)}`,
+    );
+
+    // --- 3b. REPLACE THE IMAGE WITH AN AVIF, and prove the stored URL actually moves.
+    //
+    // Two claims in one check. First, AVIF is accepted at all — it was not, and that single
+    // 422 is what got reported as "the image is not getting replaced". Second, the returned
+    // secure_url carries a NEW /v<timestamp>/ segment, which is the entire cache-busting
+    // story: every layer downstream (the Next image optimizer, the browser, the Cloudinary
+    // CDN) is keyed on that full href, so a changed URL is what makes a replacement go live
+    // for every visitor.
+    const urlBeforeReplace = firstCreate.value.imageUrl;
+    const avifReplace = await promotionsService.replacePromotionalSlideImage(
+      adminUserId,
+      firstCreate.value.id,
+      await makeTestImage(30, "avif"),
+    );
+    record(
+      "replaces a slide image with an AVIF file",
+      avifReplace.success,
+      avifReplace.success ? "accepted" : avifReplace.error.type,
+    );
+    record(
+      "the stored image URL changes on replace — the cache bust",
+      avifReplace.success && avifReplace.value.imageUrl !== urlBeforeReplace,
+      avifReplace.success
+        ? `${urlBeforeReplace.split("/upload/")[1] ?? "?"} -> ${avifReplace.value.imageUrl.split("/upload/")[1] ?? "?"}`
+        : "replace failed",
+    );
+
+    // An SVG must never reach the pipeline, whatever the multipart headers claimed.
+    const svgAttempt = await promotionsService.replacePromotionalSlideImage(
+      adminUserId,
+      firstCreate.value.id,
+      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"></svg>'),
+    );
+    record(
+      "refuses an SVG upload",
+      !svgAttempt.success && svgAttempt.error.type === "UNSUPPORTED_FORMAT",
+      svgAttempt.success ? "ACCEPTED — script-bearing XML got through" : svgAttempt.error.type,
     );
 
     // --- 4. ORDER. Send the whole permutation with the last slide moved to the front.

@@ -407,7 +407,7 @@ Same `Result` errors as `PATCH /users/me/photo`, mapped identically:
 | ------------------------------------------------ | ----- | ------------------------------------------------ |
 | missing `req.file`                               | `422` | No `image` field on the multipart body.          |
 | `NOT_AN_IMAGE`                                   | `422` | Bytes don't decode as a raster image.            |
-| `UNSUPPORTED_FORMAT`                             | `422` | Not JPEG/PNG/WebP.                               |
+| `UNSUPPORTED_FORMAT`                             | `422` | Not JPEG/PNG/WebP/AVIF, animated, or HEIC.       |
 | `DIMENSIONS_TOO_SMALL` / `DIMENSIONS_TOO_LARGE`  | `422` | Outside 64–8192 px.                              |
 | `TOO_MANY_IMAGES`                                | `409` | Product already has 9 images.                    |
 | `NOT_CONFIGURED`                                 | `503` | Cloudinary creds absent.                         |
@@ -548,7 +548,7 @@ Three layers, mirroring `PATCH /users/me/photo`:
    `upload-avatar.ts` with the field renamed. Runs **inside** the route so the global
    `express.json()` never touches multipart bodies.
 2. **`src/lib/image.ts`** — generalize `validateAndNormalizeAvatar` →
-   `validateAndNormalizeImage` (same behavior: decode to prove it's real, allow jpeg/png/webp,
+   `validateAndNormalizeImage` (same behavior: decode to prove it's real, allow jpeg/png/webp/avif,
    bound 64–8192 px, cap decoded pixels against decompression bombs, re-encode to webp q85, strip
    EXIF). Keep a thin `validateAndNormalizeAvatar` alias so the avatar route is untouched, or
    have both call the shared core.

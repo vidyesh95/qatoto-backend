@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import type { ProjectApplicationError } from "#src/services/project-applications.service.js";
 import type { ProjectInsightLinkError } from "#src/services/project-insight-links.service.js";
 import type { ProjectMemberError } from "#src/services/project-membership.service.js";
@@ -249,10 +250,10 @@ export function mapProjectErrorToResponse(error: ProjectDomainError): {
     case "NOT_AN_IMAGE":
       return { statusCode: 422, message: "That file is not a readable image." };
     case "UNSUPPORTED_FORMAT":
-      return {
-        statusCode: 422,
-        message: `Unsupported image format: ${error.format}. Use JPEG, PNG or WebP.`,
-      };
+      // The sentence lives in `image.ts` beside the allowlist it describes — six mappers
+      // spelling it out themselves is six copies to update, and the one that got missed
+      // would be telling users the wrong thing.
+      return { statusCode: 422, message: describeUnsupportedImageFormat(error.detected) };
     case "DIMENSIONS_TOO_SMALL":
       return {
         statusCode: 422,
