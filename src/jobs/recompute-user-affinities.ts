@@ -4,8 +4,8 @@ import { db } from "#src/db/index.js";
 import { userCreatorAffinitySnapshot, userTopicAffinitySnapshot } from "#src/db/schema.js";
 import { AFFINITY_WINDOW_DAYS, computeAffinityScorePoints } from "#src/lib/affinity-score.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 
 /**
  * §4.3, §4.4 — what each signed-in viewer likes, by category and by creator.
@@ -63,9 +63,7 @@ export async function handleRecomputeUserAffinities(rawPayload: unknown): Promis
 
   // ABSOLUTE bounds, derived from asOf. A window expressed as "90 days" in the row would
   // be unreadable a year later; two instants are self-describing.
-  const windowStartsAt = new Date(
-    asOf.getTime() - AFFINITY_WINDOW_DAYS * 24 * 60 * 60 * 1_000,
-  );
+  const windowStartsAt = new Date(asOf.getTime() - AFFINITY_WINDOW_DAYS * 24 * 60 * 60 * 1_000);
 
   const topicRows = await db.execute<TopicAffinityRow>(sql`
     SELECT

@@ -7,8 +7,8 @@ import {
   VIEW_SESSION_RETENTION_DAYS,
 } from "#src/lib/engagement-retention.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 
 /**
  * Retention and the outlier prune — HOME_BACKEND_STRUCTURE.md §3.2, §6, §8.1.
@@ -73,7 +73,9 @@ export async function handlePruneEngagementData(rawPayload: unknown): Promise<vo
   );
   const asOf = new Date(payload.asOf);
 
-  const sessionCutoff = new Date(asOf.getTime() - VIEW_SESSION_RETENTION_DAYS * MILLISECONDS_PER_DAY);
+  const sessionCutoff = new Date(
+    asOf.getTime() - VIEW_SESSION_RETENTION_DAYS * MILLISECONDS_PER_DAY,
+  );
   const snapshotCutoff = new Date(asOf.getTime() - SNAPSHOT_RETENTION_DAYS * MILLISECONDS_PER_DAY);
 
   const isEnabled = config.ENGAGEMENT_PRUNE_ENABLED;

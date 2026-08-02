@@ -3,8 +3,8 @@ import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { video } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 
 /**
  * `video.duration_seconds`, by consensus — HOME_BACKEND_STRUCTURE.md §3.3.
@@ -80,10 +80,7 @@ export async function handleRecomputeVideoDurations(rawPayload: unknown): Promis
           // Skip the write when nothing moved, so `updated_at` stays honest and a nightly
           // pass over a settled catalog produces no WAL churn. Same guard
           // `recompute-branch-signals` uses.
-          or(
-            isNull(video.durationSeconds),
-            ne(video.durationSeconds, row.median_duration_seconds),
-          ),
+          or(isNull(video.durationSeconds), ne(video.durationSeconds, row.median_duration_seconds)),
         ),
       )
       .returning({ id: video.id });

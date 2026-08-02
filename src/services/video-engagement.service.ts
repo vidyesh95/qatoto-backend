@@ -164,8 +164,7 @@ export async function recordViewBeacon(
         : clamped.isCountedView
           ? clamped.completionBasisPointsDelta
           : 0;
-    const completionSampleDelta =
-      contributesToCompletion && clamped.didBecomeCountedView ? 1 : 0;
+    const completionSampleDelta = contributesToCompletion && clamped.didBecomeCountedView ? 1 : 0;
 
     await tx
       .update(videoStats)

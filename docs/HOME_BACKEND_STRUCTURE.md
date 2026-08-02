@@ -351,12 +351,12 @@ At 0 samples the video is scored purely on engagement, velocity, creator track a
 
 ### 4.3 Feed rank — query time, per viewer × video, 0..100
 
-| Component         | Budget | Source                                                                                    |
-| ----------------- | ------ | ----------------------------------------------------------------------------------------- |
-| `videoQuality`    | 35     | `videoQualityScoreSnapshot`                                                               |
-| `topicAffinity`   | 25     | max over the video's ≤3 categories                                                        |
-| `creatorAffinity` | 15     | `userCreatorAffinitySnapshot`                                                             |
-| `recency`         | 15     | hours since `publishedAt`: `<6→15, <24→13, <72→10, <168→7, <336→4, <720→2, else 0`        |
+| Component         | Budget | Source                                                                                                                                |
+| ----------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `videoQuality`    | 35     | `videoQualityScoreSnapshot`                                                                                                           |
+| `topicAffinity`   | 25     | max over the video's ≤3 categories                                                                                                    |
+| `creatorAffinity` | 15     | `userCreatorAffinitySnapshot`                                                                                                         |
+| `recency`         | 15     | hours since `publishedAt`: `<6→15, <24→13, <72→10, <168→7, <336→4, <720→2, else 0`                                                    |
 | `exploration`     | 10     | `hash(rankSeed, videoId) % 8` (0..7) **plus 3** when the viewer has no affinity in any of the video's categories — 7 + 3 = the budget |
 
 > **SHIPPED AS.** `videoQuality` reads the denormalized `videoStats.qualityScorePoints` mirror
@@ -373,7 +373,7 @@ At 0 samples the video is scored purely on engagement, velocity, creator track a
 > quality 35, topicAffinity 10, creatorAffinity 0, recency 15, exploration 40 — which still sums
 > to 100. Adding 30 while leaving the rest alone would let the rank reach 130 in a module whose
 > whole discipline is that budgets sum to 100. Taking it from the two affinity components is also
-> what the mode *means*: stop ranking on how deep in the bubble you already are.
+> what the mode _means_: stop ranking on how deep in the bubble you already are.
 
 **`rankSeed = hash(userId ?? viewerFingerprint, asOfDay)`**, echoed in every response and accepted
 back on the next page request. This is what makes exploration deterministic — Rule 2 forbids
@@ -627,15 +627,15 @@ cron fires a `-tick` queue, the tick quantizes `now` to a UTC boundary and enque
 with an explicit `asOf` plus an idempotency key derived from it. This is the only place in the
 domain where `new Date()` is called.
 
-| Job                                      | Cron               | Why this slot                                                                           |
-| ---------------------------------------- | ------------------ | --------------------------------------------------------------------------------------- |
-| `recompute-video-durations`              | `08 1 * * *`       | must precede quality — completion needs a denominator                                   |
-| `recompute-video-quality-scores`         | `25 1 * * *`       | after durations                                                                         |
-| `recompute-platform-category-popularity` | `40 1 * * *`       | after quality; feeds cold start                                                         |
-| `recompute-user-affinities`              | `50 1 * * *`       | after popularity                                                                        |
-| `recompute-trending-videos`              | `18 * * * *`       | **hourly.** A "trending" chip recomputed nightly is a lie about what it says.           |
-| `verify-youtube-video`                   | on demand, backoff | §8.3 deferred verification                                                              |
-| `revalidate-youtube-embeds`              | `10 5 * * *`       | backstop for §8.2                                                                       |
+| Job                                      | Cron               | Why this slot                                                                              |
+| ---------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------ |
+| `recompute-video-durations`              | `08 1 * * *`       | must precede quality — completion needs a denominator                                      |
+| `recompute-video-quality-scores`         | `25 1 * * *`       | after durations                                                                            |
+| `recompute-platform-category-popularity` | `40 1 * * *`       | after quality; feeds cold start                                                            |
+| `recompute-user-affinities`              | `50 1 * * *`       | after popularity                                                                           |
+| `recompute-trending-videos`              | `18 * * * *`       | **hourly.** A "trending" chip recomputed nightly is a lie about what it says.              |
+| `verify-youtube-video`                   | on demand, backoff | §8.3 deferred verification                                                                 |
+| `revalidate-youtube-embeds`              | `10 5 * * *`       | backstop for §8.2                                                                          |
 | `prune-engagement-data`                  | `55 4 * * *`       | snapshots at 14 days; `videoViewSession` dropped at 90. **Dry-run by default** — see below |
 
 Ordering is expressed **by cron time**, not by code — same convention as
@@ -663,7 +663,7 @@ Definitions in `src/lib/jobs.ts`, handlers bound only in `src/worker.ts`, queues
 >
 > The real hazard is the two inputs the quality job RECOMPUTES from those sessions every night —
 > `uniqueViewerCount` and `countedViewsFirst48Hours`. Once prune removes the rows, the engagement
-> denominator collapses (engagement *inflates*) and velocity falls to zero, silently re-ranking
+> denominator collapses (engagement _inflates_) and velocity falls to zero, silently re-ranking
 > every video older than the window. So both are persisted on `videoStats` and, **past the
 > retention horizon only**, held at their stored maximum. Gated on the horizon rather than applied
 > always, because inside the window §8.1's outlier prune must still be able to deflate a farmed
@@ -805,13 +805,14 @@ curl -s localhost:8000/ready           # must still pass its pgboss version prob
 - Verify determinism: run `pnpm jobs:trigger recompute-video-quality-scores` twice with the same
   `asOf` and confirm the job logs **no** `NON-DETERMINISTIC score` error.
 
-  > **CORRECTION.** The original recipe — "diff the snapshot rows, they must be byte-identical" —
-  > cannot fail. The insert is `onConflictDoNothing` on `(videoId, asOf)`, so the second run writes
-  > nothing and the rows are identical by construction whether or not the scorer is deterministic.
-  > The comparison now lives INSIDE the job: when the insert is suppressed it reads what is stored
-  > and checks it against what was just computed, so the check runs on every replay in production
-  > rather than only when somebody remembers a script. To see it fail, edit one snapshot row's
-  > total by hand and re-run.
+    > **CORRECTION.** The original recipe — "diff the snapshot rows, they must be byte-identical" —
+    > cannot fail. The insert is `onConflictDoNothing` on `(videoId, asOf)`, so the second run writes
+    > nothing and the rows are identical by construction whether or not the scorer is deterministic.
+    > The comparison now lives INSIDE the job: when the insert is suppressed it reads what is stored
+    > and checks it against what was just computed, so the check runs on every replay in production
+    > rather than only when somebody remembers a script. To see it fail, edit one snapshot row's
+    > total by hand and re-run.
+
 - Confirm `rate-limit-coverage.test.ts` passes — it fails if any new route lacks a limiter.
 
 Per [CLAUDE.md](CLAUDE.md), **no tests are written unless explicitly requested.**

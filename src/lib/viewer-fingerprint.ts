@@ -78,7 +78,10 @@ export function computeViewerFingerprint(input: ViewerFingerprintInput): string 
       : `a:${input.clientIp}:${input.userAgent}`;
 
   return createHash("sha256")
-    .update(`${config.BETTER_AUTH_SECRET}:videoview:${input.utcDayString}:${identityComponent}`, "utf8")
+    .update(
+      `${config.BETTER_AUTH_SECRET}:videoview:${input.utcDayString}:${identityComponent}`,
+      "utf8",
+    )
     .digest("hex");
 }
 

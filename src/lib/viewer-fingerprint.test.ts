@@ -6,9 +6,7 @@ import { stubServerEnvironment } from "#src/test-support/server-env.js";
 // has to be satisfied before the dynamic import below.
 stubServerEnvironment();
 
-const { computeViewerFingerprint, utcDayStringOf } = await import(
-  "#src/lib/viewer-fingerprint.js"
-);
+const { computeViewerFingerprint, utcDayStringOf } = await import("#src/lib/viewer-fingerprint.js");
 
 describe("computeViewerFingerprint", () => {
   const anonymousViewer = {
@@ -68,9 +66,9 @@ describe("computeViewerFingerprint", () => {
   });
 
   it("distinguishes anonymous viewers by user agent", () => {
-    expect(
-      computeViewerFingerprint({ ...anonymousViewer, userAgent: "Mozilla/5.1" }),
-    ).not.toBe(computeViewerFingerprint(anonymousViewer));
+    expect(computeViewerFingerprint({ ...anonymousViewer, userAgent: "Mozilla/5.1" })).not.toBe(
+      computeViewerFingerprint(anonymousViewer),
+    );
   });
 });
 

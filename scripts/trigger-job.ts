@@ -24,7 +24,6 @@
  * uses, so a hand-triggered run is indistinguishable from a scheduled one.
  */
 import "dotenv/config";
-
 import { truncateToUtcDayStart, truncateToUtcHourStart } from "#src/lib/as-of.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob, stopSendOnlyBoss } from "#src/lib/jobs.js";
 
@@ -103,9 +102,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const requestedJobName = process.argv
-    .slice(2)
-    .find((argument) => !argument.startsWith("--"));
+  const requestedJobName = process.argv.slice(2).find((argument) => !argument.startsWith("--"));
 
   if (requestedJobName === undefined) {
     printUsage();

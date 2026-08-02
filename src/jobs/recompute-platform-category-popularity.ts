@@ -3,8 +3,8 @@ import { sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { platformCategoryPopularitySnapshot } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 
 /**
  * §4.4 — what the platform as a whole watches, per category.

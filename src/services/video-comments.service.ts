@@ -98,7 +98,12 @@ export interface ListCommentsInput {
  */
 export async function listVideoComments(
   input: ListCommentsInput,
-): Promise<Result<{ readonly rows: readonly CommentView[]; readonly nextCursor: string | null }, VideoCommentError>> {
+): Promise<
+  Result<
+    { readonly rows: readonly CommentView[]; readonly nextCursor: string | null },
+    VideoCommentError
+  >
+> {
   const publicVideo = await findPublicVideo(db, input.videoId);
   if (publicVideo === null) {
     return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId: input.videoId } };
@@ -359,7 +364,12 @@ export async function updateVideoComment(input: {
   readonly commentId: string;
   readonly authorUserId: string;
   readonly bodyText: string;
-}): Promise<Result<{ readonly commentId: string; readonly body: string; readonly updatedAt: Date }, VideoCommentError>> {
+}): Promise<
+  Result<
+    { readonly commentId: string; readonly body: string; readonly updatedAt: Date },
+    VideoCommentError
+  >
+> {
   const outcome = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select({
@@ -517,7 +527,11 @@ export async function setCommentLike(input: {
 }): Promise<Result<{ readonly isSet: boolean; readonly likeCount: number }, VideoCommentError>> {
   const outcome = await db.transaction(async (tx) => {
     const [existing] = await tx
-      .select({ id: videoComment.id, likeCount: videoComment.likeCount, isDeleted: videoComment.isDeleted })
+      .select({
+        id: videoComment.id,
+        likeCount: videoComment.likeCount,
+        isDeleted: videoComment.isDeleted,
+      })
       .from(videoComment)
       .where(eq(videoComment.id, input.commentId))
       .for("update");

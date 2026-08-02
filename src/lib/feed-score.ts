@@ -595,8 +595,7 @@ export function applyDiversityCaps<TRow extends RankedFeedRow>(
       rowsByCategory.clear();
     }
 
-    const breachesCreatorCap =
-      (rowsByCreator.get(row.creatorId) ?? 0) >= options.maxRowsPerCreator;
+    const breachesCreatorCap = (rowsByCreator.get(row.creatorId) ?? 0) >= options.maxRowsPerCreator;
     // An untagged video is capped by nothing — it belongs to no category, so it cannot
     // crowd one out. That is a true statement, not a loophole.
     const breachesCategoryCap = row.categorySlugs.some(

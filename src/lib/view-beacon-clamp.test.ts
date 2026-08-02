@@ -118,10 +118,13 @@ describe("seeking", () => {
 
     // And the session is now spent: every later beacon computes a negative raw delta.
     // That cost lands on the client that lied, which is the right place for it.
-    const afterwards = applyViewBeacon({ ...freshSession(), ...poisoned }, {
-      positionSeconds: 20,
-      elapsedSecondsSinceLastBeacon: 15,
-    });
+    const afterwards = applyViewBeacon(
+      { ...freshSession(), ...poisoned },
+      {
+        positionSeconds: 20,
+        elapsedSecondsSinceLastBeacon: 15,
+      },
+    );
     expect(afterwards.creditedSeconds).toBe(0);
   });
 });
@@ -161,10 +164,13 @@ describe("the counted-view flip", () => {
     expect(belowThreshold.isCountedView).toBe(false);
     expect(belowThreshold.didBecomeCountedView).toBe(false);
 
-    const crossing = applyViewBeacon({ ...freshSession(), ...belowThreshold }, {
-      positionSeconds: 3 + COUNTED_VIEW_MINIMUM_WATCHED_SECONDS,
-      elapsedSecondsSinceLastBeacon: 15,
-    });
+    const crossing = applyViewBeacon(
+      { ...freshSession(), ...belowThreshold },
+      {
+        positionSeconds: 3 + COUNTED_VIEW_MINIMUM_WATCHED_SECONDS,
+        elapsedSecondsSinceLastBeacon: 15,
+      },
+    );
     expect(crossing.isCountedView).toBe(true);
     expect(crossing.didBecomeCountedView).toBe(true);
   });

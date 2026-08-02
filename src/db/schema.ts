@@ -10528,7 +10528,11 @@ export const userCreatorAffinitySnapshot = pgTable(
   },
   (table) => [
     uniqueIndex("user_creator_affinity_snapshot_unq").on(table.userId, table.creatorId, table.asOf),
-    index("user_creator_affinity_snapshot_viewer_idx").on(table.userId, table.asOf, table.creatorId),
+    index("user_creator_affinity_snapshot_viewer_idx").on(
+      table.userId,
+      table.asOf,
+      table.creatorId,
+    ),
     index("user_creator_affinity_snapshot_asOf_idx").on(table.asOf, table.id),
     // A viewer cannot have an affinity for themselves — their own videos are excluded
     // from the candidate pool anyway, so such a row could only ever be dead weight.

@@ -4,8 +4,8 @@ import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { video } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 import { verifyYoutubeVideo } from "#src/lib/youtube.js";
 
 /**

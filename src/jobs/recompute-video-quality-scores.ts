@@ -5,8 +5,8 @@ import { videoQualityScoreSnapshot, videoStats } from "#src/db/schema.js";
 import { mayHavePrunedSessions } from "#src/lib/engagement-retention.js";
 import { computeVideoQualityPoints } from "#src/lib/feed-score.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 
 /**
  * §4.1 — one quality score per published video, nightly.
@@ -155,10 +155,7 @@ export async function handleRecomputeVideoQualityScores(rawPayload: unknown): Pr
         ? Math.max(row.unique_viewer_count, row.stored_unique_viewer_count ?? 0)
         : row.unique_viewer_count;
       const resolvedCountedViewsFirst48Hours = sessionsMayHaveBeenPruned
-        ? Math.max(
-            row.counted_views_first_48_hours,
-            row.stored_counted_views_first_48_hours ?? 0,
-          )
+        ? Math.max(row.counted_views_first_48_hours, row.stored_counted_views_first_48_hours ?? 0)
         : row.counted_views_first_48_hours;
 
       const breakdown = computeVideoQualityPoints({
@@ -186,8 +183,7 @@ export async function handleRecomputeVideoQualityScores(rawPayload: unknown): Pr
             meanCompletionBasisPoints: breakdown.meanCompletionBasisPoints,
             completionSampleCount: row.completion_sample_count,
             engagementPerThousandViewers: breakdown.engagementPerThousandViewers,
-            uniqueViewerCount:
-              resolvedUniqueViewerCount === 0 ? null : resolvedUniqueViewerCount,
+            uniqueViewerCount: resolvedUniqueViewerCount === 0 ? null : resolvedUniqueViewerCount,
             countedViewsFirst48Hours: resolvedCountedViewsFirst48Hours,
             creatorMedianQualityPoints: medianQualityByCreator.get(row.creator_id) ?? null,
             hoursSincePublished: row.hours_since_published,
@@ -238,8 +234,7 @@ export async function handleRecomputeVideoQualityScores(rawPayload: unknown): Pr
               completionComponentPoints: videoQualityScoreSnapshot.completionComponentPoints,
               engagementComponentPoints: videoQualityScoreSnapshot.engagementComponentPoints,
               velocityComponentPoints: videoQualityScoreSnapshot.velocityComponentPoints,
-              creatorTrackComponentPoints:
-                videoQualityScoreSnapshot.creatorTrackComponentPoints,
+              creatorTrackComponentPoints: videoQualityScoreSnapshot.creatorTrackComponentPoints,
               freshnessComponentPoints: videoQualityScoreSnapshot.freshnessComponentPoints,
             })
             .from(videoQualityScoreSnapshot)

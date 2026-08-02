@@ -36,7 +36,11 @@ function isLimiter(value: unknown): boolean {
  * spent thirty lines stubbing out. The cost is that a router added to `app.ts` and not
  * added here is simply unchecked — which is why the count assertion below exists.
  */
-const MOUNTED_ROUTERS: readonly { readonly mountPath: string; readonly specifier: string; readonly exportName: string }[] = [
+const MOUNTED_ROUTERS: readonly {
+  readonly mountPath: string;
+  readonly specifier: string;
+  readonly exportName: string;
+}[] = [
   { mountPath: "/", specifier: "#src/routes/auth.routes.js", exportName: "default" },
   { mountPath: "/users", specifier: "#src/routes/users.routes.js", exportName: "default" },
   { mountPath: "/handles", specifier: "#src/routes/handles.routes.js", exportName: "default" },

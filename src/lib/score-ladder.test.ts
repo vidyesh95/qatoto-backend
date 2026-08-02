@@ -96,7 +96,10 @@ describe("assertLadderIsWellFormed", () => {
     expect(() => {
       assertLadderIsWellFormed(
         "fractional",
-        [{ threshold: 100, points: 20 }, { threshold: 50.5, points: 12 }],
+        [
+          { threshold: 100, points: 20 },
+          { threshold: 50.5, points: 12 },
+        ],
         "atLeastThreshold",
         20,
       );
@@ -107,7 +110,10 @@ describe("assertLadderIsWellFormed", () => {
     expect(() => {
       assertLadderIsWellFormed(
         "zeroRung",
-        [{ threshold: 100, points: 20 }, { threshold: 50, points: 0 }],
+        [
+          { threshold: 100, points: 20 },
+          { threshold: 50, points: 0 },
+        ],
         "atLeastThreshold",
         20,
       );
@@ -118,7 +124,10 @@ describe("assertLadderIsWellFormed", () => {
     expect(() => {
       assertLadderIsWellFormed(
         "flatPoints",
-        [{ threshold: 100, points: 20 }, { threshold: 50, points: 20 }],
+        [
+          { threshold: 100, points: 20 },
+          { threshold: 50, points: 20 },
+        ],
         "atLeastThreshold",
         20,
       );

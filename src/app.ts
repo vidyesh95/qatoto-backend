@@ -15,10 +15,7 @@ import authRouter from "#src/routes/auth.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
-import engagementRouter, {
-  commentRouter,
-  creatorRouter,
-} from "#src/routes/engagement.routes.js";
+import engagementRouter, { commentRouter, creatorRouter } from "#src/routes/engagement.routes.js";
 import feedRouter from "#src/routes/feed.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
 import handlesRouter from "#src/routes/handles.routes.js";

@@ -132,9 +132,7 @@ export const CreateCommentSchema = z
   })
   .strict();
 
-export const UpdateCommentSchema = z
-  .object({ body: z.string().trim().min(1).max(2000) })
-  .strict();
+export const UpdateCommentSchema = z.object({ body: z.string().trim().min(1).max(2000) }).strict();
 
 /**
  * NO `sort` PARAMETER. §8.4 states that `video.commentSortOrder` remains an unbacked

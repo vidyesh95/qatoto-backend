@@ -9,6 +9,7 @@ import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
 import { handleDeliverNotification } from "#src/jobs/deliver-notification.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
+import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
 import { handleRecomputeBranchSignals } from "#src/jobs/recompute-branch-signals.js";
 import { handleRecomputeCompensationDraft } from "#src/jobs/recompute-compensation-draft.js";
 import { handleRecomputeDailyLogStreaks } from "#src/jobs/recompute-daily-log-streaks.js";
@@ -16,15 +17,14 @@ import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals
 import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapshot.js";
 import { handleRecomputeInvestorConfidence } from "#src/jobs/recompute-investor-confidence.js";
 import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
-import { handleRecomputeProgramStats } from "#src/jobs/recompute-program-stats.js";
-import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
 import { handleRecomputePlatformCategoryPopularity } from "#src/jobs/recompute-platform-category-popularity.js";
+import { handleRecomputeProgramStats } from "#src/jobs/recompute-program-stats.js";
 import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-videos.js";
 import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
 import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
-import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
+import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
 import {
   handleCloseCompensationPeriodTick,
   handleRecomputeCompensationDraftTick,

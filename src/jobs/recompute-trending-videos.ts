@@ -3,9 +3,9 @@ import { eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { trendingVideoSnapshot, videoStats } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 import {
   computeTrendingScorePoints,
   TRENDING_SNAPSHOT_SIZE,

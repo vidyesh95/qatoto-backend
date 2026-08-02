@@ -64,9 +64,7 @@ describe("the /videos prefix, shared by two routers", () => {
   it("declares nothing single-segment on the engagement router", async () => {
     const engagementRouter = (await import("#src/routes/engagement.routes.js")).default;
 
-    const shadowedRoutes = declaredRoutes(engagementRouter).filter(
-      (route) => segmentCount(route.path) < 2,
-    );
+    const shadowedRoutes = declaredRoutes(engagementRouter).filter((route) => segmentCount(route.path) < 2);
 
     expect(
       shadowedRoutes.map((route) => `${route.methods.join("|")} ${route.path}`),
@@ -79,25 +77,21 @@ describe("the /videos prefix, shared by two routers", () => {
     const videosRouter = (await import("#src/routes/videos.routes.js")).default;
 
     const studioKeys = new Set(
-      declaredRoutes(videosRouter).flatMap((route) =>
-        route.methods.map((method) => `${method} ${route.path}`),
-      ),
+      declaredRoutes(videosRouter).flatMap((route) => route.methods.map((method) => `${method} ${route.path}`)),
     );
 
     const collisions = declaredRoutes(engagementRouter)
       .flatMap((route) => route.methods.map((method) => `${method} ${route.path}`))
       .filter((key) => studioKeys.has(key));
 
-    expect(collisions, "the studio router is mounted first and wins every one of these").toEqual(
-      [],
-    );
+    expect(collisions, "the studio router is mounted first and wins every one of these").toEqual([]);
   });
 
   it("keeps the public watch payload off the /videos prefix entirely", async () => {
     const feedRouter = (await import("#src/routes/feed.routes.js")).default;
-    const engagementPaths = declaredRoutes(
-      (await import("#src/routes/engagement.routes.js")).default,
-    ).map((route) => route.path);
+    const engagementPaths = declaredRoutes((await import("#src/routes/engagement.routes.js")).default).map(
+      (route) => route.path,
+    );
 
     expect(declaredRoutes(feedRouter).map((route) => route.path)).toContain("/watch/:videoId");
     expect(engagementPaths).not.toContain("/:videoId");

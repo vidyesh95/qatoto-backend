@@ -1321,6 +1321,5 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.recomputeTrendingVideos}:${asOfIso}`,
   revalidateYoutubeEmbeds: (asOfIso: string): string =>
     `${JOB_NAMES.revalidateYoutubeEmbeds}:${asOfIso}`,
-  pruneEngagementData: (asOfIso: string): string =>
-    `${JOB_NAMES.pruneEngagementData}:${asOfIso}`,
+  pruneEngagementData: (asOfIso: string): string => `${JOB_NAMES.pruneEngagementData}:${asOfIso}`,
 } as const;

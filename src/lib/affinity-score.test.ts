@@ -33,12 +33,8 @@ describe("computeAffinityScorePoints", () => {
   it("distinguishes watching from clicking", () => {
     // A viewer who opened ten videos and abandoned every one at three seconds has told us
     // they are NOT interested. Counting arrivals alone would read that as strong affinity.
-    const watched = computeAffinityScorePoints(
-      engagedViewer({ completionBasisPointsSum: 10 * 8_000 }),
-    );
-    const abandoned = computeAffinityScorePoints(
-      engagedViewer({ completionBasisPointsSum: 10 * 200 }),
-    );
+    const watched = computeAffinityScorePoints(engagedViewer({ completionBasisPointsSum: 10 * 8_000 }));
+    const abandoned = computeAffinityScorePoints(engagedViewer({ completionBasisPointsSum: 10 * 200 }));
 
     expect(watched.watchCountComponentPoints).toBe(abandoned.watchCountComponentPoints);
     expect(watched.totalPoints).toBeGreaterThan(abandoned.totalPoints);
@@ -52,9 +48,7 @@ describe("computeAffinityScorePoints", () => {
       engagedViewer({ likeCount: 1, saveCount: 0, isSubscribedToCreator: false }),
     );
 
-    expect(subscribed.explicitSignalComponentPoints).toBeGreaterThan(
-      liked.explicitSignalComponentPoints,
-    );
+    expect(subscribed.explicitSignalComponentPoints).toBeGreaterThan(liked.explicitSignalComponentPoints);
   });
 
   it("scores a viewer with no history at zero, which is the caller's cue to fall back", () => {
@@ -81,14 +75,10 @@ describe("computeAffinityScorePoints", () => {
       isSubscribedToCreator: true,
     });
     expect(breakdown.totalPoints).toBe(100);
-    expect(breakdown.watchCountComponentPoints).toBe(
-      AFFINITY_SCORE_COMPONENT_BUDGETS.watchCount,
-    );
+    expect(breakdown.watchCountComponentPoints).toBe(AFFINITY_SCORE_COMPONENT_BUDGETS.watchCount);
   });
 
   it("throws on a negative count", () => {
-    expect(() => computeAffinityScorePoints(engagedViewer({ likeCount: -1 }))).toThrow(
-      /likeCount/,
-    );
+    expect(() => computeAffinityScorePoints(engagedViewer({ likeCount: -1 }))).toThrow(/likeCount/);
   });
 });

@@ -182,7 +182,10 @@ const RELAXATION_STAGES = [
  * scan of one row on an indexed column.
  */
 async function latestSnapshotAsOf(
-  table: typeof userTopicAffinitySnapshot | typeof userCreatorAffinitySnapshot | typeof platformCategoryPopularitySnapshot,
+  table:
+    | typeof userTopicAffinitySnapshot
+    | typeof userCreatorAffinitySnapshot
+    | typeof platformCategoryPopularitySnapshot,
 ): Promise<Date | null> {
   const [row] = await db
     .select({ asOf: table.asOf })
@@ -706,11 +709,9 @@ export async function listFeedVideos(
         maxRowsPerCreator: MAXIMUM_ROWS_PER_CREATOR,
         maxCategoryShareBasisPoints: MAXIMUM_CATEGORY_SHARE_BASIS_POINTS,
       });
-      const withQuota = reserveExplorationSlots(
-        diversified,
-        await fetchFreshCandidateIds(input),
-        { slotsPerPage: EXPLORATION_SLOTS_PER_PAGE },
-      );
+      const withQuota = reserveExplorationSlots(diversified, await fetchFreshCandidateIds(input), {
+        slotsPerPage: EXPLORATION_SLOTS_PER_PAGE,
+      });
       pageRows = withQuota.slice(offset, offset + input.limit);
     }
 
@@ -801,9 +802,7 @@ function modeSpecificPredicate(input: ListFeedVideosInput): SQL | null {
  * video, not fetch one — and fetching one would be the injection that duplicates a video
  * across pages.
  */
-async function fetchFreshCandidateIds(
-  input: ListFeedVideosInput,
-): Promise<ReadonlySet<string>> {
+async function fetchFreshCandidateIds(input: ListFeedVideosInput): Promise<ReadonlySet<string>> {
   const rows = await db.execute<{ readonly id: string }>(sql`
     SELECT v.id
     FROM video AS v

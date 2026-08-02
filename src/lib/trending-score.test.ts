@@ -57,9 +57,7 @@ describe("computeTrendingScorePoints", () => {
     const poor = computeTrendingScorePoints(risingVideo({ qualityScorePoints: 5 }));
 
     expect(good.totalPoints).toBeGreaterThan(poor.totalPoints);
-    expect(good.totalPoints - poor.totalPoints).toBe(
-      TRENDING_SCORE_COMPONENT_BUDGETS.quality,
-    );
+    expect(good.totalPoints - poor.totalPoints).toBe(TRENDING_SCORE_COMPONENT_BUDGETS.quality);
   });
 
   it("still ranks an unscored video on the other 85 points", () => {
@@ -71,11 +69,9 @@ describe("computeTrendingScorePoints", () => {
   });
 
   it("throws on a count that could not have come from a COUNT", () => {
-    expect(() => computeTrendingScorePoints(risingVideo({ countedViewsInWindow: -1 }))).toThrow(
-      /countedViewsInWindow/,
+    expect(() => computeTrendingScorePoints(risingVideo({ countedViewsInWindow: -1 }))).toThrow(/countedViewsInWindow/);
+    expect(() => computeTrendingScorePoints(risingVideo({ watchedMinutesInWindow: Number.NaN }))).toThrow(
+      /watchedMinutesInWindow/,
     );
-    expect(() =>
-      computeTrendingScorePoints(risingVideo({ watchedMinutesInWindow: Number.NaN })),
-    ).toThrow(/watchedMinutesInWindow/);
   });
 });
