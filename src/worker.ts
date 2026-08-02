@@ -38,6 +38,7 @@ import {
   handleFinalizeVerdict,
   handleGroundArtifacts,
 } from "#src/jobs/verify-effort-claim.js";
+import { handleVerifyYoutubeVideo } from "#src/jobs/verify-youtube-video.js";
 import {
   createPgBossDbAdapter,
   JOB_NAMES,
@@ -303,6 +304,18 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeProgramStats,
     workOptions,
     runJob(JOB_NAMES.recomputeProgramStats, handleRecomputeProgramStats),
+  );
+
+  // --- Creator Studio.
+  //
+  // ONE QUEUE, NO TICK. `verify-youtube-video` is enqueued in the same transaction as the
+  // video row it verifies (HOME_BACKEND_STRUCTURE.md §8.3), so there is nothing for a cron
+  // to sweep and no asOf to quantize. It is the only job in this section today; §6's seven
+  // scheduled feed jobs join it in phase 3.
+  await boss.work(
+    JOB_NAMES.verifyYoutubeVideo,
+    workOptions,
+    runJob(JOB_NAMES.verifyYoutubeVideo, handleVerifyYoutubeVideo),
   );
 
   // §7 — funding.

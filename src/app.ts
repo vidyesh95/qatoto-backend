@@ -15,6 +15,7 @@ import authRouter from "#src/routes/auth.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
+import feedRouter from "#src/routes/feed.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
 import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
@@ -133,6 +134,11 @@ app.use("/products", productsRouter);
 // The home-page carousel. GET /promotions/slides is public; every /promotions/admin/*
 // route is gated by `manage_promotions` inside the service.
 app.use("/promotions", promotionsRouter);
+// The home feed's public read surface (HOME_BACKEND_STRUCTURE.md §5.1). Grouped with the
+// carousel above because both are front-page data sources, but UNLIKE the /research-projects
+// stack below, ordering here is NOT load-bearing: /feed is a single-segment prefix that no
+// other router shares, so nothing can swallow or be swallowed by it.
+app.use("/feed", feedRouter);
 app.use("/research-projects", researchProjectsRouter);
 // Same prefix, declared AFTER: the workshop router owns /:projectSlug/workshop/* and
 // /:projectSlug/daily-logs/* (§8). No collision — researchProjectsRouter's "/:projectSlug"

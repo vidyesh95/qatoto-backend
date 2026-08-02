@@ -89,6 +89,16 @@ export const JOB_NAMES = {
   recomputeProgramStats: "recompute-program-stats",
   recomputeBranchSignalsTick: "recompute-branch-signals-tick",
   recomputeBranchSignals: "recompute-branch-signals",
+  // HOME_BACKEND_STRUCTURE.md §8.3's deferred source verification. ON DEMAND, never
+  // scheduled: it is enqueued in the SAME TRANSACTION as the video row whose id it
+  // carries, so there is no window for a tick to sweep and no asOf to quantize.
+  //
+  // It exists because a YouTube outage used to throw away the creator's upload — the
+  // oEmbed call was synchronous inside createVideo and a network blip meant a 502. Now
+  // the 11-character id is stored regardless (the charset CHECK still closes SSRF at the
+  // storage layer), the row is born an unverified draft, and this job retries until it
+  // can prove the video exists and embeds. Publish is refused in the meantime.
+  verifyYoutubeVideo: "verify-youtube-video",
   deliverNotification: "deliver-notification",
 } as const;
 
@@ -196,6 +206,16 @@ const ProgramScopedAsOfPayloadSchema = z
   .strict();
 
 /**
+ * The video id and NOTHING else — the same rule as every payload above.
+ *
+ * The 11-character YouTube id is read from the ROW inside the handler. Carrying it in the
+ * payload would put a forgeable field between the id we stored and the id we verify, and an
+ * operator with a queue dashboard could edit it to mark one video verified on the strength
+ * of a different video's proof. `video.id` is a randomUUID, so `z.uuid()` is exact.
+ */
+const VerifyYoutubeVideoPayloadSchema = z.object({ videoId: z.uuid() }).strict();
+
+/**
  * One definition per job: its payload contract and its queue policy.
  *
  * `retryDelay: 30` with `retryBackoff` and `retryDelayMax: 1800` reproduces §9.7's
@@ -224,6 +244,23 @@ const RECOMPUTE_RETRY = {
   retryDelay: 300,
   retryBackoff: true,
   retryDelayMax: 1_800,
+} as const;
+
+/**
+ * Longer and more patient than STANDARD_RETRY, on purpose.
+ *
+ * This job's whole reason to exist is that YouTube did not answer, and a provider outage
+ * routinely outlasts the ~1 hour STANDARD_RETRY covers. Ten attempts backing off to a
+ * one-hour ceiling spans roughly nine hours; after that the row dead-letters and stays an
+ * unpublishable draft, which is the honest outcome — the creator's work is still there and
+ * an operator can re-enqueue. Giving up after 5 attempts would strand uploads over a long
+ * outage for no reason.
+ */
+const SOURCE_VERIFY_RETRY = {
+  retryLimit: 10,
+  retryDelay: 60,
+  retryBackoff: true,
+  retryDelayMax: 3_600,
 } as const;
 
 export const JOB_DEFINITIONS = {
@@ -609,6 +646,19 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeBranchSignals),
     },
   },
+  [JOB_NAMES.verifyYoutubeVideo]: {
+    name: JOB_NAMES.verifyYoutubeVideo,
+    payloadSchema: VerifyYoutubeVideoPayloadSchema,
+    queueOptions: {
+      // `standard`, not `singleton`: two videos are two disjoint rows with nothing to
+      // serialize. The per-row idempotency key collapses a retried enqueue of the same one.
+      policy: "standard",
+      ...SOURCE_VERIFY_RETRY,
+      // One oEmbed call bounded by YOUTUBE_OEMBED_TIMEOUT_MS, plus one UPDATE.
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.verifyYoutubeVideo),
+    },
+  },
   [JOB_NAMES.deliverNotification]: {
     name: JOB_NAMES.deliverNotification,
     payloadSchema: DeliverNotificationPayloadSchema,
@@ -919,6 +969,7 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.recomputeProgramStats]: ProgramScopedAsOfPayloadSchema,
   [JOB_NAMES.recomputeBranchSignalsTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeBranchSignals]: ProgramScopedAsOfPayloadSchema,
+  [JOB_NAMES.verifyYoutubeVideo]: VerifyYoutubeVideoPayloadSchema,
   [JOB_NAMES.deliverNotification]: DeliverNotificationPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
@@ -1011,4 +1062,12 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.recomputeBranchSignals}:${asOfIso}:${programId ?? "all"}`,
   deliverNotification: (notificationId: string): string =>
     `${JOB_NAMES.deliverNotification}:${notificationId}`,
+  // Keyed on the video AND the youtube id being verified, not on the video alone. A creator
+  // whose upload landed unverified during an outage may PATCH the URL rather than wait —
+  // that is a genuinely different thing to prove and needs its own job. Keying on the video
+  // alone would dedup the new enqueue against the old one for the whole retention window
+  // and leave the row unverifiable with nothing in the queue. Same shape as
+  // finalizeVerdict's `generation`, for the same reason.
+  verifyYoutubeVideo: (videoId: string, youtubeVideoId: string): string =>
+    `${JOB_NAMES.verifyYoutubeVideo}:${videoId}:${youtubeVideoId}`,
 } as const;
