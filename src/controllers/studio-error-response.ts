@@ -174,6 +174,16 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
         message: "You can only attach products you own.",
         errors: { productIds: [...error.productIds] },
       };
+    case "VIDEO_CATEGORY_NOT_AVAILABLE":
+      // Same shape and the same reasoning. The message does not distinguish "no such
+      // category" from "retired category", because the service does not either — a
+      // creator fixes both by picking a different one, and separating them would tell
+      // anyone with a session which ids exist.
+      return {
+        statusCode: 422,
+        message: "You can only tag a video with categories that exist and are active.",
+        errors: { categoryIds: [...error.categoryIds] },
+      };
     case "PLAYLIST_NOT_OWNED":
       return {
         statusCode: 422,
@@ -223,6 +233,18 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
       return {
         statusCode: 409,
         message: "This video needs no playback token — it plays directly from YouTube.",
+      };
+    case "SOURCE_NOT_VERIFIED":
+      // 409, NOT 422, and the difference is the point. 422 says "your input is wrong";
+      // there is no input to correct here. The row is complete, the link is fine, and
+      // `verify-youtube-video` is already retrying — the creator waits and publishes
+      // again. That is a lifecycle conflict, which is what this file reserves 409 for.
+      //
+      // Its nearest neighbour NOT_READY maps to 422, and the two are genuinely different:
+      // NOT_READY means the media is broken and the creator must act.
+      return {
+        statusCode: 409,
+        message: "We are still confirming this video with YouTube. Try publishing again shortly.",
       };
 
     // --- Image pipeline, rendered identically to the product and avatar mappers.

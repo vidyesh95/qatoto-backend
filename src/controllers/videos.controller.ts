@@ -159,7 +159,26 @@ const videoFieldShapes = {
   shortsRemixing: z.enum(["video_and_audio", "audio_only"]),
   recordingDate: z.iso.date(),
   recordingLocation: z.string().trim().max(200),
-  category: z.string().trim().max(60),
+  // `category` USED TO BE HERE and is gone (HOME_BACKEND_STRUCTURE.md §2.2). It was free
+  // text nobody validated and nothing could filter on; `categoryIds` below replaces it.
+  // Removing it from this map removes it from CREATE and PATCH at once, so `.strict()` now
+  // answers 422 to a client that still sends it — which is louder, and therefore better,
+  // than accepting a value we would silently discard.
+  //
+  // The COLUMN survives one more release, read-only, so that dropping it and dropping its
+  // last reader are two separate deploys.
+  /**
+   * At most three, and the bound is asserted in BOTH layers on purpose. Here it is the
+   * request contract: a client sending four gets a field-level 422 with a path it can put
+   * next to an input. In the service it is the invariant, checked after dedupe — note that
+   * `["a","a","a","a"]` fails here even though it dedupes to one, which is the strict
+   * reading and the right one.
+   *
+   * No `.default([])`, here or in CreateVideoSchema below. See the note on this map: a
+   * default on an array field would make an omitted key mean "remove all categories" on a
+   * PATCH. The service reads `?? []` instead.
+   */
+  categoryIds: z.array(z.string().min(1).max(64)).max(3),
   attachedProductIds: z.array(z.string().min(1).max(64)).max(50),
   milestones: z.array(z.string().trim().min(1).max(200)).max(20),
   openRoles: z.array(z.string().trim().min(1).max(120)).max(20),

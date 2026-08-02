@@ -43,7 +43,11 @@ export type ContentReviewError =
   | PlatformAccessError
   | VideoNotFoundError
   | { type: "NOT_AN_ANIME_EPISODE" }
-  | { type: "REVIEW_NOT_PENDING"; reviewStatus: ContentReviewStatus };
+  | { type: "REVIEW_NOT_PENDING"; reviewStatus: ContentReviewStatus }
+  // Shares the literal AND the payload shape with videos.service.ts's arm, deliberately:
+  // TypeScript only collapses two union members carrying the same `type` when their
+  // payloads are identical, and the studio mapper switches over both unions at once.
+  | { type: "SOURCE_NOT_VERIFIED"; youtubeVideoId: string | null };
 
 /** One row of the moderation queue. */
 export interface ReviewQueueRow {
@@ -133,15 +137,23 @@ export async function listReviewQueue(
 }
 
 /** Loads a pending anime episode for a decision, capability already proven. */
-async function loadPendingEpisode(
-  videoId: string,
-): Promise<
-  Result<{ reviewStatus: ContentReviewStatus; premiereDate: Date | null }, ContentReviewError>
+async function loadPendingEpisode(videoId: string): Promise<
+  Result<
+    {
+      reviewStatus: ContentReviewStatus;
+      premiereDate: Date | null;
+      isSourceVerified: boolean;
+      youtubeVideoId: string | null;
+    },
+    ContentReviewError
+  >
 > {
   const [row] = await db
     .select({
       videoType: video.videoType,
       reviewStatus: video.reviewStatus,
+      isSourceVerified: video.isSourceVerified,
+      youtubeVideoId: video.youtubeVideoId,
       premiereDate: animeEpisode.premiereDate,
       episodeId: animeEpisode.id,
     })
@@ -161,9 +173,17 @@ async function loadPendingEpisode(
     };
   }
 
+  // NOT gated on isSourceVerified here: this loader serves the REJECT path too, and an
+  // episode whose source could not be verified is one a moderator must still be able to
+  // reject. The gate belongs on approve alone — see approveAnimeEpisode.
   return {
     success: true,
-    value: { reviewStatus: row.reviewStatus, premiereDate: row.premiereDate },
+    value: {
+      reviewStatus: row.reviewStatus,
+      premiereDate: row.premiereDate,
+      isSourceVerified: row.isSourceVerified,
+      youtubeVideoId: row.youtubeVideoId,
+    },
   };
 }
 
@@ -187,6 +207,17 @@ export async function approveAnimeEpisode(
 
   const pending = await loadPendingEpisode(videoId);
   if (!pending.success) return { success: false, error: pending.error };
+
+  // THE SECOND DOOR INTO PUBLISH (HOME_BACKEND_STRUCTURE.md §8.3). `publishVideo` is the
+  // obvious one and it is gated there; approving an episode publishes it too, and a gate
+  // on only one of the two doors is not a gate. An unverified episode stays pending until
+  // `verify-youtube-video` proves its source, and the moderator can still reject it.
+  if (!pending.value.isSourceVerified) {
+    return {
+      success: false,
+      error: { type: "SOURCE_NOT_VERIFIED", youtubeVideoId: pending.value.youtubeVideoId },
+    };
+  }
 
   const now = new Date();
   const premiereDate = pending.value.premiereDate;

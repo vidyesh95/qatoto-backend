@@ -1,4 +1,5 @@
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { fromDrizzle } from "pg-boss";
 
 import { config } from "#src/config/index.js";
 import type { CreateVideoInput, UpdateVideoInput } from "#src/controllers/videos.controller.js";
@@ -7,11 +8,13 @@ import {
   animeEpisode,
   animeSeason,
   animeSeries,
+  contentCategory,
   playlist,
   playlistItem,
   product,
   video,
   videoAttachedProduct,
+  videoCategory,
   videoChapter,
   videoCollaborator,
   videoDocument,
@@ -25,6 +28,7 @@ import {
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
+import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
   buildYoutubeEmbedUrl,
@@ -32,7 +36,9 @@ import {
   verifyYoutubeVideo,
   type FetchImplementation,
   type YoutubeSourceError,
+  type YoutubeVideoFacts,
 } from "#src/lib/youtube.js";
+import { findUnavailableCategoryIds } from "#src/services/content-categories.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -89,9 +95,20 @@ export type VideoError =
   // re-check job would, and that is deferred. Kept as the publish safety gate rather
   // than deleted, because publishing a row whose media is broken is the thing it stops.
   | { type: "NOT_READY"; uploadStatus: VideoUploadStatus }
+  // HOME_BACKEND_STRUCTURE.md §8.3's publish gate. DISTINCT FROM NOT_READY, and the
+  // distinction is what the creator needs: nothing about the upload is wrong, the row is
+  // complete, and there is nothing to edit. YouTube simply has not confirmed the source
+  // yet and `verify-youtube-video` is already retrying. NOT_READY says "fix this";
+  // this says "wait".
+  | { type: "SOURCE_NOT_VERIFIED"; youtubeVideoId: string | null }
   // Carries the WHOLE offending list, not the first one: a client sends up to 50 ids and
   // must be able to strike every bad chip at once rather than one round-trip each.
   | { type: "PRODUCT_NOT_OWNED"; productIds: readonly string[] }
+  // Same rule, for categories. Named NOT_AVAILABLE rather than NOT_FOUND because unknown
+  // and retired collapse into it deliberately (see findUnavailableCategoryIds), and
+  // because a distinct literal cannot collide with another union's arm inside the studio
+  // mapper's exhaustive switch.
+  | { type: "VIDEO_CATEGORY_NOT_AVAILABLE"; categoryIds: readonly string[] }
   | { type: "PLAYLIST_NOT_OWNED"; playlistIds: readonly string[] }
   | { type: "ANIME_SERIES_NOT_FOUND"; seriesId: string }
   | { type: "ANIME_SEASON_NOT_FOUND"; seasonId: string }
@@ -302,6 +319,18 @@ export interface VideoDocumentView {
   readonly position: number;
 }
 
+/**
+ * One taxonomy row as it appears on a video (HOME_BACKEND_STRUCTURE.md §2).
+ *
+ * Narrower than `ContentCategoryView`: a tag on a video does not need the tile art or the
+ * global sort order, and returning them would imply the video controls them.
+ */
+export interface ContentCategoryRefView {
+  readonly id: string;
+  readonly slug: string;
+  readonly label: string;
+}
+
 export interface AnimeEpisodeView {
   readonly id: string;
   readonly seriesId: string;
@@ -332,6 +361,15 @@ export interface PublicVideo {
   readonly youtubeVideoId: string | null;
   /** Rebuilt server-side from the stored id. The client renders THIS, never its own. */
   readonly youtubeEmbedUrl: string | null;
+  /**
+   * Has YouTube confirmed the source exists and embeds (§8.3)?
+   *
+   * IN THE PROJECTION DELIBERATELY. Without it the studio would have to INFER "still
+   * verifying" from a missing thumbnail — a client deriving a server fact from a proxy,
+   * which is the thin-client violation CLAUDE.md §1.1 exists to prevent. It is also the
+   * only way a creator can be shown why publish is refused.
+   */
+  readonly isSourceVerified: boolean;
 
   // Provider-neutral media identity — null while videoSource is "youtube" (Appendix A).
   readonly storageProvider: VideoRow["storageProvider"];
@@ -377,9 +415,20 @@ export interface PublicVideo {
   readonly shortsRemixing: VideoRow["shortsRemixing"];
   readonly recordingDate: string | null;
   readonly recordingLocation: string | null;
+  /**
+   * LEGACY, READ-ONLY, and removed next release. No write path sets it any more — see the
+   * `video.category` schema comment. `categories` below is the real answer.
+   */
   readonly category: string | null;
 
   readonly chapters: readonly VideoChapterView[];
+  /**
+   * The taxonomy rows this video is tagged into, at most three.
+   *
+   * LABELS, NOT BARE IDS. The studio renders these as chips; returning only ids would make
+   * every video card cross-reference `/feed/categories` to draw itself.
+   */
+  readonly categories: readonly ContentCategoryRefView[];
   readonly attachedProducts: readonly VideoAttachedProductView[];
   readonly milestones: readonly VideoLabelView[];
   readonly openRoles: readonly VideoOpenRoleView[];
@@ -452,6 +501,7 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     collaborators,
     documents,
     playlistRows,
+    categories,
     episodeRows,
   ] = await Promise.all([
     db
@@ -525,6 +575,19 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
       .select({ playlistId: playlistItem.playlistId })
       .from(playlistItem)
       .where(eq(playlistItem.videoId, row.id)),
+    // Ordered by the taxonomy's own sortOrder rather than by insertion: video_category has
+    // no position column on purpose, so the only ordering available is the global one, and
+    // an arbitrary order would render two chips differently on two page loads.
+    db
+      .select({
+        id: contentCategory.id,
+        slug: contentCategory.slug,
+        label: contentCategory.label,
+      })
+      .from(videoCategory)
+      .innerJoin(contentCategory, eq(contentCategory.id, videoCategory.categoryId))
+      .where(eq(videoCategory.videoId, row.id))
+      .orderBy(asc(contentCategory.sortOrder), asc(contentCategory.slug)),
     db
       .select({
         id: animeEpisode.id,
@@ -562,6 +625,7 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     videoSource: row.videoSource,
     youtubeVideoId: row.youtubeVideoId,
     youtubeEmbedUrl: row.youtubeVideoId ? buildYoutubeEmbedUrl(row.youtubeVideoId) : null,
+    isSourceVerified: row.isSourceVerified,
 
     storageProvider: row.storageProvider,
     playbackId: row.playbackId,
@@ -606,9 +670,12 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     shortsRemixing: row.shortsRemixing,
     recordingDate: row.recordingDate,
     recordingLocation: row.recordingLocation,
+    // LEGACY. Read for one more release so that dropping the column and dropping its last
+    // reader are two separate deploys (§2.2).
     category: row.category,
 
     chapters,
+    categories,
     attachedProducts,
     milestones,
     openRoles,
@@ -668,6 +735,54 @@ async function parseAndVerifyYoutubeUrl(
       thumbnailUrl: verified.value.thumbnailUrl,
     },
   };
+}
+
+/**
+ * The CREATE-path variant, which tolerates a YouTube outage (HOME_BACKEND_STRUCTURE.md §8.3).
+ *
+ * Same parse, same verify, one difference in what it does with the failure:
+ *
+ *   INVALID_YOUTUBE_URL       → still a hard error. Parsing is the SSRF boundary and it
+ *                               never degrades; a string that is not a YouTube URL has no id
+ *                               to store in the first place.
+ *   YOUTUBE_VIDEO_UNAVAILABLE → still a hard error. The video is deleted, private, or not
+ *                               embeddable. That is a link the creator must FIX, and
+ *                               deferring it would store a known-bad id while telling them
+ *                               nothing.
+ *   YOUTUBE_VERIFY_FAILED     → DEFERRED. YouTube did not answer. Nothing about the
+ *                               creator's submission is wrong, so returning `facts: null`
+ *                               lets the row land as an unverified draft and hands the
+ *                               question to `verify-youtube-video`.
+ *
+ * `parseAndVerifyYoutubeUrl` above keeps the hard failure on ALL THREE and stays the
+ * update-path function. The asymmetry is deliberate: on create, the work at risk is the
+ * whole upload; on PATCH the row already exists and the only loss is one form submission.
+ * More to the point, deferring on PATCH would let an outage silently un-verify a published
+ * row's source and swap in an id nothing has ever proven.
+ */
+async function parseAndVerifyYoutubeUrlForCreate(
+  rawYoutubeUrl: string,
+  options: YoutubeVerificationOptions,
+): Promise<Result<{ youtubeVideoId: string; facts: YoutubeVideoFacts | null }, VideoError>> {
+  const youtubeVideoId = extractYoutubeVideoId(rawYoutubeUrl);
+  if (!youtubeVideoId) {
+    return { success: false, error: { type: "INVALID_YOUTUBE_URL" } };
+  }
+
+  const verified = await verifyYoutubeVideo(youtubeVideoId, {
+    timeoutMs: config.YOUTUBE_OEMBED_TIMEOUT_MS,
+    fetchImplementation: options.fetchImplementation,
+  });
+
+  if (verified.success) {
+    return { success: true, value: { youtubeVideoId, facts: verified.value } };
+  }
+
+  if (verified.error.type === "YOUTUBE_VERIFY_FAILED") {
+    return { success: true, value: { youtubeVideoId, facts: null } };
+  }
+
+  return { success: false, error: verified.error };
 }
 
 /** Product ids the caller does NOT own, deduplicated and order-preserved. */
@@ -814,9 +929,22 @@ export async function createVideo(
     return { success: false, error: { type: "PRODUCT_NOT_OWNED", productIds: unownedProductIds } };
   }
 
-  // 4. THE ONE OUTBOUND REQUEST.
-  const verified = await parseAndVerifyYoutubeUrl(input.youtubeUrl, options);
+  // 3b. Categories — existence and activeness checked before the network call, like
+  //     products above. Cross-table, so it cannot live in the Zod schema.
+  const categoryIds = dedupe(input.categoryIds ?? []);
+  const unavailableCategoryIds = await findUnavailableCategoryIds(categoryIds);
+  if (unavailableCategoryIds.length > 0) {
+    return {
+      success: false,
+      error: { type: "VIDEO_CATEGORY_NOT_AVAILABLE", categoryIds: unavailableCategoryIds },
+    };
+  }
+
+  // 4. THE ONE OUTBOUND REQUEST — and the only failure here that is now survivable is
+  //    "YouTube did not answer" (§8.3). See parseAndVerifyYoutubeUrlForCreate.
+  const verified = await parseAndVerifyYoutubeUrlForCreate(input.youtubeUrl, options);
   if (!verified.success) return { success: false, error: verified.error };
+  const verifiedFacts = verified.value.facts;
 
   // 5. Now, and only now, write.
   let createdVideoId: string;
@@ -828,8 +956,11 @@ export async function createVideo(
           creatorId,
           videoSource: "youtube",
           youtubeVideoId: verified.value.youtubeVideoId,
+          // The id is stored either way — the charset CHECK still closes SSRF. This flag
+          // records only whether YouTube confirmed the video exists and embeds (§8.3).
+          isSourceVerified: verifiedFacts !== null,
           uploadStatus: "ready",
-          thumbnailUrl: verified.value.thumbnailUrl,
+          thumbnailUrl: verifiedFacts?.thumbnailUrl ?? null,
           title: input.title,
           description: input.description,
           videoType: input.videoType,
@@ -862,7 +993,8 @@ export async function createVideo(
           shortsRemixing: input.shortsRemixing,
           recordingDate: input.recordingDate,
           recordingLocation: input.recordingLocation,
-          category: input.category,
+          // `category` is deliberately absent: the column is dead (§2.2) and the schema no
+          // longer has a field to carry it. `videoCategory` rows below are the taxonomy.
         })
         .returning({ id: video.id });
 
@@ -875,6 +1007,41 @@ export async function createVideo(
           .values(
             attachedProductIds.map((productId, index) => ({ videoId, productId, position: index })),
           );
+      }
+
+      if (categoryIds.length > 0) {
+        await tx
+          .insert(videoCategory)
+          .values(categoryIds.map((categoryId) => ({ videoId, categoryId })));
+      }
+
+      // ENQUEUED INSIDE THE TRANSACTION, on the transaction's own connection (§8.3).
+      // pg-boss's send is an INSERT, so it can join this transaction — and it must. An
+      // enqueue after the commit can be lost with no error surface anywhere, leaving a row
+      // that is permanently unverifiable and therefore permanently unpublishable; an
+      // enqueue before it can announce a row that rolled back. Same contract as
+      // `enqueueNotifications`.
+      //
+      // A failed enqueue THROWS, taking the video row with it. A create the creator can
+      // retry is strictly better than a row nothing will ever verify.
+      if (!verifiedFacts) {
+        const enqueueResult = await sendJob(
+          JOB_NAMES.verifyYoutubeVideo,
+          { videoId },
+          {
+            idempotencyKey: idempotencyKeyFor.verifyYoutubeVideo(
+              videoId,
+              verified.value.youtubeVideoId,
+            ),
+            db: fromDrizzle(tx, sql),
+          },
+        );
+        if (!enqueueResult.success) {
+          throw new Error(
+            `createVideo: could not queue source verification for ${videoId} ` +
+              `(${enqueueResult.error.type})`,
+          );
+        }
       }
 
       await replaceSimpleChildSets(tx, videoId, input);
@@ -957,7 +1124,9 @@ export async function createVideo(
     success: true,
     value: {
       video: await toPublicVideo(createdRow, Date.now()),
-      suggestedTitle: verified.value.suggestedTitle,
+      // Null when verification was deferred: an unverified row has no oEmbed title to
+      // suggest, and inventing one would be a fabricated value dressed as a server fact.
+      suggestedTitle: verifiedFacts?.suggestedTitle ?? null,
     },
   };
 }
@@ -1082,6 +1251,20 @@ export async function updateVideo(
     }
   }
 
+  // REPLACE semantics, like every other array on this patch: `undefined` means untouched,
+  // any array means "this is now the whole set", and `[]` means remove all. Merge
+  // semantics would leave a creator no way to remove a category.
+  const categoryIds = patch.categoryIds === undefined ? undefined : dedupe(patch.categoryIds);
+  if (categoryIds !== undefined) {
+    const unavailableCategoryIds = await findUnavailableCategoryIds(categoryIds);
+    if (unavailableCategoryIds.length > 0) {
+      return {
+        success: false,
+        error: { type: "VIDEO_CATEGORY_NOT_AVAILABLE", categoryIds: unavailableCategoryIds },
+      };
+    }
+  }
+
   // Content-bearing, in the sense §10 means: a change a moderator would want to see
   // again. A visibility toggle or a comment preference is deliberately NOT in this list,
   // because un-publishing an approved episode over a settings change is its own bug.
@@ -1155,7 +1338,8 @@ export async function updateVideo(
     if (patch.recordingLocation !== undefined) {
       scalarUpdates.recordingLocation = patch.recordingLocation;
     }
-    if (patch.category !== undefined) scalarUpdates.category = patch.category;
+    // No `category` write. The column is dead (§2.2) and UpdateVideoSchema has no field
+    // for it; `categoryIds` is handled below, against video_category.
 
     if (verifiedYoutube) {
       scalarUpdates.youtubeVideoId = verifiedYoutube.youtubeVideoId;
@@ -1184,6 +1368,19 @@ export async function updateVideo(
           .values(
             attachedProductIds.map((productId, index) => ({ videoId, productId, position: index })),
           );
+      }
+    }
+
+    // Delete-then-reinsert rather than a diff. The set is at most three rows and the whole
+    // thing is inside one transaction, so computing a minimal delta would buy nothing and
+    // cost a correctness argument. Not folded into replaceSimpleChildSets: that helper
+    // writes label rows from plain strings and has no foreign key to validate.
+    if (categoryIds !== undefined) {
+      await tx.delete(videoCategory).where(eq(videoCategory.videoId, videoId));
+      if (categoryIds.length > 0) {
+        await tx
+          .insert(videoCategory)
+          .values(categoryIds.map((categoryId) => ({ videoId, categoryId })));
       }
     }
 
@@ -1395,6 +1592,16 @@ export async function publishVideo(
 
   if (existing.uploadStatus !== "ready") {
     return { success: false, error: { type: "NOT_READY", uploadStatus: existing.uploadStatus } };
+  }
+
+  // §8.3's gate, and it sits HERE — beside NOT_READY, before the completeness list —
+  // because it is a fact about the media rather than about the form. This is what keeps
+  // "no unverified id in a published row" true now that createVideo can store one.
+  if (!existing.isSourceVerified) {
+    return {
+      success: false,
+      error: { type: "SOURCE_NOT_VERIFIED", youtubeVideoId: existing.youtubeVideoId },
+    };
   }
 
   // The backstop re-check: this re-runs even if some future write path sets the columns
