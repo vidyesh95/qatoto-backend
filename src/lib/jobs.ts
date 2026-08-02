@@ -100,6 +100,26 @@ export const JOB_NAMES = {
   // can prove the video exists and embeds. Publish is refused in the meantime.
   verifyYoutubeVideo: "verify-youtube-video",
   deliverNotification: "deliver-notification",
+  // --- Home feed ranking (HOME_BACKEND_STRUCTURE.md §6). ORDERING IS EXPRESSED BY CRON
+  // --- TIME, NOT BY CODE — see SCHEDULED_JOB_CRONS below. Durations must precede quality
+  // --- (completion has no denominator without one), quality must precede popularity, and
+  // --- popularity must precede affinities.
+  recomputeVideoDurationsTick: "recompute-video-durations-tick",
+  recomputeVideoDurations: "recompute-video-durations",
+  recomputeVideoQualityScoresTick: "recompute-video-quality-scores-tick",
+  recomputeVideoQualityScores: "recompute-video-quality-scores",
+  recomputePlatformCategoryPopularityTick: "recompute-platform-category-popularity-tick",
+  recomputePlatformCategoryPopularity: "recompute-platform-category-popularity",
+  recomputeUserAffinitiesTick: "recompute-user-affinities-tick",
+  recomputeUserAffinities: "recompute-user-affinities",
+  // The ONE hourly job in this domain. A "trending" chip recomputed nightly is a lie
+  // about what the word means.
+  recomputeTrendingVideosTick: "recompute-trending-videos-tick",
+  recomputeTrendingVideos: "recompute-trending-videos",
+  revalidateYoutubeEmbedsTick: "revalidate-youtube-embeds-tick",
+  revalidateYoutubeEmbeds: "revalidate-youtube-embeds",
+  pruneEngagementDataTick: "prune-engagement-data-tick",
+  pruneEngagementData: "prune-engagement-data",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -262,6 +282,39 @@ const SOURCE_VERIFY_RETRY = {
   retryBackoff: true,
   retryDelayMax: 3_600,
 } as const;
+
+/**
+ * The queue options every home-feed tick shares.
+ *
+ * A FUNCTION rather than a spreadable constant, because `deadLetter` is derived from the
+ * queue's own name and there is no way to spell that in a shared literal. Seven ticks with
+ * seven hand-copied option blocks is seven chances to paste the wrong dead-letter name —
+ * which would route one queue's failures into another's, silently.
+ *
+ * `exclusive`: a tick's only job is to enqueue, so a second concurrent one would mint a
+ * duplicate that the idempotency key then discards. Cheaper to never start it.
+ */
+function RANKING_TICK_QUEUE_OPTIONS(tickJobName: JobName): {
+  readonly policy: "exclusive";
+  readonly retryLimit: number;
+  readonly retryDelay: number;
+  readonly retryBackoff: boolean;
+  readonly retryDelayMax: number;
+  readonly expireInSeconds: number;
+  readonly deadLetter: string;
+} {
+  return {
+    policy: "exclusive",
+    retryLimit: 2,
+    retryDelay: 60,
+    retryBackoff: true,
+    retryDelayMax: 600,
+    // A tick does one INSERT. If it has not finished in a minute, something is wrong that
+    // waiting will not fix.
+    expireInSeconds: 60,
+    deadLetter: deadLetterNameFor(tickJobName),
+  };
+}
 
 export const JOB_DEFINITIONS = {
   [JOB_NAMES.geocodeAndClusterSubmission]: {
@@ -672,6 +725,124 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.deliverNotification),
     },
   },
+
+  // --- Home feed ranking (HOME_BACKEND_STRUCTURE.md §6). Every real job is `singleton`
+  // --- for the reason the R&D recomputes are: two concurrent full recomputes writing the
+  // --- same `(scope, as_of)` rows is a deadlock generator, and there is no scenario in
+  // --- which running two helps.
+  [JOB_NAMES.recomputeVideoDurationsTick]: {
+    name: JOB_NAMES.recomputeVideoDurationsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.recomputeVideoDurationsTick) },
+  },
+  [JOB_NAMES.recomputeVideoDurations]: {
+    name: JOB_NAMES.recomputeVideoDurations,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeVideoDurations),
+    },
+  },
+  [JOB_NAMES.recomputeVideoQualityScoresTick]: {
+    name: JOB_NAMES.recomputeVideoQualityScoresTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.recomputeVideoQualityScoresTick) },
+  },
+  [JOB_NAMES.recomputeVideoQualityScores]: {
+    name: JOB_NAMES.recomputeVideoQualityScores,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // Longer than its siblings: it walks every published video and reads the whole
+      // engagement sidecar for each.
+      expireInSeconds: 3_600,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeVideoQualityScores),
+    },
+  },
+  [JOB_NAMES.recomputePlatformCategoryPopularityTick]: {
+    name: JOB_NAMES.recomputePlatformCategoryPopularityTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.recomputePlatformCategoryPopularityTick),
+    },
+  },
+  [JOB_NAMES.recomputePlatformCategoryPopularity]: {
+    name: JOB_NAMES.recomputePlatformCategoryPopularity,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputePlatformCategoryPopularity),
+    },
+  },
+  [JOB_NAMES.recomputeUserAffinitiesTick]: {
+    name: JOB_NAMES.recomputeUserAffinitiesTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.recomputeUserAffinitiesTick) },
+  },
+  [JOB_NAMES.recomputeUserAffinities]: {
+    name: JOB_NAMES.recomputeUserAffinities,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // The widest scan in the domain — every signed-in viewer's watch history, twice
+      // (once grouped by category, once by creator).
+      expireInSeconds: 3_600,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeUserAffinities),
+    },
+  },
+  [JOB_NAMES.recomputeTrendingVideosTick]: {
+    name: JOB_NAMES.recomputeTrendingVideosTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.recomputeTrendingVideosTick) },
+  },
+  [JOB_NAMES.recomputeTrendingVideos]: {
+    name: JOB_NAMES.recomputeTrendingVideos,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // Must finish inside its own hour, or the next tick queues behind it forever.
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeTrendingVideos),
+    },
+  },
+  [JOB_NAMES.revalidateYoutubeEmbedsTick]: {
+    name: JOB_NAMES.revalidateYoutubeEmbedsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.revalidateYoutubeEmbedsTick) },
+  },
+  [JOB_NAMES.revalidateYoutubeEmbeds]: {
+    name: JOB_NAMES.revalidateYoutubeEmbeds,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // It talks to youtube.com, one video at a time, rate-limited. Slow by design.
+      expireInSeconds: 3_600,
+      deadLetter: deadLetterNameFor(JOB_NAMES.revalidateYoutubeEmbeds),
+    },
+  },
+  [JOB_NAMES.pruneEngagementDataTick]: {
+    name: JOB_NAMES.pruneEngagementDataTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.pruneEngagementDataTick) },
+  },
+  [JOB_NAMES.pruneEngagementData]: {
+    name: JOB_NAMES.pruneEngagementData,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.pruneEngagementData),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -737,6 +908,41 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // pair relies on.
   [JOB_NAMES.recomputeBranchSignalsTick]: "20 3 * * *",
   [JOB_NAMES.recomputeProgramStatsTick]: "35 3 * * *",
+
+  // --- Home feed ranking (HOME_BACKEND_STRUCTURE.md §6).
+  //
+  // THE 01:00 HOUR IS A DEPENDENCY CHAIN EXPRESSED IN CRON, not in code, exactly as the
+  // 03:20/03:35 pair above is. Read downward:
+  //
+  //   05  durations   — completion rate has no denominator until this writes one, and
+  //                     `video.duration_seconds` is NULL on every YouTube row because
+  //                     oEmbed returns no duration.
+  //   25  quality     — needs durations. Also writes `unique_viewer_count`, which is the
+  //                     engagement denominator.
+  //   40  popularity  — needs quality, and feeds cold start.
+  //   50  affinities  — needs popularity for its fallback.
+  //
+  // Twenty minutes between each is not a measurement; it is room for a slow night on a
+  // catalog that has not grown yet. If any of these starts overrunning its gap, the answer
+  // is to chain them by enqueue rather than to shave the interval.
+  //
+  // Nothing here collides with the eleven crons above: hours 1 and 5 were entirely free,
+  // `35` past the hour was free (`05` belongs to refresh-talent-projections), and 04:55
+  // sits clear of recompute-compensation-draft at 04:15.
+  [JOB_NAMES.recomputeVideoDurationsTick]: "5 1 * * *",
+  [JOB_NAMES.recomputeVideoQualityScoresTick]: "25 1 * * *",
+  [JOB_NAMES.recomputePlatformCategoryPopularityTick]: "40 1 * * *",
+  [JOB_NAMES.recomputeUserAffinitiesTick]: "50 1 * * *",
+  // HOURLY, and the only job in this domain that is. A "trending" chip recomputed nightly
+  // is a lie about what the word means — §6 says so and this is where it is enforced.
+  [JOB_NAMES.recomputeTrendingVideosTick]: "35 * * * *",
+  // The §8.2 backstop, for videos nobody happens to be watching. The fast path is the
+  // client's playback-error report at three distinct fingerprints; this is what catches a
+  // dead player on a video with no viewers left to report it.
+  [JOB_NAMES.revalidateYoutubeEmbedsTick]: "10 5 * * *",
+  // Runs BEFORE the 05:10 revalidation and well after the 01:xx chain, so a night's
+  // recomputes are complete before anything is removed.
+  [JOB_NAMES.pruneEngagementDataTick]: "55 4 * * *",
 };
 
 export type JobEnqueueError =
@@ -971,6 +1177,23 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.recomputeBranchSignals]: ProgramScopedAsOfPayloadSchema,
   [JOB_NAMES.verifyYoutubeVideo]: VerifyYoutubeVideoPayloadSchema,
   [JOB_NAMES.deliverNotification]: DeliverNotificationPayloadSchema,
+  // --- Home feed ranking. Every real job takes an asOf and NOTHING else: each one walks
+  // --- the whole catalog or the whole viewer set, so there is no scope to carry, and a
+  // --- payload with no editable field is a payload nobody can aim.
+  [JOB_NAMES.recomputeVideoDurationsTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeVideoDurations]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.recomputeVideoQualityScoresTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeVideoQualityScores]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.recomputePlatformCategoryPopularityTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputePlatformCategoryPopularity]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.recomputeUserAffinitiesTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeUserAffinities]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.recomputeTrendingVideosTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeTrendingVideos]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.revalidateYoutubeEmbedsTick]: TickPayloadSchema,
+  [JOB_NAMES.revalidateYoutubeEmbeds]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.pruneEngagementDataTick]: TickPayloadSchema,
+  [JOB_NAMES.pruneEngagementData]: AsOfOnlyPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -1070,4 +1293,21 @@ export const idempotencyKeyFor = {
   // finalizeVerdict's `generation`, for the same reason.
   verifyYoutubeVideo: (videoId: string, youtubeVideoId: string): string =>
     `${JOB_NAMES.verifyYoutubeVideo}:${videoId}:${youtubeVideoId}`,
+  // --- Home feed ranking. Keyed on the asOf alone, because each job is global: two ticks
+  // --- firing for the same UTC boundary (a redeploy, a clock nudge) must produce ONE run.
+  recomputeVideoDurations: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputeVideoDurations}:${asOfIso}`,
+  recomputeVideoQualityScores: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputeVideoQualityScores}:${asOfIso}`,
+  recomputePlatformCategoryPopularity: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputePlatformCategoryPopularity}:${asOfIso}`,
+  recomputeUserAffinities: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputeUserAffinities}:${asOfIso}`,
+  // Quantized to the HOUR rather than the day, so 24 distinct runs a day dedup correctly.
+  recomputeTrendingVideos: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputeTrendingVideos}:${asOfIso}`,
+  revalidateYoutubeEmbeds: (asOfIso: string): string =>
+    `${JOB_NAMES.revalidateYoutubeEmbeds}:${asOfIso}`,
+  pruneEngagementData: (asOfIso: string): string =>
+    `${JOB_NAMES.pruneEngagementData}:${asOfIso}`,
 } as const;

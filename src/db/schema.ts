@@ -10281,8 +10281,37 @@ export const videoStats = pgTable(
      */
     uniqueViewerCount: integer("unique_viewer_count"),
     lastEngagementAt: timestamp("last_engagement_at"),
+    /**
+     * The §4.1 quality score, denormalized off `video_quality_score_snapshot`.
+     *
+     * DENORMALIZED FOR THE SAME REASON `problem_cluster.current_opportunity_score_points`
+     * is: the feed already joins this table for its counters, and making it also resolve
+     * "which snapshot is the current one" per request would be a second query on the
+     * hottest read on the platform.
+     *
+     * NULLABLE WITH NO DEFAULT (Rule 5). A brand-new video is UNSCORED, which is not the
+     * same fact as scored zero, and the feed's COALESCE is where that distinction is
+     * made. `scoreComputedAt` carries the monotonic guard that stops an operator
+     * replaying an old `asOf` for an audit from clobbering today's published scores.
+     */
+    qualityScorePoints: integer("quality_score_points"),
+    qualityScoreComputedAt: timestamp("quality_score_computed_at"),
+    /**
+     * Position in the hourly top 200, or NULL for everything else.
+     *
+     * `?mode=trending` orders by this; Spotlight is `rank <= 3`. Denormalized rather than
+     * joined for the same reason as above — and it is rewritten wholesale each hour, so
+     * it needs no monotonic guard: there is exactly one live trending list at a time.
+     */
+    trendingRank: integer("trending_rank"),
   },
   () => [
+    check(
+      "video_stats_score_range_ck",
+      sql`(quality_score_points IS NULL OR quality_score_points BETWEEN 0 AND 100)
+          AND (quality_score_points IS NULL) = (quality_score_computed_at IS NULL)
+          AND (trending_rank IS NULL OR trending_rank >= 1)`,
+    ),
     check(
       "video_stats_counters_non_negative_ck",
       sql`view_count >= 0 AND like_count >= 0 AND comment_count >= 0
@@ -10317,6 +10346,276 @@ export const creatorStats = pgTable(
     check(
       "creator_stats_counters_non_negative_ck",
       sql`subscriber_count >= 0 AND published_video_count >= 0 AND total_view_count >= 0`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// HOME FEED — RANKING SNAPSHOTS (HOME_BACKEND_STRUCTURE.md §4, §6)
+//
+// All five copy `problem_cluster_score_snapshot` (schema.ts:1968), and the shape is the
+// point: THE COMPONENT COLUMNS ARE STORED NEXT TO THE TOTAL. Six months from now,
+// "why was this video ranked third?" has an answer that does not require replaying data
+// that has since moved. A snapshot holding only a total is a number nobody can defend.
+//
+// Every one of them is APPEND-ONLY and keyed `unique(scope…, as_of)`, so re-running a job
+// for the same `asOf` is an `ON CONFLICT DO NOTHING` rather than a duplicate row or a
+// destructive overwrite — the property that makes "run it again and diff" a valid way to
+// check the ranking is deterministic.
+//
+// `scoreAlgorithmVersion` on each: the formula may evolve without invalidating history.
+// ---------------------------------------------------------------------------
+
+/**
+ * §4.1 — one video's quality, nightly, 0..100.
+ *
+ * The five components do NOT have fixed budgets, because §4.2's sample ramp moves the
+ * completion budget and redistributes the remainder. So the CHECK below asserts only that
+ * the components sum to the total and the total is in band — which is the invariant that
+ * actually holds, rather than one that looks tidier and is false.
+ */
+export const videoQualityScoreSnapshot = pgTable(
+  "video_quality_score_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // `restrict`, not cascade — the snapshot precedent. Deleting a video that has ranking
+    // history should fail loudly rather than silently erase the record of how it ranked.
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "restrict" }),
+    /** From the job payload, quantized to a UTC day start. Never a clock read. */
+    asOf: timestamp("as_of").notNull(),
+    qualityScorePoints: integer("quality_score_points").notNull(),
+    // --- Inputs, so the score is reproducible without replaying history.
+    meanCompletionBasisPoints: integer("mean_completion_basis_points").notNull(),
+    completionSampleCount: integer("completion_sample_count").notNull(),
+    engagementPerThousandViewers: integer("engagement_per_thousand_viewers").notNull(),
+    /** NULL when the job could not establish one — Rule 5, not a fabricated zero. */
+    uniqueViewerCount: integer("unique_viewer_count"),
+    countedViewsFirst48Hours: integer("counted_views_first_48_hours").notNull(),
+    creatorMedianQualityPoints: integer("creator_median_quality_points"),
+    hoursSincePublished: integer("hours_since_published").notNull(),
+    // --- Components. Their sum IS the score.
+    completionComponentPoints: integer("completion_component_points").notNull(),
+    engagementComponentPoints: integer("engagement_component_points").notNull(),
+    velocityComponentPoints: integer("velocity_component_points").notNull(),
+    creatorTrackComponentPoints: integer("creator_track_component_points").notNull(),
+    freshnessComponentPoints: integer("freshness_component_points").notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // No updatedAt. An append-only table has nothing to update.
+  },
+  (table) => [
+    uniqueIndex("video_quality_score_snapshot_unq").on(table.videoId, table.asOf),
+    index("video_quality_score_snapshot_asOf_idx").on(table.asOf, table.id),
+    check(
+      "video_quality_score_snapshot_score_ck",
+      sql`quality_score_points BETWEEN 0 AND 100
+          AND completion_component_points >= 0 AND engagement_component_points >= 0
+          AND velocity_component_points >= 0 AND creator_track_component_points >= 0
+          AND freshness_component_points >= 0
+          AND completion_component_points + engagement_component_points
+              + velocity_component_points + creator_track_component_points
+              + freshness_component_points = quality_score_points`,
+    ),
+    check(
+      "video_quality_score_snapshot_inputs_ck",
+      sql`mean_completion_basis_points BETWEEN 0 AND 10000
+          AND completion_sample_count >= 0
+          AND engagement_per_thousand_viewers >= 0
+          AND (unique_viewer_count IS NULL OR unique_viewer_count >= 0)
+          AND counted_views_first_48_hours >= 0
+          AND (creator_median_quality_points IS NULL
+               OR creator_median_quality_points BETWEEN 0 AND 100)
+          AND hours_since_published >= 0`,
+    ),
+  ],
+);
+
+/**
+ * §4.3 — how much one viewer likes one category, nightly, 0..100.
+ *
+ * A ROW ONLY EXISTS WHERE THERE IS EVIDENCE. The absence of a (user, category) row is what
+ * triggers §4.4's cold-start fallback to damped platform popularity; writing a zero row
+ * instead would fabricate the very value the fallback exists to avoid, and the feed would
+ * have no way to tell "watched it and hated it" from "never saw it".
+ */
+export const userTopicAffinitySnapshot = pgTable(
+  "user_topic_affinity_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // Cascade here, unlike the video snapshot: this is derived personal data, and a
+    // deleted account's taste profile should go with it.
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => contentCategory.id, { onDelete: "restrict" }),
+    asOf: timestamp("as_of").notNull(),
+    affinityPoints: integer("affinity_points").notNull(),
+    countedViewCount: integer("counted_view_count").notNull(),
+    meanCompletionBasisPoints: integer("mean_completion_basis_points").notNull(),
+    explicitSignalCount: integer("explicit_signal_count").notNull(),
+    watchCountComponentPoints: integer("watch_count_component_points").notNull(),
+    meanCompletionComponentPoints: integer("mean_completion_component_points").notNull(),
+    explicitSignalComponentPoints: integer("explicit_signal_component_points").notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("user_topic_affinity_snapshot_unq").on(table.userId, table.categoryId, table.asOf),
+    // The feed's join: every category this viewer has an opinion about, at one asOf.
+    index("user_topic_affinity_snapshot_viewer_idx").on(table.userId, table.asOf, table.categoryId),
+    index("user_topic_affinity_snapshot_asOf_idx").on(table.asOf, table.id),
+    check(
+      "user_topic_affinity_snapshot_score_ck",
+      sql`affinity_points BETWEEN 0 AND 100
+          AND watch_count_component_points >= 0 AND mean_completion_component_points >= 0
+          AND explicit_signal_component_points >= 0
+          AND watch_count_component_points + mean_completion_component_points
+              + explicit_signal_component_points = affinity_points
+          AND counted_view_count >= 0
+          AND mean_completion_basis_points BETWEEN 0 AND 10000
+          AND explicit_signal_count >= 0`,
+    ),
+  ],
+);
+
+/** §4.3 — the same question about a creator rather than a category. Same shape. */
+export const userCreatorAffinitySnapshot = pgTable(
+  "user_creator_affinity_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    creatorId: text("creator_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    asOf: timestamp("as_of").notNull(),
+    affinityPoints: integer("affinity_points").notNull(),
+    countedViewCount: integer("counted_view_count").notNull(),
+    meanCompletionBasisPoints: integer("mean_completion_basis_points").notNull(),
+    explicitSignalCount: integer("explicit_signal_count").notNull(),
+    watchCountComponentPoints: integer("watch_count_component_points").notNull(),
+    meanCompletionComponentPoints: integer("mean_completion_component_points").notNull(),
+    explicitSignalComponentPoints: integer("explicit_signal_component_points").notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("user_creator_affinity_snapshot_unq").on(table.userId, table.creatorId, table.asOf),
+    index("user_creator_affinity_snapshot_viewer_idx").on(table.userId, table.asOf, table.creatorId),
+    index("user_creator_affinity_snapshot_asOf_idx").on(table.asOf, table.id),
+    // A viewer cannot have an affinity for themselves — their own videos are excluded
+    // from the candidate pool anyway, so such a row could only ever be dead weight.
+    check("user_creator_affinity_snapshot_self_ck", sql`user_id <> creator_id`),
+    check(
+      "user_creator_affinity_snapshot_score_ck",
+      sql`affinity_points BETWEEN 0 AND 100
+          AND watch_count_component_points >= 0 AND mean_completion_component_points >= 0
+          AND explicit_signal_component_points >= 0
+          AND watch_count_component_points + mean_completion_component_points
+              + explicit_signal_component_points = affinity_points
+          AND counted_view_count >= 0
+          AND mean_completion_basis_points BETWEEN 0 AND 10000
+          AND explicit_signal_count >= 0`,
+    ),
+  ],
+);
+
+/**
+ * §6 — the hourly top 200. Spotlight is `rank <= 3`.
+ *
+ * HOURLY, not nightly, and that is the one scheduling decision in this domain that is not
+ * negotiable: a "trending" chip recomputed once a day is a lie about what the word means.
+ *
+ * `unique(asOf, rank)` alongside `unique(asOf, videoId)` is what makes `rank` mean
+ * something. Without it a bug that emits two rank-1 rows would store happily and Spotlight
+ * would render whichever the planner happened to return.
+ */
+export const trendingVideoSnapshot = pgTable(
+  "trending_video_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "restrict" }),
+    /** Quantized to a UTC HOUR start, unlike its nightly siblings. */
+    asOf: timestamp("as_of").notNull(),
+    rank: integer("rank").notNull(),
+    trendingScorePoints: integer("trending_score_points").notNull(),
+    countedViewsInWindow: integer("counted_views_in_window").notNull(),
+    watchedMinutesInWindow: integer("watched_minutes_in_window").notNull(),
+    engagementActionsInWindow: integer("engagement_actions_in_window").notNull(),
+    qualityScorePoints: integer("quality_score_points"),
+    recentViewComponentPoints: integer("recent_view_component_points").notNull(),
+    recentWatchTimeComponentPoints: integer("recent_watch_time_component_points").notNull(),
+    recentEngagementComponentPoints: integer("recent_engagement_component_points").notNull(),
+    qualityComponentPoints: integer("quality_component_points").notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("trending_video_snapshot_video_unq").on(table.asOf, table.videoId),
+    uniqueIndex("trending_video_snapshot_rank_unq").on(table.asOf, table.rank),
+    check(
+      "trending_video_snapshot_score_ck",
+      sql`rank >= 1
+          AND trending_score_points BETWEEN 0 AND 100
+          AND recent_view_component_points >= 0 AND recent_watch_time_component_points >= 0
+          AND recent_engagement_component_points >= 0 AND quality_component_points >= 0
+          AND recent_view_component_points + recent_watch_time_component_points
+              + recent_engagement_component_points + quality_component_points
+              = trending_score_points
+          AND counted_views_in_window >= 0 AND watched_minutes_in_window >= 0
+          AND engagement_actions_in_window >= 0
+          AND (quality_score_points IS NULL OR quality_score_points BETWEEN 0 AND 100)`,
+    ),
+  ],
+);
+
+/**
+ * §4.4 — what the platform as a whole watches, per category, nightly.
+ *
+ * The ONLY consumer is cold start: a signed-in viewer with no history sees this
+ * distribution, damped to 60%, instead of a flat feed. It is deliberately not exposed on
+ * any route — "which categories are popular" is a product decision surface, not a public
+ * fact, and publishing it would hand a creator a targeting list.
+ */
+export const platformCategoryPopularitySnapshot = pgTable(
+  "platform_category_popularity_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => contentCategory.id, { onDelete: "restrict" }),
+    asOf: timestamp("as_of").notNull(),
+    /** 0..100, a share of the most-watched category rather than of the whole. */
+    popularityPoints: integer("popularity_points").notNull(),
+    countedViewCount: integer("counted_view_count").notNull(),
+    publishedVideoCount: integer("published_video_count").notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("platform_category_popularity_snapshot_unq").on(table.categoryId, table.asOf),
+    index("platform_category_popularity_snapshot_asOf_idx").on(table.asOf, table.categoryId),
+    check(
+      "platform_category_popularity_snapshot_ck",
+      sql`popularity_points BETWEEN 0 AND 100
+          AND counted_view_count >= 0 AND published_video_count >= 0`,
     ),
   ],
 );
@@ -10583,6 +10882,57 @@ export const videoShareRelations = relations(videoShare, ({ one }) => ({
 export const videoPlaybackErrorRelations = relations(videoPlaybackError, ({ one }) => ({
   video: one(video, { fields: [videoPlaybackError.videoId], references: [video.id] }),
 }));
+
+// --- Ranking snapshots (§4, §6). Child-side only, as everywhere in this section.
+
+export const videoQualityScoreSnapshotRelations = relations(
+  videoQualityScoreSnapshot,
+  ({ one }) => ({
+    video: one(video, { fields: [videoQualityScoreSnapshot.videoId], references: [video.id] }),
+  }),
+);
+
+export const userTopicAffinitySnapshotRelations = relations(
+  userTopicAffinitySnapshot,
+  ({ one }) => ({
+    user: one(user, { fields: [userTopicAffinitySnapshot.userId], references: [user.id] }),
+    category: one(contentCategory, {
+      fields: [userTopicAffinitySnapshot.categoryId],
+      references: [contentCategory.id],
+    }),
+  }),
+);
+
+// Both FKs point at `user`, so both need a relationName — same rule as the comment thread.
+export const userCreatorAffinitySnapshotRelations = relations(
+  userCreatorAffinitySnapshot,
+  ({ one }) => ({
+    viewer: one(user, {
+      fields: [userCreatorAffinitySnapshot.userId],
+      references: [user.id],
+      relationName: "creatorAffinityViewer",
+    }),
+    creator: one(user, {
+      fields: [userCreatorAffinitySnapshot.creatorId],
+      references: [user.id],
+      relationName: "creatorAffinityCreator",
+    }),
+  }),
+);
+
+export const trendingVideoSnapshotRelations = relations(trendingVideoSnapshot, ({ one }) => ({
+  video: one(video, { fields: [trendingVideoSnapshot.videoId], references: [video.id] }),
+}));
+
+export const platformCategoryPopularitySnapshotRelations = relations(
+  platformCategoryPopularitySnapshot,
+  ({ one }) => ({
+    category: one(contentCategory, {
+      fields: [platformCategoryPopularitySnapshot.categoryId],
+      references: [contentCategory.id],
+    }),
+  }),
+);
 
 // Both sides point at `user`, so both need a relationName — same rule as the comment
 // thread above.

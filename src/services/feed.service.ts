@@ -1,0 +1,754 @@
+import { sql, type SQL } from "drizzle-orm";
+
+import { db } from "#src/db/index.js";
+import {
+  ANONYMOUS_AFFINITY_WINDOW_DAYS,
+  computeAffinityScorePoints,
+  COLD_START_POPULARITY_DAMPING_PERCENT,
+} from "#src/lib/affinity-score.js";
+import {
+  applyDiversityCaps,
+  FEED_RANK_COMPONENT_BUDGETS,
+  feedRankExpression,
+  NEW_TO_YOU_EXPLORATION_BUDGET,
+  reserveExplorationSlots,
+} from "#src/lib/feed-score.js";
+import { logger } from "#src/lib/logger.js";
+import type { Result } from "#src/types/index.js";
+
+/**
+ * The one ranked page the entire homepage reads — HOME_BACKEND_STRUCTURE.md §4, §5.1.
+ *
+ * ## Rule 3: there is ONE feed route
+ *
+ * Recommended and Explore are a FRONTEND SLICE of this page, not two response fields.
+ * Spotlight is this route with `?mode=trending&limit=3`. The filter chips are this route
+ * with `?categorySlug=`. One ranking contract, one cache story, and exactly one place a
+ * ranking bug can live.
+ *
+ * ## Where the arithmetic is, and why
+ *
+ * The blended rank of §4.3 is an integer SQL expression rendered by `feed-score.ts`, which
+ * owns the budgets and the recency ladder. Ranking in TypeScript instead would mean
+ * fetching every candidate above the requested offset — page 200 at limit 50 pulls 30,000
+ * rows to return 50. The ladder-based inputs it reads (quality, affinity) were computed in
+ * pure TypeScript by the nightly jobs, where they can be unit-tested.
+ *
+ * ## Pagination is offset, not cursor
+ *
+ * A cursor needs a stable sort key and rank is not one — a keyset over a value recomputed
+ * per request silently reshuffles page 2. Offset plus a pinned `rankSeed` gives stability
+ * for the length of a session, which is the actual requirement.
+ */
+
+export const FEED_MODES = [
+  "all",
+  "trending",
+  "new_to_you",
+  "recently_uploaded",
+  "watched",
+] as const;
+export type FeedMode = (typeof FEED_MODES)[number];
+
+// NOT a pgEnum. §3.1 lists `feed_mode` as one, but it backs a QUERY PARAMETER and no column
+// stores it — a Postgres type nothing can be assigned to is a migration nobody can reverse
+// cheaply. Values stay snake_case so they byte-match the doc's wire contract.
+
+export type FeedError = {
+  readonly type: "WATCH_HISTORY_REQUIRES_SESSION";
+};
+
+export interface FeedVideoItem {
+  readonly videoId: string;
+  readonly youtubeVideoId: string | null;
+  readonly title: string;
+  readonly thumbnailUrl: string | null;
+  readonly publishedAt: Date | null;
+  readonly durationSeconds: number | null;
+  readonly creator: {
+    readonly id: string;
+    readonly handle: string | null;
+    readonly name: string;
+    readonly imageUrl: string | null;
+  };
+  readonly categories: readonly { readonly slug: string; readonly label: string }[];
+  readonly stats: {
+    readonly viewCount: number;
+    readonly likeCount: number;
+    readonly commentCount: number;
+  };
+  readonly viewerState: {
+    readonly hasLiked: boolean;
+    readonly hasSaved: boolean;
+    readonly isSubscribedToCreator: boolean;
+  };
+  /** Always false (§5.3). Nothing backs live streaming and this doc says so. */
+  readonly isChannelLive: false;
+}
+
+export interface ListFeedVideosInput {
+  readonly mode: FeedMode;
+  readonly categorySlug: string | null;
+  readonly page: number;
+  readonly limit: number;
+  readonly viewerUserId: string | null;
+  readonly viewerFingerprint: string;
+  readonly rankSeed: string;
+}
+
+export interface FeedPage {
+  readonly rows: readonly FeedVideoItem[];
+  readonly total: number;
+  readonly rankSeed: string;
+  /** Logged, NEVER put in the response body. See `RELAXATION_STAGES`. */
+  readonly relaxationStage: number;
+}
+
+/** §4.5's window. Beyond it, only a currently-trending video stays in the pool. */
+const CANDIDATE_RECENCY_WINDOW_DAYS = 180;
+
+/** §4.5's exclusion: don't re-serve something this viewer already finished. */
+const ALREADY_WATCHED_EXCLUSION_DAYS = 30;
+
+/** §4.6's caps. */
+const MAXIMUM_ROWS_PER_CREATOR = 2;
+const MAXIMUM_CATEGORY_SHARE_BASIS_POINTS = 4_000;
+
+/** §4.4's traffic pool: reserved slots for genuinely new videos. */
+const EXPLORATION_SLOTS_PER_PAGE = 4;
+const EXPLORATION_FRESHNESS_HOURS = 72;
+const EXPLORATION_MAXIMUM_COUNTED_VIEWS = 50;
+
+/**
+ * How deep the diversified prefix goes — four pages of 24.
+ *
+ * §4.6's caps and §4.4's quota are both PERMUTATIONS of a fixed prefix of the ranking, and
+ * this is that prefix. Everything past it is served as the raw ranked offset.
+ *
+ * WHY A PREFIX AND NOT A PER-PAGE WINDOW. A post-rank pass over a window wider than the
+ * page breaks offset pagination outright: the rows it demotes on page 1 are exactly the
+ * rows page 2's offset lands on, so a viewer sees some videos twice and others never. A
+ * permutation of a FIXED prefix has no such boundary — every page slices one deterministic
+ * sequence, and the sequence past row 96 is untouched.
+ *
+ * Bounded and constant, not proportional to `page`: any request inside the prefix fetches
+ * 96 rows, whether it is page 1 or page 4.
+ */
+const DIVERSIFIED_PREFIX_ROWS = 96;
+
+/**
+ * §4.7's relaxation ladder, in the order it degrades.
+ *
+ * An under-filled homepage is a real failure mode on a young catalog, and it must degrade
+ * in a STATED order rather than by accident. The stage reached goes in the structured log
+ * and NEVER in the response body — it is an operational fact about the catalog, not
+ * something a client should branch on.
+ *
+ * NOTE WHAT IS NOT HERE. §4.7 lists "drop the diversity cap" as stage 1. It is gone,
+ * because the cap is now a permutation and a permutation cannot under-fill a page — there
+ * is nothing to relax. The two stages that remain are genuine FILTERS, which are the only
+ * things that can leave a page short.
+ */
+const RELAXATION_STAGES = [
+  "full filter",
+  "already-watched exclusion dropped",
+  "180-day window dropped",
+] as const;
+
+type SnapshotAsOfRow = {
+  readonly topic_affinity_as_of: Date | null;
+  readonly creator_affinity_as_of: Date | null;
+  readonly popularity_as_of: Date | null;
+};
+
+/**
+ * Which snapshot generation to read.
+ *
+ * RESOLVED INDEPENDENTLY PER TABLE, not assumed to be one shared value. The three nightly
+ * jobs are separate queue entries and one can fail while the others succeed; a feed that
+ * silently read a missing snapshot as zero would be Rule 5 violated at the worst possible
+ * place — it would tell a viewer with real, computed affinity that they have none.
+ *
+ * `max(as_of)` over an indexed column is an index-only scan. One query, three subselects.
+ */
+async function resolveSnapshotGenerations(): Promise<{
+  readonly topicAffinityAsOf: Date | null;
+  readonly creatorAffinityAsOf: Date | null;
+  readonly popularityAsOf: Date | null;
+}> {
+  const [row] = (
+    await db.execute<SnapshotAsOfRow>(sql`
+      SELECT
+        (SELECT max(as_of) FROM user_topic_affinity_snapshot)          AS topic_affinity_as_of,
+        (SELECT max(as_of) FROM user_creator_affinity_snapshot)        AS creator_affinity_as_of,
+        (SELECT max(as_of) FROM platform_category_popularity_snapshot) AS popularity_as_of
+    `)
+  ).rows;
+
+  return {
+    topicAffinityAsOf: row?.topic_affinity_as_of ?? null,
+    creatorAffinityAsOf: row?.creator_affinity_as_of ?? null,
+    popularityAsOf: row?.popularity_as_of ?? null,
+  };
+}
+
+type AnonymousAffinityRow = {
+  readonly category_id: string;
+  readonly counted_view_count: number;
+  readonly completion_bp_sum: number;
+  readonly completion_sample_count: number;
+};
+
+/**
+ * §4.4's anonymous cold start — affinity computed IN-REQUEST from the viewer's fingerprint.
+ *
+ * WHY THIS IS WORTH A QUERY ON THE HOT PATH. Most first visits are logged out. Without it
+ * an anonymous visitor's feed is a flat popularity list forever, no matter what they
+ * watch; with it, it starts responding after two or three videos.
+ *
+ * Seven days, not the 90 the signed-in snapshot uses: a fingerprint is a per-day bucket key
+ * over an IP and a user agent, so a 90-day profile keyed on one is a profile of a coffee
+ * shop rather than a person.
+ *
+ * The scoring runs through the SAME pure module the nightly job uses — the alternative
+ * would be a second copy of the ladders written in SQL, and the two would drift.
+ */
+async function computeAnonymousTopicAffinity(
+  viewerFingerprint: string,
+): Promise<ReadonlyMap<string, number>> {
+  const rows = await db.execute<AnonymousAffinityRow>(sql`
+    SELECT
+      vc.category_id,
+      count(*)::int                                    AS counted_view_count,
+      COALESCE(sum(s.completion_basis_points), 0)::int AS completion_bp_sum,
+      count(*)::int                                    AS completion_sample_count
+    FROM video_view_session AS s
+    JOIN video_category AS vc ON vc.video_id = s.video_id
+    WHERE s.viewer_fingerprint = ${viewerFingerprint}
+      AND s.is_counted_view
+      AND s.first_beacon_at >= now() - make_interval(days => ${ANONYMOUS_AFFINITY_WINDOW_DAYS})
+    GROUP BY vc.category_id
+  `);
+
+  return new Map(
+    rows.rows.map((row) => [
+      row.category_id,
+      computeAffinityScorePoints({
+        countedViewCount: row.counted_view_count,
+        completionBasisPointsSum: row.completion_bp_sum,
+        completionSampleCount: row.completion_sample_count,
+        // An anonymous viewer has no likes, saves or subscriptions to read — those all
+        // require an account. Zero here is a true statement, not a fabricated one.
+        likeCount: 0,
+        saveCount: 0,
+        isSubscribedToCreator: false,
+      }).totalPoints,
+    ]),
+  );
+}
+
+/**
+ * The topic-affinity term, as SQL.
+ *
+ * `max` over the video's ≤3 categories (§4.3): a video tagged Robotics and Toys should
+ * rank on whichever the viewer actually likes, not on the average of the two.
+ *
+ * The COALESCE chain IS §4.4's cold start: this viewer's affinity, else damped platform
+ * popularity, else 0. A signed-in viewer with no history lands on the middle branch, which
+ * is a sensible feed that is not *claiming* to be personalized.
+ */
+function topicAffinityExpression(input: {
+  readonly viewerUserId: string | null;
+  readonly topicAffinityAsOf: Date | null;
+  readonly popularityAsOf: Date | null;
+  readonly anonymousAffinity: ReadonlyMap<string, number>;
+}): SQL {
+  const popularityFallback =
+    input.popularityAsOf === null
+      ? sql`NULL::int`
+      : sql`(
+          SELECT pop.popularity_points * ${COLD_START_POPULARITY_DAMPING_PERCENT} / 100
+          FROM platform_category_popularity_snapshot AS pop
+          WHERE pop.category_id = vc.category_id AND pop.as_of = ${input.popularityAsOf}
+        )`;
+
+  const viewerAffinity =
+    input.viewerUserId !== null && input.topicAffinityAsOf !== null
+      ? sql`(
+          SELECT ta.affinity_points
+          FROM user_topic_affinity_snapshot AS ta
+          WHERE ta.user_id = ${input.viewerUserId}
+            AND ta.category_id = vc.category_id
+            AND ta.as_of = ${input.topicAffinityAsOf}
+        )`
+      : input.anonymousAffinity.size > 0
+        ? // The in-request anonymous map, inlined as a VALUES list rather than a temp
+          // table. It is at most a couple of dozen rows and it lives for one query.
+          sql`(
+            SELECT anon.affinity_points FROM (VALUES ${sql.join(
+              [...input.anonymousAffinity].map(
+                ([categoryId, points]) => sql`(${categoryId}::text, ${points}::int)`,
+              ),
+              sql`, `,
+            )}) AS anon(category_id, affinity_points)
+            WHERE anon.category_id = vc.category_id
+          )`
+        : sql`NULL::int`;
+
+  return sql`COALESCE((
+    SELECT max(COALESCE(${viewerAffinity}, ${popularityFallback}, 0))
+    FROM video_category AS vc
+    WHERE vc.video_id = v.id
+  ), 0)`;
+}
+
+/**
+ * The creator-affinity term.
+ *
+ * ZERO FOR AN ANONYMOUS VIEWER, and deliberately not approximated from their session
+ * history. Creator affinity's whole job is to surface people you follow; a fingerprint
+ * cannot follow anyone, and inventing a value from three watches would put a creator's
+ * back catalogue in front of somebody who watched one video by accident.
+ */
+function creatorAffinityExpression(input: {
+  readonly viewerUserId: string | null;
+  readonly creatorAffinityAsOf: Date | null;
+}): SQL {
+  if (input.viewerUserId === null || input.creatorAffinityAsOf === null) {
+    return sql`0`;
+  }
+  return sql`COALESCE((
+    SELECT ca.affinity_points
+    FROM user_creator_affinity_snapshot AS ca
+    WHERE ca.user_id = ${input.viewerUserId}
+      AND ca.creator_id = v.creator_id
+      AND ca.as_of = ${input.creatorAffinityAsOf}
+  ), 0)`;
+}
+
+/**
+ * §4.5's candidate pool.
+ *
+ * ⚠️ THE FIVE STATUS TERMS ARE SPELLED OUT AS LITERALS, byte-identical to
+ * `video_feed_candidate_idx`'s predicate (schema.ts). Postgres uses a partial index only
+ * when it can PROVE the query's WHERE implies the predicate, and that proof works against
+ * literals, not bound parameters — `review_status = ANY($1)` does not imply
+ * `review_status IN ('not_required','approved')` as far as the planner is concerned.
+ *
+ * Get this wrong and there is no error anywhere. There is just a sequential scan, and it
+ * is the single most likely way this route ships broken.
+ */
+function candidatePoolPredicate(input: {
+  readonly viewerUserId: string | null;
+  readonly viewerFingerprint: string;
+  readonly categorySlug: string | null;
+  readonly relaxationStage: number;
+}): SQL {
+  const conditions: SQL[] = [
+    sql`v.publish_status = 'published'
+        AND v.visibility = 'public'
+        AND v.upload_status = 'ready'
+        AND v.is_source_verified = true
+        AND v.review_status IN ('not_required', 'approved')`,
+    sql`v.published_at IS NOT NULL AND v.published_at <= now()`,
+  ];
+
+  // A creator's own videos are never in their feed. Nothing enforces this downstream, and
+  // without it the highest-affinity creator for any creator is themselves.
+  if (input.viewerUserId !== null) {
+    conditions.push(sql`v.creator_id <> ${input.viewerUserId}`);
+  }
+
+  if (input.categorySlug !== null) {
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM video_category AS fc
+      JOIN content_category AS cc ON cc.id = fc.category_id
+      WHERE fc.video_id = v.id AND cc.slug = ${input.categorySlug} AND cc.is_active
+    )`);
+  }
+
+  // Stage 2 drops the recency window. Until then: the last 180 days, OR anything currently
+  // trending — the escape hatch that stops an evergreen hit falling off a cliff at day 181.
+  if (input.relaxationStage < 2) {
+    conditions.push(sql`(
+      v.published_at > now() - make_interval(days => ${CANDIDATE_RECENCY_WINDOW_DAYS})
+      OR EXISTS (
+        SELECT 1 FROM video_stats AS ts
+        WHERE ts.video_id = v.id AND ts.trending_rank IS NOT NULL
+      )
+    )`);
+  }
+
+  // Stage 1 drops the already-watched exclusion.
+  //
+  // ⚠️ KEYED ON `viewer_id` WHEN SIGNED IN, `viewer_fingerprint` ONLY WHEN NOT.
+  //
+  // The fingerprint ROTATES DAILY by construction (viewer-fingerprint.ts), so keying a
+  // 30-day lookback on it would silently match nothing older than today — the exclusion
+  // would appear to work, and quietly re-serve a signed-in viewer everything they watched
+  // last week. For an anonymous viewer the fingerprint IS the only identity there is, and
+  // the same rotation means their exclusion is honestly same-day only.
+  if (input.relaxationStage < 1) {
+    const viewerMatch =
+      input.viewerUserId !== null
+        ? sql`ws.viewer_id = ${input.viewerUserId}`
+        : sql`ws.viewer_fingerprint = ${input.viewerFingerprint}`;
+    conditions.push(sql`NOT EXISTS (
+      SELECT 1 FROM video_view_session AS ws
+      WHERE ws.video_id = v.id
+        AND ws.is_counted_view
+        AND ${viewerMatch}
+        AND ws.first_beacon_at > now() - make_interval(days => ${ALREADY_WATCHED_EXCLUSION_DAYS})
+    )`);
+  }
+
+  return sql.join(conditions, sql` AND `);
+}
+
+type FeedRow = {
+  readonly video_id: string;
+  readonly youtube_video_id: string | null;
+  readonly title: string;
+  readonly thumbnail_url: string | null;
+  readonly published_at: Date | null;
+  readonly duration_seconds: number | null;
+  readonly creator_id: string;
+  readonly creator_handle: string | null;
+  readonly creator_name: string;
+  readonly creator_image_url: string | null;
+  readonly view_count: number;
+  readonly like_count: number;
+  readonly comment_count: number;
+  readonly has_liked: boolean;
+  readonly has_saved: boolean;
+  readonly is_subscribed_to_creator: boolean;
+  readonly category_slugs: readonly string[] | null;
+  readonly category_labels: readonly string[] | null;
+};
+
+type TotalRow = { readonly total: number };
+
+function toFeedVideoItem(row: FeedRow): FeedVideoItem {
+  const slugs = row.category_slugs ?? [];
+  const labels = row.category_labels ?? [];
+  return {
+    videoId: row.video_id,
+    youtubeVideoId: row.youtube_video_id,
+    title: row.title,
+    thumbnailUrl: row.thumbnail_url,
+    publishedAt: row.published_at,
+    // NULL until `recompute-video-durations` has five samples. Never substituted with a
+    // client's `reportedDurationSeconds` — that number comes from the hostile side.
+    durationSeconds: row.duration_seconds,
+    creator: {
+      id: row.creator_id,
+      handle: row.creator_handle,
+      name: row.creator_name,
+      imageUrl: row.creator_image_url,
+    },
+    categories: slugs.map((slug, index) => ({ slug, label: labels[index] ?? slug })),
+    stats: {
+      viewCount: row.view_count,
+      likeCount: row.like_count,
+      commentCount: row.comment_count,
+    },
+    // `false`, not `null`, for an anonymous viewer — definitionally true of them, not a
+    // stand-in for a value we failed to look up.
+    viewerState: {
+      hasLiked: row.has_liked,
+      hasSaved: row.has_saved,
+      isSubscribedToCreator: row.is_subscribed_to_creator,
+    },
+    isChannelLive: false,
+  };
+}
+
+/** The per-viewer flags and the card's own columns. Shared by every mode. */
+function feedSelectClause(viewerUserId: string | null): SQL {
+  const viewerFlag = (tableName: SQL, userColumn: SQL): SQL =>
+    viewerUserId === null
+      ? sql`false`
+      : sql`EXISTS (SELECT 1 FROM ${tableName} AS f WHERE f.video_id = v.id AND ${userColumn})`;
+
+  return sql`
+    v.id AS video_id,
+    v.youtube_video_id,
+    v.title,
+    v.thumbnail_url,
+    v.published_at,
+    v.duration_seconds,
+    v.creator_id,
+    u.handle AS creator_handle,
+    u.name   AS creator_name,
+    u.image  AS creator_image_url,
+    COALESCE(vs.view_count, 0)    AS view_count,
+    COALESCE(vs.like_count, 0)    AS like_count,
+    COALESCE(vs.comment_count, 0) AS comment_count,
+    ${viewerFlag(sql`video_like`, sql`f.user_id = ${viewerUserId}`)}  AS has_liked,
+    ${viewerFlag(sql`video_save`, sql`f.user_id = ${viewerUserId}`)}  AS has_saved,
+    ${
+      viewerUserId === null
+        ? sql`false`
+        : sql`EXISTS (
+            SELECT 1 FROM creator_subscription AS cs
+            WHERE cs.creator_id = v.creator_id AND cs.subscriber_id = ${viewerUserId}
+          )`
+    } AS is_subscribed_to_creator,
+    (
+      SELECT array_agg(cc.slug ORDER BY cc.sort_order, cc.slug)
+      FROM video_category AS vc JOIN content_category AS cc ON cc.id = vc.category_id
+      WHERE vc.video_id = v.id
+    ) AS category_slugs,
+    (
+      SELECT array_agg(cc.label ORDER BY cc.sort_order, cc.slug)
+      FROM video_category AS vc JOIN content_category AS cc ON cc.id = vc.category_id
+      WHERE vc.video_id = v.id
+    ) AS category_labels
+  `;
+}
+
+/** How each mode orders its page. Every one ends in a unique column. */
+function orderByClause(mode: FeedMode, rankExpression: SQL): SQL {
+  switch (mode) {
+    case "trending":
+      // NULLS LAST is not needed: the mode's predicate already excludes unranked rows.
+      return sql`vs.trending_rank ASC, v.id ASC`;
+    case "recently_uploaded":
+      return sql`v.published_at DESC, v.id DESC`;
+    case "watched":
+      return sql`watched_at DESC, v.id DESC`;
+    case "all":
+    case "new_to_you":
+      return sql`${rankExpression} DESC, v.published_at DESC, v.id DESC`;
+    default: {
+      const exhaustiveCheck: never = mode;
+      throw new Error(`Unhandled feed mode: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+export async function listFeedVideos(
+  input: ListFeedVideosInput,
+): Promise<Result<FeedPage, FeedError>> {
+  if (input.mode === "watched" && input.viewerUserId === null) {
+    // §4.8: serving watch history off a fingerprint would hand one person's history to
+    // everyone behind the same NAT.
+    return { success: false, error: { type: "WATCH_HISTORY_REQUIRES_SESSION" } };
+  }
+
+  const generations = await resolveSnapshotGenerations();
+  const anonymousAffinity =
+    input.viewerUserId === null && input.mode !== "recently_uploaded"
+      ? await computeAnonymousTopicAffinity(input.viewerFingerprint)
+      : new Map<string, number>();
+
+  const rankExpression = feedRankExpression(
+    {
+      qualityPoints: sql`vs.quality_score_points`,
+      topicAffinityPoints: topicAffinityExpression({
+        viewerUserId: input.viewerUserId,
+        topicAffinityAsOf: generations.topicAffinityAsOf,
+        popularityAsOf: generations.popularityAsOf,
+        anonymousAffinity,
+      }),
+      creatorAffinityPoints: creatorAffinityExpression({
+        viewerUserId: input.viewerUserId,
+        creatorAffinityAsOf: generations.creatorAffinityAsOf,
+      }),
+      publishedAt: sql`v.published_at`,
+      videoId: sql`v.id`,
+    },
+    {
+      rankSeed: input.rankSeed,
+      explorationBudget:
+        input.mode === "new_to_you"
+          ? NEW_TO_YOU_EXPLORATION_BUDGET
+          : FEED_RANK_COMPONENT_BUDGETS.exploration,
+    },
+  );
+
+  const offset = (input.page - 1) * input.limit;
+
+  // Inside the diversified prefix a request fetches the WHOLE prefix and slices it, so the
+  // caps and the quota act on one deterministic sequence every page agrees on. Past it,
+  // the raw ranked offset — untouched by either pass, and therefore disjoint from it.
+  const isInsideDiversifiedPrefix =
+    input.mode === "all" && offset + input.limit <= DIVERSIFIED_PREFIX_ROWS;
+
+  for (let relaxationStage = 0; relaxationStage < RELAXATION_STAGES.length; relaxationStage += 1) {
+    const modePredicate = modeSpecificPredicate(input);
+    const wherePredicate = sql`${candidatePoolPredicate({
+      viewerUserId: input.viewerUserId,
+      viewerFingerprint: input.viewerFingerprint,
+      categorySlug: input.categorySlug,
+      relaxationStage,
+    })}${modePredicate === null ? sql`` : sql` AND ${modePredicate}`}`;
+
+    const fetchLimit = isInsideDiversifiedPrefix ? DIVERSIFIED_PREFIX_ROWS : input.limit;
+    const fetchOffset = isInsideDiversifiedPrefix ? 0 : offset;
+
+    const watchedJoin =
+      input.mode === "watched"
+        ? sql`JOIN LATERAL (
+            SELECT max(ws.first_beacon_at) AS watched_at
+            FROM video_view_session AS ws
+            WHERE ws.video_id = v.id
+              AND ws.viewer_id = ${input.viewerUserId}
+              AND ws.is_counted_view
+          ) AS watched ON true`
+        : sql``;
+
+    const [pageResult, totalResult] = await Promise.all([
+      db.execute<FeedRow>(sql`
+        SELECT ${feedSelectClause(input.viewerUserId)}
+        FROM video AS v
+        JOIN "user" AS u ON u.id = v.creator_id
+        LEFT JOIN video_stats AS vs ON vs.video_id = v.id
+        ${watchedJoin}
+        WHERE ${wherePredicate}
+        ORDER BY ${orderByClause(input.mode, rankExpression)}
+        LIMIT ${fetchLimit} OFFSET ${fetchOffset}
+      `),
+      db.execute<TotalRow>(sql`
+        SELECT count(*)::int AS total
+        FROM video AS v
+        JOIN "user" AS u ON u.id = v.creator_id
+        LEFT JOIN video_stats AS vs ON vs.video_id = v.id
+        WHERE ${wherePredicate}
+      `),
+    ]);
+
+    const total = totalResult.rows[0]?.total ?? 0;
+    const rankedRows = pageResult.rows.map((row) => {
+      const item = toFeedVideoItem(row);
+      return {
+        ...item,
+        creatorId: item.creator.id,
+        categorySlugs: item.categories.map((category) => category.slug),
+      };
+    });
+
+    let pageRows = rankedRows;
+
+    if (isInsideDiversifiedPrefix) {
+      // Both passes are PERMUTATIONS of the prefix, so slicing it below can neither
+      // duplicate a video across pages nor drop one out of the feed entirely.
+      const diversified = applyDiversityCaps(rankedRows, {
+        pageSize: input.limit,
+        maxRowsPerCreator: MAXIMUM_ROWS_PER_CREATOR,
+        maxCategoryShareBasisPoints: MAXIMUM_CATEGORY_SHARE_BASIS_POINTS,
+      });
+      const withQuota = reserveExplorationSlots(
+        diversified,
+        await fetchFreshCandidateIds(input),
+        { slotsPerPage: EXPLORATION_SLOTS_PER_PAGE },
+      );
+      pageRows = withQuota.slice(offset, offset + input.limit);
+    }
+
+    // Only a genuine FILTER can leave a page short — the permutations above cannot.
+    //
+    // DELIBERATELY NOT `&& total > offset + pageRows.length`. That guard looks like it
+    // avoids pointless relaxation, and instead makes relaxation UNREACHABLE: `total` is
+    // computed under the SAME filter as the page, so when the filter is what emptied the
+    // page, the total is empty too and the condition is false. A viewer who has watched
+    // everything in the catalog would get a blank homepage and the ladder would never
+    // fire. The last-stage check below is what bounds this to three queries.
+    const isUnderFilled = pageRows.length < input.limit;
+    const isLastStage = relaxationStage === RELAXATION_STAGES.length - 1;
+
+    if (!isUnderFilled || isLastStage) {
+      if (relaxationStage > 0) {
+        logger.warn("feed: served under a relaxed filter", {
+          mode: input.mode,
+          page: input.page,
+          relaxationStage,
+          relaxationReason: RELAXATION_STAGES[relaxationStage],
+          returnedCount: pageRows.length,
+        });
+      }
+
+      return {
+        success: true,
+        value: {
+          rows: pageRows.map(
+            ({ creatorId: _creatorId, categorySlugs: _categorySlugs, ...item }) => item,
+          ),
+          total,
+          rankSeed: input.rankSeed,
+          relaxationStage,
+        },
+      };
+    }
+  }
+
+  // Unreachable: the loop returns on its last stage. Present so the function is total.
+  throw new Error("listFeedVideos: relaxation ladder exhausted without returning");
+}
+
+/** The extra predicate a mode adds on top of the candidate pool, or null for none. */
+function modeSpecificPredicate(input: ListFeedVideosInput): SQL | null {
+  switch (input.mode) {
+    case "trending":
+      return sql`vs.trending_rank IS NOT NULL`;
+    case "watched":
+      return sql`EXISTS (
+        SELECT 1 FROM video_view_session AS ws
+        WHERE ws.video_id = v.id AND ws.viewer_id = ${input.viewerUserId} AND ws.is_counted_view
+      )`;
+    case "new_to_you": {
+      // §4.8: creators the viewer has already watched are excluded outright, and the
+      // exploration budget is raised to 40 (applied in the rank expression).
+      //
+      // Same identity rule as the already-watched exclusion above, and for the same
+      // reason: a daily-rotating fingerprint cannot answer "have I ever watched this
+      // creator", which is the entire question this mode asks.
+      const viewerMatch =
+        input.viewerUserId !== null
+          ? sql`ws.viewer_id = ${input.viewerUserId}`
+          : sql`ws.viewer_fingerprint = ${input.viewerFingerprint}`;
+      return sql`NOT EXISTS (
+        SELECT 1 FROM video_view_session AS ws
+        JOIN video AS wv ON wv.id = ws.video_id
+        WHERE wv.creator_id = v.creator_id
+          AND ${viewerMatch}
+          AND ws.is_counted_view
+      )`;
+    }
+    case "all":
+    case "recently_uploaded":
+      return null;
+    default: {
+      const exhaustiveCheck: never = input.mode;
+      throw new Error(`Unhandled feed mode: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
+ * §4.4's traffic pool: which recent uploads are still almost unseen.
+ *
+ * Returns IDS ONLY. The quota pass promotes rows that are already inside the diversified
+ * prefix rather than injecting rows from outside it, so it needs to recognise a fresh
+ * video, not fetch one — and fetching one would be the injection that duplicates a video
+ * across pages.
+ */
+async function fetchFreshCandidateIds(
+  input: ListFeedVideosInput,
+): Promise<ReadonlySet<string>> {
+  const rows = await db.execute<{ readonly id: string }>(sql`
+    SELECT v.id
+    FROM video AS v
+    LEFT JOIN video_stats AS vs ON vs.video_id = v.id
+    WHERE ${candidatePoolPredicate({
+      viewerUserId: input.viewerUserId,
+      viewerFingerprint: input.viewerFingerprint,
+      categorySlug: input.categorySlug,
+      relaxationStage: 0,
+    })}
+      AND v.published_at > now() - make_interval(hours => ${EXPLORATION_FRESHNESS_HOURS})
+      AND COALESCE(vs.view_count, 0) < ${EXPLORATION_MAXIMUM_COUNTED_VIEWS}
+  `);
+
+  return new Set(rows.rows.map((row) => row.id));
+}

@@ -62,4 +62,21 @@ router.get("/categories", feedController.listFeedCategories);
  */
 router.get("/watch/:videoId", attachOptionalUser, feedReadLimiter, feedController.getWatchPayload);
 
+/**
+ * `GET /feed/videos` — THE feed (§5.1, Rule 3).
+ *
+ * ONE ROUTE, not three. Recommended and Explore are a frontend slice of this page;
+ * Spotlight is `?mode=trending&limit=3`; the chip row is `?categorySlug=`. One ranking
+ * contract, one cache story, one place a ranking bug can live.
+ *
+ * `attachOptionalUser` BEFORE the limiter, as everywhere in this domain: the limiter's
+ * default `userKey` prefers `req.user.id` and falls back to the IP, so running it first
+ * would drop every signed-in viewer into the shared NAT bucket.
+ *
+ * `?mode=watched` answers 401 when anonymous — the controller decides that, not this
+ * chain, because every other mode on this route is genuinely public and putting
+ * `requireAuth` here would break them.
+ */
+router.get("/videos", attachOptionalUser, feedReadLimiter, feedController.listFeedVideos);
+
 export default router;

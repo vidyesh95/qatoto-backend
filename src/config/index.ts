@@ -168,6 +168,23 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((rawValue) => rawValue === "true"),
+  /**
+   * Whether `prune-engagement-data` actually deletes (HOME_BACKEND_STRUCTURE.md §6, §8.1).
+   *
+   * DEFAULTS TO FALSE, and the default is the point. This is the first scheduled job in
+   * this codebase that removes domain rows, and the first run of a delete you have not
+   * watched is the one that teaches you the WHERE clause was wrong. While it is false the
+   * job runs its full selection and logs exactly what it would remove, touching nothing.
+   *
+   * Turn it on once the logged counts look like what §3.2 promises: `videoViewSession`
+   * rows past 90 days, snapshots past 14. Nothing reads a session older than 30 days
+   * (§4.5's exclusion window) or a snapshot older than yesterday, so the numbers are safe
+   * — but "safe by argument" and "safe by observation" are different things.
+   */
+  ENGAGEMENT_PRUNE_ENABLED: z
+    .string()
+    .optional()
+    .transform((rawValue) => rawValue === "true"),
   // --- Geocoding (§6). Problem reports carry a free-text location; the server resolves
   //     it to coordinates and a country, because §6 forbids client-claimed geography.
   //

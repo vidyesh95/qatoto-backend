@@ -17,6 +17,13 @@ import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapsh
 import { handleRecomputeInvestorConfidence } from "#src/jobs/recompute-investor-confidence.js";
 import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
 import { handleRecomputeProgramStats } from "#src/jobs/recompute-program-stats.js";
+import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
+import { handleRecomputePlatformCategoryPopularity } from "#src/jobs/recompute-platform-category-popularity.js";
+import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-videos.js";
+import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
+import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
+import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
+import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import {
   handleCloseCompensationPeriodTick,
@@ -30,6 +37,13 @@ import {
   handleRecomputeOpportunityScoresTick,
   handleRefreshTalentProjectionsTick,
   handleSweepDisputeWindowsTick,
+  handlePruneEngagementDataTick,
+  handleRecomputePlatformCategoryPopularityTick,
+  handleRecomputeTrendingVideosTick,
+  handleRecomputeUserAffinitiesTick,
+  handleRecomputeVideoDurationsTick,
+  handleRecomputeVideoQualityScoresTick,
+  handleRevalidateYoutubeEmbedsTick,
 } from "#src/jobs/scheduled-ticks.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
 import {
@@ -306,12 +320,93 @@ async function startWorker(): Promise<void> {
     runJob(JOB_NAMES.recomputeProgramStats, handleRecomputeProgramStats),
   );
 
+  // --- Home feed ranking (HOME_BACKEND_STRUCTURE.md §6).
+  //
+  // Fourteen bindings, seven tick/job pairs. The ORDER THEY RUN IN is set by their cron
+  // slots, not by this list — durations before quality before popularity before
+  // affinities. See SCHEDULED_JOB_CRONS.
+  await boss.work(
+    JOB_NAMES.recomputeVideoDurationsTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeVideoDurationsTick, handleRecomputeVideoDurationsTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeVideoDurations,
+    workOptions,
+    runJob(JOB_NAMES.recomputeVideoDurations, handleRecomputeVideoDurations),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeVideoQualityScoresTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeVideoQualityScoresTick, handleRecomputeVideoQualityScoresTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeVideoQualityScores,
+    workOptions,
+    runJob(JOB_NAMES.recomputeVideoQualityScores, handleRecomputeVideoQualityScores),
+  );
+  await boss.work(
+    JOB_NAMES.recomputePlatformCategoryPopularityTick,
+    workOptions,
+    runJob(
+      JOB_NAMES.recomputePlatformCategoryPopularityTick,
+      handleRecomputePlatformCategoryPopularityTick,
+    ),
+  );
+  await boss.work(
+    JOB_NAMES.recomputePlatformCategoryPopularity,
+    workOptions,
+    runJob(
+      JOB_NAMES.recomputePlatformCategoryPopularity,
+      handleRecomputePlatformCategoryPopularity,
+    ),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeUserAffinitiesTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeUserAffinitiesTick, handleRecomputeUserAffinitiesTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeUserAffinities,
+    workOptions,
+    runJob(JOB_NAMES.recomputeUserAffinities, handleRecomputeUserAffinities),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeTrendingVideosTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeTrendingVideosTick, handleRecomputeTrendingVideosTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeTrendingVideos,
+    workOptions,
+    runJob(JOB_NAMES.recomputeTrendingVideos, handleRecomputeTrendingVideos),
+  );
+  await boss.work(
+    JOB_NAMES.revalidateYoutubeEmbedsTick,
+    workOptions,
+    runJob(JOB_NAMES.revalidateYoutubeEmbedsTick, handleRevalidateYoutubeEmbedsTick),
+  );
+  await boss.work(
+    JOB_NAMES.revalidateYoutubeEmbeds,
+    workOptions,
+    runJob(JOB_NAMES.revalidateYoutubeEmbeds, handleRevalidateYoutubeEmbeds),
+  );
+  await boss.work(
+    JOB_NAMES.pruneEngagementDataTick,
+    workOptions,
+    runJob(JOB_NAMES.pruneEngagementDataTick, handlePruneEngagementDataTick),
+  );
+  await boss.work(
+    JOB_NAMES.pruneEngagementData,
+    workOptions,
+    runJob(JOB_NAMES.pruneEngagementData, handlePruneEngagementData),
+  );
+
   // --- Creator Studio.
   //
   // ONE QUEUE, NO TICK. `verify-youtube-video` is enqueued in the same transaction as the
   // video row it verifies (HOME_BACKEND_STRUCTURE.md §8.3), so there is nothing for a cron
-  // to sweep and no asOf to quantize. It is the only job in this section today; §6's seven
-  // scheduled feed jobs join it in phase 3.
+  // to sweep and no asOf to quantize.
   await boss.work(
     JOB_NAMES.verifyYoutubeVideo,
     workOptions,

@@ -359,3 +359,153 @@ export async function handleRecomputeProgramStatsTick(
     throw new Error(`recompute-program-stats-tick: enqueue failed (${enqueueResult.error.type})`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// HOME FEED RANKING (HOME_BACKEND_STRUCTURE.md §6)
+//
+// Six of the seven quantize to the UTC DAY; trending quantizes to the HOUR, because it is
+// the one thing on this surface that claims to be current.
+//
+// All seven carry an asOf and nothing else. Every one of these jobs walks the whole
+// catalog or the whole viewer set, so there is no scope to pass — and a payload with no
+// editable field is a payload nobody can aim at a single row.
+// ---------------------------------------------------------------------------
+
+/** Must land before quality: completion rate has no denominator without a duration. */
+export async function handleRecomputeVideoDurationsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeVideoDurations,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeVideoDurations(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`recompute-video-durations-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+export async function handleRecomputeVideoQualityScoresTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeVideoQualityScores,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeVideoQualityScores(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-video-quality-scores-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/** Feeds §4.4's cold start, so it must land before the affinities that fall back to it. */
+export async function handleRecomputePlatformCategoryPopularityTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputePlatformCategoryPopularity,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputePlatformCategoryPopularity(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-platform-category-popularity-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+export async function handleRecomputeUserAffinitiesTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeUserAffinities,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeUserAffinities(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`recompute-user-affinities-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/**
+ * THE HOUR, not the day — the one quantization difference in this block.
+ *
+ * `refresh-talent-projections` makes the same call for the same reason: a surface that
+ * claims to show what is happening now cannot be built on a boundary that moves once a day.
+ */
+export async function handleRecomputeTrendingVideosTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcHourStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeTrendingVideos,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeTrendingVideos(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`recompute-trending-videos-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/** The §8.2 backstop, for videos with no viewers left to report a dead player. */
+export async function handleRevalidateYoutubeEmbedsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.revalidateYoutubeEmbeds,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.revalidateYoutubeEmbeds(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`revalidate-youtube-embeds-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/**
+ * The retention sweep (§3.2, §6, §8.1).
+ *
+ * Enqueued unconditionally. The `ENGAGEMENT_PRUNE_ENABLED` gate lives in the HANDLER, not
+ * here, so that the job runs its selection and logs what it would remove even while the
+ * deletion is off — a tick that skipped the enqueue would report nothing at all.
+ */
+export async function handlePruneEngagementDataTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.pruneEngagementData,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.pruneEngagementData(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`prune-engagement-data-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
