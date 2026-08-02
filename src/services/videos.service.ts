@@ -140,6 +140,7 @@ export type VideoError =
 
 type VideoRow = typeof video.$inferSelect;
 export type VideoSource = VideoRow["videoSource"];
+export type VideoType = VideoRow["videoType"];
 export type VideoUploadStatus = VideoRow["uploadStatus"];
 export type VideoVisibility = VideoRow["visibility"];
 export type VideoPublishStatus = VideoRow["publishStatus"];
@@ -467,6 +468,14 @@ export interface VideoListRow {
   readonly id: string;
   readonly title: string;
   readonly thumbnailUrl: string | null;
+  /**
+   * What KIND of video this is.
+   *
+   * The studio list needs it to tell an anime episode from a pitch at a glance — they take
+   * different routes to publication (one is reviewed, one is not) and looked identical without
+   * it. One column on a table already in the FROM clause.
+   */
+  readonly videoType: VideoType;
   readonly videoSource: VideoSource;
   readonly visibility: VideoVisibility;
   readonly uploadStatus: VideoUploadStatus;
@@ -1186,6 +1195,7 @@ export async function listMyVideos(
         id: video.id,
         title: video.title,
         thumbnailUrl: video.thumbnailUrl,
+        videoType: video.videoType,
         videoSource: video.videoSource,
         visibility: video.visibility,
         uploadStatus: video.uploadStatus,

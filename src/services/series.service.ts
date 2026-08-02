@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq } from "drizzle-orm";
+import { and, asc, count, countDistinct, desc, eq } from "drizzle-orm";
 
 import type {
   CreateEpisodeInput,
@@ -82,7 +82,17 @@ export interface SeriesListRow {
   readonly title: string;
   readonly posterUrl: string | null;
   readonly status: SeriesRow["status"];
+  /** Shown on the studio card. Already a column on this table; it was simply not projected. */
+  readonly genreTags: readonly string[];
   readonly seasonCount: number;
+  /**
+   * Episodes across every season.
+   *
+   * A SECOND `countDistinct`, not `count()`. The query already left-joins seasons, so joining
+   * episodes as well multiplies the rows — a plain `count(animeSeason.id)` would then report
+   * seasons × episodes. Counting DISTINCT ids on both is what keeps each honest.
+   */
+  readonly episodeCount: number;
   readonly updatedAt: Date;
 }
 
@@ -209,11 +219,14 @@ export async function listMySeries(
         title: animeSeries.title,
         posterUrl: animeSeries.posterUrl,
         status: animeSeries.status,
-        seasonCount: count(animeSeason.id),
+        genreTags: animeSeries.genreTags,
+        seasonCount: countDistinct(animeSeason.id),
+        episodeCount: countDistinct(animeEpisode.id),
         updatedAt: animeSeries.updatedAt,
       })
       .from(animeSeries)
       .leftJoin(animeSeason, eq(animeSeason.seriesId, animeSeries.id))
+      .leftJoin(animeEpisode, eq(animeEpisode.seasonId, animeSeason.id))
       .where(eq(animeSeries.ownerId, ownerId))
       .groupBy(animeSeries.id)
       .orderBy(desc(animeSeries.updatedAt))

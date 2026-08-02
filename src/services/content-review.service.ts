@@ -6,6 +6,7 @@ import {
   animeSeason,
   animeSeries,
   contentReviewAction,
+  user,
   video,
 } from "#src/db/schema.js";
 import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
@@ -53,17 +54,45 @@ export type ContentReviewError =
 export interface ReviewQueueRow {
   readonly videoId: string;
   readonly title: string;
+  /**
+   * The creator's own description of the video.
+   *
+   * NOT OPTIONAL METADATA ON THIS SCREEN. A moderator's entire job is to read what is claimed
+   * and compare it to what is shown; approving on a title and a thumbnail alone is how
+   * mislabelled content gets through. It was missing from this projection while the studio and
+   * the public watch payload both carried it.
+   */
+  readonly description: string | null;
   readonly thumbnailUrl: string | null;
   /** Rebuilt server-side so the reviewer watches the real video, never a client string. */
   readonly youtubeVideoId: string | null;
   readonly creatorId: string;
+  /**
+   * Who uploaded it, joined here rather than fetched by the client.
+   *
+   * `GET /users/:id` exists and is PUBLIC, but it returns `{ id, email, created_at }` — no name,
+   * and an email. Resolving the reviewer's view through it would both fail to answer the question
+   * and expose a personal email through an unauthenticated route. This queue is already
+   * capability-gated, so the join belongs here.
+   */
+  readonly creatorName: string;
+  readonly creatorHandle: string | null;
   readonly reviewStatus: ContentReviewStatus;
   readonly rejectionReason: string | null;
   readonly seriesTitle: string | null;
+  /** The series' genres — an age/content signal the reviewer is being asked to judge against. */
+  readonly seriesGenreTags: readonly string[] | null;
   readonly seasonLabel: string | null;
   readonly episodeNumber: number | null;
   readonly episodeTitle: string | null;
   readonly premiereDate: Date | null;
+  /* The four below are what the creator declared about the episode. A reviewer checking an age
+   * rating or a dub language had no way to see either. */
+  readonly releaseScheduleDay: string | null;
+  readonly releaseScheduleTime: string | null;
+  readonly audioMode: "subbed" | "dubbed" | null;
+  readonly audioLanguage: string | null;
+  readonly ageRating: string | null;
   readonly submittedAt: Date;
 }
 
@@ -110,19 +139,30 @@ export async function listReviewQueue(
       .select({
         videoId: video.id,
         title: video.title,
+        description: video.description,
         thumbnailUrl: video.thumbnailUrl,
         youtubeVideoId: video.youtubeVideoId,
         creatorId: video.creatorId,
+        creatorName: user.name,
+        creatorHandle: user.handle,
         reviewStatus: video.reviewStatus,
         rejectionReason: video.rejectionReason,
         seriesTitle: animeSeries.title,
+        seriesGenreTags: animeSeries.genreTags,
         seasonLabel: animeSeason.seasonLabel,
         episodeNumber: animeEpisode.episodeNumber,
         episodeTitle: animeEpisode.episodeTitle,
         premiereDate: animeEpisode.premiereDate,
+        releaseScheduleDay: animeEpisode.releaseScheduleDay,
+        releaseScheduleTime: animeEpisode.releaseScheduleTime,
+        audioMode: animeEpisode.audioMode,
+        audioLanguage: animeEpisode.audioLanguage,
+        ageRating: animeEpisode.ageRating,
         submittedAt: video.updatedAt,
       })
       .from(video)
+      // INNER join: `video.creatorId` is a non-null FK to `user`, so there is always a row.
+      .innerJoin(user, eq(user.id, video.creatorId))
       .leftJoin(animeEpisode, eq(animeEpisode.videoId, video.id))
       .leftJoin(animeSeason, eq(animeSeason.id, animeEpisode.seasonId))
       .leftJoin(animeSeries, eq(animeSeries.id, animeSeason.seriesId))
