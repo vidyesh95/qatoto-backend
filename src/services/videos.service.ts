@@ -9,6 +9,7 @@ import {
   animeSeason,
   animeSeries,
   contentCategory,
+  creatorStats,
   playlist,
   playlistItem,
   product,
@@ -39,6 +40,7 @@ import {
   type YoutubeVideoFacts,
 } from "#src/lib/youtube.js";
 import { findUnavailableCategoryIds } from "#src/services/content-categories.service.js";
+import { ensureVideoStatsRows } from "#src/services/video-engagement.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -1015,6 +1017,11 @@ export async function createVideo(
           .values(categoryIds.map((categoryId) => ({ videoId, categoryId })));
       }
 
+      // The engagement counter caches, minted here rather than lazily (HOME §3.4).
+      // Every engagement write is an UPDATE, and an UPDATE against a missing row does
+      // not error — it affects zero rows and the count is silently lost.
+      await ensureVideoStatsRows(tx, { videoId, creatorId });
+
       // ENQUEUED INSIDE THE TRANSACTION, on the transaction's own connection (§8.3).
       // pg-boss's send is an INSERT, so it can join this transaction — and it must. An
       // enqueue after the commit can be lost with no error surface anywhere, leaving a row
@@ -1636,16 +1643,32 @@ export async function publishVideo(
   const shouldSchedule =
     existing.scheduledPublishAt !== null && existing.scheduledPublishAt.getTime() > now.getTime();
 
-  await db
-    .update(video)
-    .set(
-      isAnimeEpisode
-        ? { reviewStatus: "pending", rejectionReason: null }
-        : shouldSchedule
-          ? { publishStatus: "scheduled" }
-          : { publishStatus: "published", publishedAt: now },
-    )
-    .where(ownedVideoPredicate(creatorId, videoId));
+  // The counter moves in the SAME transaction as the status change (HOME §3.4). It
+  // moves ONLY on a real transition to `published`: an anime episode goes to `pending`
+  // review and a future-dated one goes to `scheduled`, and neither is a published video.
+  const becomesPublished =
+    !isAnimeEpisode && !shouldSchedule && existing.publishStatus !== "published";
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(video)
+      .set(
+        isAnimeEpisode
+          ? { reviewStatus: "pending", rejectionReason: null }
+          : shouldSchedule
+            ? { publishStatus: "scheduled" }
+            : { publishStatus: "published", publishedAt: now },
+      )
+      .where(ownedVideoPredicate(creatorId, videoId));
+
+    if (becomesPublished) {
+      await tx.insert(creatorStats).values({ userId: creatorId }).onConflictDoNothing();
+      await tx
+        .update(creatorStats)
+        .set({ publishedVideoCount: sql`${creatorStats.publishedVideoCount} + 1` })
+        .where(eq(creatorStats.userId, creatorId));
+    }
+  });
 
   const updated = await loadOwnedVideoRow(creatorId, videoId);
   if (!updated) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
@@ -1660,10 +1683,25 @@ export async function unpublishVideo(
   const existing = await loadOwnedVideoRow(creatorId, videoId);
   if (!existing) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
 
-  await db
-    .update(video)
-    .set({ publishStatus: "draft", publishedAt: null, scheduledPublishAt: null })
-    .where(ownedVideoPredicate(creatorId, videoId));
+  // Mirrors publishVideo: the counter comes back down only if it went up, so a
+  // repeated unpublish on a draft cannot drive it toward zero.
+  const wasPublished = existing.publishStatus === "published";
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(video)
+      .set({ publishStatus: "draft", publishedAt: null, scheduledPublishAt: null })
+      .where(ownedVideoPredicate(creatorId, videoId));
+
+    if (wasPublished) {
+      await tx
+        .update(creatorStats)
+        .set({
+          publishedVideoCount: sql`GREATEST(${creatorStats.publishedVideoCount} - 1, 0)`,
+        })
+        .where(eq(creatorStats.userId, creatorId));
+    }
+  });
 
   const updated = await loadOwnedVideoRow(creatorId, videoId);
   if (!updated) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };

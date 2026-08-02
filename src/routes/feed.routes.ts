@@ -1,6 +1,8 @@
 import express from "express";
 
 import * as feedController from "#src/controllers/feed.controller.js";
+import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
+import { feedReadLimiter } from "#src/middleware/rate-limit.js";
 
 const router = express.Router();
 
@@ -33,5 +35,31 @@ const router = express.Router();
  * belongs on that route, not on the router.
  */
 router.get("/categories", feedController.listFeedCategories);
+
+/**
+ * `GET /feed/watch/:videoId` — the public watch payload (§5.2).
+ *
+ * IT LIVES HERE, NOT IN engagement.routes.ts, AND NOT AT `/videos/:videoId`. The studio
+ * router declares `GET /videos/:videoId` behind `requireAuth` and mounts first, so a
+ * public route at that path would be permanently shadowed — every logged-out viewer
+ * would get a 401 and this handler would never run.
+ *
+ * IT CARRIES BOTH MIDDLEWARES THAT `/categories` ABOVE REFUSES, and neither is an
+ * inconsistency:
+ *
+ *   - `attachOptionalUser`, because unlike the taxonomy this response genuinely depends
+ *     on the caller: `viewerState` embeds hasLiked / hasSaved / isSubscribedToCreator so
+ *     a watch page is one request rather than four.
+ *
+ *   - `feedReadLimiter`, because the NAT argument above does not apply to a response
+ *     that is per-video AND per-viewer. Nothing caches this, and each call runs real
+ *     joins. 300/min is set so a large office never reaches it and a scraper does.
+ *
+ * `feedCategoriesLimiter` (§7) is still deliberately absent — see the note above.
+ *
+ * This route does NOT record a view. `viewCount` moves only on the beacon's counted-view
+ * transition (Rule 4).
+ */
+router.get("/watch/:videoId", attachOptionalUser, feedReadLimiter, feedController.getWatchPayload);
 
 export default router;

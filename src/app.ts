@@ -15,6 +15,10 @@ import authRouter from "#src/routes/auth.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
+import engagementRouter, {
+  commentRouter,
+  creatorRouter,
+} from "#src/routes/engagement.routes.js";
 import feedRouter from "#src/routes/feed.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
 import handlesRouter from "#src/routes/handles.routes.js";
@@ -183,6 +187,21 @@ app.use("/discovery", discoveryRouter);
 // root /admin, matching /discovery/admin/* — one domain's moderation surface should not
 // claim the global namespace.
 app.use("/videos", videosRouter);
+// The viewer-side half of the same prefix (HOME_BACKEND_STRUCTURE.md §5.2), declared
+// AFTER the studio router — and that order is LOAD-BEARING, not cosmetic.
+//
+// videosRouter owns `GET /:videoId` behind `requireAuth`. Express matches routers in
+// declaration order, so anything single-segment added to engagementRouter would be
+// permanently shadowed by it: a logged-out viewer would get a 401 and the public
+// handler would never run, with nothing failing to compile and no test going red.
+// Every route in engagementRouter is therefore two segments deep or more, and
+// engagement.routes.order.test.ts asserts exactly that.
+app.use("/videos", engagementRouter);
+// Root-mounted, like notificationsRouter and applicationInboxRouter: a comment id and a
+// creator id are globally unique and come from a listing, so nesting them under the
+// owning video would make the client assert a pairing the server re-checks anyway.
+app.use("/", commentRouter);
+app.use("/", creatorRouter);
 app.use("/playlists", playlistsRouter);
 app.use("/series", seriesRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,

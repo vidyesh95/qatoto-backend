@@ -784,3 +784,165 @@ export const promotionalSlideImageUploadLimiter = createLimiter({
   windowMs: ONE_MINUTE_MS,
   limit: 20,
 });
+
+// ---------------------------------------------------------------------------
+// HOME FEED ENGAGEMENT (HOME_BACKEND_STRUCTURE.md §7)
+//
+// EVERY LIMITER BELOW USES THE DEFAULT `userKey`, including the ones on optional-auth
+// routes, and that is deliberate. `userKey` already falls back to
+// `ipKeyGenerator(req.ip)`, so a signed-in caller gets a per-account bucket and an
+// anonymous one gets an IPv6-/56 bucket — out of ONE generator. Passing
+// `keyGenerator: "ip"` would be strictly worse: it would drop every signed-in viewer
+// into the shared NAT bucket alongside everyone else at their office.
+//
+// CONSEQUENCE FOR ROUTE ORDER: `attachOptionalUser` MUST precede these limiters, or a
+// signed-in viewer is keyed by IP anyway.
+// ---------------------------------------------------------------------------
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * GET /feed/watch/:videoId and GET /videos/:videoId/comments.
+ *
+ * A DELIBERATE DEPARTURE from the "no limiter on a public read" rule stated in
+ * feed.routes.ts and promotions.routes.ts. That rule exists because an IP-keyed bucket
+ * on a viewer-independent, cacheable response is a self-inflicted outage behind a
+ * corporate NAT. Neither of these responses is that: both carry `viewerState`, so they
+ * are per-video AND per-viewer, no cache absorbs them, and each one runs real joins.
+ *
+ * 300/min is set so that a large NAT never reaches it and a scraper does.
+ */
+export const feedReadLimiter = createLimiter({
+  namespace: "feedRead",
+  windowMs: ONE_MINUTE_MS,
+  limit: 300,
+});
+
+/**
+ * POST /videos/:videoId/view-beacon — the BURST half of §7's "60/min, 200/hr".
+ *
+ * TWO LIMITERS RATHER THAN ONE, because `LimiterSpec` carries a single window and
+ * `createRateLimitStore` is keyed to it. Chained on the route, exactly like
+ * `/signup/start` stacks its IP and email buckets. Each has its own namespace and
+ * therefore its own store prefix, which is what keeps express-rate-limit's
+ * double-count guard quiet.
+ *
+ * Burst is declared FIRST so a burst violator's `Retry-After` names the minute rather
+ * than the hour.
+ *
+ * The client heartbeats every ~15s, so 60/min is 15x an honest single-tab viewer.
+ */
+export const viewBeaconBurstLimiter = createLimiter({
+  namespace: "viewBeaconBurst",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
+ * POST /videos/:videoId/view-beacon — the SUSTAINED half.
+ *
+ * The burst bound alone permits 3,600/hr, which is a farm running at a comfortable
+ * walking pace. 200/hr is roughly 50 minutes of continuous honest playback, and it is
+ * the bound that actually costs an attacker something.
+ *
+ * This is the tightest pair on the platform because the beacon is the only
+ * unauthenticated write on it.
+ */
+export const viewBeaconSustainedLimiter = createLimiter({
+  namespace: "viewBeaconSustained",
+  windowMs: ONE_HOUR_MS,
+  limit: 200,
+});
+
+/**
+ * POST /videos/:videoId/playback-error (§8.2).
+ *
+ * A player fires `onError` once per video per load, so this is not a throughput bound.
+ * It bounds the manufacture of the three distinct fingerprints that flip a
+ * competitor's video to `uploadStatus: "failed"`. The distinct-fingerprint requirement
+ * is the real defence; this stops one client walking the catalogue reporting
+ * everything.
+ */
+export const playbackErrorLimiter = createLimiter({
+  namespace: "playbackError",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});
+
+/**
+ * PUT · DELETE /videos/:videoId/like.
+ *
+ * Generous, for the same reason `programPostReactionLimiter` is: the verb is already
+ * idempotent and the unique index is what stops one person inflating a count. This
+ * bounds scripted manipulation, not enthusiasm.
+ */
+export const videoLikeLimiter = createLimiter({
+  namespace: "videoLike",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/** PUT · DELETE /videos/:videoId/save — watch-later. Same shape, same reasoning. */
+export const videoSaveLimiter = createLimiter({
+  namespace: "videoSave",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
+ * POST /videos/:videoId/share.
+ *
+ * Tighter than like/save because a share APPENDS a row rather than toggling one, and
+ * because it is the one engagement write reachable without a full account — so this
+ * limiter carries the weight `requireIdentifiedUser` carries everywhere else.
+ */
+export const videoShareLimiter = createLimiter({
+  namespace: "videoShare",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
+/**
+ * POST /videos/:videoId/comments.
+ *
+ * §8.4 ships comments with NO reporting flow and NO automated moderation, so this
+ * limiter plus the 2000-character cap is the entire anti-spam story for v1. Sized for
+ * a fast typist in a real thread and no higher.
+ */
+export const commentCreateLimiter = createLimiter({
+  namespace: "commentCreate",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});
+
+/** PATCH · DELETE /comments/:commentId — a person editing their own words. */
+export const commentUpdateLimiter = createLimiter({
+  namespace: "commentUpdate",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/** PUT · DELETE /comments/:commentId/like — same reasoning as videoLikeLimiter. */
+export const commentLikeLimiter = createLimiter({
+  namespace: "commentLike",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
+ * PUT · DELETE /creators/:creatorId/subscribe.
+ *
+ * Tighter than a like because a subscribe moves a PUBLIC counter on somebody else's
+ * profile — the same split `inviteCreateLimiter` makes against `applicationCreateLimiter`.
+ */
+export const subscribeLimiter = createLimiter({
+  namespace: "subscribe",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
+// NOT HERE, deliberately: `feedCategoriesLimiter`. §7 names it, but feed.routes.ts
+// already refused it in writing — `/feed/categories` is a small, viewer-independent,
+// cacheable list, and an IP-keyed bucket on it is an outage behind a shared NAT.
+// Exporting an unused limiter would satisfy the coverage test while documenting a bound
+// nothing enforces, which is worse than not having one.

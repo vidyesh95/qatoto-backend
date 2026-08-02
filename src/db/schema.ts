@@ -9843,6 +9843,484 @@ export const videoCollaborator = pgTable(
   ],
 );
 
+// ---------------------------------------------------------------------------
+// HOME FEED — ENGAGEMENT (HOME_BACKEND_STRUCTURE.md §3)
+//
+// Everything below is written by VIEWERS, not creators. The creator-owned half of
+// the `video` table above is the studio; this half is the public surface reading it.
+//
+// THE FIVE RULES THIS BLOCK ENCODES, because they are invisible in the DDL otherwise:
+//
+//   R1. Every byte from a viewer is a CLAIM, not a measurement. The beacon is the only
+//       unauthenticated write on the platform, and it is clamped in TS
+//       (src/lib/view-beacon-clamp.ts) before any of these columns move.
+//   R2. Integers only. `completion_bp_sum` + `completion_sample_count` are stored
+//       instead of an average, because an average is a float and a float makes a
+//       ranking bug irreproducible.
+//   R3. A VIEW IS NOT A WATCH. `view_count` counts arrivals; `completion_bp_sum`
+//       measures watching. Only the second one ranks, and only from a signed-in
+//       session — see the note on `video_view_session.viewer_id`.
+//   R4. Counters move in the SAME TRANSACTION as the row that caused them, exactly
+//       like `project_stats`. A like that commits without its counter is a like that
+//       vanishes from the UI until a job runs, and that job is the one we are trying
+//       not to need.
+//   R5. Absence is not zero. `unique_viewer_count` is NULL until a job computes it,
+//       for the same reason `project_stats.allocated_equity_basis_points` is.
+// ---------------------------------------------------------------------------
+
+// Where the viewer was standing when the session started. Recorded for ranking
+// diagnostics — "does the Spotlight actually convert?" is otherwise unanswerable.
+// Pinned on the FIRST beacon of a session and never rewritten: a client that changes
+// its mind mid-session is describing a second session, not amending the first.
+export const videoFeedSourceEnum = pgEnum("video_feed_source", [
+  "feed_recommended",
+  "feed_explore",
+  "feed_spotlight",
+  "feed_filtered",
+  "search",
+  "channel",
+  "direct",
+]);
+
+export const videoShareChannelEnum = pgEnum("video_share_channel", [
+  "copy_link",
+  "x",
+  "whatsapp",
+  "linkedin",
+  "email",
+]);
+
+// NOTE what is NOT here: `feed_mode`. §3.1 lists it, but it backs a QUERY PARAMETER on
+// `GET /feed/videos` (phase 3) and no column stores it. A pgEnum with no column is a
+// Postgres type nobody can use and a migration nobody can reverse cheaply.
+
+/**
+ * One row per viewer, per video, per UTC day.
+ *
+ * THE UNIQUE INDEX IS THE ANTI-REPLAY BOUNDARY. Without it a headless loop opens a
+ * fresh session per request and every clamp below becomes decorative, because the
+ * clamp bounds what ONE session can claim, not how many sessions exist.
+ *
+ * Rows are aggregated into `video_stats` and DELETED at 90 days by
+ * `prune-engagement-data` (§6, phase 3). The counters survive; the per-viewer rows
+ * do not. That is the whole privacy story: a fingerprint is a per-day bucket key with
+ * a 90-day life, not an identity.
+ */
+export const videoViewSession = pgTable(
+  "video_view_session",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    /**
+     * NULL means anonymous, and THIS COLUMN IS THE §8.1 GATE.
+     *
+     * Anonymous watch time counts toward `view_count` — it is real traffic — but it
+     * never touches `completion_bp_sum`, the component carrying 40 of ranking's 100
+     * points. Farming the ranker therefore requires real accounts, which is a far
+     * more expensive attack than a browser loop.
+     *
+     * `set null` rather than cascade: deleting an account must not retroactively
+     * rewrite a video's view history.
+     */
+    viewerId: text("viewer_id").references(() => user.id, { onDelete: "set null" }),
+    /**
+     * sha256 hex. Derived per UTC day from BETTER_AUTH_SECRET plus either the user id
+     * (signed in) or ip+user-agent (anonymous) — see src/lib/viewer-fingerprint.ts.
+     * THE RAW IP IS NEVER WRITTEN TO THIS DATABASE.
+     */
+    viewerFingerprint: text("viewer_fingerprint").notNull(),
+    /**
+     * The UTC day, as the same string that went INTO the fingerprint hash.
+     *
+     * Deliberately a stored column and NOT generated from `first_beacon_at`: a
+     * generated column is a second derivation of the same fact, and the two disagree
+     * for any beacon that crosses midnight between the hash and the insert.
+     */
+    viewDayBucket: date("view_day_bucket", { mode: "string" }).notNull(),
+    feedSource: videoFeedSourceEnum("feed_source").notNull(),
+    /**
+     * The denominator, pinned on the first beacon and never rewritten.
+     *
+     * `video.duration_seconds` is NULL for every YouTube row — oEmbed returns no
+     * duration — so the client's claim is the only source, and it comes from the
+     * hostile side. Pinning is what stops a client shrinking its own denominator
+     * mid-session to manufacture a completion.
+     */
+    pinnedDurationSeconds: integer("pinned_duration_seconds").notNull(),
+    watchedSeconds: integer("watched_seconds").default(0).notNull(),
+    maxPositionSeconds: integer("max_position_seconds").default(0).notNull(),
+    completionBasisPoints: integer("completion_basis_points").default(0).notNull(),
+    /** Flips ONCE. The transition is what increments `video_stats.view_count`. */
+    isCountedView: boolean("is_counted_view").default(false).notNull(),
+    // `precision: 3` on both: the clamp divides the gap between them by 1000 to get
+    // elapsed seconds, and phase 3's 48-hour view-velocity window scans first_beacon_at.
+    firstBeaconAt: timestamp("first_beacon_at", { precision: 3 }).defaultNow().notNull(),
+    lastBeaconAt: timestamp("last_beacon_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("video_view_session_unq").on(
+      table.videoId,
+      table.viewerFingerprint,
+      table.viewDayBucket,
+    ),
+    // §4.4 anonymous session-scoped affinity: "what has this fingerprint watched in
+    // the last 7 days?", so a logged-out feed responds after two or three watches
+    // instead of staying a flat popularity list forever.
+    index("video_view_session_fingerprint_idx").on(table.viewerFingerprint, table.viewDayBucket),
+    // §4.5's "exclude anything this viewer already watched in the last 30 days".
+    // Partial, because the candidate pool only ever asks about counted views by a
+    // signed-in viewer, and that is a small fraction of the table.
+    index("video_view_session_viewer_idx")
+      .on(table.viewerId, table.videoId, table.firstBeaconAt)
+      .where(sql`viewer_id IS NOT NULL AND is_counted_view`),
+    // §4.1 view velocity: counted views in the first 48 hours.
+    index("video_view_session_video_idx").on(table.videoId, table.firstBeaconAt),
+    check(
+      "video_view_session_bounds_ck",
+      sql`watched_seconds >= 0
+          AND max_position_seconds >= 0
+          AND completion_basis_points BETWEEN 0 AND 10000
+          AND pinned_duration_seconds BETWEEN 1 AND 43200
+          AND last_beacon_at >= first_beacon_at`,
+    ),
+    // The fingerprint is server-computed, so a row that is not 64 lowercase hex chars
+    // means something upstream stopped hashing — fail at the storage layer, loudly.
+    check("video_view_session_fingerprint_ck", sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+/**
+ * The unique key is what makes `PUT`/`DELETE /videos/:videoId/like` idempotent by
+ * verb — which is why they are PUT and DELETE rather than POST: a double-tap on a
+ * slow connection must be harmless, not a second like. Same call, same mechanism, as
+ * `research_program_post_reaction`.
+ */
+export const videoLike = pgTable(
+  "video_like",
+  {
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.videoId, table.userId] }),
+    // THE REVERSE INDEX IS THE POINT. "Which of these 24 cards have I liked?" is one
+    // join over this index; without it, it is twenty-four round trips.
+    index("video_like_userId_idx").on(table.userId, table.videoId),
+  ],
+);
+
+/** Watch-later. Same shape as `videoLike`, one index apart — see below. */
+export const videoSave = pgTable(
+  "video_save",
+  {
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.videoId, table.userId] }),
+    // Leads with `created_at`, unlike videoLike's reverse index, because a saved list
+    // is RENDERED — newest first — where a like set is only ever probed for membership.
+    index("video_save_userId_idx").on(table.userId, table.createdAt, table.videoId),
+  ],
+);
+
+/**
+ * One level of threading only, discriminated by `depth` — the same single-table shape
+ * as `research_program_post`, for the same reason: a self-join to depth 1 is one
+ * index scan, and an unbounded tree is a recursive CTE nobody paginates correctly.
+ *
+ * DELETE IS A TOMBSTONE, NOT A ROW DELETE. Deleting a parent outright would cascade
+ * its replies away, so a moderator removing one comment would silently remove the
+ * conversation under it.
+ *
+ * §8.4 is explicit that v1 ships with NO reporting flow and NO automated moderation,
+ * so the `is_hidden`/`hidden_by`/`hidden_reason` columns `research_program_post`
+ * carries are deliberately ABSENT here rather than present and unwritten.
+ */
+export const videoComment = pgTable(
+  "video_comment",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    // Cascade is safe ONLY because deletes are tombstones: no row is ever hard-deleted
+    // by the application, and the depth cap bounds the cascade to one level anyway.
+    parentCommentId: text("parent_comment_id").references((): AnyPgColumn => videoComment.id, {
+      onDelete: "cascade",
+    }),
+    depth: integer("depth").default(0).notNull(),
+    // `set null`: closing an account must not erase the thread it participated in.
+    // A NULL author renders as "deleted user", which is a true statement.
+    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
+    bodyText: text("body_text").notNull(),
+    likeCount: integer("like_count").default(0).notNull(),
+    replyCount: integer("reply_count").default(0).notNull(),
+    isDeleted: boolean("is_deleted").default(false).notNull(),
+    deletedAt: timestamp("deleted_at"),
+    // `precision: 3` — LOAD-BEARING. Both listings are keyset-paginated on
+    // `(created_at, id)` with a millisecond cursor (src/lib/instant-cursor.ts), and a
+    // microsecond column under a millisecond cursor makes rows unreachable at every
+    // page boundary. Identical note on research_program_post.created_at.
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // The thread: top-level rows, newest first, ending in a unique column. Partial,
+    // because replies are never in this listing and they are the bulk of the rows.
+    index("video_comment_thread_idx")
+      .on(table.videoId, table.createdAt, table.id)
+      .where(sql`parent_comment_id IS NULL`),
+    // A comment's replies, oldest first.
+    index("video_comment_parent_idx").on(table.parentCommentId, table.createdAt, table.id),
+    index("video_comment_authorUserId_idx").on(table.authorUserId, table.id),
+    // Depth and parenthood are one fact stated twice, and they must agree.
+    check(
+      "video_comment_depth_ck",
+      sql`depth BETWEEN 0 AND 1 AND (depth = 0) = (parent_comment_id IS NULL)`,
+    ),
+    // A reply has no replies of its own — the cap, restated where it is cheap to check.
+    check("video_comment_leaf_ck", sql`depth = 0 OR reply_count = 0`),
+    check("video_comment_counts_ck", sql`like_count >= 0 AND reply_count >= 0`),
+    check("video_comment_deleted_ck", sql`is_deleted = (deleted_at IS NOT NULL)`),
+    // THE TOMBSTONE ERASES THE TEXT, and the constraint is what makes that true.
+    // Without the second arm, "deleted" is a rendering convention the next reader can
+    // forget to honour — and the body sits in the table forever.
+    check(
+      "video_comment_body_ck",
+      sql`(is_deleted = false AND char_length(body_text) BETWEEN 1 AND 2000)
+          OR (is_deleted = true AND body_text = '')`,
+    ),
+  ],
+);
+
+export const videoCommentLike = pgTable(
+  "video_comment_like",
+  {
+    commentId: text("comment_id")
+      .notNull()
+      .references(() => videoComment.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.commentId, table.userId] }),
+    index("video_comment_like_userId_idx").on(table.userId, table.commentId),
+  ],
+);
+
+/**
+ * A share is an append, not a toggle — but the unique index below still makes
+ * `POST /videos/:videoId/share` idempotent for a day, which is why that route carries
+ * no `idempotency()` middleware. It could not: that middleware no-ops without a
+ * session (src/middleware/idempotency.ts), and this is one of three routes an
+ * anonymous caller can reach.
+ */
+export const videoShare = pgTable(
+  "video_share",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    /**
+     * NULL for an anonymous sharer, and — exactly like `video_view_session.viewer_id`
+     * — this column is a GATE: only a share with a user id moves
+     * `video_stats.share_count`, because share count feeds §4.1's engagement rate and
+     * an anonymous caller must not be able to push a ranking input.
+     */
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    /**
+     * The dedupe identity, from the SAME helper as `viewer_fingerprint`. That helper
+     * already branches on identity, so one column dedupes signed-in and anonymous
+     * sharers without a second code path.
+     */
+    sharerFingerprint: text("sharer_fingerprint").notNull(),
+    channel: videoShareChannelEnum("channel").notNull(),
+    shareDayBucket: date("share_day_bucket", { mode: "string" }).notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("video_share_unq").on(
+      table.videoId,
+      table.sharerFingerprint,
+      table.channel,
+      table.shareDayBucket,
+    ),
+    index("video_share_videoId_idx").on(table.videoId, table.createdAt),
+    check("video_share_fingerprint_ck", sql`sharer_fingerprint ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+export const creatorSubscription = pgTable(
+  "creator_subscription",
+  {
+    subscriberId: text("subscriber_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    creatorId: text("creator_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.subscriberId, table.creatorId] }),
+    // "Who subscribes to this creator?" — the direction the PK cannot serve.
+    index("creator_subscription_creatorId_idx").on(table.creatorId, table.subscriberId),
+    // Subscribing to yourself would inflate your own public subscriber count by one
+    // and put your own videos in your own feed. Refused at the storage layer.
+    check("creator_subscription_self_ck", sql`subscriber_id <> creator_id`),
+  ],
+);
+
+/**
+ * The §8.2 fast dead-player path.
+ *
+ * A creator can disable embedding on youtube.com at any moment and Qatoto finds out
+ * only by asking. A nightly re-check means up to 24 hours of serving a dead player.
+ * The IFrame API's `onError` gives us a same-second signal instead — but ONE client's
+ * error report is one client's claim (R1), so the flip requires three DISTINCT
+ * fingerprints, and the unique index below is what makes "distinct" mean something.
+ */
+export const videoPlaybackError = pgTable(
+  "video_playback_error",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    viewerFingerprint: text("viewer_fingerprint").notNull(),
+    reportDayBucket: date("report_day_bucket", { mode: "string" }).notNull(),
+    errorCode: integer("error_code").notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("video_playback_error_unq").on(
+      table.videoId,
+      table.viewerFingerprint,
+      table.reportDayBucket,
+    ),
+    index("video_playback_error_videoId_idx").on(table.videoId, table.reportDayBucket),
+    // The IFrame API's documented codes, as a CLOSED SET. An open integer column is a
+    // column of client-chosen junk that the three-fingerprint rule would then count.
+    check("video_playback_error_code_ck", sql`error_code IN (2, 5, 100, 101, 150)`),
+    check("video_playback_error_fingerprint_ck", sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`),
+  ],
+);
+
+/**
+ * Counter cache. Same shape and same reasoning as `project_stats`: a sidecar table
+ * rather than columns on `video`, because `video.updated_at` uses `$onUpdate` and a
+ * view counter must not make a creator's video look edited.
+ *
+ * Every counter here moves IN THE SAME TRANSACTION as the row that caused it. The
+ * source-of-truth tables above stay authoritative; this is a cache, which is the only
+ * reason `onDelete: "cascade"` is acceptable on the primary key.
+ */
+export const videoStats = pgTable(
+  "video_stats",
+  {
+    videoId: text("video_id")
+      .primaryKey()
+      .references(() => video.id, { onDelete: "cascade" }),
+    /**
+     * COUNTED views, not beacons and not page loads. Moves exactly once per session,
+     * on the `is_counted_view` transition. Rule 4 of the domain: a view is not a watch.
+     */
+    viewCount: integer("view_count").default(0).notNull(),
+    likeCount: integer("like_count").default(0).notNull(),
+    commentCount: integer("comment_count").default(0).notNull(),
+    shareCount: integer("share_count").default(0).notNull(),
+    saveCount: integer("save_count").default(0).notNull(),
+    totalWatchedSeconds: bigint("total_watched_seconds", { mode: "number" }).default(0).notNull(),
+    /**
+     * SUM AND COUNT, NEVER A STORED AVERAGE. An average is a float, floats make a
+     * ranking bug irreproducible, and §4.1 divides these two at read time with integer
+     * division instead.
+     *
+     * ONLY ACCUMULATES FROM SESSIONS WHERE `viewer_id IS NOT NULL` (§8.1). That single
+     * rule is what makes farming the 40-point completion component require real
+     * accounts rather than a headless browser.
+     */
+    completionBasisPointsSum: bigint("completion_bp_sum", { mode: "number" }).default(0).notNull(),
+    completionSampleCount: integer("completion_sample_count").default(0).notNull(),
+    /**
+     * NULLABLE WITH NO DEFAULT, deliberately — the `project_stats` split between
+     * transactional counters and job-computed ones.
+     *
+     * This is a count of DISTINCT fingerprints across all days, which no single
+     * transaction can maintain. §4.1's engagement rate divides by it, so defaulting it
+     * to 0 would state as fact a denominator that is false and make a brand-new
+     * video's engagement rate undefined-but-rendered. The phase-3 job writes it; until
+     * then NULL is the honest value and the ranker treats it as absent, not as zero.
+     */
+    uniqueViewerCount: integer("unique_viewer_count"),
+    lastEngagementAt: timestamp("last_engagement_at"),
+  },
+  () => [
+    check(
+      "video_stats_counters_non_negative_ck",
+      sql`view_count >= 0 AND like_count >= 0 AND comment_count >= 0
+          AND share_count >= 0 AND save_count >= 0
+          AND total_watched_seconds >= 0 AND completion_bp_sum >= 0
+          AND completion_sample_count >= 0
+          AND (unique_viewer_count IS NULL OR unique_viewer_count >= 0)`,
+    ),
+  ],
+);
+
+/**
+ * The creator-level counter cache. Separate from `video_stats` because a subscription
+ * is not about any one video, and `subscriber_count` must survive every video being
+ * unpublished.
+ *
+ * Rows are minted lazily — `INSERT … ON CONFLICT DO NOTHING` at the first video create
+ * and at the first subscribe — because `user` rows are created by Better Auth inside a
+ * transaction this schema cannot hook.
+ */
+export const creatorStats = pgTable(
+  "creator_stats",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => user.id, { onDelete: "cascade" }),
+    subscriberCount: integer("subscriber_count").default(0).notNull(),
+    publishedVideoCount: integer("published_video_count").default(0).notNull(),
+    totalViewCount: bigint("total_view_count", { mode: "number" }).default(0).notNull(),
+  },
+  () => [
+    check(
+      "creator_stats_counters_non_negative_ck",
+      sql`subscriber_count >= 0 AND published_video_count >= 0 AND total_view_count >= 0`,
+    ),
+  ],
+);
+
 export const playlist = pgTable(
   "playlist",
   {
@@ -10028,6 +10506,12 @@ export const videoRelations = relations(video, ({ one, many }) => ({
   playlistItems: many(playlistItem),
   reviewActions: many(contentReviewAction),
   categories: many(videoCategory),
+  stats: one(videoStats, { fields: [video.id], references: [videoStats.videoId] }),
+  viewSessions: many(videoViewSession),
+  likes: many(videoLike),
+  saves: many(videoSave),
+  comments: many(videoComment),
+  shares: many(videoShare),
 }));
 
 // Child-side only, as everywhere in this section: userRelations is deliberately untouched.
@@ -10040,6 +10524,78 @@ export const videoCategoryRelations = relations(videoCategory, ({ one }) => ({
   category: one(contentCategory, {
     fields: [videoCategory.categoryId],
     references: [contentCategory.id],
+  }),
+}));
+
+// --- Engagement (§3). Child-side only: userRelations stays untouched, as everywhere
+// --- in this section.
+
+export const videoStatsRelations = relations(videoStats, ({ one }) => ({
+  video: one(video, { fields: [videoStats.videoId], references: [video.id] }),
+}));
+
+export const creatorStatsRelations = relations(creatorStats, ({ one }) => ({
+  user: one(user, { fields: [creatorStats.userId], references: [user.id] }),
+}));
+
+export const videoViewSessionRelations = relations(videoViewSession, ({ one }) => ({
+  video: one(video, { fields: [videoViewSession.videoId], references: [video.id] }),
+  viewer: one(user, { fields: [videoViewSession.viewerId], references: [user.id] }),
+}));
+
+export const videoLikeRelations = relations(videoLike, ({ one }) => ({
+  video: one(video, { fields: [videoLike.videoId], references: [video.id] }),
+  user: one(user, { fields: [videoLike.userId], references: [user.id] }),
+}));
+
+export const videoSaveRelations = relations(videoSave, ({ one }) => ({
+  video: one(video, { fields: [videoSave.videoId], references: [video.id] }),
+  user: one(user, { fields: [videoSave.userId], references: [user.id] }),
+}));
+
+export const videoCommentRelations = relations(videoComment, ({ one, many }) => ({
+  video: one(video, { fields: [videoComment.videoId], references: [video.id] }),
+  author: one(user, { fields: [videoComment.authorUserId], references: [user.id] }),
+  // The self-relation carries an explicit `relationName` on BOTH sides, or drizzle
+  // cannot tell which of the two references to `videoComment` pairs with which.
+  parent: one(videoComment, {
+    fields: [videoComment.parentCommentId],
+    references: [videoComment.id],
+    relationName: "videoCommentThread",
+  }),
+  replies: many(videoComment, { relationName: "videoCommentThread" }),
+  likes: many(videoCommentLike),
+}));
+
+export const videoCommentLikeRelations = relations(videoCommentLike, ({ one }) => ({
+  comment: one(videoComment, {
+    fields: [videoCommentLike.commentId],
+    references: [videoComment.id],
+  }),
+  user: one(user, { fields: [videoCommentLike.userId], references: [user.id] }),
+}));
+
+export const videoShareRelations = relations(videoShare, ({ one }) => ({
+  video: one(video, { fields: [videoShare.videoId], references: [video.id] }),
+  user: one(user, { fields: [videoShare.userId], references: [user.id] }),
+}));
+
+export const videoPlaybackErrorRelations = relations(videoPlaybackError, ({ one }) => ({
+  video: one(video, { fields: [videoPlaybackError.videoId], references: [video.id] }),
+}));
+
+// Both sides point at `user`, so both need a relationName — same rule as the comment
+// thread above.
+export const creatorSubscriptionRelations = relations(creatorSubscription, ({ one }) => ({
+  subscriber: one(user, {
+    fields: [creatorSubscription.subscriberId],
+    references: [user.id],
+    relationName: "creatorSubscriptionSubscriber",
+  }),
+  creator: one(user, {
+    fields: [creatorSubscription.creatorId],
+    references: [user.id],
+    relationName: "creatorSubscriptionCreator",
   }),
 }));
 
