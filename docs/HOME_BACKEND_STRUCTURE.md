@@ -52,16 +52,16 @@ is the same error as fabricating a value the server returned as `null`.
 
 ## 1. What exists today, and what it can't do
 
-| Piece | Location | State |
-| --- | --- | --- |
-| `video` table, ~50 columns | `src/db/schema.ts:9383` | ✅ built, YouTube-first |
-| `videoSource` / `youtubeVideoId` + charset CHECK | `schema.ts:9280`, `:9513-9521` | ✅ — the CHECK is a **security** constraint, it closes SSRF at the storage layer |
-| Owner-scoped `/videos` CRUD, publish, review | `src/routes/videos.routes.ts:38-120` | ✅ built, **all `requireAuth`** |
-| `contentReviewAction` audit log, anime review queue | `schema.ts:9831` | ✅ built |
-| **Any public read route** | — | 🚫 does not exist |
-| **Taxonomy** (categories with slugs + images) | — | 🚫 `video.category` is nullable free text |
-| **Engagement** (view, like, comment, share, save, subscribe) | — | 🚫 no tables at all |
-| **Ranking / recommendation** | — | 🚫 nothing |
+| Piece                                                        | Location                             | State                                                                            |
+| ------------------------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------- |
+| `video` table, ~50 columns                                   | `src/db/schema.ts:9383`              | ✅ built, YouTube-first                                                          |
+| `videoSource` / `youtubeVideoId` + charset CHECK             | `schema.ts:9280`, `:9513-9521`       | ✅ — the CHECK is a **security** constraint, it closes SSRF at the storage layer |
+| Owner-scoped `/videos` CRUD, publish, review                 | `src/routes/videos.routes.ts:38-120` | ✅ built, **all `requireAuth`**                                                  |
+| `contentReviewAction` audit log, anime review queue          | `schema.ts:9831`                     | ✅ built                                                                         |
+| **Any public read route**                                    | —                                    | 🚫 does not exist                                                                |
+| **Taxonomy** (categories with slugs + images)                | —                                    | 🚫 `video.category` is nullable free text                                        |
+| **Engagement** (view, like, comment, share, save, subscribe) | —                                    | 🚫 no tables at all                                                              |
+| **Ranking / recommendation**                                 | —                                    | 🚫 nothing                                                                       |
 
 Three properties of the existing table shape everything below:
 
@@ -84,45 +84,54 @@ product decision rather than by schema change, and an enum cannot hold a `imageU
 
 ```ts
 export const contentCategory = pgTable(
-  "content_category",
-  {
-    id: text("id").primaryKey().$defaultFn(() => randomUUID()),
-    // Kebab-case, server-generated, public, and linked the moment it exists —
-    // therefore UNWRITABLE after creation (CLAUDE.md wire-casing table).
-    slug: text("slug").notNull(),
-    label: text("label").notNull(),
-    // The tile image for "What's on your mind?". Not nullable: a tile with no
-    // image is a broken tile, and the empty state is "no categories", not
-    // "a category with a hole in it".
-    imageUrl: text("image_url").notNull(),
-    sortOrder: integer("sort_order").notNull(),
-    isActive: boolean("is_active").default(true).notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at").defaultNow().$onUpdate(() => new Date()).notNull(),
-  },
-  (table) => [
-    uniqueIndex("content_category_slug_unq").on(table.slug),
-    // The only read pattern: the chip row and the tile grid, both ordered.
-    index("content_category_active_order_idx").on(table.isActive, table.sortOrder),
-    check("content_category_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
-  ],
+    "content_category",
+    {
+        id: text("id")
+            .primaryKey()
+            .$defaultFn(() => randomUUID()),
+        // Kebab-case, server-generated, public, and linked the moment it exists —
+        // therefore UNWRITABLE after creation (CLAUDE.md wire-casing table).
+        slug: text("slug").notNull(),
+        label: text("label").notNull(),
+        // The tile image for "What's on your mind?". Not nullable: a tile with no
+        // image is a broken tile, and the empty state is "no categories", not
+        // "a category with a hole in it".
+        imageUrl: text("image_url").notNull(),
+        sortOrder: integer("sort_order").notNull(),
+        isActive: boolean("is_active").default(true).notNull(),
+        createdAt: timestamp("created_at").defaultNow().notNull(),
+        updatedAt: timestamp("updated_at")
+            .defaultNow()
+            .$onUpdate(() => new Date())
+            .notNull(),
+    },
+    (table) => [
+        uniqueIndex("content_category_slug_unq").on(table.slug),
+        // The only read pattern: the chip row and the tile grid, both ordered.
+        index("content_category_active_order_idx").on(table.isActive, table.sortOrder),
+        check("content_category_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
+    ],
 );
 ```
 
 ```ts
 export const videoCategory = pgTable(
-  "video_category",
-  {
-    videoId: text("video_id").notNull().references(() => video.id, { onDelete: "cascade" }),
-    // RESTRICT, not cascade: deleting a category that videos still use should
-    // fail loudly. Retiring one is `isActive = false`, which is reversible.
-    categoryId: text("category_id").notNull().references(() => contentCategory.id, { onDelete: "restrict" }),
-  },
-  (table) => [
-    primaryKey({ columns: [table.videoId, table.categoryId] }),
-    // The feed filter reads category -> videos. Without this it is a seq scan.
-    index("video_category_categoryId_idx").on(table.categoryId, table.videoId),
-  ],
+    "video_category",
+    {
+        videoId: text("video_id")
+            .notNull()
+            .references(() => video.id, { onDelete: "cascade" }),
+        // RESTRICT, not cascade: deleting a category that videos still use should
+        // fail loudly. Retiring one is `isActive = false`, which is reversible.
+        categoryId: text("category_id")
+            .notNull()
+            .references(() => contentCategory.id, { onDelete: "restrict" }),
+    },
+    (table) => [
+        primaryKey({ columns: [table.videoId, table.categoryId] }),
+        // The feed filter reads category -> videos. Without this it is a seq scan.
+        index("video_category_categoryId_idx").on(table.categoryId, table.videoId),
+    ],
 );
 ```
 
@@ -162,31 +171,44 @@ be `isActive`. See [STUDIO_BACKEND_STRUCTURE.md](STUDIO_BACKEND_STRUCTURE.md) §
 
 ### 3.1 Tables
 
-| Table | Key | Notes |
-| --- | --- | --- |
-| `videoViewSession` | `id`; **unique `(videoId, viewerFingerprint, viewDayBucket)`** | One row per viewer, per video, per UTC day. That constraint is the anti-replay boundary — see §3.2. |
-| `videoLike` | PK `(videoId, userId)`, **reverse index `(userId, videoId)`** | The reverse index is what turns "which of these 24 cards have I liked?" into one join. Copies `researchProgramPostReaction` (`schema.ts:8621`). |
-| `videoSave` | same | Watch-later. |
-| `videoComment` | `id`; index `(videoId, createdAt DESC) WHERE parent_comment_id IS NULL`, index `(parentCommentId, createdAt)` | One level of threading only. `isDeleted` + `deletedAt` tombstone so deleting a parent does not orphan its replies. `body` CHECK length 1..2000. |
-| `videoCommentLike` | PK `(commentId, userId)` | |
-| `videoShare` | `id`; index `(videoId, createdAt)` | `channel` enum, `userId` nullable. |
-| `creatorSubscription` | PK `(subscriberId, creatorId)`, reverse index, CHECK `subscriber <> creator` | |
-| `videoPlaybackError` | `id`; unique `(videoId, viewerFingerprint, reportDayBucket)` | Feeds the fast dead-player path, §8.2. |
-| `videoStats` | PK `videoId` | Counter cache. §3.4. |
-| `creatorStats` | PK `userId` | `subscriberCount`, `publishedVideoCount`, `totalViewCount`. |
+| Table                 | Key                                                                                                           | Notes                                                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `videoViewSession`    | `id`; **unique `(videoId, viewerFingerprint, viewDayBucket)`**                                                | One row per viewer, per video, per UTC day. That constraint is the anti-replay boundary — see §3.2.                                             |
+| `videoLike`           | PK `(videoId, userId)`, **reverse index `(userId, videoId)`**                                                 | The reverse index is what turns "which of these 24 cards have I liked?" into one join. Copies `researchProgramPostReaction` (`schema.ts:8621`). |
+| `videoSave`           | same                                                                                                          | Watch-later.                                                                                                                                    |
+| `videoComment`        | `id`; index `(videoId, createdAt DESC) WHERE parent_comment_id IS NULL`, index `(parentCommentId, createdAt)` | One level of threading only. `isDeleted` + `deletedAt` tombstone so deleting a parent does not orphan its replies. `body` CHECK length 1..2000. |
+| `videoCommentLike`    | PK `(commentId, userId)`                                                                                      |                                                                                                                                                 |
+| `videoShare`          | `id`; index `(videoId, createdAt)`                                                                            | `channel` enum, `userId` nullable.                                                                                                              |
+| `creatorSubscription` | PK `(subscriberId, creatorId)`, reverse index, CHECK `subscriber <> creator`                                  |                                                                                                                                                 |
+| `videoPlaybackError`  | `id`; unique `(videoId, viewerFingerprint, reportDayBucket)`                                                  | Feeds the fast dead-player path, §8.2.                                                                                                          |
+| `videoStats`          | PK `videoId`                                                                                                  | Counter cache. §3.4.                                                                                                                            |
+| `creatorStats`        | PK `userId`                                                                                                   | `subscriberCount`, `publishedVideoCount`, `totalViewCount`.                                                                                     |
 
 New enums, snake_case labels per the repo rule:
 
 ```ts
 export const videoFeedSourceEnum = pgEnum("video_feed_source", [
-  "feed_recommended", "feed_explore", "feed_spotlight", "feed_filtered",
-  "search", "channel", "direct",
+    "feed_recommended",
+    "feed_explore",
+    "feed_spotlight",
+    "feed_filtered",
+    "search",
+    "channel",
+    "direct",
 ]);
 export const videoShareChannelEnum = pgEnum("video_share_channel", [
-  "copy_link", "x", "whatsapp", "linkedin", "email",
+    "copy_link",
+    "x",
+    "whatsapp",
+    "linkedin",
+    "email",
 ]);
 export const feedModeEnum = pgEnum("feed_mode", [
-  "all", "trending", "new_to_you", "recently_uploaded", "watched",
+    "all",
+    "trending",
+    "new_to_you",
+    "recently_uploaded",
+    "watched",
 ]);
 ```
 
@@ -248,19 +270,21 @@ available while the bytes live on someone else's CDN.
 
 ```ts
 export const videoStats = pgTable("video_stats", {
-  videoId: text("video_id").primaryKey().references(() => video.id, { onDelete: "cascade" }),
-  viewCount: integer("view_count").default(0).notNull(),
-  uniqueViewerCount: integer("unique_viewer_count").default(0).notNull(),
-  likeCount: integer("like_count").default(0).notNull(),
-  commentCount: integer("comment_count").default(0).notNull(),
-  shareCount: integer("share_count").default(0).notNull(),
-  saveCount: integer("save_count").default(0).notNull(),
-  totalWatchedSeconds: bigint("total_watched_seconds", { mode: "number" }).default(0).notNull(),
-  // Sum + count, never a stored average: an average is a float, and Rule 2 says no floats.
-  // The mean is computed at read time by integer division.
-  completionBasisPointsSum: bigint("completion_bp_sum", { mode: "number" }).default(0).notNull(),
-  completionSampleCount: integer("completion_sample_count").default(0).notNull(),
-  lastEngagementAt: timestamp("last_engagement_at"),
+    videoId: text("video_id")
+        .primaryKey()
+        .references(() => video.id, { onDelete: "cascade" }),
+    viewCount: integer("view_count").default(0).notNull(),
+    uniqueViewerCount: integer("unique_viewer_count").default(0).notNull(),
+    likeCount: integer("like_count").default(0).notNull(),
+    commentCount: integer("comment_count").default(0).notNull(),
+    shareCount: integer("share_count").default(0).notNull(),
+    saveCount: integer("save_count").default(0).notNull(),
+    totalWatchedSeconds: bigint("total_watched_seconds", { mode: "number" }).default(0).notNull(),
+    // Sum + count, never a stored average: an average is a float, and Rule 2 says no floats.
+    // The mean is computed at read time by integer division.
+    completionBasisPointsSum: bigint("completion_bp_sum", { mode: "number" }).default(0).notNull(),
+    completionSampleCount: integer("completion_sample_count").default(0).notNull(),
+    lastEngagementAt: timestamp("last_engagement_at"),
 });
 ```
 
@@ -281,16 +305,16 @@ module-load assertion that they sum to 100, step ladders instead of curves, inte
 
 ### 4.1 Video quality — nightly, per video, 0..100
 
-| Component | Budget | Ladder input |
-| --- | --- | --- |
-| `completionRate` | 40 | `completionBasisPointsSum / completionSampleCount` |
-| `engagementRate` | 25 | `(likes + comments + shares + saves)` per 1000 **unique viewers** |
-| `viewVelocity` | 20 | counted views in the first 48h |
-| `creatorTrack` | 10 | the creator's median quality across their published videos |
-| `freshnessFloor` | 5 | published < 72h → the full 5 |
+| Component        | Budget | Ladder input                                                      |
+| ---------------- | ------ | ----------------------------------------------------------------- |
+| `completionRate` | 40     | `completionBasisPointsSum / completionSampleCount`                |
+| `engagementRate` | 25     | `(likes + comments + shares + saves)` per 1000 **unique viewers** |
+| `viewVelocity`   | 20     | counted views in the first 48h                                    |
+| `creatorTrack`   | 10     | the creator's median quality across their published videos        |
+| `freshnessFloor` | 5      | published < 72h → the full 5                                      |
 
 Completion first is the Douyin lean, and it is the right lean: it is the only component that
-measures whether the video was *good*, as opposed to whether it was *clicked*.
+measures whether the video was _good_, as opposed to whether it was _clicked_.
 
 Engagement divides by **unique viewers, not views**. This is the cheapest structural defence
 against a creator inflating their own denominator, and it costs one extra column.
@@ -312,13 +336,13 @@ At 0 samples the video is scored purely on engagement, velocity, creator track a
 
 ### 4.3 Feed rank — query time, per viewer × video, 0..100
 
-| Component | Budget | Source |
-| --- | --- | --- |
-| `videoQuality` | 35 | `videoQualityScoreSnapshot` |
-| `topicAffinity` | 25 | max over the video's ≤3 categories |
-| `creatorAffinity` | 15 | `userCreatorAffinitySnapshot` |
-| `recency` | 15 | hours since `publishedAt`: `<6→15, <24→13, <72→10, <168→7, <336→4, <720→2, else 0` |
-| `exploration` | 10 | `hash(rankSeed, videoId) % 11`, plus a boost for categories the viewer has no affinity in |
+| Component         | Budget | Source                                                                                    |
+| ----------------- | ------ | ----------------------------------------------------------------------------------------- |
+| `videoQuality`    | 35     | `videoQualityScoreSnapshot`                                                               |
+| `topicAffinity`   | 25     | max over the video's ≤3 categories                                                        |
+| `creatorAffinity` | 15     | `userCreatorAffinitySnapshot`                                                             |
+| `recency`         | 15     | hours since `publishedAt`: `<6→15, <24→13, <72→10, <168→7, <336→4, <720→2, else 0`        |
+| `exploration`     | 10     | `hash(rankSeed, videoId) % 11`, plus a boost for categories the viewer has no affinity in |
 
 **`rankSeed = hash(userId ?? viewerFingerprint, asOfDay)`**, echoed in every response and accepted
 back on the next page request. This is what makes exploration deterministic — Rule 2 forbids
@@ -329,7 +353,7 @@ between page 1 and page 2 and shows the same video twice.
 
 **Signed-in viewer with no history.** Affinity components `COALESCE` to
 `platformCategoryPopularitySnapshot * 60 / 100` — the platform's own distribution, damped, so a
-new account sees a sensible feed that is not *claiming* to be personalized. No sentinel user rows.
+new account sees a sensible feed that is not _claiming_ to be personalized. No sentinel user rows.
 
 **Anonymous viewer.** A **session-scoped affinity**, computed in-request: join `videoViewSession`
 on `viewerFingerprint` over the last 7 days, count categories, run the same ladder. One indexed
@@ -369,25 +393,25 @@ On a young catalog those filters can return fewer rows than `limit`. An under-fi
 real failure mode, and it must degrade in a **stated order** rather than by accident. The service
 re-runs deterministically:
 
-| Stage | Drops |
-| --- | --- |
-| 0 | nothing — full filter |
-| 1 | the diversity cap |
-| 2 | the 30-day already-watched exclusion |
-| 3 | the 180-day recency window |
+| Stage | Drops                                |
+| ----- | ------------------------------------ |
+| 0     | nothing — full filter                |
+| 1     | the diversity cap                    |
+| 2     | the 30-day already-watched exclusion |
+| 3     | the 180-day recency window           |
 
 The stage reached is recorded in the structured log, **never in the response body** — it is an
 operational fact about the catalog, not something a client should branch on.
 
 ### 4.8 Modes
 
-| Mode | Behaviour |
-| --- | --- |
-| `all` | The blended rank of §4.3. Default. |
-| `trending` | `trendingVideoSnapshot` rank order. `limit=3` is what Spotlight asks for. |
-| `recently_uploaded` | `publishedAt DESC` over the candidate pool. |
-| `new_to_you` | `all`, with creators the viewer has already watched excluded and the exploration budget raised to 40. |
-| `watched` | The viewer's own counted-view history, most recent first. **401 when anonymous** — serving it off a fingerprint would leak one person's history to everyone behind the same NAT. |
+| Mode                | Behaviour                                                                                                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `all`               | The blended rank of §4.3. Default.                                                                                                                                               |
+| `trending`          | `trendingVideoSnapshot` rank order. `limit=3` is what Spotlight asks for.                                                                                                        |
+| `recently_uploaded` | `publishedAt DESC` over the candidate pool.                                                                                                                                      |
+| `new_to_you`        | `all`, with creators the viewer has already watched excluded and the exploration budget raised to 40.                                                                            |
+| `watched`           | The viewer's own counted-view history, most recent first. **401 when anonymous** — serving it off a fingerprint would leak one person's history to everyone behind the same NAT. |
 
 ---
 
@@ -395,23 +419,23 @@ operational fact about the catalog, not something a client should branch on.
 
 ### 5.1 Feed — `src/routes/feed.routes.ts`, `attachOptionalUser`
 
-| Method | Path | Limiter | Returns |
-| --- | --- | --- | --- |
-| `GET` | `/feed/categories` | `feedCategoriesLimiter` | `[{ slug, label, imageUrl, sortOrder }]` — powers both the chip row and the tiles |
-| `GET` | `/feed/videos` | `feedReadLimiter` | One ranked page + `pagination` + echoed `rankSeed` |
+| Method | Path               | Limiter                 | Returns                                                                           |
+| ------ | ------------------ | ----------------------- | --------------------------------------------------------------------------------- |
+| `GET`  | `/feed/categories` | `feedCategoriesLimiter` | `[{ slug, label, imageUrl, sortOrder }]` — powers both the chip row and the tiles |
+| `GET`  | `/feed/videos`     | `feedReadLimiter`       | One ranked page + `pagination` + echoed `rankSeed`                                |
 
 ```ts
 const ListFeedVideosQuerySchema = z
-  .object({
-    mode: z.enum(FEED_MODES).default("all"),
-    categorySlug: z.string().regex(SLUG_PATTERN).optional(),
-    page: z.coerce.number().int().min(1).max(200).default(1),
-    limit: z.coerce.number().int().min(1).max(50).default(24),
-    // Echoed from a previous response so page 2 ranks against the same seed as
-    // page 1. Absent on a first request; minted server-side and returned.
-    rankSeed: z.string().length(32).optional(),
-  })
-  .strict();
+    .object({
+        mode: z.enum(FEED_MODES).default("all"),
+        categorySlug: z.string().regex(SLUG_PATTERN).optional(),
+        page: z.coerce.number().int().min(1).max(200).default(1),
+        limit: z.coerce.number().int().min(1).max(50).default(24),
+        // Echoed from a previous response so page 2 ranks against the same seed as
+        // page 1. Absent on a first request; minted server-side and returned.
+        rankSeed: z.string().length(32).optional(),
+    })
+    .strict();
 ```
 
 **Pagination is offset, not cursor.** A cursor needs a stable sort key and rank is not one — a
@@ -423,16 +447,16 @@ indexes of §3.1:
 
 ```jsonc
 {
-  "videoId": "…",
-  "youtubeVideoId": "dQw4w9WgXcQ",
-  "title": "…",
-  "thumbnailUrl": "…",
-  "publishedAt": "2026-07-30T09:12:00.000Z",   // ISO, never a pre-formatted label — see frontend §3
-  "durationSeconds": 412,                       // null until the median job has ≥5 samples
-  "creator": { "id": "…", "handle": "…", "name": "…", "imageUrl": "…", "isVerified": true },
-  "categories": [{ "slug": "robotics", "label": "Robotics" }],
-  "stats": { "viewCount": 25120, "likeCount": 840, "commentCount": 61 },
-  "viewerState": { "hasLiked": false, "hasSaved": false, "isSubscribedToCreator": true }
+    "videoId": "…",
+    "youtubeVideoId": "dQw4w9WgXcQ",
+    "title": "…",
+    "thumbnailUrl": "…",
+    "publishedAt": "2026-07-30T09:12:00.000Z", // ISO, never a pre-formatted label — see frontend §3
+    "durationSeconds": 412, // null until the median job has ≥5 samples
+    "creator": { "id": "…", "handle": "…", "name": "…", "imageUrl": "…", "isVerified": true },
+    "categories": [{ "slug": "robotics", "label": "Robotics" }],
+    "stats": { "viewCount": 25120, "likeCount": 840, "commentCount": 61 },
+    "viewerState": { "hasLiked": false, "hasSaved": false, "isSubscribedToCreator": true },
 }
 ```
 
@@ -441,19 +465,19 @@ twenty-five requests.
 
 ### 5.2 Engagement — `src/routes/engagement.routes.ts`
 
-| Method | Path | Auth | Limiter |
-| --- | --- | --- | --- |
-| `POST` | `/videos/:videoId/view-beacon` | optional | `viewBeaconLimiter` |
-| `POST` | `/videos/:videoId/playback-error` | optional | `playbackErrorLimiter` |
-| `POST` / `DELETE` | `/videos/:videoId/like` | required | `videoLikeLimiter` |
-| `POST` / `DELETE` | `/videos/:videoId/save` | required | `videoSaveLimiter` |
-| `POST` | `/videos/:videoId/share` | optional | `videoShareLimiter` |
-| `GET` | `/videos/:videoId/comments` | optional | `feedReadLimiter` |
-| `POST` | `/videos/:videoId/comments` | required + idempotency | `commentCreateLimiter` |
-| `PATCH` / `DELETE` | `/comments/:commentId` | required | `commentUpdateLimiter` |
-| `POST` / `DELETE` | `/comments/:commentId/like` | required | `commentLikeLimiter` |
-| `POST` / `DELETE` | `/creators/:creatorId/subscribe` | required | `subscribeLimiter` |
-| `GET` | `/feed/watch/:videoId` | optional | `feedReadLimiter` |
+| Method             | Path                              | Auth                   | Limiter                |
+| ------------------ | --------------------------------- | ---------------------- | ---------------------- |
+| `POST`             | `/videos/:videoId/view-beacon`    | optional               | `viewBeaconLimiter`    |
+| `POST`             | `/videos/:videoId/playback-error` | optional               | `playbackErrorLimiter` |
+| `POST` / `DELETE`  | `/videos/:videoId/like`           | required               | `videoLikeLimiter`     |
+| `POST` / `DELETE`  | `/videos/:videoId/save`           | required               | `videoSaveLimiter`     |
+| `POST`             | `/videos/:videoId/share`          | optional               | `videoShareLimiter`    |
+| `GET`              | `/videos/:videoId/comments`       | optional               | `feedReadLimiter`      |
+| `POST`             | `/videos/:videoId/comments`       | required + idempotency | `commentCreateLimiter` |
+| `PATCH` / `DELETE` | `/comments/:commentId`            | required               | `commentUpdateLimiter` |
+| `POST` / `DELETE`  | `/comments/:commentId/like`       | required               | `commentLikeLimiter`   |
+| `POST` / `DELETE`  | `/creators/:creatorId/subscribe`  | required               | `subscribeLimiter`     |
+| `GET`              | `/feed/watch/:videoId`            | optional               | `feedReadLimiter`      |
 
 Comment create is wrapped in `src/middleware/idempotency.ts` — a double-tapped submit button must
 not post twice.
@@ -498,16 +522,16 @@ cron fires a `-tick` queue, the tick quantizes `now` to a UTC boundary and enque
 with an explicit `asOf` plus an idempotency key derived from it. This is the only place in the
 domain where `new Date()` is called.
 
-| Job | Cron | Why this slot |
-| --- | --- | --- |
-| `recompute-video-durations` | `05 1 * * *` | must precede quality — completion needs a denominator |
-| `recompute-video-quality-scores` | `25 1 * * *` | after durations |
-| `recompute-platform-category-popularity` | `40 1 * * *` | after quality; feeds cold start |
-| `recompute-user-affinities` | `50 1 * * *` | after popularity |
-| `recompute-trending-videos` | `35 * * * *` | **hourly.** A "trending" chip recomputed nightly is a lie about what it says. |
-| `verify-youtube-video` | on demand, backoff | §8.3 deferred verification |
-| `revalidate-youtube-embeds` | `10 5 * * *` | backstop for §8.2 |
-| `prune-engagement-data` | `55 4 * * *` | snapshots at 14 days; `videoViewSession` aggregated into `videoStats` and dropped at 90 |
+| Job                                      | Cron               | Why this slot                                                                           |
+| ---------------------------------------- | ------------------ | --------------------------------------------------------------------------------------- |
+| `recompute-video-durations`              | `05 1 * * *`       | must precede quality — completion needs a denominator                                   |
+| `recompute-video-quality-scores`         | `25 1 * * *`       | after durations                                                                         |
+| `recompute-platform-category-popularity` | `40 1 * * *`       | after quality; feeds cold start                                                         |
+| `recompute-user-affinities`              | `50 1 * * *`       | after popularity                                                                        |
+| `recompute-trending-videos`              | `35 * * * *`       | **hourly.** A "trending" chip recomputed nightly is a lie about what it says.           |
+| `verify-youtube-video`                   | on demand, backoff | §8.3 deferred verification                                                              |
+| `revalidate-youtube-embeds`              | `10 5 * * *`       | backstop for §8.2                                                                       |
+| `prune-engagement-data`                  | `55 4 * * *`       | snapshots at 14 days; `videoViewSession` aggregated into `videoStats` and dropped at 90 |
 
 Ordering is expressed **by cron time**, not by code — same convention as
 `recompute-branch-signals` (`20 3`) running before `recompute-program-stats` (`35 3`). None of the
@@ -585,24 +609,24 @@ published row" is preserved without discarding the upload.
 
 ### 8.4 Everything else
 
-| Problem | Handling |
-| --- | --- |
-| New video scores 0 on 40% of the scale | The sample ramp (§4.2) plus the 4-of-24 exploration quota (§4.4) |
-| Under-filled page on a small catalog | The relaxation ladder (§4.7), logged by stage |
-| Filter bubble | Exploration budget with a no-affinity boost, 2-per-creator and 40%-per-category page caps (§4.6) |
-| Fingerprint privacy | Daily-rotating salt, raw IP never stored, sessions dropped at 90 days (§3.2) |
-| Double-submitted comment | `idempotencyRecord` via existing middleware (§5.2) |
-| **Comment moderation** | **A deliberate gap in v1.** Ships with `areCommentsEnabled` respected, a per-user rate limiter, a 2000-char cap, one-level threading and author-or-creator tombstone delete. There is **no reporting flow and no automated moderation**. `video.commentModeration` and `video.commentSortOrder` remain unbacked preference columns and this doc says so rather than implying they work. |
+| Problem                                | Handling                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New video scores 0 on 40% of the scale | The sample ramp (§4.2) plus the 4-of-24 exploration quota (§4.4)                                                                                                                                                                                                                                                                                                                        |
+| Under-filled page on a small catalog   | The relaxation ladder (§4.7), logged by stage                                                                                                                                                                                                                                                                                                                                           |
+| Filter bubble                          | Exploration budget with a no-affinity boost, 2-per-creator and 40%-per-category page caps (§4.6)                                                                                                                                                                                                                                                                                        |
+| Fingerprint privacy                    | Daily-rotating salt, raw IP never stored, sessions dropped at 90 days (§3.2)                                                                                                                                                                                                                                                                                                            |
+| Double-submitted comment               | `idempotencyRecord` via existing middleware (§5.2)                                                                                                                                                                                                                                                                                                                                      |
+| **Comment moderation**                 | **A deliberate gap in v1.** Ships with `areCommentsEnabled` respected, a per-user rate limiter, a 2000-char cap, one-level threading and author-or-creator tombstone delete. There is **no reporting flow and no automated moderation**. `video.commentModeration` and `video.commentSortOrder` remain unbacked preference columns and this doc says so rather than implying they work. |
 
 ---
 
 ## 9. Build order
 
-| Phase | Scope | Done when |
-| --- | --- | --- |
-| 1 | `contentCategory` + `videoCategory` + seed + `GET /feed/categories`; `isSourceVerified` + `verify-youtube-video`; studio `categoryIds` | `curl /feed/categories` returns the seeded rows |
-| 2 | Engagement tables + `videoStats` + write routes + beacon clamping + playback-error | Like/comment/beacon persist; counters move in the same transaction |
-| 3 | `feed-score.ts` / `trending-score.ts` / `affinity-score.ts` + snapshots + jobs + `GET /feed/videos` | `curl '/feed/videos?limit=24'` ranks for both anonymous and authed; `?mode=trending&limit=3` is Spotlight |
+| Phase | Scope                                                                                                                                  | Done when                                                                                                 |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| 1     | `contentCategory` + `videoCategory` + seed + `GET /feed/categories`; `isSourceVerified` + `verify-youtube-video`; studio `categoryIds` | `curl /feed/categories` returns the seeded rows                                                           |
+| 2     | Engagement tables + `videoStats` + write routes + beacon clamping + playback-error                                                     | Like/comment/beacon persist; counters move in the same transaction                                        |
+| 3     | `feed-score.ts` / `trending-score.ts` / `affinity-score.ts` + snapshots + jobs + `GET /feed/videos`                                    | `curl '/feed/videos?limit=24'` ranks for both anonymous and authed; `?mode=trending&limit=3` is Spotlight |
 
 Phases 1–3 show nothing to a user until the frontend lands (frontend §9). Phase 2 of the frontend
 work is what starts producing the completion data phase 3 here depends on — until real watch
