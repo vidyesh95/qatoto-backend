@@ -68,6 +68,7 @@
     "db:verify-rate-limit-store": "tsx --conditions=development scripts/verify-rate-limit-store.ts",
     "db:backfill-handles": "tsx --conditions=development scripts/backfill-handles.ts",
     "db:backfill-oauth-profile": "tsx --conditions=development scripts/backfill-oauth-profile.ts",
+    "db:backfill-video-categories": "tsx --conditions=development scripts/backfill-video-categories.ts",
     "db:merge-duplicate-user": "tsx --conditions=development scripts/merge-duplicate-user.ts",
     "db:grant-platform-role": "tsx --conditions=development scripts/grant-platform-role.ts",
     "fmt": "oxfmt",
