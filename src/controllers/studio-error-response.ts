@@ -184,6 +184,20 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
         message: "You can only tag a video with categories that exist and are active.",
         errors: { categoryIds: [...error.categoryIds] },
       };
+    case "TOO_MANY_VIDEO_CATEGORIES":
+      // Reachable through this mapper only if the Zod `.max(3)` was somehow bypassed —
+      // the wire schema refuses four items first. It exists because the service is where
+      // the bound is actually an INVARIANT, and an invariant with no HTTP shape would be
+      // an unhandled 500 the day an internal caller crosses it.
+      return {
+        statusCode: 422,
+        message: `A video can be tagged with at most ${String(error.limit)} categories.`,
+        errors: {
+          categoryIds: [
+            `You sent ${String(error.received)} distinct categories; the limit is ${String(error.limit)}.`,
+          ],
+        },
+      };
     case "PLAYLIST_NOT_OWNED":
       return {
         statusCode: 422,

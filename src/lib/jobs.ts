@@ -926,16 +926,29 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // catalog that has not grown yet. If any of these starts overrunning its gap, the answer
   // is to chain them by enqueue rather than to shave the interval.
   //
-  // Nothing here collides with the eleven crons above: hours 1 and 5 were entirely free,
-  // `35` past the hour was free (`05` belongs to refresh-talent-projections), and 04:55
-  // sits clear of recompute-compensation-draft at 04:15.
-  [JOB_NAMES.recomputeVideoDurationsTick]: "5 1 * * *",
+  // ## ON COLLISIONS, honestly
+  //
+  // §6 claims these slots "do not collide with the 11 existing crons". That claim is not
+  // achievable and was never true: `sweep-dispute-windows-tick` runs `* * * * *`, so EVERY
+  // cron on this platform shares its minute with that one, always.
+  //
+  // Sharing a minute is also not the thing worth avoiding. A tick does ONE INSERT and each
+  // queue is its own `singleton`; two ticks firing together cost nothing. What is worth
+  // avoiding is landing a tick on a HEAVY NIGHTLY RECOMPUTE, where the real job it enqueues
+  // then contends for the same connections. These slots are chosen for that:
+  //
+  //   * `8 1` rather than `5 1` — `refresh-talent-projections-tick` is `5 * * * *`, so 01:05
+  //     already has an hourly job on it.
+  //   * `18 * * * *` rather than `35 * * * *` — `:35` is `recompute-program-stats-tick`
+  //     (03:35), and an hourly job must not meet a nightly one 365 times a year. `:18` is
+  //     unoccupied at every hour.
+  [JOB_NAMES.recomputeVideoDurationsTick]: "8 1 * * *",
   [JOB_NAMES.recomputeVideoQualityScoresTick]: "25 1 * * *",
   [JOB_NAMES.recomputePlatformCategoryPopularityTick]: "40 1 * * *",
   [JOB_NAMES.recomputeUserAffinitiesTick]: "50 1 * * *",
   // HOURLY, and the only job in this domain that is. A "trending" chip recomputed nightly
   // is a lie about what the word means — §6 says so and this is where it is enforced.
-  [JOB_NAMES.recomputeTrendingVideosTick]: "35 * * * *",
+  [JOB_NAMES.recomputeTrendingVideosTick]: "18 * * * *",
   // The §8.2 backstop, for videos nobody happens to be watching. The fast path is the
   // client's playback-error report at three distinct fingerprints; this is what catches a
   // dead player on a video with no viewers left to report it.

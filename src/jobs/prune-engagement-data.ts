@@ -2,7 +2,12 @@ import { sql } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
+import {
+  SNAPSHOT_RETENTION_DAYS,
+  VIEW_SESSION_RETENTION_DAYS,
+} from "#src/lib/engagement-retention.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
 
 /**
@@ -38,12 +43,6 @@ import { logger } from "#src/lib/logger.js";
  *    but the ROWS STAY. Deleting them would erase the evidence of the abuse along with its
  *    effect, and the next person to ask "was this creator farmed?" would find nothing.
  */
-
-/** §3.2. The counters survive; the per-viewer rows do not. */
-const VIEW_SESSION_RETENTION_DAYS = 90;
-
-/** §6. Ranking reads yesterday's; two weeks is the explain-it-later window. */
-const SNAPSHOT_RETENTION_DAYS = 14;
 
 /**
  * §8.1 rule 3's threshold: more than this many of ONE creator's videos, by ONE fingerprint,
@@ -84,14 +83,14 @@ export async function handlePruneEngagementData(rawPayload: unknown): Promise<vo
     await db.execute<CountRow>(sql`
       SELECT count(*)::int AS affected_count
       FROM video_view_session
-      WHERE first_beacon_at < ${sessionCutoff}
+      WHERE first_beacon_at < ${utcTimestamp(sessionCutoff)}
     `)
   ).rows;
   const expiredSessionCount = expiredSessions?.affected_count ?? 0;
 
   if (isEnabled && expiredSessionCount > 0) {
     await db.execute(sql`
-      DELETE FROM video_view_session WHERE first_beacon_at < ${sessionCutoff}
+      DELETE FROM video_view_session WHERE first_beacon_at < ${utcTimestamp(sessionCutoff)}
     `);
   }
 
@@ -102,7 +101,7 @@ export async function handlePruneEngagementData(rawPayload: unknown): Promise<vo
       await db.execute<CountRow>(sql`
         SELECT count(*)::int AS affected_count
         FROM ${sql.identifier(tableName)}
-        WHERE as_of < ${snapshotCutoff}
+        WHERE as_of < ${utcTimestamp(snapshotCutoff)}
       `)
     ).rows;
     const expiredCount = expired?.affected_count ?? 0;
@@ -110,7 +109,7 @@ export async function handlePruneEngagementData(rawPayload: unknown): Promise<vo
 
     if (isEnabled && expiredCount > 0) {
       await db.execute(sql`
-        DELETE FROM ${sql.identifier(tableName)} WHERE as_of < ${snapshotCutoff}
+        DELETE FROM ${sql.identifier(tableName)} WHERE as_of < ${utcTimestamp(snapshotCutoff)}
       `);
     }
   }
@@ -130,12 +129,12 @@ export async function handlePruneEngagementData(rawPayload: unknown): Promise<vo
       FROM video_view_session AS s
       JOIN video AS v ON v.id = s.video_id
       WHERE s.is_counted_view
-        AND s.first_beacon_at < ${asOf}
+        AND s.first_beacon_at < ${utcTimestamp(asOf)}
         AND (s.viewer_fingerprint, s.view_day_bucket, v.creator_id) IN (
           SELECT o.viewer_fingerprint, o.view_day_bucket, ov.creator_id
           FROM video_view_session AS o
           JOIN video AS ov ON ov.id = o.video_id
-          WHERE o.first_beacon_at < ${asOf}
+          WHERE o.first_beacon_at < ${utcTimestamp(asOf)}
           GROUP BY o.viewer_fingerprint, o.view_day_bucket, ov.creator_id
           HAVING count(DISTINCT o.video_id) > ${OUTLIER_VIDEOS_PER_CREATOR_PER_DAY}
         )

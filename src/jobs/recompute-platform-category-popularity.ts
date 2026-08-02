@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { platformCategoryPopularitySnapshot } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
 
 /**
@@ -58,10 +59,10 @@ export async function handleRecomputePlatformCategoryPopularity(
       JOIN video AS v ON v.id = vc.video_id
         AND v.publish_status = 'published'
         AND v.published_at IS NOT NULL
-        AND v.published_at < ${asOf}
+        AND v.published_at < ${utcTimestamp(asOf)}
       LEFT JOIN video_view_session AS s ON s.video_id = v.id
         AND s.is_counted_view
-        AND s.first_beacon_at < ${asOf}
+        AND s.first_beacon_at < ${utcTimestamp(asOf)}
       GROUP BY vc.category_id
     ) AS counts ON counts.category_id = c.id
     WHERE c.is_active

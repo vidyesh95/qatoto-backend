@@ -4,6 +4,7 @@ import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { video } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
 import { verifyYoutubeVideo } from "#src/lib/youtube.js";
 
@@ -66,7 +67,7 @@ export async function handleRevalidateYoutubeEmbeds(rawPayload: unknown): Promis
       AND v.video_source = 'youtube'
       AND v.youtube_video_id IS NOT NULL
       AND v.published_at IS NOT NULL
-      AND v.published_at < ${asOf}
+      AND v.published_at < ${utcTimestamp(asOf)}
     ORDER BY v.updated_at ASC, v.id ASC
     LIMIT ${REVALIDATION_BATCH_SIZE}
   `);

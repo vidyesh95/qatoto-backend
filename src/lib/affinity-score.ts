@@ -217,20 +217,8 @@ export function computeAffinityScorePoints(inputs: AffinityScoreInputs): Affinit
   };
 }
 
-/**
- * §4.4's signed-in cold start: platform popularity, damped, used where affinity is absent.
- *
- * Deliberately a separate function rather than a `COALESCE` buried in the feed query, so
- * that "this viewer has no history and we are showing them the platform's own
- * distribution" is a named, testable idea rather than an incidental default.
- */
-export function coldStartAffinityPoints(platformPopularityPoints: number): number {
-  assertNonNegativeIntegerInput(
-    "coldStartAffinityPoints",
-    "platformPopularityPoints",
-    platformPopularityPoints,
-  );
-  return Math.floor(
-    (platformPopularityPoints * COLD_START_POPULARITY_DAMPING_PERCENT) / 100,
-  );
-}
+// NO `coldStartAffinityPoints()` HELPER. The damping is rendered directly into the feed's
+// ranking SQL (`feed.service.ts`, using COLD_START_POPULARITY_DAMPING_PERCENT above),
+// because the fallback has to be part of the ORDER BY expression rather than something
+// applied to rows already fetched. A TypeScript twin would be a second definition of the
+// same arithmetic that nothing calls — which is what it was until this audit removed it.

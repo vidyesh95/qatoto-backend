@@ -10280,6 +10280,21 @@ export const videoStats = pgTable(
      * then NULL is the honest value and the ranker treats it as absent, not as zero.
      */
     uniqueViewerCount: integer("unique_viewer_count"),
+    /**
+     * Counted views inside the first 48 hours — §4.1's velocity input, PERSISTED.
+     *
+     * Job-computed, nullable with no default, for the same Rule 5 reason as
+     * `unique_viewer_count` above: a video nobody has scored yet has no velocity, which
+     * is not the same fact as a velocity of zero.
+     *
+     * IT IS STORED RATHER THAN ALWAYS RECOMPUTED because `prune-engagement-data` deletes
+     * the `video_view_session` rows it is derived from at 90 days. Without a stored
+     * floor, every video older than the retention window would silently drop to zero
+     * velocity on the next nightly run — and its engagement rate would inflate at the
+     * same time, because the unique-viewer denominator collapses too. See
+     * `engagement-retention.ts` for how the two jobs agree on the horizon.
+     */
+    countedViewsFirst48Hours: integer("counted_views_first_48_hours"),
     lastEngagementAt: timestamp("last_engagement_at"),
     /**
      * The §4.1 quality score, denormalized off `video_quality_score_snapshot`.
@@ -10318,7 +10333,8 @@ export const videoStats = pgTable(
           AND share_count >= 0 AND save_count >= 0
           AND total_watched_seconds >= 0 AND completion_bp_sum >= 0
           AND completion_sample_count >= 0
-          AND (unique_viewer_count IS NULL OR unique_viewer_count >= 0)`,
+          AND (unique_viewer_count IS NULL OR unique_viewer_count >= 0)
+          AND (counted_views_first_48_hours IS NULL OR counted_views_first_48_hours >= 0)`,
     ),
   ],
 );

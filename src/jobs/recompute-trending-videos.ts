@@ -3,6 +3,7 @@ import { eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { trendingVideoSnapshot, videoStats } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
 import {
@@ -62,14 +63,14 @@ export async function handleRecomputeTrendingVideos(rawPayload: unknown): Promis
       COALESCE(w.watched_minutes, 0)::int    AS watched_minutes_in_window,
       (
         (SELECT count(*)::int FROM video_like AS l
-          WHERE l.video_id = v.id AND l.created_at >= ${windowStartsAt} AND l.created_at < ${asOf})
+          WHERE l.video_id = v.id AND l.created_at >= ${utcTimestamp(windowStartsAt)} AND l.created_at < ${utcTimestamp(asOf)})
         + (SELECT count(*)::int FROM video_save AS sv
-          WHERE sv.video_id = v.id AND sv.created_at >= ${windowStartsAt} AND sv.created_at < ${asOf})
+          WHERE sv.video_id = v.id AND sv.created_at >= ${utcTimestamp(windowStartsAt)} AND sv.created_at < ${utcTimestamp(asOf)})
         + (SELECT count(*)::int FROM video_share AS sh
-          WHERE sh.video_id = v.id AND sh.created_at >= ${windowStartsAt} AND sh.created_at < ${asOf})
+          WHERE sh.video_id = v.id AND sh.created_at >= ${utcTimestamp(windowStartsAt)} AND sh.created_at < ${utcTimestamp(asOf)})
         + (SELECT count(*)::int FROM video_comment AS c
           WHERE c.video_id = v.id AND c.is_deleted = false
-            AND c.created_at >= ${windowStartsAt} AND c.created_at < ${asOf})
+            AND c.created_at >= ${utcTimestamp(windowStartsAt)} AND c.created_at < ${utcTimestamp(asOf)})
       ) AS engagement_actions_in_window,
       vs.quality_score_points
     FROM video AS v
@@ -82,7 +83,7 @@ export async function handleRecomputeTrendingVideos(rawPayload: unknown): Promis
         -- must never reach a scoring module.
         FLOOR(SUM(s.watched_seconds) / 60.0)      AS watched_minutes
       FROM video_view_session AS s
-      WHERE s.last_beacon_at >= ${windowStartsAt} AND s.last_beacon_at < ${asOf}
+      WHERE s.last_beacon_at >= ${utcTimestamp(windowStartsAt)} AND s.last_beacon_at < ${utcTimestamp(asOf)}
       GROUP BY s.video_id
     ) AS w ON w.video_id = v.id
     WHERE v.publish_status = 'published'
@@ -91,7 +92,7 @@ export async function handleRecomputeTrendingVideos(rawPayload: unknown): Promis
       AND v.is_source_verified = true
       AND v.review_status IN ('not_required', 'approved')
       AND v.published_at IS NOT NULL
-      AND v.published_at < ${asOf}
+      AND v.published_at < ${utcTimestamp(asOf)}
     ORDER BY v.id
   `);
 

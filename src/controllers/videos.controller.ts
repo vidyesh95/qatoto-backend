@@ -170,9 +170,10 @@ const videoFieldShapes = {
   /**
    * At most three, and the bound is asserted in BOTH layers on purpose. Here it is the
    * request contract: a client sending four gets a field-level 422 with a path it can put
-   * next to an input. In the service it is the invariant, checked after dedupe — note that
-   * `["a","a","a","a"]` fails here even though it dedupes to one, which is the strict
-   * reading and the right one.
+   * next to an input. In `videos.service.ts` it is the invariant, checked AFTER dedupe
+   * against `MAXIMUM_CATEGORIES_PER_VIDEO` — so `["a","a","a","a"]` is refused here
+   * (four items on the wire) and accepted there (one category), which is the strict
+   * reading at the boundary and the honest one inside.
    *
    * No `.default([])`, here or in CreateVideoSchema below. See the note on this map: a
    * default on an array field would make an omitted key mean "remove all categories" on a

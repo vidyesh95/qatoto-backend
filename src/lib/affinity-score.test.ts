@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AFFINITY_SCORE_COMPONENT_BUDGETS,
-  coldStartAffinityPoints,
   computeAffinityScorePoints,
-  COLD_START_POPULARITY_DAMPING_PERCENT,
   type AffinityScoreInputs,
 } from "#src/lib/affinity-score.js";
 
@@ -92,19 +90,5 @@ describe("computeAffinityScorePoints", () => {
     expect(() => computeAffinityScorePoints(engagedViewer({ likeCount: -1 }))).toThrow(
       /likeCount/,
     );
-  });
-});
-
-describe("coldStartAffinityPoints", () => {
-  it("damps platform popularity so a new account is not claiming personalization", () => {
-    expect(coldStartAffinityPoints(100)).toBe(COLD_START_POPULARITY_DAMPING_PERCENT);
-    expect(coldStartAffinityPoints(50)).toBe(30);
-    expect(coldStartAffinityPoints(0)).toBe(0);
-  });
-
-  it("always lands below a real affinity of the same magnitude", () => {
-    for (let popularity = 0; popularity <= 100; popularity += 1) {
-      expect(coldStartAffinityPoints(popularity)).toBeLessThanOrEqual(popularity);
-    }
   });
 });

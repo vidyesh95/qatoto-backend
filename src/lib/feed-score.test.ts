@@ -5,6 +5,7 @@ import {
   COMPLETION_RAMP_FULL_WEIGHT_SAMPLES,
   computeVideoQualityPoints,
   FEED_RANK_COMPONENT_BUDGETS,
+  NEW_TO_YOU_RANK_COMPONENT_BUDGETS,
   reserveExplorationSlots,
   VIDEO_QUALITY_COMPONENT_BUDGETS,
   type RankedFeedRow,
@@ -28,12 +29,32 @@ function establishedVideo(overrides: Partial<VideoQualityInputs> = {}): VideoQua
   };
 }
 
+/** Every budget table must total the same 100 the scorers assert at module load. */
+function sumBudgets(table: Readonly<Record<string, number>>): number {
+  return Object.values(table).reduce((runningSum, budget) => runningSum + budget, 0);
+}
+
 describe("the budgets", () => {
-  it("sum to 100 for both scores", () => {
-    const quality = Object.values(VIDEO_QUALITY_COMPONENT_BUDGETS).reduce((a, b) => a + b, 0);
-    const rank = Object.values(FEED_RANK_COMPONENT_BUDGETS).reduce((a, b) => a + b, 0);
-    expect(quality).toBe(100);
-    expect(rank).toBe(100);
+  it("sum to 100 for every table", () => {
+    expect(sumBudgets(VIDEO_QUALITY_COMPONENT_BUDGETS)).toBe(100);
+    expect(sumBudgets(FEED_RANK_COMPONENT_BUDGETS)).toBe(100);
+    // Raising exploration to 40 without taking the 30 from somewhere would let the rank
+    // reach 130 — in a module whose whole discipline is that budgets sum to 100.
+    expect(sumBudgets(NEW_TO_YOU_RANK_COMPONENT_BUDGETS)).toBe(100);
+  });
+
+  it("takes new_to_you's extra exploration from the two affinity components", () => {
+    // "New to you" means stop ranking on how deep in the bubble I already am. Quality and
+    // recency are untouched — escaping the bubble must not mean worse or staler videos.
+    expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.exploration).toBe(40);
+    expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.creatorAffinity).toBe(0);
+    expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.topicAffinity).toBeLessThan(
+      FEED_RANK_COMPONENT_BUDGETS.topicAffinity,
+    );
+    expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.videoQuality).toBe(
+      FEED_RANK_COMPONENT_BUDGETS.videoQuality,
+    );
+    expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.recency).toBe(FEED_RANK_COMPONENT_BUDGETS.recency);
   });
 });
 

@@ -4,6 +4,7 @@ import { db } from "#src/db/index.js";
 import { userCreatorAffinitySnapshot, userTopicAffinitySnapshot } from "#src/db/schema.js";
 import { AFFINITY_WINDOW_DAYS, computeAffinityScorePoints } from "#src/lib/affinity-score.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
 
 /**
@@ -77,20 +78,20 @@ export async function handleRecomputeUserAffinities(rawPayload: unknown): Promis
         SELECT count(*)::int FROM video_like AS l
         JOIN video_category AS lc ON lc.video_id = l.video_id
         WHERE l.user_id = s.viewer_id AND lc.category_id = vc.category_id
-          AND l.created_at < ${asOf}
+          AND l.created_at < ${utcTimestamp(asOf)}
       ) AS like_count,
       (
         SELECT count(*)::int FROM video_save AS sv
         JOIN video_category AS sc ON sc.video_id = sv.video_id
         WHERE sv.user_id = s.viewer_id AND sc.category_id = vc.category_id
-          AND sv.created_at < ${asOf}
+          AND sv.created_at < ${utcTimestamp(asOf)}
       ) AS save_count
     FROM video_view_session AS s
     JOIN video_category AS vc ON vc.video_id = s.video_id
     WHERE s.viewer_id IS NOT NULL
       AND s.is_counted_view
-      AND s.first_beacon_at >= ${windowStartsAt}
-      AND s.first_beacon_at < ${asOf}
+      AND s.first_beacon_at >= ${utcTimestamp(windowStartsAt)}
+      AND s.first_beacon_at < ${utcTimestamp(asOf)}
     GROUP BY s.viewer_id, vc.category_id
     ORDER BY s.viewer_id, vc.category_id
   `);
@@ -106,25 +107,25 @@ export async function handleRecomputeUserAffinities(rawPayload: unknown): Promis
         SELECT count(*)::int FROM video_like AS l
         JOIN video AS lv ON lv.id = l.video_id
         WHERE l.user_id = s.viewer_id AND lv.creator_id = v.creator_id
-          AND l.created_at < ${asOf}
+          AND l.created_at < ${utcTimestamp(asOf)}
       ) AS like_count,
       (
         SELECT count(*)::int FROM video_save AS sv
         JOIN video AS svv ON svv.id = sv.video_id
         WHERE sv.user_id = s.viewer_id AND svv.creator_id = v.creator_id
-          AND sv.created_at < ${asOf}
+          AND sv.created_at < ${utcTimestamp(asOf)}
       ) AS save_count,
       EXISTS (
         SELECT 1 FROM creator_subscription AS cs
         WHERE cs.subscriber_id = s.viewer_id AND cs.creator_id = v.creator_id
-          AND cs.created_at < ${asOf}
+          AND cs.created_at < ${utcTimestamp(asOf)}
       ) AS is_subscribed
     FROM video_view_session AS s
     JOIN video AS v ON v.id = s.video_id
     WHERE s.viewer_id IS NOT NULL
       AND s.is_counted_view
-      AND s.first_beacon_at >= ${windowStartsAt}
-      AND s.first_beacon_at < ${asOf}
+      AND s.first_beacon_at >= ${utcTimestamp(windowStartsAt)}
+      AND s.first_beacon_at < ${utcTimestamp(asOf)}
       -- A viewer cannot have an affinity for themselves. The CHECK on the table would
       -- refuse the row anyway; refusing it here keeps the batch insert from failing
       -- wholesale because one creator watched their own upload.

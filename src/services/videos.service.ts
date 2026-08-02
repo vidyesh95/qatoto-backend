@@ -41,6 +41,15 @@ import {
 } from "#src/lib/youtube.js";
 import { findUnavailableCategoryIds } from "#src/services/content-categories.service.js";
 import { ensureVideoStatsRows } from "#src/services/video-engagement.service.js";
+
+/**
+ * HOME_BACKEND_STRUCTURE.md §2: at most three categories per video.
+ *
+ * A cardinality bound ACROSS ROWS is not expressible as a table CHECK, and §2 says so —
+ * which leaves the service as the only place it can hold. The matching `.max(3)` in the
+ * controller is the request contract; this is the invariant.
+ */
+const MAXIMUM_CATEGORIES_PER_VIDEO = 3;
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -111,6 +120,7 @@ export type VideoError =
   // because a distinct literal cannot collide with another union's arm inside the studio
   // mapper's exhaustive switch.
   | { type: "VIDEO_CATEGORY_NOT_AVAILABLE"; categoryIds: readonly string[] }
+  | { type: "TOO_MANY_VIDEO_CATEGORIES"; limit: number; received: number }
   | { type: "PLAYLIST_NOT_OWNED"; playlistIds: readonly string[] }
   | { type: "ANIME_SERIES_NOT_FOUND"; seriesId: string }
   | { type: "ANIME_SEASON_NOT_FOUND"; seasonId: string }
@@ -934,6 +944,21 @@ export async function createVideo(
   // 3b. Categories — existence and activeness checked before the network call, like
   //     products above. Cross-table, so it cannot live in the Zod schema.
   const categoryIds = dedupe(input.categoryIds ?? []);
+  // §2's cardinality bound, enforced HERE and not only in Zod. A cross-row count is not
+  // expressible as a table CHECK, so the service is the last place it can be true — and
+  // the Zod bound only guards the HTTP boundary, which a script, a job or a future
+  // internal caller does not cross. Checked after dedupe, so four copies of one id is
+  // one category and not an error.
+  if (categoryIds.length > MAXIMUM_CATEGORIES_PER_VIDEO) {
+    return {
+      success: false,
+      error: {
+        type: "TOO_MANY_VIDEO_CATEGORIES",
+        limit: MAXIMUM_CATEGORIES_PER_VIDEO,
+        received: categoryIds.length,
+      },
+    };
+  }
   const unavailableCategoryIds = await findUnavailableCategoryIds(categoryIds);
   if (unavailableCategoryIds.length > 0) {
     return {
@@ -1263,6 +1288,16 @@ export async function updateVideo(
   // semantics would leave a creator no way to remove a category.
   const categoryIds = patch.categoryIds === undefined ? undefined : dedupe(patch.categoryIds);
   if (categoryIds !== undefined) {
+    if (categoryIds.length > MAXIMUM_CATEGORIES_PER_VIDEO) {
+      return {
+        success: false,
+        error: {
+          type: "TOO_MANY_VIDEO_CATEGORIES",
+          limit: MAXIMUM_CATEGORIES_PER_VIDEO,
+          received: categoryIds.length,
+        },
+      };
+    }
     const unavailableCategoryIds = await findUnavailableCategoryIds(categoryIds);
     if (unavailableCategoryIds.length > 0) {
       return {

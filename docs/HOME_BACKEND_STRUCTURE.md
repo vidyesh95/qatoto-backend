@@ -13,12 +13,11 @@ splits into **Recommended** and **Explore**.
   (deferred self-hosted video) is why every row here is a YouTube link.
 - [CLAUDE.md](CLAUDE.md) — thin-client invariant, naming rules, wire-casing table.
 
-> **Phase note: none of this exists yet.** Every table, route, job and scoring module below is to
-> be built. What exists today is the creator-side `video` table (`src/db/schema.ts:9383`) and its
-> owner-scoped `/videos` routes (`src/routes/videos.routes.ts:38-120`) — **every one of which is
-> `requireAuth`**. There is no public read route anywhere in the backend, and there is not a single
-> view, like, comment, share, save, watch-history or subscription row in the entire schema. The
-> homepage has nothing to call. That is the gap this doc closes.
+> **Phase note: all three phases are BUILT.** This document is now a description of shipped code,
+> not a proposal. Where the implementation departs from what was originally specified, the section
+> says so inline under a **SHIPPED AS** note and gives the reason — those are decisions, and the
+> reasoning is what stops the next reader "correcting" the code back into a bug. Every such note was
+> written after a section-by-section audit of this document against the source.
 
 ---
 
@@ -203,13 +202,10 @@ export const videoShareChannelEnum = pgEnum("video_share_channel", [
     "linkedin",
     "email",
 ]);
-export const feedModeEnum = pgEnum("feed_mode", [
-    "all",
-    "trending",
-    "new_to_you",
-    "recently_uploaded",
-    "watched",
-]);
+// SHIPPED AS: not created. `feedMode` backs a QUERY PARAMETER and no column stores it, so a
+// pgEnum here would be a Postgres type nothing can be assigned to — and a migration nobody can
+// reverse cheaply. It lives as a TypeScript `as const` array, `FEED_MODES` in
+// src/services/feed.service.ts, with the same snake_case labels so the wire contract is unchanged.
 ```
 
 ### 3.2 `viewerFingerprint` — identifying an anonymous viewer without storing them
@@ -217,6 +213,25 @@ export const feedModeEnum = pgEnum("feed_mode", [
 ```text
 viewerFingerprint = sha256(dailyRotatingSalt || clientIp || userAgent)
 ```
+
+> **SHIPPED AS: branched on identity.**
+>
+> ```text
+> signed in : sha256(secret || "videoview" || utcDay || "u:" || userId)
+> anonymous : sha256(secret || "videoview" || utcDay || "a:" || clientIp || userAgent)
+> ```
+>
+> The formula above is wrong for signed-in viewers and wrong SILENTLY. Two people in one office,
+> on the same browser build, hash identically — so the unique index below collapses them into ONE
+> `videoViewSession` row. Whoever arrives first owns the row and its `viewerId`, and the second
+> person's watch time is credited to the first, straight into `completionBasisPointsSum`: the
+> component carrying 40 of ranking's 100 points. That is a correctness bug in the ranker's most
+> important input, not a privacy nicety.
+>
+> The salt is derived (`BETTER_AUTH_SECRET` + the UTC day string) rather than stored. It still
+> rotates daily, is still not persisted beside the hash, and the raw IP is still never written —
+> and a deployment that forgot a dedicated env var cannot silently fall back to an empty salt.
+> `src/lib/viewer-fingerprint.ts`.
 
 The salt rotates daily and is not persisted alongside the hash. **The raw IP is never written to
 the database.** The fingerprint is not an identity, it is a per-day bucket key whose only jobs are
@@ -342,7 +357,23 @@ At 0 samples the video is scored purely on engagement, velocity, creator track a
 | `topicAffinity`   | 25     | max over the video's ≤3 categories                                                        |
 | `creatorAffinity` | 15     | `userCreatorAffinitySnapshot`                                                             |
 | `recency`         | 15     | hours since `publishedAt`: `<6→15, <24→13, <72→10, <168→7, <336→4, <720→2, else 0`        |
-| `exploration`     | 10     | `hash(rankSeed, videoId) % 11`, plus a boost for categories the viewer has no affinity in |
+| `exploration`     | 10     | `hash(rankSeed, videoId) % 8` (0..7) **plus 3** when the viewer has no affinity in any of the video's categories — 7 + 3 = the budget |
+
+> **SHIPPED AS.** `videoQuality` reads the denormalized `videoStats.qualityScorePoints` mirror
+> rather than joining `videoQualityScoreSnapshot` — the feed already joins `videoStats` for its
+> counters, and resolving "which snapshot generation is current" per request would be a second
+> query on the hottest read on the platform. The snapshot remains the auditable record.
+>
+> The exploration hash is **md5**, not `hashtext`: `hashtextextended` is an undocumented Postgres
+> internal whose output is not contracted across versions, and a ranking that reshuffles on a minor
+> server upgrade is exactly the irreproducibility Rule 2 forbids. Seven hex characters cast through
+> `bit(28)::int` so the value is always non-negative — `abs(-2147483648)` raises in Postgres.
+>
+> `?mode=new_to_you` does not simply add 30 to exploration. It uses a SECOND budget table —
+> quality 35, topicAffinity 10, creatorAffinity 0, recency 15, exploration 40 — which still sums
+> to 100. Adding 30 while leaving the rest alone would let the rank reach 130 in a module whose
+> whole discipline is that budgets sum to 100. Taking it from the two affinity components is also
+> what the mode *means*: stop ranking on how deep in the bubble you already are.
 
 **`rankSeed = hash(userId ?? viewerFingerprint, asOfDay)`**, echoed in every response and accepted
 back on the next page request. This is what makes exploration deterministic — Rule 2 forbids
@@ -356,14 +387,31 @@ between page 1 and page 2 and shows the same video twice.
 new account sees a sensible feed that is not _claiming_ to be personalized. No sentinel user rows.
 
 **Anonymous viewer.** A **session-scoped affinity**, computed in-request: join `videoViewSession`
-on `viewerFingerprint` over the last 7 days, count categories, run the same ladder. One indexed
-join. An anonymous visitor's feed starts responding after two or three watches instead of staying
-a flat popularity list forever — which matters, because most first visits are logged out.
+on `viewerFingerprint`, count categories, run the same ladder. One indexed join. An anonymous
+visitor's feed starts responding after two or three watches instead of staying a flat popularity
+list forever — which matters, because most first visits are logged out.
 
-**New video.** `freshnessFloor` + `recency` + a hard **exploration quota**: every page of 24
-reserves **4 slots** for videos published < 72h with < 50 counted views, ranked by recency. This
-is the Douyin traffic-pool idea in its simplest honest form. Without it, ranking is a closed loop
-where the already-popular stay popular and a first upload is invisible.
+> **SHIPPED AS: a ONE-day window, not seven.** The seven was never achievable. §3.2 salts the
+> fingerprint with the UTC day string, so it rotates at midnight and yesterday's sessions carry a
+> different one — a 7-day query matches none of them. Writing 7 would produce a constant that reads
+> like a week of history and delivers a day of it, which is the worst kind of wrong because nothing
+> fails. Recovering the real week needs a stable per-visitor identifier that survives midnight, and
+> that is precisely the long-lived anonymous tracking record §3.2 declined to keep.
+>
+> Creator affinity has **no** cold-start fallback and is a hard 0 for a viewer without a snapshot
+> row: popularity is measured per category, so there is nothing to damp for a creator.
+
+**New video.** `freshnessFloor` + `recency` + a hard **exploration quota**: **4 slots** are
+reserved for videos published < 72h with < 50 counted views. This is the Douyin traffic-pool idea
+in its simplest honest form. Without it, ranking is a closed loop where the already-popular stay
+popular and a first upload is invisible.
+
+> **SHIPPED AS: a promotion inside the ranking, not an injection into the page.** The quota moves
+> fresh videos already present in the diversified prefix (§4.6) to its head; it never inserts a row
+> the ranking placed elsewhere. Injecting would put a video on page 1 that the raw ranking also
+> places on page 3, and the viewer would meet it twice. It therefore acts on the first page rather
+> than on every page — which is where the traffic is, and where a closed loop actually costs a new
+> upload its start.
 
 ### 4.5 Candidate pool
 
@@ -382,10 +430,40 @@ AND NOT EXISTS (counted view by this viewer in the last 30 days)
 The 180-day window is what stops this becoming a full-table scan as the catalog grows; the
 trending escape hatch is what stops an evergreen hit falling off a cliff at day 181.
 
+> **SHIPPED AS.** The escape hatch tests `videoStats.trendingRank IS NOT NULL` rather than joining
+> `trendingVideoSnapshot` at an `asOf` — the hourly job rewrites that column wholesale, so there is
+> exactly one live trending list and no generation to pin.
+>
+> The already-watched exclusion keys on **`viewer_id` when the viewer is signed in**, and only
+> falls back to `viewer_fingerprint` when there is no session. A 30-day lookback on a fingerprint
+> that rotates daily would match nothing older than today — the exclusion would appear to work and
+> quietly re-serve a signed-in viewer everything they watched last week. For an anonymous viewer
+> the fingerprint is the only identity there is, so their exclusion is honestly same-day.
+>
+> The five status terms are written out as LITERALS, byte-identical to `video_feed_candidate_idx`'s
+> predicate. Postgres uses a partial index only when it can prove the query's `WHERE` implies the
+> predicate, and that proof works against literals, not bound parameters. Get it wrong and there is
+> no error anywhere — just a sequential scan.
+
 ### 4.6 Diversity guard
 
-Fetch `limit * 3` ranked candidates, then a **pure post-rank pass** caps 2 videos per creator and
-40% per category per page. Pure function, integer, no I/O — the same discipline as `slice-math.ts`.
+A **pure post-rank pass** caps 2 videos per creator and 40% per category per page. Pure function,
+integer, no I/O — the same discipline as `slice-math.ts`.
+
+> **SHIPPED AS: a PERMUTATION of a fixed 96-row prefix, not a filter over `limit * 3`.**
+>
+> Dropping capped rows out of a `limit * 3` window breaks offset pagination outright, and it looks
+> fine in any single-page test. Ranks 0..11 are fetched for a 4-row page; the cap keeps 0, 1, 4, 7
+> and drops the rest; page 2 asks for offset 4 and serves ranks 4..7 — so two videos appear twice
+> and four are never served at all. This was observed, not theorised.
+>
+> Returning a permutation removes the failure class: every input row comes out exactly once, so any
+> window of the result is disjoint from any other. Rows breaching a cap are DEMOTED to the tail in
+> rank order rather than discarded. The prefix is fixed at 96 rows (four pages of 24) so the cost is
+> constant rather than proportional to `page`, and everything past it is the raw ranked offset.
+>
+> The category cap is floored at one row: `floor(2 × 4000 / 10000)` is 0, and a cap of zero per
+> category is not a cap, it is a ban.
 
 ### 4.7 Starvation relaxation ladder
 
@@ -396,9 +474,18 @@ re-runs deterministically:
 | Stage | Drops                                |
 | ----- | ------------------------------------ |
 | 0     | nothing — full filter                |
-| 1     | the diversity cap                    |
-| 2     | the 30-day already-watched exclusion |
-| 3     | the 180-day recency window           |
+| 1     | the 30-day already-watched exclusion |
+| 2     | the 180-day recency window           |
+
+> **SHIPPED AS: three stages.** "Drop the diversity cap" is gone, because §4.6's cap is now a
+> permutation and a permutation cannot under-fill a page — there is nothing to relax. The two
+> stages that remain are genuine FILTERS, which are the only things that can leave a page short.
+>
+> The under-fill test is deliberately `pageRows.length < limit` and NOT `&& total > offset + …`.
+> That second clause reads like a guard against pointless relaxation and instead makes relaxation
+> unreachable: `total` is computed under the same filter as the page, so when the filter is what
+> emptied the page the total is empty too. A viewer who had watched everything got a blank
+> homepage and the ladder never fired.
 
 The stage reached is recorded in the structured log, **never in the response body** — it is an
 operational fact about the catalog, not something a client should branch on.
@@ -453,7 +540,7 @@ indexes of §3.1:
     "thumbnailUrl": "…",
     "publishedAt": "2026-07-30T09:12:00.000Z", // ISO, never a pre-formatted label — see frontend §3
     "durationSeconds": 412, // null until the median job has ≥5 samples
-    "creator": { "id": "…", "handle": "…", "name": "…", "imageUrl": "…", "isVerified": true },
+    "creator": { "id": "…", "handle": "…", "name": "…", "imageUrl": "…" },
     "categories": [{ "slug": "robotics", "label": "Robotics" }],
     "stats": { "viewCount": 25120, "likeCount": 840, "commentCount": 61 },
     "viewerState": { "hasLiked": false, "hasSaved": false, "isSubscribedToCreator": true },
@@ -463,24 +550,42 @@ indexes of §3.1:
 `viewerState` is embedded, **never a second round trip**. Twenty-four cards must not become
 twenty-five requests.
 
+> **SHIPPED AS: no `creator.isVerified`.** No creator-verification concept exists anywhere in the
+> schema — `talentProfileSkill.isVerified` is a skill badge on a different subsystem. A hard-coded
+> `false` on a trust signal is a claim the platform cannot support, so the key is absent rather
+> than present and meaningless. Same call on `GET /feed/watch/:videoId`.
+
 ### 5.2 Engagement — `src/routes/engagement.routes.ts`
 
 | Method             | Path                              | Auth                   | Limiter                |
 | ------------------ | --------------------------------- | ---------------------- | ---------------------- |
 | `POST`             | `/videos/:videoId/view-beacon`    | optional               | `viewBeaconLimiter`    |
 | `POST`             | `/videos/:videoId/playback-error` | optional               | `playbackErrorLimiter` |
-| `POST` / `DELETE`  | `/videos/:videoId/like`           | required               | `videoLikeLimiter`     |
-| `POST` / `DELETE`  | `/videos/:videoId/save`           | required               | `videoSaveLimiter`     |
+| `PUT` / `DELETE`   | `/videos/:videoId/like`           | required               | `videoLikeLimiter`     |
+| `PUT` / `DELETE`   | `/videos/:videoId/save`           | required               | `videoSaveLimiter`     |
 | `POST`             | `/videos/:videoId/share`          | optional               | `videoShareLimiter`    |
 | `GET`              | `/videos/:videoId/comments`       | optional               | `feedReadLimiter`      |
 | `POST`             | `/videos/:videoId/comments`       | required + idempotency | `commentCreateLimiter` |
 | `PATCH` / `DELETE` | `/comments/:commentId`            | required               | `commentUpdateLimiter` |
-| `POST` / `DELETE`  | `/comments/:commentId/like`       | required               | `commentLikeLimiter`   |
-| `POST` / `DELETE`  | `/creators/:creatorId/subscribe`  | required               | `subscribeLimiter`     |
+| `PUT` / `DELETE`   | `/comments/:commentId/like`       | required               | `commentLikeLimiter`   |
+| `PUT` / `DELETE`   | `/creators/:creatorId/subscribe`  | required               | `subscribeLimiter`     |
 | `GET`              | `/feed/watch/:videoId`            | optional               | `feedReadLimiter`      |
 
 Comment create is wrapped in `src/middleware/idempotency.ts` — a double-tapped submit button must
 not post twice.
+
+> **SHIPPED AS.** The four toggles are `PUT`/`DELETE`, not `POST`/`DELETE`. Each has a per-user
+> unique key, so both verbs are idempotent by construction and a double-tap on a slow connection is
+> harmless rather than a second like — the call `research-programs.routes.ts` already made for post
+> reactions. They carry no body and therefore no body cap.
+>
+> Every authenticated write additionally carries `requireIdentifiedUser`. `anonymous()` mints real
+> sessions, so `requireAuth` alone admits unlimited throwaway identities into counters that feed
+> ranking.
+>
+> `POST /share` stays optional-auth and always writes a row, but moves `videoStats.shareCount`
+> **only for a signed-in sharer** — share count feeds §4.1's engagement rate, and §8.1's rule about
+> anonymous traffic not moving ranking inputs applies to it as much as to completion.
 
 `GET /feed/watch/:videoId` is the public watch payload. It replaces the frontend's legacy
 `src/lib/videos.ts` / `QATOTO_VIDEO_API_URL` path entirely (frontend §8).
@@ -524,22 +629,50 @@ domain where `new Date()` is called.
 
 | Job                                      | Cron               | Why this slot                                                                           |
 | ---------------------------------------- | ------------------ | --------------------------------------------------------------------------------------- |
-| `recompute-video-durations`              | `05 1 * * *`       | must precede quality — completion needs a denominator                                   |
+| `recompute-video-durations`              | `08 1 * * *`       | must precede quality — completion needs a denominator                                   |
 | `recompute-video-quality-scores`         | `25 1 * * *`       | after durations                                                                         |
 | `recompute-platform-category-popularity` | `40 1 * * *`       | after quality; feeds cold start                                                         |
 | `recompute-user-affinities`              | `50 1 * * *`       | after popularity                                                                        |
-| `recompute-trending-videos`              | `35 * * * *`       | **hourly.** A "trending" chip recomputed nightly is a lie about what it says.           |
+| `recompute-trending-videos`              | `18 * * * *`       | **hourly.** A "trending" chip recomputed nightly is a lie about what it says.           |
 | `verify-youtube-video`                   | on demand, backoff | §8.3 deferred verification                                                              |
 | `revalidate-youtube-embeds`              | `10 5 * * *`       | backstop for §8.2                                                                       |
-| `prune-engagement-data`                  | `55 4 * * *`       | snapshots at 14 days; `videoViewSession` aggregated into `videoStats` and dropped at 90 |
+| `prune-engagement-data`                  | `55 4 * * *`       | snapshots at 14 days; `videoViewSession` dropped at 90. **Dry-run by default** — see below |
 
 Ordering is expressed **by cron time**, not by code — same convention as
-`recompute-branch-signals` (`20 3`) running before `recompute-program-stats` (`35 3`). None of the
-slots above collide with the 11 existing crons at `src/lib/jobs.ts:646-690`.
+`recompute-branch-signals` (`20 3`) running before `recompute-program-stats` (`35 3`).
+
+> **CORRECTION.** An earlier version of this line claimed the slots "do not collide with the 11
+> existing crons". That is not achievable and was never true: `sweep-dispute-windows-tick` runs
+> `* * * * *`, so every cron on the platform shares its minute with that one, always.
+>
+> Sharing a minute is also not the thing worth avoiding — a tick does ONE INSERT and each queue is
+> its own `singleton`. What matters is not landing a tick on a heavy nightly recompute, and the two
+> slots above were moved for exactly that: `08 1` because `refresh-talent-projections-tick` already
+> holds `5 * * * *`, and `18 * * * *` because `:35` is `recompute-program-stats-tick` and an hourly
+> job must not meet a nightly one 365 times a year.
 
 Definitions in `src/lib/jobs.ts`, handlers bound only in `src/worker.ts`, queues created by
 `src/jobs-install.ts`. Failures land in `jobFailure` (`schema.ts:2729`); inspect with
-`scripts/inspect-job-failures.ts`.
+`pnpm jobs:inspect-failures`, and start one by hand with `pnpm jobs:trigger <job-name>`.
+
+> **SHIPPED AS: prune deletes, it does not aggregate — and the counters are protected elsewhere.**
+>
+> "Aggregated into `videoStats`" was the right instinct pointed at the wrong job. The transactional
+> counters need no aggregation: they were maintained as the beacons arrived, so deleting the
+> sessions loses per-viewer detail, not totals.
+>
+> The real hazard is the two inputs the quality job RECOMPUTES from those sessions every night —
+> `uniqueViewerCount` and `countedViewsFirst48Hours`. Once prune removes the rows, the engagement
+> denominator collapses (engagement *inflates*) and velocity falls to zero, silently re-ranking
+> every video older than the window. So both are persisted on `videoStats` and, **past the
+> retention horizon only**, held at their stored maximum. Gated on the horizon rather than applied
+> always, because inside the window §8.1's outlier prune must still be able to deflate a farmed
+> video by clearing `is_counted_view`. `src/lib/engagement-retention.ts` holds the one constant
+> both jobs read.
+>
+> The job is gated behind `ENGAGEMENT_PRUNE_ENABLED`, **default false**: it is the first scheduled
+> job in this codebase that deletes domain rows, and while the flag is off it runs its full
+> selection and logs what it would remove.
 
 ---
 
@@ -548,13 +681,33 @@ Definitions in `src/lib/jobs.ts`, handlers bound only in `src/worker.ts`, queues
 New limiters via `createLimiter` (`src/middleware/rate-limit.ts:78`), **each with its own store
 namespace** — reusing a store instance throws `ERR_ERL_STORE_REUSE`:
 
-`feedReadLimiter` · `feedCategoriesLimiter` · `viewBeaconLimiter` (60/min, 200/hr — tightest on
-the platform, it is the only unauthenticated write) · `playbackErrorLimiter` · `videoLikeLimiter` ·
-`videoSaveLimiter` · `videoShareLimiter` · `commentCreateLimiter` · `commentUpdateLimiter` ·
-`commentLikeLimiter` · `subscribeLimiter`.
+`feedReadLimiter` · `viewBeaconBurstLimiter` + `viewBeaconSustainedLimiter` (60/min AND 200/hr —
+tightest on the platform, it is the only unauthenticated write) · `playbackErrorLimiter` ·
+`videoLikeLimiter` · `videoSaveLimiter` · `videoShareLimiter` · `commentCreateLimiter` ·
+`commentUpdateLimiter` · `commentLikeLimiter` · `subscribeLimiter`.
 
-All must be registered in `src/middleware/rate-limit-coverage.test.ts`. That test enforces
-coverage and will fail the build otherwise — which is the point.
+> **SHIPPED AS.** `viewBeaconLimiter` is TWO chained limiters, because `LimiterSpec` carries one
+> window and `createRateLimitStore` is keyed to it. Burst is declared first so a burst violator's
+> `Retry-After` names the minute rather than the hour. Distinct namespaces keep
+> express-rate-limit's double-count guard quiet.
+>
+> **`feedCategoriesLimiter` is deliberately NOT created.** `/feed/categories` is a small,
+> viewer-independent, cacheable list; an IP-keyed bucket on the front page's data source is a
+> self-inflicted outage the first time real traffic arrives from behind a corporate NAT. If it ever
+> needs protection the answer is a cache in front of it, not a bucket that cannot tell a NAT from
+> an attacker. `feedReadLimiter` IS applied to `/feed/videos`, `/feed/watch/:videoId` and the
+> comment list, because those are per-viewer and no cache absorbs them.
+>
+> Every limiter uses the default `userKey`, which already falls back to `ipKeyGenerator(req.ip)` —
+> so `attachOptionalUser` must run BEFORE the limiter, or signed-in viewers land in the shared NAT
+> bucket.
+
+All must be registered in `src/middleware/rate-limit-coverage.test.ts`.
+
+> **CORRECTION.** That test used to count exported limiters against store registrations and never
+> inspect a route, so the claim that it "will fail the build" if a route lacks a limiter was false.
+> It now also walks every mounted router and asserts each mutating route carries one, against an
+> explicit allowlist of the 49 pre-existing routes that do not. The claim is true as of that case.
 
 ---
 
@@ -642,13 +795,23 @@ pnpm start & pnpm start:worker
 curl -s localhost:8000/ready           # must still pass its pgboss version probe
 ```
 
-- Trigger each new job by hand and inspect `scripts/inspect-job-failures.ts`.
+- Trigger each new job by hand with `pnpm jobs:trigger <job-name>` and inspect
+  `pnpm jobs:inspect-failures`. The trigger goes through `sendJob`, so the payload is re-validated
+  and re-running an `asOf` a tick already fired is a no-op rather than a duplicate run.
 - Verify the clamp directly: POST a beacon claiming `positionSeconds: 9999` one second after the
   previous one and confirm `watchedSeconds` moved by ≤ `1 + GRACE_SECONDS`.
 - Verify the unique index: POST two view-beacons for the same video from the same fingerprint on
   the same day and confirm one session row exists, not two.
-- Verify determinism: run `recompute-video-quality-scores` twice with the same `asOf` and diff the
-  snapshot rows. They must be byte-identical.
+- Verify determinism: run `pnpm jobs:trigger recompute-video-quality-scores` twice with the same
+  `asOf` and confirm the job logs **no** `NON-DETERMINISTIC score` error.
+
+  > **CORRECTION.** The original recipe — "diff the snapshot rows, they must be byte-identical" —
+  > cannot fail. The insert is `onConflictDoNothing` on `(videoId, asOf)`, so the second run writes
+  > nothing and the rows are identical by construction whether or not the scorer is deterministic.
+  > The comparison now lives INSIDE the job: when the insert is suppressed it reads what is stored
+  > and checks it against what was just computed, so the check runs on every replay in production
+  > rather than only when somebody remembers a script. To see it fail, edit one snapshot row's
+  > total by hand and re-run.
 - Confirm `rate-limit-coverage.test.ts` passes — it fails if any new route lacks a limiter.
 
 Per [CLAUDE.md](CLAUDE.md), **no tests are written unless explicitly requested.**

@@ -3,6 +3,7 @@ import { and, eq, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { video } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 import { logger } from "#src/lib/logger.js";
 
 /**
@@ -61,7 +62,7 @@ export async function handleRecomputeVideoDurations(rawPayload: unknown): Promis
         AS median_duration_seconds,
       count(*)::int AS sample_count
     FROM video_view_session
-    WHERE first_beacon_at < ${asOf}
+    WHERE first_beacon_at < ${utcTimestamp(asOf)}
     GROUP BY video_id
     HAVING count(*) >= ${MINIMUM_DURATION_SAMPLES}
     ORDER BY video_id

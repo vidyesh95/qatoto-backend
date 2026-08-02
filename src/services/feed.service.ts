@@ -1,6 +1,11 @@
-import { sql, type SQL } from "drizzle-orm";
+import { desc, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
+import {
+  platformCategoryPopularitySnapshot,
+  userCreatorAffinitySnapshot,
+  userTopicAffinitySnapshot,
+} from "#src/db/schema.js";
 import {
   ANONYMOUS_AFFINITY_WINDOW_DAYS,
   computeAffinityScorePoints,
@@ -10,10 +15,11 @@ import {
   applyDiversityCaps,
   FEED_RANK_COMPONENT_BUDGETS,
   feedRankExpression,
-  NEW_TO_YOU_EXPLORATION_BUDGET,
+  NEW_TO_YOU_RANK_COMPONENT_BUDGETS,
   reserveExplorationSlots,
 } from "#src/lib/feed-score.js";
 import { logger } from "#src/lib/logger.js";
+import { utcTimestamp } from "#src/lib/sql-time.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -155,12 +161,6 @@ const RELAXATION_STAGES = [
   "180-day window dropped",
 ] as const;
 
-type SnapshotAsOfRow = {
-  readonly topic_affinity_as_of: Date | null;
-  readonly creator_affinity_as_of: Date | null;
-  readonly popularity_as_of: Date | null;
-};
-
 /**
  * Which snapshot generation to read.
  *
@@ -169,27 +169,41 @@ type SnapshotAsOfRow = {
  * silently read a missing snapshot as zero would be Rule 5 violated at the worst possible
  * place — it would tell a viewer with real, computed affinity that they have none.
  *
- * `max(as_of)` over an indexed column is an index-only scan. One query, three subselects.
+ * ## Why three builder reads and not one `db.execute` with three `max()` subselects
+ *
+ * `db.execute<{ as_of: Date }>` is a CLAIM, not a parse instruction: the raw driver row is
+ * whatever node-pg produced, and the annotation does not convert it. These values are then
+ * fed back into a query as timestamps, so a string arriving where a Date was promised is a
+ * runtime failure in the rendering, not a type error at the boundary.
+ *
+ * Reading the real COLUMN through the query builder goes through drizzle's timestamp
+ * mapping and yields an actual `Date`. `recompute-opportunity-scores.ts` records the same
+ * hazard against `sql<Date>\`max(…)\`` and makes the same call. Each read is an index-only
+ * scan of one row on an indexed column.
  */
+async function latestSnapshotAsOf(
+  table: typeof userTopicAffinitySnapshot | typeof userCreatorAffinitySnapshot | typeof platformCategoryPopularitySnapshot,
+): Promise<Date | null> {
+  const [row] = await db
+    .select({ asOf: table.asOf })
+    .from(table)
+    .orderBy(desc(table.asOf))
+    .limit(1);
+  return row?.asOf ?? null;
+}
+
 async function resolveSnapshotGenerations(): Promise<{
   readonly topicAffinityAsOf: Date | null;
   readonly creatorAffinityAsOf: Date | null;
   readonly popularityAsOf: Date | null;
 }> {
-  const [row] = (
-    await db.execute<SnapshotAsOfRow>(sql`
-      SELECT
-        (SELECT max(as_of) FROM user_topic_affinity_snapshot)          AS topic_affinity_as_of,
-        (SELECT max(as_of) FROM user_creator_affinity_snapshot)        AS creator_affinity_as_of,
-        (SELECT max(as_of) FROM platform_category_popularity_snapshot) AS popularity_as_of
-    `)
-  ).rows;
+  const [topicAffinityAsOf, creatorAffinityAsOf, popularityAsOf] = await Promise.all([
+    latestSnapshotAsOf(userTopicAffinitySnapshot),
+    latestSnapshotAsOf(userCreatorAffinitySnapshot),
+    latestSnapshotAsOf(platformCategoryPopularitySnapshot),
+  ]);
 
-  return {
-    topicAffinityAsOf: row?.topic_affinity_as_of ?? null,
-    creatorAffinityAsOf: row?.creator_affinity_as_of ?? null,
-    popularityAsOf: row?.popularity_as_of ?? null,
-  };
+  return { topicAffinityAsOf, creatorAffinityAsOf, popularityAsOf };
 }
 
 type AnonymousAffinityRow = {
@@ -269,7 +283,7 @@ function topicAffinityExpression(input: {
       : sql`(
           SELECT pop.popularity_points * ${COLD_START_POPULARITY_DAMPING_PERCENT} / 100
           FROM platform_category_popularity_snapshot AS pop
-          WHERE pop.category_id = vc.category_id AND pop.as_of = ${input.popularityAsOf}
+          WHERE pop.category_id = vc.category_id AND pop.as_of = ${utcTimestamp(input.popularityAsOf)}
         )`;
 
   const viewerAffinity =
@@ -279,7 +293,7 @@ function topicAffinityExpression(input: {
           FROM user_topic_affinity_snapshot AS ta
           WHERE ta.user_id = ${input.viewerUserId}
             AND ta.category_id = vc.category_id
-            AND ta.as_of = ${input.topicAffinityAsOf}
+            AND ta.as_of = ${utcTimestamp(input.topicAffinityAsOf)}
         )`
       : input.anonymousAffinity.size > 0
         ? // The in-request anonymous map, inlined as a VALUES list rather than a temp
@@ -303,6 +317,55 @@ function topicAffinityExpression(input: {
 }
 
 /**
+ * §4.3's no-affinity boost: is this video's subject UNFAMILIAR to this viewer?
+ *
+ * True when the viewer has no measured affinity for any of the video's categories. That is
+ * a sharper question than "is `topicAffinityPoints` zero" — that value has already passed
+ * through the cold-start popularity fallback, so a zero there can mean "we substituted the
+ * platform average", which is not the same as "they have never watched this subject".
+ *
+ * An UNTAGGED video counts as unfamiliar (`NOT EXISTS` over an empty set is true), which is
+ * the right answer: it belongs to no subject the viewer has an opinion about.
+ *
+ * A viewer with NO affinity data at all — a brand-new account, or an anonymous first visit
+ * — gets the boost on every candidate. It therefore cancels out and changes no ordering,
+ * which is correct: with nothing to escape, there is no bubble to break.
+ */
+function hasNoTopicAffinityExpression(input: {
+  readonly viewerUserId: string | null;
+  readonly topicAffinityAsOf: Date | null;
+  readonly anonymousAffinity: ReadonlyMap<string, number>;
+}): SQL {
+  if (input.viewerUserId !== null && input.topicAffinityAsOf !== null) {
+    return sql`NOT EXISTS (
+      SELECT 1
+      FROM video_category AS bvc
+      JOIN user_topic_affinity_snapshot AS bta
+        ON bta.category_id = bvc.category_id
+       AND bta.user_id = ${input.viewerUserId}
+       AND bta.as_of = ${utcTimestamp(input.topicAffinityAsOf)}
+      WHERE bvc.video_id = v.id
+    )`;
+  }
+
+  if (input.anonymousAffinity.size > 0) {
+    return sql`NOT EXISTS (
+      SELECT 1
+      FROM video_category AS bvc
+      WHERE bvc.video_id = v.id
+        AND bvc.category_id IN (${sql.join(
+          [...input.anonymousAffinity.keys()].map((categoryId) => sql`${categoryId}`),
+          sql`, `,
+        )})
+    )`;
+  }
+
+  // No affinity data of any kind: every video is unfamiliar, so the boost is uniform and
+  // the ordering is unchanged.
+  return sql`true`;
+}
+
+/**
  * The creator-affinity term.
  *
  * ZERO FOR AN ANONYMOUS VIEWER, and deliberately not approximated from their session
@@ -322,7 +385,7 @@ function creatorAffinityExpression(input: {
     FROM user_creator_affinity_snapshot AS ca
     WHERE ca.user_id = ${input.viewerUserId}
       AND ca.creator_id = v.creator_id
-      AND ca.as_of = ${input.creatorAffinityAsOf}
+      AND ca.as_of = ${utcTimestamp(input.creatorAffinityAsOf)}
   ), 0)`;
 }
 
@@ -557,13 +620,18 @@ export async function listFeedVideos(
       }),
       publishedAt: sql`v.published_at`,
       videoId: sql`v.id`,
+      hasNoTopicAffinity: hasNoTopicAffinityExpression({
+        viewerUserId: input.viewerUserId,
+        topicAffinityAsOf: generations.topicAffinityAsOf,
+        anonymousAffinity,
+      }),
     },
     {
       rankSeed: input.rankSeed,
-      explorationBudget:
+      budgets:
         input.mode === "new_to_you"
-          ? NEW_TO_YOU_EXPLORATION_BUDGET
-          : FEED_RANK_COMPONENT_BUDGETS.exploration,
+          ? NEW_TO_YOU_RANK_COMPONENT_BUDGETS
+          : FEED_RANK_COMPONENT_BUDGETS,
     },
   );
 

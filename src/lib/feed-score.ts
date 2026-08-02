@@ -355,8 +355,37 @@ assertBudgetsSumTo(
   FEED_RANK_MAXIMUM_POINTS,
 );
 
-/** `?mode=new_to_you` raises exploration to 40 (§4.8). */
-export const NEW_TO_YOU_EXPLORATION_BUDGET = 40;
+/**
+ * `?mode=new_to_you`'s budgets (§4.8).
+ *
+ * §4.8 says only "the exploration budget raised to 40" and does not say what gives. Adding
+ * 30 while leaving the other four alone would let the rank reach 130 — in a module whose
+ * entire discipline is that budgets sum to 100 — so the 30 has to come from somewhere.
+ *
+ * IT COMES FROM THE TWO AFFINITY COMPONENTS, and that is not an accounting trick. "New to
+ * you" means *stop showing me what I already like*: a mode built to escape the filter
+ * bubble should not be ranking on the two components that measure how deep in it you are.
+ * Creator affinity goes to zero outright, because this mode already excludes creators the
+ * viewer has watched — the component would score nothing anyway.
+ *
+ * Quality and recency are untouched. Escaping your bubble should not mean being served
+ * worse or staler videos.
+ */
+export const NEW_TO_YOU_RANK_COMPONENT_BUDGETS = {
+  videoQuality: 35,
+  topicAffinity: 10,
+  creatorAffinity: 0,
+  recency: 15,
+  exploration: 40,
+} as const;
+
+// Asserted at module load exactly like the default table. Two budget tables is two chances
+// for one of them to stop summing to 100, and the one nobody looks at is the one that will.
+assertBudgetsSumTo(
+  "NEW_TO_YOU_RANK_COMPONENT_BUDGETS",
+  NEW_TO_YOU_RANK_COMPONENT_BUDGETS,
+  FEED_RANK_MAXIMUM_POINTS,
+);
 
 /**
  * Hours since publication → points. §4.3's table, as data.
@@ -392,10 +421,27 @@ const FEED_RECENCY_LADDER: readonly { readonly maxHours: number; readonly points
 }
 
 /**
- * The eleven exploration buckets of §4.3, before scaling: `hash % 11` is 0..10, which is
- * exactly the default exploration budget.
+ * §4.3's exploration term is TWO things, not one: "`hash(rankSeed, videoId) % 11`, plus a
+ * boost for categories the viewer has no affinity in."
+ *
+ * The budget is 10, so the two parts have to share it. The hash takes 0..7 and the boost
+ * takes a flat 3 — together exactly the budget, at any scaling.
+ *
+ * THE BOOST IS THE HALF THAT MATTERS. The hash is a deterministic shuffle: it stops the
+ * same videos pinning the top of every page, but it is blind to what the viewer has and
+ * has not seen. The boost is the part that actively pushes UNFAMILIAR SUBJECTS forward,
+ * and it is what §8.4's table means when it lists "exploration budget with a no-affinity
+ * boost" against the filter-bubble row.
  */
-const EXPLORATION_BUCKET_COUNT = 11;
+const EXPLORATION_HASH_BUCKETS = 8;
+const NO_AFFINITY_BOOST_SHARE = 3;
+const EXPLORATION_TOTAL_SHARE = EXPLORATION_HASH_BUCKETS - 1 + NO_AFFINITY_BOOST_SHARE;
+
+if (EXPLORATION_TOTAL_SHARE !== FEED_RANK_COMPONENT_BUDGETS.exploration) {
+  throw new Error(
+    `exploration split must sum to the budget ${String(FEED_RANK_COMPONENT_BUDGETS.exploration)}, got ${String(EXPLORATION_TOTAL_SHARE)}`,
+  );
+}
 
 export interface FeedRankColumns {
   /** `videoStats.quality_score_points`. NULL until the nightly job has run. */
@@ -405,6 +451,15 @@ export interface FeedRankColumns {
   readonly creatorAffinityPoints: SQL;
   readonly publishedAt: SQL;
   readonly videoId: SQL;
+  /**
+   * TRUE when the viewer has no measured affinity for ANY of this video's categories.
+   *
+   * Deliberately not derived from `topicAffinityPoints` being zero: that value has already
+   * been COALESCEd through the cold-start popularity fallback, so a zero there means "we
+   * substituted something", not "this subject is unfamiliar to them". The boost has to ask
+   * the sharper question directly.
+   */
+  readonly hasNoTopicAffinity: SQL;
 }
 
 /**
@@ -429,19 +484,20 @@ export interface FeedRankColumns {
  */
 export function feedRankExpression(
   columns: FeedRankColumns,
-  options: { readonly rankSeed: string; readonly explorationBudget: number },
+  options: {
+    readonly rankSeed: string;
+    /** `FEED_RANK_COMPONENT_BUDGETS` or `NEW_TO_YOU_RANK_COMPONENT_BUDGETS`. */
+    readonly budgets: typeof FEED_RANK_COMPONENT_BUDGETS | typeof NEW_TO_YOU_RANK_COMPONENT_BUDGETS;
+  },
 ): SQL {
-  assertNonNegativeIntegerInput(
-    "feedRankExpression",
-    "explorationBudget",
-    options.explorationBudget,
-  );
+  const explorationBudget = options.budgets.exploration;
+  assertNonNegativeIntegerInput("feedRankExpression", "explorationBudget", explorationBudget);
 
   // Integer division throughout: each stored score is 0..100 and is rescaled onto its
   // budget the same way the quality ramp rescales its ladders.
-  const qualityTerm = sql`(COALESCE(${columns.qualityPoints}, 0) * ${FEED_RANK_COMPONENT_BUDGETS.videoQuality} / 100)`;
-  const topicTerm = sql`(COALESCE(${columns.topicAffinityPoints}, 0) * ${FEED_RANK_COMPONENT_BUDGETS.topicAffinity} / 100)`;
-  const creatorTerm = sql`(COALESCE(${columns.creatorAffinityPoints}, 0) * ${FEED_RANK_COMPONENT_BUDGETS.creatorAffinity} / 100)`;
+  const qualityTerm = sql`(COALESCE(${columns.qualityPoints}, 0) * ${options.budgets.videoQuality} / 100)`;
+  const topicTerm = sql`(COALESCE(${columns.topicAffinityPoints}, 0) * ${options.budgets.topicAffinity} / 100)`;
+  const creatorTerm = sql`(COALESCE(${columns.creatorAffinityPoints}, 0) * ${options.budgets.creatorAffinity} / 100)`;
 
   const hoursSincePublished = sql`(EXTRACT(EPOCH FROM (now() - ${columns.publishedAt})) / 3600)`;
   const recencyBranches = FEED_RECENCY_LADDER.map(
@@ -449,13 +505,26 @@ export function feedRankExpression(
   );
   const recencyTerm = sql`(CASE${sql.join(recencyBranches, sql``)} ELSE 0 END)`;
 
-  const explorationTerm = sql`(
+  // Both halves scale with the budget, so raising exploration to 40 for `new_to_you`
+  // widens the shuffle AND the boost together rather than only one of them.
+  const explorationHashTerm = sql`(
     (('x' || substr(md5(${options.rankSeed} || ${columns.videoId}), 1, 7))::bit(28)::int
-      % ${EXPLORATION_BUCKET_COUNT})
-    * ${options.explorationBudget} / ${EXPLORATION_BUCKET_COUNT - 1}
+      % ${EXPLORATION_HASH_BUCKETS})
+    * ${explorationBudget} / ${EXPLORATION_TOTAL_SHARE}
   )`;
+  // Scaled HERE rather than in SQL. `THEN $a * $b / $c` is three untyped bind parameters
+  // with no typed operand to infer from, and Postgres refuses to plan it — the arithmetic
+  // is constant per request anyway, so it belongs in the module that owns the constants.
+  // The remaining parameter is cast for the same reason: a bare `THEN $n` in a CASE has
+  // nothing to take its type from either.
+  const noAffinityBoostPoints = Math.floor(
+    (NO_AFFINITY_BOOST_SHARE * explorationBudget) / EXPLORATION_TOTAL_SHARE,
+  );
+  const noAffinityBoostTerm = sql`(CASE WHEN ${columns.hasNoTopicAffinity}
+    THEN ${noAffinityBoostPoints}::int ELSE 0 END)`;
 
-  return sql`(${qualityTerm} + ${topicTerm} + ${creatorTerm} + ${recencyTerm} + ${explorationTerm})`;
+  return sql`(${qualityTerm} + ${topicTerm} + ${creatorTerm} + ${recencyTerm}
+    + ${explorationHashTerm} + ${noAffinityBoostTerm})`;
 }
 
 // ---------------------------------------------------------------------------

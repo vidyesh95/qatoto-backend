@@ -29,6 +29,7 @@
     "start:worker": "node dist/worker.js",
     "jobs:install": "tsx --conditions=development src/jobs-install.ts",
     "jobs:inspect-failures": "tsx --conditions=development scripts/inspect-job-failures.ts",
+    "jobs:trigger": "tsx --conditions=development scripts/trigger-job.ts",
     "jobs:install:prod": "node dist/jobs-install.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
