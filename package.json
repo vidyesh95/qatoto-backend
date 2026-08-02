@@ -38,6 +38,7 @@
     "db:seed-supplier-capabilities": "tsx --conditions=development scripts/seed-supplier-capabilities.ts",
     "db:seed-research-programs": "tsx --conditions=development scripts/seed-research-programs.ts",
     "db:seed-promotional-slides": "tsx --conditions=development scripts/seed-promotional-slides.ts",
+    "db:seed-content-categories": "tsx --conditions=development scripts/seed-content-categories.ts",
     "db:verify-research-program-constraints": "tsx --conditions=development scripts/verify-research-program-constraints.ts",
     "db:smoke-promotional-slides": "tsx --conditions=development scripts/smoke-promotional-slides.ts",
     "db:smoke-research-programs": "tsx --conditions=development scripts/smoke-research-programs.ts",

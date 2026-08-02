@@ -646,3 +646,101 @@ export async function deletePromotionalSlideImage(
     };
   }
 }
+
+/**
+ * ---------------------------------------------------------------------------------------
+ * Content category tiles (HOME_BACKEND_STRUCTURE.md §2).
+ *
+ * Same deterministic-public-id shape as promotional slides, and for the same reason: the id
+ * is derived from the category id, so replacing a tile's art overwrites in place and cannot
+ * orphan the previous asset. The returned secure_url carries a fresh `/v<timestamp>/`
+ * segment and MUST be written back to `content_category.image_url` — that segment is the
+ * cache bust, and reusing the stored URL after a replace serves the old tile forever.
+ *
+ * Only TILES ever reach this function. A chip category has `image_url NULL` by design and
+ * never has bytes to upload.
+ * ---------------------------------------------------------------------------------------
+ */
+const CONTENT_CATEGORY_FOLDER = "qatoto/content-categories";
+
+/** The stable, deterministic public id a category's tile image always lives at. */
+export function contentCategoryImagePublicId(categoryId: string): string {
+  return `${CONTENT_CATEGORY_FOLDER}/${categoryId}`;
+}
+
+/**
+ * Upload (or overwrite) a category tile image from an already-validated/re-encoded buffer.
+ * The buffer MUST be checked and normalized by the caller first (CLAUDE.md §1.1) — this
+ * layer trusts it.
+ */
+export async function uploadContentCategoryImage(
+  categoryId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: contentCategoryImagePublicId(categoryId),
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Delete a category's tile image. Treated as success when the asset is already gone — the
+ * desired end state is reached either way.
+ */
+export async function deleteContentCategoryImage(
+  categoryId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
+      contentCategoryImagePublicId(categoryId),
+      { invalidate: true },
+    );
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
