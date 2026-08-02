@@ -9379,6 +9379,60 @@ export const storageProviderEnum = pgEnum("storage_provider", [
   "self_hosted",
 ]);
 
+/**
+ * The content taxonomy behind the home feed's filter chips and "What's on your mind?"
+ * tiles (HOME_BACKEND_STRUCTURE.md §2).
+ *
+ * A TABLE, NOT A pgEnum, for the same reason as researchCategory: categories carry an
+ * image and a display order, they are added and retired by product decision rather than
+ * by schema change, and an enum cannot hold an imageUrl.
+ *
+ * IMAGE NULLABILITY IS LOAD-BEARING, and it deviates from §2's draft on purpose. The
+ * seed set has two populations: 12 curated TILES, which have commissioned art, and 11
+ * topical CHIPS, which render as a label and have no art in existence. Making imageUrl
+ * NOT NULL would force a placeholder onto those 11 — asserting an image that is not
+ * real, which is the same class of error as fabricating a zero (§0 Rule 5). Instead the
+ * doc's actual invariant, "a tile with no image is a broken tile", is written as the
+ * implication below. It is deliberately one-directional: a chip may gain art without
+ * being promoted into the curated tile grid.
+ */
+export const contentCategory = pgTable(
+  "content_category",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // Kebab-case, server-generated, public, and linked the moment it exists — therefore
+    // UNWRITABLE after creation. The regex is byte-identical to research_category_slug_ck;
+    // §5.1's `?categorySlug=` query parameter must reuse this same literal, or a slug this
+    // table accepts becomes one the feed route rejects.
+    slug: text("slug").notNull(),
+    label: text("label").notNull(),
+    // The tile image. NULL for a chip — see the header note.
+    imageUrl: text("image_url"),
+    // Which of the two home-page surfaces this category was curated for. A tile is
+    // rendered as art in the "What's on your mind?" grid; a chip is rendered as a label
+    // in the filter row. Both appear in the chip row; only tiles appear in the grid.
+    isTile: boolean("is_tile").default(false).notNull(),
+    sortOrder: integer("sort_order").notNull(),
+    // Retiring a category is `isActive = false`, which is reversible and which
+    // video_category's RESTRICT FK is designed around. Deleting one is not.
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("content_category_slug_unq").on(table.slug),
+    // The only read pattern: the chip row and the tile grid, both ordered.
+    index("content_category_active_order_idx").on(table.isActive, table.sortOrder),
+    check("content_category_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
+    check("content_category_tile_image_ck", sql`is_tile = false OR image_url IS NOT NULL`),
+  ],
+);
+
 // A video, owned by exactly one creator.
 export const video = pgTable(
   "video",
@@ -9400,6 +9454,30 @@ export const video = pgTable(
     // videoSource = "hosted", which nothing produces today. The format CHECK below
     // is what makes this value safe to interpolate into an outbound oEmbed URL.
     youtubeVideoId: text("youtube_video_id"),
+    /**
+     * Has the id above been PROVEN to resolve to a public, embeddable video
+     * (HOME_BACKEND_STRUCTURE.md §8.3)?
+     *
+     * THIS FLAG IS NOT A SECURITY BOUNDARY, and confusing it for one would be the
+     * dangerous reading. `video_youtube_id_format_ck` below is what closes SSRF, and it
+     * applies to every row regardless of this column. This flag answers a different
+     * question: does the video exist and will it play?
+     *
+     * WHY IT EXISTS. Verification used to be synchronous inside createVideo, so a
+     * YouTube outage threw away the creator's upload with a 502. Now the id is stored
+     * regardless, the row is born a draft with this flag false, and `verify-youtube-video`
+     * retries with backoff until it flips. The invariant "no unverified id in a published
+     * row" is preserved WITHOUT discarding the upload.
+     *
+     * THREE READERS ENFORCE IT: publishVideo refuses while false, content-review approve
+     * refuses while false, and §4.5's feed candidate pool requires it true. A fourth
+     * reader of youtubeVideoId added later must check it too — this comment is the only
+     * thing that will tell them.
+     *
+     * Existing rows were backfilled to true in the migration that added this column:
+     * every one of them went through the old synchronous verify.
+     */
+    isSourceVerified: boolean("is_source_verified").default(false).notNull(),
 
     // --- Provider-neutral media identity. ALL NULL TODAY (Appendix A, rule 2). ---
     storageProvider: storageProviderEnum("storage_provider"),
@@ -9483,6 +9561,18 @@ export const video = pgTable(
     shortsRemixing: shortsRemixEnum("shorts_remixing"),
     recordingDate: date("recording_date"),
     recordingLocation: text("recording_location"),
+    /**
+     * DEAD COLUMN. Superseded by `video_category` (HOME_BACKEND_STRUCTURE.md §2.2).
+     *
+     * Free text, unindexed, and validated by nobody — filtering on it would be a LIKE
+     * over a column no schema ever constrained. Every write path was removed when
+     * `categoryIds` landed; the read in `toPublicVideo` survives for ONE release so that
+     * dropping the column and dropping its last reader are two separate deploys. Doing
+     * both at once is how you find out in production that something still read it.
+     *
+     * `scripts/backfill-video-categories.ts` maps the confident values onto video_category
+     * and prints the rest for a human. Remove this column once that list is resolved.
+     */
     category: text("category"),
 
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -9508,6 +9598,36 @@ export const video = pgTable(
     uniqueIndex("video_asset_unq")
       .on(table.videoAssetId)
       .where(sql`video_asset_id is not null`),
+    /**
+     * The home feed's candidate pool (HOME_BACKEND_STRUCTURE.md §4.5), as a PARTIAL index.
+     *
+     * WHY PARTIAL AND NOT A COMPOSITE. Every term in §4.5's static filter is a
+     * low-cardinality enum or boolean, so a b-tree leading on them is nearly useless —
+     * the planner would scan a huge fraction of the index to find the published rows.
+     * Moving the whole static filter into the PREDICATE makes the index *be* the
+     * candidate pool: it holds only rows that can ever be served, and its single key
+     * column is the one the feed actually ranges and sorts on.
+     *
+     * THE TRAP, and it fails silently. Postgres uses a partial index only when it can
+     * PROVE the query's WHERE implies this predicate. Proof works against literals, not
+     * against bound parameters — `review_status = ANY($1)` does not imply
+     * `review_status IN ('not_required','approved')` as far as the planner is concerned.
+     * The §4.5 query must therefore spell these five terms out literally and identically.
+     * Get it wrong and there is no error anywhere; there is just a sequential scan.
+     *
+     * Built now rather than with §4.5 in phase 3 because CREATE INDEX (drizzle-kit does
+     * not emit CONCURRENTLY) takes a lock that blocks every write to this table for the
+     * duration. That is free today and a studio outage later.
+     */
+    index("video_feed_candidate_idx")
+      .on(table.publishedAt.desc())
+      .where(
+        sql`publish_status = 'published'
+            AND visibility = 'public'
+            AND upload_status = 'ready'
+            AND is_source_verified = true
+            AND review_status IN ('not_required', 'approved')`,
+      ),
 
     // A youtube row with no id is a dead player; a hosted row has no id by design.
     check("video_source_id_ck", sql`(video_source <> 'youtube') OR (youtube_video_id IS NOT NULL)`),
@@ -9543,6 +9663,39 @@ export const video = pgTable(
     ),
     check("video_sector_tags_ck", sql`cardinality(sector_tags) <= 20`),
     check("video_tags_ck", sql`cardinality(tags) <= 30`),
+  ],
+);
+
+/**
+ * Which categories a video is tagged into (HOME_BACKEND_STRUCTURE.md §2). At most three,
+ * enforced in the service — a cardinality bound ACROSS rows is not expressible as a table
+ * CHECK, and a trigger to fake one buys nothing here.
+ *
+ * NO `position` COLUMN, deliberately. §4.3 scores topic affinity as the MAX over a video's
+ * categories, so there is no primary and no order to preserve. talentProfileSkill and
+ * supplierCapabilityLink are the shape precedent, not videoAttachedProduct — that one has a
+ * position because it renders as an ordered list.
+ */
+export const videoCategory = pgTable(
+  "video_category",
+  {
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    // RESTRICT, not cascade, and the asymmetry with videoId is the point: deleting a
+    // category that videos still use should fail loudly rather than silently untag them.
+    // Retiring one is `isActive = false`, which is reversible.
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => contentCategory.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.videoId, table.categoryId] }),
+    // The PK covers video -> categories. This is the reverse: the §5.1 category filter
+    // reads category -> videos, and without it that is a sequential scan. Built now
+    // because building it later locks the table.
+    index("video_category_categoryId_idx").on(table.categoryId, table.videoId),
   ],
 );
 
@@ -9874,6 +10027,20 @@ export const videoRelations = relations(video, ({ one, many }) => ({
   collaborators: many(videoCollaborator),
   playlistItems: many(playlistItem),
   reviewActions: many(contentReviewAction),
+  categories: many(videoCategory),
+}));
+
+// Child-side only, as everywhere in this section: userRelations is deliberately untouched.
+export const contentCategoryRelations = relations(contentCategory, ({ many }) => ({
+  videoLinks: many(videoCategory),
+}));
+
+export const videoCategoryRelations = relations(videoCategory, ({ one }) => ({
+  video: one(video, { fields: [videoCategory.videoId], references: [video.id] }),
+  category: one(contentCategory, {
+    fields: [videoCategory.categoryId],
+    references: [contentCategory.id],
+  }),
 }));
 
 export const videoChapterRelations = relations(videoChapter, ({ one }) => ({
