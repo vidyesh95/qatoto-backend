@@ -33,6 +33,19 @@ const citext = customType<{ data: string }>({
   },
 });
 
+// Postgres' full-text search document type, backing `video.searchDocument`.
+//
+// IT IS NEVER READ OR WRITTEN BY THE APPLICATION — the column is GENERATED ALWAYS, so
+// Postgres computes it and an INSERT or UPDATE that mentions it is an error. The type
+// exists so drizzle-kit knows the column is there and does not try to add it on every
+// `generate`; `data: string` is the shape the driver would hand back if anyone ever
+// selected it, which nothing does.
+const tsvector = customType<{ data: string }>({
+  dataType() {
+    return "tsvector";
+  },
+});
+
 // Provenance of `user.image`. "oauth" = seeded from a Google/GitHub profile;
 // "user" = the user uploaded their own photo (PATCH /users/me/photo). NULL = no
 // image. "user" is a lock: OAuth must never overwrite a user-owned photo, exactly
@@ -9575,6 +9588,42 @@ export const video = pgTable(
      */
     category: text("category"),
 
+    /**
+     * What `GET /feed/search` matches against.
+     *
+     * GENERATED AND STORED, NOT A TRIGGER AND NOT A JOB. Postgres recomputes it inside the
+     * same UPDATE that changes a title, so the index cannot drift from the row it describes
+     * and there is no backfill to run, nothing to re-enqueue after a failed job, and no
+     * window where an edited title is findable under its old wording.
+     *
+     * THE THREE WEIGHTS ARE THE RANKING, and `ts_rank_cd` reads them: a title hit (A) must
+     * outrank a description hit (C) for the same term, or searching "beni" returns whichever
+     * video happens to mention it most rather than the ones named for it. Tags sit between
+     * the two — a creator chose them deliberately, which is more signal than prose, and less
+     * than the title.
+     *
+     * IT CANNOT INCLUDE THE CREATOR'S NAME. A generated column may only reference its OWN
+     * row, and the handle lives on `"user"`. Creator matching is therefore a separate,
+     * lower-ranked term evaluated at query time in `searchVideos` — not an omission.
+     *
+     * `english`, not `simple`, so "robots" finds "robot". The cost is that the stemmer is
+     * language-specific and `videoLanguage` is not consulted; a per-language configuration
+     * would mean a different generated expression per row, which a generated column cannot
+     * express. One config, chosen for the catalogue that exists.
+     *
+     * ⚠️ `text_array_to_search_text`, NOT `array_to_string`. A generated expression must be
+     * IMMUTABLE, and `array_to_string` is only STABLE — Postgres refuses this column outright
+     * ("generation expression is not immutable") if it appears here. The wrapper, created in
+     * the same migration, is `array_to_string` narrowed to `text[]`, where the underlying
+     * output function genuinely is immutable. The marker is a fact about `text[]`, not a
+     * promise being made on behalf of a type that cannot keep it.
+     */
+    searchDocument: tsvector("search_document").generatedAlwaysAs(
+      sql`setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+          setweight(to_tsvector('english', text_array_to_search_text(tags)), 'B') ||
+          setweight(to_tsvector('english', coalesce(description, '')), 'C')`,
+    ),
+
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -9583,6 +9632,9 @@ export const video = pgTable(
   },
   (table) => [
     index("video_creatorId_idx").on(table.creatorId),
+    // GIN, not b-tree: `@@` against a tsvector is a containment test over lexemes, which is
+    // exactly what an inverted index answers and what a b-tree cannot answer at all.
+    index("video_search_document_idx").using("gin", table.searchDocument),
     index("video_publishStatus_idx").on(table.publishStatus),
     // Composite, not two singles: the admin queue filters reviewStatus AND videoType
     // together and nothing filters videoType alone.

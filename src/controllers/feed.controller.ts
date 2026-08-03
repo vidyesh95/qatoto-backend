@@ -19,7 +19,11 @@ import { logger } from "#src/lib/logger.js";
 import { isWellFormedRankSeed, mintRankSeed, RANK_SEED_LENGTH } from "#src/lib/rank-seed.js";
 import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
 import * as contentCategoriesService from "#src/services/content-categories.service.js";
-import { FEED_MODES, listFeedVideos as listFeedVideosService } from "#src/services/feed.service.js";
+import {
+  FEED_MODES,
+  listFeedVideos as listFeedVideosService,
+  searchVideos as searchVideosService,
+} from "#src/services/feed.service.js";
 import * as videoWatchService from "#src/services/video-watch.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
@@ -207,6 +211,74 @@ export async function listFeedVideos(req: Request, res: Response): Promise<void>
       totalPages: Math.ceil(feedResult.value.total / parsedQuery.data.limit),
     },
     rankSeed: feedResult.value.rankSeed,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * `GET /feed/search` — the query contract for relevance search.
+ *
+ * `query` IS REQUIRED AND CANNOT BE EMPTY. A blank search is not a search: it would ask the
+ * database to rank the entire catalogue by a tsquery that matches nothing, and the client
+ * already knows not to send it — an empty box renders a prompt, not a request. `.trim()`
+ * first, so `?query=%20` is a 422 rather than a scan.
+ *
+ * 120 characters is well past any real query and short enough that `websearch_to_tsquery`
+ * cannot be handed a novel to parse.
+ *
+ * `page` and `limit` share `ListFeedVideosQuerySchema`'s bounds for the same reason it has
+ * them: offset pagination gets more expensive the deeper it goes, and nothing on a search
+ * results page asks for row 10,000.
+ */
+export const SearchVideosQuerySchema = z
+  .object({
+    query: z.string().trim().min(1).max(120),
+    page: z.coerce.number().int().min(1).max(200).default(1),
+    limit: z.coerce.number().int().min(1).max(50).default(24),
+  })
+  .strict();
+
+/**
+ * `GET /feed/search` — videos matching a typed query, most relevant first.
+ *
+ * NO `rankSeed` IN THE RESPONSE, unlike `/feed/videos`. The feed's seed exists to pin an
+ * exploration term so page 2 does not reshuffle page 1; search has no exploration term to
+ * pin, because its order is relevance and relevance is deterministic. Returning a seed the
+ * route ignores would invite a client to thread one through.
+ *
+ * `PaginatedResponse` exactly — `data` plus `pagination`, no third sibling — which is what
+ * lets the frontend read it with the ordinary paginated helper.
+ *
+ * The service answers no error union: a query that matches nothing is an empty page, not a
+ * failure, and every other outcome here is an exception the error middleware owns.
+ */
+export async function searchVideos(req: Request, res: Response): Promise<void> {
+  const parsedQuery = SearchVideosQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const searchPage = await searchVideosService({
+    query: parsedQuery.data.query,
+    page: parsedQuery.data.page,
+    limit: parsedQuery.data.limit,
+    // Optional auth: an anonymous searcher gets the same rows with every viewerState flag
+    // false, which is definitionally true of them rather than a lookup we failed to do.
+    viewerUserId: req.user?.id ?? null,
+  });
+
+  const response: PaginatedResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Search results retrieved successfully",
+    data: [...searchPage.rows],
+    pagination: {
+      page: parsedQuery.data.page,
+      limit: parsedQuery.data.limit,
+      total: searchPage.total,
+      totalPages: Math.ceil(searchPage.total / parsedQuery.data.limit),
+    },
   };
   res.status(200).json(response);
 }

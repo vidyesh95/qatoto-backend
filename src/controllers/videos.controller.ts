@@ -178,6 +178,13 @@ const videoFieldShapes = {
    * No `.default([])`, here or in CreateVideoSchema below. See the note on this map: a
    * default on an array field would make an omitted key mean "remove all categories" on a
    * PATCH. The service reads `?? []` instead.
+   *
+   * NO `.min(1)`, AND AN EMPTY SET IS NOT AN UNTAGGED VIDEO. Choosing a category is optional
+   * for the creator; `withDefaultCategoryFallback` in `videos.service.ts` turns an empty set
+   * — omitted on create, or `[]` on either verb — into the single default bucket
+   * (`DEFAULT_CONTENT_CATEGORY_SLUG`). The feed's category predicate never relaxes, so a
+   * genuinely untagged video is invisible to every category filter; requiring a choice at
+   * this boundary would have pushed that cost onto the creator instead.
    */
   categoryIds: z.array(z.string().min(1).max(64)).max(3),
   attachedProductIds: z.array(z.string().min(1).max(64)).max(50),

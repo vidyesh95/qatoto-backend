@@ -6,7 +6,7 @@
  * `feed.service.ts` stays unwritten until §4's ranker needs it, so that the one file named
  * for ranking contains only ranking.
  *
- * BOTH FUNCTIONS HERE ARE PURE READS AND NEITHER RETURNS A `Result`. There is no failure
+ * EVERY FUNCTION HERE IS A PURE READ AND NONE RETURNS A `Result`. There is no failure
  * mode: an empty taxonomy is an empty array, not an error, and `findUnavailableCategoryIds`
  * answers a question rather than performing an act. `Result` is for operations that can
  * fail, and inventing an error union for a SELECT would be ceremony.
@@ -16,6 +16,22 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { contentCategory } from "#src/db/schema.js";
+
+/**
+ * Where a video goes when its creator picks no category.
+ *
+ * WHY A DEFAULT EXISTS AT ALL. The feed's category predicate never relaxes — `EXISTS (SELECT
+ * 1 FROM video_category …)` is in the WHERE at every relaxation stage — so an untagged video
+ * is unreachable by every category filter for as long as it exists. Category selection stays
+ * OPTIONAL at the boundary (`categoryIds` has no `.min(1)`), and the cost of that choice is
+ * paid here instead of by the viewer.
+ *
+ * A SLUG, NOT AN ID, and resolved at call time rather than pinned as a constant. The seed
+ * script fixes the row's UUID, but nothing stops an environment from being seeded by hand,
+ * and a hardcoded id that is wrong fails as a foreign-key violation on someone's upload.
+ * A slug that is wrong fails as a `null` this module already handles.
+ */
+export const DEFAULT_CONTENT_CATEGORY_SLUG = "people-and-blogs";
 
 /**
  * What a visitor sees for one category.
@@ -92,4 +108,34 @@ export async function findUnavailableCategoryIds(
 
   const availableIds = new Set(availableRows.map((row) => row.id));
   return categoryIds.filter((categoryId) => !availableIds.has(categoryId));
+}
+
+/**
+ * The id behind `DEFAULT_CONTENT_CATEGORY_SLUG`, or `null` when that row is missing or has
+ * been retired.
+ *
+ * `null` IS A LEGITIMATE ANSWER AND NOT AN ERROR, which is why this returns an id rather
+ * than a `Result`. The caller's contract is to write no categories in that case — the
+ * behaviour before the default existed. An upload refused because an operator forgot to run
+ * `pnpm db:seed-content-categories` would trade a soft problem (an untagged video) for a
+ * hard one (a creator who cannot publish), and the seed row is not something a creator can
+ * fix.
+ *
+ * `isActive` is part of the lookup for the same reason it is half of
+ * `findUnavailableCategoryIds`' predicate: retiring the default must stop new videos from
+ * being tagged into it, not start writing rows a filter will never surface.
+ */
+export async function resolveDefaultCategoryId(): Promise<string | null> {
+  const [defaultRow] = await db
+    .select({ id: contentCategory.id })
+    .from(contentCategory)
+    .where(
+      and(
+        eq(contentCategory.slug, DEFAULT_CONTENT_CATEGORY_SLUG),
+        eq(contentCategory.isActive, true),
+      ),
+    )
+    .limit(1);
+
+  return defaultRow?.id ?? null;
 }

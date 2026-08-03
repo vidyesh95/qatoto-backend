@@ -79,4 +79,25 @@ router.get("/watch/:videoId", attachOptionalUser, feedReadLimiter, feedControlle
  */
 router.get("/videos", attachOptionalUser, feedReadLimiter, feedController.listFeedVideos);
 
+/**
+ * `GET /feed/search` — relevance search over the public catalogue.
+ *
+ * A SEPARATE ROUTE, NOT `?query=` ON `/videos`, and the split is not cosmetic. The feed's
+ * page is a ranked, seeded, diversity-permuted slice with a relaxation ladder behind it;
+ * search is `ts_rank_cd` over a GIN index with none of that. Folding the two together would
+ * mean one handler whose entire behaviour — ordering, pagination stability, response shape
+ * (`rankSeed` or no `rankSeed`) — forks on whether one parameter is present, which is two
+ * routes wearing one URL.
+ *
+ * BOTH MIDDLEWARES, for the same reasons `/watch/:videoId` above carries them and
+ * `/categories` refuses them: the response embeds `viewerState`, so it is per-viewer and
+ * uncacheable, and a full-text scan with a `count(*)` behind it is real work per call. The
+ * NAT argument that keeps the taxonomy bare does not protect a route like this.
+ *
+ * DECLARED AFTER `/videos` AND BEFORE ANY `/feed/:param` ROUTE. Express matches in
+ * declaration order, and a parameterised sibling added above this line would swallow
+ * `/search` silently — the failure mode would look like a 404 from a route that exists.
+ */
+router.get("/search", attachOptionalUser, feedReadLimiter, feedController.searchVideos);
+
 export default router;

@@ -3,8 +3,9 @@
  *
  * TWO POPULATIONS, ONE TABLE. The 12 TILES come from `all-content.tsx`'s VIDEO_CATEGORIES
  * and have commissioned art committed in the frontend repo; they seed with `isTile: true`
- * and a Cloudinary URL. The 11 CHIPS come from `filter.tsx`'s FILTER_CHIPS and have no art
- * anywhere; they seed with `imageUrl: null`. That null is deliberate and is why the column
+ * and a Cloudinary URL. The 12 CHIPS are `filter.tsx`'s FILTER_CHIPS plus the default bucket
+ * `people-and-blogs`, and have no art anywhere; they seed with `imageUrl: null`. That null is
+ * deliberate and is why the column
  * is nullable — inventing a placeholder would assert an image that does not exist, which is
  * the same class of error as fabricating a zero (§0 Rule 5).
  *
@@ -164,6 +165,18 @@ const BASELINE_TILE_CATEGORIES: readonly BaselineTileCategory[] = [
  * The 11 topical chips, in `filter.tsx`'s own declaration order minus the modes, the
  * aesthetics, "Live", and the Robotics duplicate. Preserving that order keeps the chip row
  * looking as close to today as a taxonomy change allows.
+ *
+ * `people-and-blogs` is the twelfth and is NOT from that list — it is the DEFAULT bucket a
+ * video lands in when its creator picks nothing (`DEFAULT_CONTENT_CATEGORY_SLUG` in
+ * `content-categories.service.ts`). It seeds LAST so it sorts to the end of the chip row,
+ * and as a chip rather than a tile because a catch-all is not a subject worth advertising in
+ * the "What's on your mind?" grid — and a tile with no art is a broken tile
+ * (`content_category_tile_image_ck`).
+ *
+ * IT MUST EXIST IN EVERY ENVIRONMENT THE STUDIO WRITES TO. Its absence does not break an
+ * upload — the service falls back to writing no categories and logs — but it does mean
+ * untagged videos are unreachable by every category filter, which is the exact hole the
+ * default was added to close.
  */
 const BASELINE_CHIP_CATEGORIES: readonly BaselineChipCategory[] = [
   { id: "c0a7e1d3-4b52-4f68-9a71-00000000000d", slug: "news", label: "News" },
@@ -177,6 +190,11 @@ const BASELINE_CHIP_CATEGORIES: readonly BaselineChipCategory[] = [
   { id: "c0a7e1d3-4b52-4f68-9a71-000000000015", slug: "electronics", label: "Electronics" },
   { id: "c0a7e1d3-4b52-4f68-9a71-000000000016", slug: "sports", label: "Sports" },
   { id: "c0a7e1d3-4b52-4f68-9a71-000000000017", slug: "animated", label: "Animated" },
+  {
+    id: "c0a7e1d3-4b52-4f68-9a71-000000000018",
+    slug: "people-and-blogs",
+    label: "People & Blogs",
+  },
 ];
 
 interface PreparedCategory {

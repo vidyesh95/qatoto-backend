@@ -19,6 +19,7 @@ import {
   reserveExplorationSlots,
 } from "#src/lib/feed-score.js";
 import { logger } from "#src/lib/logger.js";
+import { escapeLikePattern } from "#src/lib/sql-pattern.js";
 import { utcDateFromRow, utcTimestamp } from "#src/lib/sql-time.js";
 import type { Result } from "#src/types/index.js";
 
@@ -402,6 +403,32 @@ function creatorAffinityExpression(input: {
 }
 
 /**
+ * "This video may be shown to a stranger" — and nothing else.
+ *
+ * ⚠️ THE FIVE STATUS TERMS ARE SPELLED OUT AS LITERALS, byte-identical to
+ * `video_feed_candidate_idx`'s predicate (schema.ts). Postgres uses a partial index only
+ * when it can PROVE the query's WHERE implies the predicate, and that proof works against
+ * literals, not bound parameters. See the long note on `candidatePoolPredicate` below.
+ *
+ * SHARED BY THE FEED AND BY SEARCH, which is why it is its own function: two copies of five
+ * literals is two chances for one of them to drift out of the index's predicate, and the
+ * penalty for drift is a silent sequential scan rather than an error.
+ *
+ * IT DELIBERATELY CARRIES NOTHING ELSE. The recency window, the already-watched exclusion
+ * and the creator self-exclusion are FEED RANKING decisions, not visibility ones — search
+ * must return an eight-month-old video the viewer already watched and uploaded themselves,
+ * because they typed its title.
+ */
+function publicVideoPredicate(): SQL {
+  return sql`v.publish_status = 'published'
+        AND v.visibility = 'public'
+        AND v.upload_status = 'ready'
+        AND v.is_source_verified = true
+        AND v.review_status IN ('not_required', 'approved')
+        AND v.published_at IS NOT NULL AND v.published_at <= now()`;
+}
+
+/**
  * §4.5's candidate pool.
  *
  * ⚠️ THE FIVE STATUS TERMS ARE SPELLED OUT AS LITERALS, byte-identical to
@@ -419,14 +446,7 @@ function candidatePoolPredicate(input: {
   readonly categorySlug: string | null;
   readonly relaxationStage: number;
 }): SQL {
-  const conditions: SQL[] = [
-    sql`v.publish_status = 'published'
-        AND v.visibility = 'public'
-        AND v.upload_status = 'ready'
-        AND v.is_source_verified = true
-        AND v.review_status IN ('not_required', 'approved')`,
-    sql`v.published_at IS NOT NULL AND v.published_at <= now()`,
-  ];
+  const conditions: SQL[] = [publicVideoPredicate()];
 
   // A creator's own videos are never in their feed. Nothing enforces this downstream, and
   // without it the highest-affinity creator for any creator is themselves.
@@ -844,4 +864,122 @@ async function fetchFreshCandidateIds(input: ListFeedVideosInput): Promise<Reado
   `);
 
   return new Set(rows.rows.map((row) => row.id));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Search                                                                       */
+/* -------------------------------------------------------------------------- */
+
+export interface SearchVideosInput {
+  readonly query: string;
+  readonly page: number;
+  readonly limit: number;
+  readonly viewerUserId: string | null;
+}
+
+export interface SearchVideoPage {
+  readonly rows: readonly FeedVideoItem[];
+  readonly total: number;
+}
+
+/**
+ * `GET /feed/search` — relevance over `video.search_document`.
+ *
+ * ## It is not the feed with a WHERE clause
+ *
+ * Everything §4 does is deliberately absent here. No rank seed, no exploration quota, no
+ * diversity permutation, no relaxation ladder. A viewer who typed "beni" is not browsing;
+ * shuffling their results to give an unseen creator a chance is a bug wearing a feature's
+ * clothes, and a ladder cannot help when a short page means "we do not have it" rather than
+ * "the filter was too tight".
+ *
+ * The visibility predicate is `publicVideoPredicate` alone — no 180-day window, no
+ * already-watched exclusion, and no creator self-exclusion. A creator searching for their own
+ * upload must find it, which is exactly what the feed's pool is built to prevent.
+ *
+ * ## What is being matched
+ *
+ * `websearch_to_tsquery` rather than `plainto_tsquery`: it accepts quoted phrases, `or` and
+ * `-excluded` from a person typing into a box, and it does not raise on syntax a person will
+ * inevitably produce. `to_tsquery` would answer a 500 to an unbalanced quote.
+ *
+ * THE CREATOR TERM IS SEPARATE AND CANNOT BE OTHERWISE. `search_document` is a GENERATED
+ * column, and a generated expression may only reference its own row — the handle and display
+ * name live on `"user"`. So a name match is an OR branch evaluated at query time, and it
+ * contributes a fixed rank rather than a `ts_rank_cd`, because there is no document to
+ * measure coverage against.
+ *
+ * ## The stopword hole
+ *
+ * `websearch_to_tsquery('english', 'the a of')` is a VALID, EMPTY tsquery, and an empty
+ * tsquery matches nothing. Left alone, searching "The Who" answers zero results with no
+ * indication that the words were thrown away. `numnode() = 0` detects it and the query falls
+ * back to a literal `ILIKE` over the title, which is what the reader meant. The pattern is
+ * escaped — an unescaped `%` from a client turns a search box into a full-table-scan
+ * selector.
+ */
+export async function searchVideos(input: SearchVideosInput): Promise<SearchVideoPage> {
+  const tsQuery = sql`websearch_to_tsquery('english', ${input.query})`;
+  const likePattern = `%${escapeLikePattern(input.query)}%`;
+
+  // One expression, referenced by the WHERE, the ORDER BY and the count. Postgres evaluates
+  // `numnode()` once per row-free constant folding, so this costs nothing per row.
+  const hasUsableTsQuery = sql`numnode(${tsQuery}) > 0`;
+
+  const matchPredicate = sql`(
+    (${hasUsableTsQuery} AND (
+      v.search_document @@ ${tsQuery}
+      OR to_tsvector('english', coalesce(u.name, '') || ' ' || coalesce(u.handle, '')) @@ ${tsQuery}
+    ))
+    OR (NOT ${hasUsableTsQuery} AND (
+      v.title ILIKE ${likePattern}
+      OR coalesce(u.handle, '') ILIKE ${likePattern}
+      OR coalesce(u.name, '') ILIKE ${likePattern}
+    ))
+  )`;
+
+  const wherePredicate = sql`${publicVideoPredicate()} AND ${matchPredicate}`;
+
+  // `32` is `ts_rank_cd`'s "divide by the document length" normalisation: without it a long
+  // description outranks a title purely by containing more words, which inverts the weights
+  // the generated column was built to express.
+  //
+  // The creator term adds a FLAT bonus rather than a measured rank. It is deliberately small
+  // enough to sit below a real title hit and large enough to beat a passing mention in a
+  // description — a search for a creator's handle should surface their videos, not the ones
+  // that merely name-drop them.
+  const rankExpression = sql`
+    ts_rank_cd(v.search_document, ${tsQuery}, 32)
+    + CASE
+        WHEN ${hasUsableTsQuery}
+         AND to_tsvector('english', coalesce(u.name, '') || ' ' || coalesce(u.handle, '')) @@ ${tsQuery}
+        THEN 0.05
+        ELSE 0
+      END
+  `;
+
+  const offset = (input.page - 1) * input.limit;
+
+  const [pageResult, totalResult] = await Promise.all([
+    db.execute<FeedRow>(sql`
+      SELECT ${feedSelectClause(input.viewerUserId)}
+      FROM video AS v
+      JOIN "user" AS u ON u.id = v.creator_id
+      LEFT JOIN video_stats AS vs ON vs.video_id = v.id
+      WHERE ${wherePredicate}
+      ORDER BY ${rankExpression} DESC, v.published_at DESC, v.id DESC
+      LIMIT ${input.limit} OFFSET ${offset}
+    `),
+    db.execute<TotalRow>(sql`
+      SELECT count(*)::int AS total
+      FROM video AS v
+      JOIN "user" AS u ON u.id = v.creator_id
+      WHERE ${wherePredicate}
+    `),
+  ]);
+
+  return {
+    rows: pageResult.rows.map((row) => toFeedVideoItem(row)),
+    total: totalResult.rows[0]?.total ?? 0,
+  };
 }

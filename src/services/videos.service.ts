@@ -30,6 +30,7 @@ import {
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
+import { logger } from "#src/lib/logger.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
   buildYoutubeEmbedUrl,
@@ -39,7 +40,11 @@ import {
   type YoutubeSourceError,
   type YoutubeVideoFacts,
 } from "#src/lib/youtube.js";
-import { findUnavailableCategoryIds } from "#src/services/content-categories.service.js";
+import {
+  DEFAULT_CONTENT_CATEGORY_SLUG,
+  findUnavailableCategoryIds,
+  resolveDefaultCategoryId,
+} from "#src/services/content-categories.service.js";
 import { ensureVideoStatsRows } from "#src/services/video-engagement.service.js";
 
 /**
@@ -51,6 +56,39 @@ import { ensureVideoStatsRows } from "#src/services/video-engagement.service.js"
  */
 const MAXIMUM_CATEGORIES_PER_VIDEO = 3;
 import type { Result } from "#src/types/index.js";
+
+/**
+ * The categories to actually write, given what the creator chose.
+ *
+ * AN EMPTY SET BECOMES THE DEFAULT BUCKET, and this is the whole reason the default exists:
+ * the feed's category predicate never relaxes, so a video in no category is unreachable by
+ * every category filter for as long as it lives. Choosing a category stays optional for the
+ * creator; the consequence of not choosing is absorbed here.
+ *
+ * IT DEGRADES TO `[]` RATHER THAN FAILING when the default row is missing or retired. That
+ * is the behaviour that existed before this function did, and the alternative — refusing an
+ * upload because an environment was never seeded — hands a creator a wall they cannot climb
+ * over a problem only an operator can fix. The warning is the signal that the seed is due.
+ *
+ * The returned ids are NOT re-validated by `findUnavailableCategoryIds`: the default is
+ * looked up by slug WITH `isActive` already in the predicate, so it is available by
+ * construction, and the caller's own list was validated before it got here.
+ */
+async function withDefaultCategoryFallback(
+  categoryIds: readonly string[],
+): Promise<readonly string[]> {
+  if (categoryIds.length > 0) return categoryIds;
+
+  const defaultCategoryId = await resolveDefaultCategoryId();
+  if (defaultCategoryId === null) {
+    logger.warn("videos: default content category missing, video will be left untagged", {
+      slug: DEFAULT_CONTENT_CATEGORY_SLUG,
+    });
+    return [];
+  }
+
+  return [defaultCategoryId];
+}
 
 /**
  * Creator-owned video operations (docs/STUDIO_BACKEND_STRUCTURE.md §6, §8, §9).
@@ -976,6 +1014,11 @@ export async function createVideo(
     };
   }
 
+  // Resolved AFTER validation and BEFORE the transaction: the creator's own list is checked
+  // on its own terms, and the fallback lookup is a plain read that has no business holding a
+  // write transaction open.
+  const categoryIdsToWrite = await withDefaultCategoryFallback(categoryIds);
+
   // 4. THE ONE OUTBOUND REQUEST — and the only failure here that is now survivable is
   //    "YouTube did not answer" (§8.3). See parseAndVerifyYoutubeUrlForCreate.
   const verified = await parseAndVerifyYoutubeUrlForCreate(input.youtubeUrl, options);
@@ -1045,10 +1088,13 @@ export async function createVideo(
           );
       }
 
-      if (categoryIds.length > 0) {
+      // `categoryIdsToWrite`, not `categoryIds` — this is the creator's set OR the default
+      // bucket. Still guarded on length: the fallback returns `[]` when the default row is
+      // missing, and an INSERT with no values is an error rather than a no-op.
+      if (categoryIdsToWrite.length > 0) {
         await tx
           .insert(videoCategory)
-          .values(categoryIds.map((categoryId) => ({ videoId, categoryId })));
+          .values(categoryIdsToWrite.map((categoryId) => ({ videoId, categoryId })));
       }
 
       // The engagement counter caches, minted here rather than lazily (HOME §3.4).
@@ -1317,6 +1363,19 @@ export async function updateVideo(
     }
   }
 
+  /*
+   * `[]` ON A PATCH MEANS "THE DEFAULT BUCKET", NOT "NO CATEGORIES" — the same rule create
+   * follows, applied to the same wire shape. A creator who strips every category off a
+   * published video would otherwise walk it out of every category filter permanently, and
+   * the edit form gives them no warning that this is what the empty state costs.
+   *
+   * `undefined` still means UNTOUCHED and is not defaulted: a patch that never mentions
+   * categories must not rewrite them, or every unrelated edit would silently overwrite a
+   * three-category video with the fallback.
+   */
+  const categoryIdsToWrite =
+    categoryIds === undefined ? undefined : await withDefaultCategoryFallback(categoryIds);
+
   // Content-bearing, in the sense §10 means: a change a moderator would want to see
   // again. A visibility toggle or a comment preference is deliberately NOT in this list,
   // because un-publishing an approved episode over a settings change is its own bug.
@@ -1427,12 +1486,12 @@ export async function updateVideo(
     // thing is inside one transaction, so computing a minimal delta would buy nothing and
     // cost a correctness argument. Not folded into replaceSimpleChildSets: that helper
     // writes label rows from plain strings and has no foreign key to validate.
-    if (categoryIds !== undefined) {
+    if (categoryIdsToWrite !== undefined) {
       await tx.delete(videoCategory).where(eq(videoCategory.videoId, videoId));
-      if (categoryIds.length > 0) {
+      if (categoryIdsToWrite.length > 0) {
         await tx
           .insert(videoCategory)
-          .values(categoryIds.map((categoryId) => ({ videoId, categoryId })));
+          .values(categoryIdsToWrite.map((categoryId) => ({ videoId, categoryId })));
       }
     }
 
