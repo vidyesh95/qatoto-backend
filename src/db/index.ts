@@ -27,6 +27,22 @@ import * as schema from "#src/db/schema.js";
  *
  * Postgres hands us a bare `YYYY-MM-DD HH:MM:SS[.ffffff]` string with no offset. Appending
  * "Z" states the convention the schema already assumes: these columns hold UTC.
+ *
+ * ## ⚠️ THIS DOES NOT REACH DRIZZLE QUERIES — do not rely on it
+ *
+ * The comment above described this as global. It is not.
+ * `drizzle-orm/node-postgres/session.js` builds every prepared query with its own
+ * `types.getTypeParser`, which returns `(val) => val` for TIMESTAMP, TIMESTAMPTZ, DATE and
+ * INTERVAL. That override wins, so the parser registered here is never consulted by `db`.
+ *
+ * Nothing was broken by that for the query BUILDER: drizzle re-parses with the column's own
+ * codec (`PgTimestamp.mapFromDriver` appends `'+0000'`), which is the same UTC convention.
+ * The gap is `db.execute`, which has no column to map to — its rows carry raw strings under
+ * whatever `Date` annotation the call site claimed. Those must be converted explicitly with
+ * `utcDateFromRow` from `src/lib/sql-time.ts`; see that function for the bug it fixes.
+ *
+ * This registration is KEPT because it still covers a raw `pg` client that bypasses drizzle
+ * — `query()` at the bottom of this file goes straight to `pool.query`.
  */
 pgTypes.setTypeParser(pgTypes.builtins.TIMESTAMP, (rawValue: string) =>
   rawValue === null ? null : new Date(`${rawValue.replace(" ", "T")}Z`),

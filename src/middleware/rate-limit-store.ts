@@ -7,6 +7,7 @@ import { isRateLimitStoreShared } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { rateLimitBucket } from "#src/db/schema.js";
 import { errorFields, logger } from "#src/lib/logger.js";
+import { utcDateFromRow } from "#src/lib/sql-time.js";
 
 /**
  * A rate-limit store every API instance shares (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 7).
@@ -253,7 +254,11 @@ export class PostgresRateLimitStore implements Store {
   }
 
   async get(key: string): Promise<ClientRateLimitInfo | undefined> {
-    const rows = await db.execute<{ hit_count: number; expires_at: Date }>(sql`
+    // `expires_at` is a STRING here, not a Date — `db.execute` bypasses drizzle's column
+    // codec, so the annotation converts nothing. `resetTime` is read as a Date by
+    // express-rate-limit's `RateLimit-Reset` header, which is why it goes through
+    // `utcDateFromRow`. See `src/lib/sql-time.ts`.
+    const rows = await db.execute<{ hit_count: number; expires_at: string | Date }>(sql`
       SELECT hit_count, expires_at FROM ${rateLimitBucket}
       WHERE namespace = ${this.namespace}
         AND bucket_key = ${normalizeBucketKey(key)}
@@ -261,7 +266,10 @@ export class PostgresRateLimitStore implements Store {
     `);
 
     const row = rows.rows[0];
-    return row ? { totalHits: row.hit_count, resetTime: row.expires_at } : undefined;
+    if (!row) return undefined;
+    // `resetTime` is optional on ClientRateLimitInfo, so absence is `undefined` — never a
+    // fabricated instant.
+    return { totalHits: row.hit_count, resetTime: utcDateFromRow(row.expires_at) ?? undefined };
   }
 
   /**

@@ -19,7 +19,7 @@ import {
   reserveExplorationSlots,
 } from "#src/lib/feed-score.js";
 import { logger } from "#src/lib/logger.js";
-import { utcTimestamp } from "#src/lib/sql-time.js";
+import { utcDateFromRow, utcTimestamp } from "#src/lib/sql-time.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -152,13 +152,22 @@ const DIVERSIFIED_PREFIX_ROWS = 96;
  *
  * NOTE WHAT IS NOT HERE. §4.7 lists "drop the diversity cap" as stage 1. It is gone,
  * because the cap is now a permutation and a permutation cannot under-fill a page — there
- * is nothing to relax. The two stages that remain are genuine FILTERS, which are the only
- * things that can leave a page short.
+ * is nothing to relax. Every stage that remains is a genuine FILTER, which is the only kind
+ * of thing that can leave a page short.
+ *
+ * ORDER IS BY CONSEQUENCE, LOOSEST LAST. The gates below read `< 1`, `< 2`, `< 3`, so a
+ * higher stage is a weaker filter. Creator self-exclusion is last because it is the only one
+ * that changes WHOSE content a viewer sees rather than HOW MUCH — the other two return
+ * videos the viewer would have been shown anyway, just older or already watched. It exists
+ * for the young-catalog case it was found in: a solo creator whose feed is empty because
+ * every video in the catalog is their own. At any real catalog size the page fills long
+ * before stage 3 and nobody is ever shown their own uploads.
  */
 const RELAXATION_STAGES = [
   "full filter",
   "already-watched exclusion dropped",
   "180-day window dropped",
+  "creator self-exclusion dropped",
 ] as const;
 
 /**
@@ -421,7 +430,11 @@ function candidatePoolPredicate(input: {
 
   // A creator's own videos are never in their feed. Nothing enforces this downstream, and
   // without it the highest-affinity creator for any creator is themselves.
-  if (input.viewerUserId !== null) {
+  //
+  // Dropped at the LAST relaxation stage, and only there. On a catalog where one account
+  // uploaded everything, this predicate alone empties that account's homepage — an empty
+  // page is worse than a page of your own uploads, but only once nothing else can fill it.
+  if (input.viewerUserId !== null && input.relaxationStage < 3) {
     conditions.push(sql`v.creator_id <> ${input.viewerUserId}`);
   }
 
@@ -476,7 +489,13 @@ type FeedRow = {
   readonly youtube_video_id: string | null;
   readonly title: string;
   readonly thumbnail_url: string | null;
-  readonly published_at: Date | null;
+  /**
+   * A STRING at runtime, not a Date — drizzle disables the temporal type parsers on every
+   * prepared query and `db.execute` has no column codec to recover with. Declaring it
+   * `Date | null` here is what let `'2026-08-02 17:36:54.105'` reach the wire. `utcDateFromRow`
+   * in `toFeedVideoItem` is the conversion; `src/lib/sql-time.ts` has the full account.
+   */
+  readonly published_at: string | Date | null;
   readonly duration_seconds: number | null;
   readonly creator_id: string;
   readonly creator_handle: string | null;
@@ -502,7 +521,9 @@ function toFeedVideoItem(row: FeedRow): FeedVideoItem {
     youtubeVideoId: row.youtube_video_id,
     title: row.title,
     thumbnailUrl: row.thumbnail_url,
-    publishedAt: row.published_at,
+    // A real Date, so `JSON.stringify` emits ISO 8601 with an explicit `Z` — the same shape
+    // `GET /feed/watch/:id` sends for this column. Without it the two routes disagreed.
+    publishedAt: utcDateFromRow(row.published_at),
     // NULL until `recompute-video-durations` has five samples. Never substituted with a
     // client's `reportedDurationSeconds` — that number comes from the hostile side.
     durationSeconds: row.duration_seconds,
@@ -811,6 +832,11 @@ async function fetchFreshCandidateIds(input: ListFeedVideosInput): Promise<Reado
       viewerUserId: input.viewerUserId,
       viewerFingerprint: input.viewerFingerprint,
       categorySlug: input.categorySlug,
+      // DELIBERATELY PINNED AT 0, not threaded from the caller's ladder stage. This is a
+      // recognition probe, not a page: it answers "is this video fresh and near-unseen",
+      // and it only ever narrows a set the page query already produced. Relaxing it would
+      // widen the exploration pool as a side effect of the page being short, which is a
+      // different decision than the one the ladder is making.
       relaxationStage: 0,
     })}
       AND v.published_at > now() - make_interval(hours => ${EXPLORATION_FRESHNESS_HOURS})
