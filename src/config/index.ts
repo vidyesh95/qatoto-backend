@@ -18,14 +18,21 @@ const commaSeparatedList = z
       .filter((entry) => entry.length > 0),
   );
 
+// changed bellow - since we're using origin instead of full url, it will match any subdomain
+const originUrl = z
+  .url()
+  .transform((val) => new URL(val).origin);
+
 const envSchema = z.object({
   PORT: z.coerce.number().default(8000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   DATABASE_URL: z.url(),
   DATABASE_CA_CERT_PATH: z.string().optional(),
   BETTER_AUTH_SECRET: z.string().min(16),
-  BETTER_AUTH_URL: z.url(),
-  FRONTEND_URL: z.url(),
+  // BETTER_AUTH_URL: z.url(),
+  // FRONTEND_URL: z.url(),
+  BETTER_AUTH_URL: originUrl,
+  FRONTEND_URL: originUrl,
   GOOGLE_CLIENT_ID: z.string().min(1),
   GOOGLE_CLIENT_SECRET: z.string().min(1),
   GITHUB_CLIENT_ID: z.string().min(1),
@@ -78,7 +85,7 @@ const envSchema = z.object({
    * console for humans, and the S3 API takes an access-key ID and a secret, not a
    * nickname. Reading it would imply it mattered.
    */
-  BLACKBLAZE_ENDPOINT: z.string().url().optional(),
+  BLACKBLAZE_ENDPOINT: z.url().optional(),
   BLACKBLAZE_BUCKET_NAME: z.string().min(1).optional(),
   BLACKBLAZE_S3_KEY_ID: z.string().min(1).optional(),
   BLACKBLAZE_S3_APPLICATION_KEY: z.string().min(1).optional(),

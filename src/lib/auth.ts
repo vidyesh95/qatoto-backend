@@ -56,6 +56,13 @@ export const auth = betterAuth({
   // / iOS Universal Links (https, exact-origin matched) with the scheme as a fallback,
   // and mandate PKCE on the native side.
   trustedOrigins: [config.FRONTEND_URL, ...config.NATIVE_DEEP_LINK_SCHEMES],
+  // changed below - since we're using origin instead of full url, it will match any subdomain
+  advanced: {
+    defaultCookieAttributes: {
+      sameSite: config.NODE_ENV === "production" ? "none" : "lax",
+      secure: config.NODE_ENV === "production" ? true : undefined,
+    },
+  },
   user: {
     // Expose the user's handle on the session so session.user.handle drives
     // menu/avatar display (the frontend mirrors this via inferAdditionalFields).
