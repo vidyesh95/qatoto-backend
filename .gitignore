@@ -4,5 +4,4 @@
 /dist
 *.tsbuildinfo
 .env
-/certs
 .DS_Store
