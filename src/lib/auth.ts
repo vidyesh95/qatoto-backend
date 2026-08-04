@@ -59,7 +59,8 @@ export const auth = betterAuth({
   // changed below - since we're using origin instead of full url, it will match any subdomain
   advanced: {
     defaultCookieAttributes: {
-      sameSite: config.NODE_ENV === "production" ? "none" : "lax",
+      // sameSite: config.NODE_ENV === "production" ? "none" : "lax",
+      sameSite: "lax", // using lax so that it works for incognito
       secure: config.NODE_ENV === "production" ? true : undefined,
     },
   },
