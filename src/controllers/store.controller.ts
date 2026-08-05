@@ -1,10 +1,10 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";
 import * as storeMerchandisingService from "#src/services/store-merchandising.service.js";
 import * as storeSearchService from "#src/services/store-search.service.js";
-import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 const CursorPageQuerySchema = z
@@ -137,11 +137,14 @@ export async function getCategory(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const productsResult = await storeCatalogService.listEligibleProducts({
-    categoryId: categoryResult.value.category.id,
-    limit: page.data.limit,
-    cursor: page.data.cursor,
-  });
+  const [productsResult, facets] = await Promise.all([
+    storeCatalogService.listEligibleProducts({
+      categoryId: categoryResult.value.category.id,
+      limit: page.data.limit,
+      cursor: page.data.cursor,
+    }),
+    storeCatalogService.getCategoryFacets(categoryResult.value.category.id),
+  ]);
   if (!productsResult.success) {
     switch (productsResult.error.type) {
       case "INVALID_CURSOR":
@@ -172,6 +175,7 @@ export async function getCategory(req: Request, res: Response): Promise<void> {
     message: "Category.",
     data: {
       ...categoryResult.value,
+      facets,
       products: productsResult.value,
     },
   } satisfies ApiResponse);
@@ -190,6 +194,7 @@ export async function search(req: Request, res: Response): Promise<void> {
     providerKind: parsed.data.providerKind,
     documentKind: parsed.data.documentKind,
     minOrderQuantityMax: parsed.data.minOrderQuantityMax,
+    sort: parsed.data.sort ?? "relevance",
     limit: parsed.data.limit,
     cursor: parsed.data.cursor,
   });

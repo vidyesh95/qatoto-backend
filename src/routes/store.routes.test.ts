@@ -14,6 +14,7 @@ vi.mock("#src/lib/auth.js", async () => (await import("#src/test-support/auth-mo
 const catalogStubs = vi.hoisted(() => ({
   listActiveCategories: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getCategoryBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  getCategoryFacets: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   listEligibleProducts: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getPublicProductBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getPublicOrganizationStorefront: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
@@ -159,5 +160,57 @@ describe("public store routes", () => {
     const response = await request(app).get("/store/services/draft-offering");
 
     expect(response.status).toBe(404);
+  });
+
+  it("returns category facets with the first product page", async () => {
+    catalogStubs.getCategoryBySlug.mockResolvedValue({
+      success: true,
+      value: {
+        category: {
+          id: "cat-1",
+          slug: "electronics",
+          name: "Electronics",
+          parentCategoryId: null,
+          siblingOrder: 0,
+          imageUrl: null,
+        },
+        children: [],
+      },
+    });
+    catalogStubs.getCategoryFacets.mockResolvedValue({
+      sellerCountryCodes: [{ value: "IN", count: 2 }],
+      stockStates: [{ value: "in_stock", count: 2 }],
+      samplePolicies: [{ value: "unavailable", count: 2 }],
+      priceRangesInCents: { minInCents: 1000, maxInCents: 5000, count: 2 },
+    });
+    catalogStubs.listEligibleProducts.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+
+    const response = await request(app).get("/store/categories/electronics");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.facets.sellerCountryCodes[0].value).toBe("IN");
+    expect(response.body.data.products.page.hasMore).toBe(false);
+    expect(catalogStubs.getCategoryFacets).toHaveBeenCalledWith("cat-1");
+  });
+
+  it("forwards sort=relevance to search", async () => {
+    searchStubs.searchStoreDocuments.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+
+    const response = await request(app).get("/store/search").query({ query: "solar", sort: "relevance", limit: 12 });
+
+    expect(response.status).toBe(200);
+    expect(searchStubs.searchStoreDocuments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "solar",
+        sort: "relevance",
+        limit: 12,
+      }),
+    );
   });
 });

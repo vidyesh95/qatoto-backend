@@ -32,6 +32,17 @@ export interface StoreSellerProjection {
   readonly summary: string | null;
 }
 
+/** Server-derived placeholders until Phase 7 trust metrics exist. */
+export interface StoreReviewMetrics {
+  readonly averageRating: number | null;
+  readonly reviewCount: number;
+}
+
+export interface StoreFulfillmentMetrics {
+  readonly onTimeShipmentRate: number | null;
+  readonly completedOrderCount: number;
+}
+
 export interface StoreProductCardProjection {
   readonly id: string;
   readonly publicSlug: string;
@@ -40,6 +51,7 @@ export interface StoreProductCardProjection {
   readonly currency: string;
   readonly priceInCents: number;
   readonly compareAtPriceInCents: number | null;
+  readonly minimumOrderQuantity: number | null;
   readonly stockState: StoreStockState;
   readonly samplePolicy: (typeof product.$inferSelect)["samplePolicy"];
   readonly leadTimeMinDays: number | null;
@@ -47,6 +59,8 @@ export interface StoreProductCardProjection {
   readonly mainImageUrl: string | null;
   readonly seller: StoreSellerProjection;
   readonly category: { readonly id: string; readonly slug: string; readonly name: string };
+  readonly reviewMetrics: StoreReviewMetrics;
+  readonly fulfillmentMetrics: StoreFulfillmentMetrics;
 }
 
 export interface StoreProductDetailProjection extends StoreProductCardProjection {
@@ -56,7 +70,11 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
   readonly countryOfOriginCode: string | null;
   readonly unitOfMeasure: string | null;
   readonly samplePriceInCents: number | null;
-  readonly images: readonly { readonly id: string; readonly url: string; readonly position: number }[];
+  readonly images: readonly {
+    readonly id: string;
+    readonly url: string;
+    readonly position: number;
+  }[];
   readonly pricingTiers: readonly {
     readonly unitPriceInCents: number;
     readonly minimumOrderQuantity: number;
@@ -68,6 +86,22 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
     readonly position: number;
   }[];
   readonly categoryTrail: readonly StoreCategoryProjection[];
+}
+
+export interface StoreCategoryFacetBucket {
+  readonly value: string;
+  readonly count: number;
+}
+
+export interface StoreCategoryFacets {
+  readonly sellerCountryCodes: readonly StoreCategoryFacetBucket[];
+  readonly stockStates: readonly StoreCategoryFacetBucket[];
+  readonly samplePolicies: readonly StoreCategoryFacetBucket[];
+  readonly priceRangesInCents: {
+    readonly minInCents: number | null;
+    readonly maxInCents: number | null;
+    readonly count: number;
+  };
 }
 
 export interface StoreOrganizationStorefront {
@@ -84,9 +118,17 @@ export interface StoreOrganizationStorefront {
   };
 }
 
-export type StoreCatalogError =
-  | { type: "NOT_FOUND" }
-  | { type: "INVALID_CURSOR" };
+export type StoreCatalogError = { type: "NOT_FOUND" } | { type: "INVALID_CURSOR" };
+
+const EMPTY_REVIEW_METRICS: StoreReviewMetrics = {
+  averageRating: null,
+  reviewCount: 0,
+};
+
+const EMPTY_FULFILLMENT_METRICS: StoreFulfillmentMetrics = {
+  onTimeShipmentRate: null,
+  completedOrderCount: 0,
+};
 
 const publicProductEligibility = and(
   eq(product.status, "active"),
@@ -97,11 +139,22 @@ const publicProductEligibility = and(
   eq(commerceCategory.state, "active"),
 );
 
-export function deriveStockState(stockQuantity: number): StoreStockState {
-  if (stockQuantity <= 0) {
+/**
+ * Derives buyer-safe stock state from authoritative inventory and lead-time policy.
+ * Zero stock with a declared lead-time window is made-to-order, not unavailable.
+ */
+export function deriveStockState(input: {
+  readonly stockQuantity: number;
+  readonly leadTimeMinDays: number | null;
+  readonly leadTimeMaxDays: number | null;
+}): StoreStockState {
+  if (input.stockQuantity <= 0) {
+    if (input.leadTimeMinDays !== null && input.leadTimeMaxDays !== null) {
+      return "made_to_order";
+    }
     return "unavailable";
   }
-  if (stockQuantity <= 5) {
+  if (input.stockQuantity <= 5) {
     return "low_stock";
   }
   return "in_stock";
@@ -125,9 +178,7 @@ function toSellerProjection(row: {
   };
 }
 
-async function loadMainImageUrls(
-  productIds: readonly string[],
-): Promise<Map<string, string>> {
+async function loadMainImageUrls(productIds: readonly string[]): Promise<Map<string, string>> {
   if (productIds.length === 0) {
     return new Map();
   }
@@ -148,6 +199,26 @@ async function loadMainImageUrls(
     }
   }
   return map;
+}
+
+async function loadMinimumOrderQuantities(
+  productIds: readonly string[],
+): Promise<Map<string, number>> {
+  if (productIds.length === 0) {
+    return new Map();
+  }
+  const rows = await db
+    .select({
+      productId: productPricingTier.productId,
+      minimumOrderQuantity: sql<number>`min(${productPricingTier.minimumOrderQuantity})`.mapWith(
+        Number,
+      ),
+    })
+    .from(productPricingTier)
+    .where(inArray(productPricingTier.productId, [...productIds]))
+    .groupBy(productPricingTier.productId);
+
+  return new Map(rows.map((row) => [row.productId, row.minimumOrderQuantity]));
 }
 
 export async function listActiveCategories(input: {
@@ -212,9 +283,91 @@ export async function getCategoryBySlug(categorySlug: string): Promise<
   };
 }
 
-async function buildCategoryTrail(
-  categoryId: string,
-): Promise<readonly StoreCategoryProjection[]> {
+export async function getCategoryFacets(categoryId: string): Promise<StoreCategoryFacets> {
+  const [countryRows, stockRows, sampleRows, priceRow] = await Promise.all([
+    db
+      .select({
+        value: commerceOrganization.countryCode,
+        count: sql<number>`count(*)::int`.mapWith(Number),
+      })
+      .from(product)
+      .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+      .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
+      .where(and(publicProductEligibility, eq(product.categoryId, categoryId)))
+      .groupBy(commerceOrganization.countryCode)
+      .orderBy(desc(sql`count(*)`), asc(commerceOrganization.countryCode)),
+    db.execute<{ value: string; count: number }>(sql`
+      SELECT derived.stock_state AS value, count(*)::int AS count
+      FROM (
+        SELECT CASE
+          WHEN p.stock_quantity <= 0
+               AND p.lead_time_min_days IS NOT NULL
+               AND p.lead_time_max_days IS NOT NULL
+            THEN 'made_to_order'
+          WHEN p.stock_quantity <= 0 THEN 'unavailable'
+          WHEN p.stock_quantity <= 5 THEN 'low_stock'
+          ELSE 'in_stock'
+        END AS stock_state
+        FROM product AS p
+        INNER JOIN commerce_organization AS o ON o.id = p.seller_organization_id
+        INNER JOIN commerce_category AS c ON c.id = p.category_id
+        WHERE p.status = 'active'
+          AND p.moderation_state = 'approved'
+          AND p.public_slug IS NOT NULL
+          AND o.trade_state = 'active'
+          AND o.visibility = 'public'
+          AND c.state = 'active'
+          AND p.category_id = ${categoryId}
+      ) AS derived
+      GROUP BY derived.stock_state
+      ORDER BY count DESC, derived.stock_state ASC
+    `),
+    db
+      .select({
+        value: product.samplePolicy,
+        count: sql<number>`count(*)::int`.mapWith(Number),
+      })
+      .from(product)
+      .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+      .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
+      .where(and(publicProductEligibility, eq(product.categoryId, categoryId)))
+      .groupBy(product.samplePolicy)
+      .orderBy(desc(sql`count(*)`), asc(product.samplePolicy)),
+    db
+      .select({
+        minInCents: sql<number | null>`min(${product.priceInCents})`.mapWith(Number),
+        maxInCents: sql<number | null>`max(${product.priceInCents})`.mapWith(Number),
+        count: sql<number>`count(*)::int`.mapWith(Number),
+      })
+      .from(product)
+      .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+      .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
+      .where(and(publicProductEligibility, eq(product.categoryId, categoryId))),
+  ]);
+
+  const priceSummary = priceRow[0];
+  return {
+    sellerCountryCodes: countryRows.map((row) => ({
+      value: row.value,
+      count: row.count,
+    })),
+    stockStates: stockRows.rows.map((row) => ({
+      value: row.value,
+      count: row.count,
+    })),
+    samplePolicies: sampleRows.map((row) => ({
+      value: row.value,
+      count: row.count,
+    })),
+    priceRangesInCents: {
+      minInCents: priceSummary?.count ? (priceSummary.minInCents ?? null) : null,
+      maxInCents: priceSummary?.count ? (priceSummary.maxInCents ?? null) : null,
+      count: priceSummary?.count ?? 0,
+    },
+  };
+}
+
+async function buildCategoryTrail(categoryId: string): Promise<readonly StoreCategoryProjection[]> {
   const trail: StoreCategoryProjection[] = [];
   let currentId: string | null = categoryId;
   for (let depth = 0; depth < 16 && currentId !== null; depth += 1) {
@@ -270,6 +423,7 @@ function mapProductCard(
     readonly categoryName: string;
   },
   mainImageUrl: string | null,
+  minimumOrderQuantity: number | null,
 ): StoreProductCardProjection {
   if (row.publicSlug === null) {
     throw new Error("Eligible product missing publicSlug.");
@@ -282,7 +436,12 @@ function mapProductCard(
     currency: row.currency,
     priceInCents: row.priceInCents,
     compareAtPriceInCents: row.compareAtPriceInCents,
-    stockState: deriveStockState(row.stockQuantity),
+    minimumOrderQuantity,
+    stockState: deriveStockState({
+      stockQuantity: row.stockQuantity,
+      leadTimeMinDays: row.leadTimeMinDays,
+      leadTimeMaxDays: row.leadTimeMaxDays,
+    }),
     samplePolicy: row.samplePolicy,
     leadTimeMinDays: row.leadTimeMinDays,
     leadTimeMaxDays: row.leadTimeMaxDays,
@@ -293,6 +452,8 @@ function mapProductCard(
       slug: row.categorySlug,
       name: row.categoryName,
     },
+    reviewMetrics: EMPTY_REVIEW_METRICS,
+    fulfillmentMetrics: EMPTY_FULFILLMENT_METRICS,
   };
 }
 
@@ -324,6 +485,7 @@ const productSelectFields = {
 export async function listEligibleProducts(input: {
   readonly categoryId?: string | undefined;
   readonly sellerOrganizationId?: string | undefined;
+  readonly productIds?: readonly string[] | undefined;
   readonly limit: number;
   readonly cursor?: string | undefined;
 }): Promise<
@@ -335,8 +497,7 @@ export async function listEligibleProducts(input: {
     StoreCatalogError
   >
 > {
-  const decodedCursor =
-    input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -355,20 +516,16 @@ export async function listEligibleProducts(input: {
   const rows = await db
     .select(productSelectFields)
     .from(product)
-    .innerJoin(
-      commerceOrganization,
-      eq(commerceOrganization.id, product.sellerOrganizationId),
-    )
+    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
     .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
     .where(
       and(
         publicProductEligibility,
-        input.categoryId === undefined
-          ? undefined
-          : eq(product.categoryId, input.categoryId),
+        input.categoryId === undefined ? undefined : eq(product.categoryId, input.categoryId),
         input.sellerOrganizationId === undefined
           ? undefined
           : eq(product.sellerOrganizationId, input.sellerOrganizationId),
+        input.productIds === undefined ? undefined : inArray(product.id, [...input.productIds]),
         cursorPredicate,
       ),
     )
@@ -376,9 +533,13 @@ export async function listEligibleProducts(input: {
     .limit(input.limit + 1);
 
   const pageRows = rows.slice(0, input.limit);
-  const imageMap = await loadMainImageUrls(pageRows.map((row) => row.id));
+  const productIds = pageRows.map((row) => row.id);
+  const [imageMap, moqMap] = await Promise.all([
+    loadMainImageUrls(productIds),
+    loadMinimumOrderQuantities(productIds),
+  ]);
   const items = pageRows.map((row) =>
-    mapProductCard(row, imageMap.get(row.id) ?? null),
+    mapProductCard(row, imageMap.get(row.id) ?? null, moqMap.get(row.id) ?? null),
   );
 
   const lastRow = pageRows[pageRows.length - 1];
@@ -399,6 +560,27 @@ export async function listEligibleProducts(input: {
   };
 }
 
+/** Resolve eligible product cards for an ordered id list, dropping ineligible ids. */
+export async function resolveEligibleProductCardsByIds(
+  productIds: readonly string[],
+): Promise<readonly StoreProductCardProjection[]> {
+  if (productIds.length === 0) {
+    return [];
+  }
+  const result = await listEligibleProducts({
+    productIds,
+    limit: productIds.length,
+  });
+  if (!result.success) {
+    return [];
+  }
+  const byId = new Map(result.value.items.map((item) => [item.id, item]));
+  return productIds.flatMap((productId) => {
+    const card = byId.get(productId);
+    return card === undefined ? [] : [card];
+  });
+}
+
 export async function getPublicProductBySlug(
   productSlug: string,
 ): Promise<Result<StoreProductDetailProjection, StoreCatalogError>> {
@@ -413,10 +595,7 @@ export async function getPublicProductBySlug(
       samplePriceInCents: product.samplePriceInCents,
     })
     .from(product)
-    .innerJoin(
-      commerceOrganization,
-      eq(commerceOrganization.id, product.sellerOrganizationId),
-    )
+    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
     .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
     .where(and(publicProductEligibility, eq(product.publicSlug, productSlug)))
     .limit(1);
@@ -425,7 +604,7 @@ export async function getPublicProductBySlug(
     return { success: false, error: { type: "NOT_FOUND" } };
   }
 
-  const [images, pricingTiers, specifications, categoryTrail] = await Promise.all([
+  const [images, pricingTiers, specifications, categoryTrail, moqMap] = await Promise.all([
     db
       .select({
         id: productImage.id,
@@ -454,9 +633,17 @@ export async function getPublicProductBySlug(
       .where(eq(commerceProductSpecification.productId, row.id))
       .orderBy(asc(commerceProductSpecification.position)),
     buildCategoryTrail(row.categoryId),
+    loadMinimumOrderQuantities([row.id]),
   ]);
 
-  const card = mapProductCard(row, images[0]?.url ?? null);
+  const card = mapProductCard(
+    row,
+    images[0]?.url ?? null,
+    moqMap.get(row.id) ??
+      (pricingTiers.length > 0
+        ? Math.min(...pricingTiers.map((tier) => tier.minimumOrderQuantity))
+        : null),
+  );
   return {
     success: true,
     value: {

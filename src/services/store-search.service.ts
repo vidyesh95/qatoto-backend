@@ -1,17 +1,83 @@
-import { and, asc, desc, eq, gt, ilike, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
   commerceCategory,
   commerceOrganization,
+  commerceProviderKindLink,
   commerceProviderProfile,
   commerceServiceOffering,
   product,
   productPricingTier,
   storeSearchDocument,
 } from "#src/db/schema.js";
+import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
+import { escapeLikePattern } from "#src/lib/sql-pattern.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { Result } from "#src/types/index.js";
+
+async function enqueueRefresh(
+  payload:
+    | {
+        readonly targetKind: "product";
+        readonly productId: string;
+      }
+    | {
+        readonly targetKind: "provider_offering";
+        readonly offeringId: string;
+      }
+    | {
+        readonly targetKind: "organization";
+        readonly organizationId: string;
+      },
+): Promise<void> {
+  const generation = new Date().toISOString();
+  const idempotencyKey =
+    payload.targetKind === "product"
+      ? idempotencyKeyFor.refreshStoreSearchDocumentProduct(payload.productId, generation)
+      : payload.targetKind === "provider_offering"
+        ? idempotencyKeyFor.refreshStoreSearchDocumentOffering(payload.offeringId, generation)
+        : idempotencyKeyFor.refreshStoreSearchDocumentOrganization(
+            payload.organizationId,
+            generation,
+          );
+
+  const enqueued = await sendJob(JOB_NAMES.refreshStoreSearchDocument, payload, {
+    idempotencyKey,
+  });
+  if (!enqueued.success) {
+    // Fall back to synchronous refresh so a queue outage cannot leave public search stale.
+    switch (payload.targetKind) {
+      case "product":
+        await refreshProductSearchDocument(payload.productId);
+        return;
+      case "provider_offering":
+        await refreshOfferingSearchDocument(payload.offeringId);
+        return;
+      case "organization":
+        await refreshOrganizationSearchEligibility(payload.organizationId);
+        return;
+      default: {
+        const exhaustiveTarget: never = payload;
+        throw new Error(`Unhandled enqueue target: ${JSON.stringify(exhaustiveTarget)}`);
+      }
+    }
+  }
+}
+
+export async function enqueueProductSearchDocumentRefresh(productId: string): Promise<void> {
+  await enqueueRefresh({ targetKind: "product", productId });
+}
+
+export async function enqueueOfferingSearchDocumentRefresh(offeringId: string): Promise<void> {
+  await enqueueRefresh({ targetKind: "provider_offering", offeringId });
+}
+
+export async function enqueueOrganizationSearchDocumentRefresh(
+  organizationId: string,
+): Promise<void> {
+  await enqueueRefresh({ targetKind: "organization", organizationId });
+}
 
 export type StoreSearchDocumentKind = "product" | "provider_offering";
 
@@ -29,11 +95,26 @@ export interface StoreSearchHit {
   readonly priceInCents: number | null;
   readonly currency: string | null;
   readonly minimumOrderQuantity: number | null;
+  readonly relevanceScore: number | null;
 }
 
 export type StoreSearchError = { type: "INVALID_CURSOR" };
 
 type StoreProviderKind = NonNullable<(typeof storeSearchDocument.$inferSelect)["providerKind"]>;
+
+function encodeRelevanceSortKey(rank: number): string {
+  // Fixed-width so lexicographic compare matches numeric order for DESC pagination.
+  return rank.toFixed(12).padStart(24, "0");
+}
+
+function decodeRelevanceSortKey(sortKey: string): number | null {
+  if (!/^\d+\.\d+$/.test(sortKey.trim()) && !/^\d{1,24}\.\d{12}$/.test(sortKey.trim())) {
+    const parsed = Number(sortKey);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const parsed = Number(sortKey);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 export async function searchStoreDocuments(input: {
   readonly query?: string | undefined;
@@ -42,6 +123,7 @@ export async function searchStoreDocuments(input: {
   readonly providerKind?: StoreProviderKind | undefined;
   readonly documentKind?: StoreSearchDocumentKind | undefined;
   readonly minOrderQuantityMax?: number | undefined;
+  readonly sort?: "relevance" | undefined;
   readonly limit: number;
   readonly cursor?: string | undefined;
 }): Promise<
@@ -53,24 +135,16 @@ export async function searchStoreDocuments(input: {
     StoreSearchError
   >
 > {
-  const decodedCursor =
-    input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
 
-  const cursorPredicate =
-    decodedCursor === null
-      ? undefined
-      : or(
-          sql`${storeSearchDocument.title} > ${decodedCursor.sortKey}`,
-          and(
-            eq(storeSearchDocument.title, decodedCursor.sortKey),
-            gt(storeSearchDocument.id, decodedCursor.id),
-          ),
-        );
+  const trimmedQuery = input.query?.trim() ?? "";
+  const hasQuery = trimmedQuery.length > 0;
+  const useRelevance = hasQuery && (input.sort === undefined || input.sort === "relevance");
 
-  const filters = [
+  const baseFilters = [
     eq(storeSearchDocument.isEligible, true),
     input.documentKind === undefined
       ? undefined
@@ -88,11 +162,103 @@ export async function searchStoreDocuments(input: {
       ? undefined
       : sql`(${storeSearchDocument.minimumOrderQuantity} IS NULL
             OR ${storeSearchDocument.minimumOrderQuantity} <= ${input.minOrderQuantityMax})`,
-    input.query === undefined || input.query.trim().length === 0
-      ? undefined
-      : ilike(storeSearchDocument.searchText, `%${input.query.trim()}%`),
-    cursorPredicate,
   ];
+
+  if (!useRelevance) {
+    const cursorPredicate =
+      decodedCursor === null
+        ? undefined
+        : or(
+            sql`${storeSearchDocument.title} > ${decodedCursor.sortKey}`,
+            and(
+              eq(storeSearchDocument.title, decodedCursor.sortKey),
+              gt(storeSearchDocument.id, decodedCursor.id),
+            ),
+          );
+
+    const likeFilter = !hasQuery
+      ? undefined
+      : sql`${storeSearchDocument.searchText} ILIKE ${`%${escapeLikePattern(trimmedQuery)}%`}`;
+
+    const rows = await db
+      .select({
+        documentKind: storeSearchDocument.documentKind,
+        entityId: storeSearchDocument.entityId,
+        publicSlug: storeSearchDocument.publicSlug,
+        title: storeSearchDocument.title,
+        summary: storeSearchDocument.summary,
+        organizationSlug: storeSearchDocument.organizationSlug,
+        organizationDisplayName: storeSearchDocument.organizationDisplayName,
+        organizationCountryCode: storeSearchDocument.organizationCountryCode,
+        categorySlug: storeSearchDocument.categorySlug,
+        providerKind: storeSearchDocument.providerKind,
+        priceInCents: storeSearchDocument.priceInCents,
+        currency: storeSearchDocument.currency,
+        minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
+        id: storeSearchDocument.id,
+      })
+      .from(storeSearchDocument)
+      .where(and(...baseFilters, likeFilter, cursorPredicate))
+      .orderBy(asc(storeSearchDocument.title), asc(storeSearchDocument.id))
+      .limit(input.limit + 1);
+
+    const pageRows = rows.slice(0, input.limit);
+    const lastRow = pageRows[pageRows.length - 1];
+    const nextCursor =
+      rows.length > input.limit && lastRow
+        ? encodeStoreCursor({ sortKey: lastRow.title, id: lastRow.id })
+        : null;
+
+    return {
+      success: true,
+      value: {
+        items: pageRows.map((row) => ({
+          documentKind: row.documentKind,
+          entityId: row.entityId,
+          publicSlug: row.publicSlug,
+          title: row.title,
+          summary: row.summary,
+          organizationSlug: row.organizationSlug,
+          organizationDisplayName: row.organizationDisplayName,
+          organizationCountryCode: row.organizationCountryCode,
+          categorySlug: row.categorySlug,
+          providerKind: row.providerKind,
+          priceInCents: row.priceInCents,
+          currency: row.currency,
+          minimumOrderQuantity: row.minimumOrderQuantity,
+          relevanceScore: null,
+        })),
+        page: { nextCursor, hasMore: nextCursor !== null },
+      },
+    };
+  }
+
+  const tsQuery = sql`websearch_to_tsquery('english', ${trimmedQuery})`;
+  const likePattern = `%${escapeLikePattern(trimmedQuery)}%`;
+  const hasUsableTsQuery = sql`numnode(${tsQuery}) > 0`;
+  const matchPredicate = sql`(
+    (${hasUsableTsQuery} AND ${storeSearchDocument.searchDocument} @@ ${tsQuery})
+    OR (NOT ${hasUsableTsQuery} AND ${storeSearchDocument.searchText} ILIKE ${likePattern})
+  )`;
+  const rankExpression = sql`
+    CASE
+      WHEN ${hasUsableTsQuery}
+        THEN ts_rank_cd(${storeSearchDocument.searchDocument}, ${tsQuery}, 32)
+      ELSE 0
+    END
+  `;
+
+  let cursorPredicate = undefined;
+  if (decodedCursor !== null) {
+    const cursorRank = decodeRelevanceSortKey(decodedCursor.sortKey);
+    if (cursorRank === null) {
+      return { success: false, error: { type: "INVALID_CURSOR" } };
+    }
+    cursorPredicate = or(
+      sql`(${rankExpression}) < ${cursorRank}`,
+      and(sql`(${rankExpression}) = ${cursorRank}`, gt(storeSearchDocument.id, decodedCursor.id)),
+    );
+  }
 
   const rows = await db
     .select({
@@ -110,17 +276,21 @@ export async function searchStoreDocuments(input: {
       currency: storeSearchDocument.currency,
       minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
       id: storeSearchDocument.id,
+      relevanceScore: sql<number>`${rankExpression}`.mapWith(Number),
     })
     .from(storeSearchDocument)
-    .where(and(...filters))
-    .orderBy(asc(storeSearchDocument.title), asc(storeSearchDocument.id))
+    .where(and(...baseFilters, matchPredicate, cursorPredicate))
+    .orderBy(desc(rankExpression), asc(storeSearchDocument.id))
     .limit(input.limit + 1);
 
   const pageRows = rows.slice(0, input.limit);
   const lastRow = pageRows[pageRows.length - 1];
   const nextCursor =
     rows.length > input.limit && lastRow
-      ? encodeStoreCursor({ sortKey: lastRow.title, id: lastRow.id })
+      ? encodeStoreCursor({
+          sortKey: encodeRelevanceSortKey(lastRow.relevanceScore),
+          id: lastRow.id,
+        })
       : null;
 
   return {
@@ -140,15 +310,14 @@ export async function searchStoreDocuments(input: {
         priceInCents: row.priceInCents,
         currency: row.currency,
         minimumOrderQuantity: row.minimumOrderQuantity,
+        relevanceScore: row.relevanceScore,
       })),
       page: { nextCursor, hasMore: nextCursor !== null },
     },
   };
 }
 
-export async function refreshProductSearchDocument(
-  productId: string,
-): Promise<void> {
+export async function refreshProductSearchDocument(productId: string): Promise<void> {
   const [row] = await db
     .select({
       id: product.id,
@@ -172,10 +341,7 @@ export async function refreshProductSearchDocument(
       categoryState: commerceCategory.state,
     })
     .from(product)
-    .innerJoin(
-      commerceOrganization,
-      eq(commerceOrganization.id, product.sellerOrganizationId),
-    )
+    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
     .leftJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
     .where(eq(product.id, productId))
     .limit(1);
@@ -276,6 +442,7 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
       organizationTradeState: commerceOrganization.tradeState,
       organizationVisibility: commerceOrganization.visibility,
       profileVerificationState: commerceProviderProfile.verificationState,
+      kindVerificationState: commerceProviderKindLink.verificationState,
     })
     .from(commerceServiceOffering)
     .innerJoin(
@@ -285,6 +452,13 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
     .innerJoin(
       commerceOrganization,
       eq(commerceOrganization.id, commerceServiceOffering.providerOrganizationId),
+    )
+    .leftJoin(
+      commerceProviderKindLink,
+      and(
+        eq(commerceProviderKindLink.organizationId, commerceServiceOffering.providerOrganizationId),
+        eq(commerceProviderKindLink.providerKind, commerceServiceOffering.providerKind),
+      ),
     )
     .where(eq(commerceServiceOffering.id, offeringId))
     .limit(1);
@@ -301,12 +475,18 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
     return;
   }
 
+  const kindIsPubliclyVerified =
+    row.kindVerificationState !== null &&
+    row.kindVerificationState !== "rejected" &&
+    row.kindVerificationState !== "suspended";
+
   const isEligible =
     row.state === "active" &&
     row.organizationTradeState === "active" &&
     row.organizationVisibility === "public" &&
     row.profileVerificationState !== "rejected" &&
-    row.profileVerificationState !== "suspended";
+    row.profileVerificationState !== "suspended" &&
+    kindIsPubliclyVerified;
 
   const searchText = [row.title, row.summary, row.organizationDisplayName, row.providerKind]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
@@ -355,9 +535,7 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
 }
 
 /** Recompute eligibility for every search document owned by an organization. */
-export async function refreshOrganizationSearchEligibility(
-  organizationId: string,
-): Promise<void> {
+export async function refreshOrganizationSearchEligibility(organizationId: string): Promise<void> {
   const productIds = await db
     .select({ id: product.id })
     .from(product)
@@ -375,27 +553,83 @@ export async function refreshOrganizationSearchEligibility(
   }
 }
 
-/** Newest eligible product cards for algorithmic rails. */
-export async function listNewestEligibleSearchProducts(limit: number): Promise<
-  readonly {
-    readonly entityId: string;
-    readonly publicSlug: string;
-    readonly title: string;
-  }[]
+/** Newest eligible product cards for algorithmic rails, with optional cursor. */
+export async function listNewestEligibleSearchProducts(input: {
+  readonly limit: number;
+  readonly cursor?: string | undefined;
+}): Promise<
+  Result<
+    {
+      readonly items: readonly {
+        readonly entityId: string;
+        readonly publicSlug: string;
+        readonly title: string;
+        readonly publishedAt: Date | null;
+      }[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    StoreSearchError
+  >
 > {
-  return db
+  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
+  const cursorPredicate =
+    decodedCursor === null
+      ? undefined
+      : or(
+          sql`coalesce(${storeSearchDocument.publishedAt}, ${storeSearchDocument.createdAt}) < ${decodedCursor.sortKey}::timestamp`,
+          and(
+            sql`coalesce(${storeSearchDocument.publishedAt}, ${storeSearchDocument.createdAt}) = ${decodedCursor.sortKey}::timestamp`,
+            gt(storeSearchDocument.id, decodedCursor.id),
+          ),
+        );
+
+  const rows = await db
     .select({
       entityId: storeSearchDocument.entityId,
       publicSlug: storeSearchDocument.publicSlug,
       title: storeSearchDocument.title,
+      publishedAt: storeSearchDocument.publishedAt,
+      createdAt: storeSearchDocument.createdAt,
+      id: storeSearchDocument.id,
     })
     .from(storeSearchDocument)
     .where(
       and(
         eq(storeSearchDocument.isEligible, true),
         eq(storeSearchDocument.documentKind, "product"),
+        cursorPredicate,
       ),
     )
-    .orderBy(desc(storeSearchDocument.publishedAt), asc(storeSearchDocument.id))
-    .limit(limit);
+    .orderBy(
+      desc(sql`coalesce(${storeSearchDocument.publishedAt}, ${storeSearchDocument.createdAt})`),
+      asc(storeSearchDocument.id),
+    )
+    .limit(input.limit + 1);
+
+  const pageRows = rows.slice(0, input.limit);
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor =
+    rows.length > input.limit && lastRow
+      ? encodeStoreCursor({
+          sortKey: (lastRow.publishedAt ?? lastRow.createdAt).toISOString(),
+          id: lastRow.id,
+        })
+      : null;
+
+  return {
+    success: true,
+    value: {
+      items: pageRows.map((row) => ({
+        entityId: row.entityId,
+        publicSlug: row.publicSlug,
+        title: row.title,
+        publishedAt: row.publishedAt,
+      })),
+      page: { nextCursor, hasMore: nextCursor !== null },
+    },
+  };
 }

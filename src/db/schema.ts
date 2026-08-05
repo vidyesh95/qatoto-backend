@@ -1293,6 +1293,16 @@ export const storeSearchDocument = pgTable(
     currency: text("currency"),
     minimumOrderQuantity: integer("minimum_order_quantity"),
     searchText: text("search_text").notNull(),
+    /**
+     * Weighted FTS document for `/store/search` relevance ranking.
+     * GENERATED ALWAYS so title/summary edits cannot drift from the index.
+     * Title A > organization display name B > summary/body C.
+     */
+    searchDocument: tsvector("search_document").generatedAlwaysAs(
+      sql`setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+          setweight(to_tsvector('english', coalesce(organization_display_name, '')), 'B') ||
+          setweight(to_tsvector('english', coalesce(summary, '') || ' ' || coalesce(search_text, '')), 'C')`,
+    ),
     isEligible: boolean("is_eligible").default(true).notNull(),
     publishedAt: timestamp("published_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1309,15 +1319,13 @@ export const storeSearchDocument = pgTable(
     index("store_search_document_organization_idx").on(table.organizationId, table.id),
     index("store_search_document_category_idx").on(table.categoryId, table.id),
     index("store_search_document_provider_kind_idx").on(table.providerKind, table.id),
+    index("store_search_document_fts_idx").using("gin", table.searchDocument),
     check(
       "store_search_document_slug_ck",
       sql`public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
           AND organization_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
     ),
-    check(
-      "store_search_document_country_ck",
-      sql`organization_country_code ~ '^[A-Z]{2}$'`,
-    ),
+    check("store_search_document_country_ck", sql`organization_country_code ~ '^[A-Z]{2}$'`),
   ],
 );
 
@@ -1499,18 +1507,15 @@ export const commerceServiceCoverage = pgTable(
   ],
 );
 
-export const freightOfferingDetail = pgTable(
-  "freight_offering_detail",
-  {
-    offeringId: text("offering_id")
-      .primaryKey()
-      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
-    transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
-    supportsConsolidation: boolean("supports_consolidation").default(false).notNull(),
-    supportsContainers: boolean("supports_containers").default(false).notNull(),
-    supportsHazardousGoods: boolean("supports_hazardous_goods").default(false).notNull(),
-  },
-);
+export const freightOfferingDetail = pgTable("freight_offering_detail", {
+  offeringId: text("offering_id")
+    .primaryKey()
+    .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+  transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
+  supportsConsolidation: boolean("supports_consolidation").default(false).notNull(),
+  supportsContainers: boolean("supports_containers").default(false).notNull(),
+  supportsHazardousGoods: boolean("supports_hazardous_goods").default(false).notNull(),
+});
 
 export const customsBrokerageOfferingDetail = pgTable(
   "customs_brokerage_offering_detail",
@@ -1523,7 +1528,7 @@ export const customsBrokerageOfferingDetail = pgTable(
     exportSupported: boolean("export_supported").default(true).notNull(),
     commodityCoverageSummary: text("commodity_coverage_summary"),
   },
-  (table) => [
+  (_table) => [
     check(
       "customs_brokerage_offering_detail_summary_ck",
       sql`commodity_coverage_summary IS NULL OR char_length(commodity_coverage_summary) <= 2000`,
@@ -1543,7 +1548,7 @@ export const insuranceOfferingDetail = pgTable(
     currency: text("currency").default("USD").notNull(),
     exclusionsDocumentReference: text("exclusions_document_reference"),
   },
-  (table) => [
+  (_table) => [
     check("insurance_offering_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
     check(
       "insurance_offering_detail_limits_ck",
@@ -1555,30 +1560,24 @@ export const insuranceOfferingDetail = pgTable(
   ],
 );
 
-export const inspectionOfferingDetail = pgTable(
-  "inspection_offering_detail",
-  {
-    offeringId: text("offering_id")
-      .primaryKey()
-      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
-    preProduction: boolean("pre_production").default(false).notNull(),
-    duringProduction: boolean("during_production").default(false).notNull(),
-    preShipment: boolean("pre_shipment").default(false).notNull(),
-    loadingSupervision: boolean("loading_supervision").default(false).notNull(),
-  },
-);
+export const inspectionOfferingDetail = pgTable("inspection_offering_detail", {
+  offeringId: text("offering_id")
+    .primaryKey()
+    .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+  preProduction: boolean("pre_production").default(false).notNull(),
+  duringProduction: boolean("during_production").default(false).notNull(),
+  preShipment: boolean("pre_shipment").default(false).notNull(),
+  loadingSupervision: boolean("loading_supervision").default(false).notNull(),
+});
 
-export const testingCertificationOfferingDetail = pgTable(
-  "testing_certification_offering_detail",
-  {
-    offeringId: text("offering_id")
-      .primaryKey()
-      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
-    standards: text("standards").array().notNull().default([]),
-    accreditationBodies: text("accreditation_bodies").array().notNull().default([]),
-    laboratoryLocations: text("laboratory_locations").array().notNull().default([]),
-  },
-);
+export const testingCertificationOfferingDetail = pgTable("testing_certification_offering_detail", {
+  offeringId: text("offering_id")
+    .primaryKey()
+    .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+  standards: text("standards").array().notNull().default([]),
+  accreditationBodies: text("accreditation_bodies").array().notNull().default([]),
+  laboratoryLocations: text("laboratory_locations").array().notNull().default([]),
+});
 
 export const marketingOfferingDetail = pgTable(
   "marketing_offering_detail",
@@ -1591,7 +1590,7 @@ export const marketingOfferingDetail = pgTable(
     languageCapabilities: text("language_capabilities").array().notNull().default([]),
     engagementModel: text("engagement_model"),
   },
-  (table) => [
+  (_table) => [
     check(
       "marketing_offering_detail_engagement_ck",
       sql`engagement_model IS NULL OR char_length(engagement_model) <= 200`,
@@ -1610,7 +1609,7 @@ export const warehouseOfferingDetail = pgTable(
     bondedStatus: boolean("bonded_status").default(false).notNull(),
     capacityUnits: text("capacity_units"),
   },
-  (table) => [
+  (_table) => [
     check(
       "warehouse_offering_detail_capacity_ck",
       sql`capacity_units IS NULL OR char_length(capacity_units) <= 80`,
@@ -1630,7 +1629,7 @@ export const foreignExchangeOfferingDetail = pgTable(
     maximumNotionalInCents: integer("maximum_notional_in_cents"),
     notionalCurrency: text("notional_currency").default("USD").notNull(),
   },
-  (table) => [
+  (_table) => [
     check("foreign_exchange_offering_detail_currency_ck", sql`notional_currency ~ '^[A-Z]{3}$'`),
     check(
       "foreign_exchange_offering_detail_notional_ck",

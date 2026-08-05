@@ -23,6 +23,7 @@ import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-vide
 import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
 import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
+import { handleRefreshStoreSearchDocument } from "#src/jobs/refresh-store-search-document.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
 import {
@@ -411,6 +412,14 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.verifyYoutubeVideo,
     workOptions,
     runJob(JOB_NAMES.verifyYoutubeVideo, handleVerifyYoutubeVideo),
+  );
+
+  // STORE Phase 1/2 — denormalized public search document refresh. ON DEMAND only;
+  // mutations enqueue after commit so browse/search eligibility cannot drift silently.
+  await boss.work(
+    JOB_NAMES.refreshStoreSearchDocument,
+    workOptions,
+    runJob(JOB_NAMES.refreshStoreSearchDocument, handleRefreshStoreSearchDocument),
   );
 
   // §7 — funding.

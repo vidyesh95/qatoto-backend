@@ -47,6 +47,7 @@ vi.mock("#src/lib/image.js", () => ({
   validateAndNormalizeImage: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 vi.mock("#src/services/store-search.service.js", () => ({
+  enqueueProductSearchDocumentRefresh: vi.fn<(...arguments_: readonly unknown[]) => Promise<void>>(),
   refreshProductSearchDocument: vi.fn<(...arguments_: readonly unknown[]) => Promise<void>>(),
 }));
 

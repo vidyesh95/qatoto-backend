@@ -1,51 +1,68 @@
 import express from "express";
 
+import * as commerceOrganizationsController from "#src/controllers/commerce-organizations.controller.js";
 import * as commerceProvidersController from "#src/controllers/commerce-providers.controller.js";
-import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { idempotency } from "#src/middleware/idempotency.js";
-import {
-  commerceProviderWriteLimiter,
-} from "#src/middleware/rate-limit.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
+import { commerceProviderWriteLimiter } from "#src/middleware/rate-limit.js";
 import { requireActiveCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
 
 const commerceProvidersRouter = express.Router();
 
-commerceProvidersRouter.post(
-  "/providers/profile",
-  requireAuth,
-  requireActiveCommerceOrganization,
-  commerceProviderWriteLimiter,
-  longFormBody,
-  idempotency({ required: true, scope: "active_organization" }),
-  commerceProvidersController.upsertProfile,
-);
+function mountProviderWriteRoutes(pathPrefix: "/providers" | "/providers/:organizationId"): void {
+  commerceProvidersRouter.post(
+    `${pathPrefix}/profile`,
+    requireAuth,
+    requireActiveCommerceOrganization,
+    commerceProviderWriteLimiter,
+    longFormBody,
+    idempotency({ required: true, scope: "active_organization" }),
+    commerceProvidersController.upsertProfile,
+  );
+
+  commerceProvidersRouter.post(
+    `${pathPrefix}/kinds`,
+    requireAuth,
+    requireActiveCommerceOrganization,
+    commerceProviderWriteLimiter,
+    compactBody,
+    idempotency({ required: true, scope: "active_organization" }),
+    commerceProvidersController.addKindLink,
+  );
+
+  commerceProvidersRouter.get(
+    `${pathPrefix}/offerings/mine`,
+    requireAuth,
+    requireActiveCommerceOrganization,
+    commerceProvidersController.listMineOfferings,
+  );
+
+  commerceProvidersRouter.post(
+    `${pathPrefix}/offerings`,
+    requireAuth,
+    requireActiveCommerceOrganization,
+    commerceProviderWriteLimiter,
+    longFormBody,
+    idempotency({ required: true, scope: "active_organization" }),
+    commerceProvidersController.createOffering,
+  );
+}
+
+// Temporary aliases without :organizationId must register BEFORE param routes so
+// `/providers/profile` is not captured as `:organizationId = "profile"`.
+mountProviderWriteRoutes("/providers");
+// Spec paths (STORE §6.1). Controllers authorize :organizationId against active org.
+mountProviderWriteRoutes("/providers/:organizationId");
 
 commerceProvidersRouter.post(
-  "/providers/kinds",
+  "/providers/:organizationId/evidence",
   requireAuth,
-  requireActiveCommerceOrganization,
   commerceProviderWriteLimiter,
-  compactBody,
-  idempotency({ required: true, scope: "active_organization" }),
-  commerceProvidersController.addKindLink,
-);
-
-commerceProvidersRouter.get(
-  "/providers/offerings/mine",
-  requireAuth,
-  requireActiveCommerceOrganization,
-  commerceProvidersController.listMineOfferings,
-);
-
-commerceProvidersRouter.post(
-  "/providers/offerings",
-  requireAuth,
-  requireActiveCommerceOrganization,
-  commerceProviderWriteLimiter,
-  longFormBody,
-  idempotency({ required: true, scope: "active_organization" }),
-  commerceProvidersController.createOffering,
+  uploadCommerceVerificationEvidence,
+  idempotency({ required: true }),
+  commerceOrganizationsController.submitVerificationEvidence,
 );
 
 commerceProvidersRouter.patch(

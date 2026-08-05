@@ -120,6 +120,8 @@ export const JOB_NAMES = {
   revalidateYoutubeEmbeds: "revalidate-youtube-embeds",
   pruneEngagementDataTick: "prune-engagement-data-tick",
   pruneEngagementData: "prune-engagement-data",
+  // STORE Phase 1/2 — refresh denormalized public search documents after mutations.
+  refreshStoreSearchDocument: "refresh-store-search-document",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -234,6 +236,31 @@ const ProgramScopedAsOfPayloadSchema = z
  * of a different video's proof. `video.id` is a randomUUID, so `z.uuid()` is exact.
  */
 const VerifyYoutubeVideoPayloadSchema = z.object({ videoId: z.uuid() }).strict();
+
+/**
+ * Store search document refresh. Carries the target identity only — eligibility and
+ * projection fields are re-read from authoritative rows inside the handler.
+ */
+const RefreshStoreSearchDocumentPayloadSchema = z.discriminatedUnion("targetKind", [
+  z
+    .object({
+      targetKind: z.literal("product"),
+      productId: z.string().trim().min(1).max(200),
+    })
+    .strict(),
+  z
+    .object({
+      targetKind: z.literal("provider_offering"),
+      offeringId: z.string().trim().min(1).max(200),
+    })
+    .strict(),
+  z
+    .object({
+      targetKind: z.literal("organization"),
+      organizationId: z.string().trim().min(1).max(200),
+    })
+    .strict(),
+]);
 
 /**
  * One definition per job: its payload contract and its queue policy.
@@ -843,6 +870,16 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.pruneEngagementData),
     },
   },
+  [JOB_NAMES.refreshStoreSearchDocument]: {
+    name: JOB_NAMES.refreshStoreSearchDocument,
+    payloadSchema: RefreshStoreSearchDocumentPayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      expireInSeconds: 300,
+      deadLetter: deadLetterNameFor(JOB_NAMES.refreshStoreSearchDocument),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -1207,6 +1244,7 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.revalidateYoutubeEmbeds]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.pruneEngagementDataTick]: TickPayloadSchema,
   [JOB_NAMES.pruneEngagementData]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.refreshStoreSearchDocument]: RefreshStoreSearchDocumentPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -1322,4 +1360,11 @@ export const idempotencyKeyFor = {
   revalidateYoutubeEmbeds: (asOfIso: string): string =>
     `${JOB_NAMES.revalidateYoutubeEmbeds}:${asOfIso}`,
   pruneEngagementData: (asOfIso: string): string => `${JOB_NAMES.pruneEngagementData}:${asOfIso}`,
+  // Include a generation so successive mutations inside the retention window each refresh.
+  refreshStoreSearchDocumentProduct: (productId: string, generation: string): string =>
+    `${JOB_NAMES.refreshStoreSearchDocument}:product:${productId}:${generation}`,
+  refreshStoreSearchDocumentOffering: (offeringId: string, generation: string): string =>
+    `${JOB_NAMES.refreshStoreSearchDocument}:offering:${offeringId}:${generation}`,
+  refreshStoreSearchDocumentOrganization: (organizationId: string, generation: string): string =>
+    `${JOB_NAMES.refreshStoreSearchDocument}:organization:${organizationId}:${generation}`,
 } as const;

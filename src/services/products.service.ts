@@ -17,7 +17,7 @@ import {
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
 import { slugifyPublicTitle } from "#src/lib/store-cursor.js";
-import { refreshProductSearchDocument } from "#src/services/store-search.service.js";
+import { enqueueProductSearchDocumentRefresh } from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 
 /** Max images per listing (the wizard's MAX_PRODUCT_IMAGES). Enforced here, not the DB. */
@@ -619,7 +619,7 @@ export async function updateProduct(
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
-  await refreshProductSearchDocument(productId);
+  await enqueueProductSearchDocumentRefresh(productId);
   return { success: true, value: owned };
 }
 
@@ -868,7 +868,7 @@ export async function publishProduct(
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
-  await refreshProductSearchDocument(productId);
+  await enqueueProductSearchDocumentRefresh(productId);
   return { success: true, value: owned };
 }
 
@@ -891,7 +891,7 @@ export async function unpublishProduct(
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
-  await refreshProductSearchDocument(productId);
+  await enqueueProductSearchDocumentRefresh(productId);
   return { success: true, value: owned };
 }
 

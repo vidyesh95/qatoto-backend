@@ -200,6 +200,7 @@ const SetCoverageSchema = z
 const OfferingParamsSchema = z.object({ offeringId: z.string().trim().min(1).max(200) }).strict();
 const ProductParamsSchema = z.object({ productId: z.string().trim().min(1).max(200) }).strict();
 const SupplierParamsSchema = z.object({ supplierId: z.string().trim().min(1).max(200) }).strict();
+const RouteOrganizationIdSchema = z.string().trim().min(1).max(200);
 
 const ModerateOfferingSchema = z
   .object({
@@ -245,6 +246,24 @@ function requireCommerceContext(
     } satisfies ApiResponse);
     return null;
   }
+
+  const routeOrganizationIdRaw = req.params.organizationId;
+  if (typeof routeOrganizationIdRaw === "string") {
+    const routeOrganizationId = RouteOrganizationIdSchema.safeParse(routeOrganizationIdRaw);
+    if (!routeOrganizationId.success) {
+      sendZodError(res, routeOrganizationId.error);
+      return null;
+    }
+    const match = commerceProvidersService.assertOrganizationContextMatch({
+      activeOrganizationId: req.commerceOrganization.organizationId,
+      routeOrganizationId: routeOrganizationId.data,
+    });
+    if (!match.success) {
+      mapProviderError(res, match.error);
+      return null;
+    }
+  }
+
   return {
     userId: req.user.id,
     organizationId: req.commerceOrganization.organizationId,
@@ -270,6 +289,13 @@ function mapProviderError(
         status: "error",
         statusCode: 404,
         message: "Not found.",
+      } satisfies ApiResponse);
+      return;
+    case "ORGANIZATION_CONTEXT_MISMATCH":
+      res.status(403).json({
+        status: "error",
+        statusCode: 403,
+        message: "Active commerce organization does not match the route organization.",
       } satisfies ApiResponse);
       return;
     case "PROFILE_REQUIRED":

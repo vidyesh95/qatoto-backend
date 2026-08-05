@@ -68,6 +68,17 @@ vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
 }));
 
 const serviceStubs = vi.hoisted(() => ({
+  assertOrganizationContextMatch: vi.fn<
+    (input: {
+      activeOrganizationId: string;
+      routeOrganizationId: string;
+    }) => { success: true; value: true } | { success: false; error: { type: "ORGANIZATION_CONTEXT_MISMATCH" } }
+  >((input) => {
+    if (input.activeOrganizationId !== input.routeOrganizationId) {
+      return { success: false, error: { type: "ORGANIZATION_CONTEXT_MISMATCH" } };
+    }
+    return { success: true, value: true };
+  }),
   upsertProviderProfile: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   addProviderKindLink: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   createServiceOffering: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
@@ -262,5 +273,32 @@ describe("commerce provider routes", () => {
         commerceOrganizationId: ORGANIZATION_ID,
       }),
     );
+  });
+
+  it("accepts organization-scoped profile routes matching the active org", async () => {
+    serviceStubs.upsertProviderProfile.mockResolvedValue({
+      success: true,
+      value: { organizationId: ORGANIZATION_ID, verificationState: "unverified" },
+    });
+
+    const response = await request(app)
+      .post(`/commerce/providers/${ORGANIZATION_ID}/profile`)
+      .set("Idempotency-Key", "profile-scoped-1")
+      .send({ publicSummary: "Scoped profile" });
+
+    expect(response.status).toBe(200);
+    expect(serviceStubs.upsertProviderProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: ORGANIZATION_ID }),
+    );
+  });
+
+  it("rejects organization-scoped routes when the active org mismatches", async () => {
+    const response = await request(app)
+      .post("/commerce/providers/commerce_org_other/profile")
+      .set("Idempotency-Key", "profile-scoped-mismatch")
+      .send({ publicSummary: "Nope" });
+
+    expect(response.status).toBe(403);
+    expect(serviceStubs.upsertProviderProfile).not.toHaveBeenCalled();
   });
 });

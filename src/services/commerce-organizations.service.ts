@@ -432,10 +432,9 @@ export async function updateOrganization(
     return { success: false, error: { type: "NOT_FOUND" } };
   }
   if (patch.visibility !== undefined) {
-    const { refreshOrganizationSearchEligibility } = await import(
-      "#src/services/store-search.service.js"
-    );
-    await refreshOrganizationSearchEligibility(organizationId);
+    const { enqueueOrganizationSearchDocumentRefresh } =
+      await import("#src/services/store-search.service.js");
+    await enqueueOrganizationSearchDocumentRefresh(organizationId);
   }
   return { success: true, value: updated };
 }

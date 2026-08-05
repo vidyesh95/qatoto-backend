@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, gt, ne, or } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, ne, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -23,10 +23,11 @@ import {
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor, slugifyPublicTitle } from "#src/lib/store-cursor.js";
 import { memberCanOperateProvider } from "#src/services/commerce-organization-access.service.js";
+import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import {
-  refreshOfferingSearchDocument,
-  refreshProductSearchDocument,
+  enqueueOfferingSearchDocumentRefresh,
+  enqueueProductSearchDocumentRefresh,
 } from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -52,7 +53,8 @@ export type CommerceProvidersError =
   | { type: "VALIDATION"; message: string }
   | { type: "INVALID_STATE" }
   | { type: "INVALID_CURSOR" }
-  | { type: "ORGANIZATION_NOT_FOUND" };
+  | { type: "ORGANIZATION_NOT_FOUND" }
+  | { type: "ORGANIZATION_CONTEXT_MISMATCH" };
 
 export type ServiceOfferingDetailInput =
   | {
@@ -135,6 +137,17 @@ export interface PublicProviderCard {
   readonly verificationState: ProviderProfile["verificationState"];
   readonly acceptingRequests: boolean;
   readonly serviceRegionSummary: string | null;
+  readonly averageResponseTimeHours: number | null;
+}
+
+export interface PublicCoverageProjection {
+  readonly originCountryCode: string | null;
+  readonly destinationCountryCode: string | null;
+  readonly originRegionLabel: string | null;
+  readonly destinationRegionLabel: string | null;
+  readonly locationIdentifier: string | null;
+  readonly supportsHazardousGoods: boolean;
+  readonly supportsConsolidation: boolean;
 }
 
 export interface PublicOfferingCard {
@@ -158,6 +171,11 @@ const publicProviderEligibility = and(
   ne(commerceProviderProfile.verificationState, "suspended"),
 );
 
+const publicKindLinkEligibility = and(
+  ne(commerceProviderKindLink.verificationState, "rejected"),
+  ne(commerceProviderKindLink.verificationState, "suspended"),
+);
+
 const publicProviderSelect = {
   organizationId: commerceOrganization.id,
   slug: commerceOrganization.slug,
@@ -168,7 +186,18 @@ const publicProviderSelect = {
   verificationState: commerceProviderProfile.verificationState,
   acceptingRequests: commerceProviderProfile.acceptingRequests,
   serviceRegionSummary: commerceProviderProfile.serviceRegionSummary,
+  averageResponseTimeHours: commerceProviderProfile.averageResponseTimeHours,
 };
+
+export function assertOrganizationContextMatch(input: {
+  readonly activeOrganizationId: string;
+  readonly routeOrganizationId: string;
+}): Result<true, CommerceProvidersError> {
+  if (input.activeOrganizationId !== input.routeOrganizationId) {
+    return { success: false, error: { type: "ORGANIZATION_CONTEXT_MISMATCH" } };
+  }
+  return { success: true, value: true };
+}
 
 function requireProviderRole(memberRole: MemberRole): Result<true, CommerceProvidersError> {
   if (!memberCanOperateProvider(memberRole)) {
@@ -766,7 +795,10 @@ export async function submitServiceOffering(input: {
       ),
     )
     .returning();
-  if (updated) return { success: true, value: updated };
+  if (updated) {
+    await enqueueOfferingSearchDocumentRefresh(updated.id);
+    return { success: true, value: updated };
+  }
 
   const existing = await findOwnedOffering(input.offeringId, input.organizationId);
   if (!existing) return { success: false, error: { type: "NOT_FOUND" } };
@@ -783,10 +815,7 @@ export async function setOfferingCoverage(input: {
   if (!access.success) return access;
 
   for (const coverage of input.coverages) {
-    if (
-      coverage.originCountryCode != null &&
-      !/^[A-Z]{2}$/.test(coverage.originCountryCode)
-    ) {
+    if (coverage.originCountryCode != null && !/^[A-Z]{2}$/.test(coverage.originCountryCode)) {
       return validationFailure("Origin country code must be ISO-3166 alpha-2.");
     }
     if (
@@ -900,25 +929,46 @@ export async function moderateServiceOffering(input: {
   if (!nextState.success) return nextState;
 
   const occurredAt = new Date();
-  const [updated] = await db
-    .update(commerceServiceOffering)
-    .set({
-      state: nextState.value,
-      moderatedByUserId: input.moderatorUserId,
-      moderatedAt: occurredAt,
-      moderationReason: input.reason ?? null,
-      updatedAt: occurredAt,
-    })
-    .where(
-      and(
-        eq(commerceServiceOffering.id, input.offeringId),
-        eq(commerceServiceOffering.state, existing.state),
-      ),
-    )
-    .returning();
+  const updated = await db.transaction(async (transaction) => {
+    const [row] = await transaction
+      .update(commerceServiceOffering)
+      .set({
+        state: nextState.value,
+        moderatedByUserId: input.moderatorUserId,
+        moderatedAt: occurredAt,
+        moderationReason: input.reason ?? null,
+        updatedAt: occurredAt,
+      })
+      .where(
+        and(
+          eq(commerceServiceOffering.id, input.offeringId),
+          eq(commerceServiceOffering.state, existing.state),
+        ),
+      )
+      .returning();
+    if (!row) return null;
+
+    await appendPlatformAuditEntry(transaction, {
+      eventKind:
+        input.decision === "approve" ? "content_review_approved" : "content_review_rejected",
+      actorUserId: input.moderatorUserId,
+      actorRoleSnapshot: capability.value.platformRole,
+      actionLabel: `Commerce service offering ${input.decision}`,
+      targetLabel: `service_offering ${input.offeringId}`,
+      detailNote: input.reason ?? "",
+      payload: {
+        offeringId: input.offeringId,
+        decision: input.decision,
+        previousState: existing.state,
+        nextState: nextState.value,
+      },
+      occurredAt,
+    });
+    return row;
+  });
   if (!updated) return { success: false, error: { type: "INVALID_STATE" } };
 
-  await refreshOfferingSearchDocument(updated.id);
+  await enqueueOfferingSearchDocumentRefresh(updated.id);
   return { success: true, value: updated };
 }
 
@@ -931,14 +981,36 @@ export async function moderateProduct(input: {
   const capability = await requirePlatformCapability(input.moderatorUserId, "moderate_commerce");
   if (!capability.success) return { success: false, error: { type: "FORBIDDEN" } };
 
-  const [updated] = await db
-    .update(product)
-    .set({ moderationState: input.moderationState, updatedAt: new Date() })
-    .where(eq(product.id, input.productId))
-    .returning();
+  const occurredAt = new Date();
+  const updated = await db.transaction(async (transaction) => {
+    const [row] = await transaction
+      .update(product)
+      .set({ moderationState: input.moderationState, updatedAt: occurredAt })
+      .where(eq(product.id, input.productId))
+      .returning();
+    if (!row) return null;
+
+    await appendPlatformAuditEntry(transaction, {
+      eventKind:
+        input.moderationState === "approved"
+          ? "content_review_approved"
+          : "content_review_rejected",
+      actorUserId: input.moderatorUserId,
+      actorRoleSnapshot: capability.value.platformRole,
+      actionLabel: `Commerce product moderation ${input.moderationState}`,
+      targetLabel: `product ${input.productId}`,
+      detailNote: input.reason ?? "",
+      payload: {
+        productId: input.productId,
+        moderationState: input.moderationState,
+      },
+      occurredAt,
+    });
+    return row;
+  });
   if (!updated) return { success: false, error: { type: "NOT_FOUND" } };
 
-  await refreshProductSearchDocument(updated.id);
+  await enqueueProductSearchDocumentRefresh(updated.id);
   return { success: true, value: updated };
 }
 
@@ -1019,6 +1091,7 @@ export async function listPublicProviders(input: {
             and(
               eq(commerceProviderKindLink.organizationId, commerceOrganization.id),
               eq(commerceProviderKindLink.providerKind, input.providerKind),
+              publicKindLinkEligibility,
             ),
           )
           .where(and(publicProviderEligibility, cursorPredicate))
@@ -1038,7 +1111,9 @@ export async function listPublicProviders(input: {
   };
 }
 
-export async function getPublicProviderByOrganizationSlug(organizationSlug: string): Promise<
+export async function getPublicProviderByOrganizationSlug(
+  organizationSlug: string,
+): Promise<
   Result<
     { readonly provider: PublicProviderCard; readonly offerings: readonly PublicOfferingCard[] },
     CommerceProvidersError
@@ -1056,8 +1131,16 @@ export async function getPublicProviderByOrganizationSlug(organizationSlug: stri
   if (!provider) return { success: false, error: { type: "NOT_FOUND" } };
 
   const offerings = await db
-    .select()
+    .select({ offering: commerceServiceOffering })
     .from(commerceServiceOffering)
+    .innerJoin(
+      commerceProviderKindLink,
+      and(
+        eq(commerceProviderKindLink.organizationId, commerceServiceOffering.providerOrganizationId),
+        eq(commerceProviderKindLink.providerKind, commerceServiceOffering.providerKind),
+        publicKindLinkEligibility,
+      ),
+    )
     .where(
       and(
         eq(commerceServiceOffering.providerOrganizationId, provider.organizationId),
@@ -1068,7 +1151,10 @@ export async function getPublicProviderByOrganizationSlug(organizationSlug: stri
 
   return {
     success: true,
-    value: { provider, offerings: offerings.map(toPublicOfferingCard) },
+    value: {
+      provider,
+      offerings: offerings.map((row) => toPublicOfferingCard(row.offering)),
+    },
   };
 }
 
@@ -1078,6 +1164,7 @@ export async function getPublicServiceOfferingBySlug(offeringSlug: string): Prom
       readonly offering: PublicOfferingCard & { readonly state: "active" };
       readonly provider: PublicProviderCard;
       readonly detail: ServiceOfferingDetailProjection;
+      readonly coverage: readonly PublicCoverageProjection[];
     },
     CommerceProvidersError
   >
@@ -1096,6 +1183,14 @@ export async function getPublicServiceOfferingBySlug(offeringSlug: string): Prom
       commerceOrganization,
       eq(commerceOrganization.id, commerceServiceOffering.providerOrganizationId),
     )
+    .innerJoin(
+      commerceProviderKindLink,
+      and(
+        eq(commerceProviderKindLink.organizationId, commerceServiceOffering.providerOrganizationId),
+        eq(commerceProviderKindLink.providerKind, commerceServiceOffering.providerKind),
+        publicKindLinkEligibility,
+      ),
+    )
     .where(
       and(
         eq(commerceServiceOffering.slug, offeringSlug),
@@ -1106,7 +1201,22 @@ export async function getPublicServiceOfferingBySlug(offeringSlug: string): Prom
     .limit(1);
   if (!row) return { success: false, error: { type: "NOT_FOUND" } };
 
-  const detail = await loadOfferingDetail(row.offering.id, row.offering.providerKind);
+  const [detail, coverageRows] = await Promise.all([
+    loadOfferingDetail(row.offering.id, row.offering.providerKind),
+    db
+      .select({
+        originCountryCode: commerceServiceCoverage.originCountryCode,
+        destinationCountryCode: commerceServiceCoverage.destinationCountryCode,
+        originRegionLabel: commerceServiceCoverage.originRegionLabel,
+        destinationRegionLabel: commerceServiceCoverage.destinationRegionLabel,
+        locationIdentifier: commerceServiceCoverage.locationIdentifier,
+        supportsHazardousGoods: commerceServiceCoverage.supportsHazardousGoods,
+        supportsConsolidation: commerceServiceCoverage.supportsConsolidation,
+      })
+      .from(commerceServiceCoverage)
+      .where(eq(commerceServiceCoverage.offeringId, row.offering.id))
+      .orderBy(asc(commerceServiceCoverage.id)),
+  ]);
   if (!detail) return { success: false, error: { type: "NOT_FOUND" } };
 
   return {
@@ -1123,10 +1233,78 @@ export async function getPublicServiceOfferingBySlug(offeringSlug: string): Prom
         verificationState: row.verificationState,
         acceptingRequests: row.acceptingRequests,
         serviceRegionSummary: row.serviceRegionSummary,
+        averageResponseTimeHours: row.averageResponseTimeHours,
       },
       detail,
+      coverage: coverageRows,
     },
   };
+}
+
+/** Resolve eligible public offerings for merchandising placements. */
+export async function resolveEligiblePublicOfferingsByIds(offeringIds: readonly string[]): Promise<
+  readonly {
+    readonly offering: PublicOfferingCard;
+    readonly provider: PublicProviderCard;
+  }[]
+> {
+  if (offeringIds.length === 0) return [];
+
+  const rows = await db
+    .select({
+      offering: commerceServiceOffering,
+      ...publicProviderSelect,
+    })
+    .from(commerceServiceOffering)
+    .innerJoin(
+      commerceProviderProfile,
+      eq(commerceProviderProfile.organizationId, commerceServiceOffering.providerOrganizationId),
+    )
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, commerceServiceOffering.providerOrganizationId),
+    )
+    .innerJoin(
+      commerceProviderKindLink,
+      and(
+        eq(commerceProviderKindLink.organizationId, commerceServiceOffering.providerOrganizationId),
+        eq(commerceProviderKindLink.providerKind, commerceServiceOffering.providerKind),
+        publicKindLinkEligibility,
+      ),
+    )
+    .where(
+      and(
+        inArray(commerceServiceOffering.id, [...offeringIds]),
+        eq(commerceServiceOffering.state, "active"),
+        publicProviderEligibility,
+      ),
+    );
+
+  const byId = new Map(
+    rows.map((row) => [
+      row.offering.id,
+      {
+        offering: toPublicOfferingCard(row.offering),
+        provider: {
+          organizationId: row.organizationId,
+          slug: row.slug,
+          displayName: row.displayName,
+          countryCode: row.countryCode,
+          logoUrl: row.logoUrl,
+          publicSummary: row.publicSummary,
+          verificationState: row.verificationState,
+          acceptingRequests: row.acceptingRequests,
+          serviceRegionSummary: row.serviceRegionSummary,
+          averageResponseTimeHours: row.averageResponseTimeHours,
+        },
+      },
+    ]),
+  );
+
+  return offeringIds.flatMap((offeringId) => {
+    const entry = byId.get(offeringId);
+    return entry === undefined ? [] : [entry];
+  });
 }
 
 export async function listMineOfferings(

@@ -309,6 +309,13 @@
       "when": 1785937841579,
       "tag": "0043_uneven_ulik",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1785939000000,
+      "tag": "0044_store_search_fts",
+      "breakpoints": true
     }
   ]
 }
