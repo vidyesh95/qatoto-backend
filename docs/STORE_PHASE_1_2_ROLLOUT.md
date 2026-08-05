@@ -6,7 +6,8 @@ ranked search documents, and the provider connector directory under
 `/commerce/providers*`.
 
 **Status:** shipped and hardened. Follow this runbook for deploy, backfill, and
-verification. RFQ/cart/checkout/payment work remains Phase 3+. Product ownership and
+verification. Phase 3 RFQ/quote/order-snapshot work is documented in
+`docs/STORE_PHASE_3_ROLLOUT.md`. Product ownership and
 category columns remain in the Phase 0 expand/dual-write contract until the separate
 non-null contract migration lands (`docs/STORE_PHASE_0_ROLLOUT.md`).
 

@@ -8,6 +8,7 @@ import { jobFailure } from "#src/db/schema.js";
 import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
 import { handleDeliverNotification } from "#src/jobs/deliver-notification.js";
+import { handleExpireCommerceQuotes } from "#src/jobs/expire-commerce-quotes.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
 import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
 import { handleRecomputeBranchSignals } from "#src/jobs/recompute-branch-signals.js";
@@ -45,6 +46,7 @@ import {
   handleRecomputeVideoDurationsTick,
   handleRecomputeVideoQualityScoresTick,
   handleRevalidateYoutubeEmbedsTick,
+  handleExpireCommerceQuotesTick,
 } from "#src/jobs/scheduled-ticks.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
 import {
@@ -420,6 +422,18 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.refreshStoreSearchDocument,
     workOptions,
     runJob(JOB_NAMES.refreshStoreSearchDocument, handleRefreshStoreSearchDocument),
+  );
+
+  // STORE Phase 3 — expire submitted quotes and open RFQs past their deadlines.
+  await boss.work(
+    JOB_NAMES.expireCommerceQuotesTick,
+    workOptions,
+    runJob(JOB_NAMES.expireCommerceQuotesTick, handleExpireCommerceQuotesTick),
+  );
+  await boss.work(
+    JOB_NAMES.expireCommerceQuotes,
+    workOptions,
+    runJob(JOB_NAMES.expireCommerceQuotes, handleExpireCommerceQuotes),
   );
 
   // §7 — funding.

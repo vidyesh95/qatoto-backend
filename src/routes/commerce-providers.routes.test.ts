@@ -65,6 +65,24 @@ vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
     };
     next();
   },
+  requireActiveBuyerCommerceOrganization: (req: Request, _res: Response, next: NextFunction): void => {
+    req.commerceOrganization = {
+      organizationId: ORGANIZATION_ID,
+      memberId: "member-buyer",
+      memberRole: "buyer",
+      tradeState: "active",
+    };
+    next();
+  },
+  requireActiveProviderCommerceOrganization: (req: Request, _res: Response, next: NextFunction): void => {
+    req.commerceOrganization = {
+      organizationId: ORGANIZATION_ID,
+      memberId: "member-provider",
+      memberRole: "provider_operator",
+      tradeState: "active",
+    };
+    next();
+  },
 }));
 
 const serviceStubs = vi.hoisted(() => ({

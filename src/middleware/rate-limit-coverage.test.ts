@@ -59,6 +59,12 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/discovery", specifier: "#src/routes/discovery.routes.js", exportName: "default" },
   { mountPath: "/suppliers", specifier: "#src/routes/suppliers.routes.js", exportName: "default" },
   { mountPath: "/notifications", specifier: "#src/routes/notifications.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-organizations.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-providers.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-rfqs.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-quotes.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-messages.routes.js", exportName: "default" },
+  { mountPath: "/store", specifier: "#src/routes/store.routes.js", exportName: "default" },
 ];
 
 /** A write. GETs are excluded — §7's bounds are about writes and expensive reads. */

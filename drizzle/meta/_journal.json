@@ -316,6 +316,13 @@
       "when": 1785939000000,
       "tag": "0044_store_search_fts",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1785947098341,
+      "tag": "0045_tough_sunfire",
+      "breakpoints": true
     }
   ]
 }

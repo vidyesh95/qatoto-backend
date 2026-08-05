@@ -3,12 +3,15 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveActiveCommerceOrganization = vi.fn<(...arguments_: readonly unknown[]) => Promise<unknown>>();
+const resolveActiveBuyerCommerceOrganization = vi.fn<(...arguments_: readonly unknown[]) => Promise<unknown>>();
 
 vi.mock("#src/services/commerce-organization-access.service.js", () => ({
   resolveActiveCommerceOrganization,
+  resolveActiveBuyerCommerceOrganization,
 }));
 
-const { requireActiveCommerceOrganization } = await import("#src/middleware/require-active-commerce-organization.js");
+const { requireActiveCommerceOrganization, requireActiveBuyerCommerceOrganization } =
+  await import("#src/middleware/require-active-commerce-organization.js");
 
 function buildProbeApp(): express.Express {
   const app = express();
@@ -27,6 +30,9 @@ function buildProbeApp(): express.Express {
     next();
   });
   app.get("/protected", requireActiveCommerceOrganization, (req, res) => {
+    res.status(200).json(req.commerceOrganization);
+  });
+  app.get("/buyer-protected", requireActiveBuyerCommerceOrganization, (req, res) => {
     res.status(200).json(req.commerceOrganization);
   });
   return app;
@@ -73,5 +79,49 @@ describe("requireActiveCommerceOrganization", () => {
 
     expect(response.status).toBe(403);
     expect(response.body.message).toBe("An active commerce organization membership is required.");
+  });
+});
+
+describe("requireActiveBuyerCommerceOrganization", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("attaches buyer organization context after a fresh membership check", async () => {
+    resolveActiveBuyerCommerceOrganization.mockResolvedValue({
+      success: true,
+      value: {
+        organizationId: "organization-1",
+        memberId: "member-buyer",
+        memberRole: "buyer",
+        tradeState: "active",
+      },
+    });
+
+    const response = await request(buildProbeApp()).get("/buyer-protected");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      organizationId: "organization-1",
+      memberId: "member-buyer",
+      memberRole: "buyer",
+      tradeState: "active",
+    });
+    expect(resolveActiveBuyerCommerceOrganization).toHaveBeenCalledWith({
+      userId: "user-1",
+      activeOrganizationId: "organization-1",
+    });
+  });
+
+  it("refuses when the active organization lacks a buyer role", async () => {
+    resolveActiveBuyerCommerceOrganization.mockResolvedValue({
+      success: false,
+      error: { type: "ACTIVE_BUYER_MEMBERSHIP_REQUIRED" },
+    });
+
+    const response = await request(buildProbeApp()).get("/buyer-protected");
+
+    expect(response.status).toBe(403);
+    expect(response.body.message).toBe("An active buyer organization membership is required.");
   });
 });

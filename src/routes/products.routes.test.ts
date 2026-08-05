@@ -34,6 +34,24 @@ vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
     };
     next();
   },
+  requireActiveBuyerCommerceOrganization: (req: Request, _res: Response, next: NextFunction): void => {
+    req.commerceOrganization = {
+      organizationId: ORGANIZATION_ID,
+      memberId: "member-one",
+      memberRole: "buyer",
+      tradeState: "active",
+    };
+    next();
+  },
+  requireActiveProviderCommerceOrganization: (req: Request, _res: Response, next: NextFunction): void => {
+    req.commerceOrganization = {
+      organizationId: ORGANIZATION_ID,
+      memberId: "member-one",
+      memberRole: "provider_operator",
+      tradeState: "active",
+    };
+    next();
+  },
 }));
 
 const productView = {

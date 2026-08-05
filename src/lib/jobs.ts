@@ -122,6 +122,9 @@ export const JOB_NAMES = {
   pruneEngagementData: "prune-engagement-data",
   // STORE Phase 1/2 — refresh denormalized public search documents after mutations.
   refreshStoreSearchDocument: "refresh-store-search-document",
+  // STORE Phase 3 — expire submitted quotes and open RFQs past their deadlines.
+  expireCommerceQuotesTick: "expire-commerce-quotes-tick",
+  expireCommerceQuotes: "expire-commerce-quotes",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -880,6 +883,29 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.refreshStoreSearchDocument),
     },
   },
+  [JOB_NAMES.expireCommerceQuotesTick]: {
+    name: JOB_NAMES.expireCommerceQuotesTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.expireCommerceQuotesTick),
+    },
+  },
+  [JOB_NAMES.expireCommerceQuotes]: {
+    name: JOB_NAMES.expireCommerceQuotes,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.expireCommerceQuotes),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -993,6 +1019,9 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // Runs BEFORE the 05:10 revalidation and well after the 01:xx chain, so a night's
   // recomputes are complete before anything is removed.
   [JOB_NAMES.pruneEngagementDataTick]: "55 4 * * *",
+  // STORE Phase 3 — hourly quote/RFQ expiry. Minute :20 is lightly occupied (branch
+  // signals is daily at 03:20 only); tick work is a single enqueue so sharing is fine.
+  [JOB_NAMES.expireCommerceQuotesTick]: "20 * * * *",
 };
 
 export type JobEnqueueError =
@@ -1245,6 +1274,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.pruneEngagementDataTick]: TickPayloadSchema,
   [JOB_NAMES.pruneEngagementData]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.refreshStoreSearchDocument]: RefreshStoreSearchDocumentPayloadSchema,
+  [JOB_NAMES.expireCommerceQuotesTick]: TickPayloadSchema,
+  [JOB_NAMES.expireCommerceQuotes]: AsOfOnlyPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -1367,4 +1398,6 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.refreshStoreSearchDocument}:offering:${offeringId}:${generation}`,
   refreshStoreSearchDocumentOrganization: (organizationId: string, generation: string): string =>
     `${JOB_NAMES.refreshStoreSearchDocument}:organization:${organizationId}:${generation}`,
+  // Quantized to the HOUR: a double cron fire inside the same UTC hour dedups to one run.
+  expireCommerceQuotes: (asOfIso: string): string => `${JOB_NAMES.expireCommerceQuotes}:${asOfIso}`,
 } as const;

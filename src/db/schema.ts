@@ -455,6 +455,14 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "document_uploaded",
     "document_state_changed",
     "verification_decided",
+    "rfq_opened",
+    "rfq_closed",
+    "rfq_awarded",
+    "quote_submitted",
+    "quote_accepted",
+    "quote_declined",
+    "quote_withdrawn",
+    "order_created_from_quote",
   ],
 );
 
@@ -542,6 +550,74 @@ export const freightTransportModeEnum = pgEnum("freight_transport_mode", [
   "land",
   "rail",
   "multimodal",
+]);
+
+// ---------------------------------------------------------------------------
+// Store Phase 3 — RFQs, quotes, quote-originated orders, negotiation threads.
+// See docs/STORE_BACKEND_STRUCTURE.md §4.6–4.8, §4.11, §6.2, §8.
+// ---------------------------------------------------------------------------
+
+export const commerceRfqStateEnum = pgEnum("commerce_rfq_state", [
+  "draft",
+  "open",
+  "closed",
+  "awarded",
+  "cancelled",
+  "expired",
+]);
+
+export const commerceRfqVisibilityEnum = pgEnum("commerce_rfq_visibility", [
+  "invited_only",
+  "matched_providers",
+]);
+
+export const commerceRfqInvitationStateEnum = pgEnum("commerce_rfq_invitation_state", [
+  "pending",
+  "sent",
+  "read",
+  "responded",
+  "withdrawn",
+  "expired",
+]);
+
+export const commerceQuoteStatusEnum = pgEnum("commerce_quote_status", [
+  "draft",
+  "submitted",
+  "superseded",
+  "accepted",
+  "declined",
+  "withdrawn",
+  "expired",
+]);
+
+export const commerceOrderSourceEnum = pgEnum("commerce_order_source", [
+  "direct_checkout",
+  "accepted_quote",
+]);
+
+export const commerceOrderStateEnum = pgEnum("commerce_order_state", [
+  "pending_payment",
+  "payment_processing",
+  "confirmed",
+  "in_fulfillment",
+  "partially_completed",
+  "completed",
+  "cancelled",
+  "disputed",
+]);
+
+export const commerceThreadResourceKindEnum = pgEnum("commerce_thread_resource_kind", [
+  "rfq",
+  "quote",
+  "order",
+  "service_engagement",
+  "dispute",
+]);
+
+export const commerceThreadParticipantRoleEnum = pgEnum("commerce_thread_participant_role", [
+  "buyer",
+  "provider",
+  "moderator",
 ]);
 
 /**
@@ -1638,6 +1714,805 @@ export const foreignExchangeOfferingDetail = pgTable(
               AND minimum_notional_in_cents >= 0
               AND maximum_notional_in_cents >= minimum_notional_in_cents)`,
     ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Phase 3 RFQ / quote / order / thread tables
+// ---------------------------------------------------------------------------
+
+export const commerceRfq = pgTable(
+  "commerce_rfq",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    state: commerceRfqStateEnum("state").default("draft").notNull(),
+    visibility: commerceRfqVisibilityEnum("visibility").default("invited_only").notNull(),
+    responseDeadlineAt: timestamp("response_deadline_at"),
+    desiredDeliveryStartsAt: timestamp("desired_delivery_starts_at"),
+    desiredDeliveryEndsAt: timestamp("desired_delivery_ends_at"),
+    destinationAddressId: text("destination_address_id").references(
+      () => commerceOrganizationAddress.id,
+      { onDelete: "restrict" },
+    ),
+    destinationCountryCode: text("destination_country_code"),
+    destinationLocality: text("destination_locality"),
+    settlementCurrency: text("settlement_currency").default("USD").notNull(),
+    openedAt: timestamp("opened_at"),
+    closedAt: timestamp("closed_at"),
+    awardedAt: timestamp("awarded_at"),
+    expiredAt: timestamp("expired_at"),
+    cancelledAt: timestamp("cancelled_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_rfq_buyer_state_idx").on(table.buyerOrganizationId, table.state, table.id),
+    index("commerce_rfq_deadline_idx").on(table.responseDeadlineAt, table.state),
+    check("commerce_rfq_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
+    check(
+      "commerce_rfq_description_ck",
+      sql`description IS NULL OR char_length(description) <= 10000`,
+    ),
+    check("commerce_rfq_currency_ck", sql`settlement_currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_rfq_destination_country_ck",
+      sql`destination_country_code IS NULL OR destination_country_code ~ '^[A-Z]{2}$'`,
+    ),
+    check(
+      "commerce_rfq_delivery_window_ck",
+      sql`(desired_delivery_starts_at IS NULL AND desired_delivery_ends_at IS NULL)
+          OR (desired_delivery_starts_at IS NOT NULL AND desired_delivery_ends_at IS NOT NULL
+              AND desired_delivery_ends_at >= desired_delivery_starts_at)`,
+    ),
+    check(
+      "commerce_rfq_state_timestamps_ck",
+      sql`(state = 'draft' AND opened_at IS NULL AND closed_at IS NULL AND awarded_at IS NULL
+              AND expired_at IS NULL AND cancelled_at IS NULL)
+          OR (state = 'open' AND opened_at IS NOT NULL AND closed_at IS NULL AND awarded_at IS NULL
+              AND expired_at IS NULL AND cancelled_at IS NULL)
+          OR (state = 'closed' AND opened_at IS NOT NULL AND closed_at IS NOT NULL
+              AND awarded_at IS NULL AND expired_at IS NULL AND cancelled_at IS NULL)
+          OR (state = 'awarded' AND opened_at IS NOT NULL AND awarded_at IS NOT NULL
+              AND expired_at IS NULL AND cancelled_at IS NULL)
+          OR (state = 'expired' AND opened_at IS NOT NULL AND expired_at IS NOT NULL
+              AND cancelled_at IS NULL)
+          OR (state = 'cancelled' AND cancelled_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const commerceRfqProductLine = pgTable(
+  "commerce_rfq_product_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    rfqId: text("rfq_id")
+      .notNull()
+      .references(() => commerceRfq.id, { onDelete: "cascade" }),
+    productId: text("product_id").references(() => product.id, { onDelete: "restrict" }),
+    categoryId: text("category_id").references(() => commerceCategory.id, { onDelete: "restrict" }),
+    requestedTitle: text("requested_title").notNull(),
+    requestedSpecificationSnapshot: text("requested_specification_snapshot").notNull(),
+    quantity: integer("quantity").notNull(),
+    unitLabel: text("unit_label").notNull(),
+    siblingOrder: integer("sibling_order").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_rfq_product_line_rfq_idx").on(table.rfqId, table.siblingOrder),
+    uniqueIndex("commerce_rfq_product_line_order_uidx").on(table.rfqId, table.siblingOrder),
+    check(
+      "commerce_rfq_product_line_title_ck",
+      sql`char_length(requested_title) BETWEEN 1 AND 200`,
+    ),
+    check(
+      "commerce_rfq_product_line_spec_ck",
+      sql`char_length(requested_specification_snapshot) BETWEEN 1 AND 10000`,
+    ),
+    check("commerce_rfq_product_line_quantity_ck", sql`quantity > 0`),
+    check("commerce_rfq_product_line_unit_ck", sql`char_length(unit_label) BETWEEN 1 AND 40`),
+    check("commerce_rfq_product_line_order_ck", sql`sibling_order >= 0`),
+  ],
+);
+
+export const commerceRfqServiceLine = pgTable(
+  "commerce_rfq_service_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    rfqId: text("rfq_id")
+      .notNull()
+      .references(() => commerceRfq.id, { onDelete: "cascade" }),
+    providerKind: commerceProviderKindSlugEnum("provider_kind").notNull(),
+    serviceOfferingId: text("service_offering_id").references(() => commerceServiceOffering.id, {
+      onDelete: "restrict",
+    }),
+    linkedProductLineId: text("linked_product_line_id").references(
+      () => commerceRfqProductLine.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    requirementSummary: text("requirement_summary").notNull(),
+    siblingOrder: integer("sibling_order").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_rfq_service_line_rfq_idx").on(table.rfqId, table.siblingOrder),
+    index("commerce_rfq_service_line_kind_idx").on(table.providerKind, table.rfqId),
+    uniqueIndex("commerce_rfq_service_line_order_uidx").on(table.rfqId, table.siblingOrder),
+    check(
+      "commerce_rfq_service_line_summary_ck",
+      sql`char_length(requirement_summary) BETWEEN 1 AND 4000`,
+    ),
+    check("commerce_rfq_service_line_order_ck", sql`sibling_order >= 0`),
+  ],
+);
+
+/** Typed RFQ requirement extension — freight / logistics. */
+export const freightRfqRequirementDetail = pgTable("freight_rfq_requirement_detail", {
+  serviceLineId: text("service_line_id")
+    .primaryKey()
+    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+  transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
+  originCountryCode: text("origin_country_code"),
+  destinationCountryCode: text("destination_country_code"),
+  requiresConsolidation: boolean("requires_consolidation").default(false).notNull(),
+  requiresHazardousGoodsSupport: boolean("requires_hazardous_goods_support")
+    .default(false)
+    .notNull(),
+  cargoDescription: text("cargo_description"),
+});
+
+export const customsBrokerageRfqRequirementDetail = pgTable(
+  "customs_brokerage_rfq_requirement_detail",
+  {
+    serviceLineId: text("service_line_id")
+      .primaryKey()
+      .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+    jurisdictions: text("jurisdictions").array().notNull().default([]),
+    importRequired: boolean("import_required").default(true).notNull(),
+    exportRequired: boolean("export_required").default(false).notNull(),
+    commoditySummary: text("commodity_summary"),
+  },
+);
+
+export const insuranceRfqRequirementDetail = pgTable("insurance_rfq_requirement_detail", {
+  serviceLineId: text("service_line_id")
+    .primaryKey()
+    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+  cargoCoverageClasses: text("cargo_coverage_classes").array().notNull().default([]),
+  coverageLimitInCents: integer("coverage_limit_in_cents"),
+  currency: text("currency").default("USD").notNull(),
+});
+
+export const inspectionRfqRequirementDetail = pgTable("inspection_rfq_requirement_detail", {
+  serviceLineId: text("service_line_id")
+    .primaryKey()
+    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+  preProduction: boolean("pre_production").default(false).notNull(),
+  duringProduction: boolean("during_production").default(false).notNull(),
+  preShipment: boolean("pre_shipment").default(false).notNull(),
+  loadingSupervision: boolean("loading_supervision").default(false).notNull(),
+});
+
+export const testingCertificationRfqRequirementDetail = pgTable(
+  "testing_certification_rfq_requirement_detail",
+  {
+    serviceLineId: text("service_line_id")
+      .primaryKey()
+      .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+    standards: text("standards").array().notNull().default([]),
+    laboratoryLocationPreference: text("laboratory_location_preference"),
+  },
+);
+
+export const marketingRfqRequirementDetail = pgTable("marketing_rfq_requirement_detail", {
+  serviceLineId: text("service_line_id")
+    .primaryKey()
+    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+  channels: text("channels").array().notNull().default([]),
+  targetRegions: text("target_regions").array().notNull().default([]),
+  languageCapabilities: text("language_capabilities").array().notNull().default([]),
+});
+
+export const warehouseRfqRequirementDetail = pgTable("warehouse_rfq_requirement_detail", {
+  serviceLineId: text("service_line_id")
+    .primaryKey()
+    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+  storageTypes: text("storage_types").array().notNull().default([]),
+  temperatureControlled: boolean("temperature_controlled").default(false).notNull(),
+  bondedStatusRequired: boolean("bonded_status_required").default(false).notNull(),
+  capacityUnits: text("capacity_units"),
+});
+
+export const foreignExchangeRfqRequirementDetail = pgTable(
+  "foreign_exchange_rfq_requirement_detail",
+  {
+    serviceLineId: text("service_line_id")
+      .primaryKey()
+      .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+    currencyPairs: text("currency_pairs").array().notNull().default([]),
+    settlementRails: text("settlement_rails").array().notNull().default([]),
+    notionalAmountInCents: integer("notional_amount_in_cents"),
+    notionalCurrency: text("notional_currency").default("USD").notNull(),
+  },
+);
+
+export const commerceRfqInvitation = pgTable(
+  "commerce_rfq_invitation",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    rfqId: text("rfq_id")
+      .notNull()
+      .references(() => commerceRfq.id, { onDelete: "cascade" }),
+    providerOrganizationId: text("provider_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    state: commerceRfqInvitationStateEnum("state").default("pending").notNull(),
+    invitedByMemberId: text("invited_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    sentAt: timestamp("sent_at"),
+    readAt: timestamp("read_at"),
+    respondedAt: timestamp("responded_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_rfq_invitation_rfq_provider_uidx").on(
+      table.rfqId,
+      table.providerOrganizationId,
+    ),
+    index("commerce_rfq_invitation_provider_idx").on(
+      table.providerOrganizationId,
+      table.state,
+      table.id,
+    ),
+  ],
+);
+
+export const commerceRfqDocument = pgTable(
+  "commerce_rfq_document",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    rfqId: text("rfq_id")
+      .notNull()
+      .references(() => commerceRfq.id, { onDelete: "cascade" }),
+    encryptedDocumentId: text("encrypted_document_id")
+      .notNull()
+      .references(() => commerceEncryptedDocument.id, { onDelete: "restrict" }),
+    attachedByMemberId: text("attached_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_rfq_document_uidx").on(table.rfqId, table.encryptedDocumentId),
+    index("commerce_rfq_document_rfq_idx").on(table.rfqId),
+  ],
+);
+
+export const commerceQuote = pgTable(
+  "commerce_quote",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    rfqId: text("rfq_id")
+      .notNull()
+      .references(() => commerceRfq.id, { onDelete: "restrict" }),
+    providerOrganizationId: text("provider_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    status: commerceQuoteStatusEnum("status").default("draft").notNull(),
+    latestRevisionNumber: integer("latest_revision_number").default(0).notNull(),
+    acceptedRevisionNumber: integer("accepted_revision_number"),
+    submittedAt: timestamp("submitted_at"),
+    acceptedAt: timestamp("accepted_at"),
+    declinedAt: timestamp("declined_at"),
+    withdrawnAt: timestamp("withdrawn_at"),
+    expiredAt: timestamp("expired_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_quote_rfq_provider_uidx").on(table.rfqId, table.providerOrganizationId),
+    uniqueIndex("commerce_quote_accepted_revision_uidx")
+      .on(table.id, table.acceptedRevisionNumber)
+      .where(sql`status = 'accepted' AND accepted_revision_number IS NOT NULL`),
+    index("commerce_quote_provider_status_idx").on(
+      table.providerOrganizationId,
+      table.status,
+      table.id,
+    ),
+    index("commerce_quote_rfq_status_idx").on(table.rfqId, table.status, table.id),
+    check("commerce_quote_revision_ck", sql`latest_revision_number >= 0`),
+    check(
+      "commerce_quote_accepted_revision_ck",
+      sql`(status <> 'accepted' AND accepted_revision_number IS NULL AND accepted_at IS NULL)
+          OR (status = 'accepted' AND accepted_revision_number IS NOT NULL
+              AND accepted_revision_number > 0 AND accepted_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const commerceQuoteRevision = pgTable(
+  "commerce_quote_revision",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    quoteId: text("quote_id")
+      .notNull()
+      .references(() => commerceQuote.id, { onDelete: "cascade" }),
+    revisionNumber: integer("revision_number").notNull(),
+    currency: text("currency").notNull(),
+    validityDeadlineAt: timestamp("validity_deadline_at").notNull(),
+    subtotalInCents: bigint("subtotal_in_cents", { mode: "number" }).notNull(),
+    taxInCents: bigint("tax_in_cents", { mode: "number" }).default(0).notNull(),
+    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" }).default(0).notNull(),
+    shippingInCents: bigint("shipping_in_cents", { mode: "number" }).default(0).notNull(),
+    discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
+    totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
+    paymentTerms: text("payment_terms"),
+    incoterm: text("incoterm"),
+    notes: text("notes"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    submittedAt: timestamp("submitted_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_quote_revision_number_uidx").on(table.quoteId, table.revisionNumber),
+    index("commerce_quote_revision_validity_idx").on(table.validityDeadlineAt, table.submittedAt),
+    check("commerce_quote_revision_number_ck", sql`revision_number > 0`),
+    check("commerce_quote_revision_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_quote_revision_money_ck",
+      sql`subtotal_in_cents >= 0 AND tax_in_cents >= 0 AND service_fee_in_cents >= 0
+          AND shipping_in_cents >= 0 AND discount_in_cents >= 0 AND total_in_cents >= 0
+          AND total_in_cents = (subtotal_in_cents + tax_in_cents + service_fee_in_cents
+              + shipping_in_cents - discount_in_cents)`,
+    ),
+    check(
+      "commerce_quote_revision_text_ck",
+      sql`(payment_terms IS NULL OR char_length(payment_terms) <= 2000)
+          AND (incoterm IS NULL OR char_length(incoterm) BETWEEN 1 AND 20)
+          AND (notes IS NULL OR char_length(notes) <= 10000)`,
+    ),
+  ],
+);
+
+export const commerceQuoteProductLine = pgTable(
+  "commerce_quote_product_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    revisionId: text("revision_id")
+      .notNull()
+      .references(() => commerceQuoteRevision.id, { onDelete: "cascade" }),
+    rfqProductLineId: text("rfq_product_line_id")
+      .notNull()
+      .references(() => commerceRfqProductLine.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").notNull(),
+    unitPriceInCents: bigint("unit_price_in_cents", { mode: "number" }).notNull(),
+    lineTotalInCents: bigint("line_total_in_cents", { mode: "number" }).notNull(),
+    titleSnapshot: text("title_snapshot").notNull(),
+    specificationSnapshot: text("specification_snapshot").notNull(),
+    leadTimeDays: integer("lead_time_days"),
+    exclusionsSnapshot: text("exclusions_snapshot"),
+    siblingOrder: integer("sibling_order").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_quote_product_line_revision_idx").on(table.revisionId, table.siblingOrder),
+    uniqueIndex("commerce_quote_product_line_rfq_uidx").on(
+      table.revisionId,
+      table.rfqProductLineId,
+    ),
+    check("commerce_quote_product_line_quantity_ck", sql`quantity > 0`),
+    check(
+      "commerce_quote_product_line_money_ck",
+      sql`unit_price_in_cents >= 0 AND line_total_in_cents = (quantity::bigint * unit_price_in_cents)`,
+    ),
+    check(
+      "commerce_quote_product_line_title_ck",
+      sql`char_length(title_snapshot) BETWEEN 1 AND 200
+          AND char_length(specification_snapshot) BETWEEN 1 AND 10000`,
+    ),
+  ],
+);
+
+export const commerceQuoteServiceLine = pgTable(
+  "commerce_quote_service_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    revisionId: text("revision_id")
+      .notNull()
+      .references(() => commerceQuoteRevision.id, { onDelete: "cascade" }),
+    rfqServiceLineId: text("rfq_service_line_id")
+      .notNull()
+      .references(() => commerceRfqServiceLine.id, { onDelete: "restrict" }),
+    providerKind: commerceProviderKindSlugEnum("provider_kind").notNull(),
+    feeInCents: bigint("fee_in_cents", { mode: "number" }).notNull(),
+    titleSnapshot: text("title_snapshot").notNull(),
+    scopeSnapshot: text("scope_snapshot").notNull(),
+    leadTimeDays: integer("lead_time_days"),
+    exclusionsSnapshot: text("exclusions_snapshot"),
+    deliverableSnapshot: text("deliverable_snapshot"),
+    siblingOrder: integer("sibling_order").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_quote_service_line_revision_idx").on(table.revisionId, table.siblingOrder),
+    uniqueIndex("commerce_quote_service_line_rfq_uidx").on(
+      table.revisionId,
+      table.rfqServiceLineId,
+    ),
+    check("commerce_quote_service_line_fee_ck", sql`fee_in_cents >= 0`),
+    check(
+      "commerce_quote_service_line_text_ck",
+      sql`char_length(title_snapshot) BETWEEN 1 AND 200
+          AND char_length(scope_snapshot) BETWEEN 1 AND 10000`,
+    ),
+  ],
+);
+
+export const freightQuoteServiceDetail = pgTable("freight_quote_service_detail", {
+  quoteServiceLineId: text("quote_service_line_id")
+    .primaryKey()
+    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+  transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
+  originCountryCode: text("origin_country_code"),
+  destinationCountryCode: text("destination_country_code"),
+  estimatedTransitDays: integer("estimated_transit_days"),
+});
+
+export const customsBrokerageQuoteServiceDetail = pgTable(
+  "customs_brokerage_quote_service_detail",
+  {
+    quoteServiceLineId: text("quote_service_line_id")
+      .primaryKey()
+      .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+    jurisdictions: text("jurisdictions").array().notNull().default([]),
+    filingSummary: text("filing_summary"),
+  },
+);
+
+export const insuranceQuoteServiceDetail = pgTable("insurance_quote_service_detail", {
+  quoteServiceLineId: text("quote_service_line_id")
+    .primaryKey()
+    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+  coverageClasses: text("coverage_classes").array().notNull().default([]),
+  coverageLimitInCents: integer("coverage_limit_in_cents"),
+  currency: text("currency").default("USD").notNull(),
+});
+
+export const inspectionQuoteServiceDetail = pgTable("inspection_quote_service_detail", {
+  quoteServiceLineId: text("quote_service_line_id")
+    .primaryKey()
+    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+  includedStages: text("included_stages").array().notNull().default([]),
+});
+
+export const testingCertificationQuoteServiceDetail = pgTable(
+  "testing_certification_quote_service_detail",
+  {
+    quoteServiceLineId: text("quote_service_line_id")
+      .primaryKey()
+      .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+    standards: text("standards").array().notNull().default([]),
+    laboratoryLocation: text("laboratory_location"),
+  },
+);
+
+export const marketingQuoteServiceDetail = pgTable("marketing_quote_service_detail", {
+  quoteServiceLineId: text("quote_service_line_id")
+    .primaryKey()
+    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+  channels: text("channels").array().notNull().default([]),
+  deliverablesSummary: text("deliverables_summary"),
+});
+
+export const warehouseQuoteServiceDetail = pgTable("warehouse_quote_service_detail", {
+  quoteServiceLineId: text("quote_service_line_id")
+    .primaryKey()
+    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+  storageTypes: text("storage_types").array().notNull().default([]),
+  capacityUnits: text("capacity_units"),
+  temperatureControlled: boolean("temperature_controlled").default(false).notNull(),
+});
+
+export const foreignExchangeQuoteServiceDetail = pgTable(
+  "foreign_exchange_quote_service_detail",
+  {
+    quoteServiceLineId: text("quote_service_line_id")
+      .primaryKey()
+      .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+    currencyPair: text("currency_pair").notNull(),
+    /** Fixed-point integer; pair with `rateScale` (e.g. rate=123456, scale=6 → 0.123456). */
+    rateFixedPoint: bigint("rate_fixed_point", { mode: "number" }).notNull(),
+    rateScale: integer("rate_scale").notNull(),
+    settlementRail: text("settlement_rail"),
+    notionalAmountInCents: integer("notional_amount_in_cents"),
+    notionalCurrency: text("notional_currency").default("USD").notNull(),
+  },
+  (_table) => [
+    check(
+      "foreign_exchange_quote_service_detail_rate_ck",
+      sql`rate_fixed_point > 0 AND rate_scale BETWEEN 0 AND 12`,
+    ),
+    check(
+      "foreign_exchange_quote_service_detail_pair_ck",
+      sql`char_length(currency_pair) BETWEEN 7 AND 7 AND currency_pair ~ '^[A-Z]{3}/[A-Z]{3}$'`,
+    ),
+    check(
+      "foreign_exchange_quote_service_detail_currency_ck",
+      sql`notional_currency ~ '^[A-Z]{3}$'`,
+    ),
+  ],
+);
+
+/**
+ * Minimal Phase 3 order shell. Created only from accepted quotes in this phase;
+ * cart/checkout-originated orders arrive in Phase 4.
+ */
+export const commerceOrder = pgTable(
+  "commerce_order",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    counterpartyOrganizationId: text("counterparty_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    source: commerceOrderSourceEnum("source").notNull(),
+    state: commerceOrderStateEnum("state").default("pending_payment").notNull(),
+    acceptedQuoteId: text("accepted_quote_id").references(() => commerceQuote.id, {
+      onDelete: "restrict",
+    }),
+    acceptedQuoteRevisionId: text("accepted_quote_revision_id").references(
+      () => commerceQuoteRevision.id,
+      { onDelete: "restrict" },
+    ),
+    currency: text("currency").notNull(),
+    subtotalInCents: bigint("subtotal_in_cents", { mode: "number" }).notNull(),
+    taxInCents: bigint("tax_in_cents", { mode: "number" }).default(0).notNull(),
+    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" }).default(0).notNull(),
+    shippingInCents: bigint("shipping_in_cents", { mode: "number" }).default(0).notNull(),
+    discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
+    totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
+    paymentTermsSnapshot: text("payment_terms_snapshot"),
+    incotermSnapshot: text("incoterm_snapshot"),
+    buyerLegalNameSnapshot: text("buyer_legal_name_snapshot").notNull(),
+    counterpartyLegalNameSnapshot: text("counterparty_legal_name_snapshot").notNull(),
+    buyerAddressSnapshot: text("buyer_address_snapshot"),
+    counterpartyAddressSnapshot: text("counterparty_address_snapshot"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_order_accepted_quote_uidx")
+      .on(table.acceptedQuoteId)
+      .where(sql`accepted_quote_id IS NOT NULL`),
+    uniqueIndex("commerce_order_accepted_revision_uidx")
+      .on(table.acceptedQuoteRevisionId)
+      .where(sql`accepted_quote_revision_id IS NOT NULL`),
+    index("commerce_order_buyer_idx").on(table.buyerOrganizationId, table.state, table.id),
+    index("commerce_order_counterparty_idx").on(
+      table.counterpartyOrganizationId,
+      table.state,
+      table.id,
+    ),
+    check("commerce_order_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_order_money_ck",
+      sql`subtotal_in_cents >= 0 AND tax_in_cents >= 0 AND service_fee_in_cents >= 0
+          AND shipping_in_cents >= 0 AND discount_in_cents >= 0 AND total_in_cents >= 0
+          AND total_in_cents = (subtotal_in_cents + tax_in_cents + service_fee_in_cents
+              + shipping_in_cents - discount_in_cents)`,
+    ),
+    check(
+      "commerce_order_quote_source_ck",
+      sql`(source = 'accepted_quote' AND accepted_quote_id IS NOT NULL
+              AND accepted_quote_revision_id IS NOT NULL)
+          OR (source = 'direct_checkout' AND accepted_quote_id IS NULL
+              AND accepted_quote_revision_id IS NULL)`,
+    ),
+  ],
+);
+
+export const commerceOrderProductLine = pgTable(
+  "commerce_order_product_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "cascade" }),
+    productId: text("product_id").references(() => product.id, { onDelete: "restrict" }),
+    titleSnapshot: text("title_snapshot").notNull(),
+    specificationSnapshot: text("specification_snapshot").notNull(),
+    quantityOrdered: integer("quantity_ordered").notNull(),
+    quantityReserved: integer("quantity_reserved").default(0).notNull(),
+    quantityFulfilled: integer("quantity_fulfilled").default(0).notNull(),
+    quantityCancelled: integer("quantity_cancelled").default(0).notNull(),
+    quantityRefunded: integer("quantity_refunded").default(0).notNull(),
+    unitPriceInCents: bigint("unit_price_in_cents", { mode: "number" }).notNull(),
+    lineTotalInCents: bigint("line_total_in_cents", { mode: "number" }).notNull(),
+    siblingOrder: integer("sibling_order").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_order_product_line_order_idx").on(table.orderId, table.siblingOrder),
+    check(
+      "commerce_order_product_line_qty_ck",
+      sql`quantity_ordered > 0
+          AND quantity_reserved >= 0 AND quantity_fulfilled >= 0
+          AND quantity_cancelled >= 0 AND quantity_refunded >= 0
+          AND (quantity_fulfilled + quantity_cancelled) <= quantity_ordered`,
+    ),
+    check(
+      "commerce_order_product_line_money_ck",
+      sql`unit_price_in_cents >= 0
+          AND line_total_in_cents = (quantity_ordered::bigint * unit_price_in_cents)`,
+    ),
+  ],
+);
+
+export const commerceOrderServiceLine = pgTable(
+  "commerce_order_service_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "cascade" }),
+    providerKind: commerceProviderKindSlugEnum("provider_kind").notNull(),
+    titleSnapshot: text("title_snapshot").notNull(),
+    scopeSnapshot: text("scope_snapshot").notNull(),
+    feeInCents: bigint("fee_in_cents", { mode: "number" }).notNull(),
+    siblingOrder: integer("sibling_order").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_order_service_line_order_idx").on(table.orderId, table.siblingOrder),
+    check("commerce_order_service_line_fee_ck", sql`fee_in_cents >= 0`),
+  ],
+);
+
+export const commerceThread = pgTable(
+  "commerce_thread",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    resourceKind: commerceThreadResourceKindEnum("resource_kind").notNull(),
+    resourceId: text("resource_id").notNull(),
+    createdByOrganizationId: text("created_by_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_thread_resource_uidx").on(table.resourceKind, table.resourceId),
+    index("commerce_thread_org_idx").on(table.createdByOrganizationId, table.id),
+  ],
+);
+
+export const commerceThreadParticipant = pgTable(
+  "commerce_thread_participant",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => commerceThread.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    participantRole: commerceThreadParticipantRoleEnum("participant_role").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_thread_participant_uidx").on(table.threadId, table.organizationId),
+    index("commerce_thread_participant_org_idx").on(table.organizationId, table.threadId),
+  ],
+);
+
+export const commerceMessage = pgTable(
+  "commerce_message",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => commerceThread.id, { onDelete: "cascade" }),
+    authorOrganizationId: text("author_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    authorMemberId: text("author_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    bodyText: text("body_text").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_message_thread_idx").on(table.threadId, table.createdAt, table.id),
+    check("commerce_message_body_ck", sql`char_length(body_text) BETWEEN 1 AND 10000`),
+  ],
+);
+
+export const commerceMessageAttachment = pgTable(
+  "commerce_message_attachment",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    messageId: text("message_id")
+      .notNull()
+      .references(() => commerceMessage.id, { onDelete: "cascade" }),
+    encryptedDocumentId: text("encrypted_document_id")
+      .notNull()
+      .references(() => commerceEncryptedDocument.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_message_attachment_uidx").on(table.messageId, table.encryptedDocumentId),
+    index("commerce_message_attachment_message_idx").on(table.messageId),
   ],
 );
 

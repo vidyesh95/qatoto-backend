@@ -28,13 +28,14 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–2 foundation shipped.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–3 foundation shipped.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
-> merchandising, search documents, and the provider connector directory are implemented.
-> RFQs, carts, checkout, orders, payments, fulfillment, messaging, and trust workflows
-> described here remain planned unless a section explicitly says otherwise. Product
-> organization-ownership and category columns remain in the documented expand/dual-write
-> contract phase until non-null enforcement is separately released.
+> merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
+> quote-originated order snapshots, and RFQ/quote threads are implemented. Carts, direct
+> checkout, payments, fulfillment execution, and trust workflows described here remain planned
+> unless a section explicitly says otherwise. Product organization-ownership and category
+> columns remain in the documented expand/dual-write contract phase until non-null enforcement
+> is separately released.
 
 ---
 
@@ -781,6 +782,8 @@ Scheduled jobs:
 
 - Mixed product/service RFQs, invitations, threads, immutable quote revisions, comparison.
 - Quote acceptance creates order snapshots.
+- **Shipped.** See `docs/STORE_PHASE_3_ROLLOUT.md` for migrate, worker install, verification,
+  and smoke tests. Cart/checkout remain Phase 4.
 
 ### Phase 4 — direct purchase and order operations
 

@@ -866,6 +866,30 @@ export const commerceOrganizationEvidenceLimiter = createLimiter({
 });
 
 /**
+ * RFQ create/open/invite/close mutations. Bound tightly because broadcast invites
+ * can fan out to many providers and are a high-value abuse target.
+ */
+export const commerceRfqWriteLimiter = createLimiter({
+  namespace: "commerceRfqWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/** Quote draft/revision/submit/accept/decline/withdraw mutations. */
+export const commerceQuoteWriteLimiter = createLimiter({
+  namespace: "commerceQuoteWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/** Negotiation message appends on RFQ/quote threads. */
+export const commerceMessageWriteLimiter = createLimiter({
+  namespace: "commerceMessageWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
  * POST /videos/:videoId/view-beacon — the BURST half of §7's "60/min, 200/hr".
  *
  * TWO LIMITERS RATHER THAN ONE, because `LimiterSpec` carries a single window and

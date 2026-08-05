@@ -1,0 +1,1583 @@
+import { and, asc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
+
+import { db } from "#src/db/index.js";
+import {
+  commerceOrder,
+  commerceOrderProductLine,
+  commerceOrderServiceLine,
+  commerceOrganization,
+  commerceProviderKindLink,
+  commerceQuote,
+  commerceQuoteProductLine,
+  commerceQuoteRevision,
+  commerceQuoteServiceLine,
+  commerceRfq,
+  commerceRfqInvitation,
+  commerceRfqProductLine,
+  commerceRfqServiceLine,
+  customsBrokerageQuoteServiceDetail,
+  foreignExchangeQuoteServiceDetail,
+  freightQuoteServiceDetail,
+  inspectionQuoteServiceDetail,
+  insuranceQuoteServiceDetail,
+  marketingQuoteServiceDetail,
+  testingCertificationQuoteServiceDetail,
+  warehouseQuoteServiceDetail,
+} from "#src/db/schema.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
+import type { Result } from "#src/types/index.js";
+
+type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type QuoteRow = typeof commerceQuote.$inferSelect;
+type RevisionRow = typeof commerceQuoteRevision.$inferSelect;
+type OrderRow = typeof commerceOrder.$inferSelect;
+type ProviderKind = (typeof commerceRfqServiceLine.$inferSelect)["providerKind"];
+type FreightTransportMode = (typeof freightQuoteServiceDetail.$inferSelect.transportModes)[number];
+
+export type CommerceQuotesError =
+  | { type: "NOT_FOUND" }
+  | { type: "FORBIDDEN" }
+  | { type: "QUOTE_EXPIRED"; expiredAt: Date }
+  | { type: "REVISION_CHANGED"; currentRevision: number }
+  | { type: "RFQ_NOT_OPEN" }
+  | { type: "ORGANIZATION_NOT_ACTIVE" }
+  | { type: "CONFLICTING_ACCEPTANCE"; orderId: string }
+  | { type: "INVALID_STATE" }
+  | { type: "VALIDATION_FAILED"; message: string }
+  | { type: "CONFLICT"; message: string };
+
+export interface QuoteActorContext {
+  readonly organizationId: string;
+  readonly memberId: string;
+  readonly memberRole: CommerceOrganizationMemberRole;
+  readonly actorUserId: string;
+}
+
+export type QuoteServiceDetailInput =
+  | {
+      readonly kind: "freight_forwarder" | "logistics_operator";
+      readonly transportModes: readonly FreightTransportMode[];
+      readonly originCountryCode?: string;
+      readonly destinationCountryCode?: string;
+      readonly estimatedTransitDays?: number;
+    }
+  | {
+      readonly kind: "customs_broker";
+      readonly jurisdictions: readonly string[];
+      readonly filingSummary?: string;
+    }
+  | {
+      readonly kind: "insurance_provider";
+      readonly coverageClasses: readonly string[];
+      readonly coverageLimitInCents?: number;
+      readonly currency?: string;
+    }
+  | {
+      readonly kind: "inspection_agency";
+      readonly includedStages: readonly string[];
+    }
+  | {
+      readonly kind: "testing_certification_lab";
+      readonly standards: readonly string[];
+      readonly laboratoryLocation?: string;
+    }
+  | {
+      readonly kind: "marketing_agency";
+      readonly channels: readonly string[];
+      readonly deliverablesSummary?: string;
+    }
+  | {
+      readonly kind: "warehouse_provider";
+      readonly storageTypes: readonly string[];
+      readonly capacityUnits?: string;
+      readonly temperatureControlled: boolean;
+    }
+  | {
+      readonly kind: "foreign_exchange_facilitator";
+      readonly currencyPair: string;
+      readonly rateFixedPoint: number;
+      readonly rateScale: number;
+      readonly settlementRail?: string;
+      readonly notionalAmountInCents?: number;
+      readonly notionalCurrency?: string;
+    };
+
+export interface QuoteProductLineInput {
+  readonly rfqProductLineId: string;
+  readonly quantity: number;
+  readonly unitPriceInCents: number;
+  readonly titleSnapshot: string;
+  readonly specificationSnapshot: string;
+  readonly leadTimeDays?: number;
+  readonly exclusionsSnapshot?: string;
+  readonly siblingOrder: number;
+}
+
+export interface QuoteServiceLineInput {
+  readonly rfqServiceLineId: string;
+  readonly feeInCents: number;
+  readonly titleSnapshot: string;
+  readonly scopeSnapshot: string;
+  readonly leadTimeDays?: number;
+  readonly exclusionsSnapshot?: string;
+  readonly deliverableSnapshot?: string;
+  readonly siblingOrder: number;
+  readonly serviceDetail?: QuoteServiceDetailInput;
+}
+
+export interface AppendRevisionInput {
+  readonly currency: string;
+  readonly validityDeadlineAt: Date;
+  readonly taxInCents: number;
+  readonly serviceFeeInCents: number;
+  readonly shippingInCents: number;
+  readonly discountInCents: number;
+  readonly paymentTerms?: string;
+  readonly incoterm?: string;
+  readonly notes?: string;
+  readonly productLines: readonly QuoteProductLineInput[];
+  readonly serviceLines: readonly QuoteServiceLineInput[];
+}
+
+export interface QuoteShellProjection {
+  readonly id: string;
+  readonly rfqId: string;
+  readonly providerOrganizationId: string;
+  readonly status: QuoteRow["status"];
+  readonly latestRevisionNumber: number;
+  readonly createdAt: Date;
+}
+
+export interface QuoteRevisionMoneyProjection {
+  readonly revisionNumber: number;
+  readonly currency: string;
+  readonly validityDeadlineAt: Date;
+  readonly subtotalInCents: number;
+  readonly taxInCents: number;
+  readonly serviceFeeInCents: number;
+  readonly shippingInCents: number;
+  readonly discountInCents: number;
+  readonly totalInCents: number;
+  readonly submittedAt: Date | null;
+}
+
+export interface QuoteComparisonItem {
+  readonly quoteId: string;
+  readonly status: QuoteRow["status"];
+  readonly provider: {
+    readonly organizationId: string;
+    readonly displayName: string;
+    readonly slug: string;
+  };
+  readonly latestSubmittedRevision: QuoteRevisionMoneyProjection | null;
+  readonly productLineSummaries: readonly {
+    readonly titleSnapshot: string;
+    readonly quantity: number;
+    readonly unitPriceInCents: number;
+    readonly lineTotalInCents: number;
+  }[];
+  readonly serviceLineSummaries: readonly {
+    readonly titleSnapshot: string;
+    readonly providerKind: ProviderKind;
+    readonly feeInCents: number;
+  }[];
+}
+
+export interface QuoteDetailProjection {
+  readonly id: string;
+  readonly rfqId: string;
+  readonly providerOrganizationId: string;
+  readonly status: QuoteRow["status"];
+  readonly latestRevisionNumber: number;
+  readonly acceptedRevisionNumber: number | null;
+  readonly submittedAt: Date | null;
+  readonly acceptedAt: Date | null;
+  readonly declinedAt: Date | null;
+  readonly withdrawnAt: Date | null;
+  readonly expiredAt: Date | null;
+  readonly createdAt: Date;
+  readonly latestRevision:
+    | (QuoteRevisionMoneyProjection & {
+        readonly paymentTerms: string | null;
+        readonly incoterm: string | null;
+        readonly notes: string | null;
+        readonly productLines: readonly {
+          readonly id: string;
+          readonly rfqProductLineId: string;
+          readonly quantity: number;
+          readonly unitPriceInCents: number;
+          readonly lineTotalInCents: number;
+          readonly titleSnapshot: string;
+          readonly specificationSnapshot: string;
+          readonly leadTimeDays: number | null;
+          readonly exclusionsSnapshot: string | null;
+          readonly siblingOrder: number;
+        }[];
+        readonly serviceLines: readonly {
+          readonly id: string;
+          readonly rfqServiceLineId: string;
+          readonly providerKind: ProviderKind;
+          readonly feeInCents: number;
+          readonly titleSnapshot: string;
+          readonly scopeSnapshot: string;
+          readonly leadTimeDays: number | null;
+          readonly exclusionsSnapshot: string | null;
+          readonly deliverableSnapshot: string | null;
+          readonly siblingOrder: number;
+        }[];
+      })
+    | null;
+}
+
+export interface OrderProjection {
+  readonly id: string;
+  readonly buyerOrganizationId: string;
+  readonly counterpartyOrganizationId: string;
+  readonly source: OrderRow["source"];
+  readonly state: OrderRow["state"];
+  readonly acceptedQuoteId: string | null;
+  readonly acceptedQuoteRevisionId: string | null;
+  readonly currency: string;
+  readonly subtotalInCents: number;
+  readonly taxInCents: number;
+  readonly serviceFeeInCents: number;
+  readonly shippingInCents: number;
+  readonly discountInCents: number;
+  readonly totalInCents: number;
+  readonly paymentTermsSnapshot: string | null;
+  readonly incotermSnapshot: string | null;
+  readonly buyerLegalNameSnapshot: string;
+  readonly counterpartyLegalNameSnapshot: string;
+  readonly createdAt: Date;
+}
+
+const MUTABLE_QUOTE_STATUSES: readonly QuoteRow["status"][] = ["draft", "submitted"];
+const INVITATION_RESPONDABLE_STATES: readonly (typeof commerceRfqInvitation.$inferSelect.state)[] =
+  ["pending", "sent", "read", "responded"];
+
+async function appendAuditOrThrow(
+  transaction: DatabaseTransaction,
+  input: Parameters<typeof appendCommerceOrganizationAuditEntry>[1],
+): Promise<void> {
+  const appended = await appendCommerceOrganizationAuditEntry(transaction, input);
+  if (!appended.success) {
+    throw new Error(`Commerce quote audit append failed: ${appended.error.type}`);
+  }
+}
+
+function validationFailed(message: string): Result<never, CommerceQuotesError> {
+  return { success: false, error: { type: "VALIDATION_FAILED", message } };
+}
+
+function projectQuoteShell(quote: QuoteRow): QuoteShellProjection {
+  return {
+    id: quote.id,
+    rfqId: quote.rfqId,
+    providerOrganizationId: quote.providerOrganizationId,
+    status: quote.status,
+    latestRevisionNumber: quote.latestRevisionNumber,
+    createdAt: quote.createdAt,
+  };
+}
+
+function projectOrder(order: OrderRow): OrderProjection {
+  return {
+    id: order.id,
+    buyerOrganizationId: order.buyerOrganizationId,
+    counterpartyOrganizationId: order.counterpartyOrganizationId,
+    source: order.source,
+    state: order.state,
+    acceptedQuoteId: order.acceptedQuoteId,
+    acceptedQuoteRevisionId: order.acceptedQuoteRevisionId,
+    currency: order.currency,
+    subtotalInCents: order.subtotalInCents,
+    taxInCents: order.taxInCents,
+    serviceFeeInCents: order.serviceFeeInCents,
+    shippingInCents: order.shippingInCents,
+    discountInCents: order.discountInCents,
+    totalInCents: order.totalInCents,
+    paymentTermsSnapshot: order.paymentTermsSnapshot,
+    incotermSnapshot: order.incotermSnapshot,
+    buyerLegalNameSnapshot: order.buyerLegalNameSnapshot,
+    counterpartyLegalNameSnapshot: order.counterpartyLegalNameSnapshot,
+    createdAt: order.createdAt,
+  };
+}
+
+function projectRevisionMoney(revision: RevisionRow): QuoteRevisionMoneyProjection {
+  return {
+    revisionNumber: revision.revisionNumber,
+    currency: revision.currency,
+    validityDeadlineAt: revision.validityDeadlineAt,
+    subtotalInCents: revision.subtotalInCents,
+    taxInCents: revision.taxInCents,
+    serviceFeeInCents: revision.serviceFeeInCents,
+    shippingInCents: revision.shippingInCents,
+    discountInCents: revision.discountInCents,
+    totalInCents: revision.totalInCents,
+    submittedAt: revision.submittedAt,
+  };
+}
+
+type QuoteQueryExecutor = DatabaseTransaction | typeof db;
+
+async function providerMayQuoteRfq(
+  queryExecutor: QuoteQueryExecutor,
+  input: {
+    readonly rfqId: string;
+    readonly providerOrganizationId: string;
+    readonly visibility: (typeof commerceRfq.$inferSelect)["visibility"];
+  },
+): Promise<boolean> {
+  const [invitation] = await queryExecutor
+    .select({
+      id: commerceRfqInvitation.id,
+      state: commerceRfqInvitation.state,
+    })
+    .from(commerceRfqInvitation)
+    .where(
+      and(
+        eq(commerceRfqInvitation.rfqId, input.rfqId),
+        eq(commerceRfqInvitation.providerOrganizationId, input.providerOrganizationId),
+      ),
+    )
+    .limit(1);
+
+  if (invitation && INVITATION_RESPONDABLE_STATES.includes(invitation.state)) {
+    return true;
+  }
+
+  if (input.visibility !== "matched_providers") {
+    return false;
+  }
+
+  const rfqServiceKinds = await queryExecutor
+    .selectDistinct({ providerKind: commerceRfqServiceLine.providerKind })
+    .from(commerceRfqServiceLine)
+    .where(eq(commerceRfqServiceLine.rfqId, input.rfqId));
+
+  if (rfqServiceKinds.length === 0) {
+    return false;
+  }
+
+  const kindValues = rfqServiceKinds.map((row) => row.providerKind);
+  const [verifiedLink] = await queryExecutor
+    .select({ id: commerceProviderKindLink.id })
+    .from(commerceProviderKindLink)
+    .where(
+      and(
+        eq(commerceProviderKindLink.organizationId, input.providerOrganizationId),
+        eq(commerceProviderKindLink.verificationState, "verified"),
+        inArray(commerceProviderKindLink.providerKind, kindValues),
+      ),
+    )
+    .limit(1);
+
+  return verifiedLink !== undefined;
+}
+
+async function insertQuoteServiceDetail(
+  transaction: DatabaseTransaction,
+  quoteServiceLineId: string,
+  providerKind: ProviderKind,
+  detail: QuoteServiceDetailInput,
+): Promise<Result<true, CommerceQuotesError>> {
+  if (detail.kind !== providerKind) {
+    return validationFailed("serviceDetail.kind must match the RFQ service line provider kind.");
+  }
+
+  switch (detail.kind) {
+    case "freight_forwarder":
+    case "logistics_operator":
+      await transaction.insert(freightQuoteServiceDetail).values({
+        quoteServiceLineId,
+        transportModes: [...detail.transportModes],
+        originCountryCode: detail.originCountryCode ?? null,
+        destinationCountryCode: detail.destinationCountryCode ?? null,
+        estimatedTransitDays: detail.estimatedTransitDays ?? null,
+      });
+      return { success: true, value: true };
+    case "customs_broker":
+      await transaction.insert(customsBrokerageQuoteServiceDetail).values({
+        quoteServiceLineId,
+        jurisdictions: [...detail.jurisdictions],
+        filingSummary: detail.filingSummary ?? null,
+      });
+      return { success: true, value: true };
+    case "insurance_provider":
+      await transaction.insert(insuranceQuoteServiceDetail).values({
+        quoteServiceLineId,
+        coverageClasses: [...detail.coverageClasses],
+        coverageLimitInCents: detail.coverageLimitInCents ?? null,
+        currency: detail.currency ?? "USD",
+      });
+      return { success: true, value: true };
+    case "inspection_agency":
+      await transaction.insert(inspectionQuoteServiceDetail).values({
+        quoteServiceLineId,
+        includedStages: [...detail.includedStages],
+      });
+      return { success: true, value: true };
+    case "testing_certification_lab":
+      await transaction.insert(testingCertificationQuoteServiceDetail).values({
+        quoteServiceLineId,
+        standards: [...detail.standards],
+        laboratoryLocation: detail.laboratoryLocation ?? null,
+      });
+      return { success: true, value: true };
+    case "marketing_agency":
+      await transaction.insert(marketingQuoteServiceDetail).values({
+        quoteServiceLineId,
+        channels: [...detail.channels],
+        deliverablesSummary: detail.deliverablesSummary ?? null,
+      });
+      return { success: true, value: true };
+    case "warehouse_provider":
+      await transaction.insert(warehouseQuoteServiceDetail).values({
+        quoteServiceLineId,
+        storageTypes: [...detail.storageTypes],
+        capacityUnits: detail.capacityUnits ?? null,
+        temperatureControlled: detail.temperatureControlled,
+      });
+      return { success: true, value: true };
+    case "foreign_exchange_facilitator": {
+      if (!/^[A-Z]{3}\/[A-Z]{3}$/.test(detail.currencyPair)) {
+        return validationFailed("FX currencyPair must be XXX/YYY.");
+      }
+      if (detail.rateFixedPoint <= 0 || detail.rateScale < 0 || detail.rateScale > 12) {
+        return validationFailed("FX rateFixedPoint must be > 0 and rateScale between 0 and 12.");
+      }
+      await transaction.insert(foreignExchangeQuoteServiceDetail).values({
+        quoteServiceLineId,
+        currencyPair: detail.currencyPair,
+        rateFixedPoint: detail.rateFixedPoint,
+        rateScale: detail.rateScale,
+        settlementRail: detail.settlementRail ?? null,
+        notionalAmountInCents: detail.notionalAmountInCents ?? null,
+        notionalCurrency: detail.notionalCurrency ?? "USD",
+      });
+      return { success: true, value: true };
+    }
+    default: {
+      const exhaustiveCheck: never = detail;
+      throw new Error(`Unhandled quote service detail: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
+ * Provider creates an empty quote shell against an open RFQ they are invited to
+ * or eligible to match. One quote per provider per RFQ.
+ */
+export async function createQuoteShell(
+  actor: QuoteActorContext,
+  rfqId: string,
+): Promise<Result<QuoteShellProjection, CommerceQuotesError>> {
+  try {
+    const created = await db.transaction(async (transaction) => {
+      const [rfq] = await transaction
+        .select()
+        .from(commerceRfq)
+        .where(eq(commerceRfq.id, rfqId))
+        .for("update");
+      if (!rfq) return { status: "not_found" as const };
+
+      if (rfq.state !== "open") {
+        return { status: "rfq_not_open" as const };
+      }
+
+      const eligible = await providerMayQuoteRfq(transaction, {
+        rfqId: rfq.id,
+        providerOrganizationId: actor.organizationId,
+        visibility: rfq.visibility,
+      });
+      if (!eligible) {
+        return { status: "not_found" as const };
+      }
+
+      const [existingQuote] = await transaction
+        .select({ id: commerceQuote.id })
+        .from(commerceQuote)
+        .where(
+          and(
+            eq(commerceQuote.rfqId, rfq.id),
+            eq(commerceQuote.providerOrganizationId, actor.organizationId),
+          ),
+        )
+        .limit(1);
+      if (existingQuote) {
+        return { status: "conflict" as const };
+      }
+
+      const now = new Date();
+      const [quote] = await transaction
+        .insert(commerceQuote)
+        .values({
+          rfqId: rfq.id,
+          providerOrganizationId: actor.organizationId,
+          createdByMemberId: actor.memberId,
+          status: "draft",
+          latestRevisionNumber: 0,
+        })
+        .returning();
+      if (!quote) {
+        throw new Error("Quote shell insert returned no row.");
+      }
+
+      await transaction
+        .update(commerceRfqInvitation)
+        .set({
+          state: "responded",
+          respondedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(commerceRfqInvitation.rfqId, rfq.id),
+            eq(commerceRfqInvitation.providerOrganizationId, actor.organizationId),
+            inArray(commerceRfqInvitation.state, ["pending", "sent", "read"]),
+          ),
+        );
+
+      return { status: "created" as const, quote };
+    });
+
+    switch (created.status) {
+      case "not_found":
+        return { success: false, error: { type: "NOT_FOUND" } };
+      case "rfq_not_open":
+        return { success: false, error: { type: "RFQ_NOT_OPEN" } };
+      case "conflict":
+        return {
+          success: false,
+          error: { type: "CONFLICT", message: "A quote already exists for this RFQ." },
+        };
+      case "created":
+        return { success: true, value: projectQuoteShell(created.quote) };
+      default: {
+        const exhaustiveCheck: never = created;
+        throw new Error(`Unhandled createQuoteShell outcome: ${JSON.stringify(exhaustiveCheck)}`);
+      }
+    }
+  } catch (error: unknown) {
+    if (isUniqueViolation(error)) {
+      return {
+        success: false,
+        error: { type: "CONFLICT", message: "A quote already exists for this RFQ." },
+      };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Appends an unsubmitted revision. Only one draft revision may exist at a time
+ * while the quote is still draft or submitted.
+ */
+export async function appendRevision(
+  actor: QuoteActorContext,
+  quoteId: string,
+  input: AppendRevisionInput,
+): Promise<
+  Result<QuoteRevisionMoneyProjection & { readonly quoteId: string }, CommerceQuotesError>
+> {
+  if (input.validityDeadlineAt.getTime() <= Date.now()) {
+    return validationFailed("validityDeadlineAt must be in the future.");
+  }
+  if (input.productLines.length === 0 && input.serviceLines.length === 0) {
+    return validationFailed("At least one product or service line is required.");
+  }
+
+  const outcome = await db.transaction(async (transaction) => {
+    const [quote] = await transaction
+      .select()
+      .from(commerceQuote)
+      .where(eq(commerceQuote.id, quoteId))
+      .for("update");
+    if (!quote) return { status: "not_found" as const };
+    if (quote.providerOrganizationId !== actor.organizationId) {
+      return { status: "not_found" as const };
+    }
+    if (!MUTABLE_QUOTE_STATUSES.includes(quote.status)) {
+      return { status: "invalid_state" as const };
+    }
+
+    const [openDraft] = await transaction
+      .select({ id: commerceQuoteRevision.id })
+      .from(commerceQuoteRevision)
+      .where(
+        and(eq(commerceQuoteRevision.quoteId, quote.id), isNull(commerceQuoteRevision.submittedAt)),
+      )
+      .limit(1);
+    if (openDraft) {
+      return {
+        status: "validation" as const,
+        message: "Submit or abandon the existing unsubmitted revision before appending another.",
+      };
+    }
+
+    const rfqProductLines = await transaction
+      .select()
+      .from(commerceRfqProductLine)
+      .where(eq(commerceRfqProductLine.rfqId, quote.rfqId));
+    const rfqServiceLines = await transaction
+      .select()
+      .from(commerceRfqServiceLine)
+      .where(eq(commerceRfqServiceLine.rfqId, quote.rfqId));
+    const rfqProductLineById = new Map(rfqProductLines.map((line) => [line.id, line]));
+    const rfqServiceLineById = new Map(rfqServiceLines.map((line) => [line.id, line]));
+
+    let productSubtotal = 0;
+    for (const productLine of input.productLines) {
+      if (!rfqProductLineById.has(productLine.rfqProductLineId)) {
+        return {
+          status: "validation" as const,
+          message: "rfqProductLineId does not belong to this RFQ.",
+        };
+      }
+      productSubtotal += productLine.quantity * productLine.unitPriceInCents;
+    }
+
+    let serviceSubtotal = 0;
+    for (const serviceLine of input.serviceLines) {
+      const rfqServiceLine = rfqServiceLineById.get(serviceLine.rfqServiceLineId);
+      if (!rfqServiceLine) {
+        return {
+          status: "validation" as const,
+          message: "rfqServiceLineId does not belong to this RFQ.",
+        };
+      }
+      if (
+        serviceLine.serviceDetail &&
+        serviceLine.serviceDetail.kind !== rfqServiceLine.providerKind
+      ) {
+        return {
+          status: "validation" as const,
+          message: "serviceDetail.kind must match the RFQ service line provider kind.",
+        };
+      }
+      serviceSubtotal += serviceLine.feeInCents;
+    }
+
+    const subtotalInCents = productSubtotal + serviceSubtotal;
+    const totalInCents =
+      subtotalInCents +
+      input.taxInCents +
+      input.serviceFeeInCents +
+      input.shippingInCents -
+      input.discountInCents;
+    if (totalInCents < 0) {
+      return { status: "validation" as const, message: "Computed total cannot be negative." };
+    }
+
+    const revisionNumber = quote.latestRevisionNumber + 1;
+    const [revision] = await transaction
+      .insert(commerceQuoteRevision)
+      .values({
+        quoteId: quote.id,
+        revisionNumber,
+        currency: input.currency,
+        validityDeadlineAt: input.validityDeadlineAt,
+        subtotalInCents,
+        taxInCents: input.taxInCents,
+        serviceFeeInCents: input.serviceFeeInCents,
+        shippingInCents: input.shippingInCents,
+        discountInCents: input.discountInCents,
+        totalInCents,
+        paymentTerms: input.paymentTerms ?? null,
+        incoterm: input.incoterm ?? null,
+        notes: input.notes ?? null,
+        createdByMemberId: actor.memberId,
+        submittedAt: null,
+      })
+      .returning();
+    if (!revision) {
+      throw new Error("Quote revision insert returned no row.");
+    }
+
+    for (const productLine of input.productLines) {
+      const lineTotalInCents = productLine.quantity * productLine.unitPriceInCents;
+      await transaction.insert(commerceQuoteProductLine).values({
+        revisionId: revision.id,
+        rfqProductLineId: productLine.rfqProductLineId,
+        quantity: productLine.quantity,
+        unitPriceInCents: productLine.unitPriceInCents,
+        lineTotalInCents,
+        titleSnapshot: productLine.titleSnapshot,
+        specificationSnapshot: productLine.specificationSnapshot,
+        leadTimeDays: productLine.leadTimeDays ?? null,
+        exclusionsSnapshot: productLine.exclusionsSnapshot ?? null,
+        siblingOrder: productLine.siblingOrder,
+      });
+    }
+
+    for (const serviceLine of input.serviceLines) {
+      const rfqServiceLine = rfqServiceLineById.get(serviceLine.rfqServiceLineId);
+      if (!rfqServiceLine) {
+        return {
+          status: "validation" as const,
+          message: "rfqServiceLineId does not belong to this RFQ.",
+        };
+      }
+      const [insertedServiceLine] = await transaction
+        .insert(commerceQuoteServiceLine)
+        .values({
+          revisionId: revision.id,
+          rfqServiceLineId: serviceLine.rfqServiceLineId,
+          providerKind: rfqServiceLine.providerKind,
+          feeInCents: serviceLine.feeInCents,
+          titleSnapshot: serviceLine.titleSnapshot,
+          scopeSnapshot: serviceLine.scopeSnapshot,
+          leadTimeDays: serviceLine.leadTimeDays ?? null,
+          exclusionsSnapshot: serviceLine.exclusionsSnapshot ?? null,
+          deliverableSnapshot: serviceLine.deliverableSnapshot ?? null,
+          siblingOrder: serviceLine.siblingOrder,
+        })
+        .returning();
+      if (!insertedServiceLine) {
+        throw new Error("Quote service line insert returned no row.");
+      }
+      if (serviceLine.serviceDetail) {
+        const detailResult = await insertQuoteServiceDetail(
+          transaction,
+          insertedServiceLine.id,
+          rfqServiceLine.providerKind,
+          serviceLine.serviceDetail,
+        );
+        if (!detailResult.success) {
+          const detailError = detailResult.error;
+          if (detailError.type !== "VALIDATION_FAILED") {
+            throw new Error(`Unexpected service detail error: ${detailError.type}`);
+          }
+          return { status: "validation" as const, message: detailError.message };
+        }
+      }
+    }
+
+    await transaction
+      .update(commerceQuote)
+      .set({ latestRevisionNumber: revisionNumber })
+      .where(eq(commerceQuote.id, quote.id));
+
+    return { status: "created" as const, revision, quoteId: quote.id };
+  });
+
+  switch (outcome.status) {
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "invalid_state":
+      return { success: false, error: { type: "INVALID_STATE" } };
+    case "validation":
+      return validationFailed(outcome.message);
+    case "created":
+      return {
+        success: true,
+        value: { quoteId: outcome.quoteId, ...projectRevisionMoney(outcome.revision) },
+      };
+    default: {
+      const exhaustiveCheck: never = outcome;
+      throw new Error(`Unhandled appendRevision outcome: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
+ * Freezes an unsubmitted revision. Later revisions supersede prior submitted ones
+ * while the quote remains in `submitted` status until acceptance or withdrawal.
+ */
+export async function submitRevision(
+  actor: QuoteActorContext,
+  quoteId: string,
+  revisionNumber: number,
+): Promise<
+  Result<QuoteShellProjection & { readonly revisionNumber: number }, CommerceQuotesError>
+> {
+  const outcome = await db.transaction(async (transaction) => {
+    const [quote] = await transaction
+      .select()
+      .from(commerceQuote)
+      .where(eq(commerceQuote.id, quoteId))
+      .for("update");
+    if (!quote) return { status: "not_found" as const };
+    if (quote.providerOrganizationId !== actor.organizationId) {
+      return { status: "not_found" as const };
+    }
+    if (!MUTABLE_QUOTE_STATUSES.includes(quote.status)) {
+      return { status: "invalid_state" as const };
+    }
+    if (revisionNumber !== quote.latestRevisionNumber) {
+      return {
+        status: "revision_changed" as const,
+        currentRevision: quote.latestRevisionNumber,
+      };
+    }
+
+    const [revision] = await transaction
+      .select()
+      .from(commerceQuoteRevision)
+      .where(
+        and(
+          eq(commerceQuoteRevision.quoteId, quote.id),
+          eq(commerceQuoteRevision.revisionNumber, revisionNumber),
+        ),
+      )
+      .for("update");
+    if (!revision || revision.submittedAt !== null) {
+      return { status: "invalid_state" as const };
+    }
+
+    const now = new Date();
+    if (revision.validityDeadlineAt.getTime() <= now.getTime()) {
+      return { status: "expired" as const, expiredAt: revision.validityDeadlineAt };
+    }
+
+    await transaction
+      .update(commerceQuoteRevision)
+      .set({ submittedAt: now })
+      .where(eq(commerceQuoteRevision.id, revision.id));
+
+    const [updatedQuote] = await transaction
+      .update(commerceQuote)
+      .set({
+        status: "submitted",
+        submittedAt: quote.submittedAt ?? now,
+      })
+      .where(eq(commerceQuote.id, quote.id))
+      .returning();
+    if (!updatedQuote) {
+      throw new Error("Quote submit update returned no row.");
+    }
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: actor.organizationId,
+      eventKind: "quote_submitted",
+      actorUserId: actor.actorUserId,
+      actorMemberRoleSnapshot: actor.memberRole,
+      targetEntityType: "commerce_quote",
+      targetEntityId: quote.id,
+      payload: {
+        quoteId: quote.id,
+        rfqId: quote.rfqId,
+        revisionNumber: String(revisionNumber),
+        totalInCents: String(revision.totalInCents),
+      },
+      occurredAt: now,
+    });
+
+    return { status: "submitted" as const, quote: updatedQuote, revisionNumber };
+  });
+
+  switch (outcome.status) {
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "invalid_state":
+      return { success: false, error: { type: "INVALID_STATE" } };
+    case "revision_changed":
+      return {
+        success: false,
+        error: { type: "REVISION_CHANGED", currentRevision: outcome.currentRevision },
+      };
+    case "expired":
+      return { success: false, error: { type: "QUOTE_EXPIRED", expiredAt: outcome.expiredAt } };
+    case "submitted":
+      return {
+        success: true,
+        value: { ...projectQuoteShell(outcome.quote), revisionNumber: outcome.revisionNumber },
+      };
+    default: {
+      const exhaustiveCheck: never = outcome;
+      throw new Error(`Unhandled submitRevision outcome: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+async function loadLatestSubmittedRevision(quoteId: string): Promise<RevisionRow | null> {
+  const submitted = await db
+    .select()
+    .from(commerceQuoteRevision)
+    .where(
+      and(eq(commerceQuoteRevision.quoteId, quoteId), isNotNull(commerceQuoteRevision.submittedAt)),
+    );
+  if (submitted.length === 0) return null;
+  return submitted.reduce((latest, candidate) =>
+    candidate.revisionNumber > latest.revisionNumber ? candidate : latest,
+  );
+}
+
+/**
+ * Buyer comparison list (submitted+) or provider view of own quote including drafts.
+ */
+export async function listQuotesForRfq(
+  actor: QuoteActorContext,
+  rfqId: string,
+): Promise<Result<{ readonly items: readonly QuoteComparisonItem[] }, CommerceQuotesError>> {
+  const [rfq] = await db.select().from(commerceRfq).where(eq(commerceRfq.id, rfqId)).limit(1);
+  if (!rfq) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  const isBuyer = rfq.buyerOrganizationId === actor.organizationId;
+  const quotes = await db
+    .select({
+      quote: commerceQuote,
+      providerDisplayName: commerceOrganization.displayName,
+      providerSlug: commerceOrganization.slug,
+    })
+    .from(commerceQuote)
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, commerceQuote.providerOrganizationId),
+    )
+    .where(
+      isBuyer
+        ? and(eq(commerceQuote.rfqId, rfqId), ne(commerceQuote.status, "draft"))
+        : and(
+            eq(commerceQuote.rfqId, rfqId),
+            eq(commerceQuote.providerOrganizationId, actor.organizationId),
+          ),
+    )
+    .orderBy(asc(commerceQuote.createdAt), asc(commerceQuote.id));
+
+  if (!isBuyer && quotes.length === 0) {
+    // Provider with no quote and no invitation visibility → not found (probe-safe).
+    const eligible = await providerMayQuoteRfq(db, {
+      rfqId,
+      providerOrganizationId: actor.organizationId,
+      visibility: rfq.visibility,
+    });
+    if (!eligible) {
+      return { success: false, error: { type: "NOT_FOUND" } };
+    }
+  }
+
+  if (!isBuyer) {
+    // Non-buyer who isn't the provider of returned rows (shouldn't happen) or has no access.
+    const ownsAny = quotes.some((row) => row.quote.providerOrganizationId === actor.organizationId);
+    if (!ownsAny && quotes.length > 0) {
+      return { success: false, error: { type: "NOT_FOUND" } };
+    }
+    if (!ownsAny && quotes.length === 0) {
+      // Already handled eligibility above; empty list is valid for invited provider without shell.
+    }
+  }
+
+  const items: QuoteComparisonItem[] = [];
+  for (const row of quotes) {
+    const latestSubmitted = await loadLatestSubmittedRevision(row.quote.id);
+    let productLineSummaries: QuoteComparisonItem["productLineSummaries"] = [];
+    let serviceLineSummaries: QuoteComparisonItem["serviceLineSummaries"] = [];
+    if (latestSubmitted) {
+      const productLines = await db
+        .select({
+          titleSnapshot: commerceQuoteProductLine.titleSnapshot,
+          quantity: commerceQuoteProductLine.quantity,
+          unitPriceInCents: commerceQuoteProductLine.unitPriceInCents,
+          lineTotalInCents: commerceQuoteProductLine.lineTotalInCents,
+        })
+        .from(commerceQuoteProductLine)
+        .where(eq(commerceQuoteProductLine.revisionId, latestSubmitted.id))
+        .orderBy(asc(commerceQuoteProductLine.siblingOrder));
+      const serviceLines = await db
+        .select({
+          titleSnapshot: commerceQuoteServiceLine.titleSnapshot,
+          providerKind: commerceQuoteServiceLine.providerKind,
+          feeInCents: commerceQuoteServiceLine.feeInCents,
+        })
+        .from(commerceQuoteServiceLine)
+        .where(eq(commerceQuoteServiceLine.revisionId, latestSubmitted.id))
+        .orderBy(asc(commerceQuoteServiceLine.siblingOrder));
+      productLineSummaries = productLines;
+      serviceLineSummaries = serviceLines;
+    }
+
+    items.push({
+      quoteId: row.quote.id,
+      status: row.quote.status,
+      provider: {
+        organizationId: row.quote.providerOrganizationId,
+        displayName: row.providerDisplayName,
+        slug: row.providerSlug,
+      },
+      latestSubmittedRevision: latestSubmitted ? projectRevisionMoney(latestSubmitted) : null,
+      productLineSummaries,
+      serviceLineSummaries,
+    });
+  }
+
+  return { success: true, value: { items } };
+}
+
+export async function getQuote(
+  actor: QuoteActorContext,
+  quoteId: string,
+): Promise<Result<QuoteDetailProjection, CommerceQuotesError>> {
+  const [row] = await db
+    .select({
+      quote: commerceQuote,
+      buyerOrganizationId: commerceRfq.buyerOrganizationId,
+    })
+    .from(commerceQuote)
+    .innerJoin(commerceRfq, eq(commerceRfq.id, commerceQuote.rfqId))
+    .where(eq(commerceQuote.id, quoteId))
+    .limit(1);
+
+  if (!row) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  const isBuyer = row.buyerOrganizationId === actor.organizationId;
+  const isProvider = row.quote.providerOrganizationId === actor.organizationId;
+  if (!isBuyer && !isProvider) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+  if (isBuyer && !isProvider && row.quote.status === "draft") {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  const [latestRevision] = await db
+    .select()
+    .from(commerceQuoteRevision)
+    .where(
+      and(
+        eq(commerceQuoteRevision.quoteId, row.quote.id),
+        eq(commerceQuoteRevision.revisionNumber, row.quote.latestRevisionNumber),
+      ),
+    )
+    .limit(1);
+
+  let latestRevisionProjection: QuoteDetailProjection["latestRevision"] = null;
+  if (latestRevision && row.quote.latestRevisionNumber > 0) {
+    // Buyers only see submitted revisions as the detail tip when the latest is still draft.
+    const revisionForViewer =
+      isBuyer && !isProvider && latestRevision.submittedAt === null
+        ? await loadLatestSubmittedRevision(row.quote.id)
+        : latestRevision;
+
+    if (revisionForViewer) {
+      const productLines = await db
+        .select()
+        .from(commerceQuoteProductLine)
+        .where(eq(commerceQuoteProductLine.revisionId, revisionForViewer.id))
+        .orderBy(asc(commerceQuoteProductLine.siblingOrder));
+      const serviceLines = await db
+        .select()
+        .from(commerceQuoteServiceLine)
+        .where(eq(commerceQuoteServiceLine.revisionId, revisionForViewer.id))
+        .orderBy(asc(commerceQuoteServiceLine.siblingOrder));
+
+      latestRevisionProjection = {
+        ...projectRevisionMoney(revisionForViewer),
+        paymentTerms: revisionForViewer.paymentTerms,
+        incoterm: revisionForViewer.incoterm,
+        notes: revisionForViewer.notes,
+        productLines: productLines.map((line) => ({
+          id: line.id,
+          rfqProductLineId: line.rfqProductLineId,
+          quantity: line.quantity,
+          unitPriceInCents: line.unitPriceInCents,
+          lineTotalInCents: line.lineTotalInCents,
+          titleSnapshot: line.titleSnapshot,
+          specificationSnapshot: line.specificationSnapshot,
+          leadTimeDays: line.leadTimeDays,
+          exclusionsSnapshot: line.exclusionsSnapshot,
+          siblingOrder: line.siblingOrder,
+        })),
+        serviceLines: serviceLines.map((line) => ({
+          id: line.id,
+          rfqServiceLineId: line.rfqServiceLineId,
+          providerKind: line.providerKind,
+          feeInCents: line.feeInCents,
+          titleSnapshot: line.titleSnapshot,
+          scopeSnapshot: line.scopeSnapshot,
+          leadTimeDays: line.leadTimeDays,
+          exclusionsSnapshot: line.exclusionsSnapshot,
+          deliverableSnapshot: line.deliverableSnapshot,
+          siblingOrder: line.siblingOrder,
+        })),
+      };
+    }
+  }
+
+  return {
+    success: true,
+    value: {
+      id: row.quote.id,
+      rfqId: row.quote.rfqId,
+      providerOrganizationId: row.quote.providerOrganizationId,
+      status: row.quote.status,
+      latestRevisionNumber: row.quote.latestRevisionNumber,
+      acceptedRevisionNumber: row.quote.acceptedRevisionNumber,
+      submittedAt: row.quote.submittedAt,
+      acceptedAt: row.quote.acceptedAt,
+      declinedAt: row.quote.declinedAt,
+      withdrawnAt: row.quote.withdrawnAt,
+      expiredAt: row.quote.expiredAt,
+      createdAt: row.quote.createdAt,
+      latestRevision: latestRevisionProjection,
+    },
+  };
+}
+
+/**
+ * Atomically accepts a submitted revision, creates an order snapshot, awards the RFQ,
+ * and declines competing submitted quotes.
+ */
+export async function acceptQuote(
+  actor: QuoteActorContext,
+  quoteId: string,
+  expectedRevision: number,
+): Promise<Result<OrderProjection, CommerceQuotesError>> {
+  try {
+    const outcome = await db.transaction(async (transaction) => {
+      const [quote] = await transaction
+        .select()
+        .from(commerceQuote)
+        .where(eq(commerceQuote.id, quoteId))
+        .for("update");
+      if (!quote) return { status: "not_found" as const };
+
+      const [rfq] = await transaction
+        .select()
+        .from(commerceRfq)
+        .where(eq(commerceRfq.id, quote.rfqId))
+        .for("update");
+      if (!rfq) return { status: "not_found" as const };
+
+      if (rfq.buyerOrganizationId !== actor.organizationId) {
+        return { status: "not_found" as const };
+      }
+
+      const [buyerOrg] = await transaction
+        .select({
+          tradeState: commerceOrganization.tradeState,
+          legalName: commerceOrganization.legalName,
+        })
+        .from(commerceOrganization)
+        .where(eq(commerceOrganization.id, actor.organizationId))
+        .limit(1);
+      if (!buyerOrg || buyerOrg.tradeState !== "active") {
+        return { status: "org_inactive" as const };
+      }
+
+      const [existingOrder] = await transaction
+        .select()
+        .from(commerceOrder)
+        .where(eq(commerceOrder.acceptedQuoteId, quote.id))
+        .limit(1);
+      if (existingOrder) {
+        return { status: "replay" as const, order: existingOrder };
+      }
+
+      if (rfq.state === "awarded") {
+        const [competingOrder] = await transaction
+          .select({ id: commerceOrder.id })
+          .from(commerceOrder)
+          .innerJoin(commerceQuote, eq(commerceQuote.id, commerceOrder.acceptedQuoteId))
+          .where(eq(commerceQuote.rfqId, rfq.id))
+          .limit(1);
+        if (competingOrder) {
+          return { status: "conflicting" as const, orderId: competingOrder.id };
+        }
+        return { status: "rfq_not_open" as const };
+      }
+
+      if (rfq.state !== "open") {
+        return { status: "rfq_not_open" as const };
+      }
+
+      if (quote.status !== "submitted") {
+        return { status: "invalid_state" as const };
+      }
+
+      if (expectedRevision !== quote.latestRevisionNumber) {
+        return {
+          status: "revision_changed" as const,
+          currentRevision: quote.latestRevisionNumber,
+        };
+      }
+
+      const [revision] = await transaction
+        .select()
+        .from(commerceQuoteRevision)
+        .where(
+          and(
+            eq(commerceQuoteRevision.quoteId, quote.id),
+            eq(commerceQuoteRevision.revisionNumber, expectedRevision),
+          ),
+        )
+        .for("update");
+      if (!revision || revision.submittedAt === null) {
+        return { status: "invalid_state" as const };
+      }
+
+      const now = new Date();
+      if (revision.validityDeadlineAt.getTime() <= now.getTime()) {
+        return { status: "expired" as const, expiredAt: revision.validityDeadlineAt };
+      }
+
+      const [providerOrg] = await transaction
+        .select({ legalName: commerceOrganization.legalName })
+        .from(commerceOrganization)
+        .where(eq(commerceOrganization.id, quote.providerOrganizationId))
+        .limit(1);
+      if (!providerOrg) {
+        return { status: "not_found" as const };
+      }
+
+      const productLines = await transaction
+        .select({
+          quoteLine: commerceQuoteProductLine,
+          productId: commerceRfqProductLine.productId,
+        })
+        .from(commerceQuoteProductLine)
+        .innerJoin(
+          commerceRfqProductLine,
+          eq(commerceRfqProductLine.id, commerceQuoteProductLine.rfqProductLineId),
+        )
+        .where(eq(commerceQuoteProductLine.revisionId, revision.id));
+
+      const serviceLines = await transaction
+        .select()
+        .from(commerceQuoteServiceLine)
+        .where(eq(commerceQuoteServiceLine.revisionId, revision.id));
+
+      const [order] = await transaction
+        .insert(commerceOrder)
+        .values({
+          buyerOrganizationId: rfq.buyerOrganizationId,
+          counterpartyOrganizationId: quote.providerOrganizationId,
+          source: "accepted_quote",
+          state: "pending_payment",
+          acceptedQuoteId: quote.id,
+          acceptedQuoteRevisionId: revision.id,
+          currency: revision.currency,
+          subtotalInCents: revision.subtotalInCents,
+          taxInCents: revision.taxInCents,
+          serviceFeeInCents: revision.serviceFeeInCents,
+          shippingInCents: revision.shippingInCents,
+          discountInCents: revision.discountInCents,
+          totalInCents: revision.totalInCents,
+          paymentTermsSnapshot: revision.paymentTerms,
+          incotermSnapshot: revision.incoterm,
+          buyerLegalNameSnapshot: buyerOrg.legalName,
+          counterpartyLegalNameSnapshot: providerOrg.legalName,
+          createdByMemberId: actor.memberId,
+        })
+        .returning();
+      if (!order) {
+        throw new Error("Order insert returned no row.");
+      }
+
+      for (const line of productLines) {
+        await transaction.insert(commerceOrderProductLine).values({
+          orderId: order.id,
+          productId: line.productId,
+          titleSnapshot: line.quoteLine.titleSnapshot,
+          specificationSnapshot: line.quoteLine.specificationSnapshot,
+          quantityOrdered: line.quoteLine.quantity,
+          unitPriceInCents: line.quoteLine.unitPriceInCents,
+          lineTotalInCents: line.quoteLine.lineTotalInCents,
+          siblingOrder: line.quoteLine.siblingOrder,
+        });
+      }
+
+      for (const line of serviceLines) {
+        await transaction.insert(commerceOrderServiceLine).values({
+          orderId: order.id,
+          providerKind: line.providerKind,
+          titleSnapshot: line.titleSnapshot,
+          scopeSnapshot: line.scopeSnapshot,
+          feeInCents: line.feeInCents,
+          siblingOrder: line.siblingOrder,
+        });
+      }
+
+      await transaction
+        .update(commerceQuote)
+        .set({
+          status: "accepted",
+          acceptedRevisionNumber: expectedRevision,
+          acceptedAt: now,
+        })
+        .where(eq(commerceQuote.id, quote.id));
+
+      await transaction
+        .update(commerceRfq)
+        .set({
+          state: "awarded",
+          awardedAt: now,
+        })
+        .where(eq(commerceRfq.id, rfq.id));
+
+      const competingQuotes = await transaction
+        .select()
+        .from(commerceQuote)
+        .where(
+          and(
+            eq(commerceQuote.rfqId, rfq.id),
+            ne(commerceQuote.id, quote.id),
+            eq(commerceQuote.status, "submitted"),
+          ),
+        )
+        .for("update");
+
+      for (const competing of competingQuotes) {
+        await transaction
+          .update(commerceQuote)
+          .set({
+            status: "declined",
+            declinedAt: now,
+          })
+          .where(eq(commerceQuote.id, competing.id));
+
+        await appendAuditOrThrow(transaction, {
+          organizationId: competing.providerOrganizationId,
+          eventKind: "quote_declined",
+          actorUserId: actor.actorUserId,
+          actorMemberRoleSnapshot: actor.memberRole,
+          targetEntityType: "commerce_quote",
+          targetEntityId: competing.id,
+          payload: {
+            quoteId: competing.id,
+            rfqId: rfq.id,
+            reason: "competing_quote_accepted",
+            acceptedQuoteId: quote.id,
+          },
+          occurredAt: now,
+        });
+      }
+
+      await appendAuditOrThrow(transaction, {
+        organizationId: actor.organizationId,
+        eventKind: "quote_accepted",
+        actorUserId: actor.actorUserId,
+        actorMemberRoleSnapshot: actor.memberRole,
+        targetEntityType: "commerce_quote",
+        targetEntityId: quote.id,
+        payload: {
+          quoteId: quote.id,
+          rfqId: rfq.id,
+          revisionNumber: String(expectedRevision),
+          orderId: order.id,
+        },
+        occurredAt: now,
+      });
+
+      await appendAuditOrThrow(transaction, {
+        organizationId: actor.organizationId,
+        eventKind: "order_created_from_quote",
+        actorUserId: actor.actorUserId,
+        actorMemberRoleSnapshot: actor.memberRole,
+        targetEntityType: "commerce_order",
+        targetEntityId: order.id,
+        payload: {
+          orderId: order.id,
+          quoteId: quote.id,
+          rfqId: rfq.id,
+          totalInCents: String(order.totalInCents),
+        },
+        occurredAt: now,
+      });
+
+      await appendAuditOrThrow(transaction, {
+        organizationId: actor.organizationId,
+        eventKind: "rfq_awarded",
+        actorUserId: actor.actorUserId,
+        actorMemberRoleSnapshot: actor.memberRole,
+        targetEntityType: "commerce_rfq",
+        targetEntityId: rfq.id,
+        payload: {
+          rfqId: rfq.id,
+          quoteId: quote.id,
+          orderId: order.id,
+        },
+        occurredAt: now,
+      });
+
+      return { status: "accepted" as const, order };
+    });
+
+    switch (outcome.status) {
+      case "not_found":
+        return { success: false, error: { type: "NOT_FOUND" } };
+      case "org_inactive":
+        return { success: false, error: { type: "ORGANIZATION_NOT_ACTIVE" } };
+      case "replay":
+        return { success: true, value: projectOrder(outcome.order) };
+      case "conflicting":
+        return {
+          success: false,
+          error: { type: "CONFLICTING_ACCEPTANCE", orderId: outcome.orderId },
+        };
+      case "rfq_not_open":
+        return { success: false, error: { type: "RFQ_NOT_OPEN" } };
+      case "invalid_state":
+        return { success: false, error: { type: "INVALID_STATE" } };
+      case "revision_changed":
+        return {
+          success: false,
+          error: { type: "REVISION_CHANGED", currentRevision: outcome.currentRevision },
+        };
+      case "expired":
+        return { success: false, error: { type: "QUOTE_EXPIRED", expiredAt: outcome.expiredAt } };
+      case "accepted":
+        return { success: true, value: projectOrder(outcome.order) };
+      default: {
+        const exhaustiveCheck: never = outcome;
+        throw new Error(`Unhandled acceptQuote outcome: ${JSON.stringify(exhaustiveCheck)}`);
+      }
+    }
+  } catch (error: unknown) {
+    if (isUniqueViolation(error)) {
+      const [existingOrder] = await db
+        .select()
+        .from(commerceOrder)
+        .where(eq(commerceOrder.acceptedQuoteId, quoteId))
+        .limit(1);
+      if (existingOrder) {
+        return { success: true, value: projectOrder(existingOrder) };
+      }
+      return {
+        success: false,
+        error: { type: "CONFLICT", message: "Quote acceptance conflicted with concurrent state." },
+      };
+    }
+    throw error;
+  }
+}
+
+export async function declineQuote(
+  actor: QuoteActorContext,
+  quoteId: string,
+): Promise<Result<QuoteShellProjection, CommerceQuotesError>> {
+  const outcome = await db.transaction(async (transaction) => {
+    const [quote] = await transaction
+      .select()
+      .from(commerceQuote)
+      .where(eq(commerceQuote.id, quoteId))
+      .for("update");
+    if (!quote) return { status: "not_found" as const };
+
+    const [rfq] = await transaction
+      .select({ buyerOrganizationId: commerceRfq.buyerOrganizationId })
+      .from(commerceRfq)
+      .where(eq(commerceRfq.id, quote.rfqId))
+      .limit(1);
+    if (!rfq || rfq.buyerOrganizationId !== actor.organizationId) {
+      return { status: "not_found" as const };
+    }
+    if (quote.status !== "submitted") {
+      return { status: "invalid_state" as const };
+    }
+
+    const now = new Date();
+    const [updated] = await transaction
+      .update(commerceQuote)
+      .set({
+        status: "declined",
+        declinedAt: now,
+      })
+      .where(eq(commerceQuote.id, quote.id))
+      .returning();
+    if (!updated) {
+      throw new Error("Quote decline update returned no row.");
+    }
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: actor.organizationId,
+      eventKind: "quote_declined",
+      actorUserId: actor.actorUserId,
+      actorMemberRoleSnapshot: actor.memberRole,
+      targetEntityType: "commerce_quote",
+      targetEntityId: quote.id,
+      payload: {
+        quoteId: quote.id,
+        rfqId: quote.rfqId,
+        reason: "buyer_declined",
+      },
+      occurredAt: now,
+    });
+
+    return { status: "declined" as const, quote: updated };
+  });
+
+  switch (outcome.status) {
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "invalid_state":
+      return { success: false, error: { type: "INVALID_STATE" } };
+    case "declined":
+      return { success: true, value: projectQuoteShell(outcome.quote) };
+    default: {
+      const exhaustiveCheck: never = outcome;
+      throw new Error(`Unhandled declineQuote outcome: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+export async function withdrawQuote(
+  actor: QuoteActorContext,
+  quoteId: string,
+): Promise<Result<QuoteShellProjection, CommerceQuotesError>> {
+  const outcome = await db.transaction(async (transaction) => {
+    const [quote] = await transaction
+      .select()
+      .from(commerceQuote)
+      .where(eq(commerceQuote.id, quoteId))
+      .for("update");
+    if (!quote) return { status: "not_found" as const };
+    if (quote.providerOrganizationId !== actor.organizationId) {
+      return { status: "not_found" as const };
+    }
+    if (quote.status === "accepted") {
+      return { status: "invalid_state" as const };
+    }
+    if (!MUTABLE_QUOTE_STATUSES.includes(quote.status)) {
+      return { status: "invalid_state" as const };
+    }
+
+    const now = new Date();
+    const [updated] = await transaction
+      .update(commerceQuote)
+      .set({
+        status: "withdrawn",
+        withdrawnAt: now,
+      })
+      .where(eq(commerceQuote.id, quote.id))
+      .returning();
+    if (!updated) {
+      throw new Error("Quote withdraw update returned no row.");
+    }
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: actor.organizationId,
+      eventKind: "quote_withdrawn",
+      actorUserId: actor.actorUserId,
+      actorMemberRoleSnapshot: actor.memberRole,
+      targetEntityType: "commerce_quote",
+      targetEntityId: quote.id,
+      payload: {
+        quoteId: quote.id,
+        rfqId: quote.rfqId,
+      },
+      occurredAt: now,
+    });
+
+    return { status: "withdrawn" as const, quote: updated };
+  });
+
+  switch (outcome.status) {
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "invalid_state":
+      return { success: false, error: { type: "INVALID_STATE" } };
+    case "withdrawn":
+      return { success: true, value: projectQuoteShell(outcome.quote) };
+    default: {
+      const exhaustiveCheck: never = outcome;
+      throw new Error(`Unhandled withdrawQuote outcome: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}

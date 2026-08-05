@@ -509,3 +509,26 @@ export async function handlePruneEngagementDataTick(
     throw new Error(`prune-engagement-data-tick: enqueue failed (${enqueueResult.error.type})`);
   }
 }
+
+/**
+ * The hourly commerce quote/RFQ expiry tick (STORE_BACKEND_STRUCTURE.md §10).
+ *
+ * Quantized to the HOUR so a double cron fire inside the same UTC hour collapses to one
+ * real job. The handler never reads the clock — only this tick does.
+ */
+export async function handleExpireCommerceQuotesTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcHourStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.expireCommerceQuotes,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.expireCommerceQuotes(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`expire-commerce-quotes-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}

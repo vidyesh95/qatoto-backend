@@ -24,16 +24,24 @@ export type ActiveSellerCommerceOrganizationAccessError =
 
 const SELLER_MEMBER_ROLES: readonly CommerceOrganizationMemberRole[] = ["owner", "seller"];
 
+const BUYER_MEMBER_ROLES: readonly CommerceOrganizationMemberRole[] = [
+  "owner",
+  "administrator",
+  "buyer",
+];
+
 const PROVIDER_MEMBER_ROLES: readonly CommerceOrganizationMemberRole[] = [
   "owner",
   "administrator",
   "provider_operator",
 ];
 
-export function memberCanOperateProvider(
-  memberRole: CommerceOrganizationMemberRole,
-): boolean {
+export function memberCanOperateProvider(memberRole: CommerceOrganizationMemberRole): boolean {
   return PROVIDER_MEMBER_ROLES.includes(memberRole);
+}
+
+export function memberCanOperateBuyer(memberRole: CommerceOrganizationMemberRole): boolean {
+  return BUYER_MEMBER_ROLES.includes(memberRole);
 }
 
 export function memberCanUpdateOrganizationVisibility(
@@ -41,6 +49,14 @@ export function memberCanUpdateOrganizationVisibility(
 ): boolean {
   return memberRole === "owner" || memberRole === "administrator";
 }
+
+export type ActiveBuyerCommerceOrganizationAccessError =
+  | { type: "ACTIVE_BUYER_ORGANIZATION_REQUIRED" }
+  | { type: "ACTIVE_BUYER_MEMBERSHIP_REQUIRED" };
+
+export type ActiveProviderCommerceOrganizationAccessError =
+  | { type: "ACTIVE_PROVIDER_ORGANIZATION_REQUIRED" }
+  | { type: "ACTIVE_PROVIDER_MEMBERSHIP_REQUIRED" };
 
 interface SellerCommerceOrganizationRow {
   readonly organizationId: string;
@@ -209,6 +225,111 @@ export async function resolveActiveSellerCommerceOrganization(input: {
       memberId: soleOrganization.memberId,
       memberRole: soleOrganization.memberRole,
       tradeState: soleOrganization.tradeState,
+    },
+  };
+}
+
+async function findActiveOrganizationsForRoles(
+  userId: string,
+  organizationId: string | null,
+  allowedRoles: readonly CommerceOrganizationMemberRole[],
+  limit: number,
+): Promise<readonly SellerCommerceOrganizationRow[]> {
+  const organizationFilter =
+    organizationId === null
+      ? and(
+          eq(commerceOrganizationMember.userId, userId),
+          eq(commerceOrganizationMember.state, "active"),
+          inArray(commerceOrganizationMember.role, [...allowedRoles]),
+          eq(commerceOrganization.tradeState, "active"),
+        )
+      : and(
+          eq(commerceOrganizationMember.userId, userId),
+          eq(commerceOrganizationMember.organizationId, organizationId),
+          eq(commerceOrganizationMember.state, "active"),
+          inArray(commerceOrganizationMember.role, [...allowedRoles]),
+          eq(commerceOrganization.tradeState, "active"),
+        );
+
+  return db
+    .select({
+      organizationId: commerceOrganization.id,
+      memberId: commerceOrganizationMember.id,
+      memberRole: commerceOrganizationMember.role,
+      tradeState: commerceOrganization.tradeState,
+    })
+    .from(commerceOrganizationMember)
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, commerceOrganizationMember.organizationId),
+    )
+    .where(organizationFilter)
+    .limit(limit);
+}
+
+/**
+ * Resolves the active organization allowed to create and manage RFQs as a buyer.
+ * Organization id comes from the session pointer only; membership is re-proven.
+ */
+export async function resolveActiveBuyerCommerceOrganization(input: {
+  readonly userId: string;
+  readonly activeOrganizationId: string | null;
+}): Promise<Result<ActiveCommerceOrganizationContext, ActiveBuyerCommerceOrganizationAccessError>> {
+  if (input.activeOrganizationId === null) {
+    return { success: false, error: { type: "ACTIVE_BUYER_ORGANIZATION_REQUIRED" } };
+  }
+
+  const [selectedOrganization] = await findActiveOrganizationsForRoles(
+    input.userId,
+    input.activeOrganizationId,
+    BUYER_MEMBER_ROLES,
+    1,
+  );
+  if (!selectedOrganization || selectedOrganization.tradeState !== "active") {
+    return { success: false, error: { type: "ACTIVE_BUYER_MEMBERSHIP_REQUIRED" } };
+  }
+
+  return {
+    success: true,
+    value: {
+      organizationId: selectedOrganization.organizationId,
+      memberId: selectedOrganization.memberId,
+      memberRole: selectedOrganization.memberRole,
+      tradeState: selectedOrganization.tradeState,
+    },
+  };
+}
+
+/**
+ * Resolves the active organization allowed to operate provider quote workflows.
+ */
+export async function resolveActiveProviderCommerceOrganization(input: {
+  readonly userId: string;
+  readonly activeOrganizationId: string | null;
+}): Promise<
+  Result<ActiveCommerceOrganizationContext, ActiveProviderCommerceOrganizationAccessError>
+> {
+  if (input.activeOrganizationId === null) {
+    return { success: false, error: { type: "ACTIVE_PROVIDER_ORGANIZATION_REQUIRED" } };
+  }
+
+  const [selectedOrganization] = await findActiveOrganizationsForRoles(
+    input.userId,
+    input.activeOrganizationId,
+    PROVIDER_MEMBER_ROLES,
+    1,
+  );
+  if (!selectedOrganization || selectedOrganization.tradeState !== "active") {
+    return { success: false, error: { type: "ACTIVE_PROVIDER_MEMBERSHIP_REQUIRED" } };
+  }
+
+  return {
+    success: true,
+    value: {
+      organizationId: selectedOrganization.organizationId,
+      memberId: selectedOrganization.memberId,
+      memberRole: selectedOrganization.memberRole,
+      tradeState: selectedOrganization.tradeState,
     },
   };
 }

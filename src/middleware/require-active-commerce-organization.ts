@@ -1,8 +1,12 @@
 import type { NextFunction, Request, Response } from "express";
 
 import {
+  resolveActiveBuyerCommerceOrganization,
   resolveActiveCommerceOrganization,
+  resolveActiveProviderCommerceOrganization,
   resolveActiveSellerCommerceOrganization,
+  type ActiveBuyerCommerceOrganizationAccessError,
+  type ActiveProviderCommerceOrganizationAccessError,
   type ActiveSellerCommerceOrganizationAccessError,
 } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
@@ -76,6 +80,70 @@ export async function requireActiveSellerCommerceOrganization(
   next();
 }
 
+/** RFQ buyer guard: active trade plus buyer/owner/administrator membership. */
+export async function requireActiveBuyerCommerceOrganization(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (!req.user || !req.authSession) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const accessResult = await resolveActiveBuyerCommerceOrganization({
+    userId: req.user.id,
+    activeOrganizationId: req.authSession.activeOrganizationId,
+  });
+  if (!accessResult.success) {
+    res.status(403).json({
+      status: "error",
+      statusCode: 403,
+      message: activeBuyerAccessErrorMessage(accessResult.error),
+    } satisfies ApiResponse);
+    return;
+  }
+
+  req.commerceOrganization = accessResult.value;
+  next();
+}
+
+/** Provider quote guard: active trade plus provider_operator/admin/owner membership. */
+export async function requireActiveProviderCommerceOrganization(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (!req.user || !req.authSession) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const accessResult = await resolveActiveProviderCommerceOrganization({
+    userId: req.user.id,
+    activeOrganizationId: req.authSession.activeOrganizationId,
+  });
+  if (!accessResult.success) {
+    res.status(403).json({
+      status: "error",
+      statusCode: 403,
+      message: activeProviderAccessErrorMessage(accessResult.error),
+    } satisfies ApiResponse);
+    return;
+  }
+
+  req.commerceOrganization = accessResult.value;
+  next();
+}
+
 function activeSellerAccessErrorMessage(
   error: ActiveSellerCommerceOrganizationAccessError,
 ): string {
@@ -87,6 +155,34 @@ function activeSellerAccessErrorMessage(
       const exhaustiveError: never = error;
       void exhaustiveError;
       throw new Error("Unhandled active seller organization access error.");
+    }
+  }
+}
+
+function activeBuyerAccessErrorMessage(error: ActiveBuyerCommerceOrganizationAccessError): string {
+  switch (error.type) {
+    case "ACTIVE_BUYER_ORGANIZATION_REQUIRED":
+    case "ACTIVE_BUYER_MEMBERSHIP_REQUIRED":
+      return "An active buyer organization membership is required.";
+    default: {
+      const exhaustiveError: never = error;
+      void exhaustiveError;
+      throw new Error("Unhandled active buyer organization access error.");
+    }
+  }
+}
+
+function activeProviderAccessErrorMessage(
+  error: ActiveProviderCommerceOrganizationAccessError,
+): string {
+  switch (error.type) {
+    case "ACTIVE_PROVIDER_ORGANIZATION_REQUIRED":
+    case "ACTIVE_PROVIDER_MEMBERSHIP_REQUIRED":
+      return "An active provider organization membership is required.";
+    default: {
+      const exhaustiveError: never = error;
+      void exhaustiveError;
+      throw new Error("Unhandled active provider organization access error.");
     }
   }
 }

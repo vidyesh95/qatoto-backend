@@ -1,0 +1,200 @@
+import type { Request, Response } from "express";
+import { z } from "zod";
+
+import * as commerceMessagesService from "#src/services/commerce-messages.service.js";
+import type { ApiResponse } from "#src/types/index.js";
+
+const CreateThreadBodySchema = z
+  .object({
+    resourceKind: z.enum(["rfq", "quote"]),
+    resourceId: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+const ThreadParamsSchema = z
+  .object({
+    threadId: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+const ListMessagesQuerySchema = z
+  .object({
+    cursor: z.string().trim().min(1).max(500).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
+const AppendMessageBodySchema = z
+  .object({
+    bodyText: z.string().min(1).max(10_000),
+    encryptedDocumentIds: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+  })
+  .strict();
+
+function sendZodError(res: Response, error: z.ZodError): void {
+  res.status(422).json({
+    status: "error",
+    statusCode: 422,
+    message: "Validation failed.",
+    data: error.flatten().fieldErrors,
+  } satisfies ApiResponse);
+}
+
+function requireCommerceContext(
+  req: Request,
+  res: Response,
+): {
+  readonly userId: string;
+  readonly organizationId: string;
+  readonly memberId: string;
+} | null {
+  if (!req.user || !req.commerceOrganization) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return null;
+  }
+
+  return {
+    userId: req.user.id,
+    organizationId: req.commerceOrganization.organizationId,
+    memberId: req.commerceOrganization.memberId,
+  };
+}
+
+function mapMessagesError(
+  res: Response,
+  error: commerceMessagesService.CommerceMessagesError,
+): void {
+  switch (error.type) {
+    case "NOT_FOUND":
+    case "FORBIDDEN":
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "Not found.",
+      } satisfies ApiResponse);
+      return;
+    case "VALIDATION_FAILED":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: error.message,
+      } satisfies ApiResponse);
+      return;
+    case "DOCUMENT_NOT_OWNED":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "One or more attachments are not available to this organization.",
+      } satisfies ApiResponse);
+      return;
+    default: {
+      const exhaustiveError: never = error;
+      throw new Error(`Unhandled commerce messages error: ${JSON.stringify(exhaustiveError)}`);
+    }
+  }
+}
+
+export async function createOrGetThread(req: Request, res: Response): Promise<void> {
+  const commerceContext = requireCommerceContext(req, res);
+  if (!commerceContext) return;
+
+  const parsedBody = CreateThreadBodySchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    sendZodError(res, parsedBody.error);
+    return;
+  }
+
+  const result = await commerceMessagesService.createOrGetThread({
+    resourceKind: parsedBody.data.resourceKind,
+    resourceId: parsedBody.data.resourceId,
+    organizationId: commerceContext.organizationId,
+    memberId: commerceContext.memberId,
+    actorUserId: commerceContext.userId,
+  });
+  if (!result.success) {
+    mapMessagesError(res, result.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Commerce thread ready.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function listMessages(req: Request, res: Response): Promise<void> {
+  const commerceContext = requireCommerceContext(req, res);
+  if (!commerceContext) return;
+
+  const parsedParams = ThreadParamsSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    sendZodError(res, parsedParams.error);
+    return;
+  }
+
+  const parsedQuery = ListMessagesQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendZodError(res, parsedQuery.error);
+    return;
+  }
+
+  const result = await commerceMessagesService.listMessages({
+    threadId: parsedParams.data.threadId,
+    organizationId: commerceContext.organizationId,
+    cursor: parsedQuery.data.cursor,
+    limit: parsedQuery.data.limit,
+  });
+  if (!result.success) {
+    mapMessagesError(res, result.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Commerce messages listed.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function appendMessage(req: Request, res: Response): Promise<void> {
+  const commerceContext = requireCommerceContext(req, res);
+  if (!commerceContext) return;
+
+  const parsedParams = ThreadParamsSchema.safeParse(req.params);
+  if (!parsedParams.success) {
+    sendZodError(res, parsedParams.error);
+    return;
+  }
+
+  const parsedBody = AppendMessageBodySchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    sendZodError(res, parsedBody.error);
+    return;
+  }
+
+  const result = await commerceMessagesService.appendMessage({
+    threadId: parsedParams.data.threadId,
+    organizationId: commerceContext.organizationId,
+    memberId: commerceContext.memberId,
+    bodyText: parsedBody.data.bodyText,
+    encryptedDocumentIds: parsedBody.data.encryptedDocumentIds,
+  });
+  if (!result.success) {
+    mapMessagesError(res, result.error);
+    return;
+  }
+
+  res.status(201).json({
+    status: "success",
+    statusCode: 201,
+    message: "Commerce message appended.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
