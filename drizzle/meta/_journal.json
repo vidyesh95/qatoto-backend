@@ -323,6 +323,13 @@
       "when": 1785947098341,
       "tag": "0045_tough_sunfire",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1785950000000,
+      "tag": "0046_store_phase_4_checkout",
+      "breakpoints": true
     }
   ]
 }

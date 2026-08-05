@@ -26,6 +26,7 @@ import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-duratio
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
 import { handleRefreshStoreSearchDocument } from "#src/jobs/refresh-store-search-document.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
+import { handleReleaseExpiredInventoryReservations } from "#src/jobs/release-expired-inventory-reservations.js";
 import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
 import {
   handleCloseCompensationPeriodTick,
@@ -47,6 +48,7 @@ import {
   handleRecomputeVideoQualityScoresTick,
   handleRevalidateYoutubeEmbedsTick,
   handleExpireCommerceQuotesTick,
+  handleReleaseExpiredInventoryReservationsTick,
 } from "#src/jobs/scheduled-ticks.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
 import {
@@ -434,6 +436,24 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.expireCommerceQuotes,
     workOptions,
     runJob(JOB_NAMES.expireCommerceQuotes, handleExpireCommerceQuotes),
+  );
+
+  // STORE Phase 4 — release expired checkout preparations and inventory holds.
+  await boss.work(
+    JOB_NAMES.releaseExpiredInventoryReservationsTick,
+    workOptions,
+    runJob(
+      JOB_NAMES.releaseExpiredInventoryReservationsTick,
+      handleReleaseExpiredInventoryReservationsTick,
+    ),
+  );
+  await boss.work(
+    JOB_NAMES.releaseExpiredInventoryReservations,
+    workOptions,
+    runJob(
+      JOB_NAMES.releaseExpiredInventoryReservations,
+      handleReleaseExpiredInventoryReservations,
+    ),
   );
 
   // §7 — funding.

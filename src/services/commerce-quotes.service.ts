@@ -5,6 +5,7 @@ import {
   commerceOrder,
   commerceOrderProductLine,
   commerceOrderServiceLine,
+  commerceOrderServiceLink,
   commerceOrganization,
   commerceProviderKindLink,
   commerceQuote,
@@ -15,18 +16,21 @@ import {
   commerceRfqInvitation,
   commerceRfqProductLine,
   commerceRfqServiceLine,
+  commerceServiceEngagement,
   customsBrokerageQuoteServiceDetail,
   foreignExchangeQuoteServiceDetail,
   freightQuoteServiceDetail,
   inspectionQuoteServiceDetail,
   insuranceQuoteServiceDetail,
   marketingQuoteServiceDetail,
+  product,
   testingCertificationQuoteServiceDetail,
   warehouseQuoteServiceDetail,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
+import { deriveStockState } from "#src/services/store-catalog.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -45,6 +49,7 @@ export type CommerceQuotesError =
   | { type: "ORGANIZATION_NOT_ACTIVE" }
   | { type: "CONFLICTING_ACCEPTANCE"; orderId: string }
   | { type: "INVALID_STATE" }
+  | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
   | { type: "VALIDATION_FAILED"; message: string }
   | { type: "CONFLICT"; message: string };
 
@@ -1271,12 +1276,62 @@ export async function acceptQuote(
       }
 
       for (const line of productLines) {
+        let quantityReserved = 0;
+        if (line.productId !== null) {
+          const [lockedProduct] = await transaction
+            .select({
+              id: product.id,
+              stockQuantity: product.stockQuantity,
+              leadTimeMinDays: product.leadTimeMinDays,
+              leadTimeMaxDays: product.leadTimeMaxDays,
+            })
+            .from(product)
+            .where(eq(product.id, line.productId))
+            .for("update");
+          if (!lockedProduct) {
+            return {
+              status: "insufficient_stock" as const,
+              productId: line.productId,
+              availableQuantity: 0,
+            };
+          }
+          const stockState = deriveStockState({
+            stockQuantity: lockedProduct.stockQuantity,
+            leadTimeMinDays: lockedProduct.leadTimeMinDays,
+            leadTimeMaxDays: lockedProduct.leadTimeMaxDays,
+          });
+          if (stockState === "unavailable") {
+            return {
+              status: "insufficient_stock" as const,
+              productId: line.productId,
+              availableQuantity: 0,
+            };
+          }
+          if (stockState !== "made_to_order") {
+            if (lockedProduct.stockQuantity < line.quoteLine.quantity) {
+              return {
+                status: "insufficient_stock" as const,
+                productId: line.productId,
+                availableQuantity: lockedProduct.stockQuantity,
+              };
+            }
+            await transaction
+              .update(product)
+              .set({
+                stockQuantity: lockedProduct.stockQuantity - line.quoteLine.quantity,
+              })
+              .where(eq(product.id, line.productId));
+            quantityReserved = line.quoteLine.quantity;
+          }
+        }
+
         await transaction.insert(commerceOrderProductLine).values({
           orderId: order.id,
           productId: line.productId,
           titleSnapshot: line.quoteLine.titleSnapshot,
           specificationSnapshot: line.quoteLine.specificationSnapshot,
           quantityOrdered: line.quoteLine.quantity,
+          quantityReserved,
           unitPriceInCents: line.quoteLine.unitPriceInCents,
           lineTotalInCents: line.quoteLine.lineTotalInCents,
           siblingOrder: line.quoteLine.siblingOrder,
@@ -1284,13 +1339,58 @@ export async function acceptQuote(
       }
 
       for (const line of serviceLines) {
-        await transaction.insert(commerceOrderServiceLine).values({
+        const [orderServiceLine] = await transaction
+          .insert(commerceOrderServiceLine)
+          .values({
+            orderId: order.id,
+            providerKind: line.providerKind,
+            titleSnapshot: line.titleSnapshot,
+            scopeSnapshot: line.scopeSnapshot,
+            feeInCents: line.feeInCents,
+            siblingOrder: line.siblingOrder,
+          })
+          .returning();
+        if (!orderServiceLine) {
+          throw new Error("Order service line insert returned no row.");
+        }
+
+        const [engagement] = await transaction
+          .insert(commerceServiceEngagement)
+          .values({
+            buyerOrganizationId: rfq.buyerOrganizationId,
+            providerOrganizationId: quote.providerOrganizationId,
+            orderId: order.id,
+            orderServiceLineId: orderServiceLine.id,
+            providerKind: line.providerKind,
+            state: "awaiting_provider",
+            titleSnapshot: line.titleSnapshot,
+            scopeSnapshot: line.scopeSnapshot,
+          })
+          .returning();
+        if (!engagement) {
+          throw new Error("Service engagement insert returned no row.");
+        }
+
+        await transaction.insert(commerceOrderServiceLink).values({
+          engagementId: engagement.id,
           orderId: order.id,
-          providerKind: line.providerKind,
-          titleSnapshot: line.titleSnapshot,
-          scopeSnapshot: line.scopeSnapshot,
-          feeInCents: line.feeInCents,
-          siblingOrder: line.siblingOrder,
+          orderServiceLineId: orderServiceLine.id,
+        });
+
+        await appendAuditOrThrow(transaction, {
+          organizationId: actor.organizationId,
+          eventKind: "service_engagement_created",
+          actorUserId: actor.actorUserId,
+          actorMemberRoleSnapshot: actor.memberRole,
+          targetEntityType: "commerce_service_engagement",
+          targetEntityId: engagement.id,
+          payload: {
+            engagementId: engagement.id,
+            orderId: order.id,
+            orderServiceLineId: orderServiceLine.id,
+            providerKind: line.providerKind,
+          },
+          occurredAt: now,
         });
       }
 
@@ -1422,6 +1522,15 @@ export async function acceptQuote(
         };
       case "expired":
         return { success: false, error: { type: "QUOTE_EXPIRED", expiredAt: outcome.expiredAt } };
+      case "insufficient_stock":
+        return {
+          success: false,
+          error: {
+            type: "INSUFFICIENT_STOCK",
+            productId: outcome.productId,
+            availableQuantity: outcome.availableQuantity,
+          },
+        };
       case "accepted":
         return { success: true, value: projectOrder(outcome.order) };
       default: {

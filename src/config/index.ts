@@ -258,6 +258,16 @@ const envSchema = z.object({
    * is absent; production readiness reports the missing capability.
    */
   COMMERCE_PII_ENCRYPTION_SECRET: z.string().min(32).optional(),
+  /**
+   * How long a checkout preparation (and its inventory holds) remains valid.
+   * Confirm after expiry must fail with a tagged conflict and require a fresh prepare.
+   */
+  COMMERCE_CHECKOUT_PREPARE_TTL_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(3_600_000)
+    .default(900_000),
   // The GitHub App that grounds code artifacts. All three are required together, and
   // without them `POST …/integrations` answers 503 INTEGRATION_UNCONFIGURED and grounding
   // falls back to the evidence links §8 already stored.

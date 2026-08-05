@@ -890,6 +890,28 @@ export const commerceMessageWriteLimiter = createLimiter({
 });
 
 /**
+ * Cart line set/remove mutations (Store Phase 4). Generous — a buyer legitimately
+ * adjusts quantities across many product lines while assembling an order — but still
+ * bounded, since each write takes a row lock and supersedes any active checkout prepare.
+ */
+export const commerceCartWriteLimiter = createLimiter({
+  namespace: "commerceCartWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
+ * Checkout prepare/confirm (Store Phase 4). Tighter than cart writes: prepare holds
+ * inventory reservations and confirm decrements stock and creates orders, so both are
+ * bound well below honest checkout pace while still allowing legitimate retries.
+ */
+export const commerceCheckoutWriteLimiter = createLimiter({
+  namespace: "commerceCheckoutWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});
+
+/**
  * POST /videos/:videoId/view-beacon — the BURST half of §7's "60/min, 200/hr".
  *
  * TWO LIMITERS RATHER THAN ONE, because `LimiterSpec` carries a single window and
@@ -1017,3 +1039,25 @@ export const subscribeLimiter = createLimiter({
 // cacheable list, and an IP-keyed bucket on it is an outage behind a shared NAT.
 // Exporting an unused limiter would satisfy the coverage test while documenting a bound
 // nothing enforces, which is worse than not having one.
+
+/**
+ * Order cancel mutations (Store Phase 4). A buyer or counterparty cancels an order at
+ * most a handful of times; the state-predicate update already makes a retried POST
+ * harmless, so this bounds a scripted cancel loop rather than honest use.
+ */
+export const commerceOrderWriteLimiter = createLimiter({
+  namespace: "commerceOrderWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/**
+ * Shipment create/event and service-engagement transition mutations (Store Phase 4).
+ * Each write commits inventory or state changes visible to the other party, so this is
+ * bound below honest counterparty-operations pace while still tolerating idempotent retries.
+ */
+export const commerceFulfillmentWriteLimiter = createLimiter({
+  namespace: "commerceFulfillmentWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});

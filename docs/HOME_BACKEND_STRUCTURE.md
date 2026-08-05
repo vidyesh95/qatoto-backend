@@ -497,7 +497,7 @@ operational fact about the catalog, not something a client should branch on.
 | Mode                | Behaviour                                                                                                                                                                        |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `all`               | The blended rank of §4.3. Default.                                                                                                                                               |
-| `trending`          | `trendingVideoSnapshot` rank order. The Trending chip uses this; Spotlight is a separate curated route (`GET /spotlight/videos`).                                                  |
+| `trending`          | `trendingVideoSnapshot` rank order. The Trending chip uses this; Spotlight is a separate curated route (`GET /spotlight/videos`).                                                |
 | `recently_uploaded` | `publishedAt DESC` over the candidate pool.                                                                                                                                      |
 | `new_to_you`        | `all`, with creators the viewer has already watched excluded and the exploration budget raised to 40.                                                                            |
 | `watched`           | The viewer's own counted-view history, most recent first. **401 when anonymous** — serving it off a fingerprint would leak one person's history to everyone behind the same NAT. |
@@ -777,10 +777,10 @@ published row" is preserved without discarding the upload.
 
 ## 9. Build order
 
-| Phase | Scope                                                                                                                                  | Done when                                                                                                 |
-| ----- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| 1     | `contentCategory` + `videoCategory` + seed + `GET /feed/categories`; `isSourceVerified` + `verify-youtube-video`; studio `categoryIds` | `curl /feed/categories` returns the seeded rows                                                           |
-| 2     | Engagement tables + `videoStats` + write routes + beacon clamping + playback-error                                                     | Like/comment/beacon persist; counters move in the same transaction                                        |
+| Phase | Scope                                                                                                                                  | Done when                                                                                                |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 1     | `contentCategory` + `videoCategory` + seed + `GET /feed/categories`; `isSourceVerified` + `verify-youtube-video`; studio `categoryIds` | `curl /feed/categories` returns the seeded rows                                                          |
+| 2     | Engagement tables + `videoStats` + write routes + beacon clamping + playback-error                                                     | Like/comment/beacon persist; counters move in the same transaction                                       |
 | 3     | `feed-score.ts` / `trending-score.ts` / `affinity-score.ts` + snapshots + jobs + `GET /feed/videos`                                    | `curl '/feed/videos?limit=24'` ranks for both anonymous and authed; Spotlight is `GET /spotlight/videos` |
 
 Phases 1–3 show nothing to a user until the frontend lands (frontend §9). Phase 2 of the frontend

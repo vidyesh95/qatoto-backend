@@ -125,6 +125,9 @@ export const JOB_NAMES = {
   // STORE Phase 3 — expire submitted quotes and open RFQs past their deadlines.
   expireCommerceQuotesTick: "expire-commerce-quotes-tick",
   expireCommerceQuotes: "expire-commerce-quotes",
+  // STORE Phase 4 — release expired checkout preparations and inventory holds.
+  releaseExpiredInventoryReservationsTick: "release-expired-inventory-reservations-tick",
+  releaseExpiredInventoryReservations: "release-expired-inventory-reservations",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -906,6 +909,29 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.expireCommerceQuotes),
     },
   },
+  [JOB_NAMES.releaseExpiredInventoryReservationsTick]: {
+    name: JOB_NAMES.releaseExpiredInventoryReservationsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.releaseExpiredInventoryReservationsTick),
+    },
+  },
+  [JOB_NAMES.releaseExpiredInventoryReservations]: {
+    name: JOB_NAMES.releaseExpiredInventoryReservations,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.releaseExpiredInventoryReservations),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -1022,6 +1048,8 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // STORE Phase 3 — hourly quote/RFQ expiry. Minute :20 is lightly occupied (branch
   // signals is daily at 03:20 only); tick work is a single enqueue so sharing is fine.
   [JOB_NAMES.expireCommerceQuotesTick]: "20 * * * *",
+  // STORE Phase 4 — hourly inventory hold release. Minute :35 avoids the quote expiry tick.
+  [JOB_NAMES.releaseExpiredInventoryReservationsTick]: "35 * * * *",
 };
 
 export type JobEnqueueError =
@@ -1276,6 +1304,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.refreshStoreSearchDocument]: RefreshStoreSearchDocumentPayloadSchema,
   [JOB_NAMES.expireCommerceQuotesTick]: TickPayloadSchema,
   [JOB_NAMES.expireCommerceQuotes]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.releaseExpiredInventoryReservationsTick]: TickPayloadSchema,
+  [JOB_NAMES.releaseExpiredInventoryReservations]: AsOfOnlyPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -1400,4 +1430,6 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.refreshStoreSearchDocument}:organization:${organizationId}:${generation}`,
   // Quantized to the HOUR: a double cron fire inside the same UTC hour dedups to one run.
   expireCommerceQuotes: (asOfIso: string): string => `${JOB_NAMES.expireCommerceQuotes}:${asOfIso}`,
+  releaseExpiredInventoryReservations: (asOfIso: string): string =>
+    `${JOB_NAMES.releaseExpiredInventoryReservations}:${asOfIso}`,
 } as const;

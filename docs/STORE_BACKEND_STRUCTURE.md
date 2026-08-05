@@ -28,11 +28,14 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–3 foundation shipped.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–4 foundation shipped.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
-> quote-originated order snapshots, and RFQ/quote threads are implemented. Carts, direct
-> checkout, payments, fulfillment execution, and trust workflows described here remain planned
+> quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
+> preparation and confirmation into direct-checkout orders, buyer/counterparty order queues and
+> cancellation, product shipments, and standalone service engagements are implemented. See
+> `docs/STORE_PHASE_4_ROLLOUT.md` for the cart/checkout/orders/fulfillment contract. Payments,
+> escrow, shipment-leg/connector execution, and trust workflows described here remain planned
 > unless a section explicitly says otherwise. Product organization-ownership and category
 > columns remain in the documented expand/dual-write contract phase until non-null enforcement
 > is separately released.
@@ -789,6 +792,8 @@ Scheduled jobs:
 
 - Cart, inventory reservation, checkout groups, buyer and provider order queues.
 - Product fulfillment and standalone service engagements.
+- **Shipped.** See `docs/STORE_PHASE_4_ROLLOUT.md` for migrate, worker install, verification,
+  and smoke tests. Payments and escrow remain Phase 5.
 
 ### Phase 5 — payments and trade assurance
 

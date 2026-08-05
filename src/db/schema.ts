@@ -463,6 +463,17 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "quote_declined",
     "quote_withdrawn",
     "order_created_from_quote",
+    "cart_line_updated",
+    "cart_line_removed",
+    "checkout_prepared",
+    "checkout_confirmed",
+    "inventory_reservation_released",
+    "order_created_from_checkout",
+    "order_cancelled",
+    "shipment_created",
+    "shipment_event_recorded",
+    "service_engagement_created",
+    "service_engagement_transitioned",
   ],
 );
 
@@ -618,6 +629,49 @@ export const commerceThreadParticipantRoleEnum = pgEnum("commerce_thread_partici
   "buyer",
   "provider",
   "moderator",
+]);
+
+export const commerceInventoryReservationStateEnum = pgEnum(
+  "commerce_inventory_reservation_state",
+  ["held", "consumed", "released", "expired"],
+);
+
+export const commerceCheckoutPrepareStateEnum = pgEnum("commerce_checkout_prepare_state", [
+  "active",
+  "consumed",
+  "superseded",
+  "expired",
+]);
+
+export const commerceCheckoutGroupStateEnum = pgEnum("commerce_checkout_group_state", [
+  "confirmed",
+  "cancelled",
+]);
+
+export const commerceServiceEngagementStateEnum = pgEnum("commerce_service_engagement_state", [
+  "awaiting_provider",
+  "scheduled",
+  "in_progress",
+  "awaiting_buyer",
+  "completed",
+  "cancelled",
+  "disputed",
+]);
+
+export const commerceShipmentStateEnum = pgEnum("commerce_shipment_state", [
+  "planned",
+  "in_transit",
+  "delivered",
+  "cancelled",
+]);
+
+export const commerceShipmentEventKindEnum = pgEnum("commerce_shipment_event_kind", [
+  "created",
+  "picked_up",
+  "in_transit",
+  "delivered",
+  "exception",
+  "cancelled",
 ]);
 
 /**
@@ -2302,6 +2356,7 @@ export const commerceOrder = pgTable(
     counterpartyOrganizationId: text("counterparty_organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    checkoutGroupId: text("checkout_group_id"),
     source: commerceOrderSourceEnum("source").notNull(),
     state: commerceOrderStateEnum("state").default("pending_payment").notNull(),
     acceptedQuoteId: text("accepted_quote_id").references(() => commerceQuote.id, {
@@ -2346,6 +2401,7 @@ export const commerceOrder = pgTable(
       table.state,
       table.id,
     ),
+    index("commerce_order_checkout_group_idx").on(table.checkoutGroupId, table.id),
     check("commerce_order_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
     check(
       "commerce_order_money_ck",
@@ -2357,9 +2413,9 @@ export const commerceOrder = pgTable(
     check(
       "commerce_order_quote_source_ck",
       sql`(source = 'accepted_quote' AND accepted_quote_id IS NOT NULL
-              AND accepted_quote_revision_id IS NOT NULL)
+              AND accepted_quote_revision_id IS NOT NULL AND checkout_group_id IS NULL)
           OR (source = 'direct_checkout' AND accepted_quote_id IS NULL
-              AND accepted_quote_revision_id IS NULL)`,
+              AND accepted_quote_revision_id IS NULL AND checkout_group_id IS NOT NULL)`,
     ),
   ],
 );
@@ -2513,6 +2569,464 @@ export const commerceMessageAttachment = pgTable(
   (table) => [
     uniqueIndex("commerce_message_attachment_uidx").on(table.messageId, table.encryptedDocumentId),
     index("commerce_message_attachment_message_idx").on(table.messageId),
+  ],
+);
+
+/**
+ * One active cart per buyer organization (STORE_BACKEND_STRUCTURE.md §4.8 / Phase 4).
+ * Cart lines store desired quantity only — totals are server-priced at prepare.
+ */
+export const commerceCart = pgTable(
+  "commerce_cart",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [uniqueIndex("commerce_cart_buyer_uidx").on(table.buyerOrganizationId)],
+);
+
+export const commerceCartProductLine = pgTable(
+  "commerce_cart_product_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    cartId: text("cart_id")
+      .notNull()
+      .references(() => commerceCart.id, { onDelete: "cascade" }),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_cart_product_line_uidx").on(table.cartId, table.productId),
+    index("commerce_cart_product_line_cart_idx").on(table.cartId, table.productId),
+    check("commerce_cart_product_line_qty_ck", sql`quantity > 0`),
+  ],
+);
+
+/**
+ * Persisted checkout preparation. Confirm creates the checkout group + orders;
+ * prepare never creates orders (STORE_BACKEND_STRUCTURE.md §6.3).
+ */
+export const commerceCheckoutPrepare = pgTable(
+  "commerce_checkout_prepare",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    cartId: text("cart_id")
+      .notNull()
+      .references(() => commerceCart.id, { onDelete: "restrict" }),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    state: commerceCheckoutPrepareStateEnum("state").default("active").notNull(),
+    deliveryAddressId: text("delivery_address_id").references(
+      () => commerceOrganizationAddress.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    deliveryAddressSnapshot: text("delivery_address_snapshot"),
+    expiresAt: timestamp("expires_at").notNull(),
+    prepareIdempotencyKey: text("prepare_idempotency_key"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_checkout_prepare_idempotency_uidx")
+      .on(table.buyerOrganizationId, table.prepareIdempotencyKey)
+      .where(sql`prepare_idempotency_key IS NOT NULL`),
+    index("commerce_checkout_prepare_state_expires_idx").on(table.state, table.expiresAt),
+    index("commerce_checkout_prepare_cart_idx").on(table.cartId, table.state),
+  ],
+);
+
+export const commerceCheckoutPrepareProductLine = pgTable(
+  "commerce_checkout_prepare_product_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    prepareId: text("prepare_id")
+      .notNull()
+      .references(() => commerceCheckoutPrepare.id, { onDelete: "cascade" }),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "restrict" }),
+    sellerOrganizationId: text("seller_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    titleSnapshot: text("title_snapshot").notNull(),
+    specificationSnapshot: text("specification_snapshot").notNull(),
+    quantity: integer("quantity").notNull(),
+    unitPriceInCents: bigint("unit_price_in_cents", { mode: "number" }).notNull(),
+    lineTotalInCents: bigint("line_total_in_cents", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    isMadeToOrder: boolean("is_made_to_order").default(false).notNull(),
+    siblingOrder: integer("sibling_order").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_checkout_prepare_product_line_uidx").on(table.prepareId, table.productId),
+    index("commerce_checkout_prepare_product_line_prepare_idx").on(
+      table.prepareId,
+      table.siblingOrder,
+    ),
+    check("commerce_checkout_prepare_product_line_qty_ck", sql`quantity > 0`),
+    check(
+      "commerce_checkout_prepare_product_line_money_ck",
+      sql`unit_price_in_cents >= 0
+          AND line_total_in_cents = (quantity::bigint * unit_price_in_cents)
+          AND currency ~ '^[A-Z]{3}$'`,
+    ),
+  ],
+);
+
+export const commerceCheckoutPrepareCurrencyTotal = pgTable(
+  "commerce_checkout_prepare_currency_total",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    prepareId: text("prepare_id")
+      .notNull()
+      .references(() => commerceCheckoutPrepare.id, { onDelete: "cascade" }),
+    currency: text("currency").notNull(),
+    subtotalInCents: bigint("subtotal_in_cents", { mode: "number" }).notNull(),
+    taxInCents: bigint("tax_in_cents", { mode: "number" }).default(0).notNull(),
+    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" }).default(0).notNull(),
+    shippingInCents: bigint("shipping_in_cents", { mode: "number" }).default(0).notNull(),
+    discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
+    totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_checkout_prepare_currency_total_uidx").on(
+      table.prepareId,
+      table.currency,
+    ),
+    check("commerce_checkout_prepare_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_checkout_prepare_currency_money_ck",
+      sql`subtotal_in_cents >= 0 AND tax_in_cents >= 0 AND service_fee_in_cents >= 0
+          AND shipping_in_cents >= 0 AND discount_in_cents >= 0 AND total_in_cents >= 0
+          AND total_in_cents = (subtotal_in_cents + tax_in_cents + service_fee_in_cents
+              + shipping_in_cents - discount_in_cents)`,
+    ),
+  ],
+);
+
+export const commerceInventoryReservation = pgTable(
+  "commerce_inventory_reservation",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "restrict" }),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    cartId: text("cart_id").references(() => commerceCart.id, { onDelete: "restrict" }),
+    checkoutPrepareId: text("checkout_prepare_id").references(() => commerceCheckoutPrepare.id, {
+      onDelete: "restrict",
+    }),
+    orderId: text("order_id").references(() => commerceOrder.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").notNull(),
+    isMadeToOrder: boolean("is_made_to_order").default(false).notNull(),
+    state: commerceInventoryReservationStateEnum("state").default("held").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    consumedAt: timestamp("consumed_at"),
+    releasedAt: timestamp("released_at"),
+  },
+  (table) => [
+    uniqueIndex("commerce_inventory_reservation_prepare_product_held_uidx")
+      .on(table.checkoutPrepareId, table.productId)
+      .where(sql`state = 'held' AND checkout_prepare_id IS NOT NULL`),
+    index("commerce_inventory_reservation_product_state_idx").on(
+      table.productId,
+      table.state,
+      table.expiresAt,
+    ),
+    index("commerce_inventory_reservation_state_expires_idx").on(table.state, table.expiresAt),
+    check(
+      "commerce_inventory_reservation_qty_ck",
+      sql`(is_made_to_order = true AND quantity = 0) OR (is_made_to_order = false AND quantity > 0)`,
+    ),
+    check(
+      "commerce_inventory_reservation_owner_ck",
+      sql`(
+            (checkout_prepare_id IS NOT NULL AND cart_id IS NOT NULL AND order_id IS NULL)
+         OR (order_id IS NOT NULL AND checkout_prepare_id IS NULL AND cart_id IS NULL)
+          )`,
+    ),
+  ],
+);
+
+export const commerceCheckoutGroup = pgTable(
+  "commerce_checkout_group",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    checkoutPrepareId: text("checkout_prepare_id")
+      .notNull()
+      .references(() => commerceCheckoutPrepare.id, { onDelete: "restrict" }),
+    state: commerceCheckoutGroupStateEnum("state").default("confirmed").notNull(),
+    deliveryAddressSnapshot: text("delivery_address_snapshot"),
+    confirmIdempotencyKey: text("confirm_idempotency_key"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_checkout_group_prepare_uidx").on(table.checkoutPrepareId),
+    uniqueIndex("commerce_checkout_group_idempotency_uidx")
+      .on(table.buyerOrganizationId, table.confirmIdempotencyKey)
+      .where(sql`confirm_idempotency_key IS NOT NULL`),
+    index("commerce_checkout_group_buyer_idx").on(table.buyerOrganizationId, table.id),
+  ],
+);
+
+export const commerceCheckoutGroupCurrencyTotal = pgTable(
+  "commerce_checkout_group_currency_total",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    checkoutGroupId: text("checkout_group_id")
+      .notNull()
+      .references(() => commerceCheckoutGroup.id, { onDelete: "cascade" }),
+    currency: text("currency").notNull(),
+    subtotalInCents: bigint("subtotal_in_cents", { mode: "number" }).notNull(),
+    taxInCents: bigint("tax_in_cents", { mode: "number" }).default(0).notNull(),
+    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" }).default(0).notNull(),
+    shippingInCents: bigint("shipping_in_cents", { mode: "number" }).default(0).notNull(),
+    discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
+    totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_checkout_group_currency_total_uidx").on(
+      table.checkoutGroupId,
+      table.currency,
+    ),
+    check("commerce_checkout_group_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_checkout_group_currency_money_ck",
+      sql`subtotal_in_cents >= 0 AND tax_in_cents >= 0 AND service_fee_in_cents >= 0
+          AND shipping_in_cents >= 0 AND discount_in_cents >= 0 AND total_in_cents >= 0
+          AND total_in_cents = (subtotal_in_cents + tax_in_cents + service_fee_in_cents
+              + shipping_in_cents - discount_in_cents)`,
+    ),
+  ],
+);
+
+export const commerceServiceEngagement = pgTable(
+  "commerce_service_engagement",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    providerOrganizationId: text("provider_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    orderServiceLineId: text("order_service_line_id")
+      .notNull()
+      .references(() => commerceOrderServiceLine.id, { onDelete: "restrict" }),
+    providerKind: commerceProviderKindSlugEnum("provider_kind").notNull(),
+    state: commerceServiceEngagementStateEnum("state").default("awaiting_provider").notNull(),
+    titleSnapshot: text("title_snapshot").notNull(),
+    scopeSnapshot: text("scope_snapshot").notNull(),
+    scheduledAt: timestamp("scheduled_at"),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    cancelledAt: timestamp("cancelled_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_service_engagement_order_line_uidx").on(table.orderServiceLineId),
+    index("commerce_service_engagement_buyer_idx").on(
+      table.buyerOrganizationId,
+      table.state,
+      table.id,
+    ),
+    index("commerce_service_engagement_provider_idx").on(
+      table.providerOrganizationId,
+      table.state,
+      table.id,
+    ),
+  ],
+);
+
+export const commerceShipment = pgTable(
+  "commerce_shipment",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    state: commerceShipmentStateEnum("state").default("planned").notNull(),
+    originCountryCode: text("origin_country_code"),
+    originLocality: text("origin_locality"),
+    destinationCountryCode: text("destination_country_code"),
+    destinationLocality: text("destination_locality"),
+    packageCount: integer("package_count").notNull(),
+    totalWeightGrams: integer("total_weight_grams"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_shipment_order_idx").on(table.orderId, table.id),
+    check("commerce_shipment_package_ck", sql`package_count > 0`),
+    check("commerce_shipment_weight_ck", sql`total_weight_grams IS NULL OR total_weight_grams > 0`),
+    check(
+      "commerce_shipment_country_ck",
+      sql`(origin_country_code IS NULL OR origin_country_code ~ '^[A-Z]{2}$')
+          AND (destination_country_code IS NULL OR destination_country_code ~ '^[A-Z]{2}$')`,
+    ),
+  ],
+);
+
+export const commerceOrderServiceLink = pgTable(
+  "commerce_order_service_link",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    engagementId: text("engagement_id")
+      .notNull()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    orderServiceLineId: text("order_service_line_id").references(
+      () => commerceOrderServiceLine.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    orderProductLineId: text("order_product_line_id").references(
+      () => commerceOrderProductLine.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    shipmentId: text("shipment_id").references(() => commerceShipment.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_order_service_link_engagement_idx").on(table.engagementId),
+    index("commerce_order_service_link_order_idx").on(table.orderId),
+    check(
+      "commerce_order_service_link_target_ck",
+      sql`order_service_line_id IS NOT NULL
+          OR order_product_line_id IS NOT NULL
+          OR shipment_id IS NOT NULL`,
+    ),
+  ],
+);
+
+export const commerceShipmentProductLine = pgTable(
+  "commerce_shipment_product_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    shipmentId: text("shipment_id")
+      .notNull()
+      .references(() => commerceShipment.id, { onDelete: "cascade" }),
+    orderProductLineId: text("order_product_line_id")
+      .notNull()
+      .references(() => commerceOrderProductLine.id, { onDelete: "restrict" }),
+    quantity: integer("quantity").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_shipment_product_line_uidx").on(
+      table.shipmentId,
+      table.orderProductLineId,
+    ),
+    check("commerce_shipment_product_line_qty_ck", sql`quantity > 0`),
+  ],
+);
+
+export const commerceShipmentEvent = pgTable(
+  "commerce_shipment_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    shipmentId: text("shipment_id")
+      .notNull()
+      .references(() => commerceShipment.id, { onDelete: "cascade" }),
+    eventKind: commerceShipmentEventKindEnum("event_kind").notNull(),
+    occurredAt: timestamp("occurred_at").notNull(),
+    description: text("description"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_shipment_event_shipment_idx").on(table.shipmentId, table.occurredAt, table.id),
+    check(
+      "commerce_shipment_event_description_ck",
+      sql`description IS NULL OR char_length(description) BETWEEN 1 AND 2000`,
+    ),
   ],
 );
 

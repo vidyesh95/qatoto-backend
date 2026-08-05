@@ -60,7 +60,6 @@ import {
   ReorderPromotionalSlidesSchema,
   UpdatePromotionalSlideSchema,
 } from "#src/controllers/promotions.controller.js";
-import { ReplaceSpotlightSlotsSchema } from "#src/controllers/spotlight.controller.js";
 import {
   AuthorizeIntegrationSchema,
   BakePieSchema,
@@ -105,6 +104,7 @@ import {
   UpdateProjectSchema,
   UpdateProjectStageSchema,
 } from "#src/controllers/research-projects.controller.js";
+import { ReplaceSpotlightSlotsSchema } from "#src/controllers/spotlight.controller.js";
 import {
   CreateSupplierEngagementSchema,
   CreateSupplierSchema,

@@ -36,12 +36,29 @@ const PROVIDER_MEMBER_ROLES: readonly CommerceOrganizationMemberRole[] = [
   "provider_operator",
 ];
 
+/**
+ * The counterparty side of an order — whichever role created the listing or quote the
+ * order fulfills. An order's `counterpartyOrganizationId` may be a product seller
+ * (direct/cart checkout) or a service provider (accepted quote), so this union covers
+ * both rather than forcing fulfillment routes to pick one role family.
+ */
+const COUNTERPARTY_MEMBER_ROLES: readonly CommerceOrganizationMemberRole[] = [
+  "owner",
+  "administrator",
+  "seller",
+  "provider_operator",
+];
+
 export function memberCanOperateProvider(memberRole: CommerceOrganizationMemberRole): boolean {
   return PROVIDER_MEMBER_ROLES.includes(memberRole);
 }
 
 export function memberCanOperateBuyer(memberRole: CommerceOrganizationMemberRole): boolean {
   return BUYER_MEMBER_ROLES.includes(memberRole);
+}
+
+export function memberCanOperateCounterparty(memberRole: CommerceOrganizationMemberRole): boolean {
+  return COUNTERPARTY_MEMBER_ROLES.includes(memberRole);
 }
 
 export function memberCanUpdateOrganizationVisibility(

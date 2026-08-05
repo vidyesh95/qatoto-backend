@@ -38,6 +38,7 @@ router.post(
   requireAuth,
   requireActiveProviderCommerceOrganization,
   commerceQuoteWriteLimiter,
+  compactBody,
   idempotency({ required: true, scope: "active_organization" }),
   commerceQuotesController.submitRevision,
 );
@@ -71,6 +72,7 @@ router.post(
   requireAuth,
   requireActiveBuyerCommerceOrganization,
   commerceQuoteWriteLimiter,
+  compactBody,
   idempotency({ required: true, scope: "active_organization" }),
   commerceQuotesController.declineQuote,
 );
@@ -80,6 +82,7 @@ router.post(
   requireAuth,
   requireActiveProviderCommerceOrganization,
   commerceQuoteWriteLimiter,
+  compactBody,
   idempotency({ required: true, scope: "active_organization" }),
   commerceQuotesController.withdrawQuote,
 );

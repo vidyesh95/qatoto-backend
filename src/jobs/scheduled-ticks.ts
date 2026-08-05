@@ -532,3 +532,28 @@ export async function handleExpireCommerceQuotesTick(
     throw new Error(`expire-commerce-quotes-tick: enqueue failed (${enqueueResult.error.type})`);
   }
 }
+
+/**
+ * The hourly inventory-reservation release tick (STORE Phase 4).
+ *
+ * Quantized to the HOUR so a double cron fire collapses to one real job. Releases
+ * expired checkout preparations and their held stock reservations.
+ */
+export async function handleReleaseExpiredInventoryReservationsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcHourStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.releaseExpiredInventoryReservations,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.releaseExpiredInventoryReservations(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `release-expired-inventory-reservations-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}

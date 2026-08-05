@@ -270,6 +270,17 @@ function mapQuotesError(res: Response, error: CommerceQuotesError): void {
         message: "This action conflicts with the current quote state.",
       } satisfies ApiResponse);
       return;
+    case "INSUFFICIENT_STOCK":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "Insufficient stock to accept this quote.",
+        data: {
+          productId: error.productId,
+          availableQuantity: error.availableQuantity,
+        },
+      } satisfies ApiResponse);
+      return;
     case "CONFLICT":
       res.status(409).json({
         status: "error",

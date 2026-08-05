@@ -64,6 +64,9 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/commerce", specifier: "#src/routes/commerce-rfqs.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-quotes.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-messages.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-cart.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-orders.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-fulfillment.routes.js", exportName: "default" },
   { mountPath: "/store", specifier: "#src/routes/store.routes.js", exportName: "default" },
 ];
 

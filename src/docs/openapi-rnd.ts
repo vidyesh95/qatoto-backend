@@ -19,7 +19,6 @@ import notificationsRouter from "#src/routes/notifications.routes.js";
 import platformAuditRouter from "#src/routes/platform-audit.routes.js";
 import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import promotionsRouter from "#src/routes/promotions.routes.js";
-import spotlightRouter from "#src/routes/spotlight.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
@@ -30,6 +29,7 @@ import researchProgramsRouter, {
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/routes/research-projects.routes.js";
+import spotlightRouter from "#src/routes/spotlight.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
 import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.js";
 
