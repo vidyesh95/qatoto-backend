@@ -46,6 +46,7 @@ import type { Result } from "#src/types/index.js";
  */
 
 const PAPER_KEY_PREFIX = "research-programs";
+const COMMERCE_DOCUMENT_KEY_PREFIX = "commerce-organizations";
 
 export type ObjectStorageError =
   | { type: "NOT_CONFIGURED" }
@@ -54,6 +55,7 @@ export type ObjectStorageError =
 
 /** How long a download link lives. Long enough to click, short enough not to circulate. */
 export const PAPER_DOWNLOAD_URL_TTL_SECONDS = 300;
+export const PRIVATE_COMMERCE_DOCUMENT_URL_TTL_SECONDS = 300;
 
 interface ConfiguredStorage {
   readonly client: S3Client;
@@ -111,6 +113,20 @@ export function paperObjectKey(programId: string, contentSha256: string): string
   return `${PAPER_KEY_PREFIX}/${programId}/papers/${contentSha256}.pdf`;
 }
 
+export function commerceDocumentObjectKey(input: {
+  readonly organizationId: string;
+  readonly documentId: string;
+  readonly contentSha256: string;
+}): string {
+  return [
+    COMMERCE_DOCUMENT_KEY_PREFIX,
+    encodeURIComponent(input.organizationId),
+    "documents",
+    encodeURIComponent(input.documentId),
+    input.contentSha256,
+  ].join("/");
+}
+
 function describeCause(thrown: unknown): string {
   return thrown instanceof Error ? thrown.message : String(thrown);
 }
@@ -160,6 +176,56 @@ export async function uploadResearchPaper(input: {
 }
 
 /**
+ * Stores private commerce document bytes. Callers authorize and scan the document
+ * before making it available; this function never returns a public URL.
+ */
+export async function uploadPrivateCommerceDocument(input: {
+  readonly organizationId: string;
+  readonly documentId: string;
+  readonly contentSha256: string;
+  readonly documentBytes: Buffer;
+  readonly mediaType: string;
+  readonly downloadFileName: string;
+}): Promise<Result<{ objectKey: string }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  const objectKey = commerceDocumentObjectKey(input);
+  try {
+    await storage.client.send(
+      new PutObjectCommand({
+        Bucket: storage.bucketName,
+        Key: objectKey,
+        Body: input.documentBytes,
+        ContentType: normalizePrivateMediaType(input.mediaType),
+        ContentDisposition: `attachment; filename="${sanitizePrivateFileName(input.downloadFileName)}"`,
+        ChecksumSHA256: Buffer.from(input.contentSha256, "hex").toString("base64"),
+      }),
+    );
+    return { success: true, value: { objectKey } };
+  } catch (uploadError: unknown) {
+    return { success: false, error: { type: "UPLOAD_FAILED", cause: describeCause(uploadError) } };
+  }
+}
+
+/** Deletes private commerce ciphertext during upload compensation. */
+export async function deletePrivateCommerceDocument(
+  objectKey: string,
+): Promise<Result<{ deleted: boolean }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  try {
+    await storage.client.send(
+      new DeleteObjectCommand({ Bucket: storage.bucketName, Key: objectKey }),
+    );
+    return { success: true, value: { deleted: true } };
+  } catch (deleteError: unknown) {
+    return { success: false, error: { type: "DELETE_FAILED", cause: describeCause(deleteError) } };
+  }
+}
+
+/**
  * Deletes a paper's bytes.
  *
  * S3 `DeleteObject` is idempotent — deleting an absent key succeeds — which is the
@@ -198,6 +264,43 @@ export async function deleteResearchPaper(
 export async function presignPaperDownload(
   objectKey: string,
 ): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, ObjectStorageError>> {
+  return presignPrivateObjectDownload(objectKey, PAPER_DOWNLOAD_URL_TTL_SECONDS);
+}
+
+export async function presignPrivateCommerceDocumentDownload(
+  objectKey: string,
+): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, ObjectStorageError>> {
+  return presignPrivateObjectDownload(objectKey, PRIVATE_COMMERCE_DOCUMENT_URL_TTL_SECONDS);
+}
+
+/** Fetches ciphertext for an authorized server-side decrypt-and-stream response. */
+export async function downloadPrivateCommerceDocument(
+  objectKey: string,
+): Promise<Result<{ readonly ciphertext: Buffer }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  try {
+    const storedObject = await storage.client.send(
+      new GetObjectCommand({ Bucket: storage.bucketName, Key: objectKey }),
+    );
+    if (!storedObject.Body) {
+      return { success: false, error: { type: "UPLOAD_FAILED", cause: "Object body is empty." } };
+    }
+    const ciphertext = Buffer.from(await storedObject.Body.transformToByteArray());
+    return { success: true, value: { ciphertext } };
+  } catch (downloadError: unknown) {
+    return {
+      success: false,
+      error: { type: "UPLOAD_FAILED", cause: describeCause(downloadError) },
+    };
+  }
+}
+
+async function presignPrivateObjectDownload(
+  objectKey: string,
+  expiresInSeconds: number,
+): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, ObjectStorageError>> {
   const storage = ensureConfigured();
   if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
 
@@ -205,11 +308,11 @@ export async function presignPaperDownload(
     const downloadUrl = await getSignedUrl(
       storage.client,
       new GetObjectCommand({ Bucket: storage.bucketName, Key: objectKey }),
-      { expiresIn: PAPER_DOWNLOAD_URL_TTL_SECONDS },
+      { expiresIn: expiresInSeconds },
     );
     return {
       success: true,
-      value: { downloadUrl, expiresInSeconds: PAPER_DOWNLOAD_URL_TTL_SECONDS },
+      value: { downloadUrl, expiresInSeconds },
     };
   } catch (signError: unknown) {
     return { success: false, error: { type: "UPLOAD_FAILED", cause: describeCause(signError) } };
@@ -234,6 +337,27 @@ function sanitizeDownloadFileName(rawTitle: string): string {
     .slice(0, 100);
 
   return cleaned.length > 0 ? `${cleaned}.pdf` : "paper.pdf";
+}
+
+function sanitizePrivateFileName(rawFileName: string): string {
+  const cleaned = rawFileName
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9 ._-]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return cleaned.length > 0 ? cleaned : "document.bin";
+}
+
+function normalizePrivateMediaType(mediaType: string): string {
+  switch (mediaType) {
+    case "application/pdf":
+    case "image/jpeg":
+    case "image/png":
+      return mediaType;
+    default:
+      return "application/octet-stream";
+  }
 }
 
 /**

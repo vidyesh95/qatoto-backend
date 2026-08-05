@@ -45,6 +45,11 @@ const MAXIMUM_KEY_LENGTH = 200;
 export interface IdempotencyOptions {
   /** When true, a request with no `Idempotency-Key` is refused with `400`. */
   readonly required?: boolean;
+  /**
+   * Defaults to the historical user scope. Commerce routes may opt into the
+   * organization scope only after active membership/trade context was proven.
+   */
+  readonly scope?: "user" | "active_organization";
 }
 
 /**
@@ -57,9 +62,19 @@ export interface IdempotencyOptions {
  */
 function fingerprintRequest(req: Request): string {
   const body: unknown = req.body;
-  return createHash("sha256")
-    .update(`${req.method}\n${req.originalUrl}\n${stableStringify(body)}`)
-    .digest("hex");
+  const requestHash = createHash("sha256").update(
+    `${req.method}\n${req.originalUrl}\n${stableStringify(body)}`,
+  );
+  if (req.file) {
+    // Multipart evidence retries must identify the bytes, not only the text fields.
+    // Otherwise one key reused with a different file would replay the first document.
+    requestHash
+      .update(
+        `\n${req.file.fieldname}\n${req.file.originalname}\n${req.file.mimetype}\n${String(req.file.size)}\n`,
+      )
+      .update(req.file.buffer);
+  }
+  return requestHash.digest("hex");
 }
 
 function stableStringify(value: unknown): string {
@@ -116,6 +131,19 @@ export function idempotency(options: IdempotencyOptions = {}) {
     }
 
     const userId = req.user.id;
+    if (options.scope === "active_organization" && !req.commerceOrganization) {
+      res.status(403).json({
+        status: "error",
+        statusCode: 403,
+        message: "An active commerce organization membership is required.",
+      } satisfies ApiResponse);
+      return;
+    }
+
+    const persistedIdempotencyKey =
+      options.scope === "active_organization" && req.commerceOrganization
+        ? organizationScopedIdempotencyKey(req.commerceOrganization.organizationId, idempotencyKey)
+        : idempotencyKey;
     const requestFingerprint = fingerprintRequest(req);
 
     const [existing] = await db
@@ -128,7 +156,7 @@ export function idempotency(options: IdempotencyOptions = {}) {
       .where(
         and(
           eq(idempotencyRecord.userId, userId),
-          eq(idempotencyRecord.idempotencyKey, idempotencyKey),
+          eq(idempotencyRecord.idempotencyKey, persistedIdempotencyKey),
         ),
       )
       .limit(1);
@@ -150,9 +178,19 @@ export function idempotency(options: IdempotencyOptions = {}) {
       return;
     }
 
-    captureResponse(req, res, userId, idempotencyKey, requestFingerprint);
+    captureResponse(req, res, userId, persistedIdempotencyKey, requestFingerprint);
     next();
   };
+}
+
+function organizationScopedIdempotencyKey(
+  organizationId: string,
+  clientIdempotencyKey: string,
+): string {
+  const scopedDigest = createHash("sha256")
+    .update(`${organizationId}\n${clientIdempotencyKey}`, "utf8")
+    .digest("hex");
+  return `org:${scopedDigest}`;
 }
 
 /**

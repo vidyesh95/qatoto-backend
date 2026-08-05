@@ -1,0 +1,203 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { CreateProductInput } from "#src/controllers/products.controller.js";
+
+interface CategoryRow {
+  readonly id: string;
+  readonly parentCategoryId?: string | null;
+  readonly state?: "active" | "draft" | "retired";
+}
+
+const databaseState = vi.hoisted(
+  (): {
+    categoryResults: CategoryRow[][];
+    insertedProduct: Record<string, unknown> | null;
+    transactionCalled: boolean;
+  } => ({
+    categoryResults: [],
+    insertedProduct: null,
+    transactionCalled: false,
+  }),
+);
+
+const forMock = vi.fn<() => Promise<CategoryRow[]>>(() => Promise.resolve(databaseState.categoryResults.shift() ?? []));
+const whereMock = vi.fn<(condition: unknown) => { for: typeof forMock }>(() => ({
+  for: forMock,
+}));
+const fromMock = vi.fn<(table: unknown) => { where: typeof whereMock }>(() => ({
+  where: whereMock,
+}));
+const selectMock = vi.fn<(columns: unknown) => { from: typeof fromMock }>(() => ({
+  from: fromMock,
+}));
+
+const productRow = {
+  id: "product-one",
+  title: "Mapped listing",
+  brand: null,
+  category: "electronics",
+  categoryId: "commerce_category_electronics",
+  condition: "new",
+  description: null,
+  priceInCents: 1_000,
+  compareAtPriceInCents: null,
+  currency: "USD",
+  stockQuantity: 0,
+  sku: null,
+  keyFeatures: [],
+  status: "draft",
+  publishedAt: null,
+};
+
+const returningMock = vi.fn<(columns: unknown) => Promise<(typeof productRow)[]>>(() => Promise.resolve([productRow]));
+const valuesMock = vi.fn<
+  (insertedProduct: Record<string, unknown>) => {
+    returning: typeof returningMock;
+  }
+>((insertedProduct) => {
+  databaseState.insertedProduct = insertedProduct;
+  return { returning: returningMock };
+});
+const insertMock = vi.fn<(table: unknown) => { values: typeof valuesMock }>(() => ({
+  values: valuesMock,
+}));
+const transactionMock = vi.fn<(callback: (transaction: unknown) => Promise<unknown>) => Promise<unknown>>(
+  async (callback) => {
+    databaseState.transactionCalled = true;
+    return callback({ insert: insertMock, select: selectMock });
+  },
+);
+
+vi.mock("#src/db/index.js", () => ({
+  db: { select: selectMock, transaction: transactionMock },
+}));
+vi.mock("#src/lib/cloudinary.js", () => ({
+  deleteAllProductImages: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  deleteProductImage: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  uploadProductImage: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
+vi.mock("#src/lib/image.js", () => ({
+  validateAndNormalizeImage: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
+
+const { createProduct } = await import("#src/services/products.service.js");
+
+const baseInput: Omit<CreateProductInput, "category" | "categoryId"> = {
+  title: "Mapped listing",
+  condition: "new",
+  keyFeatures: [],
+  priceInCents: 1_000,
+  stockQuantity: 0,
+  pricingTiers: [],
+};
+
+describe("product category resolution", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    databaseState.categoryResults = [];
+    databaseState.insertedProduct = null;
+    databaseState.transactionCalled = false;
+  });
+
+  it("maps a legacy category and dual-writes the canonical category id", async () => {
+    databaseState.categoryResults = [
+      [
+        {
+          id: "commerce_category_electronics",
+          parentCategoryId: null,
+          state: "active",
+        },
+      ],
+      [],
+    ];
+
+    const result = await createProduct(
+      { userId: "user-one", organizationId: "organization-one" },
+      { ...baseInput, category: "electronics" },
+    );
+
+    expect(result.success).toBe(true);
+    expect(databaseState.insertedProduct).toEqual(
+      expect.objectContaining({
+        sellerId: "user-one",
+        sellerOrganizationId: "organization-one",
+        createdByUserId: "user-one",
+        category: "electronics",
+        categoryId: "commerce_category_electronics",
+      }),
+    );
+  });
+
+  it("rejects inactive categories before creating a listing", async () => {
+    databaseState.categoryResults = [
+      [
+        {
+          id: "commerce_category_electronics",
+          parentCategoryId: null,
+          state: "retired",
+        },
+      ],
+      [],
+    ];
+
+    const result = await createProduct(
+      { userId: "user-one", organizationId: "organization-one" },
+      { ...baseInput, categoryId: "commerce_category_electronics" },
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: {
+        type: "CATEGORY_NOT_ACTIVE_LEAF",
+        categoryId: "commerce_category_electronics",
+      },
+    });
+    expect(databaseState.transactionCalled).toBe(true);
+  });
+
+  it("rejects active categories that have children", async () => {
+    databaseState.categoryResults = [
+      [
+        {
+          id: "commerce_category_electronics",
+          parentCategoryId: null,
+          state: "active",
+        },
+      ],
+      [{ id: "commerce_category_phones" }],
+    ];
+
+    const result = await createProduct(
+      { userId: "user-one", organizationId: "organization-one" },
+      { ...baseInput, categoryId: "commerce_category_electronics" },
+    );
+
+    expect(result.success).toBe(false);
+    expect(!result.success && result.error.type).toBe("CATEGORY_NOT_ACTIVE_LEAF");
+  });
+
+  it("rejects inconsistent canonical and legacy category values", async () => {
+    databaseState.categoryResults = [
+      [
+        {
+          id: "commerce_category_fashion",
+          parentCategoryId: null,
+          state: "active",
+        },
+      ],
+      [],
+    ];
+
+    const result = await createProduct(
+      { userId: "user-one", organizationId: "organization-one" },
+      {
+        ...baseInput,
+        category: "electronics",
+        categoryId: "commerce_category_fashion",
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(!result.success && result.error.type).toBe("CATEGORY_MISMATCH");
+  });
+});

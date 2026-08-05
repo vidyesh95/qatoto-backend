@@ -281,6 +281,27 @@
       "when": 1785914061247,
       "tag": "0039_giant_midnight",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1785933250512,
+      "tag": "0040_dear_surge",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1785934676006,
+      "tag": "0041_elite_piledriver",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1785935822577,
+      "tag": "0042_many_jasper_sitwell",
+      "breakpoints": true
     }
   ]
 }

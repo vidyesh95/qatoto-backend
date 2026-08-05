@@ -39,6 +39,7 @@ export type PlatformCapability =
   | "moderate_taxonomy"
   | "moderate_clusters"
   | "moderate_content"
+  | "moderate_commerce"
   | "audit_escrow"
   /**
    * Grant and revoke platform roles over HTTP. `admin` ONLY — deliberately not held by
@@ -63,12 +64,13 @@ export type PlatformCapability =
  * reading this answers "who can do X" without tracing any logic.
  */
 const PLATFORM_ROLE_GRANTS: Readonly<Record<PlatformRole, readonly PlatformCapability[]>> = {
-  moderator: ["moderate_taxonomy", "moderate_clusters", "moderate_content"],
+  moderator: ["moderate_taxonomy", "moderate_clusters", "moderate_content", "moderate_commerce"],
   auditor: ["audit_escrow"],
   admin: [
     "moderate_taxonomy",
     "moderate_clusters",
     "moderate_content",
+    "moderate_commerce",
     "audit_escrow",
     "manage_platform_roles",
     "manage_promotions",

@@ -12,6 +12,7 @@ import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import { requestLog } from "#src/middleware/request-log.js";
 import authRouter from "#src/routes/auth.routes.js";
+import commerceOrganizationsRouter from "#src/routes/commerce-organizations.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
@@ -26,7 +27,6 @@ import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import playlistsRouter from "#src/routes/playlists.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
 import promotionsRouter from "#src/routes/promotions.routes.js";
-import spotlightRouter from "#src/routes/spotlight.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
@@ -38,6 +38,7 @@ import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/routes/research-projects.routes.js";
 import seriesRouter from "#src/routes/series.routes.js";
+import spotlightRouter from "#src/routes/spotlight.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
 import videosRouter from "#src/routes/videos.routes.js";
@@ -132,6 +133,7 @@ app.use("/", indexRouter);
 app.use("/", authRouter);
 app.use("/users", usersRouter);
 app.use("/handles", handlesRouter);
+app.use("/commerce", commerceOrganizationsRouter);
 app.use("/products", productsRouter);
 // The home-page carousel. GET /promotions/slides is public; every /promotions/admin/*
 // route is gated by `manage_promotions` inside the service.

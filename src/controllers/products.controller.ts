@@ -31,16 +31,19 @@ const PricingTierSchema = z.object({
 const productFieldShapes = {
   title: z.string().trim().min(1).max(200),
   brand: z.string().trim().max(120).optional(),
-  category: z.enum([
-    "electronics",
-    "fashion",
-    "home_kitchen",
-    "anime_collectibles",
-    "digital_goods",
-    "books_media",
-    "sports_outdoors",
-    "beauty_personal_care",
-  ]),
+  category: z
+    .enum([
+      "electronics",
+      "fashion",
+      "home_kitchen",
+      "anime_collectibles",
+      "digital_goods",
+      "books_media",
+      "sports_outdoors",
+      "beauty_personal_care",
+    ])
+    .optional(),
+  categoryId: z.string().trim().min(1).max(200).optional(),
   condition: z.enum(["new", "refurbished", "used"]),
   description: z.string().trim().max(5000).optional(),
   keyFeatures: z.array(z.string().trim().min(1).max(200)).max(20),
@@ -91,9 +94,9 @@ const compareAtRefinement = {
 // Exported so the defaults-vs-partial regression is testable without a request; the
 // discovery controllers export their schemas the same way.
 export const CreateProductSchema = ProductFieldsSchema.refine(
-  compareAtPriceExceedsPrice,
-  compareAtRefinement,
-);
+  (productInput) => productInput.category !== undefined || productInput.categoryId !== undefined,
+  { error: "Either categoryId or category is required.", path: ["categoryId"] },
+).refine(compareAtPriceExceedsPrice, compareAtRefinement);
 
 /**
  * Every field optional and NONE defaulted — a PATCH may touch any subset, and a key the
@@ -110,6 +113,12 @@ export const UpdateProductSchema = z
   .refine(compareAtPriceExceedsPrice, compareAtRefinement);
 
 const ReorderImagesSchema = z.object({ imageIds: z.array(z.string()).min(1) }).strict();
+const ProductParamsSchema = z.object({ id: z.string().trim().min(1).max(200) }).strict();
+const ProductImageParamsSchema = ProductParamsSchema.extend({
+  imageId: z.string().trim().min(1).max(200),
+}).strict();
+const EmptyQuerySchema = z.object({}).strict();
+const EmptyBodySchema = z.union([z.undefined(), z.object({}).strict()]);
 
 const ListProductsQuerySchema = z
   .object({
@@ -126,13 +135,21 @@ function respondUnauthenticated(res: Response): void {
   res.status(401).json({ status: "error", statusCode: 401, message: "Please sign in." });
 }
 
-/**
- * A single route param value. Express types params as `string | string[]` (a
- * repeated key yields an array); the first value is the one we act on — matching
- * the users controller's defensive handling.
- */
-function firstParam(value: string | string[]): string {
-  return Array.isArray(value) ? value[0] : value;
+function getProductOrganizationContext(
+  req: Request,
+  res: Response,
+): {
+  readonly userId: string;
+  readonly organizationId: string;
+} | null {
+  if (!req.user || !req.commerceOrganization) {
+    respondUnauthenticated(res);
+    return null;
+  }
+  return {
+    userId: req.user.id,
+    organizationId: req.commerceOrganization.organizationId,
+  };
 }
 
 /** 422 for a Zod parse failure, carrying the flattened field errors. */
@@ -160,6 +177,15 @@ function mapProductErrorToResponse(error: productsService.ProductError): {
       return { statusCode: 404, message: "Product not found." };
     case "SKU_TAKEN":
       return { statusCode: 409, message: "That SKU is already used by one of your listings." };
+    case "CATEGORY_NOT_FOUND":
+      return { statusCode: 422, message: "The selected commerce category does not exist." };
+    case "CATEGORY_NOT_ACTIVE_LEAF":
+      return { statusCode: 422, message: "The selected commerce category must be an active leaf." };
+    case "CATEGORY_MISMATCH":
+      return {
+        statusCode: 422,
+        message: "The legacy category does not match the selected commerce category.",
+      };
     case "TOO_MANY_IMAGES":
       return {
         statusCode: 409,
@@ -212,10 +238,10 @@ function respondProductError(res: Response, error: productsService.ProductError)
  * body — a caller can only ever create their own listing (CLAUDE.md §1.1).
  */
 export async function createProduct(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
 
   const parsedBody = CreateProductSchema.safeParse(req.body);
   if (!parsedBody.success) {
@@ -223,7 +249,7 @@ export async function createProduct(req: Request, res: Response): Promise<void> 
     return;
   }
 
-  const createResult = await productsService.createProduct(req.user.id, parsedBody.data);
+  const createResult = await productsService.createProduct(commerceContext, parsedBody.data);
   if (!createResult.success) {
     respondProductError(res, createResult.error);
     return;
@@ -244,10 +270,8 @@ export async function createProduct(req: Request, res: Response): Promise<void> 
  * `/:id` in the router so "mine" is never swallowed as an id.
  */
 export async function getMyProducts(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
 
   const parsedQuery = ListProductsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
@@ -256,7 +280,11 @@ export async function getMyProducts(req: Request, res: Response): Promise<void> 
   }
 
   const { page, limit } = parsedQuery.data;
-  const productsPage = await productsService.listMyProducts(req.user.id, page, limit);
+  const productsPage = await productsService.listMyProducts(
+    commerceContext.organizationId,
+    page,
+    limit,
+  );
 
   const response: PaginatedResponse = {
     status: "success",
@@ -278,12 +306,17 @@ export async function getMyProducts(req: Request, res: Response): Promise<void> 
  * Full listing (images + tiers) for the edit/detail flow. Owner only → 404.
  */
 export async function getProductById(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
 
-  const getResult = await productsService.getProduct(req.user.id, firstParam(req.params.id));
+  const getResult = await productsService.getProduct(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+  );
   if (!getResult.success) {
     respondProductError(res, getResult.error);
     return;
@@ -303,20 +336,22 @@ export async function getProductById(req: Request, res: Response): Promise<void>
  * Partial update of a listing's mutable fields (+ optional tier replacement).
  */
 export async function updateProduct(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
 
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
   const parsedBody = UpdateProductSchema.safeParse(req.body);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
   if (!parsedBody.success) {
     respondValidationFailed(res, parsedBody.error);
     return;
   }
 
   const updateResult = await productsService.updateProduct(
-    req.user.id,
-    firstParam(req.params.id),
+    commerceContext.organizationId,
+    parsedParams.data.id,
     parsedBody.data,
   );
   if (!updateResult.success) {
@@ -339,10 +374,12 @@ export async function updateProduct(req: Request, res: Response): Promise<void> 
  * the file; the service re-validates the actual bytes server-side (§1.1).
  */
 export async function uploadImage(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
 
   if (!req.file) {
     res.status(422).json({
@@ -354,8 +391,8 @@ export async function uploadImage(req: Request, res: Response): Promise<void> {
   }
 
   const uploadResult = await productsService.addProductImage(
-    req.user.id,
-    firstParam(req.params.id),
+    commerceContext.organizationId,
+    parsedParams.data.id,
     req.file.buffer,
   );
   if (!uploadResult.success) {
@@ -377,15 +414,19 @@ export async function uploadImage(req: Request, res: Response): Promise<void> {
  * Remove one image (Cloudinary asset + row) and re-pack remaining positions.
  */
 export async function deleteImage(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductImageParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  const parsedBody = EmptyBodySchema.safeParse(req.body);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+  if (!parsedBody.success) return respondValidationFailed(res, parsedBody.error);
 
   const deleteResult = await productsService.deleteProductImageById(
-    req.user.id,
-    firstParam(req.params.id),
-    firstParam(req.params.imageId),
+    commerceContext.organizationId,
+    parsedParams.data.id,
+    parsedParams.data.imageId,
   );
   if (!deleteResult.success) {
     respondProductError(res, deleteResult.error);
@@ -407,20 +448,22 @@ export async function deleteImage(req: Request, res: Response): Promise<void> {
  * product's image ids.
  */
 export async function reorderImages(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
 
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
   const parsedBody = ReorderImagesSchema.safeParse(req.body);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
   if (!parsedBody.success) {
     respondValidationFailed(res, parsedBody.error);
     return;
   }
 
   const reorderResult = await productsService.reorderImages(
-    req.user.id,
-    firstParam(req.params.id),
+    commerceContext.organizationId,
+    parsedParams.data.id,
     parsedBody.data.imageIds,
   );
   if (!reorderResult.success) {
@@ -442,14 +485,18 @@ export async function reorderImages(req: Request, res: Response): Promise<void> 
  * draft → active. Completeness is re-checked server-side; incomplete → 422.
  */
 export async function publishProduct(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  const parsedBody = EmptyBodySchema.safeParse(req.body);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+  if (!parsedBody.success) return respondValidationFailed(res, parsedBody.error);
 
   const publishResult = await productsService.publishProduct(
-    req.user.id,
-    firstParam(req.params.id),
+    commerceContext.organizationId,
+    parsedParams.data.id,
   );
   if (!publishResult.success) {
     respondProductError(res, publishResult.error);
@@ -470,14 +517,18 @@ export async function publishProduct(req: Request, res: Response): Promise<void>
  * active → draft.
  */
 export async function unpublishProduct(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  const parsedBody = EmptyBodySchema.safeParse(req.body);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+  if (!parsedBody.success) return respondValidationFailed(res, parsedBody.error);
 
   const unpublishResult = await productsService.unpublishProduct(
-    req.user.id,
-    firstParam(req.params.id),
+    commerceContext.organizationId,
+    parsedParams.data.id,
   );
   if (!unpublishResult.success) {
     respondProductError(res, unpublishResult.error);
@@ -499,12 +550,19 @@ export async function unpublishProduct(req: Request, res: Response): Promise<voi
  * the FK cascade clears image + tier rows.
  */
 export async function deleteProduct(req: Request, res: Response): Promise<void> {
-  if (!req.user) {
-    respondUnauthenticated(res);
-    return;
-  }
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  const parsedBody = EmptyBodySchema.safeParse(req.body);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+  if (!parsedBody.success) return respondValidationFailed(res, parsedBody.error);
 
-  const deleteResult = await productsService.deleteProduct(req.user.id, firstParam(req.params.id));
+  const deleteResult = await productsService.deleteProduct(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+  );
   if (!deleteResult.success) {
     respondProductError(res, deleteResult.error);
     return;

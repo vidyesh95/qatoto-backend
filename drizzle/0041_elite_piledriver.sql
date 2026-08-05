@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "product_sellerOrganization_sku_unq" ON "product" USING btree ("seller_organization_id","sku");

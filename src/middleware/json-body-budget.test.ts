@@ -162,6 +162,9 @@ describe("per-route body caps", () => {
       // codebase. Its bytes are bounded by multer's 25 MB cap (imported from
       // `src/lib/pdf.ts` so the two cannot disagree), not by a JSON byte budget.
       import("#src/middleware/upload-research-paper.js"),
+      // Commerce verification evidence is multipart and bounded by its upload middleware,
+      // not by the JSON parser's per-route budget.
+      import("#src/middleware/upload-commerce-verification-evidence.js"),
       // The promotional-carousel image routes. The create route carries TEXT PARTS
       // alongside the file, so without this import `isMultipart()` would not recognize
       // it, the sweep would treat it as a JSON body-reading route, and it would be

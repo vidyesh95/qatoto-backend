@@ -74,6 +74,14 @@ export const auth = betterAuth({
       handle: { type: "string", required: false, input: false },
     },
   },
+  session: {
+    additionalFields: {
+      // Server-selected tenant context. `input:false` prevents Better Auth clients
+      // from asserting an organization while still making the persisted value
+      // available to our server-side request guard.
+      activeOrganizationId: { type: "string", required: false, input: false },
+    },
+  },
   // Guards Better Auth's OWN HTTP endpoints (the frontend hits these directly for
   // forgot-password and password login). Note: our /signup/* routes call auth.api
   // server-side, which this does NOT cover — those are rate limited in Express

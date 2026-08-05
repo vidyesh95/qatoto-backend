@@ -77,4 +77,51 @@ describe("CreateProductSchema — defaults still apply on create", () => {
   it("still requires the fields that have no default", () => {
     expect(CreateProductSchema.safeParse({ title: "A listing" }).success).toBe(false);
   });
+
+  it("accepts canonical categoryId without the legacy category enum", () => {
+    const parsed = CreateProductSchema.parse({
+      title: "A listing",
+      categoryId: "commerce_category_electronics",
+      priceInCents: 1_000,
+    });
+
+    expect(parsed.categoryId).toBe("commerce_category_electronics");
+    expect(parsed.category).toBeUndefined();
+  });
+
+  it("requires at least one category representation", () => {
+    expect(CreateProductSchema.safeParse({ title: "A listing", priceInCents: 1_000 }).success).toBe(false);
+  });
+
+  it("rejects client-supplied organization ownership fields", () => {
+    expect(
+      CreateProductSchema.safeParse({
+        title: "A listing",
+        category: "electronics",
+        priceInCents: 1_000,
+        sellerOrganizationId: "commerce_org_attacker",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("legacy product schema compatibility", () => {
+  it("accepts all eight legacy category values", () => {
+    const legacyCategories = [
+      "electronics",
+      "fashion",
+      "home_kitchen",
+      "anime_collectibles",
+      "digital_goods",
+      "books_media",
+      "sports_outdoors",
+      "beauty_personal_care",
+    ];
+
+    for (const category of legacyCategories) {
+      expect(CreateProductSchema.safeParse({ title: "Legacy listing", category, priceInCents: 100 }).success).toBe(
+        true,
+      );
+    }
+  });
 });

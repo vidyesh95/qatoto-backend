@@ -40,8 +40,13 @@ describe("requirePlatformCapability", () => {
     vi.clearAllMocks();
   });
 
-  it("grants a moderator the three content capabilities", async () => {
-    for (const capability of ["moderate_taxonomy", "moderate_clusters", "moderate_content"] as const) {
+  it("grants a moderator content and commerce moderation capabilities", async () => {
+    for (const capability of [
+      "moderate_taxonomy",
+      "moderate_clusters",
+      "moderate_content",
+      "moderate_commerce",
+    ] as const) {
       stubPlatformRole("moderator");
       const result = await requirePlatformCapability("user-1", capability);
       expect(result.success).toBe(true);
@@ -62,7 +67,12 @@ describe("requirePlatformCapability", () => {
   });
 
   it("REFUSES an auditor every content capability", async () => {
-    for (const capability of ["moderate_taxonomy", "moderate_clusters", "moderate_content"] as const) {
+    for (const capability of [
+      "moderate_taxonomy",
+      "moderate_clusters",
+      "moderate_content",
+      "moderate_commerce",
+    ] as const) {
       stubPlatformRole("auditor");
       const result = await requirePlatformCapability("user-1", capability);
       expect(result.success).toBe(false);
@@ -75,7 +85,13 @@ describe("requirePlatformCapability", () => {
   });
 
   it("grants an admin everything", async () => {
-    for (const capability of ["moderate_taxonomy", "moderate_clusters", "moderate_content", "audit_escrow"] as const) {
+    for (const capability of [
+      "moderate_taxonomy",
+      "moderate_clusters",
+      "moderate_content",
+      "moderate_commerce",
+      "audit_escrow",
+    ] as const) {
       stubPlatformRole("admin");
       expect((await requirePlatformCapability("user-1", capability)).success).toBe(true);
     }

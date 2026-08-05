@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 
 import { config } from "#src/config/index.js";
 import { query } from "#src/db/index.js";
+import { isCommercePiiEncryptionConfigured } from "#src/lib/commerce-pii-encryption.js";
 import { errorFields, logger } from "#src/lib/logger.js";
 import type { ApiResponse } from "#src/types/index.js";
 
@@ -87,6 +88,10 @@ async function reportReadiness(req: Request, res: Response): Promise<void> {
       requestId: req.requestId,
       ...errorFields(error),
     });
+  }
+
+  if (config.NODE_ENV === "production") {
+    checks["commercePiiEncryption"] = isCommercePiiEncryptionConfigured() ? "ok" : "failed";
   }
 
   const isReady = Object.values(checks).every((state) => state === "ok");

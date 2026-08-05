@@ -34,5 +34,25 @@ declare namespace Express {
       // Current active handle (normalized, no leading "@"); null until claimed.
       readonly handle: string | null;
     };
+    authSession?: {
+      /** Safe identifier for revocation, audit correlation, and tenant selection. */
+      readonly id: string;
+      /** Server-owned selection only; authorization is re-proven separately. */
+      readonly activeOrganizationId: string | null;
+    };
+    commerceOrganization?: {
+      readonly organizationId: string;
+      readonly memberId: string;
+      readonly memberRole:
+        | "owner"
+        | "administrator"
+        | "buyer"
+        | "seller"
+        | "provider_operator"
+        | "finance"
+        | "support"
+        | "viewer";
+      readonly tradeState: "active";
+    };
   }
 }

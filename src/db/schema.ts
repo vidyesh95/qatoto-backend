@@ -135,8 +135,20 @@ export const session = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
+    // Server-selected commerce tenant context. Nullable for users with no commerce
+    // membership and during the Phase 0 expand rollout. Every request using it must
+    // still re-check an active membership; possession of a session is not authorization.
+    activeOrganizationId: text("active_organization_id").references(
+      (): AnyPgColumn => commerceOrganization.id,
+      { onDelete: "set null" },
+    ),
   },
-  (table) => [index("session_userId_idx").on(table.userId)],
+  (table) => [
+    index("session_userId_idx").on(table.userId),
+    index("session_activeOrganizationId_idx")
+      .on(table.activeOrganizationId)
+      .where(sql`active_organization_id IS NOT NULL`),
+  ],
 );
 
 export const account = pgTable(
@@ -294,6 +306,10 @@ export const sessionRelations = relations(session, ({ one }) => ({
     fields: [session.userId],
     references: [user.id],
   }),
+  activeOrganization: one(commerceOrganization, {
+    fields: [session.activeOrganizationId],
+    references: [commerceOrganization.id],
+  }),
 }));
 
 export const accountRelations = relations(account, ({ one }) => ({
@@ -342,7 +358,453 @@ export const productConditionEnum = pgEnum("product_condition", ["new", "refurbi
 // draft→active transition is gated server-side (POST /products/:id/publish).
 export const productStatusEnum = pgEnum("product_status", ["draft", "active"]);
 
-// A product listing, owned by exactly one seller.
+export const commerceOrganizationTypeEnum = pgEnum("commerce_organization_type", [
+  "company",
+  "sole_proprietor",
+  "cooperative",
+  "government",
+  "nonprofit",
+]);
+
+export const commerceOrganizationTradeStateEnum = pgEnum("commerce_organization_trade_state", [
+  "pending",
+  "active",
+  "suspended",
+  "closed",
+]);
+
+export const commerceOrganizationVisibilityEnum = pgEnum("commerce_organization_visibility", [
+  "private",
+  "public",
+]);
+
+export const commerceOrganizationMemberRoleEnum = pgEnum("commerce_organization_member_role", [
+  "owner",
+  "administrator",
+  "buyer",
+  "seller",
+  "provider_operator",
+  "finance",
+  "support",
+  "viewer",
+]);
+
+export const commerceOrganizationMemberStateEnum = pgEnum("commerce_organization_member_state", [
+  "invited",
+  "active",
+  "suspended",
+  "left",
+]);
+
+export const commerceOrganizationAddressKindEnum = pgEnum("commerce_organization_address_kind", [
+  "billing",
+  "registered",
+  "warehouse",
+  "pickup",
+  "return",
+]);
+
+export const commerceVerificationKindEnum = pgEnum("commerce_verification_kind", [
+  "business_registration",
+  "tax_registration",
+  "identity",
+  "address",
+  "bank_account",
+]);
+
+export const commerceVerificationStateEnum = pgEnum("commerce_verification_state", [
+  "pending",
+  "approved",
+  "rejected",
+  "superseded",
+]);
+
+export const commerceCategoryStateEnum = pgEnum("commerce_category_state", [
+  "draft",
+  "active",
+  "retired",
+]);
+
+export const commerceDocumentKindEnum = pgEnum("commerce_document_kind", [
+  "business_registration",
+  "tax_registration",
+  "identity",
+  "address_proof",
+  "bank_evidence",
+  "other",
+]);
+
+export const commerceDocumentStateEnum = pgEnum("commerce_document_state", [
+  "pending_scan",
+  "available",
+  "quarantined",
+  "deleted",
+]);
+
+export const commerceOrganizationAuditEventKindEnum = pgEnum(
+  "commerce_organization_audit_event_kind",
+  [
+    "organization_created",
+    "organization_updated",
+    "trade_state_changed",
+    "visibility_changed",
+    "member_invited",
+    "member_state_changed",
+    "member_role_changed",
+    "address_changed",
+    "document_uploaded",
+    "document_state_changed",
+    "verification_decided",
+  ],
+);
+
+/**
+ * A legal commerce identity. Registration and tax identifiers are ciphertext
+ * envelopes, never searchable or public fields. `normalizedLegalName` exists only
+ * for duplicate-review lookup and is always scoped by country.
+ */
+export const commerceOrganization = pgTable(
+  "commerce_organization",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    legalName: text("legal_name").notNull(),
+    normalizedLegalName: text("normalized_legal_name").notNull(),
+    displayName: text("display_name").notNull(),
+    summary: text("summary"),
+    organizationType: commerceOrganizationTypeEnum("organization_type").notNull(),
+    tradeState: commerceOrganizationTradeStateEnum("trade_state").default("pending").notNull(),
+    visibility: commerceOrganizationVisibilityEnum("visibility").default("private").notNull(),
+    countryCode: text("country_code").notNull(),
+    registrationNumberEncrypted: text("registration_number_encrypted"),
+    taxIdentifierEncrypted: text("tax_identifier_encrypted"),
+    logoUrl: text("logo_url"),
+    websiteUrl: text("website_url"),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_organization_slug_uidx").on(table.slug),
+    index("commerce_organization_legalName_country_idx").on(
+      table.normalizedLegalName,
+      table.countryCode,
+    ),
+    index("commerce_organization_tradeState_idx").on(table.tradeState, table.id),
+    check(
+      "commerce_organization_slug_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 100`,
+    ),
+    check(
+      "commerce_organization_name_ck",
+      sql`char_length(legal_name) BETWEEN 1 AND 200
+          AND char_length(normalized_legal_name) BETWEEN 1 AND 200
+          AND char_length(display_name) BETWEEN 1 AND 200
+          AND (summary IS NULL OR char_length(summary) <= 4000)`,
+    ),
+    check("commerce_organization_country_ck", sql`country_code ~ '^[A-Z]{2}$'`),
+    check(
+      "commerce_organization_url_ck",
+      sql`(logo_url IS NULL OR (char_length(logo_url) <= 2048 AND logo_url LIKE 'https://%'))
+          AND (website_url IS NULL OR (char_length(website_url) <= 2048 AND website_url LIKE 'https://%'))`,
+    ),
+  ],
+);
+
+export const commerceOrganizationMember = pgTable(
+  "commerce_organization_member",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    role: commerceOrganizationMemberRoleEnum("role").notNull(),
+    state: commerceOrganizationMemberStateEnum("state").default("invited").notNull(),
+    invitedByUserId: text("invited_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    joinedAt: timestamp("joined_at"),
+    leftAt: timestamp("left_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_organization_member_organizationId_idx").on(table.organizationId, table.state),
+    index("commerce_organization_member_userId_idx").on(table.userId, table.state),
+    // At most one current membership. Historical `left` rows remain append-only
+    // history, while invited/active/suspended are mutually exclusive per user/org.
+    uniqueIndex("commerce_organization_member_current_uidx")
+      .on(table.organizationId, table.userId)
+      .where(sql`state <> 'left'`),
+    check(
+      "commerce_organization_member_dates_ck",
+      sql`(state = 'invited' AND joined_at IS NULL AND left_at IS NULL)
+          OR (state IN ('active', 'suspended') AND joined_at IS NOT NULL AND left_at IS NULL)
+          OR (state = 'left' AND joined_at IS NOT NULL AND left_at IS NOT NULL AND left_at >= joined_at)`,
+    ),
+  ],
+);
+
+export const commerceOrganizationAddress = pgTable(
+  "commerce_organization_address",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    addressKind: commerceOrganizationAddressKindEnum("address_kind").notNull(),
+    label: text("label"),
+    countryCode: text("country_code").notNull(),
+    regionCode: text("region_code"),
+    locality: text("locality").notNull(),
+    postalCode: text("postal_code"),
+    recipientNameEncrypted: text("recipient_name_encrypted"),
+    addressLineOneEncrypted: text("address_line_one_encrypted").notNull(),
+    addressLineTwoEncrypted: text("address_line_two_encrypted"),
+    phoneEncrypted: text("phone_encrypted"),
+    isDefault: boolean("is_default").default(false).notNull(),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_organization_address_organizationId_idx").on(
+      table.organizationId,
+      table.addressKind,
+    ),
+    uniqueIndex("commerce_organization_address_default_uidx")
+      .on(table.organizationId, table.addressKind)
+      .where(sql`is_default = true`),
+    check("commerce_organization_address_country_ck", sql`country_code ~ '^[A-Z]{2}$'`),
+    check(
+      "commerce_organization_address_text_ck",
+      sql`(label IS NULL OR char_length(label) BETWEEN 1 AND 100)
+          AND char_length(locality) BETWEEN 1 AND 150
+          AND (region_code IS NULL OR char_length(region_code) BETWEEN 1 AND 100)
+          AND (postal_code IS NULL OR char_length(postal_code) BETWEEN 1 AND 32)`,
+    ),
+  ],
+);
+
+/**
+ * Private object-storage metadata. The database stores the encrypted data-key
+ * envelope and nonce, never plaintext document bytes or a public URL.
+ */
+export const commerceEncryptedDocument = pgTable(
+  "commerce_encrypted_document",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    documentKind: commerceDocumentKindEnum("document_kind").notNull(),
+    state: commerceDocumentStateEnum("state").default("pending_scan").notNull(),
+    storageProvider: text("storage_provider").notNull(),
+    objectStorageKey: text("object_storage_key").notNull(),
+    mediaType: text("media_type").notNull(),
+    fileByteSize: bigint("file_byte_size", { mode: "number" }).notNull(),
+    contentSha256: text("content_sha256").notNull(),
+    encryptionAlgorithm: text("encryption_algorithm").notNull(),
+    encryptionKeyVersion: integer("encryption_key_version").notNull(),
+    encryptedDataKey: text("encrypted_data_key").notNull(),
+    initializationVector: text("initialization_vector").notNull(),
+    originalFileNameEncrypted: text("original_file_name_encrypted"),
+    uploadedByUserId: text("uploaded_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_encrypted_document_objectStorageKey_uidx").on(table.objectStorageKey),
+    index("commerce_encrypted_document_organizationId_idx").on(
+      table.organizationId,
+      table.documentKind,
+      table.createdAt,
+    ),
+    check("commerce_encrypted_document_size_ck", sql`file_byte_size > 0`),
+    check("commerce_encrypted_document_sha_ck", sql`content_sha256 ~ '^[0-9a-f]{64}$'`),
+    check(
+      "commerce_encrypted_document_encryption_ck",
+      sql`char_length(encryption_algorithm) BETWEEN 1 AND 50
+          AND encryption_key_version >= 1
+          AND char_length(encrypted_data_key) >= 16
+          AND char_length(initialization_vector) >= 12`,
+    ),
+  ],
+);
+
+export const commerceOrganizationVerification = pgTable(
+  "commerce_organization_verification",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    verificationKind: commerceVerificationKindEnum("verification_kind").notNull(),
+    state: commerceVerificationStateEnum("state").default("pending").notNull(),
+    evidenceDocumentId: text("evidence_document_id")
+      .notNull()
+      .references(() => commerceEncryptedDocument.id, { onDelete: "restrict" }),
+    submittedByUserId: text("submitted_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    decisionReason: text("decision_reason"),
+    submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+    decidedAt: timestamp("decided_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_organization_verification_organizationId_idx").on(
+      table.organizationId,
+      table.verificationKind,
+      table.state,
+    ),
+    uniqueIndex("commerce_organization_verification_pending_uidx")
+      .on(table.organizationId, table.verificationKind)
+      .where(sql`state = 'pending'`),
+    check(
+      "commerce_organization_verification_decision_ck",
+      sql`(state = 'pending' AND reviewed_by_user_id IS NULL AND decision_reason IS NULL AND decided_at IS NULL)
+          OR (state = 'approved' AND reviewed_by_user_id IS NOT NULL AND decision_reason IS NULL AND decided_at IS NOT NULL)
+          OR (state IN ('rejected', 'superseded') AND reviewed_by_user_id IS NOT NULL
+              AND decision_reason IS NOT NULL AND char_length(decision_reason) BETWEEN 1 AND 2000
+              AND decided_at IS NOT NULL)`,
+    ),
+    check(
+      "commerce_organization_verification_reviewer_ck",
+      sql`reviewed_by_user_id IS NULL OR reviewed_by_user_id <> submitted_by_user_id`,
+    ),
+  ],
+);
+
+export const commerceCategory = pgTable(
+  "commerce_category",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    parentCategoryId: text("parent_category_id").references(
+      (): AnyPgColumn => commerceCategory.id,
+      { onDelete: "restrict" },
+    ),
+    siblingOrder: integer("sibling_order").notNull(),
+    state: commerceCategoryStateEnum("state").default("draft").notNull(),
+    imageUrl: text("image_url"),
+    searchSynonyms: text("search_synonyms").array().default([]).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_category_slug_uidx").on(table.slug),
+    uniqueIndex("commerce_category_siblingOrder_uidx").on(
+      sql`coalesce(parent_category_id, '__root__')`,
+      table.siblingOrder,
+    ),
+    index("commerce_category_parentCategoryId_idx").on(
+      table.parentCategoryId,
+      table.state,
+      table.siblingOrder,
+    ),
+    check(
+      "commerce_category_slug_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 2 AND 100`,
+    ),
+    check(
+      "commerce_category_shape_ck",
+      sql`char_length(name) BETWEEN 1 AND 120
+          AND sibling_order >= 0
+          AND (image_url IS NULL OR (char_length(image_url) <= 2048 AND image_url LIKE 'https://%'))
+          AND parent_category_id IS DISTINCT FROM id`,
+    ),
+  ],
+);
+
+/**
+ * Immutable organization-scoped security history. A migration-installed trigger
+ * rejects UPDATE, DELETE and TRUNCATE; payloadJson contains a redacted canonical
+ * snapshot and must never contain ciphertext or object-storage keys.
+ */
+export const commerceOrganizationAuditEntry = pgTable(
+  "commerce_organization_audit_entry",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    eventKind: commerceOrganizationAuditEventKindEnum("event_kind").notNull(),
+    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "restrict" }),
+    actorMemberRoleSnapshot: commerceOrganizationMemberRoleEnum("actor_member_role_snapshot"),
+    targetEntityType: text("target_entity_type").notNull(),
+    targetEntityId: text("target_entity_id").notNull(),
+    payloadJson: text("payload_json").default("{}").notNull(),
+    occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_organization_audit_entry_timeline_idx").on(
+      table.organizationId,
+      table.occurredAt,
+      table.id,
+    ),
+    index("commerce_organization_audit_entry_actorUserId_idx")
+      .on(table.actorUserId, table.occurredAt)
+      .where(sql`actor_user_id IS NOT NULL`),
+    check(
+      "commerce_organization_audit_entry_target_ck",
+      sql`char_length(target_entity_type) BETWEEN 1 AND 80
+          AND char_length(target_entity_id) BETWEEN 1 AND 200`,
+    ),
+    check(
+      "commerce_organization_audit_entry_payload_ck",
+      sql`char_length(payload_json) BETWEEN 2 AND 10000 AND payload_json LIKE '{%'`,
+    ),
+  ],
+);
+
+// A product listing, transitioning from user ownership to organization ownership.
 export const product = pgTable(
   "product",
   {
@@ -354,6 +816,15 @@ export const product = pgTable(
     sellerId: text("seller_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
+    // Nullable only for the expand phase. Migration 0040 backfills every row.
+    // Authorization must re-check an active seller membership, never trust a body value.
+    sellerOrganizationId: text("seller_organization_id").references(() => commerceOrganization.id, {
+      onDelete: "restrict",
+    }),
+    // Immutable creator attribution retained after legacy sellerId is retired.
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
     /**
      * THE R&D → STORE HANDOFF (R_AND_D_BACKEND_STRUCTURE.md §11i, Appendix B4).
      *
@@ -381,6 +852,10 @@ export const product = pgTable(
     title: text("title").notNull(),
     brand: text("brand"),
     category: productCategoryEnum("category").notNull(),
+    // Hierarchical category transition column. Legacy category remains for dual-write.
+    categoryId: text("category_id").references(() => commerceCategory.id, {
+      onDelete: "restrict",
+    }),
     condition: productConditionEnum("condition").default("new").notNull(),
     description: text("description"),
     // Money in integer cents. Server-authoritative; the client sends cents,
@@ -406,15 +881,23 @@ export const product = pgTable(
   },
   (table) => [
     index("product_sellerId_idx").on(table.sellerId),
+    index("product_sellerOrganizationId_idx").on(table.sellerOrganizationId),
+    index("product_createdByUserId_idx").on(table.createdByUserId),
+    index("product_categoryId_idx").on(table.categoryId),
     index("product_status_idx").on(table.status),
     // "What did this project launch?" — the launch-ready rail's lookup. Partial, because
     // the overwhelming majority of listings have no research project behind them.
     index("product_researchProjectId_idx")
       .on(table.researchProjectId)
       .where(sql`research_project_id IS NOT NULL`),
-    // A seller can't reuse one SKU across their own listings. Postgres UNIQUE
-    // permits many NULLs, so SKU stays optional.
+    // Keep the legacy user-scoped uniqueness throughout the expand/backfill rollout:
+    // an old application instance can still write seller_id while the new one writes
+    // seller_organization_id. The organization index becomes canonical only after every
+    // writer has moved and the contract migration retires seller_id.
     uniqueIndex("product_seller_sku_unq").on(table.sellerId, table.sku),
+    // An organization can't reuse one SKU across its listings. Postgres UNIQUE
+    // permits many NULLs, so SKU stays optional.
+    uniqueIndex("product_sellerOrganization_sku_unq").on(table.sellerOrganizationId, table.sku),
   ],
 );
 
@@ -462,9 +945,128 @@ export const productPricingTier = pgTable(
 
 export const productRelations = relations(product, ({ one, many }) => ({
   seller: one(user, { fields: [product.sellerId], references: [user.id] }),
+  sellerOrganization: one(commerceOrganization, {
+    fields: [product.sellerOrganizationId],
+    references: [commerceOrganization.id],
+  }),
+  createdByUser: one(user, {
+    fields: [product.createdByUserId],
+    references: [user.id],
+  }),
+  commerceCategory: one(commerceCategory, {
+    fields: [product.categoryId],
+    references: [commerceCategory.id],
+  }),
   images: many(productImage),
   pricingTiers: many(productPricingTier),
 }));
+
+export const commerceOrganizationRelations = relations(commerceOrganization, ({ one, many }) => ({
+  createdByUser: one(user, {
+    fields: [commerceOrganization.createdByUserId],
+    references: [user.id],
+  }),
+  members: many(commerceOrganizationMember),
+  addresses: many(commerceOrganizationAddress),
+  encryptedDocuments: many(commerceEncryptedDocument),
+  verifications: many(commerceOrganizationVerification),
+  auditEntries: many(commerceOrganizationAuditEntry),
+  products: many(product),
+  activeSessions: many(session),
+}));
+
+export const commerceOrganizationMemberRelations = relations(
+  commerceOrganizationMember,
+  ({ one }) => ({
+    organization: one(commerceOrganization, {
+      fields: [commerceOrganizationMember.organizationId],
+      references: [commerceOrganization.id],
+    }),
+    user: one(user, {
+      fields: [commerceOrganizationMember.userId],
+      references: [user.id],
+    }),
+    invitedByUser: one(user, {
+      fields: [commerceOrganizationMember.invitedByUserId],
+      references: [user.id],
+    }),
+  }),
+);
+
+export const commerceOrganizationAddressRelations = relations(
+  commerceOrganizationAddress,
+  ({ one }) => ({
+    organization: one(commerceOrganization, {
+      fields: [commerceOrganizationAddress.organizationId],
+      references: [commerceOrganization.id],
+    }),
+    createdByUser: one(user, {
+      fields: [commerceOrganizationAddress.createdByUserId],
+      references: [user.id],
+    }),
+  }),
+);
+
+export const commerceEncryptedDocumentRelations = relations(
+  commerceEncryptedDocument,
+  ({ one, many }) => ({
+    organization: one(commerceOrganization, {
+      fields: [commerceEncryptedDocument.organizationId],
+      references: [commerceOrganization.id],
+    }),
+    uploadedByUser: one(user, {
+      fields: [commerceEncryptedDocument.uploadedByUserId],
+      references: [user.id],
+    }),
+    verifications: many(commerceOrganizationVerification),
+  }),
+);
+
+export const commerceOrganizationVerificationRelations = relations(
+  commerceOrganizationVerification,
+  ({ one }) => ({
+    organization: one(commerceOrganization, {
+      fields: [commerceOrganizationVerification.organizationId],
+      references: [commerceOrganization.id],
+    }),
+    evidenceDocument: one(commerceEncryptedDocument, {
+      fields: [commerceOrganizationVerification.evidenceDocumentId],
+      references: [commerceEncryptedDocument.id],
+    }),
+    submittedByUser: one(user, {
+      fields: [commerceOrganizationVerification.submittedByUserId],
+      references: [user.id],
+    }),
+    reviewedByUser: one(user, {
+      fields: [commerceOrganizationVerification.reviewedByUserId],
+      references: [user.id],
+    }),
+  }),
+);
+
+export const commerceCategoryRelations = relations(commerceCategory, ({ one, many }) => ({
+  parentCategory: one(commerceCategory, {
+    fields: [commerceCategory.parentCategoryId],
+    references: [commerceCategory.id],
+    relationName: "commerceCategoryHierarchy",
+  }),
+  childCategories: many(commerceCategory, { relationName: "commerceCategoryHierarchy" }),
+  products: many(product),
+}));
+
+export const commerceOrganizationAuditEntryRelations = relations(
+  commerceOrganizationAuditEntry,
+  ({ one }) => ({
+    organization: one(commerceOrganization, {
+      fields: [commerceOrganizationAuditEntry.organizationId],
+      references: [commerceOrganization.id],
+    }),
+    actorUser: one(user, {
+      fields: [commerceOrganizationAuditEntry.actorUserId],
+      references: [user.id],
+    }),
+  }),
+);
 
 export const productImageRelations = relations(productImage, ({ one }) => ({
   product: one(product, { fields: [productImage.productId], references: [product.id] }),

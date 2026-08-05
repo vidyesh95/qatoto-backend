@@ -7,7 +7,7 @@ import type {
   UpdateProductInput,
 } from "#src/controllers/products.controller.js";
 import { db } from "#src/db/index.js";
-import { product, productImage, productPricingTier } from "#src/db/schema.js";
+import { commerceCategory, product, productImage, productPricingTier } from "#src/db/schema.js";
 import {
   deleteAllProductImages,
   deleteProductImage,
@@ -33,11 +33,25 @@ const PRODUCT_IMAGE_OUTPUT_MAX_DIMENSION_PX = 1600;
 export type ProductError =
   | { type: "NOT_FOUND"; productId: string }
   | { type: "SKU_TAKEN"; sku: string }
+  | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
+  | { type: "CATEGORY_NOT_ACTIVE_LEAF"; categoryId: string }
+  | { type: "CATEGORY_MISMATCH"; categoryId: string }
   | { type: "TOO_MANY_IMAGES"; limit: number }
   | { type: "INCOMPLETE_FOR_PUBLISH"; missing: readonly string[] }
   | { type: "IMAGE_ORDER_MISMATCH" }
   | ImageValidationError
   | CloudinaryError;
+
+type ProductUpdateOutcome =
+  | { readonly status: "updated" }
+  | { readonly status: "not_found" }
+  | { readonly status: "category_error"; readonly error: ProductError };
+
+type ProductPublishOutcome =
+  | { readonly status: "published" }
+  | { readonly status: "not_found" }
+  | { readonly status: "category_error"; readonly error: ProductError }
+  | { readonly status: "incomplete"; readonly missing: readonly string[] };
 
 /** One image of a listing, as read back to the client. */
 export interface ProductImageView {
@@ -63,6 +77,7 @@ export interface PublicProduct {
   readonly title: string;
   readonly brand: string | null;
   readonly category: string;
+  readonly categoryId: string;
   readonly condition: "new" | "refurbished" | "used";
   readonly description: string | null;
   readonly priceInCents: number;
@@ -103,6 +118,7 @@ const PRODUCT_SCALAR_COLUMNS = {
   title: product.title,
   brand: product.brand,
   category: product.category,
+  categoryId: product.categoryId,
   condition: product.condition,
   description: product.description,
   priceInCents: product.priceInCents,
@@ -129,6 +145,7 @@ const PRICING_TIER_VIEW_COLUMNS = {
 } as const;
 
 type ProductScalarRow = typeof product.$inferSelect;
+type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * A Postgres unique-constraint violation (SQLSTATE 23505). The UNIQUE(sellerId,
@@ -152,6 +169,7 @@ function toPublicProduct(
     | "title"
     | "brand"
     | "category"
+    | "categoryId"
     | "condition"
     | "description"
     | "priceInCents"
@@ -166,11 +184,15 @@ function toPublicProduct(
   images: readonly ProductImageView[],
   pricingTiers: readonly PricingTierView[],
 ): PublicProduct {
+  if (row.categoryId === null) {
+    throw new Error(`Product ${row.id} is missing its canonical commerce category.`);
+  }
   return {
     id: row.id,
     title: row.title,
     brand: row.brand,
     category: row.category,
+    categoryId: row.categoryId,
     condition: row.condition,
     description: row.description,
     priceInCents: row.priceInCents,
@@ -191,14 +213,14 @@ function toPublicProduct(
  * enforced IN the query (`sellerId = caller`) — an empty result means either the
  * row is missing or belongs to someone else; the caller can't tell which.
  */
-async function loadOwnedProduct(
-  sellerId: string,
+async function loadOrganizationProduct(
+  sellerOrganizationId: string,
   productId: string,
 ): Promise<PublicProduct | null> {
   const [row] = await db
     .select(PRODUCT_SCALAR_COLUMNS)
     .from(product)
-    .where(and(eq(product.id, productId), eq(product.sellerId, sellerId)));
+    .where(and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)));
 
   if (!row) {
     return null;
@@ -220,12 +242,144 @@ async function loadOwnedProduct(
 }
 
 /** Confirm the caller owns this listing; returns the id or null. */
-async function findOwnedProductId(sellerId: string, productId: string): Promise<string | null> {
+async function findOrganizationProductId(
+  sellerOrganizationId: string,
+  productId: string,
+): Promise<string | null> {
   const [owned] = await db
     .select({ id: product.id })
     .from(product)
-    .where(and(eq(product.id, productId), eq(product.sellerId, sellerId)));
+    .where(and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)));
   return owned?.id ?? null;
+}
+
+type LegacyProductCategory = NonNullable<CreateProductInput["category"]>;
+
+function legacyCategoryId(category: LegacyProductCategory): string {
+  switch (category) {
+    case "electronics":
+      return "commerce_category_electronics";
+    case "fashion":
+      return "commerce_category_fashion";
+    case "home_kitchen":
+      return "commerce_category_home_kitchen";
+    case "anime_collectibles":
+      return "commerce_category_anime_collectibles";
+    case "digital_goods":
+      return "commerce_category_digital_goods";
+    case "books_media":
+      return "commerce_category_books_media";
+    case "sports_outdoors":
+      return "commerce_category_sports_outdoors";
+    case "beauty_personal_care":
+      return "commerce_category_beauty_personal_care";
+    default: {
+      const exhaustiveCategory: never = category;
+      void exhaustiveCategory;
+      throw new Error("Unhandled legacy product category.");
+    }
+  }
+}
+
+function legacyCategoryForRootId(rootCategoryId: string): LegacyProductCategory | null {
+  switch (rootCategoryId) {
+    case "commerce_category_electronics":
+      return "electronics";
+    case "commerce_category_fashion":
+      return "fashion";
+    case "commerce_category_home_kitchen":
+      return "home_kitchen";
+    case "commerce_category_anime_collectibles":
+      return "anime_collectibles";
+    case "commerce_category_digital_goods":
+      return "digital_goods";
+    case "commerce_category_books_media":
+      return "books_media";
+    case "commerce_category_sports_outdoors":
+      return "sports_outdoors";
+    case "commerce_category_beauty_personal_care":
+      return "beauty_personal_care";
+    default:
+      return null;
+  }
+}
+
+async function resolveProductCategory(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly category?: LegacyProductCategory;
+    readonly categoryId?: string;
+  },
+): Promise<
+  Result<{ readonly categoryId: string; readonly category: LegacyProductCategory }, ProductError>
+> {
+  const requestedCategoryId =
+    input.categoryId ?? (input.category === undefined ? null : legacyCategoryId(input.category));
+  if (requestedCategoryId === null) {
+    throw new Error("Create/update category resolution requires category or categoryId.");
+  }
+
+  const [selectedCategory] = await transaction
+    .select({
+      id: commerceCategory.id,
+      parentCategoryId: commerceCategory.parentCategoryId,
+      state: commerceCategory.state,
+    })
+    .from(commerceCategory)
+    .where(eq(commerceCategory.id, requestedCategoryId))
+    .for("share");
+  if (!selectedCategory) {
+    return {
+      success: false,
+      error: { type: "CATEGORY_NOT_FOUND", categoryId: requestedCategoryId },
+    };
+  }
+
+  const [childCategory] = await transaction
+    .select({ id: commerceCategory.id })
+    .from(commerceCategory)
+    .where(eq(commerceCategory.parentCategoryId, requestedCategoryId))
+    .for("share");
+  if (selectedCategory.state !== "active" || childCategory) {
+    return {
+      success: false,
+      error: { type: "CATEGORY_NOT_ACTIVE_LEAF", categoryId: requestedCategoryId },
+    };
+  }
+
+  let rootCategoryId = selectedCategory.id;
+  let parentCategoryId = selectedCategory.parentCategoryId;
+  while (parentCategoryId !== null) {
+    const [parentCategory] = await transaction
+      .select({ id: commerceCategory.id, parentCategoryId: commerceCategory.parentCategoryId })
+      .from(commerceCategory)
+      .where(eq(commerceCategory.id, parentCategoryId))
+      .for("share");
+    if (!parentCategory) {
+      return {
+        success: false,
+        error: { type: "CATEGORY_NOT_FOUND", categoryId: parentCategoryId },
+      };
+    }
+    rootCategoryId = parentCategory.id;
+    parentCategoryId = parentCategory.parentCategoryId;
+  }
+
+  const resolvedLegacyCategory = legacyCategoryForRootId(rootCategoryId);
+  if (
+    resolvedLegacyCategory === null ||
+    (input.category !== undefined && input.category !== resolvedLegacyCategory)
+  ) {
+    return {
+      success: false,
+      error: { type: "CATEGORY_MISMATCH", categoryId: requestedCategoryId },
+    };
+  }
+
+  return {
+    success: true,
+    value: { categoryId: requestedCategoryId, category: resolvedLegacyCategory },
+  };
 }
 
 /**
@@ -234,48 +388,54 @@ async function findOwnedProductId(sellerId: string, productId: string): Promise<
  * the body. The product row and its tiers are inserted in one transaction.
  */
 export async function createProduct(
-  sellerId: string,
+  commerceContext: { readonly userId: string; readonly organizationId: string },
   input: CreateProductInput,
 ): Promise<Result<PublicProduct, ProductError>> {
   try {
-    const created = await db.transaction(async (tx) => {
-      const [row] = await tx
-        .insert(product)
-        .values({
-          sellerId,
-          title: input.title,
-          brand: input.brand ?? null,
-          category: input.category,
-          condition: input.condition,
-          description: input.description ?? null,
-          priceInCents: input.priceInCents,
-          compareAtPriceInCents: input.compareAtPriceInCents ?? null,
-          stockQuantity: input.stockQuantity,
-          sku: input.sku ?? null,
-          keyFeatures: input.keyFeatures,
-          // status ("draft") and currency ("USD") fall to their column defaults.
-        })
-        .returning(PRODUCT_SCALAR_COLUMNS);
+    return await db.transaction(
+      async (tx) => {
+        const categoryResult = await resolveProductCategory(tx, input);
+        if (!categoryResult.success) return categoryResult;
+        const [row] = await tx
+          .insert(product)
+          .values({
+            sellerId: commerceContext.userId,
+            sellerOrganizationId: commerceContext.organizationId,
+            createdByUserId: commerceContext.userId,
+            title: input.title,
+            brand: input.brand ?? null,
+            category: categoryResult.value.category,
+            categoryId: categoryResult.value.categoryId,
+            condition: input.condition,
+            description: input.description ?? null,
+            priceInCents: input.priceInCents,
+            compareAtPriceInCents: input.compareAtPriceInCents ?? null,
+            stockQuantity: input.stockQuantity,
+            sku: input.sku ?? null,
+            keyFeatures: input.keyFeatures,
+            // status ("draft") and currency ("USD") fall to their column defaults.
+          })
+          .returning(PRODUCT_SCALAR_COLUMNS);
 
-      const pricingTiers =
-        input.pricingTiers.length > 0
-          ? await tx
-              .insert(productPricingTier)
-              .values(
-                input.pricingTiers.map((tier, index) => ({
-                  productId: row.id,
-                  unitPriceInCents: tier.unitPriceInCents,
-                  minimumOrderQuantity: tier.minimumOrderQuantity,
-                  position: index,
-                })),
-              )
-              .returning(PRICING_TIER_VIEW_COLUMNS)
-          : [];
+        const pricingTiers =
+          input.pricingTiers.length > 0
+            ? await tx
+                .insert(productPricingTier)
+                .values(
+                  input.pricingTiers.map((tier, index) => ({
+                    productId: row.id,
+                    unitPriceInCents: tier.unitPriceInCents,
+                    minimumOrderQuantity: tier.minimumOrderQuantity,
+                    position: index,
+                  })),
+                )
+                .returning(PRICING_TIER_VIEW_COLUMNS)
+            : [];
 
-      return toPublicProduct(row, [], pricingTiers);
-    });
-
-    return { success: true, value: created };
+        return { success: true, value: toPublicProduct(row, [], pricingTiers) };
+      },
+      { isolationLevel: "serializable" },
+    );
   } catch (error) {
     if (isUniqueViolation(error)) {
       return { success: false, error: { type: "SKU_TAKEN", sku: input.sku ?? "" } };
@@ -289,7 +449,7 @@ export async function createProduct(
  * succeeds. `sellerId` from the session, so a caller only ever lists their own.
  */
 export async function listMyProducts(
-  sellerId: string,
+  sellerOrganizationId: string,
   page: number,
   limit: number,
 ): Promise<ProductPage> {
@@ -305,7 +465,7 @@ export async function listMyProducts(
       status: product.status,
     })
     .from(product)
-    .where(eq(product.sellerId, sellerId))
+    .where(eq(product.sellerOrganizationId, sellerOrganizationId))
     .orderBy(desc(product.updatedAt))
     .limit(limit)
     .offset(offset);
@@ -313,17 +473,17 @@ export async function listMyProducts(
   const [totals] = await db
     .select({ value: count() })
     .from(product)
-    .where(eq(product.sellerId, sellerId));
+    .where(eq(product.sellerOrganizationId, sellerOrganizationId));
 
   return { rows, total: totals?.value ?? 0 };
 }
 
 /** Full listing for the edit/detail flow. Owner only → NOT_FOUND otherwise. */
 export async function getProduct(
-  sellerId: string,
+  sellerOrganizationId: string,
   productId: string,
 ): Promise<Result<PublicProduct, ProductError>> {
-  const owned = await loadOwnedProduct(sellerId, productId);
+  const owned = await loadOrganizationProduct(sellerOrganizationId, productId);
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -336,14 +496,13 @@ export async function getProduct(
  * one transaction so the row and its tiers stay consistent.
  */
 export async function updateProduct(
-  sellerId: string,
+  sellerOrganizationId: string,
   productId: string,
   patch: UpdateProductInput,
 ): Promise<Result<PublicProduct, ProductError>> {
   const scalarUpdates: Partial<typeof product.$inferInsert> = {};
   if (patch.title !== undefined) scalarUpdates.title = patch.title;
   if (patch.brand !== undefined) scalarUpdates.brand = patch.brand;
-  if (patch.category !== undefined) scalarUpdates.category = patch.category;
   if (patch.condition !== undefined) scalarUpdates.condition = patch.condition;
   if (patch.description !== undefined) scalarUpdates.description = patch.description;
   if (patch.priceInCents !== undefined) scalarUpdates.priceInCents = patch.priceInCents;
@@ -353,45 +512,71 @@ export async function updateProduct(
   if (patch.sku !== undefined) scalarUpdates.sku = patch.sku;
   if (patch.keyFeatures !== undefined) scalarUpdates.keyFeatures = patch.keyFeatures;
 
-  const hasScalarUpdates = Object.keys(scalarUpdates).length > 0;
-
   try {
-    const notFound = await db.transaction(async (tx) => {
-      const [owned] = await tx
-        .select({ id: product.id })
-        .from(product)
-        .where(and(eq(product.id, productId), eq(product.sellerId, sellerId)));
-
-      if (!owned) {
-        return true;
-      }
-
-      if (hasScalarUpdates) {
-        await tx
-          .update(product)
-          .set(scalarUpdates)
-          .where(and(eq(product.id, productId), eq(product.sellerId, sellerId)));
-      }
-
-      if (patch.pricingTiers !== undefined) {
-        await tx.delete(productPricingTier).where(eq(productPricingTier.productId, productId));
-        if (patch.pricingTiers.length > 0) {
-          await tx.insert(productPricingTier).values(
-            patch.pricingTiers.map((tier, index) => ({
-              productId,
-              unitPriceInCents: tier.unitPriceInCents,
-              minimumOrderQuantity: tier.minimumOrderQuantity,
-              position: index,
-            })),
+    const outcome = await db.transaction(
+      async (tx): Promise<ProductUpdateOutcome> => {
+        const [owned] = await tx
+          .select({ id: product.id })
+          .from(product)
+          .where(
+            and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
           );
+
+        if (!owned) {
+          return { status: "not_found" };
         }
+
+        if (patch.category !== undefined || patch.categoryId !== undefined) {
+          const categoryResult = await resolveProductCategory(tx, patch);
+          if (!categoryResult.success) {
+            return { status: "category_error", error: categoryResult.error };
+          }
+          scalarUpdates.category = categoryResult.value.category;
+          scalarUpdates.categoryId = categoryResult.value.categoryId;
+        }
+
+        if (Object.keys(scalarUpdates).length > 0) {
+          await tx
+            .update(product)
+            .set(scalarUpdates)
+            .where(
+              and(
+                eq(product.id, productId),
+                eq(product.sellerOrganizationId, sellerOrganizationId),
+              ),
+            );
+        }
+
+        if (patch.pricingTiers !== undefined) {
+          await tx.delete(productPricingTier).where(eq(productPricingTier.productId, productId));
+          if (patch.pricingTiers.length > 0) {
+            await tx.insert(productPricingTier).values(
+              patch.pricingTiers.map((tier, index) => ({
+                productId,
+                unitPriceInCents: tier.unitPriceInCents,
+                minimumOrderQuantity: tier.minimumOrderQuantity,
+                position: index,
+              })),
+            );
+          }
+        }
+
+        return { status: "updated" };
+      },
+      { isolationLevel: "serializable" },
+    );
+
+    switch (outcome.status) {
+      case "updated":
+        break;
+      case "not_found":
+        return { success: false, error: { type: "NOT_FOUND", productId } };
+      case "category_error":
+        return { success: false, error: outcome.error };
+      default: {
+        const exhaustiveOutcome: never = outcome;
+        throw new Error(`Unhandled product update outcome: ${JSON.stringify(exhaustiveOutcome)}`);
       }
-
-      return false;
-    });
-
-    if (notFound) {
-      return { success: false, error: { type: "NOT_FOUND", productId } };
     }
   } catch (error) {
     if (isUniqueViolation(error)) {
@@ -400,7 +585,7 @@ export async function updateProduct(
     throw error;
   }
 
-  const owned = await loadOwnedProduct(sellerId, productId);
+  const owned = await loadOrganizationProduct(sellerOrganizationId, productId);
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -414,11 +599,11 @@ export async function updateProduct(
  * targets the exact asset.
  */
 export async function addProductImage(
-  sellerId: string,
+  sellerOrganizationId: string,
   productId: string,
   rawImageBytes: Buffer,
 ): Promise<Result<ProductImageView, ProductError>> {
-  const ownedId = await findOwnedProductId(sellerId, productId);
+  const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
   if (!ownedId) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -466,11 +651,11 @@ export async function addProductImage(
  * listing so the client can re-render the gallery order.
  */
 export async function deleteProductImageById(
-  sellerId: string,
+  sellerOrganizationId: string,
   productId: string,
   imageId: string,
 ): Promise<Result<PublicProduct, ProductError>> {
-  const ownedId = await findOwnedProductId(sellerId, productId);
+  const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
   if (!ownedId) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -507,7 +692,7 @@ export async function deleteProductImageById(
     }
   });
 
-  const owned = await loadOwnedProduct(sellerId, productId);
+  const owned = await loadOrganizationProduct(sellerOrganizationId, productId);
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -520,11 +705,11 @@ export async function deleteProductImageById(
  * IMAGE_ORDER_MISMATCH (the client is out of sync).
  */
 export async function reorderImages(
-  sellerId: string,
+  sellerOrganizationId: string,
   productId: string,
   imageIds: readonly string[],
 ): Promise<Result<PublicProduct, ProductError>> {
-  const ownedId = await findOwnedProductId(sellerId, productId);
+  const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
   if (!ownedId) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -554,7 +739,7 @@ export async function reorderImages(
     }
   });
 
-  const owned = await loadOwnedProduct(sellerId, productId);
+  const owned = await loadOrganizationProduct(sellerOrganizationId, productId);
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -567,42 +752,78 @@ export async function reorderImages(
  * click is a request, not an authorization. Sets status active + publishedAt.
  */
 export async function publishProduct(
-  sellerId: string,
+  sellerOrganizationId: string,
   productId: string,
 ): Promise<Result<PublicProduct, ProductError>> {
-  const [row] = await db
-    .select({
-      id: product.id,
-      title: product.title,
-      priceInCents: product.priceInCents,
-    })
-    .from(product)
-    .where(and(eq(product.id, productId), eq(product.sellerId, sellerId)));
+  const outcome = await db.transaction(
+    async (transaction): Promise<ProductPublishOutcome> => {
+      const [row] = await transaction
+        .select({
+          id: product.id,
+          title: product.title,
+          priceInCents: product.priceInCents,
+          categoryId: product.categoryId,
+        })
+        .from(product)
+        .where(
+          and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
+        )
+        .for("update");
+      if (!row) return { status: "not_found" };
+      if (row.categoryId === null) {
+        return {
+          status: "category_error",
+          error: { type: "CATEGORY_NOT_FOUND", categoryId: "" },
+        };
+      }
 
-  if (!row) {
-    return { success: false, error: { type: "NOT_FOUND", productId } };
+      const categoryResult = await resolveProductCategory(transaction, {
+        categoryId: row.categoryId,
+      });
+      if (!categoryResult.success) {
+        return { status: "category_error", error: categoryResult.error };
+      }
+
+      const [imageCount] = await transaction
+        .select({ value: count() })
+        .from(productImage)
+        .where(eq(productImage.productId, productId));
+      const missing: string[] = [];
+      if (row.title.trim().length === 0) missing.push("title");
+      if (row.priceInCents <= 0) missing.push("price");
+      if ((imageCount?.value ?? 0) < 1) missing.push("images");
+      if (missing.length > 0) return { status: "incomplete", missing };
+
+      await transaction
+        .update(product)
+        .set({ status: "active", publishedAt: new Date() })
+        .where(
+          and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
+        );
+      return { status: "published" };
+    },
+    { isolationLevel: "serializable" },
+  );
+
+  switch (outcome.status) {
+    case "published":
+      break;
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND", productId } };
+    case "category_error":
+      return { success: false, error: outcome.error };
+    case "incomplete":
+      return {
+        success: false,
+        error: { type: "INCOMPLETE_FOR_PUBLISH", missing: outcome.missing },
+      };
+    default: {
+      const exhaustiveOutcome: never = outcome;
+      throw new Error(`Unhandled product publish outcome: ${JSON.stringify(exhaustiveOutcome)}`);
+    }
   }
 
-  const [imageCount] = await db
-    .select({ value: count() })
-    .from(productImage)
-    .where(eq(productImage.productId, productId));
-
-  const missing: string[] = [];
-  if (row.title.trim().length === 0) missing.push("title");
-  if (row.priceInCents <= 0) missing.push("price");
-  if ((imageCount?.value ?? 0) < 1) missing.push("images");
-
-  if (missing.length > 0) {
-    return { success: false, error: { type: "INCOMPLETE_FOR_PUBLISH", missing } };
-  }
-
-  await db
-    .update(product)
-    .set({ status: "active", publishedAt: new Date() })
-    .where(and(eq(product.id, productId), eq(product.sellerId, sellerId)));
-
-  const owned = await loadOwnedProduct(sellerId, productId);
+  const owned = await loadOrganizationProduct(sellerOrganizationId, productId);
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -611,20 +832,20 @@ export async function publishProduct(
 
 /** Take an active listing back to draft. Leaves publishedAt as-is. */
 export async function unpublishProduct(
-  sellerId: string,
+  sellerOrganizationId: string,
   productId: string,
 ): Promise<Result<PublicProduct, ProductError>> {
   const [updated] = await db
     .update(product)
     .set({ status: "draft" })
-    .where(and(eq(product.id, productId), eq(product.sellerId, sellerId)))
+    .where(and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)))
     .returning({ id: product.id });
 
   if (!updated) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
 
-  const owned = await loadOwnedProduct(sellerId, productId);
+  const owned = await loadOrganizationProduct(sellerOrganizationId, productId);
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -636,10 +857,10 @@ export async function unpublishProduct(
  * orphaned), then deletes the row — the FK cascade clears image and tier rows.
  */
 export async function deleteProduct(
-  sellerId: string,
+  sellerOrganizationId: string,
   productId: string,
 ): Promise<Result<{ id: string }, ProductError>> {
-  const ownedId = await findOwnedProductId(sellerId, productId);
+  const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
   if (!ownedId) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
@@ -649,7 +870,9 @@ export async function deleteProduct(
     return { success: false, error: assetRemoval.error };
   }
 
-  await db.delete(product).where(and(eq(product.id, productId), eq(product.sellerId, sellerId)));
+  await db
+    .delete(product)
+    .where(and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)));
 
   return { success: true, value: { id: productId } };
 }

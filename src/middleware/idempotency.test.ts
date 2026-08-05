@@ -1,4 +1,5 @@
 import express from "express";
+import multer from "multer";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -70,6 +71,28 @@ async function buildProbeApp(): Promise<express.Express> {
     handler();
     res.status(201).json({ status: "success", statusCode: 201, message: "created" });
   });
+  const upload = multer({ storage: multer.memoryStorage() });
+  app.post("/multipart-probe", upload.single("evidence"), idempotency({ required: true }), (_req, res) => {
+    handler();
+    res.status(201).json({ status: "success", statusCode: 201, message: "created" });
+  });
+  app.post(
+    "/commerce-probe",
+    (req, _res, next) => {
+      req.commerceOrganization = {
+        organizationId: "organization-1",
+        memberId: "member-1",
+        memberRole: "owner",
+        tradeState: "active",
+      };
+      next();
+    },
+    idempotency({ scope: "active_organization" }),
+    (_req, res) => {
+      handler();
+      res.status(201).json({ status: "success", statusCode: 201, message: "created" });
+    },
+  );
   return app;
 }
 
@@ -121,6 +144,25 @@ describe("idempotency middleware", () => {
     );
   });
 
+  it("derives an organization-specific key only from proven active context", async () => {
+    const app = await buildProbeApp();
+
+    await request(app)
+      .post("/commerce-probe")
+      .set("Idempotency-Key", "attempt-organization-1")
+      .send({ amountInCents: "100" });
+
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "user_1",
+        idempotencyKey: expect.stringMatching(/^org:[0-9a-f]{64}$/),
+      }),
+    );
+    expect(insertValues).not.toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: "attempt-organization-1" }),
+    );
+  });
+
   it("replays the original response and does not run the handler again", async () => {
     const app = await buildProbeApp();
 
@@ -166,6 +208,37 @@ describe("idempotency middleware", () => {
       .post("/probe")
       .set("Idempotency-Key", "attempt-0000003")
       .send({ amountInCents: "999999" });
+
+    expect(response.status).toBe(409);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("includes a persisted multipart filename in the request fingerprint", async () => {
+    const app = await buildProbeApp();
+    const evidenceBytes = Buffer.from("same evidence bytes");
+
+    await request(app)
+      .post("/multipart-probe")
+      .set("Idempotency-Key", "multipart-attempt-0001")
+      .attach("evidence", evidenceBytes, "registration-a.pdf");
+    const recorded: unknown = insertValues.mock.calls[0]?.[0];
+    const recordedFingerprint =
+      typeof recorded === "object" && recorded !== null && "requestFingerprint" in recorded
+        ? String(recorded.requestFingerprint)
+        : "";
+    expect(recordedFingerprint).toMatch(/^[0-9a-f]{64}$/);
+
+    vi.clearAllMocks();
+    selectRows.push({
+      requestFingerprint: recordedFingerprint,
+      responseStatus: 201,
+      responseBody: JSON.stringify({ status: "success", statusCode: 201, message: "original" }),
+    });
+
+    const response = await request(app)
+      .post("/multipart-probe")
+      .set("Idempotency-Key", "multipart-attempt-0001")
+      .attach("evidence", evidenceBytes, "registration-b.pdf");
 
     expect(response.status).toBe(409);
     expect(handler).not.toHaveBeenCalled();

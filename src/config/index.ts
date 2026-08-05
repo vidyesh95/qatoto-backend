@@ -19,9 +19,7 @@ const commaSeparatedList = z
   );
 
 // changed bellow - since we're using origin instead of full url, it will match any subdomain
-const originUrl = z
-  .url()
-  .transform((val) => new URL(val).origin);
+const originUrl = z.url().transform((val) => new URL(val).origin);
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(8000),
@@ -252,6 +250,14 @@ const envSchema = z.object({
   // §9.10 specifies a KMS-held key; src/lib/token-encryption.ts isolates the derivation
   // into one function so that swap is an edit rather than a migration.
   INTEGRATION_TOKEN_SECRET: z.string().min(32).optional(),
+  /**
+   * Root secret for versioned AES-256-GCM encryption of commerce PII.
+   *
+   * Optional so development and test environments still boot without production
+   * key material. Commerce encryption operations return `NOT_CONFIGURED` when it
+   * is absent; production readiness reports the missing capability.
+   */
+  COMMERCE_PII_ENCRYPTION_SECRET: z.string().min(32).optional(),
   // The GitHub App that grounds code artifacts. All three are required together, and
   // without them `POST …/integrations` answers 503 INTEGRATION_UNCONFIGURED and grounding
   // falls back to the evidence links §8 already stored.

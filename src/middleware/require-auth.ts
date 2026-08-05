@@ -29,5 +29,9 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     emailVerified: session.user.emailVerified,
     handle: session.user.handle ?? null,
   };
+  req.authSession = {
+    id: session.session.id,
+    activeOrganizationId: session.session.activeOrganizationId ?? null,
+  };
   next();
 }
