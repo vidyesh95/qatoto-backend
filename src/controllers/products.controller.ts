@@ -52,6 +52,17 @@ const productFieldShapes = {
   stockQuantity: z.number().int().min(0),
   sku: z.string().trim().max(64).optional(),
   pricingTiers: z.array(PricingTierSchema).max(10),
+  modelNumber: z.string().trim().min(1).max(120).optional(),
+  countryOfOriginCode: z
+    .string()
+    .trim()
+    .regex(/^[A-Z]{2}$/)
+    .optional(),
+  unitOfMeasure: z.string().trim().min(1).max(40).optional(),
+  samplePolicy: z.enum(["unavailable", "paid", "refundable"]).optional(),
+  samplePriceInCents: z.number().int().positive().optional(),
+  leadTimeMinDays: z.number().int().min(0).max(3650).optional(),
+  leadTimeMaxDays: z.number().int().min(0).max(3650).optional(),
 };
 
 /**
@@ -93,10 +104,45 @@ const compareAtRefinement = {
 
 // Exported so the defaults-vs-partial regression is testable without a request; the
 // discovery controllers export their schemas the same way.
+function samplePolicyHasPrice(data: {
+  samplePolicy?: "unavailable" | "paid" | "refundable";
+  samplePriceInCents?: number;
+}): boolean {
+  if (data.samplePolicy === "paid" || data.samplePolicy === "refundable") {
+    return data.samplePriceInCents !== undefined;
+  }
+  if (data.samplePolicy === "unavailable") {
+    return data.samplePriceInCents === undefined;
+  }
+  return true;
+}
+
+function leadTimeRangeValid(data: {
+  leadTimeMinDays?: number;
+  leadTimeMaxDays?: number;
+}): boolean {
+  if (data.leadTimeMinDays === undefined && data.leadTimeMaxDays === undefined) {
+    return true;
+  }
+  if (data.leadTimeMinDays === undefined || data.leadTimeMaxDays === undefined) {
+    return false;
+  }
+  return data.leadTimeMaxDays >= data.leadTimeMinDays;
+}
+
 export const CreateProductSchema = ProductFieldsSchema.refine(
   (productInput) => productInput.category !== undefined || productInput.categoryId !== undefined,
   { error: "Either categoryId or category is required.", path: ["categoryId"] },
-).refine(compareAtPriceExceedsPrice, compareAtRefinement);
+)
+  .refine(compareAtPriceExceedsPrice, compareAtRefinement)
+  .refine(samplePolicyHasPrice, {
+    error: "Paid or refundable samples require samplePriceInCents.",
+    path: ["samplePriceInCents"],
+  })
+  .refine(leadTimeRangeValid, {
+    error: "leadTimeMaxDays must be >= leadTimeMinDays when either is set.",
+    path: ["leadTimeMaxDays"],
+  });
 
 /**
  * Every field optional and NONE defaulted — a PATCH may touch any subset, and a key the
@@ -110,7 +156,15 @@ export const UpdateProductSchema = z
   .object(productFieldShapes)
   .partial()
   .strict()
-  .refine(compareAtPriceExceedsPrice, compareAtRefinement);
+  .refine(compareAtPriceExceedsPrice, compareAtRefinement)
+  .refine(samplePolicyHasPrice, {
+    error: "Paid or refundable samples require samplePriceInCents.",
+    path: ["samplePriceInCents"],
+  })
+  .refine(leadTimeRangeValid, {
+    error: "leadTimeMaxDays must be >= leadTimeMinDays when either is set.",
+    path: ["leadTimeMaxDays"],
+  });
 
 const ReorderImagesSchema = z.object({ imageIds: z.array(z.string()).min(1) }).strict();
 const ProductParamsSchema = z.object({ id: z.string().trim().min(1).max(200) }).strict();

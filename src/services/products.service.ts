@@ -16,6 +16,8 @@ import {
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
+import { slugifyPublicTitle } from "#src/lib/store-cursor.js";
+import { refreshProductSearchDocument } from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 
 /** Max images per listing (the wizard's MAX_PRODUCT_IMAGES). Enforced here, not the DB. */
@@ -88,6 +90,15 @@ export interface PublicProduct {
   readonly keyFeatures: readonly string[];
   readonly status: "draft" | "active";
   readonly publishedAt: Date | null;
+  readonly publicSlug: string | null;
+  readonly modelNumber: string | null;
+  readonly countryOfOriginCode: string | null;
+  readonly unitOfMeasure: string | null;
+  readonly samplePolicy: "unavailable" | "paid" | "refundable";
+  readonly samplePriceInCents: number | null;
+  readonly leadTimeMinDays: number | null;
+  readonly leadTimeMaxDays: number | null;
+  readonly moderationState: "pending" | "approved" | "rejected" | "suspended";
   readonly images: readonly ProductImageView[];
   readonly pricingTiers: readonly PricingTierView[];
 }
@@ -129,6 +140,15 @@ const PRODUCT_SCALAR_COLUMNS = {
   keyFeatures: product.keyFeatures,
   status: product.status,
   publishedAt: product.publishedAt,
+  publicSlug: product.publicSlug,
+  modelNumber: product.modelNumber,
+  countryOfOriginCode: product.countryOfOriginCode,
+  unitOfMeasure: product.unitOfMeasure,
+  samplePolicy: product.samplePolicy,
+  samplePriceInCents: product.samplePriceInCents,
+  leadTimeMinDays: product.leadTimeMinDays,
+  leadTimeMaxDays: product.leadTimeMaxDays,
+  moderationState: product.moderationState,
 } as const;
 
 const PRODUCT_IMAGE_VIEW_COLUMNS = {
@@ -144,7 +164,9 @@ const PRICING_TIER_VIEW_COLUMNS = {
   position: productPricingTier.position,
 } as const;
 
-type ProductScalarRow = typeof product.$inferSelect;
+type ProductScalarRow = {
+  readonly [ColumnKey in keyof typeof PRODUCT_SCALAR_COLUMNS]: (typeof product.$inferSelect)[ColumnKey];
+};
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
@@ -163,24 +185,7 @@ const isUniqueViolation = isUniqueConstraintViolation;
 
 /** Assemble the read-back shape from an already-loaded scalar row + its children. */
 function toPublicProduct(
-  row: Pick<
-    ProductScalarRow,
-    | "id"
-    | "title"
-    | "brand"
-    | "category"
-    | "categoryId"
-    | "condition"
-    | "description"
-    | "priceInCents"
-    | "compareAtPriceInCents"
-    | "currency"
-    | "stockQuantity"
-    | "sku"
-    | "keyFeatures"
-    | "status"
-    | "publishedAt"
-  >,
+  row: ProductScalarRow,
   images: readonly ProductImageView[],
   pricingTiers: readonly PricingTierView[],
 ): PublicProduct {
@@ -203,6 +208,15 @@ function toPublicProduct(
     keyFeatures: row.keyFeatures,
     status: row.status,
     publishedAt: row.publishedAt,
+    publicSlug: row.publicSlug,
+    modelNumber: row.modelNumber,
+    countryOfOriginCode: row.countryOfOriginCode,
+    unitOfMeasure: row.unitOfMeasure,
+    samplePolicy: row.samplePolicy,
+    samplePriceInCents: row.samplePriceInCents,
+    leadTimeMinDays: row.leadTimeMinDays,
+    leadTimeMaxDays: row.leadTimeMaxDays,
+    moderationState: row.moderationState,
     images,
     pricingTiers,
   };
@@ -413,7 +427,14 @@ export async function createProduct(
             stockQuantity: input.stockQuantity,
             sku: input.sku ?? null,
             keyFeatures: input.keyFeatures,
-            // status ("draft") and currency ("USD") fall to their column defaults.
+            modelNumber: input.modelNumber ?? null,
+            countryOfOriginCode: input.countryOfOriginCode ?? null,
+            unitOfMeasure: input.unitOfMeasure ?? null,
+            samplePolicy: input.samplePolicy ?? "unavailable",
+            samplePriceInCents: input.samplePriceInCents ?? null,
+            leadTimeMinDays: input.leadTimeMinDays ?? null,
+            leadTimeMaxDays: input.leadTimeMaxDays ?? null,
+            // status ("draft"), moderationState ("pending"), and currency ("USD") use defaults.
           })
           .returning(PRODUCT_SCALAR_COLUMNS);
 
@@ -511,6 +532,15 @@ export async function updateProduct(
   if (patch.stockQuantity !== undefined) scalarUpdates.stockQuantity = patch.stockQuantity;
   if (patch.sku !== undefined) scalarUpdates.sku = patch.sku;
   if (patch.keyFeatures !== undefined) scalarUpdates.keyFeatures = patch.keyFeatures;
+  if (patch.modelNumber !== undefined) scalarUpdates.modelNumber = patch.modelNumber;
+  if (patch.countryOfOriginCode !== undefined)
+    scalarUpdates.countryOfOriginCode = patch.countryOfOriginCode;
+  if (patch.unitOfMeasure !== undefined) scalarUpdates.unitOfMeasure = patch.unitOfMeasure;
+  if (patch.samplePolicy !== undefined) scalarUpdates.samplePolicy = patch.samplePolicy;
+  if (patch.samplePriceInCents !== undefined)
+    scalarUpdates.samplePriceInCents = patch.samplePriceInCents;
+  if (patch.leadTimeMinDays !== undefined) scalarUpdates.leadTimeMinDays = patch.leadTimeMinDays;
+  if (patch.leadTimeMaxDays !== undefined) scalarUpdates.leadTimeMaxDays = patch.leadTimeMaxDays;
 
   try {
     const outcome = await db.transaction(
@@ -589,6 +619,7 @@ export async function updateProduct(
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
+  await refreshProductSearchDocument(productId);
   return { success: true, value: owned };
 }
 
@@ -763,6 +794,9 @@ export async function publishProduct(
           title: product.title,
           priceInCents: product.priceInCents,
           categoryId: product.categoryId,
+          publicSlug: product.publicSlug,
+          samplePolicy: product.samplePolicy,
+          samplePriceInCents: product.samplePriceInCents,
         })
         .from(product)
         .where(
@@ -792,11 +826,18 @@ export async function publishProduct(
       if (row.title.trim().length === 0) missing.push("title");
       if (row.priceInCents <= 0) missing.push("price");
       if ((imageCount?.value ?? 0) < 1) missing.push("images");
+      if (
+        (row.samplePolicy === "paid" || row.samplePolicy === "refundable") &&
+        (row.samplePriceInCents === null || row.samplePriceInCents <= 0)
+      ) {
+        missing.push("samplePriceInCents");
+      }
       if (missing.length > 0) return { status: "incomplete", missing };
 
+      const publicSlug = row.publicSlug ?? slugifyPublicTitle(row.title, row.id);
       await transaction
         .update(product)
-        .set({ status: "active", publishedAt: new Date() })
+        .set({ status: "active", publishedAt: new Date(), publicSlug })
         .where(
           and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
         );
@@ -827,6 +868,7 @@ export async function publishProduct(
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
+  await refreshProductSearchDocument(productId);
   return { success: true, value: owned };
 }
 
@@ -849,6 +891,7 @@ export async function unpublishProduct(
   if (!owned) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
+  await refreshProductSearchDocument(productId);
   return { success: true, value: owned };
 }
 

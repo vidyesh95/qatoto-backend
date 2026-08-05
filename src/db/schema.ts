@@ -458,6 +458,92 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
   ],
 );
 
+// Public catalog buyer-contract fields (STORE_BACKEND_STRUCTURE.md §4.4).
+export const productSamplePolicyEnum = pgEnum("product_sample_policy", [
+  "unavailable",
+  "paid",
+  "refundable",
+]);
+
+export const productModerationStateEnum = pgEnum("product_moderation_state", [
+  "pending",
+  "approved",
+  "rejected",
+  "suspended",
+]);
+
+export const storePresentationAccentEnum = pgEnum("store_presentation_accent", [
+  "amber",
+  "slate",
+  "emerald",
+  "sky",
+  "rose",
+]);
+
+export const storeMerchandisingStateEnum = pgEnum("store_merchandising_state", [
+  "draft",
+  "active",
+  "retired",
+]);
+
+export const storeMerchandisingEntityKindEnum = pgEnum("store_merchandising_entity_kind", [
+  "product",
+  "category",
+  "organization",
+  "provider_offering",
+]);
+
+export const storeRailStrategyEnum = pgEnum("store_rail_strategy", [
+  "curated",
+  "newest",
+  "trending_placeholder",
+]);
+
+export const storeSearchDocumentKindEnum = pgEnum("store_search_document_kind", [
+  "product",
+  "provider_offering",
+]);
+
+export const commerceProviderKindSlugEnum = pgEnum("commerce_provider_kind_slug", [
+  "freight_forwarder",
+  "logistics_operator",
+  "customs_broker",
+  "insurance_provider",
+  "inspection_agency",
+  "testing_certification_lab",
+  "marketing_agency",
+  "warehouse_provider",
+  "foreign_exchange_facilitator",
+]);
+
+export const commerceProviderVerificationStateEnum = pgEnum(
+  "commerce_provider_verification_state",
+  ["unverified", "documents_pending", "verified", "rejected", "suspended"],
+);
+
+export const commerceServiceOfferingStateEnum = pgEnum("commerce_service_offering_state", [
+  "draft",
+  "pending_review",
+  "active",
+  "suspended",
+  "retired",
+]);
+
+export const commerceServicePricingModelEnum = pgEnum("commerce_service_pricing_model", [
+  "quote_only",
+  "fixed_fee",
+  "per_unit",
+  "subscription",
+]);
+
+export const freightTransportModeEnum = pgEnum("freight_transport_mode", [
+  "air",
+  "sea",
+  "land",
+  "rail",
+  "multimodal",
+]);
+
 /**
  * A legal commerce identity. Registration and tax identifiers are ciphertext
  * envelopes, never searchable or public fields. `normalizedLegalName` exists only
@@ -873,6 +959,16 @@ export const product = pgTable(
     status: productStatusEnum("status").default("draft").notNull(),
     // NULL until first published; set on the draft→active transition.
     publishedAt: timestamp("published_at"),
+    // Immutable public URL identity after first assignment (STORE §4.4 / §4 intro).
+    publicSlug: text("public_slug"),
+    modelNumber: text("model_number"),
+    countryOfOriginCode: text("country_of_origin_code"),
+    unitOfMeasure: text("unit_of_measure"),
+    samplePolicy: productSamplePolicyEnum("sample_policy").default("unavailable").notNull(),
+    samplePriceInCents: integer("sample_price_in_cents"),
+    leadTimeMinDays: integer("lead_time_min_days"),
+    leadTimeMaxDays: integer("lead_time_max_days"),
+    moderationState: productModerationStateEnum("moderation_state").default("pending").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -885,6 +981,10 @@ export const product = pgTable(
     index("product_createdByUserId_idx").on(table.createdByUserId),
     index("product_categoryId_idx").on(table.categoryId),
     index("product_status_idx").on(table.status),
+    index("product_moderationState_idx").on(table.moderationState, table.id),
+    uniqueIndex("product_publicSlug_uidx")
+      .on(table.publicSlug)
+      .where(sql`public_slug IS NOT NULL`),
     // "What did this project launch?" — the launch-ready rail's lookup. Partial, because
     // the overwhelming majority of listings have no research project behind them.
     index("product_researchProjectId_idx")
@@ -898,6 +998,31 @@ export const product = pgTable(
     // An organization can't reuse one SKU across its listings. Postgres UNIQUE
     // permits many NULLs, so SKU stays optional.
     uniqueIndex("product_sellerOrganization_sku_unq").on(table.sellerOrganizationId, table.sku),
+    check(
+      "product_public_slug_ck",
+      sql`public_slug IS NULL OR (public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(public_slug) BETWEEN 3 AND 120)`,
+    ),
+    check(
+      "product_origin_ck",
+      sql`country_of_origin_code IS NULL OR country_of_origin_code ~ '^[A-Z]{2}$'`,
+    ),
+    check(
+      "product_sample_price_ck",
+      sql`(sample_price_in_cents IS NULL OR sample_price_in_cents > 0)
+          AND (sample_policy <> 'unavailable' OR sample_price_in_cents IS NULL)`,
+    ),
+    check(
+      "product_lead_time_ck",
+      sql`(lead_time_min_days IS NULL AND lead_time_max_days IS NULL)
+          OR (lead_time_min_days IS NOT NULL AND lead_time_max_days IS NOT NULL
+              AND lead_time_min_days >= 0 AND lead_time_max_days >= lead_time_min_days
+              AND lead_time_max_days <= 3650)`,
+    ),
+    check(
+      "product_model_unit_ck",
+      sql`(model_number IS NULL OR char_length(model_number) BETWEEN 1 AND 120)
+          AND (unit_of_measure IS NULL OR char_length(unit_of_measure) BETWEEN 1 AND 40)`,
+    ),
   ],
 );
 
@@ -943,6 +1068,580 @@ export const productPricingTier = pgTable(
   (table) => [index("product_pricing_tier_productId_idx").on(table.productId)],
 );
 
+/** Structured key/value specs for public product detail (STORE §4.4). */
+export const commerceProductSpecification = pgTable(
+  "commerce_product_specification",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    specificationKey: text("specification_key").notNull(),
+    specificationValue: text("specification_value").notNull(),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_product_specification_productId_idx").on(table.productId, table.position),
+    uniqueIndex("commerce_product_specification_product_key_uidx").on(
+      table.productId,
+      table.specificationKey,
+    ),
+    check(
+      "commerce_product_specification_lengths_ck",
+      sql`char_length(specification_key) BETWEEN 1 AND 80
+          AND char_length(specification_value) BETWEEN 1 AND 500`,
+    ),
+    check("commerce_product_specification_position_ck", sql`position >= 0`),
+  ],
+);
+
+export const storeHeroSlide = pgTable(
+  "store_hero_slide",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    title: text("title").notNull(),
+    subtitle: text("subtitle"),
+    accent: storePresentationAccentEnum("accent").default("slate").notNull(),
+    imageUrl: text("image_url"),
+    linkTargetKind: storeMerchandisingEntityKindEnum("link_target_kind"),
+    linkTargetId: text("link_target_id"),
+    linkTargetSlug: text("link_target_slug"),
+    siblingOrder: integer("sibling_order").notNull(),
+    state: storeMerchandisingStateEnum("state").default("draft").notNull(),
+    startsAt: timestamp("starts_at"),
+    endsAt: timestamp("ends_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("store_hero_slide_state_order_idx").on(table.state, table.siblingOrder, table.id),
+    check("store_hero_slide_title_ck", sql`char_length(title) BETWEEN 1 AND 120`),
+    check(
+      "store_hero_slide_subtitle_ck",
+      sql`subtitle IS NULL OR char_length(subtitle) BETWEEN 1 AND 280`,
+    ),
+    check(
+      "store_hero_slide_image_ck",
+      sql`image_url IS NULL OR (char_length(image_url) <= 2048 AND image_url LIKE 'https://%')`,
+    ),
+    check(
+      "store_hero_slide_window_ck",
+      sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
+    ),
+  ],
+);
+
+export const storePathway = pgTable(
+  "store_pathway",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    title: text("title").notNull(),
+    summary: text("summary"),
+    accent: storePresentationAccentEnum("accent").default("slate").notNull(),
+    state: storeMerchandisingStateEnum("state").default("draft").notNull(),
+    startsAt: timestamp("starts_at"),
+    endsAt: timestamp("ends_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("store_pathway_slug_uidx").on(table.slug),
+    index("store_pathway_state_idx").on(table.state, table.id),
+    check(
+      "store_pathway_slug_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 100`,
+    ),
+    check("store_pathway_title_ck", sql`char_length(title) BETWEEN 1 AND 120`),
+    check(
+      "store_pathway_summary_ck",
+      sql`summary IS NULL OR char_length(summary) BETWEEN 1 AND 500`,
+    ),
+    check(
+      "store_pathway_window_ck",
+      sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
+    ),
+  ],
+);
+
+export const storePathwayItem = pgTable(
+  "store_pathway_item",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    pathwayId: text("pathway_id")
+      .notNull()
+      .references(() => storePathway.id, { onDelete: "cascade" }),
+    entityKind: storeMerchandisingEntityKindEnum("entity_kind").notNull(),
+    entityId: text("entity_id").notNull(),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("store_pathway_item_pathway_idx").on(table.pathwayId, table.position),
+    uniqueIndex("store_pathway_item_unique_uidx").on(
+      table.pathwayId,
+      table.entityKind,
+      table.entityId,
+    ),
+    check("store_pathway_item_position_ck", sql`position >= 0`),
+  ],
+);
+
+export const storeRail = pgTable(
+  "store_rail",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    title: text("title").notNull(),
+    strategy: storeRailStrategyEnum("strategy").notNull(),
+    state: storeMerchandisingStateEnum("state").default("draft").notNull(),
+    startsAt: timestamp("starts_at"),
+    endsAt: timestamp("ends_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("store_rail_slug_uidx").on(table.slug),
+    index("store_rail_state_idx").on(table.state, table.id),
+    check(
+      "store_rail_slug_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 100`,
+    ),
+    check("store_rail_title_ck", sql`char_length(title) BETWEEN 1 AND 120`),
+    check("store_rail_window_ck", sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`),
+  ],
+);
+
+export const storeRailPlacement = pgTable(
+  "store_rail_placement",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    railId: text("rail_id")
+      .notNull()
+      .references(() => storeRail.id, { onDelete: "cascade" }),
+    entityKind: storeMerchandisingEntityKindEnum("entity_kind").notNull(),
+    entityId: text("entity_id").notNull(),
+    position: integer("position").notNull(),
+    startsAt: timestamp("starts_at"),
+    endsAt: timestamp("ends_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("store_rail_placement_rail_idx").on(table.railId, table.position),
+    uniqueIndex("store_rail_placement_unique_uidx").on(
+      table.railId,
+      table.entityKind,
+      table.entityId,
+    ),
+    check("store_rail_placement_position_ck", sql`position >= 0`),
+    check(
+      "store_rail_placement_window_ck",
+      sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
+    ),
+  ],
+);
+
+/**
+ * Denormalized public search rows. Refreshed after product/offering mutations.
+ * Only eligible public fields belong here.
+ */
+export const storeSearchDocument = pgTable(
+  "store_search_document",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    documentKind: storeSearchDocumentKindEnum("document_kind").notNull(),
+    entityId: text("entity_id").notNull(),
+    publicSlug: text("public_slug").notNull(),
+    title: text("title").notNull(),
+    summary: text("summary"),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    organizationSlug: text("organization_slug").notNull(),
+    organizationDisplayName: text("organization_display_name").notNull(),
+    organizationCountryCode: text("organization_country_code").notNull(),
+    categoryId: text("category_id").references(() => commerceCategory.id, {
+      onDelete: "set null",
+    }),
+    categorySlug: text("category_slug"),
+    providerKind: commerceProviderKindSlugEnum("provider_kind"),
+    priceInCents: integer("price_in_cents"),
+    currency: text("currency"),
+    minimumOrderQuantity: integer("minimum_order_quantity"),
+    searchText: text("search_text").notNull(),
+    isEligible: boolean("is_eligible").default(true).notNull(),
+    publishedAt: timestamp("published_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("store_search_document_kind_entity_uidx").on(table.documentKind, table.entityId),
+    index("store_search_document_eligible_title_idx")
+      .on(table.isEligible, table.title, table.id)
+      .where(sql`is_eligible`),
+    index("store_search_document_organization_idx").on(table.organizationId, table.id),
+    index("store_search_document_category_idx").on(table.categoryId, table.id),
+    index("store_search_document_provider_kind_idx").on(table.providerKind, table.id),
+    check(
+      "store_search_document_slug_ck",
+      sql`public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+          AND organization_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
+    ),
+    check(
+      "store_search_document_country_ck",
+      sql`organization_country_code ~ '^[A-Z]{2}$'`,
+    ),
+  ],
+);
+
+/** Seeded catalog of provider kinds (STORE §4.5). */
+export const commerceProviderKind = pgTable(
+  "commerce_provider_kind",
+  {
+    slug: commerceProviderKindSlugEnum("slug").primaryKey(),
+    label: text("label").notNull(),
+    summary: text("summary"),
+    siblingOrder: integer("sibling_order").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_provider_kind_order_uidx").on(table.siblingOrder),
+    check("commerce_provider_kind_label_ck", sql`char_length(label) BETWEEN 1 AND 80`),
+  ],
+);
+
+export const commerceProviderProfile = pgTable(
+  "commerce_provider_profile",
+  {
+    organizationId: text("organization_id")
+      .primaryKey()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    publicSummary: text("public_summary"),
+    supportPolicy: text("support_policy"),
+    verificationState: commerceProviderVerificationStateEnum("verification_state")
+      .default("unverified")
+      .notNull(),
+    acceptingRequests: boolean("accepting_requests").default(true).notNull(),
+    serviceRegionSummary: text("service_region_summary"),
+    averageResponseTimeHours: integer("average_response_time_hours"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_provider_profile_verification_idx").on(table.verificationState),
+    check(
+      "commerce_provider_profile_text_ck",
+      sql`(public_summary IS NULL OR char_length(public_summary) <= 4000)
+          AND (support_policy IS NULL OR char_length(support_policy) <= 4000)
+          AND (service_region_summary IS NULL OR char_length(service_region_summary) <= 1000)`,
+    ),
+    check(
+      "commerce_provider_profile_response_ck",
+      sql`average_response_time_hours IS NULL OR average_response_time_hours BETWEEN 0 AND 8760`,
+    ),
+  ],
+);
+
+export const commerceProviderKindLink = pgTable(
+  "commerce_provider_kind_link",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceProviderProfile.organizationId, { onDelete: "cascade" }),
+    providerKind: commerceProviderKindSlugEnum("provider_kind")
+      .notNull()
+      .references(() => commerceProviderKind.slug, { onDelete: "restrict" }),
+    verificationState: commerceProviderVerificationStateEnum("verification_state")
+      .default("unverified")
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_provider_kind_link_org_kind_uidx").on(
+      table.organizationId,
+      table.providerKind,
+    ),
+    index("commerce_provider_kind_link_kind_idx").on(table.providerKind, table.verificationState),
+  ],
+);
+
+export const commerceServiceOffering = pgTable(
+  "commerce_service_offering",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    providerOrganizationId: text("provider_organization_id")
+      .notNull()
+      .references(() => commerceProviderProfile.organizationId, { onDelete: "restrict" }),
+    providerKind: commerceProviderKindSlugEnum("provider_kind")
+      .notNull()
+      .references(() => commerceProviderKind.slug, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    summary: text("summary"),
+    state: commerceServiceOfferingStateEnum("state").default("draft").notNull(),
+    pricingModel: commerceServicePricingModelEnum("pricing_model").notNull(),
+    indicativePriceMinInCents: integer("indicative_price_min_in_cents"),
+    indicativePriceMaxInCents: integer("indicative_price_max_in_cents"),
+    currency: text("currency").default("USD").notNull(),
+    minimumLeadTimeDays: integer("minimum_lead_time_days"),
+    maximumLeadTimeDays: integer("maximum_lead_time_days"),
+    moderatedByUserId: text("moderated_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    moderatedAt: timestamp("moderated_at"),
+    moderationReason: text("moderation_reason"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_service_offering_slug_uidx").on(table.slug),
+    index("commerce_service_offering_provider_idx").on(
+      table.providerOrganizationId,
+      table.state,
+      table.id,
+    ),
+    index("commerce_service_offering_kind_state_idx").on(table.providerKind, table.state, table.id),
+    check(
+      "commerce_service_offering_slug_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 120`,
+    ),
+    check("commerce_service_offering_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
+    check(
+      "commerce_service_offering_summary_ck",
+      sql`summary IS NULL OR char_length(summary) <= 4000`,
+    ),
+    check(
+      "commerce_service_offering_price_ck",
+      sql`(indicative_price_min_in_cents IS NULL AND indicative_price_max_in_cents IS NULL)
+          OR (indicative_price_min_in_cents IS NOT NULL AND indicative_price_max_in_cents IS NOT NULL
+              AND indicative_price_min_in_cents >= 0
+              AND indicative_price_max_in_cents >= indicative_price_min_in_cents)`,
+    ),
+    check(
+      "commerce_service_offering_lead_ck",
+      sql`(minimum_lead_time_days IS NULL AND maximum_lead_time_days IS NULL)
+          OR (minimum_lead_time_days IS NOT NULL AND maximum_lead_time_days IS NOT NULL
+              AND minimum_lead_time_days >= 0
+              AND maximum_lead_time_days >= minimum_lead_time_days
+              AND maximum_lead_time_days <= 3650)`,
+    ),
+    check("commerce_service_offering_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+  ],
+);
+
+export const commerceServiceCoverage = pgTable(
+  "commerce_service_coverage",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    offeringId: text("offering_id")
+      .notNull()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    originCountryCode: text("origin_country_code"),
+    destinationCountryCode: text("destination_country_code"),
+    originRegionLabel: text("origin_region_label"),
+    destinationRegionLabel: text("destination_region_label"),
+    locationIdentifier: text("location_identifier"),
+    supportsHazardousGoods: boolean("supports_hazardous_goods").default(false).notNull(),
+    supportsConsolidation: boolean("supports_consolidation").default(false).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_service_coverage_offering_idx").on(table.offeringId),
+    check(
+      "commerce_service_coverage_country_ck",
+      sql`(origin_country_code IS NULL OR origin_country_code ~ '^[A-Z]{2}$')
+          AND (destination_country_code IS NULL OR destination_country_code ~ '^[A-Z]{2}$')`,
+    ),
+  ],
+);
+
+export const freightOfferingDetail = pgTable(
+  "freight_offering_detail",
+  {
+    offeringId: text("offering_id")
+      .primaryKey()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
+    supportsConsolidation: boolean("supports_consolidation").default(false).notNull(),
+    supportsContainers: boolean("supports_containers").default(false).notNull(),
+    supportsHazardousGoods: boolean("supports_hazardous_goods").default(false).notNull(),
+  },
+);
+
+export const customsBrokerageOfferingDetail = pgTable(
+  "customs_brokerage_offering_detail",
+  {
+    offeringId: text("offering_id")
+      .primaryKey()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    jurisdictions: text("jurisdictions").array().notNull().default([]),
+    importSupported: boolean("import_supported").default(true).notNull(),
+    exportSupported: boolean("export_supported").default(true).notNull(),
+    commodityCoverageSummary: text("commodity_coverage_summary"),
+  },
+  (table) => [
+    check(
+      "customs_brokerage_offering_detail_summary_ck",
+      sql`commodity_coverage_summary IS NULL OR char_length(commodity_coverage_summary) <= 2000`,
+    ),
+  ],
+);
+
+export const insuranceOfferingDetail = pgTable(
+  "insurance_offering_detail",
+  {
+    offeringId: text("offering_id")
+      .primaryKey()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    cargoCoverageClasses: text("cargo_coverage_classes").array().notNull().default([]),
+    coverageLimitMinInCents: integer("coverage_limit_min_in_cents"),
+    coverageLimitMaxInCents: integer("coverage_limit_max_in_cents"),
+    currency: text("currency").default("USD").notNull(),
+    exclusionsDocumentReference: text("exclusions_document_reference"),
+  },
+  (table) => [
+    check("insurance_offering_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "insurance_offering_detail_limits_ck",
+      sql`(coverage_limit_min_in_cents IS NULL AND coverage_limit_max_in_cents IS NULL)
+          OR (coverage_limit_min_in_cents IS NOT NULL AND coverage_limit_max_in_cents IS NOT NULL
+              AND coverage_limit_min_in_cents >= 0
+              AND coverage_limit_max_in_cents >= coverage_limit_min_in_cents)`,
+    ),
+  ],
+);
+
+export const inspectionOfferingDetail = pgTable(
+  "inspection_offering_detail",
+  {
+    offeringId: text("offering_id")
+      .primaryKey()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    preProduction: boolean("pre_production").default(false).notNull(),
+    duringProduction: boolean("during_production").default(false).notNull(),
+    preShipment: boolean("pre_shipment").default(false).notNull(),
+    loadingSupervision: boolean("loading_supervision").default(false).notNull(),
+  },
+);
+
+export const testingCertificationOfferingDetail = pgTable(
+  "testing_certification_offering_detail",
+  {
+    offeringId: text("offering_id")
+      .primaryKey()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    standards: text("standards").array().notNull().default([]),
+    accreditationBodies: text("accreditation_bodies").array().notNull().default([]),
+    laboratoryLocations: text("laboratory_locations").array().notNull().default([]),
+  },
+);
+
+export const marketingOfferingDetail = pgTable(
+  "marketing_offering_detail",
+  {
+    offeringId: text("offering_id")
+      .primaryKey()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    channels: text("channels").array().notNull().default([]),
+    targetRegions: text("target_regions").array().notNull().default([]),
+    languageCapabilities: text("language_capabilities").array().notNull().default([]),
+    engagementModel: text("engagement_model"),
+  },
+  (table) => [
+    check(
+      "marketing_offering_detail_engagement_ck",
+      sql`engagement_model IS NULL OR char_length(engagement_model) <= 200`,
+    ),
+  ],
+);
+
+export const warehouseOfferingDetail = pgTable(
+  "warehouse_offering_detail",
+  {
+    offeringId: text("offering_id")
+      .primaryKey()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    storageTypes: text("storage_types").array().notNull().default([]),
+    temperatureControlled: boolean("temperature_controlled").default(false).notNull(),
+    bondedStatus: boolean("bonded_status").default(false).notNull(),
+    capacityUnits: text("capacity_units"),
+  },
+  (table) => [
+    check(
+      "warehouse_offering_detail_capacity_ck",
+      sql`capacity_units IS NULL OR char_length(capacity_units) <= 80`,
+    ),
+  ],
+);
+
+export const foreignExchangeOfferingDetail = pgTable(
+  "foreign_exchange_offering_detail",
+  {
+    offeringId: text("offering_id")
+      .primaryKey()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    currencyPairs: text("currency_pairs").array().notNull().default([]),
+    settlementRails: text("settlement_rails").array().notNull().default([]),
+    minimumNotionalInCents: integer("minimum_notional_in_cents"),
+    maximumNotionalInCents: integer("maximum_notional_in_cents"),
+    notionalCurrency: text("notional_currency").default("USD").notNull(),
+  },
+  (table) => [
+    check("foreign_exchange_offering_detail_currency_ck", sql`notional_currency ~ '^[A-Z]{3}$'`),
+    check(
+      "foreign_exchange_offering_detail_notional_ck",
+      sql`(minimum_notional_in_cents IS NULL AND maximum_notional_in_cents IS NULL)
+          OR (minimum_notional_in_cents IS NOT NULL AND maximum_notional_in_cents IS NOT NULL
+              AND minimum_notional_in_cents >= 0
+              AND maximum_notional_in_cents >= minimum_notional_in_cents)`,
+    ),
+  ],
+);
+
 export const productRelations = relations(product, ({ one, many }) => ({
   seller: one(user, { fields: [product.sellerId], references: [user.id] }),
   sellerOrganization: one(commerceOrganization, {
@@ -959,6 +1658,7 @@ export const productRelations = relations(product, ({ one, many }) => ({
   }),
   images: many(productImage),
   pricingTiers: many(productPricingTier),
+  specifications: many(commerceProductSpecification),
 }));
 
 export const commerceOrganizationRelations = relations(commerceOrganization, ({ one, many }) => ({
@@ -972,6 +1672,10 @@ export const commerceOrganizationRelations = relations(commerceOrganization, ({ 
   verifications: many(commerceOrganizationVerification),
   auditEntries: many(commerceOrganizationAuditEntry),
   products: many(product),
+  providerProfile: one(commerceProviderProfile, {
+    fields: [commerceOrganization.id],
+    references: [commerceProviderProfile.organizationId],
+  }),
   activeSessions: many(session),
 }));
 
@@ -3230,6 +3934,12 @@ export const supplier = pgTable(
     leadTimeDays: integer("lead_time_days"),
     minimumOrderQuantity: integer("minimum_order_quantity"),
     isActive: boolean("is_active").default(true).notNull(),
+    // Optional link to a commerce organization after moderator review (STORE §1.3).
+    // Imports no trust state, quotes, prices, or project engagements.
+    commerceOrganizationId: text("commerce_organization_id").references(
+      () => commerceOrganization.id,
+      { onDelete: "set null" },
+    ),
     // R2: attribution that must never block an account deletion.
     createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -3247,6 +3957,9 @@ export const supplier = pgTable(
       .where(sql`is_active`),
     index("supplier_regionId_idx").on(table.regionId),
     index("supplier_verificationState_idx").on(table.verificationState),
+    index("supplier_commerceOrganizationId_idx")
+      .on(table.commerceOrganizationId)
+      .where(sql`commerce_organization_id IS NOT NULL`),
     check("supplier_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
     check("supplier_name_ck", sql`char_length(name) BETWEEN 1 AND 120`),
     check("supplier_summary_ck", sql`summary IS NULL OR char_length(summary) <= 2000`),

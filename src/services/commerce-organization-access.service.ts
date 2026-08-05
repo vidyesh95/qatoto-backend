@@ -24,6 +24,24 @@ export type ActiveSellerCommerceOrganizationAccessError =
 
 const SELLER_MEMBER_ROLES: readonly CommerceOrganizationMemberRole[] = ["owner", "seller"];
 
+const PROVIDER_MEMBER_ROLES: readonly CommerceOrganizationMemberRole[] = [
+  "owner",
+  "administrator",
+  "provider_operator",
+];
+
+export function memberCanOperateProvider(
+  memberRole: CommerceOrganizationMemberRole,
+): boolean {
+  return PROVIDER_MEMBER_ROLES.includes(memberRole);
+}
+
+export function memberCanUpdateOrganizationVisibility(
+  memberRole: CommerceOrganizationMemberRole,
+): boolean {
+  return memberRole === "owner" || memberRole === "administrator";
+}
+
 interface SellerCommerceOrganizationRow {
   readonly organizationId: string;
   readonly memberId: string;

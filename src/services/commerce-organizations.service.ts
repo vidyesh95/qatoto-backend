@@ -388,6 +388,26 @@ export async function updateOrganization(
   const access = await requireMembershipRole(userId, organizationId, ORGANIZATION_MANAGERS);
   if (!access.success) return access;
 
+  if (patch.visibility === "public") {
+    const [organizationRow] = await db
+      .select({ tradeState: commerceOrganization.tradeState })
+      .from(commerceOrganization)
+      .where(eq(commerceOrganization.id, organizationId))
+      .limit(1);
+    if (!organizationRow) {
+      return { success: false, error: { type: "NOT_FOUND" } };
+    }
+    if (organizationRow.tradeState !== "active") {
+      return {
+        success: false,
+        error: {
+          type: "CONFLICT",
+          message: "Only organizations with active trade state may become public.",
+        },
+      };
+    }
+  }
+
   const updated = await db.transaction(async (transaction) => {
     const occurredAt = new Date();
     const [organization] = await transaction
@@ -408,9 +428,16 @@ export async function updateOrganization(
     });
     return publicOrganization(organization);
   });
-  return updated
-    ? { success: true, value: updated }
-    : { success: false, error: { type: "NOT_FOUND" } };
+  if (!updated) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+  if (patch.visibility !== undefined) {
+    const { refreshOrganizationSearchEligibility } = await import(
+      "#src/services/store-search.service.js"
+    );
+    await refreshOrganizationSearchEligibility(organizationId);
+  }
+  return { success: true, value: updated };
 }
 
 export async function createMember(

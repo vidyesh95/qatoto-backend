@@ -830,6 +830,20 @@ export const feedReadLimiter = createLimiter({
   limit: 300,
 });
 
+/** Public `/store/*` reads — same bound and optional-auth keying as the home feed. */
+export const storeReadLimiter = createLimiter({
+  namespace: "storeRead",
+  windowMs: ONE_MINUTE_MS,
+  limit: 300,
+});
+
+/** Authenticated commerce provider mutations. */
+export const commerceProviderWriteLimiter = createLimiter({
+  namespace: "commerceProviderWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
 /**
  * POST /videos/:videoId/view-beacon — the BURST half of §7's "60/min, 200/hr".
  *

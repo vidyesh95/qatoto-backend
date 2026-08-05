@@ -13,6 +13,8 @@ import { requestId } from "#src/middleware/request-id.js";
 import { requestLog } from "#src/middleware/request-log.js";
 import authRouter from "#src/routes/auth.routes.js";
 import commerceOrganizationsRouter from "#src/routes/commerce-organizations.routes.js";
+import commerceProvidersRouter from "#src/routes/commerce-providers.routes.js";
+import storeRouter from "#src/routes/store.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
@@ -134,6 +136,8 @@ app.use("/", authRouter);
 app.use("/users", usersRouter);
 app.use("/handles", handlesRouter);
 app.use("/commerce", commerceOrganizationsRouter);
+app.use("/commerce", commerceProvidersRouter);
+app.use("/store", storeRouter);
 app.use("/products", productsRouter);
 // The home-page carousel. GET /promotions/slides is public; every /promotions/admin/*
 // route is gated by `manage_promotions` inside the service.

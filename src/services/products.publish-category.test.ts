@@ -46,6 +46,9 @@ vi.mock("#src/lib/cloudinary.js", () => ({
 vi.mock("#src/lib/image.js", () => ({
   validateAndNormalizeImage: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
+vi.mock("#src/services/store-search.service.js", () => ({
+  refreshProductSearchDocument: vi.fn<(...arguments_: readonly unknown[]) => Promise<void>>(),
+}));
 
 const { publishProduct } = await import("#src/services/products.service.js");
 
@@ -59,7 +62,17 @@ describe("product publish category eligibility", () => {
 
   it("rejects a category retired before publish inside the publish transaction", async () => {
     databaseState.queryResults = [
-      [{ id: "product-one", title: "Listing", priceInCents: 100, categoryId: "category-one" }],
+      [
+        {
+          id: "product-one",
+          title: "Listing",
+          priceInCents: 100,
+          categoryId: "category-one",
+          publicSlug: null,
+          samplePolicy: "unavailable",
+          samplePriceInCents: null,
+        },
+      ],
       [{ id: "category-one", parentCategoryId: null, state: "retired" }],
       [],
     ];
@@ -76,7 +89,17 @@ describe("product publish category eligibility", () => {
 
   it("rejects a category that gained a child before publish", async () => {
     databaseState.queryResults = [
-      [{ id: "product-one", title: "Listing", priceInCents: 100, categoryId: "category-one" }],
+      [
+        {
+          id: "product-one",
+          title: "Listing",
+          priceInCents: 100,
+          categoryId: "category-one",
+          publicSlug: null,
+          samplePolicy: "unavailable",
+          samplePriceInCents: null,
+        },
+      ],
       [{ id: "category-one", parentCategoryId: null, state: "active" }],
       [{ id: "new-child" }],
     ];

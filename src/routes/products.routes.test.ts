@@ -16,6 +16,15 @@ const ORGANIZATION_ID = "commerce_org_legacy_0123456789abcdef";
 const PRODUCT_ID = "product-one";
 
 vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
+  requireActiveCommerceOrganization: (req: Request, _res: Response, next: NextFunction): void => {
+    req.commerceOrganization = {
+      organizationId: ORGANIZATION_ID,
+      memberId: "member-one",
+      memberRole: "seller",
+      tradeState: "active",
+    };
+    next();
+  },
   requireActiveSellerCommerceOrganization: (req: Request, _res: Response, next: NextFunction): void => {
     req.commerceOrganization = {
       organizationId: ORGANIZATION_ID,
@@ -43,6 +52,15 @@ const productView = {
   keyFeatures: [],
   status: "draft",
   publishedAt: null,
+  publicSlug: null,
+  modelNumber: null,
+  countryOfOriginCode: null,
+  unitOfMeasure: null,
+  samplePolicy: "unavailable" as const,
+  samplePriceInCents: null,
+  leadTimeMinDays: null,
+  leadTimeMaxDays: null,
+  moderationState: "pending" as const,
   images: [],
   pricingTiers: [],
 };
