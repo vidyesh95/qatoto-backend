@@ -284,6 +284,17 @@ export async function getCategoryBySlug(categorySlug: string): Promise<
 }
 
 export async function getCategoryFacets(categoryId: string): Promise<StoreCategoryFacets> {
+  const subtreeIds = await listActiveCategorySubtreeIds(categoryId);
+  if (subtreeIds.length === 0) {
+    return {
+      sellerCountryCodes: [],
+      stockStates: [],
+      samplePolicies: [],
+      priceRangesInCents: { minInCents: null, maxInCents: null, count: 0 },
+    };
+  }
+
+  const categoryPredicate = inArray(product.categoryId, [...subtreeIds]);
   const [countryRows, stockRows, sampleRows, priceRow] = await Promise.all([
     db
       .select({
@@ -293,7 +304,7 @@ export async function getCategoryFacets(categoryId: string): Promise<StoreCatego
       .from(product)
       .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
       .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
-      .where(and(publicProductEligibility, eq(product.categoryId, categoryId)))
+      .where(and(publicProductEligibility, categoryPredicate))
       .groupBy(commerceOrganization.countryCode)
       .orderBy(desc(sql`count(*)`), asc(commerceOrganization.countryCode)),
     db.execute<{ value: string; count: number }>(sql`
@@ -317,7 +328,10 @@ export async function getCategoryFacets(categoryId: string): Promise<StoreCatego
           AND o.trade_state = 'active'
           AND o.visibility = 'public'
           AND c.state = 'active'
-          AND p.category_id = ${categoryId}
+          AND p.category_id IN (${sql.join(
+            subtreeIds.map((id) => sql`${id}`),
+            sql`, `,
+          )})
       ) AS derived
       GROUP BY derived.stock_state
       ORDER BY count DESC, derived.stock_state ASC
@@ -330,7 +344,7 @@ export async function getCategoryFacets(categoryId: string): Promise<StoreCatego
       .from(product)
       .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
       .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
-      .where(and(publicProductEligibility, eq(product.categoryId, categoryId)))
+      .where(and(publicProductEligibility, categoryPredicate))
       .groupBy(product.samplePolicy)
       .orderBy(desc(sql`count(*)`), asc(product.samplePolicy)),
     db
@@ -342,7 +356,7 @@ export async function getCategoryFacets(categoryId: string): Promise<StoreCatego
       .from(product)
       .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
       .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
-      .where(and(publicProductEligibility, eq(product.categoryId, categoryId))),
+      .where(and(publicProductEligibility, categoryPredicate)),
   ]);
 
   const priceSummary = priceRow[0];
@@ -397,6 +411,54 @@ async function buildCategoryTrail(categoryId: string): Promise<readonly StoreCat
     currentId = row.parentCategoryId;
   }
   return trail;
+}
+
+/**
+ * Active category id plus every active descendant. Used so parent browse pages and
+ * facets include products assigned to leaf categories under the requested node.
+ */
+export async function listActiveCategorySubtreeIds(
+  rootCategoryId: string,
+): Promise<readonly string[]> {
+  const result = await db.execute<{ id: string }>(sql`
+    WITH RECURSIVE category_subtree AS (
+      SELECT id
+      FROM commerce_category
+      WHERE id = ${rootCategoryId}
+        AND state = 'active'
+      UNION ALL
+      SELECT child.id
+      FROM commerce_category AS child
+      INNER JOIN category_subtree AS parent ON parent.id = child.parent_category_id
+      WHERE child.state = 'active'
+    )
+    SELECT id FROM category_subtree
+  `);
+  return result.rows.map((row) => row.id);
+}
+
+/**
+ * Active category slug plus every active descendant slug. Search filters expand a
+ * parent slug into its subtree so leaf-assigned products remain findable.
+ */
+export async function listActiveCategorySubtreeSlugs(
+  rootCategorySlug: string,
+): Promise<readonly string[]> {
+  const result = await db.execute<{ slug: string }>(sql`
+    WITH RECURSIVE category_subtree AS (
+      SELECT id, slug
+      FROM commerce_category
+      WHERE slug = ${rootCategorySlug}
+        AND state = 'active'
+      UNION ALL
+      SELECT child.id, child.slug
+      FROM commerce_category AS child
+      INNER JOIN category_subtree AS parent ON parent.id = child.parent_category_id
+      WHERE child.state = 'active'
+    )
+    SELECT slug FROM category_subtree
+  `);
+  return result.rows.map((row) => row.slug);
 }
 
 function mapProductCard(
@@ -502,6 +564,17 @@ export async function listEligibleProducts(input: {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
 
+  const categoryIds =
+    input.categoryId === undefined
+      ? undefined
+      : await listActiveCategorySubtreeIds(input.categoryId);
+  if (input.categoryId !== undefined && (categoryIds === undefined || categoryIds.length === 0)) {
+    return {
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    };
+  }
+
   const cursorPredicate =
     decodedCursor === null
       ? undefined
@@ -521,7 +594,7 @@ export async function listEligibleProducts(input: {
     .where(
       and(
         publicProductEligibility,
-        input.categoryId === undefined ? undefined : eq(product.categoryId, input.categoryId),
+        categoryIds === undefined ? undefined : inArray(product.categoryId, [...categoryIds]),
         input.sellerOrganizationId === undefined
           ? undefined
           : eq(product.sellerOrganizationId, input.sellerOrganizationId),

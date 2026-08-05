@@ -61,6 +61,22 @@ export type CommerceOrganizationsError =
   | { type: "PLATFORM_CAPABILITY_REQUIRED" }
   | { type: "SELF_REVIEW_FORBIDDEN" };
 
+type TradeState = Organization["tradeState"];
+
+const LEGAL_TRADE_STATE_TRANSITIONS: Readonly<Record<TradeState, readonly TradeState[]>> = {
+  pending: ["active", "closed"],
+  active: ["suspended", "closed"],
+  suspended: ["active", "closed"],
+  closed: [],
+};
+
+type TradeStateTransitionOutcome =
+  | { readonly status: "transitioned"; readonly organization: Organization }
+  | { readonly status: "not_found" }
+  | { readonly status: "self_review" }
+  | { readonly status: "illegal_transition"; readonly currentTradeState: TradeState }
+  | { readonly status: "race_conflict" };
+
 export interface CreateOrganizationInput {
   readonly slug: string;
   readonly legalName: string;
@@ -1149,6 +1165,113 @@ export async function downloadVerificationEvidence(input: {
       fileName: decryptOptionalPii(document.originalFileNameEncrypted) ?? "evidence",
     },
   };
+}
+
+/**
+ * Moderator-only trade-state transition. Evidence approval never activates trade;
+ * this is the explicit gate that allows a pending organization to sell, provide,
+ * or become public. Leaving `active` forces visibility private so catalog eligibility
+ * cannot linger after suspension or closure.
+ */
+export async function transitionTradeState(input: {
+  readonly moderatorUserId: string;
+  readonly organizationId: string;
+  readonly tradeState: TradeState;
+  readonly reason?: string;
+}): Promise<Result<ReturnType<typeof publicOrganization>, CommerceOrganizationsError>> {
+  const capability = await requirePlatformCapability(input.moderatorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return { success: false, error: { type: "PLATFORM_CAPABILITY_REQUIRED" } };
+  }
+
+  const outcome = await db.transaction(
+    async (transaction): Promise<TradeStateTransitionOutcome> => {
+      const [existing] = await transaction
+        .select()
+        .from(commerceOrganization)
+        .where(eq(commerceOrganization.id, input.organizationId))
+        .for("update");
+      if (!existing) return { status: "not_found" };
+      if (existing.createdByUserId === input.moderatorUserId) {
+        return { status: "self_review" };
+      }
+      if (existing.tradeState === input.tradeState) {
+        return { status: "transitioned", organization: existing };
+      }
+      if (!LEGAL_TRADE_STATE_TRANSITIONS[existing.tradeState].includes(input.tradeState)) {
+        return { status: "illegal_transition", currentTradeState: existing.tradeState };
+      }
+
+      const occurredAt = new Date();
+      const leavingActive =
+        existing.tradeState === "active" &&
+        (input.tradeState === "suspended" || input.tradeState === "closed");
+      const [organization] = await transaction
+        .update(commerceOrganization)
+        .set({
+          tradeState: input.tradeState,
+          visibility: leavingActive ? "private" : undefined,
+          updatedAt: occurredAt,
+        })
+        .where(
+          and(
+            eq(commerceOrganization.id, input.organizationId),
+            eq(commerceOrganization.tradeState, existing.tradeState),
+          ),
+        )
+        .returning();
+      if (!organization) return { status: "race_conflict" };
+
+      await appendAuditOrThrow(transaction, {
+        organizationId: input.organizationId,
+        eventKind: "trade_state_changed",
+        actorUserId: input.moderatorUserId,
+        actorMemberRoleSnapshot: null,
+        targetEntityType: "commerce_organization",
+        targetEntityId: input.organizationId,
+        payload: {
+          previousTradeState: existing.tradeState,
+          nextTradeState: input.tradeState,
+          visibilityForcedPrivate: leavingActive,
+          reason: input.reason ?? null,
+        },
+        occurredAt,
+      });
+      return { status: "transitioned", organization };
+    },
+  );
+
+  switch (outcome.status) {
+    case "transitioned": {
+      const { enqueueOrganizationSearchDocumentRefresh } =
+        await import("#src/services/store-search.service.js");
+      await enqueueOrganizationSearchDocumentRefresh(input.organizationId);
+      return { success: true, value: publicOrganization(outcome.organization) };
+    }
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "self_review":
+      return { success: false, error: { type: "SELF_REVIEW_FORBIDDEN" } };
+    case "illegal_transition":
+      return {
+        success: false,
+        error: {
+          type: "CONFLICT",
+          message: `Cannot transition trade state from ${outcome.currentTradeState} to ${input.tradeState}.`,
+        },
+      };
+    case "race_conflict":
+      return {
+        success: false,
+        error: { type: "CONFLICT", message: "Organization trade state changed concurrently." },
+      };
+    default: {
+      const exhaustiveOutcome: never = outcome;
+      throw new Error(
+        `Unhandled trade-state transition outcome: ${JSON.stringify(exhaustiveOutcome)}`,
+      );
+    }
+  }
 }
 
 export async function decideVerification(input: {

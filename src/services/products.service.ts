@@ -7,7 +7,14 @@ import type {
   UpdateProductInput,
 } from "#src/controllers/products.controller.js";
 import { db } from "#src/db/index.js";
-import { commerceCategory, product, productImage, productPricingTier } from "#src/db/schema.js";
+import {
+  commerceCategory,
+  commerceProductSpecification,
+  product,
+  productImage,
+  productPricingTier,
+  storeSearchDocument,
+} from "#src/db/schema.js";
 import {
   deleteAllProductImages,
   deleteProductImage,
@@ -70,6 +77,13 @@ export interface PricingTierView {
   readonly position: number;
 }
 
+/** One structured product specification, as read back to the client. */
+export interface ProductSpecificationView {
+  readonly key: string;
+  readonly value: string;
+  readonly position: number;
+}
+
 /**
  * Full listing for the create/edit/detail flows. One canonical projection so the
  * shape can't drift between mutations (mirrors PublicUser / PUBLIC_USER_COLUMNS).
@@ -101,6 +115,7 @@ export interface PublicProduct {
   readonly moderationState: "pending" | "approved" | "rejected" | "suspended";
   readonly images: readonly ProductImageView[];
   readonly pricingTiers: readonly PricingTierView[];
+  readonly specifications: readonly ProductSpecificationView[];
 }
 
 /** Compact row for the My Products list (maps 1:1 to products-page.tsx). */
@@ -164,6 +179,12 @@ const PRICING_TIER_VIEW_COLUMNS = {
   position: productPricingTier.position,
 } as const;
 
+const PRODUCT_SPECIFICATION_VIEW_COLUMNS = {
+  key: commerceProductSpecification.specificationKey,
+  value: commerceProductSpecification.specificationValue,
+  position: commerceProductSpecification.position,
+} as const;
+
 type ProductScalarRow = {
   readonly [ColumnKey in keyof typeof PRODUCT_SCALAR_COLUMNS]: (typeof product.$inferSelect)[ColumnKey];
 };
@@ -188,6 +209,7 @@ function toPublicProduct(
   row: ProductScalarRow,
   images: readonly ProductImageView[],
   pricingTiers: readonly PricingTierView[],
+  specifications: readonly ProductSpecificationView[],
 ): PublicProduct {
   if (row.categoryId === null) {
     throw new Error(`Product ${row.id} is missing its canonical commerce category.`);
@@ -219,7 +241,32 @@ function toPublicProduct(
     moderationState: row.moderationState,
     images,
     pricingTiers,
+    specifications,
   };
+}
+
+async function replaceProductSpecifications(
+  transaction: DatabaseTransaction,
+  productId: string,
+  specifications: readonly { readonly key: string; readonly value: string }[],
+): Promise<readonly ProductSpecificationView[]> {
+  await transaction
+    .delete(commerceProductSpecification)
+    .where(eq(commerceProductSpecification.productId, productId));
+  if (specifications.length === 0) {
+    return [];
+  }
+  return transaction
+    .insert(commerceProductSpecification)
+    .values(
+      specifications.map((specification, index) => ({
+        productId,
+        specificationKey: specification.key,
+        specificationValue: specification.value,
+        position: index,
+      })),
+    )
+    .returning(PRODUCT_SPECIFICATION_VIEW_COLUMNS);
 }
 
 /**
@@ -252,7 +299,13 @@ async function loadOrganizationProduct(
     .where(eq(productPricingTier.productId, productId))
     .orderBy(asc(productPricingTier.position));
 
-  return toPublicProduct(row, images, pricingTiers);
+  const specifications = await db
+    .select(PRODUCT_SPECIFICATION_VIEW_COLUMNS)
+    .from(commerceProductSpecification)
+    .where(eq(commerceProductSpecification.productId, productId))
+    .orderBy(asc(commerceProductSpecification.position));
+
+  return toPublicProduct(row, images, pricingTiers, specifications);
 }
 
 /** Confirm the caller owns this listing; returns the id or null. */
@@ -453,7 +506,9 @@ export async function createProduct(
                 .returning(PRICING_TIER_VIEW_COLUMNS)
             : [];
 
-        return { success: true, value: toPublicProduct(row, [], pricingTiers) };
+        const specifications = await replaceProductSpecifications(tx, row.id, input.specifications);
+
+        return { success: true, value: toPublicProduct(row, [], pricingTiers, specifications) };
       },
       { isolationLevel: "serializable" },
     );
@@ -589,6 +644,10 @@ export async function updateProduct(
               })),
             );
           }
+        }
+
+        if (patch.specifications !== undefined) {
+          await replaceProductSpecifications(tx, productId, patch.specifications);
         }
 
         return { status: "updated" };
@@ -913,9 +972,21 @@ export async function deleteProduct(
     return { success: false, error: assetRemoval.error };
   }
 
-  await db
-    .delete(product)
-    .where(and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)));
+  await db.transaction(async (transaction) => {
+    await transaction
+      .delete(product)
+      .where(
+        and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
+      );
+    await transaction
+      .delete(storeSearchDocument)
+      .where(
+        and(
+          eq(storeSearchDocument.documentKind, "product"),
+          eq(storeSearchDocument.entityId, productId),
+        ),
+      );
+  });
 
   return { success: true, value: { id: productId } };
 }

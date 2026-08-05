@@ -27,6 +27,7 @@ const serviceStubs = vi.hoisted(() => ({
   downloadVerificationEvidence: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   recordDocumentScannerVerdict: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   decideVerification: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  transitionTradeState: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
 vi.mock("#src/services/commerce-organizations.service.js", () => serviceStubs);
@@ -250,6 +251,36 @@ describe("commerce organization routes", () => {
 
     expect(response.status).toBe(403);
     expect(response.body.message).toBe("This action requires a platform staff role.");
+  });
+
+  it("routes trade-state transitions through the moderator service path", async () => {
+    serviceStubs.transitionTradeState.mockResolvedValue({
+      success: true,
+      value: { id: ORGANIZATION_ID, tradeState: "active" },
+    });
+
+    const response = await request(app)
+      .post(`/commerce/admin/organizations/${ORGANIZATION_ID}/trade-state`)
+      .set("Idempotency-Key", "trade-state-001")
+      .send({ tradeState: "active", reason: "Business registration verified." });
+
+    expect(response.status).toBe(200);
+    expect(serviceStubs.transitionTradeState).toHaveBeenCalledWith({
+      moderatorUserId: TEST_SESSION_USER.id,
+      organizationId: ORGANIZATION_ID,
+      tradeState: "active",
+      reason: "Business registration verified.",
+    });
+  });
+
+  it("rejects client-asserted pending trade-state reopen", async () => {
+    const response = await request(app)
+      .post(`/commerce/admin/organizations/${ORGANIZATION_ID}/trade-state`)
+      .set("Idempotency-Key", "trade-state-002")
+      .send({ tradeState: "pending" });
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.transitionTradeState).not.toHaveBeenCalled();
   });
 
   it("records an explicit scanner verdict using only path-scoped identifiers", async () => {

@@ -28,9 +28,13 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **planned.** Seller product CRUD is shipped. Buyer `/store`, commerce organizations,
-> provider offerings, RFQs, orders, and trade-service workflows described here are not shipped
-> unless a section explicitly says otherwise.
+> **Status:** **Phases 0–2 foundation shipped.** Seller `/products/*` CRUD, commerce
+> organizations/memberships/addresses/verification, public `/store/*` catalog reads,
+> merchandising, search documents, and the provider connector directory are implemented.
+> RFQs, carts, checkout, orders, payments, fulfillment, messaging, and trust workflows
+> described here remain planned unless a section explicitly says otherwise. Product
+> organization-ownership and category columns remain in the documented expand/dual-write
+> contract phase until non-null enforcement is separately released.
 
 ---
 
@@ -755,17 +759,23 @@ Scheduled jobs:
 - Commerce organizations, memberships, addresses, verification evidence.
 - Product organization-ownership and category migrations.
 - Shared error, idempotency, audit, and document primitives.
+- **Shipped** (expand/dual-write). Contract migration that makes ownership/category
+  columns non-null remains gated by `docs/STORE_PHASE_0_ROLLOUT.md`.
 
 ### Phase 1 — real public store
 
 - Public active-product projections, category tree, product detail, storefronts.
 - Server-side search/filter/facets and curated merchandising.
 - Remove fallback behavior that masks backend contract failures.
+- **Shipped and hardened.** Moderator trade-state transitions, organization write
+  rate limits, product specifications, category-subtree browse/search, and explicit
+  home provider-directory failure mapping are included.
 
 ### Phase 2 — provider connector directory
 
 - Provider profiles, kinds, typed offerings, coverage, moderation, public search/detail.
 - Link eligible R&D suppliers to organizations without importing trust or project records.
+- **Shipped** alongside Phase 1 in the Phase 1/2 rollout.
 
 ### Phase 3 — RFQ and quote negotiation
 

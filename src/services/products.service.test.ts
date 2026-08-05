@@ -61,10 +61,14 @@ const valuesMock = vi.fn<
 const insertMock = vi.fn<(table: unknown) => { values: typeof valuesMock }>(() => ({
   values: valuesMock,
 }));
+const deleteWhereMock = vi.fn<() => Promise<void>>(async () => undefined);
+const deleteMock = vi.fn<() => { where: typeof deleteWhereMock }>(() => ({
+  where: deleteWhereMock,
+}));
 const transactionMock = vi.fn<(callback: (transaction: unknown) => Promise<unknown>) => Promise<unknown>>(
   async (callback) => {
     databaseState.transactionCalled = true;
-    return callback({ insert: insertMock, select: selectMock });
+    return callback({ insert: insertMock, select: selectMock, delete: deleteMock });
   },
 );
 
@@ -79,6 +83,11 @@ vi.mock("#src/lib/cloudinary.js", () => ({
 vi.mock("#src/lib/image.js", () => ({
   validateAndNormalizeImage: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
+vi.mock("#src/services/store-search.service.js", () => ({
+  enqueueProductSearchDocumentRefresh: vi.fn<(...arguments_: readonly unknown[]) => Promise<void>>(
+    async () => undefined,
+  ),
+}));
 
 const { createProduct } = await import("#src/services/products.service.js");
 
@@ -89,6 +98,7 @@ const baseInput: Omit<CreateProductInput, "category" | "categoryId"> = {
   priceInCents: 1_000,
   stockQuantity: 0,
   pricingTiers: [],
+  specifications: [],
 };
 
 describe("product category resolution", () => {

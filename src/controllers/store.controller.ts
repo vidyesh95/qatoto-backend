@@ -90,11 +90,35 @@ function sendZodError(res: Response, error: z.ZodError): void {
 
 export async function getHome(_req: Request, res: Response): Promise<void> {
   const result = await storeMerchandisingService.getStoreHome();
+  if (!result.success) {
+    switch (result.error.type) {
+      case "PROVIDER_DIRECTORY_FAILED":
+        res.status(503).json({
+          status: "error",
+          statusCode: 503,
+          message: "Store home provider directory is temporarily unavailable.",
+        } satisfies ApiResponse);
+        return;
+      case "NOT_FOUND":
+      case "INVALID_CURSOR":
+        res.status(500).json({
+          status: "error",
+          statusCode: 500,
+          message: "Store home failed unexpectedly.",
+        } satisfies ApiResponse);
+        return;
+      default: {
+        const exhaustiveError: never = result.error;
+        void exhaustiveError;
+        throw new Error("Unhandled store home error.");
+      }
+    }
+  }
   res.status(200).json({
     status: "success",
     statusCode: 200,
     message: "Store home.",
-    data: result,
+    data: result.value,
   } satisfies ApiResponse);
 }
 
@@ -347,6 +371,13 @@ export async function getRail(req: Request, res: Response): Promise<void> {
           status: "error",
           statusCode: 404,
           message: "Rail not found.",
+        } satisfies ApiResponse);
+        return;
+      case "PROVIDER_DIRECTORY_FAILED":
+        res.status(503).json({
+          status: "error",
+          statusCode: 503,
+          message: "Store provider directory is temporarily unavailable.",
         } satisfies ApiResponse);
         return;
       default: {

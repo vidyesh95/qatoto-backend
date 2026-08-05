@@ -36,6 +36,7 @@ describe("UpdateProductSchema — a PATCH carries only what the client sent", ()
     expect(parsed.keyFeatures).toBeUndefined();
     expect(parsed.stockQuantity).toBeUndefined();
     expect(parsed.pricingTiers).toBeUndefined();
+    expect(parsed.specifications).toBeUndefined();
   });
 
   it("still round-trips the fields a patch does send", () => {
@@ -72,6 +73,7 @@ describe("CreateProductSchema — defaults still apply on create", () => {
     expect(parsed.keyFeatures).toEqual([]);
     expect(parsed.stockQuantity).toBe(0);
     expect(parsed.pricingTiers).toEqual([]);
+    expect(parsed.specifications).toEqual([]);
   });
 
   it("still requires the fields that have no default", () => {

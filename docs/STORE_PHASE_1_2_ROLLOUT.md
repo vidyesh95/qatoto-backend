@@ -5,6 +5,25 @@ plus the Phase 1/2 application release: public `/store/*` catalog reads, merchan
 ranked search documents, and the provider connector directory under
 `/commerce/providers*`.
 
+**Status:** shipped and hardened. Follow this runbook for deploy, backfill, and
+verification. RFQ/cart/checkout/payment work remains Phase 3+. Product ownership and
+category columns remain in the Phase 0 expand/dual-write contract until the separate
+non-null contract migration lands (`docs/STORE_PHASE_0_ROLLOUT.md`).
+
+## Hardening notes
+
+Post-ship contract fixes included:
+
+- moderator `POST /commerce/admin/organizations/:organizationId/trade-state` for
+  `pending → active|closed`, `active → suspended|closed`, and `suspended → active|closed`,
+  with search-document refresh after transition;
+- organization write and evidence-upload rate limits;
+- seller-authored `commerce_product_specification` replace-all on product create/update;
+- atomic `store_search_document` cleanup on product delete;
+- category-subtree browse/facets/search so parent categories include leaf products;
+- search documents include category synonyms and product specifications;
+- `/store/home` surfaces provider-directory failures instead of returning empty shortcuts.
+
 ## Expand
 
 Migration `0043` adds:

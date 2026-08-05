@@ -63,6 +63,22 @@ const productFieldShapes = {
   samplePriceInCents: z.number().int().positive().optional(),
   leadTimeMinDays: z.number().int().min(0).max(3650).optional(),
   leadTimeMaxDays: z.number().int().min(0).max(3650).optional(),
+  specifications: z
+    .array(
+      z
+        .object({
+          key: z.string().trim().min(1).max(80),
+          value: z.string().trim().min(1).max(500),
+        })
+        .strict(),
+    )
+    .max(40)
+    .refine(
+      (entries) =>
+        new Set(entries.map((entry) => entry.key.toLocaleLowerCase("en-US"))).size ===
+        entries.length,
+      "Specification keys must be unique within a listing.",
+    ),
 };
 
 /**
@@ -79,6 +95,7 @@ const ProductFieldsSchema = z
     keyFeatures: productFieldShapes.keyFeatures.default([]),
     stockQuantity: productFieldShapes.stockQuantity.default(0),
     pricingTiers: productFieldShapes.pricingTiers.default([]),
+    specifications: productFieldShapes.specifications.default([]),
   })
   .strict();
 
@@ -117,10 +134,7 @@ function samplePolicyHasPrice(data: {
   return true;
 }
 
-function leadTimeRangeValid(data: {
-  leadTimeMinDays?: number;
-  leadTimeMaxDays?: number;
-}): boolean {
+function leadTimeRangeValid(data: { leadTimeMinDays?: number; leadTimeMaxDays?: number }): boolean {
   if (data.leadTimeMinDays === undefined && data.leadTimeMaxDays === undefined) {
     return true;
   }

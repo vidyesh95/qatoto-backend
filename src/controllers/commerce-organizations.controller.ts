@@ -142,6 +142,13 @@ export const RecordCommerceDocumentScannerVerdictSchema = z
   .object({ verdict: z.enum(["available", "quarantined"]) })
   .strict();
 
+export const TransitionCommerceTradeStateSchema = z
+  .object({
+    tradeState: z.enum(["active", "suspended", "closed"]),
+    reason: z.string().trim().min(1).max(2000).optional(),
+  })
+  .strict();
+
 function validationError(res: Response, error: z.ZodError): void {
   res.status(422).json({
     status: "error",
@@ -533,5 +540,28 @@ export async function decideVerification(req: Request, res: Response): Promise<v
     statusCode: 200,
     message: "Organization verification decided.",
     data: decided.value,
+  } satisfies ApiResponse);
+}
+
+export async function transitionTradeState(req: Request, res: Response): Promise<void> {
+  const authContext = authenticatedRequest(req, res);
+  if (!authContext) return;
+  if (!parseNoQuery(req, res)) return;
+  const params = OrganizationIdSchema.safeParse(req.params);
+  const body = TransitionCommerceTradeStateSchema.safeParse(req.body);
+  if (!params.success) return validationError(res, params.error);
+  if (!body.success) return validationError(res, body.error);
+  const transitioned = await commerceOrganizationsService.transitionTradeState({
+    moderatorUserId: authContext.userId,
+    organizationId: params.data.organizationId,
+    tradeState: body.data.tradeState,
+    reason: body.data.reason,
+  });
+  if (!transitioned.success) return respondCommerceError(res, transitioned.error);
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Organization trade state updated.",
+    data: transitioned.value,
   } satisfies ApiResponse);
 }

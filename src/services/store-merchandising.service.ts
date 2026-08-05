@@ -14,7 +14,10 @@ import * as storeCatalogService from "#src/services/store-catalog.service.js";
 import * as storeSearchService from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 
-export type StoreMerchandisingError = { type: "NOT_FOUND" } | { type: "INVALID_CURSOR" };
+export type StoreMerchandisingError =
+  | { type: "NOT_FOUND" }
+  | { type: "INVALID_CURSOR" }
+  | { type: "PROVIDER_DIRECTORY_FAILED" };
 
 export type MerchandisingItemProjection =
   | {
@@ -95,34 +98,39 @@ async function resolveEligibleMerchandisingItems(
   return resolved;
 }
 
-export async function getStoreHome(): Promise<{
-  readonly heroSlides: readonly {
-    readonly id: string;
-    readonly title: string;
-    readonly subtitle: string | null;
-    readonly accent: string;
-    readonly imageUrl: string | null;
-    readonly linkTargetKind: string | null;
-    readonly linkTargetSlug: string | null;
-  }[];
-  readonly categories: Awaited<
-    ReturnType<typeof storeCatalogService.listActiveCategories>
-  >["items"];
-  readonly pathways: readonly {
-    readonly id: string;
-    readonly slug: string;
-    readonly title: string;
-    readonly summary: string | null;
-    readonly accent: string;
-  }[];
-  readonly providerShortcuts: readonly commerceProvidersService.PublicProviderCard[];
-  readonly rails: readonly {
-    readonly slug: string;
-    readonly title: string;
-    readonly strategy: string;
-    readonly items: readonly MerchandisingItemProjection[];
-  }[];
-}> {
+export async function getStoreHome(): Promise<
+  Result<
+    {
+      readonly heroSlides: readonly {
+        readonly id: string;
+        readonly title: string;
+        readonly subtitle: string | null;
+        readonly accent: string;
+        readonly imageUrl: string | null;
+        readonly linkTargetKind: string | null;
+        readonly linkTargetSlug: string | null;
+      }[];
+      readonly categories: Awaited<
+        ReturnType<typeof storeCatalogService.listActiveCategories>
+      >["items"];
+      readonly pathways: readonly {
+        readonly id: string;
+        readonly slug: string;
+        readonly title: string;
+        readonly summary: string | null;
+        readonly accent: string;
+      }[];
+      readonly providerShortcuts: readonly commerceProvidersService.PublicProviderCard[];
+      readonly rails: readonly {
+        readonly slug: string;
+        readonly title: string;
+        readonly strategy: string;
+        readonly items: readonly MerchandisingItemProjection[];
+      }[];
+    },
+    StoreMerchandisingError
+  >
+> {
   const [heroSlides, categoriesResult, pathways, rails, providersResult] = await Promise.all([
     db
       .select({
@@ -165,6 +173,10 @@ export async function getStoreHome(): Promise<{
     commerceProvidersService.listPublicProviders({ limit: 8 }),
   ]);
 
+  if (!providersResult.success) {
+    return { success: false, error: { type: "PROVIDER_DIRECTORY_FAILED" } };
+  }
+
   const railProjections = await Promise.all(
     rails.map(async (rail) => {
       const itemsResult = await resolveRailItemsPage({
@@ -182,11 +194,14 @@ export async function getStoreHome(): Promise<{
   );
 
   return {
-    heroSlides,
-    categories: categoriesResult.items,
-    pathways,
-    providerShortcuts: providersResult.success ? providersResult.value.items : [],
-    rails: railProjections,
+    success: true,
+    value: {
+      heroSlides,
+      categories: categoriesResult.items,
+      pathways,
+      providerShortcuts: providersResult.value.items,
+      rails: railProjections,
+    },
   };
 }
 

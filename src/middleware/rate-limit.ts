@@ -845,6 +845,27 @@ export const commerceProviderWriteLimiter = createLimiter({
 });
 
 /**
+ * Authenticated commerce organization profile, membership, address, activation,
+ * and moderation mutations. Bound below the provider write limiter because org
+ * creation and member invites are higher-value abuse targets.
+ */
+export const commerceOrganizationWriteLimiter = createLimiter({
+  namespace: "commerceOrganizationWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/**
+ * Verification evidence uploads. Separate from ordinary org writes because each
+ * attempt stores encrypted private bytes and must stay expensive to spray.
+ */
+export const commerceOrganizationEvidenceLimiter = createLimiter({
+  namespace: "commerceOrganizationEvidence",
+  windowMs: ONE_MINUTE_MS,
+  limit: 10,
+});
+
+/**
  * POST /videos/:videoId/view-beacon — the BURST half of §7's "60/min, 200/hr".
  *
  * TWO LIMITERS RATHER THAN ONE, because `LimiterSpec` carries a single window and

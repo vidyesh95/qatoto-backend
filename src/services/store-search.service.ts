@@ -1,9 +1,10 @@
-import { and, asc, desc, eq, gt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
   commerceCategory,
   commerceOrganization,
+  commerceProductSpecification,
   commerceProviderKindLink,
   commerceProviderProfile,
   commerceServiceOffering,
@@ -15,6 +16,26 @@ import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { escapeLikePattern } from "#src/lib/sql-pattern.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { Result } from "#src/types/index.js";
+
+async function listActiveCategorySubtreeSlugs(
+  rootCategorySlug: string,
+): Promise<readonly string[]> {
+  const result = await db.execute<{ slug: string }>(sql`
+    WITH RECURSIVE category_subtree AS (
+      SELECT id, slug
+      FROM commerce_category
+      WHERE slug = ${rootCategorySlug}
+        AND state = 'active'
+      UNION ALL
+      SELECT child.id, child.slug
+      FROM commerce_category AS child
+      INNER JOIN category_subtree AS parent ON parent.id = child.parent_category_id
+      WHERE child.state = 'active'
+    )
+    SELECT slug FROM category_subtree
+  `);
+  return result.rows.map((row) => row.slug);
+}
 
 async function enqueueRefresh(
   payload:
@@ -144,14 +165,28 @@ export async function searchStoreDocuments(input: {
   const hasQuery = trimmedQuery.length > 0;
   const useRelevance = hasQuery && (input.sort === undefined || input.sort === "relevance");
 
+  const categorySlugs =
+    input.categorySlug === undefined
+      ? undefined
+      : await listActiveCategorySubtreeSlugs(input.categorySlug);
+  if (
+    input.categorySlug !== undefined &&
+    (categorySlugs === undefined || categorySlugs.length === 0)
+  ) {
+    return {
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    };
+  }
+
   const baseFilters = [
     eq(storeSearchDocument.isEligible, true),
     input.documentKind === undefined
       ? undefined
       : eq(storeSearchDocument.documentKind, input.documentKind),
-    input.categorySlug === undefined
+    categorySlugs === undefined
       ? undefined
-      : eq(storeSearchDocument.categorySlug, input.categorySlug),
+      : inArray(storeSearchDocument.categorySlug, [...categorySlugs]),
     input.sellerCountryCode === undefined
       ? undefined
       : eq(storeSearchDocument.organizationCountryCode, input.sellerCountryCode),
@@ -367,6 +402,25 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
     .from(productPricingTier)
     .where(eq(productPricingTier.productId, productId));
 
+  const [specificationRows, categorySynonymRow] = await Promise.all([
+    db
+      .select({
+        key: commerceProductSpecification.specificationKey,
+        value: commerceProductSpecification.specificationValue,
+      })
+      .from(commerceProductSpecification)
+      .where(eq(commerceProductSpecification.productId, productId))
+      .orderBy(asc(commerceProductSpecification.position)),
+    row.categoryId === null
+      ? Promise.resolve(undefined)
+      : db
+          .select({ searchSynonyms: commerceCategory.searchSynonyms })
+          .from(commerceCategory)
+          .where(eq(commerceCategory.id, row.categoryId))
+          .limit(1)
+          .then((rows) => rows[0]),
+  ]);
+
   const isEligible =
     row.status === "active" &&
     row.moderationState === "approved" &&
@@ -375,7 +429,14 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
     row.categoryState === "active" &&
     row.categoryId !== null;
 
-  const searchText = [row.title, row.brand, row.description, row.organizationDisplayName]
+  const searchText = [
+    row.title,
+    row.brand,
+    row.description,
+    row.organizationDisplayName,
+    ...(categorySynonymRow?.searchSynonyms ?? []),
+    ...specificationRows.flatMap((specification) => [specification.key, specification.value]),
+  ]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
     .join(" ");
 

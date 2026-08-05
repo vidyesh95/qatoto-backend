@@ -80,7 +80,6 @@ commerceProvidersRouter.post(
   requireAuth,
   requireActiveCommerceOrganization,
   commerceProviderWriteLimiter,
-  compactBody,
   idempotency({ required: true, scope: "active_organization" }),
   commerceProvidersController.submitOffering,
 );
