@@ -7619,6 +7619,9 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "promotional_slide_reordered",
   "promotional_slide_image_replaced",
   "promotional_slide_deleted",
+  // The home-page Spotlight rail — up to three admin-picked catalogue videos. One event
+  // because the only write is a whole-set replace (never a per-slot create/update).
+  "spotlight_slots_replaced",
 ]);
 
 /**
@@ -11228,4 +11231,58 @@ export const promotionalSlide = pgTable(
 export const promotionalSlideRelations = relations(promotionalSlide, ({ one }) => ({
   createdBy: one(user, { fields: [promotionalSlide.createdByUserId], references: [user.id] }),
   updatedBy: one(user, { fields: [promotionalSlide.updatedByUserId], references: [user.id] }),
+}));
+
+// ---------------------------------------------------------------------------
+// Spotlight — the three-video rail on the home feed below the category tiles.
+//
+// PLATFORM-AUTHORED, like `promotional_slide`. No member owner; the gate is
+// `manage_promotions` (same front-page placement blast radius as the carousel). The
+// only write is a whole-set replace of 0..3 video ids — there is no per-slot CRUD,
+// because a partial list would silently drop a slot the admin had not seen.
+//
+// Thumbnails and titles are NOT stored here. They are joined from `video` at read
+// time, so an admin never uploads a second creative for a video that already has one.
+// ---------------------------------------------------------------------------
+
+export const feedSpotlightSlot = pgTable(
+  "feed_spotlight_slot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /**
+     * 0-based display order: 0 = left, 1 = center, 2 = right. Contiguous after every
+     * replace. UNIQUE — two rows sharing a position would make the rail order undefined.
+     */
+    position: integer("position").notNull(),
+    /**
+     * The catalogue video shown in this slot. Cascade: deleting the video must not leave
+     * a dangling homepage placement pointing at a 404.
+     */
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    updatedByUserId: text("updated_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("feed_spotlight_slot_position_uidx").on(table.position),
+    uniqueIndex("feed_spotlight_slot_video_uidx").on(table.videoId),
+    check("feed_spotlight_slot_position_ck", sql`position >= 0 AND position <= 2`),
+  ],
+);
+
+export const feedSpotlightSlotRelations = relations(feedSpotlightSlot, ({ one }) => ({
+  video: one(video, { fields: [feedSpotlightSlot.videoId], references: [video.id] }),
+  updatedBy: one(user, {
+    fields: [feedSpotlightSlot.updatedByUserId],
+    references: [user.id],
+  }),
 }));

@@ -19,6 +19,7 @@ import notificationsRouter from "#src/routes/notifications.routes.js";
 import platformAuditRouter from "#src/routes/platform-audit.routes.js";
 import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import promotionsRouter from "#src/routes/promotions.routes.js";
+import spotlightRouter from "#src/routes/spotlight.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
@@ -76,6 +77,7 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/research-programs", router: researchProgramsRouter },
   { mountPath: "/discovery", router: discoveryRouter },
   { mountPath: "/promotions", router: promotionsRouter },
+  { mountPath: "/spotlight", router: spotlightRouter },
   { mountPath: "/", router: researchCatalogRouter },
   { mountPath: "/", router: researchPaperCategoryRouter },
   { mountPath: "/", router: dailyLogFeedRouter },
@@ -108,6 +110,8 @@ export function rndRouteChains(): readonly RouteHandlerChain[] {
 const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = [
   { prefix: "/promotions/admin", tag: "Promotions moderation" },
   { prefix: "/promotions", tag: "Promotions" },
+  { prefix: "/spotlight/admin", tag: "Spotlight moderation" },
+  { prefix: "/spotlight", tag: "Spotlight" },
   { prefix: "/discovery/admin", tag: "Discovery moderation" },
   { prefix: "/discovery", tag: "Discovery" },
   { prefix: "/admin/audit-trail", tag: "Platform audit" },
@@ -197,6 +201,8 @@ const PUBLICLY_RESOLVABLE = new Set([
   // The home-page carousel. Bare on purpose — no requireAuth AND no attachOptionalUser,
   // because nothing about a slide depends on who is asking.
   "get /promotions/slides",
+  // The home-page Spotlight rail. Bare on purpose — same rationale as promotions.
+  "get /spotlight/videos",
 ]);
 
 const CONTRACT_NOTE =

@@ -60,6 +60,7 @@ import {
   ReorderPromotionalSlidesSchema,
   UpdatePromotionalSlideSchema,
 } from "#src/controllers/promotions.controller.js";
+import { ReplaceSpotlightSlotsSchema } from "#src/controllers/spotlight.controller.js";
 import {
   AuthorizeIntegrationSchema,
   BakePieSchema,
@@ -438,6 +439,10 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   // PATCH /promotions/admin/slides/{slideId}/image is deliberately ABSENT. It carries only
   // the file and its controller never touches `req.body`, so it is not a body-reading
   // route — an entry here would be an orphan the sweep reports.
+  "put /spotlight/admin/slots": {
+    schema: ReplaceSpotlightSlotsSchema,
+    required: true,
+  },
   "post /research-programs/{programSlug}/papers/{paperId}/file": {
     schema: AttachPaperFileSchema,
     required: true,

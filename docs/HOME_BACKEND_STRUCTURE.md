@@ -33,10 +33,12 @@ who edits the beacon payload in DevTools must not be able to promote their own v
 bit-identical scores, which is what makes a ranking bug reproducible instead of folklore. This
 copies `src/lib/opportunity-score.ts` exactly and for exactly the same reason.
 
-**Rule 3 — There is one feed route.** `GET /feed/videos` returns one ranked page. Recommended and
-Explore are a **frontend slice** of that page (frontend §5), not two response fields. Spotlight is
-the same route with `?mode=trending&limit=3`. One ranking contract, one cache story, one place a
-ranking bug can live.
+**Rule 3 — There is one feed ranking route.** `GET /feed/videos` returns one ranked page.
+Recommended and Explore are a **frontend slice** of that page (frontend §5), not two response
+fields. One ranking contract, one cache story, one place a ranking bug can live. Spotlight is the
+**exception**: it is admin-curated via `GET /spotlight/videos` (up to three catalogue videos set
+at `PUT /spotlight/admin/slots`), not `?mode=trending&limit=3`. The Trending chip still uses
+`mode=trending` on the feed route.
 
 **Rule 4 — A view is not a watch.** `viewCount` counts arrivals. `completionBasisPoints` measures
 watching. Only the second one ranks, and **only when it came from a signed-in session** (§8).
@@ -495,7 +497,7 @@ operational fact about the catalog, not something a client should branch on.
 | Mode                | Behaviour                                                                                                                                                                        |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `all`               | The blended rank of §4.3. Default.                                                                                                                                               |
-| `trending`          | `trendingVideoSnapshot` rank order. `limit=3` is what Spotlight asks for.                                                                                                        |
+| `trending`          | `trendingVideoSnapshot` rank order. The Trending chip uses this; Spotlight is a separate curated route (`GET /spotlight/videos`).                                                  |
 | `recently_uploaded` | `publishedAt DESC` over the candidate pool.                                                                                                                                      |
 | `new_to_you`        | `all`, with creators the viewer has already watched excluded and the exploration budget raised to 40.                                                                            |
 | `watched`           | The viewer's own counted-view history, most recent first. **401 when anonymous** — serving it off a fingerprint would leak one person's history to everyone behind the same NAT. |
@@ -619,7 +621,7 @@ are stored next to the total**, so any score can be explained after the fact rat
 re-derived from data that has since moved.
 
 `userTopicAffinitySnapshot` · `userCreatorAffinitySnapshot` · `videoQualityScoreSnapshot` ·
-`trendingVideoSnapshot` (top 200, with a `rank` column — Spotlight is `rank <= 3`) ·
+`trendingVideoSnapshot` (top 200, with a `rank` column — powers `mode=trending`) ·
 `platformCategoryPopularitySnapshot`.
 
 Every scheduled job follows the mandatory **tick pattern** (`src/jobs/scheduled-ticks.ts`): the
@@ -779,7 +781,7 @@ published row" is preserved without discarding the upload.
 | ----- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | 1     | `contentCategory` + `videoCategory` + seed + `GET /feed/categories`; `isSourceVerified` + `verify-youtube-video`; studio `categoryIds` | `curl /feed/categories` returns the seeded rows                                                           |
 | 2     | Engagement tables + `videoStats` + write routes + beacon clamping + playback-error                                                     | Like/comment/beacon persist; counters move in the same transaction                                        |
-| 3     | `feed-score.ts` / `trending-score.ts` / `affinity-score.ts` + snapshots + jobs + `GET /feed/videos`                                    | `curl '/feed/videos?limit=24'` ranks for both anonymous and authed; `?mode=trending&limit=3` is Spotlight |
+| 3     | `feed-score.ts` / `trending-score.ts` / `affinity-score.ts` + snapshots + jobs + `GET /feed/videos`                                    | `curl '/feed/videos?limit=24'` ranks for both anonymous and authed; Spotlight is `GET /spotlight/videos` |
 
 Phases 1–3 show nothing to a user until the frontend lands (frontend §9). Phase 2 of the frontend
 work is what starts producing the completion data phase 3 here depends on — until real watch

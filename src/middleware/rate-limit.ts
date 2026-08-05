@@ -785,6 +785,18 @@ export const promotionalSlideImageUploadLimiter = createLimiter({
   limit: 20,
 });
 
+/**
+ * Spotlight admin reads and the whole-set replace write.
+ *
+ * Same shape as the promotional-slide write bucket: low-frequency staff actions against a
+ * three-row table. Thirty a minute is far above any human merchandising pace.
+ */
+export const spotlightWriteLimiter = createLimiter({
+  namespace: "spotlightWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
 // ---------------------------------------------------------------------------
 // HOME FEED ENGAGEMENT (HOME_BACKEND_STRUCTURE.md §7)
 //

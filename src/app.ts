@@ -26,6 +26,7 @@ import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import playlistsRouter from "#src/routes/playlists.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
 import promotionsRouter from "#src/routes/promotions.routes.js";
+import spotlightRouter from "#src/routes/spotlight.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
@@ -135,6 +136,9 @@ app.use("/products", productsRouter);
 // The home-page carousel. GET /promotions/slides is public; every /promotions/admin/*
 // route is gated by `manage_promotions` inside the service.
 app.use("/promotions", promotionsRouter);
+// The home-page Spotlight rail. GET /spotlight/videos is public; admin routes are gated
+// by `manage_promotions` inside the service (same blast radius as the carousel).
+app.use("/spotlight", spotlightRouter);
 // The home feed's public read surface (HOME_BACKEND_STRUCTURE.md §5.1). Grouped with the
 // carousel above because both are front-page data sources, but UNLIKE the /research-projects
 // stack below, ordering here is NOT load-bearing: /feed is a single-segment prefix that no
