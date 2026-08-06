@@ -330,6 +330,13 @@
       "when": 1785950000000,
       "tag": "0046_store_phase_4_checkout",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1785955000000,
+      "tag": "0047_store_phase_5_payments",
+      "breakpoints": true
     }
   ]
 }

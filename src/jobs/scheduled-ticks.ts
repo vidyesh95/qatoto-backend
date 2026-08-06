@@ -557,3 +557,28 @@ export async function handleReleaseExpiredInventoryReservationsTick(
     );
   }
 }
+
+/**
+ * The hourly commerce payment reconciliation tick (STORE Phase 5).
+ *
+ * Quantized to the HOUR so a double cron fire collapses to one real job. Re-enqueues
+ * pending outbox rows and re-checks submitted transfers against the provider adapter.
+ */
+export async function handleReconcileCommercePaymentsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcHourStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.reconcileCommercePayments,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.reconcileCommercePayments(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `reconcile-commerce-payments-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}

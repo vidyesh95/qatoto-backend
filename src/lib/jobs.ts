@@ -128,6 +128,10 @@ export const JOB_NAMES = {
   // STORE Phase 4 — release expired checkout preparations and inventory holds.
   releaseExpiredInventoryReservationsTick: "release-expired-inventory-reservations-tick",
   releaseExpiredInventoryReservations: "release-expired-inventory-reservations",
+  // STORE Phase 5 — commerce payment outbox dispatch and reconciliation.
+  dispatchCommerceWebhookEvent: "dispatch-commerce-webhook-event",
+  reconcileCommercePaymentsTick: "reconcile-commerce-payments-tick",
+  reconcileCommercePayments: "reconcile-commerce-payments",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -267,6 +271,16 @@ const RefreshStoreSearchDocumentPayloadSchema = z.discriminatedUnion("targetKind
     })
     .strict(),
 ]);
+
+/**
+ * Commerce payment outbox dispatch. Carries the outbox row id only — amounts, provider
+ * refs, and state are re-read from authoritative rows inside the handler.
+ */
+const DispatchCommerceWebhookEventPayloadSchema = z
+  .object({
+    outboxId: z.string().trim().min(1).max(200),
+  })
+  .strict();
 
 /**
  * One definition per job: its payload contract and its queue policy.
@@ -932,6 +946,39 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.releaseExpiredInventoryReservations),
     },
   },
+  [JOB_NAMES.dispatchCommerceWebhookEvent]: {
+    name: JOB_NAMES.dispatchCommerceWebhookEvent,
+    payloadSchema: DispatchCommerceWebhookEventPayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      expireInSeconds: 300,
+      deadLetter: deadLetterNameFor(JOB_NAMES.dispatchCommerceWebhookEvent),
+    },
+  },
+  [JOB_NAMES.reconcileCommercePaymentsTick]: {
+    name: JOB_NAMES.reconcileCommercePaymentsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.reconcileCommercePaymentsTick),
+    },
+  },
+  [JOB_NAMES.reconcileCommercePayments]: {
+    name: JOB_NAMES.reconcileCommercePayments,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.reconcileCommercePayments),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -1050,6 +1097,8 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   [JOB_NAMES.expireCommerceQuotesTick]: "20 * * * *",
   // STORE Phase 4 — hourly inventory hold release. Minute :35 avoids the quote expiry tick.
   [JOB_NAMES.releaseExpiredInventoryReservationsTick]: "35 * * * *",
+  // STORE Phase 5 — hourly payment reconciliation. Minute :50 avoids inventory/quote ticks.
+  [JOB_NAMES.reconcileCommercePaymentsTick]: "50 * * * *",
 };
 
 export type JobEnqueueError =
@@ -1306,6 +1355,9 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.expireCommerceQuotes]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.releaseExpiredInventoryReservationsTick]: TickPayloadSchema,
   [JOB_NAMES.releaseExpiredInventoryReservations]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.dispatchCommerceWebhookEvent]: DispatchCommerceWebhookEventPayloadSchema,
+  [JOB_NAMES.reconcileCommercePaymentsTick]: TickPayloadSchema,
+  [JOB_NAMES.reconcileCommercePayments]: AsOfOnlyPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -1432,4 +1484,8 @@ export const idempotencyKeyFor = {
   expireCommerceQuotes: (asOfIso: string): string => `${JOB_NAMES.expireCommerceQuotes}:${asOfIso}`,
   releaseExpiredInventoryReservations: (asOfIso: string): string =>
     `${JOB_NAMES.releaseExpiredInventoryReservations}:${asOfIso}`,
+  dispatchCommerceWebhookEvent: (outboxId: string): string =>
+    `${JOB_NAMES.dispatchCommerceWebhookEvent}:${outboxId}`,
+  reconcileCommercePayments: (asOfIso: string): string =>
+    `${JOB_NAMES.reconcileCommercePayments}:${asOfIso}`,
 } as const;

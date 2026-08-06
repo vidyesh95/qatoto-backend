@@ -268,6 +268,13 @@ const envSchema = z.object({
     .min(60_000)
     .max(3_600_000)
     .default(900_000),
+  /**
+   * Commerce payment provider selection (Store Phase 5).
+   *
+   * `fake` is the development/test adapter only — it is refuse-closed in production by
+   * `resolveCommercePaymentProvider`. `stripe` is reserved for a future real processor.
+   */
+  COMMERCE_PAYMENT_PROVIDER: z.enum(["fake", "stripe"]).default("fake"),
   // The GitHub App that grounds code artifacts. All three are required together, and
   // without them `POST …/integrations` answers 503 INTEGRATION_UNCONFIGURED and grounding
   // falls back to the evidence links §8 already stored.

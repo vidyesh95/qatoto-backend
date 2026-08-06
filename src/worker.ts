@@ -8,6 +8,7 @@ import { jobFailure } from "#src/db/schema.js";
 import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
 import { handleDeliverNotification } from "#src/jobs/deliver-notification.js";
+import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
 import { handleExpireCommerceQuotes } from "#src/jobs/expire-commerce-quotes.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
 import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
@@ -24,6 +25,7 @@ import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-vide
 import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
 import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
+import { handleReconcileCommercePayments } from "#src/jobs/reconcile-commerce-payments.js";
 import { handleRefreshStoreSearchDocument } from "#src/jobs/refresh-store-search-document.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import { handleReleaseExpiredInventoryReservations } from "#src/jobs/release-expired-inventory-reservations.js";
@@ -49,6 +51,7 @@ import {
   handleRevalidateYoutubeEmbedsTick,
   handleExpireCommerceQuotesTick,
   handleReleaseExpiredInventoryReservationsTick,
+  handleReconcileCommercePaymentsTick,
 } from "#src/jobs/scheduled-ticks.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
 import {
@@ -454,6 +457,23 @@ async function startWorker(): Promise<void> {
       JOB_NAMES.releaseExpiredInventoryReservations,
       handleReleaseExpiredInventoryReservations,
     ),
+  );
+
+  // STORE Phase 5 — payment outbox dispatch and reconciliation.
+  await boss.work(
+    JOB_NAMES.dispatchCommerceWebhookEvent,
+    workOptions,
+    runJob(JOB_NAMES.dispatchCommerceWebhookEvent, handleDispatchCommerceWebhookEvent),
+  );
+  await boss.work(
+    JOB_NAMES.reconcileCommercePaymentsTick,
+    workOptions,
+    runJob(JOB_NAMES.reconcileCommercePaymentsTick, handleReconcileCommercePaymentsTick),
+  );
+  await boss.work(
+    JOB_NAMES.reconcileCommercePayments,
+    workOptions,
+    runJob(JOB_NAMES.reconcileCommercePayments, handleReconcileCommercePayments),
   );
 
   // §7 — funding.

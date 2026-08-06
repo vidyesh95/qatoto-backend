@@ -28,17 +28,18 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–4 foundation shipped.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–5 foundation shipped.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
 > preparation and confirmation into direct-checkout orders, buyer/counterparty order queues and
-> cancellation, product shipments, and standalone service engagements are implemented. See
-> `docs/STORE_PHASE_4_ROLLOUT.md` for the cart/checkout/orders/fulfillment contract. Payments,
-> escrow, shipment-leg/connector execution, and trust workflows described here remain planned
-> unless a section explicitly says otherwise. Product organization-ownership and category
-> columns remain in the documented expand/dual-write contract phase until non-null enforcement
-> is separately released.
+> cancellation, product shipments, standalone service engagements, commerce payment intents,
+> refunds, and a double-entry commerce journal (fake provider adapter only) are implemented. See
+> `docs/STORE_PHASE_5_ROLLOUT.md` for the payments/journal contract. Trade-assurance language,
+> real payment processors, shipment-leg/connector execution, and trust workflows described here
+> remain planned unless a section explicitly says otherwise. Product organization-ownership and
+> category columns remain in the documented expand/dual-write contract phase until non-null
+> enforcement is separately released.
 
 ---
 
@@ -798,7 +799,9 @@ Scheduled jobs:
 ### Phase 5 — payments and trade assurance
 
 - Commerce-specific payment/journal records, provider adapters, reconciliation, refunds.
-- Enable assurance language only after legal and operational controls are complete.
+- **Shipped (ledger + fake adapter).** See `docs/STORE_PHASE_5_ROLLOUT.md` for migrate,
+  worker install, verification, and smoke tests. Trade-assurance language and real payment
+  processors remain blocked on legal/provider decisions (§14).
 
 ### Phase 6 — connector execution
 

@@ -1052,6 +1052,16 @@ export const commerceOrderWriteLimiter = createLimiter({
 });
 
 /**
+ * Payment intent and refund mutations (Store Phase 5). These create ledger and provider
+ * work; bound below scripted abuse while tolerating honest idempotent retries.
+ */
+export const commercePaymentWriteLimiter = createLimiter({
+  namespace: "commercePaymentWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});
+
+/**
  * Shipment create/event and service-engagement transition mutations (Store Phase 4).
  * Each write commits inventory or state changes visible to the other party, so this is
  * bound below honest counterparty-operations pace while still tolerating idempotent retries.

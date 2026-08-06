@@ -474,6 +474,12 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "shipment_event_recorded",
     "service_engagement_created",
     "service_engagement_transitioned",
+    "payment_intent_created",
+    "payment_intent_settled",
+    "payment_intent_failed",
+    "payment_refund_created",
+    "payment_refund_settled",
+    "payment_refund_failed",
   ],
 );
 
@@ -672,6 +678,96 @@ export const commerceShipmentEventKindEnum = pgEnum("commerce_shipment_event_kin
   "delivered",
   "exception",
   "cancelled",
+]);
+
+/**
+ * Commerce payment provider identity (STORE Phase 5).
+ *
+ * Separate from the R&D `payment_provider` enum: commerce never posts into project-
+ * funding rows, and the fake adapter is fail-closed outside local/test environments.
+ * `stripe` is reserved so switching a real processor on is an INSERT, not a migration.
+ */
+export const commercePaymentProviderEnum = pgEnum("commerce_payment_provider", ["fake", "stripe"]);
+
+/**
+ * Payment intent lifecycle (STORE_BACKEND_STRUCTURE.md §4.9):
+ * `created → requires_action | processing → authorized → settled`
+ * Terminal alternatives: `failed | cancelled | partially_refunded | refunded | disputed`.
+ */
+export const commercePaymentIntentStateEnum = pgEnum("commerce_payment_intent_state", [
+  "created",
+  "requires_action",
+  "processing",
+  "authorized",
+  "settled",
+  "failed",
+  "cancelled",
+  "partially_refunded",
+  "refunded",
+  "disputed",
+]);
+
+export const commerceProviderTransferStateEnum = pgEnum("commerce_provider_transfer_state", [
+  "created",
+  "submitted",
+  "settled",
+  "failed",
+  "cancelled",
+]);
+
+export const commerceRefundStateEnum = pgEnum("commerce_refund_state", [
+  "created",
+  "processing",
+  "settled",
+  "failed",
+  "cancelled",
+]);
+
+/**
+ * Commerce journal account kinds (ESCROW_LEDGER_STRUCTURE.md §3, retargeted at orders).
+ *
+ * Sign conventions are FIXED here, not inferred:
+ *   - `buyer_clearing` — outside world; permanently negative when funds enter
+ *   - `order_held` — positive while the hold stands
+ *   - `seller_payable` — seller entitlement not yet paid out
+ *   - `platform_fee` — retained at zero until a fee policy exists
+ *   - `refunds_payable` — owed back to the buyer
+ *   - `reconciliation_suspense` — provider/ledger delta until a human resolves it
+ */
+export const commerceJournalAccountKindEnum = pgEnum("commerce_journal_account_kind", [
+  "buyer_clearing",
+  "order_held",
+  "seller_payable",
+  "platform_fee",
+  "refunds_payable",
+  "reconciliation_suspense",
+]);
+
+export const commerceJournalKindEnum = pgEnum("commerce_journal_kind", [
+  "payment_authorized",
+  "payment_settled",
+  "payment_failed",
+  "payment_refunded",
+  "reconciliation_adjustment",
+  "reversal",
+]);
+
+export const commerceJournalEntrySettlementEnum = pgEnum("commerce_journal_entry_settlement", [
+  "pending",
+  "settled",
+  "failed",
+]);
+
+export const commercePaymentOutboxKindEnum = pgEnum("commerce_payment_outbox_kind", [
+  "submit_payment_intent",
+  "submit_refund",
+]);
+
+export const commercePaymentOutboxStateEnum = pgEnum("commerce_payment_outbox_state", [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
 ]);
 
 /**
@@ -3026,6 +3122,381 @@ export const commerceShipmentEvent = pgTable(
     check(
       "commerce_shipment_event_description_ck",
       sql`description IS NULL OR char_length(description) BETWEEN 1 AND 2000`,
+    ),
+  ],
+);
+
+/**
+ * A commerce payment intent for one order (STORE_BACKEND_STRUCTURE.md §4.9).
+ *
+ * Amount and currency are copied from the immutable order snapshot at create — never
+ * accepted from the client. The local row and idempotency key are committed BEFORE any
+ * provider call; the worker submits through the adapter seam.
+ */
+export const commercePaymentIntent = pgTable(
+  "commerce_payment_intent",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    counterpartyOrganizationId: text("counterparty_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    provider: commercePaymentProviderEnum("provider").notNull(),
+    state: commercePaymentIntentStateEnum("state").default("created").notNull(),
+    amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    /** OURS, minted before any provider call. Unique across intents. */
+    idempotencyKey: text("idempotency_key").notNull(),
+    providerPaymentRef: text("provider_payment_ref"),
+    failureReason: text("failure_reason"),
+    authorizedAt: timestamp("authorized_at"),
+    settledAt: timestamp("settled_at"),
+    failedAt: timestamp("failed_at"),
+    cancelledAt: timestamp("cancelled_at"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_payment_intent_idempotency_uidx").on(table.idempotencyKey),
+    uniqueIndex("commerce_payment_intent_provider_ref_uidx")
+      .on(table.provider, table.providerPaymentRef)
+      .where(sql`provider_payment_ref IS NOT NULL`),
+    // At most one non-terminal intent per order. Terminal states may coexist with a
+    // replacement intent after failure/cancellation.
+    uniqueIndex("commerce_payment_intent_active_order_uidx")
+      .on(table.orderId)
+      .where(
+        sql`state IN ('created', 'requires_action', 'processing', 'authorized', 'settled', 'partially_refunded', 'refunded', 'disputed')`,
+      ),
+    index("commerce_payment_intent_order_idx").on(table.orderId, table.id),
+    index("commerce_payment_intent_buyer_idx").on(table.buyerOrganizationId, table.state, table.id),
+    index("commerce_payment_intent_state_idx").on(table.state, table.updatedAt, table.id),
+    check("commerce_payment_intent_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("commerce_payment_intent_amount_ck", sql`amount_in_cents > 0`),
+    check(
+      "commerce_payment_intent_failure_ck",
+      sql`failure_reason IS NULL OR char_length(failure_reason) BETWEEN 1 AND 1000`,
+    ),
+  ],
+);
+
+/**
+ * A transfer submitted to the commerce payment provider.
+ *
+ * Written with OUR idempotency key BEFORE the adapter call (STORE §4.9 / ESCROW §7).
+ */
+export const commerceProviderTransfer = pgTable(
+  "commerce_provider_transfer",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    paymentIntentId: text("payment_intent_id")
+      .notNull()
+      .references(() => commercePaymentIntent.id, { onDelete: "restrict" }),
+    refundId: text("refund_id").references((): AnyPgColumn => commerceRefund.id, {
+      onDelete: "set null",
+    }),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    provider: commercePaymentProviderEnum("provider").notNull(),
+    direction: text("direction").notNull(),
+    state: commerceProviderTransferStateEnum("state").default("created").notNull(),
+    amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    providerTransferRef: text("provider_transfer_ref"),
+    failureReason: text("failure_reason"),
+    submittedAt: timestamp("submitted_at"),
+    settledAt: timestamp("settled_at"),
+    failedAt: timestamp("failed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_provider_transfer_idempotency_uidx").on(table.idempotencyKey),
+    uniqueIndex("commerce_provider_transfer_provider_ref_uidx")
+      .on(table.provider, table.providerTransferRef)
+      .where(sql`provider_transfer_ref IS NOT NULL`),
+    index("commerce_provider_transfer_intent_idx").on(table.paymentIntentId, table.id),
+    index("commerce_provider_transfer_order_idx").on(table.orderId, table.id),
+    index("commerce_provider_transfer_state_idx").on(table.state, table.updatedAt, table.id),
+    check("commerce_provider_transfer_direction_ck", sql`direction IN ('inbound', 'outbound')`),
+    check("commerce_provider_transfer_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("commerce_provider_transfer_amount_ck", sql`amount_in_cents > 0`),
+  ],
+);
+
+export const commerceRefund = pgTable(
+  "commerce_refund",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    paymentIntentId: text("payment_intent_id")
+      .notNull()
+      .references(() => commercePaymentIntent.id, { onDelete: "restrict" }),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    provider: commercePaymentProviderEnum("provider").notNull(),
+    state: commerceRefundStateEnum("state").default("created").notNull(),
+    amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    providerRefundRef: text("provider_refund_ref"),
+    reason: text("reason"),
+    failureReason: text("failure_reason"),
+    settledAt: timestamp("settled_at"),
+    failedAt: timestamp("failed_at"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_refund_idempotency_uidx").on(table.idempotencyKey),
+    uniqueIndex("commerce_refund_provider_ref_uidx")
+      .on(table.provider, table.providerRefundRef)
+      .where(sql`provider_refund_ref IS NOT NULL`),
+    index("commerce_refund_intent_idx").on(table.paymentIntentId, table.id),
+    index("commerce_refund_order_idx").on(table.orderId, table.id),
+    check("commerce_refund_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("commerce_refund_amount_ck", sql`amount_in_cents > 0`),
+    check(
+      "commerce_refund_reason_ck",
+      sql`reason IS NULL OR char_length(reason) BETWEEN 1 AND 1000`,
+    ),
+  ],
+);
+
+/**
+ * One double-entry account per (order, kind). Balances are derived from journal lines;
+ * cached balance columns are deliberately absent so the journal remains the sole truth.
+ */
+export const commerceJournalAccount = pgTable(
+  "commerce_journal_account",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    kind: commerceJournalAccountKindEnum("kind").notNull(),
+    currency: text("currency").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_journal_account_order_kind_uidx").on(table.orderId, table.kind),
+    check("commerce_journal_account_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+  ],
+);
+
+/**
+ * Append-only, hash-chained commerce journal header (ESCROW_LEDGER_STRUCTURE.md §4).
+ * Corrections are reversing entries — never UPDATE or DELETE.
+ */
+export const commerceJournalEntry = pgTable(
+  "commerce_journal_entry",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    sequenceNumber: integer("sequence_number").notNull(),
+    kind: commerceJournalKindEnum("kind").notNull(),
+    description: text("description").notNull(),
+    currency: text("currency").notNull(),
+    occurredAt: timestamp("occurred_at").notNull(),
+    settlement: commerceJournalEntrySettlementEnum("settlement").default("pending").notNull(),
+    linkedPaymentIntentId: text("linked_payment_intent_id").references(
+      () => commercePaymentIntent.id,
+      { onDelete: "set null" },
+    ),
+    linkedRefundId: text("linked_refund_id").references(() => commerceRefund.id, {
+      onDelete: "set null",
+    }),
+    linkedTransferId: text("linked_transfer_id").references(() => commerceProviderTransfer.id, {
+      onDelete: "set null",
+    }),
+    reversesJournalEntryId: text("reverses_journal_entry_id").references(
+      (): AnyPgColumn => commerceJournalEntry.id,
+      { onDelete: "restrict" },
+    ),
+    entryHash: text("entry_hash").notNull(),
+    previousEntryHash: text("previous_entry_hash").notNull(),
+    hashVersion: integer("hash_version").default(1).notNull(),
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_journal_entry_order_seq_uidx").on(table.orderId, table.sequenceNumber),
+    index("commerce_journal_entry_order_occurred_idx").on(
+      table.orderId,
+      table.occurredAt,
+      table.id,
+    ),
+    index("commerce_journal_entry_payment_intent_idx").on(table.linkedPaymentIntentId),
+    check("commerce_journal_entry_sequence_ck", sql`sequence_number >= 1`),
+    check("commerce_journal_entry_hash_ck", sql`entry_hash ~ '^[0-9a-f]{64}$'`),
+    check(
+      "commerce_journal_entry_link_ck",
+      sql`(sequence_number = 1) = (previous_entry_hash = 'genesis')
+          AND (previous_entry_hash = 'genesis' OR previous_entry_hash ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      "commerce_journal_entry_reversal_ck",
+      sql`(kind <> 'reversal') OR (reverses_journal_entry_id IS NOT NULL)`,
+    ),
+    check("commerce_journal_entry_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("commerce_journal_entry_description_ck", sql`char_length(description) BETWEEN 1 AND 500`),
+  ],
+);
+
+/**
+ * Signed postings for one journal entry. Positive INTO the account, negative OUT.
+ * SUM over one entry MUST equal zero (service assert + deferred constraint trigger).
+ */
+export const commerceJournalLine = pgTable(
+  "commerce_journal_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    journalEntryId: text("journal_entry_id")
+      .notNull()
+      .references(() => commerceJournalEntry.id, { onDelete: "restrict" }),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => commerceJournalAccount.id, { onDelete: "restrict" }),
+    accountKind: commerceJournalAccountKindEnum("account_kind").notNull(),
+    signedAmountInCents: bigint("signed_amount_in_cents", { mode: "bigint" }).notNull(),
+    lineIndex: integer("line_index").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_journal_line_entry_index_uidx").on(table.journalEntryId, table.lineIndex),
+    index("commerce_journal_line_account_idx").on(table.accountId, table.id),
+    index("commerce_journal_line_order_kind_idx").on(table.orderId, table.accountKind),
+    check("commerce_journal_line_index_ck", sql`line_index >= 0`),
+    check("commerce_journal_line_amount_ck", sql`signed_amount_in_cents <> 0`),
+  ],
+);
+
+/**
+ * Durable outbox for commerce provider calls. Local intent rows commit first; the worker
+ * drains this table and calls the adapter (STORE §9 integration pattern).
+ */
+export const commercePaymentOutbox = pgTable(
+  "commerce_payment_outbox",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    kind: commercePaymentOutboxKindEnum("kind").notNull(),
+    state: commercePaymentOutboxStateEnum("state").default("pending").notNull(),
+    paymentIntentId: text("payment_intent_id").references(() => commercePaymentIntent.id, {
+      onDelete: "restrict",
+    }),
+    refundId: text("refund_id").references(() => commerceRefund.id, { onDelete: "restrict" }),
+    transferId: text("transfer_id")
+      .notNull()
+      .references(() => commerceProviderTransfer.id, { onDelete: "restrict" }),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    lastError: text("last_error"),
+    availableAt: timestamp("available_at").defaultNow().notNull(),
+    processedAt: timestamp("processed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_payment_outbox_transfer_uidx").on(table.transferId),
+    index("commerce_payment_outbox_pending_idx").on(table.state, table.availableAt, table.id),
+    check(
+      "commerce_payment_outbox_target_ck",
+      sql`(kind = 'submit_payment_intent' AND payment_intent_id IS NOT NULL AND refund_id IS NULL)
+          OR (kind = 'submit_refund' AND refund_id IS NOT NULL AND payment_intent_id IS NOT NULL)`,
+    ),
+    check("commerce_payment_outbox_attempt_ck", sql`attempt_count >= 0`),
+  ],
+);
+
+/**
+ * Provider webhook / settlement-event inbox. Persist BEFORE applying state transitions;
+ * unique (provider, provider_event_id) makes replay harmless.
+ */
+export const commercePaymentWebhookEvent = pgTable(
+  "commerce_payment_webhook_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    provider: commercePaymentProviderEnum("provider").notNull(),
+    providerEventId: text("provider_event_id").notNull(),
+    eventType: text("event_type").notNull(),
+    paymentIntentId: text("payment_intent_id").references(() => commercePaymentIntent.id, {
+      onDelete: "set null",
+    }),
+    transferId: text("transfer_id").references(() => commerceProviderTransfer.id, {
+      onDelete: "set null",
+    }),
+    refundId: text("refund_id").references(() => commerceRefund.id, { onDelete: "set null" }),
+    orderId: text("order_id").references(() => commerceOrder.id, { onDelete: "set null" }),
+    payloadJson: text("payload_json").notNull(),
+    receivedAt: timestamp("received_at").defaultNow().notNull(),
+    processedAt: timestamp("processed_at"),
+    processingError: text("processing_error"),
+  },
+  (table) => [
+    uniqueIndex("commerce_payment_webhook_event_provider_uidx").on(
+      table.provider,
+      table.providerEventId,
+    ),
+    index("commerce_payment_webhook_event_unprocessed_idx")
+      .on(table.receivedAt, table.id)
+      .where(sql`processed_at IS NULL`),
+    check("commerce_payment_webhook_event_type_ck", sql`char_length(event_type) BETWEEN 1 AND 120`),
+    check(
+      "commerce_payment_webhook_event_payload_ck",
+      sql`char_length(payload_json) BETWEEN 2 AND 50000 AND payload_json LIKE '{%'`,
     ),
   ],
 );

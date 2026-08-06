@@ -17,6 +17,7 @@ import commerceFulfillmentRouter from "#src/routes/commerce-fulfillment.routes.j
 import commerceMessagesRouter from "#src/routes/commerce-messages.routes.js";
 import commerceOrdersRouter from "#src/routes/commerce-orders.routes.js";
 import commerceOrganizationsRouter from "#src/routes/commerce-organizations.routes.js";
+import commercePaymentsRouter from "#src/routes/commerce-payments.routes.js";
 import commerceProvidersRouter from "#src/routes/commerce-providers.routes.js";
 import commerceQuotesRouter from "#src/routes/commerce-quotes.routes.js";
 import commerceRfqsRouter from "#src/routes/commerce-rfqs.routes.js";
@@ -148,6 +149,7 @@ app.use("/commerce", commerceQuotesRouter);
 app.use("/commerce", commerceMessagesRouter);
 app.use("/commerce", commerceCartRouter);
 app.use("/commerce", commerceOrdersRouter);
+app.use("/commerce", commercePaymentsRouter);
 app.use("/commerce", commerceFulfillmentRouter);
 app.use("/store", storeRouter);
 app.use("/products", productsRouter);
