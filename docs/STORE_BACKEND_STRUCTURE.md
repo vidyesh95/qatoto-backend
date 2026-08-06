@@ -28,7 +28,7 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–7 trust MVP foundation shipped and hardened.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–8 shipped and hardened.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
@@ -37,9 +37,12 @@
 > refunds, a double-entry commerce journal (fake provider adapter only), shipment-leg command
 > execution, immutable typed engagement snapshots, contracted deliverable plans/results,
 > derived fulfillment progress, server-issued completions, verified reviews, disputes, and
-> privacy-safe review/completion metrics are implemented. See `docs/STORE_PHASE_5_ROLLOUT.md` for the
-> payments/journal contract, `docs/STORE_PHASE_6_ROLLOUT.md` for connector execution, and
-> `docs/STORE_PHASE_7_ROLLOUT.md` for the trust MVP.
+> privacy-safe review/completion metrics are implemented. Phase 8 adds **product variants,
+> media kinds, specification groups, packaging geometry, product highlights, the product
+> relation graph, and the merchandising integrity fixes**. See `docs/STORE_PHASE_5_ROLLOUT.md`
+> for the payments/journal contract, `docs/STORE_PHASE_6_ROLLOUT.md` for connector execution,
+> `docs/STORE_PHASE_7_ROLLOUT.md` for the trust MVP, and `docs/STORE_PHASE_8_ROLLOUT.md` for
+> catalog depth.
 > Trade-assurance language, real payment processors, external provider adapters/webhooks, Q&A,
 > content reports, ranking, and recommendations remain planned unless a section explicitly says
 > otherwise. Product organization-ownership and category columns remain in the documented
@@ -47,12 +50,14 @@
 >
 > **What is NOT built, and what the frontend is standing in for meanwhile:**
 > [§15](#15-guided-pathways--the-buy-the-set-surface) specifies **guided pathways** — the buy-the-set
-> surface whose tables exist as a flat list and whose feature does not — and
-> [Appendix A](#appendix-a--what-the-frontend-needs-and-this-backend-does-not-have) is the register of
-> every remaining store feature the frontend renders as mock UI, with the tables, columns and routes
-> each one needs. Three entries there describe fields that already reach the wire and can never carry
-> a real value: `onTimeShipmentRate` is hardcoded `null`, checkout `shippingInCents` is written
-> literal `0`, and the `trending_placeholder` rail strategy returns an empty list unconditionally.
+> surface whose tables exist as a flat list and whose feature does not; §15.3's relation graph is now
+> built, which is what unblocks anchored sets. [Appendix A](#appendix-a--what-the-frontend-needs-and-this-backend-does-not-have)
+> is the register of every remaining store feature the frontend renders as mock UI, with the tables,
+> columns and routes each one needs. Two entries there still describe fields that reach the wire and
+> can never carry a real value: `onTimeShipmentRate` is hardcoded `null`, and the
+> `trending_placeholder` rail strategy returns an empty list unconditionally. Checkout
+> `shippingInCents` is still written literal `0` — Phase 8 supplies the weight and dimensions A16
+> needs to rate freight, but not the estimate itself.
 
 ---
 
@@ -845,15 +850,19 @@ Scheduled jobs:
   projection (A4), packaging dimensions and weight (A5), highlights (A6).
 - `commerce_product_relation` (§15.3), which unblocks similar / frequently-bought / compare (A7).
 - The merchandising integrity fixes in A19.
-- **Not started.** A4 is a one-line projection change and the cheapest entry in the whole appendix;
-  A1 is the most expensive, because a variant reaches pricing, stock, the cart and the order
-  snapshot.
+- **Shipped and hardened (`0054`–`0056`).** See `docs/STORE_PHASE_8_ROLLOUT.md`. A1 was indeed the
+  expensive one: a variant reaches the tier ladder, the gallery, the cart, the inventory
+  reservation, the checkout prepare snapshot and the order line, and the rule that makes it safe —
+  a product with active variants refuses a line that names none — is enforced in
+  `commerce-pricing.ts` and again by database triggers.
 
 ### Phase 9 — guided pathways
 
 - Slots, candidates, anchors and pathway images (§15.2), set pricing (§15.4), authoring and
   moderation (§15.5), degradation signals (§15.6), the derivation job (§15.9).
-- **Not started.** Depends on Phase 8's relation graph for anchored sets; curated sets do not.
+- **Not started**, but no longer blocked: Phase 8 shipped the relation graph anchored sets resolve
+  their slots from, and gave `store_pathway_item` the scheduling window §15.2 asked for. The
+  remaining work is the slot/candidate model itself.
 
 ### Phase 10 — the public voice
 
@@ -931,8 +940,11 @@ scheduled work, and no backend entry exists to make it true.
 
 ## 15. Guided pathways — the buy-the-set surface
 
-> **Status: the tables exist, the feature does not.** `store_pathway` and `store_pathway_item` model a
-> flat ordered list of entity ids. Everything below is unbuilt.
+> **Status: the relation graph is built; the set surface is not.** §15.3's
+> `commerce_product_relation` shipped in Phase 8 and is live at
+> `GET /store/products/:productSlug/companions`. `store_pathway` and `store_pathway_item` still model
+> a flat ordered list of entity ids — they did gain the per-item time window §15.2 asked for, but
+> slots, candidates, anchors, set pricing and degradation signals remain unbuilt (Phase 9).
 
 ### 15.1 A pathway is a composition, not a rail
 
@@ -1003,10 +1015,11 @@ image column at all today, which is why the frontend renders a local placeholder
 
 ### 15.3 The product relation graph
 
-**No table in this schema has two foreign keys to `product`.** There is no similar-product edge, no
-accessory edge, no spare-part edge, no compatibility edge. Every discovery feature the frontend
-mocks — "Frequently bought together", "Other recommendations", "View similar", "Add to Compare" —
-and every anchored pathway needs the same missing thing.
+**Built in Phase 8 (Appendix A7).** Before it, no table in this schema had two foreign keys to
+`product` — no similar-product edge, no accessory edge, no spare-part edge, no compatibility edge —
+and every discovery feature the frontend mocks ("Frequently bought together", "Other
+recommendations", "View similar", "Add to Compare") plus every anchored pathway was blocked on the
+same missing thing. The shape as built:
 
 `commerce_product_relation`
 
@@ -1096,6 +1109,10 @@ and inventing one would mean converting currencies without an FX quote.
 
 All writes take `Idempotency-Key` and are organization-scoped like every other commerce write.
 
+The last two rows shipped in Phase 8; everything above them is Phase 9. The verify route is scoped
+to the user rather than an organization, because a moderator acts for the platform and may not
+belong to a commerce organization at all.
+
 ### 15.9 Derivation job
 
 `derive-product-relations` — nightly, in the pattern of `refresh-store-search-document`: mine
@@ -1125,71 +1142,75 @@ Each entry: **Needed by** · **What exists** · **What to build** · **Frontend 
 
 ---
 
-### A1. Product variants — the colour picker cannot work
+### A1. Product variants — **SHIPPED (Phase 8)**
 
 **Needed by:** `sections/product-color-picker.tsx`, a "Select Color" strip of four swatches.
 
-**What exists:** nothing. No variant, option, swatch or SKU-child table. `product.sku` is a single
-nullable text column; there is one `priceInCents`, one `stockQuantity`, and images have no variant
-association.
+**What exists now:** `commerce_product_variant` (product, name, `publicSlug`, `sku`, own price,
+stock and MOQ, position, `active | retired`), plus `variantId` on `product_image`,
+`product_pricing_tier`, `commerce_cart_product_line`, `commerce_inventory_reservation`,
+`commerce_checkout_prepare_product_line` and `commerce_order_product_line` — the last two also
+carrying `variantNameSnapshot`. Authored through `PUT /products/:id/variants`; projected on
+`GET /store/products/:slug` as `variants[]`, with `hasVariants`/`variantCount` on the card.
 
-**What to build:** `commerce_product_variant` (product, name, `publicSlug`, own price/stock/MOQ) plus
-a `variantId` on `product_image`, on `commerce_cart_product_line` and on the order-line snapshot.
-This is not a display feature — a variant changes price, stock, gallery and what gets shipped.
+**The rule that makes it safe:** a product has zero active variants (pre-Phase-8 behaviour,
+unchanged) or one or more, and in the second case a cart line naming no variant is refused with
+`VARIANT_REQUIRED`. Enforced in `commerce-pricing.ts` under the pricing row locks and again by
+`commerce_cart_product_line_variant_guard`. A variant ladder replaces the product ladder rather
+than merging with it, because tier prices are absolute unit prices.
 
-**Frontend today:** four hardcoded swatches rendered as `<div>`s. Not clickable at all, first one
-hardcoded selected. Deliberately inert rather than a picker that appears to work and changes nothing.
+**Rule, still binding:** a variant reaching an order line is snapshotted like every other
+commercial fact — "Sea blue" is part of what was bought, so variants are retired, never deleted.
 
 **Rule:** a variant reaching an order line must be snapshotted like every other commercial fact —
 `commerce_order_product_line` records what was bought, and "Sea blue" is part of that.
 
 ---
 
-### A2. No media kind on `product_image` — no 360, no video
+### A2. Media kinds on `product_image` — **SHIPPED (Phase 8)**
 
 **Needed by:** `sections/view-in-360-banner.tsx`.
 
-**What exists:** `product_image` is `{id, productId, url, position, createdAt}`. No discriminator, no
-`altText`, no dimensions, and **no unique index on `(productId, position)`** even though position 0
-is load-bearing as the main image.
+**What exists now:** `mediaKind` (`photo | video | spin_360`, defaulting to `photo`, which is what
+every pre-Phase-8 row is), `altText`, and `widthPx`/`heightPx` measured from the decoded bytes
+rather than accepted from the client. Set through the multipart fields on
+`POST /products/:id/images`.
 
-**What to build:** a `mediaKind` enum (`photo | video | spin_360`) on `product_image`, or a sibling
-`product_media` table; plus the unique index.
-
-**Frontend today:** a non-interactive banner. There is no asset to open, so it is not a button.
+**The unique index landed too**, as `(product_id, coalesce(variant_id, ''), position)` — an
+expression index, because a per-variant gallery has its own position 0. Consequence worth knowing:
+an expression index cannot be `DEFERRABLE`, so gallery re-packing parks every position beyond the
+range before writing final ones. A per-row loop deadlocks against the index.
 
 ---
 
-### A3. `specification` has no grouping — the five-tab sheet cannot be real
+### A3. Specification grouping — **SHIPPED (Phase 8)**
 
 **Needed by:** `sheets/product-details-sheet.tsx`, a tabbed spec sheet with five tabs and 28 rows.
 
 **What exists:** `commerce_product_specification` is `{productId, specificationKey,
 specificationValue, position}` — flat, unique on `(productId, specificationKey)`, no group, no unit.
 
-**What to build:** a `specificationGroup` column (free text, like `roleLabel` in §15.2 — the useful
-groupings for a chair and a transformer share nothing).
-
-**Frontend today:** the real rows render ungrouped in `ProductSpecifications`; the grouped sheet
-renders mock tabs beside it. Two components, one truth, until the column lands.
+**What exists now:** `specificationGroup`, free text like `roleLabel` in §15.2 — the useful
+groupings for a chair and a transformer share nothing. The key stays unique per PRODUCT, not per
+group: two groups claiming one key would make the sheet ambiguous about which value is current.
+Authored through `PATCH /products/:id`, projected as `specifications[].group`.
 
 ---
 
-### A4. `condition` is not in the public projection
+### A4. `condition` in the public projection — **SHIPPED (Phase 8)**
 
 **Needed by:** the PDP meta line, which showed "New / Refurbished / Used".
 
 **What exists:** `product.condition` (`productConditionEnum`, notNull, default `new`) **is stored** —
 it is simply absent from `StoreProductDetailProjection`.
 
-**What to build:** add it to the projection. One line.
-
-**Frontend today:** the label is **gone**. This is the only mock-era feature not restored, because
-there is no value on the wire to render and inventing one is not an option.
+**What exists now:** `condition` is on `StoreProductCardProjection`, so both the card and the
+detail page carry it. It was the cheapest entry in the appendix and it was true — one select field
+and one projection line.
 
 ---
 
-### A5. Packaging dimensions, gross weight, selling units, "in the box"
+### A5. Packaging dimensions and gross weight — **SHIPPED (Phase 8)**
 
 **Needed by:** `sections/packaging-and-delivery.tsx` (three spec rows plus three lead-time bands) and
 the "In the box" line in `sections/product-details-section.tsx`.
@@ -1198,41 +1219,55 @@ the "In the box" line in `sections/product-details-section.tsx`.
 pair. Weight and dimensions exist **only** on `commerce_shipment` (`packageCount`,
 `totalWeightGrams`) — seller-entered at ship time, per shipment, not a product attribute.
 
-**What to build:** `packageLengthMm`, `packageWidthMm`, `packageHeightMm`, `packageGrossWeightGrams`,
-`unitsPerPackage` on `product`. "In the box" is best a specification row under a reserved group once
-A3 lands, not its own column.
+**What exists now:** `packageLengthMm`, `packageWidthMm`, `packageHeightMm`,
+`packageGrossWeightGrams` and `unitsPerPackage` on `product`, projected as a `packaging` object.
+Dimensions are all-or-nothing — two of three is not a box — enforced by a Zod refinement and by
+`product_package_dimensions_ck`. "In the box" remains best as a specification row under a reserved
+group now that A3 has landed, not its own column.
 
-**Rule:** integers in named units — millimetres and grams — never a formatted string. The mock renders
-"52 × 46 × 12 cm" and "4.8 kg" as prose, which cannot be filtered, compared, or freight-rated.
+**Rule, honoured:** integers in named units — millimetres and grams — never a formatted string. The
+mock rendered "52 × 46 × 12 cm" and "4.8 kg" as prose, which cannot be filtered, compared, or
+freight-rated. These columns are what A16 will rate freight from; they are not themselves a quote.
 
 ---
 
-### A6. Product highlights
+### A6. Product highlights — **SHIPPED (Phase 8)**
 
 **Needed by:** `sections/product-highlights.tsx` — five collapsible cards, each `{title, body, image}`.
 
 **What exists:** `product.keyFeatures: text[]`, documented in the schema as deliberately not a table:
 short bullets with no image, no body, no identity.
 
-**What to build:** `commerce_product_highlight` (product, title, body, `imageUrl`, `position`). The
-schema comment already anticipates this — "promote to a table only if features ever grow attributes",
-and an image is an attribute.
+**What exists now:** `commerce_product_highlight` (product, title, `bodyText`, `imageUrl`,
+`position`), authored through `PUT /products/:id/highlights` and projected as `highlights[]`.
+`product.keyFeatures` stays exactly what it was — the schema comment anticipated this split:
+"promote to a table only if features ever grow attributes", and an image is an attribute.
 
 ---
 
-### A7. No product-to-product relations — similar, frequently-bought, compare
+### A7. Product-to-product relations — **SHIPPED (Phase 8)**
 
 **Needed by:** `sheets/similar-products-sheet.tsx` (6 products), `sheets/compare-products-sheet.tsx`
 (5 products, multi-select), and the two PDP recommendation rails.
 
-**What exists:** nothing. **No table in the schema has two foreign keys to `product`.** The only
-product-adjacent "compare" is `product.compareAtPriceInCents`, a strike-through reference price.
+**What exists now:** `commerce_product_relation`, specified in §15.3 — the first table in this
+schema with two foreign keys to `product`, and the one that serves all five surfaces: companions,
+similar, frequently-bought, compare candidates, and spare-part lookup from an order line.
 
-**What to build:** `commerce_product_relation` — specified in §15.3, because the same table serves
-anchored pathways.
+Read it at `GET /store/products/:productSlug/companions`, grouped by `relationKind`, each companion
+carrying `sourceKind` and a full product card. Written by the seller at
+`PUT /commerce/products/:productId/relations` and promoted by staff at
+`POST /commerce/admin/product-relations/:relationId/verify`.
 
-**Frontend today:** the similar sheet's tiles are `<button>`s with no handler and no route; compare's
-"Compare" button closes the sheet because no comparison view exists. Mock rail tiles render unlinked.
+**The rule §15.3 asked for, enforced:** `sourceKind` is not an input. A seller write is always
+`seller_declared` regardless of body content, and `.strict()` turns an attempt to send
+`moderator_curated` into a loud 422 rather than a silently ignored field. Only the platform
+`moderate_commerce` capability promotes a claim, and a `commerce_product_relation_verified_ck`
+constraint keeps reviewer attribution and `moderator_curated` in lockstep in both directions.
+
+**Still absent:** ranking and recommendation *selection* (Phase 10+), and the nightly
+`derive-product-relations` co-occurrence job (§15.9). The `derived_cooccurrence` source kind exists
+in the enum; nothing writes it yet.
 
 ---
 
@@ -1423,8 +1458,9 @@ directory — `commerce_service_coverage` already models origin/destination, and
 attributable estimate without a carrier integration.
 
 **Rule:** an estimate is not a quote and must never be rendered as a promise. §14 blocks assurance
-language, and "Free Delivery" over a hardcoded date range is exactly the claim it blocks. A2 and A5
-are prerequisites — you cannot rate freight without weight and dimensions.
+language, and "Free Delivery" over a hardcoded date range is exactly the claim it blocks. The A2 and
+A5 prerequisites are now satisfied — Phase 8 supplies the package dimensions and gross weight you
+cannot rate freight without — so this entry is unblocked, and still unbuilt.
 
 ---
 
@@ -1465,20 +1501,24 @@ checkout; the client's copy of the number is a hint. The mock enforces nothing.
 
 ---
 
-### A19. Merchandising data-integrity gaps found while writing this
+### A19. Merchandising data-integrity gaps — **SHIPPED (Phase 8)**
 
-Small, cheap, and each one currently lets a bad row exist:
+All four were small, cheap, and each one let a bad row exist. All four are closed:
 
-- **Hero slides have no CHECK tying `linkTargetKind` to `linkTargetId`/`linkTargetSlug`.** All three
-  are nullable and independent, so a slide can carry a kind with no target. The frontend guards by
-  requiring both before it builds an href.
-- **`product_image` has no unique index on `(productId, position)`** despite position 0 being the
-  main image by convention. Two rows can claim it.
-- **`category` and `organization` merchandising placements are storable but silently discarded.**
-  `storeMerchandisingEntityKindEnum` admits four kinds; `resolveEligibleMerchandisingItems` projects
-  two and `break`s on the others. A merchandiser can place a category in a rail and see it vanish
-  with no error.
-- **`store_pathway_item` has no time window** while `store_rail_placement` does (§15.2).
+- **Hero-slide link targets are all-or-nothing.** `store_hero_slide_link_target_ck` requires
+  `linkTargetKind`, `linkTargetId` and `linkTargetSlug` together or not at all, so the frontend's
+  defensive "require both before building an href" is now a guarantee rather than a guess.
+  Migration `0054` preflights this and refuses to run against violating rows.
+- **`product_image` position is unique**, as `(product_id, coalesce(variant_id, ''), position)` —
+  see A2 for why it is an expression index and what that costs re-packing.
+- **`category` and `organization` merchandising placements now resolve.**
+  `MerchandisingItemProjection` gained both members and
+  `resolveEligibleMerchandisingItems` resolves them through
+  `resolveEligibleCategoriesByIds` / `resolveEligibleOrganizationCardsByIds`, using the same
+  public-eligibility rules products and offerings already used. Placing something and seeing
+  nothing rendered, with no error, was the worst of the four.
+- **`store_pathway_item` carries `startsAt`/`endsAt`** and `getPathwayBySlug` filters on the window,
+  matching `store_rail_placement` since Phase 1 (§15.2).
 
 ---
 
