@@ -3,7 +3,7 @@
 Shipment legs, typed service-engagement execution snapshots/deliverables, command
 idempotency receipts, and derived order fulfillment progress.
 
-**Status:** Shipped and hardened through additive migrations `0048`–`0050`.
+**Status:** Shipped and hardened through additive migrations `0048`–`0051`.
 
 This phase does **not** add external carrier/customs/insurance/lab adapters, webhooks,
 outbox workers, or trade-assurance claims. Commands are operator-driven against
@@ -18,14 +18,17 @@ platform-owned evidence documents and typed contractual snapshots.
   detail tables, `commerce_engagement_deliverable` (+ events), typed deliverable detail
   tables, and normalized `commerce_quote_service_deliverable_plan`
 - Columns: `commerce_shipment.version`, `commerce_service_engagement.version` +
-  `execution_contract_state`, `commerce_order_service_line.source_quote_service_line_id`
+  `execution_contract_state` + `execution_contract_provenance` +
+  `requires_deliverable_normalization`, `commerce_order_service_line.source_quote_service_line_id`
 - Quote handoff: every service quote line requires exactly one typed `serviceDetail`;
   accept copies the snapshot and structured contracted deliverable plans into the engagement
   execution tables (or leaves `legacy_missing_snapshot` when no deterministic typed history
-  exists)
-- Hardening: transaction-scoped command idempotency locks, tenant-safe logistics linkage,
-  terminal-state role guards, parent shipment/order reconciliation, paired money/currency
-  constraints, immutable snapshot `TRUNCATE` rejection, and typed detail/result reads
+  exists). Accepted-quote provenance retains the source line; operator `initialize` sets
+  `operator_initialized` provenance without inventing a quote source.
+- Historical free-text `deliverable_snapshot` obligations without structured plans mark
+  `requires_deliverable_normalization` and block completion until `normalize_deliverables`.
+- Payment gate: shipments and order-state advancement require `confirmed` (or later
+  fulfillment states). `pending_payment` / `payment_processing` are preserved.
 - Routes:
     - `GET /commerce/orders/:orderId/fulfillment` (derived progress; not client-writable %)
     - `GET /commerce/shipments/:shipmentId`
@@ -50,7 +53,8 @@ platform-owned evidence documents and typed contractual snapshots.
 ## Deploy order
 
 1. Apply migrations `0048_store_phase_6_connector_execution`,
-   `0049_store_phase_6_hardening`, and `0050_store_phase_6_typed_contracts`:
+   `0049_store_phase_6_hardening`, `0050_store_phase_6_typed_contracts`, and
+   `0051_store_phase_6_correctness`:
 
     ```bash
     pnpm run db:migrate
@@ -67,7 +71,13 @@ platform-owned evidence documents and typed contractual snapshots.
 4. Smoke (authorized org actors):
 
     - Append a quote revision with typed `serviceDetail` → accept → engagement
-      `execution_contract_state = ready` and matching detail row present
+      `execution_contract_state = ready`, `execution_contract_provenance = accepted_quote`,
+      and matching detail row present
+    - Create a shipment only after the order is `confirmed` (not `pending_payment`)
+    - Engagement `initialize` on legacy rows sets `operator_initialized` provenance and
+      does not invent a quote source line
+    - Historical free-text deliverable obligations require `normalize_deliverables` before
+      `complete`
     - Create a shipment with optional `legs` → leg sequences unique, events append-only
     - `POST /commerce/shipment-legs/:legId/commands` with `book` → `depart` → `arrive` →
       `complete`; replay same `Idempotency-Key` + fingerprint → same response; changed body
@@ -114,7 +124,11 @@ row exists. No external provider protocol is wired in Phase 6.
 - Typed engagement detail rows match `provider_kind`
 - Accepted quote deliverable plans retain their source line and unique per-line sequence
 - Optional insurance/FX amounts always carry explicit paired currencies
-- `ready` engagements have a typed snapshot; `legacy_missing_snapshot` engagements do not
-  invent one
+- `ready` engagements have a typed snapshot and non-null provenance; `legacy_missing_snapshot`
+  engagements do not invent a snapshot or provenance
+- Operator-initialized snapshots keep a null quote source; accepted-quote snapshots retain
+  deterministic source identity
+- Unpaid orders (`pending_payment` / `payment_processing`) are never advanced by
+  fulfillment reconciliation
 - Append-only triggers reject UPDATE/DELETE/TRUNCATE on event, command, and engagement
-  detail tables
+  detail tables and remain enabled after migrations

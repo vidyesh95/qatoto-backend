@@ -23,6 +23,10 @@ import {
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor, slugifyPublicTitle } from "#src/lib/store-cursor.js";
 import { memberCanOperateProvider } from "#src/services/commerce-organization-access.service.js";
+import {
+  loadOrganizationFulfillmentMetrics,
+  loadOrganizationReviewMetrics,
+} from "#src/services/commerce-trust-metrics.service.js";
 import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import {
@@ -138,6 +142,14 @@ export interface PublicProviderCard {
   readonly acceptingRequests: boolean;
   readonly serviceRegionSummary: string | null;
   readonly averageResponseTimeHours: number | null;
+  readonly reviewMetrics: {
+    readonly averageRating: number | null;
+    readonly reviewCount: number;
+  };
+  readonly fulfillmentMetrics: {
+    readonly onTimeShipmentRate: number | null;
+    readonly completedOrderCount: number;
+  };
 }
 
 export interface PublicCoverageProjection {
@@ -188,6 +200,27 @@ const publicProviderSelect = {
   serviceRegionSummary: commerceProviderProfile.serviceRegionSummary,
   averageResponseTimeHours: commerceProviderProfile.averageResponseTimeHours,
 };
+
+async function attachPublicProviderTrustMetrics(
+  rows: readonly Omit<PublicProviderCard, "reviewMetrics" | "fulfillmentMetrics">[],
+): Promise<readonly PublicProviderCard[]> {
+  const organizationIds = rows.map((row) => row.organizationId);
+  const [reviewMetrics, fulfillmentMetrics] = await Promise.all([
+    loadOrganizationReviewMetrics(organizationIds),
+    loadOrganizationFulfillmentMetrics(organizationIds),
+  ]);
+  return rows.map((row) => ({
+    ...row,
+    reviewMetrics: reviewMetrics.get(row.organizationId) ?? {
+      averageRating: null,
+      reviewCount: 0,
+    },
+    fulfillmentMetrics: fulfillmentMetrics.get(row.organizationId) ?? {
+      onTimeShipmentRate: null,
+      completedOrderCount: 0,
+    },
+  }));
+}
 
 export function assertOrganizationContextMatch(input: {
   readonly activeOrganizationId: string;
@@ -1099,6 +1132,7 @@ export async function listPublicProviders(input: {
           .limit(input.limit + 1);
 
   const pageRows = rows.slice(0, input.limit);
+  const items = await attachPublicProviderTrustMetrics(pageRows);
   const lastRow = pageRows[pageRows.length - 1];
   const nextCursor =
     rows.length > input.limit && lastRow
@@ -1107,7 +1141,7 @@ export async function listPublicProviders(input: {
 
   return {
     success: true,
-    value: { items: pageRows, page: { nextCursor, hasMore: nextCursor !== null } },
+    value: { items, page: { nextCursor, hasMore: nextCursor !== null } },
   };
 }
 
@@ -1129,6 +1163,9 @@ export async function getPublicProviderByOrganizationSlug(
     .where(and(publicProviderEligibility, eq(commerceOrganization.slug, organizationSlug)))
     .limit(1);
   if (!provider) return { success: false, error: { type: "NOT_FOUND" } };
+
+  const [enrichedProvider] = await attachPublicProviderTrustMetrics([provider]);
+  if (!enrichedProvider) return { success: false, error: { type: "NOT_FOUND" } };
 
   const offerings = await db
     .select({ offering: commerceServiceOffering })
@@ -1152,7 +1189,7 @@ export async function getPublicProviderByOrganizationSlug(
   return {
     success: true,
     value: {
-      provider,
+      provider: enrichedProvider,
       offerings: offerings.map((row) => toPublicOfferingCard(row.offering)),
     },
   };
@@ -1219,22 +1256,27 @@ export async function getPublicServiceOfferingBySlug(offeringSlug: string): Prom
   ]);
   if (!detail) return { success: false, error: { type: "NOT_FOUND" } };
 
+  const [provider] = await attachPublicProviderTrustMetrics([
+    {
+      organizationId: row.organizationId,
+      slug: row.slug,
+      displayName: row.displayName,
+      countryCode: row.countryCode,
+      logoUrl: row.logoUrl,
+      publicSummary: row.publicSummary,
+      verificationState: row.verificationState,
+      acceptingRequests: row.acceptingRequests,
+      serviceRegionSummary: row.serviceRegionSummary,
+      averageResponseTimeHours: row.averageResponseTimeHours,
+    },
+  ]);
+  if (!provider) return { success: false, error: { type: "NOT_FOUND" } };
+
   return {
     success: true,
     value: {
       offering: { ...toPublicOfferingCard(row.offering), state: "active" },
-      provider: {
-        organizationId: row.organizationId,
-        slug: row.slug,
-        displayName: row.displayName,
-        countryCode: row.countryCode,
-        logoUrl: row.logoUrl,
-        publicSummary: row.publicSummary,
-        verificationState: row.verificationState,
-        acceptingRequests: row.acceptingRequests,
-        serviceRegionSummary: row.serviceRegionSummary,
-        averageResponseTimeHours: row.averageResponseTimeHours,
-      },
+      provider,
       detail,
       coverage: coverageRows,
     },
@@ -1280,25 +1322,38 @@ export async function resolveEligiblePublicOfferingsByIds(offeringIds: readonly 
       ),
     );
 
+  const providers = await attachPublicProviderTrustMetrics(
+    rows.map((row) => ({
+      organizationId: row.organizationId,
+      slug: row.slug,
+      displayName: row.displayName,
+      countryCode: row.countryCode,
+      logoUrl: row.logoUrl,
+      publicSummary: row.publicSummary,
+      verificationState: row.verificationState,
+      acceptingRequests: row.acceptingRequests,
+      serviceRegionSummary: row.serviceRegionSummary,
+      averageResponseTimeHours: row.averageResponseTimeHours,
+    })),
+  );
+  const providersByOrganizationId = new Map(
+    providers.map((provider) => [provider.organizationId, provider]),
+  );
+
   const byId = new Map(
-    rows.map((row) => [
-      row.offering.id,
-      {
-        offering: toPublicOfferingCard(row.offering),
-        provider: {
-          organizationId: row.organizationId,
-          slug: row.slug,
-          displayName: row.displayName,
-          countryCode: row.countryCode,
-          logoUrl: row.logoUrl,
-          publicSummary: row.publicSummary,
-          verificationState: row.verificationState,
-          acceptingRequests: row.acceptingRequests,
-          serviceRegionSummary: row.serviceRegionSummary,
-          averageResponseTimeHours: row.averageResponseTimeHours,
-        },
-      },
-    ]),
+    rows.flatMap((row) => {
+      const provider = providersByOrganizationId.get(row.organizationId);
+      if (!provider) return [];
+      return [
+        [
+          row.offering.id,
+          {
+            offering: toPublicOfferingCard(row.offering),
+            provider,
+          },
+        ] as const,
+      ];
+    }),
   );
 
   return offeringIds.flatMap((offeringId) => {

@@ -14,6 +14,7 @@ import {
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { ShipmentLegInput } from "#src/schemas/commerce-fulfillment.schemas.js";
+import { issueCompletionsForOrder } from "#src/services/commerce-completion.service.js";
 import { insertShipmentLegs } from "#src/services/commerce-fulfillment-phase6.service.js";
 import {
   finalizeShipmentState,
@@ -55,9 +56,8 @@ export interface CommerceFulfillmentActorContext {
   readonly actorUserId: string;
 }
 
-/** Order states a shipment may be raised against — before physical fulfillment completes. */
+/** Order states a shipment may be raised against — after payment confirmation. */
 const SHIPPABLE_ORDER_STATES: readonly OrderState[] = [
-  "pending_payment",
   "confirmed",
   "in_fulfillment",
   "partially_completed",
@@ -222,10 +222,9 @@ async function loadShipmentProjection(shipmentId: string): Promise<ShipmentProje
 }
 
 /**
- * Creates a shipment against an order still awaiting or mid fulfillment. Phase 4 has no
- * purchase-order acceptance step, so `pending_payment` is deliberately included alongside
- * `confirmed` — a counterparty must be able to start shipping before Phase 5 wires payment
- * capture, without this route inventing an undocumented acceptance state of its own.
+ * Creates a shipment against an order that is confirmed or already in fulfillment.
+ * Payment must settle first — shipping before confirmation would lock the order out of
+ * payment-intent creation (`pending_payment` only).
  */
 export async function createShipment(
   actor: CommerceFulfillmentActorContext,
@@ -361,7 +360,7 @@ export async function createShipment(
       }
     }
 
-    if (order.state === "pending_payment" || order.state === "confirmed") {
+    if (order.state === "confirmed") {
       await transaction
         .update(commerceOrder)
         .set({ state: "in_fulfillment", updatedAt: now })
@@ -783,6 +782,13 @@ export async function transitionServiceEngagement(
             "This engagement is missing an accepted typed execution snapshot. Initialize it before completing.",
         };
       }
+      if (engagement.requiresDeliverableNormalization) {
+        return {
+          status: "validation_failed" as const,
+          message:
+            "This engagement has an unresolved free-text deliverable obligation. Normalize structured deliverables before completing.",
+        };
+      }
     }
 
     const now = new Date();
@@ -822,6 +828,9 @@ export async function transitionServiceEngagement(
       createdByMemberId: actor.memberId,
     });
     await reconcileOrderAggregateState(transaction, engagement.orderId, now);
+    if (input.targetState === "completed") {
+      await issueCompletionsForOrder(transaction, engagement.orderId, now, actor.actorUserId);
+    }
 
     await appendAuditOrThrow(transaction, {
       organizationId: actor.organizationId,

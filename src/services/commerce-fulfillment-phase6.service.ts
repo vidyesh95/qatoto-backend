@@ -42,6 +42,7 @@ import type {
   ShipmentLegInput,
   TypedDeliverableResultSchema,
 } from "#src/schemas/commerce-fulfillment.schemas.js";
+import { issueCompletionsForOrder } from "#src/services/commerce-completion.service.js";
 import {
   reconcileOrderAggregateState,
   reconcileShipmentStateFromLegs,
@@ -71,6 +72,7 @@ export type CommercePhase6Error =
   | { type: "IDEMPOTENCY_CONFLICT" }
   | { type: "PROVIDER_KIND_MISMATCH" }
   | { type: "CONTRACT_SNAPSHOT_MISSING" }
+  | { type: "DELIVERABLE_NORMALIZATION_REQUIRED" }
   | { type: "REQUIRED_DELIVERABLES_INCOMPLETE"; deliverableIds: readonly string[] }
   | { type: "DOCUMENT_NOT_AVAILABLE" }
   | { type: "VALIDATION_FAILED"; message: string }
@@ -1004,6 +1006,8 @@ function projectEngagement(engagement: EngagementRow) {
     providerKind: engagement.providerKind,
     state: engagement.state,
     executionContractState: engagement.executionContractState,
+    executionContractProvenance: engagement.executionContractProvenance,
+    requiresDeliverableNormalization: engagement.requiresDeliverableNormalization,
     version: engagement.version,
     titleSnapshot: engagement.titleSnapshot,
     scopeSnapshot: engagement.scopeSnapshot,
@@ -1060,9 +1064,12 @@ export async function executeServiceEngagementCommand(
     let completedAt = engagement.completedAt;
     let cancelledAt = engagement.cancelledAt;
     let executionContractState = engagement.executionContractState;
+    let executionContractProvenance = engagement.executionContractProvenance;
+    let requiresDeliverableNormalization = engagement.requiresDeliverableNormalization;
 
     const providerCommands = new Set([
       "initialize",
+      "normalize_deliverables",
       "schedule",
       "start",
       "request_buyer_action",
@@ -1148,6 +1155,50 @@ export async function executeServiceEngagementCommand(
           });
         }
         executionContractState = "ready";
+        executionContractProvenance = "operator_initialized";
+        if (command.deliverables.length > 0) {
+          requiresDeliverableNormalization = false;
+        }
+        break;
+      }
+      case "normalize_deliverables": {
+        if (!engagement.requiresDeliverableNormalization) {
+          return {
+            status: "invalid_state" as const,
+            currentState: engagement.state,
+            command: command.command,
+          };
+        }
+        if (engagement.executionContractState !== "ready") {
+          return { status: "contract_missing" as const };
+        }
+        const existingDeliverables = await transaction
+          .select({ id: commerceEngagementDeliverable.id })
+          .from(commerceEngagementDeliverable)
+          .where(eq(commerceEngagementDeliverable.engagementId, engagement.id))
+          .limit(1);
+        if (existingDeliverables.length > 0) {
+          return {
+            status: "error" as const,
+            error: {
+              type: "VALIDATION_FAILED",
+              message:
+                "Structured deliverables already exist; free-text obligations cannot be re-normalized.",
+            } satisfies CommercePhase6Error,
+          };
+        }
+        for (const deliverable of command.deliverables) {
+          await transaction.insert(commerceEngagementDeliverable).values({
+            engagementId: engagement.id,
+            sequence: deliverable.sequence,
+            title: deliverable.title,
+            isRequired: deliverable.isRequired,
+            state: "planned",
+            dueAt: deliverable.dueAt === undefined ? null : new Date(deliverable.dueAt),
+            createdByMemberId: actor.memberId,
+          });
+        }
+        requiresDeliverableNormalization = false;
         break;
       }
       case "schedule":
@@ -1343,6 +1394,9 @@ export async function executeServiceEngagementCommand(
             command: command.command,
           };
         }
+        if (requiresDeliverableNormalization) {
+          return { status: "normalization_required" as const };
+        }
         const incomplete = await loadRequiredIncompleteDeliverableIds(transaction, engagement.id);
         if (incomplete.length > 0) {
           return {
@@ -1386,6 +1440,8 @@ export async function executeServiceEngagementCommand(
       .set({
         state: nextState,
         executionContractState,
+        executionContractProvenance,
+        requiresDeliverableNormalization,
         version: nextVersion,
         scheduledAt,
         startedAt,
@@ -1404,6 +1460,9 @@ export async function executeServiceEngagementCommand(
       return { status: "version_conflict" as const, currentVersion: engagement.version };
     }
     await reconcileOrderAggregateState(transaction, engagement.orderId, now);
+    if (nextState === "completed") {
+      await issueCompletionsForOrder(transaction, engagement.orderId, now, actor.actorUserId);
+    }
 
     const projection = projectEngagement(updated);
     await finalizeCommandReceipt(
@@ -1458,6 +1517,8 @@ export async function executeServiceEngagementCommand(
       };
     case "contract_missing":
       return { success: false, error: { type: "CONTRACT_SNAPSHOT_MISSING" } };
+    case "normalization_required":
+      return { success: false, error: { type: "DELIVERABLE_NORMALIZATION_REQUIRED" } };
     case "incomplete_deliverables":
       return {
         success: false,

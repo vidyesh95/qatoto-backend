@@ -211,6 +211,14 @@ function mapPhase6Error(res: Response, error: CommercePhase6Error): void {
           "This engagement is missing an accepted typed execution snapshot. Initialize it before continuing.",
       } satisfies ApiResponse);
       return;
+    case "DELIVERABLE_NORMALIZATION_REQUIRED":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message:
+          "This engagement has an unresolved free-text deliverable obligation. Normalize structured deliverables before completing.",
+      } satisfies ApiResponse);
+      return;
     case "REQUIRED_DELIVERABLES_INCOMPLETE":
       res.status(409).json({
         status: "error",

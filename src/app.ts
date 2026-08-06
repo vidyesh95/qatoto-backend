@@ -21,6 +21,7 @@ import commercePaymentsRouter from "#src/routes/commerce-payments.routes.js";
 import commerceProvidersRouter from "#src/routes/commerce-providers.routes.js";
 import commerceQuotesRouter from "#src/routes/commerce-quotes.routes.js";
 import commerceRfqsRouter from "#src/routes/commerce-rfqs.routes.js";
+import commerceTrustRouter from "#src/routes/commerce-trust.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
@@ -151,6 +152,7 @@ app.use("/commerce", commerceCartRouter);
 app.use("/commerce", commerceOrdersRouter);
 app.use("/commerce", commercePaymentsRouter);
 app.use("/commerce", commerceFulfillmentRouter);
+app.use("/commerce", commerceTrustRouter);
 app.use("/store", storeRouter);
 app.use("/products", productsRouter);
 // The home-page carousel. GET /promotions/slides is public; every /promotions/admin/*

@@ -10,6 +10,7 @@ import {
   commerceShipmentLeg,
   commerceShipmentProductLine,
 } from "#src/db/schema.js";
+import { issueCompletionsForOrder } from "#src/services/commerce-completion.service.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type OrderState = typeof commerceOrder.$inferSelect.state;
@@ -40,7 +41,13 @@ export function deriveOrderAggregateState(
   }[],
   currentState: OrderState,
 ): OrderState {
-  if (currentState === "completed" || currentState === "cancelled" || currentState === "disputed") {
+  if (
+    currentState === "completed" ||
+    currentState === "cancelled" ||
+    currentState === "disputed" ||
+    currentState === "pending_payment" ||
+    currentState === "payment_processing"
+  ) {
     return currentState;
   }
 
@@ -60,9 +67,7 @@ export function deriveOrderAggregateState(
     serviceEngagements.some((serviceEngagement) => serviceEngagement.state === "completed");
   if (anyWorkCompleted) return "partially_completed";
 
-  return currentState === "pending_payment" || currentState === "confirmed"
-    ? "in_fulfillment"
-    : currentState;
+  return currentState === "confirmed" ? "in_fulfillment" : currentState;
 }
 
 export async function reconcileOrderAggregateState(
@@ -157,6 +162,7 @@ export async function finalizeShipmentState(
     .where(eq(commerceShipment.id, shipment.id));
 
   await reconcileOrderAggregateState(transaction, order.id, occurredAt);
+  await issueCompletionsForOrder(transaction, order.id, occurredAt, null);
 
   return true;
 }

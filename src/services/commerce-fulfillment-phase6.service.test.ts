@@ -146,6 +146,22 @@ describe("commerce fulfillment Phase 6 schemas", () => {
     });
     expect(parsed.success).toBe(false);
   });
+
+  it("accepts normalize_deliverables with at least one structured plan", () => {
+    const missing = ServiceEngagementCommandSchema.safeParse({
+      command: "normalize_deliverables",
+      expectedVersion: 1,
+      deliverables: [],
+    });
+    expect(missing.success).toBe(false);
+
+    const ok = ServiceEngagementCommandSchema.safeParse({
+      command: "normalize_deliverables",
+      expectedVersion: 1,
+      deliverables: [{ sequence: 0, title: "Normalized entry filing", isRequired: true }],
+    });
+    expect(ok.success).toBe(true);
+  });
 });
 
 describe("commerce fulfillment Phase 6 workflow helpers", () => {
@@ -195,6 +211,18 @@ describe("commerce fulfillment Phase 6 workflow helpers", () => {
     expect(deriveOrderAggregateState([], [{ state: "in_progress" }], "confirmed")).toBe("in_fulfillment");
     expect(deriveOrderAggregateState([], [{ state: "completed" }], "in_fulfillment")).toBe("completed");
     expect(deriveOrderAggregateState([], [{ state: "completed" }], "disputed")).toBe("disputed");
+  });
+
+  it("preserves unpaid and payment-processing orders during fulfillment reconciliation", () => {
+    expect(deriveOrderAggregateState([], [{ state: "awaiting_provider" }], "pending_payment")).toBe("pending_payment");
+    expect(deriveOrderAggregateState([], [{ state: "scheduled" }], "payment_processing")).toBe("payment_processing");
+    expect(
+      deriveOrderAggregateState(
+        [{ quantityOrdered: 1, quantityFulfilled: 1, quantityCancelled: 0 }],
+        [{ state: "completed" }],
+        "pending_payment",
+      ),
+    ).toBe("pending_payment");
   });
 
   it("derives deterministic progress from legs and engagements", () => {

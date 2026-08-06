@@ -389,6 +389,17 @@ export const ServiceEngagementCommandSchema = z.discriminatedUnion("command", [
     .strict(),
   z
     .object({
+      command: z.literal("normalize_deliverables"),
+      expectedVersion: z.number().int().min(0),
+      deliverables: DeliverablePlanListSchema.refine(
+        (deliverables) => deliverables.length > 0,
+        "At least one structured deliverable is required to clear a free-text obligation.",
+      ),
+      note: z.string().trim().min(1).max(2000).optional(),
+    })
+    .strict(),
+  z
+    .object({
       command: z.literal("schedule"),
       expectedVersion: z.number().int().min(0),
       note: z.string().trim().min(1).max(2000).optional(),

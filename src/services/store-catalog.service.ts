@@ -10,6 +10,10 @@ import {
   productPricingTier,
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import {
+  loadOrganizationFulfillmentMetrics,
+  loadProductReviewMetrics,
+} from "#src/services/commerce-trust-metrics.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type StoreStockState = "in_stock" | "low_stock" | "made_to_order" | "unavailable";
@@ -32,7 +36,7 @@ export interface StoreSellerProjection {
   readonly summary: string | null;
 }
 
-/** Server-derived placeholders until Phase 7 trust metrics exist. */
+/** Server-derived review and fulfillment metrics (Phase 7 aggregates). */
 export interface StoreReviewMetrics {
   readonly averageRating: number | null;
   readonly reviewCount: number;
@@ -486,6 +490,8 @@ function mapProductCard(
   },
   mainImageUrl: string | null,
   minimumOrderQuantity: number | null,
+  reviewMetrics: StoreReviewMetrics = EMPTY_REVIEW_METRICS,
+  fulfillmentMetrics: StoreFulfillmentMetrics = EMPTY_FULFILLMENT_METRICS,
 ): StoreProductCardProjection {
   if (row.publicSlug === null) {
     throw new Error("Eligible product missing publicSlug.");
@@ -514,8 +520,8 @@ function mapProductCard(
       slug: row.categorySlug,
       name: row.categoryName,
     },
-    reviewMetrics: EMPTY_REVIEW_METRICS,
-    fulfillmentMetrics: EMPTY_FULFILLMENT_METRICS,
+    reviewMetrics,
+    fulfillmentMetrics,
   };
 }
 
@@ -607,12 +613,22 @@ export async function listEligibleProducts(input: {
 
   const pageRows = rows.slice(0, input.limit);
   const productIds = pageRows.map((row) => row.id);
-  const [imageMap, moqMap] = await Promise.all([
-    loadMainImageUrls(productIds),
-    loadMinimumOrderQuantities(productIds),
-  ]);
+  const organizationIds = [...new Set(pageRows.map((row) => row.organizationId))];
+  const [imageMap, moqMap, productReviewMetrics, organizationFulfillmentMetrics] =
+    await Promise.all([
+      loadMainImageUrls(productIds),
+      loadMinimumOrderQuantities(productIds),
+      loadProductReviewMetrics(productIds),
+      loadOrganizationFulfillmentMetrics(organizationIds),
+    ]);
   const items = pageRows.map((row) =>
-    mapProductCard(row, imageMap.get(row.id) ?? null, moqMap.get(row.id) ?? null),
+    mapProductCard(
+      row,
+      imageMap.get(row.id) ?? null,
+      moqMap.get(row.id) ?? null,
+      productReviewMetrics.get(row.id) ?? EMPTY_REVIEW_METRICS,
+      organizationFulfillmentMetrics.get(row.organizationId) ?? EMPTY_FULFILLMENT_METRICS,
+    ),
   );
 
   const lastRow = pageRows[pageRows.length - 1];
@@ -677,7 +693,15 @@ export async function getPublicProductBySlug(
     return { success: false, error: { type: "NOT_FOUND" } };
   }
 
-  const [images, pricingTiers, specifications, categoryTrail, moqMap] = await Promise.all([
+  const [
+    images,
+    pricingTiers,
+    specifications,
+    categoryTrail,
+    moqMap,
+    productReviewMetrics,
+    organizationFulfillmentMetrics,
+  ] = await Promise.all([
     db
       .select({
         id: productImage.id,
@@ -707,6 +731,8 @@ export async function getPublicProductBySlug(
       .orderBy(asc(commerceProductSpecification.position)),
     buildCategoryTrail(row.categoryId),
     loadMinimumOrderQuantities([row.id]),
+    loadProductReviewMetrics([row.id]),
+    loadOrganizationFulfillmentMetrics([row.organizationId]),
   ]);
 
   const card = mapProductCard(
@@ -716,6 +742,8 @@ export async function getPublicProductBySlug(
       (pricingTiers.length > 0
         ? Math.min(...pricingTiers.map((tier) => tier.minimumOrderQuantity))
         : null),
+    productReviewMetrics.get(row.id) ?? EMPTY_REVIEW_METRICS,
+    organizationFulfillmentMetrics.get(row.organizationId) ?? EMPTY_FULFILLMENT_METRICS,
   );
   return {
     success: true,

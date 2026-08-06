@@ -1818,6 +1818,13 @@ export async function acceptQuote(
           throw new Error("Order service line insert returned no row.");
         }
 
+        const contractedDeliverablePlansForLine =
+          contractedDeliverablePlansByServiceLineId.get(line.id) ?? [];
+        const requiresDeliverableNormalization =
+          contractedDeliverablePlansForLine.length === 0 &&
+          line.deliverableSnapshot !== null &&
+          line.deliverableSnapshot.trim().length > 0;
+
         const [engagement] = await transaction
           .insert(commerceServiceEngagement)
           .values({
@@ -1828,6 +1835,7 @@ export async function acceptQuote(
             providerKind: line.providerKind,
             state: "awaiting_provider",
             executionContractState: "legacy_missing_snapshot",
+            requiresDeliverableNormalization,
             version: 0,
             titleSnapshot: line.titleSnapshot,
             scopeSnapshot: line.scopeSnapshot,
@@ -1846,13 +1854,15 @@ export async function acceptQuote(
         if (hasTypedSnapshot) {
           await transaction
             .update(commerceServiceEngagement)
-            .set({ executionContractState: "ready", updatedAt: now })
+            .set({
+              executionContractState: "ready",
+              executionContractProvenance: "accepted_quote",
+              updatedAt: now,
+            })
             .where(eq(commerceServiceEngagement.id, engagement.id));
         }
 
-        for (const contractedDeliverablePlan of contractedDeliverablePlansByServiceLineId.get(
-          line.id,
-        ) ?? []) {
+        for (const contractedDeliverablePlan of contractedDeliverablePlansForLine) {
           await transaction.insert(commerceEngagementDeliverable).values({
             engagementId: engagement.id,
             sequence: contractedDeliverablePlan.sequence,

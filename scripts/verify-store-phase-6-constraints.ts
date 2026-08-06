@@ -1,5 +1,5 @@
 /**
- * Verifies Store Phase 6 database invariants after migrations 0048 and 0049.
+ * Verifies Store Phase 6 database invariants after migrations 0048–0051.
  *
  *   pnpm run db:verify-store-phase-6-constraints
  */
@@ -334,21 +334,130 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
          ON quote_service_line.id = snapshot.source_quote_service_line_id
       WHERE engagement.order_id <> order_service_line.order_id
          OR engagement.provider_kind <> order_service_line.provider_kind
-         OR snapshot.source_quote_service_line_id IS NULL
-         OR order_service_line.source_quote_service_line_id IS DISTINCT FROM
-            snapshot.source_quote_service_line_id
-         OR quote_service_line.id IS NULL
-         OR quote_service_line.provider_kind <> engagement.provider_kind
          OR (
-           commerce_order.source = 'accepted_quote'
-           AND quote_service_line.revision_id IS DISTINCT FROM
-               commerce_order.accepted_quote_revision_id
+           engagement.execution_contract_provenance = 'accepted_quote'
+           AND (
+             snapshot.source_quote_service_line_id IS NULL
+             OR order_service_line.source_quote_service_line_id IS DISTINCT FROM
+                snapshot.source_quote_service_line_id
+             OR quote_service_line.id IS NULL
+             OR quote_service_line.provider_kind <> engagement.provider_kind
+             OR (
+               commerce_order.source = 'accepted_quote'
+               AND quote_service_line.revision_id IS DISTINCT FROM
+                   commerce_order.accepted_quote_revision_id
+             )
+           )
+         )
+         OR (
+           engagement.execution_contract_provenance = 'operator_initialized'
+           AND snapshot.source_quote_service_line_id IS NOT NULL
+         )
+         OR (
+           engagement.execution_contract_state = 'ready'
+           AND engagement.execution_contract_provenance IS NULL
+         )
+         OR (
+           engagement.execution_contract_state = 'legacy_missing_snapshot'
+           AND engagement.execution_contract_provenance IS NOT NULL
          )`,
   );
   outcomes.push({
-    label: "typed snapshot sources match engagement and order service lines",
+    label: "typed snapshot sources match engagement provenance and order service lines",
     passed: inconsistentSnapshotSources === 0,
     detail: `${String(inconsistentSnapshotSources)} inconsistent source link(s)`,
+  });
+
+  const enabledAppendOnlyTriggers = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM pg_trigger AS trigger_definition
+       INNER JOIN pg_class AS target_table
+         ON target_table.oid = trigger_definition.tgrelid
+       INNER JOIN pg_namespace AS target_schema
+         ON target_schema.oid = target_table.relnamespace
+      WHERE NOT trigger_definition.tgisinternal
+        AND target_schema.nspname = 'public'
+        AND trigger_definition.tgenabled = 'O'
+        AND trigger_definition.tgname = ANY($1)`,
+    [
+      [
+        "freight_engagement_detail_append_only",
+        "customs_brokerage_engagement_detail_append_only",
+        "insurance_engagement_detail_append_only",
+        "inspection_engagement_detail_append_only",
+        "testing_certification_engagement_detail_append_only",
+        "marketing_engagement_detail_append_only",
+        "warehouse_engagement_detail_append_only",
+        "foreign_exchange_engagement_detail_append_only",
+        "commerce_shipment_leg_event_append_only",
+        "commerce_service_engagement_event_append_only",
+        "commerce_fulfillment_command_append_only",
+        "commerce_engagement_deliverable_event_append_only",
+      ],
+    ],
+  );
+  outcomes.push({
+    label: "immutable Phase 6 append-only triggers remain enabled",
+    passed: enabledAppendOnlyTriggers === 12,
+    detail: `${String(enabledAppendOnlyTriggers)}/12 enabled`,
+  });
+
+  const historicalDeliverableGaps = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM commerce_service_engagement AS engagement
+       INNER JOIN commerce_order_service_line AS order_service_line
+         ON order_service_line.id = engagement.order_service_line_id
+       INNER JOIN commerce_quote_service_line AS quote_service_line
+         ON quote_service_line.id = order_service_line.source_quote_service_line_id
+      WHERE quote_service_line.deliverable_snapshot IS NOT NULL
+        AND char_length(btrim(quote_service_line.deliverable_snapshot)) > 0
+        AND NOT EXISTS (
+          SELECT 1
+            FROM commerce_engagement_deliverable AS deliverable
+           WHERE deliverable.engagement_id = engagement.id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+            FROM commerce_quote_service_deliverable_plan AS deliverable_plan
+           WHERE deliverable_plan.quote_service_line_id = quote_service_line.id
+        )
+        AND engagement.requires_deliverable_normalization = false
+        AND engagement.state <> 'cancelled'`,
+  );
+  outcomes.push({
+    label: "historical free-text deliverable obligations are marked for normalization",
+    passed: historicalDeliverableGaps === 0,
+    detail: `${String(historicalDeliverableGaps)} unmarked obligation(s)`,
+  });
+
+  const gaplessEngagementEvents = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM (
+         SELECT engagement_id
+           FROM commerce_service_engagement_event
+          GROUP BY engagement_id
+         HAVING min(sequence) <> 0
+             OR max(sequence) + 1 <> count(*)
+       ) AS gapped_engagements`,
+  );
+  outcomes.push({
+    label: "service engagement event sequences are gapless from zero",
+    passed: gaplessEngagementEvents === 0,
+    detail: `${String(gaplessEngagementEvents)} gapped engagement(s)`,
+  });
+
+  const provenanceColumnCount = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'commerce_service_engagement'
+        AND column_name = ANY($1)`,
+    [["execution_contract_provenance", "requires_deliverable_normalization"]],
+  );
+  outcomes.push({
+    label: "Phase 6 correctness columns exist on service engagement",
+    passed: provenanceColumnCount === 2,
+    detail: `${String(provenanceColumnCount)}/2 columns`,
   });
 
   const orphanDeliverables = await countQuery(

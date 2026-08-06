@@ -1071,3 +1071,33 @@ export const commerceFulfillmentWriteLimiter = createLimiter({
   windowMs: ONE_MINUTE_MS,
   limit: 30,
 });
+
+/**
+ * Verified review creation (Store Phase 7). Bound below scripted reputation farming while
+ * still allowing honest post-completion reviews with idempotent retries.
+ */
+export const commerceReviewWriteLimiter = createLimiter({
+  namespace: "commerceReviewWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});
+
+/**
+ * Dispute opening (Store Phase 7). Opening a dispute freezes order state, so this is
+ * tighter than ordinary order writes.
+ */
+export const commerceDisputeWriteLimiter = createLimiter({
+  namespace: "commerceDisputeWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 10,
+});
+
+/**
+ * Commerce trust moderation reads/writes. Blast-radius bound for compromised staff
+ * sessions holding `moderate_commerce`.
+ */
+export const commerceTrustModerationLimiter = createLimiter({
+  namespace: "commerceTrustModeration",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});

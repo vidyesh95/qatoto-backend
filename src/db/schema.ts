@@ -485,6 +485,11 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "service_engagement_command_executed",
     "engagement_deliverable_submitted",
     "engagement_deliverable_reviewed",
+    "engagement_deliverables_normalized",
+    "completion_issued",
+    "review_created",
+    "dispute_opened",
+    "dispute_decided",
   ],
 );
 
@@ -721,6 +726,16 @@ export const commerceExecutionContractStateEnum = pgEnum("commerce_execution_con
   "legacy_missing_snapshot",
 ]);
 
+/**
+ * How an engagement's typed execution snapshot was established.
+ * Null while `execution_contract_state = legacy_missing_snapshot`.
+ * `accepted_quote` requires a non-null detail source line; `operator_initialized` does not.
+ */
+export const commerceExecutionContractProvenanceEnum = pgEnum(
+  "commerce_execution_contract_provenance",
+  ["accepted_quote", "operator_initialized"],
+);
+
 export const commerceEngagementDeliverableStateEnum = pgEnum(
   "commerce_engagement_deliverable_state",
   ["planned", "submitted", "accepted", "waived", "cancelled"],
@@ -730,6 +745,29 @@ export const commerceFulfillmentCommandTargetKindEnum = pgEnum(
   "commerce_fulfillment_command_target_kind",
   ["shipment", "shipment_leg", "service_engagement", "engagement_deliverable"],
 );
+
+export const commerceCompletionTargetKindEnum = pgEnum("commerce_completion_target_kind", [
+  "product_order_line",
+  "service_engagement",
+]);
+
+export const commerceReviewVisibilityEnum = pgEnum("commerce_review_visibility", [
+  "visible",
+  "hidden",
+]);
+
+export const commerceDisputeStateEnum = pgEnum("commerce_dispute_state", [
+  "open",
+  "closed",
+  "dismissed",
+]);
+
+export const commerceDisputeEventKindEnum = pgEnum("commerce_dispute_event_kind", [
+  "opened",
+  "note_added",
+  "closed",
+  "dismissed",
+]);
 
 /**
  * Commerce payment provider identity (STORE Phase 5).
@@ -3075,6 +3113,20 @@ export const commerceServiceEngagement = pgTable(
     executionContractState: commerceExecutionContractStateEnum("execution_contract_state")
       .default("legacy_missing_snapshot")
       .notNull(),
+    /**
+     * Set when the typed snapshot becomes ready. Null for legacy engagements awaiting
+     * `initialize`. Operator-initialized snapshots may omit quote source identity.
+     */
+    executionContractProvenance: commerceExecutionContractProvenanceEnum(
+      "execution_contract_provenance",
+    ),
+    /**
+     * True when a historical free-text deliverable obligation exists without structured
+     * deliverable rows. Completion fails closed until `normalize_deliverables`.
+     */
+    requiresDeliverableNormalization: boolean("requires_deliverable_normalization")
+      .default(false)
+      .notNull(),
     version: integer("version").default(0).notNull(),
     titleSnapshot: text("title_snapshot").notNull(),
     scopeSnapshot: text("scope_snapshot").notNull(),
@@ -3090,6 +3142,11 @@ export const commerceServiceEngagement = pgTable(
   },
   (table) => [
     uniqueIndex("commerce_service_engagement_order_line_uidx").on(table.orderServiceLineId),
+    check(
+      "commerce_service_engagement_provenance_ck",
+      sql`(execution_contract_state = 'legacy_missing_snapshot' AND execution_contract_provenance IS NULL)
+          OR (execution_contract_state = 'ready' AND execution_contract_provenance IS NOT NULL)`,
+    ),
     index("commerce_service_engagement_buyer_idx").on(
       table.buyerOrganizationId,
       table.state,
@@ -4263,6 +4320,205 @@ export const commercePaymentWebhookEvent = pgTable(
     check(
       "commerce_payment_webhook_event_payload_ck",
       sql`char_length(payload_json) BETWEEN 2 AND 50000 AND payload_json LIKE '{%'`,
+    ),
+  ],
+);
+
+/**
+ * Server-issued completion records (STORE Phase 7). Created only from verified product
+ * fulfillment or completed service engagements; reviews attach to these identities.
+ */
+export const commerceCompletion = pgTable(
+  "commerce_completion",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    targetKind: commerceCompletionTargetKindEnum("target_kind").notNull(),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    counterpartyOrganizationId: text("counterparty_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    orderProductLineId: text("order_product_line_id").references(
+      () => commerceOrderProductLine.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    serviceEngagementId: text("service_engagement_id").references(
+      () => commerceServiceEngagement.id,
+      { onDelete: "restrict" },
+    ),
+    productId: text("product_id").references(() => product.id, { onDelete: "restrict" }),
+    completedAt: timestamp("completed_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_completion_product_line_uidx")
+      .on(table.orderProductLineId)
+      .where(sql`order_product_line_id IS NOT NULL`),
+    uniqueIndex("commerce_completion_engagement_uidx")
+      .on(table.serviceEngagementId)
+      .where(sql`service_engagement_id IS NOT NULL`),
+    index("commerce_completion_buyer_idx").on(table.buyerOrganizationId, table.completedAt),
+    index("commerce_completion_counterparty_idx").on(
+      table.counterpartyOrganizationId,
+      table.completedAt,
+    ),
+    index("commerce_completion_product_idx")
+      .on(table.productId, table.completedAt)
+      .where(sql`product_id IS NOT NULL`),
+    check(
+      "commerce_completion_target_ck",
+      sql`(target_kind = 'product_order_line'
+              AND order_product_line_id IS NOT NULL
+              AND service_engagement_id IS NULL)
+          OR (target_kind = 'service_engagement'
+              AND service_engagement_id IS NOT NULL
+              AND order_product_line_id IS NULL)`,
+    ),
+  ],
+);
+
+export const commerceReview = pgTable(
+  "commerce_review",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    completionId: text("completion_id")
+      .notNull()
+      .references(() => commerceCompletion.id, { onDelete: "restrict" }),
+    reviewerOrganizationId: text("reviewer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    reviewerMemberId: text("reviewer_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    subjectOrganizationId: text("subject_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    productId: text("product_id").references(() => product.id, { onDelete: "restrict" }),
+    rating: integer("rating").notNull(),
+    body: text("body").notNull(),
+    visibility: commerceReviewVisibilityEnum("visibility").default("visible").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_review_completion_reviewer_uidx").on(
+      table.completionId,
+      table.reviewerOrganizationId,
+    ),
+    index("commerce_review_subject_idx").on(table.subjectOrganizationId, table.visibility),
+    index("commerce_review_product_idx")
+      .on(table.productId, table.visibility)
+      .where(sql`product_id IS NOT NULL`),
+    check("commerce_review_rating_ck", sql`rating BETWEEN 1 AND 5`),
+    check("commerce_review_body_ck", sql`char_length(body) BETWEEN 1 AND 4000`),
+    check("commerce_review_self_ck", sql`reviewer_organization_id <> subject_organization_id`),
+  ],
+);
+
+export const commerceDispute = pgTable(
+  "commerce_dispute",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    openedByOrganizationId: text("opened_by_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    openedByMemberId: text("opened_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    counterpartyOrganizationId: text("counterparty_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    priorOrderState: commerceOrderStateEnum("prior_order_state").notNull(),
+    state: commerceDisputeStateEnum("state").default("open").notNull(),
+    reasonCode: text("reason_code").notNull(),
+    summary: text("summary").notNull(),
+    orderSnapshotJson: text("order_snapshot_json").notNull(),
+    decidedByUserId: text("decided_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    decisionNote: text("decision_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+    decidedAt: timestamp("decided_at"),
+  },
+  (table) => [
+    uniqueIndex("commerce_dispute_open_order_uidx")
+      .on(table.orderId)
+      .where(sql`state = 'open'`),
+    index("commerce_dispute_buyer_idx").on(table.buyerOrganizationId, table.state, table.id),
+    index("commerce_dispute_counterparty_idx").on(
+      table.counterpartyOrganizationId,
+      table.state,
+      table.id,
+    ),
+    index("commerce_dispute_state_idx").on(table.state, table.createdAt, table.id),
+    check(
+      "commerce_dispute_reason_ck",
+      sql`char_length(reason_code) BETWEEN 1 AND 80
+          AND char_length(summary) BETWEEN 1 AND 4000`,
+    ),
+    check(
+      "commerce_dispute_snapshot_ck",
+      sql`char_length(order_snapshot_json) BETWEEN 2 AND 20000
+          AND order_snapshot_json LIKE '{%'`,
+    ),
+    check(
+      "commerce_dispute_decision_ck",
+      sql`(state = 'open' AND decided_at IS NULL AND decided_by_user_id IS NULL)
+          OR (state IN ('closed', 'dismissed')
+              AND decided_at IS NOT NULL
+              AND decided_by_user_id IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const commerceDisputeEvent = pgTable(
+  "commerce_dispute_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    disputeId: text("dispute_id")
+      .notNull()
+      .references(() => commerceDispute.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    eventKind: commerceDisputeEventKindEnum("event_kind").notNull(),
+    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "restrict" }),
+    note: text("note"),
+    occurredAt: timestamp("occurred_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_dispute_event_sequence_uidx").on(table.disputeId, table.sequence),
+    index("commerce_dispute_event_timeline_idx").on(table.disputeId, table.occurredAt),
+    check("commerce_dispute_event_sequence_ck", sql`sequence >= 0`),
+    check(
+      "commerce_dispute_event_note_ck",
+      sql`note IS NULL OR char_length(note) BETWEEN 1 AND 4000`,
     ),
   ],
 );
