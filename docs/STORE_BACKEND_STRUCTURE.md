@@ -44,6 +44,15 @@
 > content reports, ranking, and recommendations remain planned unless a section explicitly says
 > otherwise. Product organization-ownership and category columns remain in the documented
 > expand/dual-write contract phase until non-null enforcement is separately released.
+>
+> **What is NOT built, and what the frontend is standing in for meanwhile:**
+> [§15](#15-guided-pathways--the-buy-the-set-surface) specifies **guided pathways** — the buy-the-set
+> surface whose tables exist as a flat list and whose feature does not — and
+> [Appendix A](#appendix-a--what-the-frontend-needs-and-this-backend-does-not-have) is the register of
+> every remaining store feature the frontend renders as mock UI, with the tables, columns and routes
+> each one needs. Three entries there describe fields that already reach the wire and can never carry
+> a real value: `onTimeShipmentRate` is hardcoded `null`, checkout `shippingInCents` is written
+> literal `0`, and the `trending_placeholder` rail strategy returns an empty list unconditionally.
 
 ---
 
@@ -83,18 +92,18 @@ If a rule must remain true after DevTools changes or request replay, it belongs 
 
 ### 1.1 What this domain owns
 
-| Context             | Owns                                                                           |
-| ------------------- | ------------------------------------------------------------------------------ |
-| Commerce identity   | Organizations, memberships, trade roles, addresses, verification evidence      |
-| Public catalog      | Active product projections, categories, search, facets, storefronts            |
-| Merchandising       | Hero slides, curated pathways, rails, placements                               |
-| Service marketplace | Provider profiles, capabilities, service offerings, coverage, credentials      |
-| Sourcing            | RFQs, invitations, requirement lines, quote revisions, negotiation             |
-| Purchasing          | Carts, checkout groups, purchase orders, immutable commercial snapshots        |
-| Payments            | Commerce payment intents, provider adapter references, refunds, reconciliation |
-| Fulfillment         | Product shipments and connector engagements                                    |
-| Trust               | Trade-assurance cases, disputes, reviews, Q&A, reports, moderation             |
-| Communication       | Resource-scoped threads, participants, messages, attachment metadata           |
+| Context             | Owns                                                                             |
+| ------------------- | -------------------------------------------------------------------------------- |
+| Commerce identity   | Organizations, memberships, trade roles, addresses, verification evidence        |
+| Public catalog      | Active product projections, categories, search, facets, storefronts              |
+| Merchandising       | Hero slides, rails, placements, guided pathway sets and slots, product relations |
+| Service marketplace | Provider profiles, capabilities, service offerings, coverage, credentials        |
+| Sourcing            | RFQs, invitations, requirement lines, quote revisions, negotiation               |
+| Purchasing          | Carts, checkout groups, purchase orders, immutable commercial snapshots          |
+| Payments            | Commerce payment intents, provider adapter references, refunds, reconciliation   |
+| Fulfillment         | Product shipments and connector engagements                                      |
+| Trust               | Trade-assurance cases, disputes, reviews, Q&A, reports, moderation               |
+| Communication       | Resource-scoped threads, participants, messages, attachment metadata             |
 
 ### 1.2 What this domain does not own
 
@@ -514,20 +523,21 @@ audit event. A seller/provider cannot review or resolve its own case.
 Public reads use `attachOptionalUser`, strict query parsing, bounded limits, deterministic ordering,
 and buyer-safe projections.
 
-| Method | Route                                    | Purpose                                                               |
-| ------ | ---------------------------------------- | --------------------------------------------------------------------- |
-| GET    | `/store/home`                            | Curated hero, categories, pathways, provider shortcuts, product rails |
-| GET    | `/store/categories`                      | Root or parent-scoped active categories                               |
-| GET    | `/store/categories/:slug`                | Category metadata, children, facets, first result page                |
-| GET    | `/store/search`                          | Product/provider search with server-side filters and cursor           |
-| GET    | `/store/products/:productSlug`           | Public product detail, tiers, seller/storefront projection            |
-| GET    | `/store/organizations/:organizationSlug` | Public company storefront                                             |
-| GET    | `/store/providers`                       | Filterable provider directory                                         |
-| GET    | `/store/providers/:organizationSlug`     | Public provider profile and active offerings                          |
-| GET    | `/store/services/:offeringSlug`          | One active service offering                                           |
-| GET    | `/store/pathways`                        | Curated pathway page                                                  |
-| GET    | `/store/pathways/:pathwaySlug`           | Pathway with eligible item projections                                |
-| GET    | `/store/rails/:railSlug`                 | Paginated curated/ranked feed                                         |
+| Method | Route                                     | Purpose                                                               |
+| ------ | ----------------------------------------- | --------------------------------------------------------------------- |
+| GET    | `/store/home`                             | Curated hero, categories, pathways, provider shortcuts, product rails |
+| GET    | `/store/categories`                       | Root or parent-scoped active categories                               |
+| GET    | `/store/categories/:slug`                 | Category metadata, children, facets, first result page                |
+| GET    | `/store/search`                           | Product/provider search with server-side filters and cursor           |
+| GET    | `/store/products/:productSlug`            | Public product detail, tiers, seller/storefront projection            |
+| GET    | `/store/organizations/:organizationSlug`  | Public company storefront                                             |
+| GET    | `/store/providers`                        | Filterable provider directory                                         |
+| GET    | `/store/providers/:organizationSlug`      | Public provider profile and active offerings                          |
+| GET    | `/store/services/:offeringSlug`           | One active service offering                                           |
+| GET    | `/store/pathways`                         | Active guided sets — see §15                                          |
+| GET    | `/store/pathways/:pathwaySlug`            | Pathway slots, ranked candidates, set totals, completeness (§15.7)    |
+| GET    | `/store/products/:productSlug/companions` | Relation-graph companions for a product detail page (§15.7)           |
+| GET    | `/store/rails/:railSlug`                  | Paginated curated/ranked feed                                         |
 
 `category-slugs` and `pathway-slugs` mock endpoints are not durable public API requirements.
 Dynamic routes should render on demand; build-time static parameter generation may use a bounded
@@ -829,6 +839,37 @@ Scheduled jobs:
 - Still deferred: Q&A, content reports, ranking, recommendations, abuse-operations automation,
   and trade-assurance financial remedies.
 
+### Phase 8 — catalog depth and the relation graph
+
+- Product variants (A1), media kinds (A2), specification grouping (A3), `condition` in the public
+  projection (A4), packaging dimensions and weight (A5), highlights (A6).
+- `commerce_product_relation` (§15.3), which unblocks similar / frequently-bought / compare (A7).
+- The merchandising integrity fixes in A19.
+- **Not started.** A4 is a one-line projection change and the cheapest entry in the whole appendix;
+  A1 is the most expensive, because a variant reaches pricing, stock, the cart and the order
+  snapshot.
+
+### Phase 9 — guided pathways
+
+- Slots, candidates, anchors and pathway images (§15.2), set pricing (§15.4), authoring and
+  moderation (§15.5), degradation signals (§15.6), the derivation job (§15.9).
+- **Not started.** Depends on Phase 8's relation graph for anchored sets; curated sets do not.
+
+### Phase 10 — the public voice
+
+- Review reads, media, sub-scores, helpful votes and seller replies (A8); Q&A (A9); content reports
+  (A12); engagement counters (A11); product-scoped threads (A14).
+- **Not started.** A8 first: a review that can be written and never read is the sharpest of these
+  gaps, and the table already exists.
+
+### Phase 11 — buyer logistics
+
+- A `delivery` address kind and a shippable order address (A15) — the only entry in the appendix that
+  is a correctness problem rather than a missing feature.
+- Indicative delivery estimates from provider coverage (A16), sample ordering (A17), seller-declared
+  customization options (A18).
+- **Not started.** A15 does not depend on the others and should not wait for them.
+
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
 ---
@@ -867,7 +908,589 @@ The following require legal, provider, or product decisions before implementatio
 - insurance solicitation/licensing boundaries;
 - FX facilitator licensing and whether Qatoto ever touches funds;
 - service-level guarantees and assurance coverage;
-- retention periods for invoices, customs records, lab reports, and disputes.
+- retention periods for invoices, customs records, lab reports, and disputes;
+- **whether a supplier's trading volume or revenue may be published, and on what consent.** The
+  frontend's company block renders "Online revenue US $2.4M+" (Appendix A13). Even once the figure is
+  derivable from order data, publishing a seller's commercial performance is a disclosure decision,
+  not an aggregation one.
+- **how a seller obtains a buyer's full delivery address.** Street lines, recipient name and phone are
+  encrypted, and the order snapshot today records only country, region, locality and postal code
+  (Appendix A15). Either an authorized decrypt path or a seller-openable encrypted snapshot has to be
+  chosen before fulfillment can be honest about what it knows.
 
 Until decided, the backend stores no fabricated guarantee and the frontend displays no claim that
 money, shipment, certification, insurance, or compliance is assured.
+
+**One frontend surface already violates this and is knowingly held back.**
+`sections/trade-protection.tsx` and `sheets/trade-protection-sheet.tsx` render four finished
+guarantees — "funds are only released once the order is confirmed", "full refund — no back-and-forth
+with the seller". That copy is mock and stays behind this decision (Appendix A20); it is not
+scheduled work, and no backend entry exists to make it true.
+
+---
+
+## 15. Guided pathways — the buy-the-set surface
+
+> **Status: the tables exist, the feature does not.** `store_pathway` and `store_pathway_item` model a
+> flat ordered list of entity ids. Everything below is unbuilt.
+
+### 15.1 A pathway is a composition, not a rail
+
+A rail ranks products that happen to be good; the buyer picks one. A **pathway** is a set whose
+members relate to each other, and the buyer's intent is the whole thing:
+
+- pick an outfit and get the jewelry, trousers, shirt and boots that go together;
+- pick a bicycle and get the matching jersey, gearset, lights and the bolts that actually fit it.
+
+In this market that reads as **multi-SKU kit sourcing** — "everything to fit out a hotel room",
+"everything to assemble 500 bicycles" — which is the thing single-SKU search is worst at. A buyer
+who knows the kit but not the part numbers cannot express that as a query, and today has to run one
+search per line.
+
+Two shapes, one model, distinguished by a nullable `anchorProductId`:
+
+| Shape            | `anchorProductId` | Slots come from               | Example                              |
+| ---------------- | ----------------- | ----------------------------- | ------------------------------------ |
+| **Curated set**  | `NULL`            | hand-picked by a merchandiser | "Autumn hotel-room refit"            |
+| **Anchored set** | a product         | the relation graph (§15.3)    | "Everything for the Model-C bicycle" |
+
+They share one route, one wire shape, and one renderer. An anchored set is not a second feature; it
+is a pathway whose slots were resolved rather than typed.
+
+### 15.2 Slots, not items
+
+Today's `store_pathway_item` is `(pathwayId, entityKind, entityId, position)` with an **untyped,
+un-FK'd `entityId`**. Three things follow, and all three are wrong for a set:
+
+1. **A dead member vanishes silently.** `resolveEligibleMerchandisingItems` drops any id that is no
+   longer publicly eligible, so a five-piece look renders as three pieces with nothing saying a
+   piece is missing. For a rail that is correct — a shorter rail is still a rail. For a set it is a
+   lie: the buyer believes they are seeing the whole kit.
+2. **Pathway items are the only merchandising rows with no time window.** `store_rail_placement`
+   carries `startsAt`/`endsAt`; `store_pathway_item` carries neither, so a seasonal member cannot be
+   scheduled in or out.
+3. **`getPathwayBySlug` returns every item, unbounded** — no limit, no cursor. A 200-piece kit is
+   one response.
+
+Replace it with two tables.
+
+`store_pathway_slot` — a **role** in the set, not a product:
+
+- `id`, `pathwayId`
+- `roleLabel` — "Footwear", "Front light", "Chain bolts". Display copy, not an enum: the roles in a
+  hotel refit and a bicycle build share nothing.
+- `isRequired` — a required slot with no eligible candidate makes the set incomplete (§15.6)
+- `quantity` — how many units of the chosen candidate the set needs. A bicycle takes one saddle and
+  twelve bolts.
+- `siblingOrder`, `startsAt`, `endsAt`, timestamps
+- unique `(pathwayId, siblingOrder)`
+
+`store_pathway_slot_candidate` — the products that can fill a slot:
+
+- `id`, `slotId`, `productId` **with a real foreign key**
+- `rank` — 0 is the default the set shows first
+- `sourceKind` — `curated | derived` (§15.3), so a swap suggested by the graph is distinguishable
+  from one a merchandiser chose
+- unique `(slotId, productId)`
+
+**Why candidates rather than one product per slot.** It is what makes a swap possible ("show me a
+cheaper saddle"), and it is what turns today's silent shrink into a fall-through: when rank 0 is out
+of stock the slot offers rank 1 instead of disappearing. A set is only as robust as its substitutes.
+
+`store_pathway` gains `anchorProductId` (nullable FK), `heroImageUrl` and `cardImageUrl`. It has no
+image column at all today, which is why the frontend renders a local placeholder banner
+(`mockPathwayBannerForSlug`) — that function deletes itself the day these columns land.
+
+### 15.3 The product relation graph
+
+**No table in this schema has two foreign keys to `product`.** There is no similar-product edge, no
+accessory edge, no spare-part edge, no compatibility edge. Every discovery feature the frontend
+mocks — "Frequently bought together", "Other recommendations", "View similar", "Add to Compare" —
+and every anchored pathway needs the same missing thing.
+
+`commerce_product_relation`
+
+- `id`, `fromProductId`, `toProductId` — both FK to `product`, both `restrict`
+- `relationKind`:
+  `accessory_of | spare_part_of | consumable_for | compatible_with | complements | replaces`
+- `sourceKind`: `seller_declared | moderator_curated | derived_cooccurrence`
+- `rank`, `createdByUserId`, timestamps
+- unique `(fromProductId, toProductId, relationKind)`; CHECK `fromProductId <> toProductId`
+
+Directional on purpose. "This bolt is a spare part of that bicycle" does not invert into "that
+bicycle is a spare part of this bolt". Symmetric meanings (`complements`, `compatible_with`) are
+stored as two rows so a single query direction serves every read.
+
+> **The rule that governs this table.** A seller saying its bolt fits a given bicycle is a **claim**,
+> not a fact — the same posture §0 takes on prices, badges and countries. A `seller_declared`
+> relation may drive discovery; it may **never** be projected as verified compatibility. `sourceKind`
+> rides the wire so no client can render a claim as a check mark, and only `moderator_curated`
+> earns confirmatory language. Fitment is a safety claim in every category where it matters —
+> brake parts, electrical, load-bearing hardware — and getting this wrong is not a merchandising bug.
+
+One table, five surfaces: anchored pathway slots, similar products, frequently-bought-together,
+compare candidates, and spare-part lookup from an order line.
+
+### 15.4 Set pricing is computed, never stored
+
+The set CTA reads "Buy complete set · N items", which implies a total. That total is **derived at
+read time** from current pricing tiers, per currency, exactly as `/commerce/cart` already prices a
+cart — §0's rule that the client may display a price but never establish one applies unchanged, and
+a stored set total would be stale the moment a seller edits a tier.
+
+A pathway spanning several sellers is not a new order type. It **seeds a cart**; the existing
+cart → `checkout/prepare` → `checkout/confirm` path then produces one `commerce_order` per
+counterparty (§2.3). Nothing about a pathway reaches an order — the order's line snapshots record
+products, quantities and prices, and a set is a browsing construct, not a commercial one.
+
+`POST /commerce/cart/from-pathway/:pathwaySlug` adds one chosen candidate per required slot at its
+slot quantity, returns the authoritative cart, and reports any slot it could not fill rather than
+quietly adding fewer lines.
+
+### 15.5 Authorship and moderation
+
+Platform merchandisers curate directly. A seller may **propose** a set through the same
+`draft → pending_review → active` flow `commerce_service_offering` already uses, because a seller
+knows its own compatibility better than a merchandiser does.
+
+Moderation is not ceremony here: without it, a seller composes a set entirely from its own SKUs and
+a curated look becomes an advertisement. A reviewer checks that slots are filled on merit and that
+`seller_declared` compatibility claims in a safety-relevant category have evidence behind them.
+
+### 15.6 Honest degradation
+
+A set that cannot be completed must say so. The projection carries:
+
+- per slot — `state`: `available | substituted | unavailable`, and which candidate was chosen;
+- per pathway — `requiredSlotCount`, `filledRequiredSlotCount`, `isComplete`.
+
+The frontend can then render "3 of 5 pieces available" and disable the whole-set CTA, instead of
+showing a shorter set that looks complete. **Never omit an unfillable required slot from the
+response** — an absent slot and a slot with nothing in it are different facts, and only the second
+one is true.
+
+### 15.7 Public API
+
+| Method | Route                                     | Purpose                                                                                    |
+| ------ | ----------------------------------------- | ------------------------------------------------------------------------------------------ |
+| GET    | `/store/pathways`                         | Active pathways with `cardImageUrl`; cursor-paginated                                      |
+| GET    | `/store/pathways/:pathwaySlug`            | Slots, ranked candidates, per-currency set totals, completeness; cursor over slots         |
+| GET    | `/store/products/:productSlug/companions` | Relation-graph companions for a PDP, grouped by `relationKind`, each carrying `sourceKind` |
+
+`GET /store/pathways/:pathwaySlug` replaces today's unbounded flat `items` array. Set totals are an
+array keyed by currency — a kit sourced from three countries has three totals and no single number,
+and inventing one would mean converting currencies without an FX quote.
+
+### 15.8 Authoring API
+
+| Method | Route                                                    | Result                                               |
+| ------ | -------------------------------------------------------- | ---------------------------------------------------- |
+| POST   | `/commerce/pathways`                                     | Create draft (merchandiser, or seller proposal)      |
+| PATCH  | `/commerce/pathways/:pathwayId`                          | Update owned draft                                   |
+| PUT    | `/commerce/pathways/:pathwayId/slots`                    | Replace the slot plan                                |
+| PUT    | `/commerce/pathways/:pathwayId/slots/:slotId/candidates` | Replace ranked candidates                            |
+| POST   | `/commerce/pathways/:pathwayId/submit`                   | Submit for moderation                                |
+| POST   | `/commerce/admin/pathways/:pathwayId/moderate`           | Publish or reject                                    |
+| PUT    | `/commerce/products/:productId/relations`                | Seller declares relations — always `seller_declared` |
+| POST   | `/commerce/admin/product-relations/:relationId/verify`   | Promote to `moderator_curated`                       |
+
+All writes take `Idempotency-Key` and are organization-scoped like every other commerce write.
+
+### 15.9 Derivation job
+
+`derive-product-relations` — nightly, in the pattern of `refresh-store-search-document`: mine
+co-occurrence from completed order lines into `derived_cooccurrence` relations with a rank, never
+overwriting a `moderator_curated` or `seller_declared` row.
+
+This is also the honest replacement for the `trending_placeholder` rail strategy, which today returns
+an empty list unconditionally and will keep doing so until something computes trending.
+
+---
+
+## Appendix A — What the frontend needs and this backend does not have
+
+**Written from the other side.** §5 and §6 record what this backend serves. This records what the
+store frontend tried to render and could not, found by reading all 33 `// TRANSPORT: mock` files in
+`src/components/home/store/` against `src/db/schema.ts` and `src/routes/`.
+
+**None of these blocked the frontend** — every one shipped as mock UI carrying a `TRANSPORT: mock`
+banner, which is the point of writing them down. A stand-in nobody recorded becomes a bug report
+later, and worse, becomes indistinguishable from an oversight.
+
+Every absence below was confirmed by enumerating all 244 `pgTable` calls, not by spot-checking. The
+sibling R&D appendix shipped one entry describing something already built; that is the failure mode
+this list is written to avoid.
+
+Each entry: **Needed by** · **What exists** · **What to build** · **Frontend today** · **Rule**.
+
+---
+
+### A1. Product variants — the colour picker cannot work
+
+**Needed by:** `sections/product-color-picker.tsx`, a "Select Color" strip of four swatches.
+
+**What exists:** nothing. No variant, option, swatch or SKU-child table. `product.sku` is a single
+nullable text column; there is one `priceInCents`, one `stockQuantity`, and images have no variant
+association.
+
+**What to build:** `commerce_product_variant` (product, name, `publicSlug`, own price/stock/MOQ) plus
+a `variantId` on `product_image`, on `commerce_cart_product_line` and on the order-line snapshot.
+This is not a display feature — a variant changes price, stock, gallery and what gets shipped.
+
+**Frontend today:** four hardcoded swatches rendered as `<div>`s. Not clickable at all, first one
+hardcoded selected. Deliberately inert rather than a picker that appears to work and changes nothing.
+
+**Rule:** a variant reaching an order line must be snapshotted like every other commercial fact —
+`commerce_order_product_line` records what was bought, and "Sea blue" is part of that.
+
+---
+
+### A2. No media kind on `product_image` — no 360, no video
+
+**Needed by:** `sections/view-in-360-banner.tsx`.
+
+**What exists:** `product_image` is `{id, productId, url, position, createdAt}`. No discriminator, no
+`altText`, no dimensions, and **no unique index on `(productId, position)`** even though position 0
+is load-bearing as the main image.
+
+**What to build:** a `mediaKind` enum (`photo | video | spin_360`) on `product_image`, or a sibling
+`product_media` table; plus the unique index.
+
+**Frontend today:** a non-interactive banner. There is no asset to open, so it is not a button.
+
+---
+
+### A3. `specification` has no grouping — the five-tab sheet cannot be real
+
+**Needed by:** `sheets/product-details-sheet.tsx`, a tabbed spec sheet with five tabs and 28 rows.
+
+**What exists:** `commerce_product_specification` is `{productId, specificationKey,
+specificationValue, position}` — flat, unique on `(productId, specificationKey)`, no group, no unit.
+
+**What to build:** a `specificationGroup` column (free text, like `roleLabel` in §15.2 — the useful
+groupings for a chair and a transformer share nothing).
+
+**Frontend today:** the real rows render ungrouped in `ProductSpecifications`; the grouped sheet
+renders mock tabs beside it. Two components, one truth, until the column lands.
+
+---
+
+### A4. `condition` is not in the public projection
+
+**Needed by:** the PDP meta line, which showed "New / Refurbished / Used".
+
+**What exists:** `product.condition` (`productConditionEnum`, notNull, default `new`) **is stored** —
+it is simply absent from `StoreProductDetailProjection`.
+
+**What to build:** add it to the projection. One line.
+
+**Frontend today:** the label is **gone**. This is the only mock-era feature not restored, because
+there is no value on the wire to render and inventing one is not an option.
+
+---
+
+### A5. Packaging dimensions, gross weight, selling units, "in the box"
+
+**Needed by:** `sections/packaging-and-delivery.tsx` (three spec rows plus three lead-time bands) and
+the "In the box" line in `sections/product-details-section.tsx`.
+
+**What exists:** `product.unitOfMeasure` (text, ≤40 chars) and the `leadTimeMinDays`/`leadTimeMaxDays`
+pair. Weight and dimensions exist **only** on `commerce_shipment` (`packageCount`,
+`totalWeightGrams`) — seller-entered at ship time, per shipment, not a product attribute.
+
+**What to build:** `packageLengthMm`, `packageWidthMm`, `packageHeightMm`, `packageGrossWeightGrams`,
+`unitsPerPackage` on `product`. "In the box" is best a specification row under a reserved group once
+A3 lands, not its own column.
+
+**Rule:** integers in named units — millimetres and grams — never a formatted string. The mock renders
+"52 × 46 × 12 cm" and "4.8 kg" as prose, which cannot be filtered, compared, or freight-rated.
+
+---
+
+### A6. Product highlights
+
+**Needed by:** `sections/product-highlights.tsx` — five collapsible cards, each `{title, body, image}`.
+
+**What exists:** `product.keyFeatures: text[]`, documented in the schema as deliberately not a table:
+short bullets with no image, no body, no identity.
+
+**What to build:** `commerce_product_highlight` (product, title, body, `imageUrl`, `position`). The
+schema comment already anticipates this — "promote to a table only if features ever grow attributes",
+and an image is an attribute.
+
+---
+
+### A7. No product-to-product relations — similar, frequently-bought, compare
+
+**Needed by:** `sheets/similar-products-sheet.tsx` (6 products), `sheets/compare-products-sheet.tsx`
+(5 products, multi-select), and the two PDP recommendation rails.
+
+**What exists:** nothing. **No table in the schema has two foreign keys to `product`.** The only
+product-adjacent "compare" is `product.compareAtPriceInCents`, a strike-through reference price.
+
+**What to build:** `commerce_product_relation` — specified in §15.3, because the same table serves
+anchored pathways.
+
+**Frontend today:** the similar sheet's tiles are `<button>`s with no handler and no route; compare's
+"Compare" button closes the sheet because no comparison view exists. Mock rail tiles render unlinked.
+
+---
+
+### A8. Reviews are write-only
+
+**Needed by:** `sections/ratings-and-reviews.tsx` — a rating summary, three sub-score bars (Service,
+Shipping, Quality), a video strip, a photo strip, filter and sort chips, and review cards with
+images, helpful counts and a seller reply.
+
+**What exists:** `commerce_review` — `{completionId, reviewerOrganizationId, subjectOrganizationId,
+productId, rating 1–5, body, visibility}`. `POST /commerce/completions/:completionId/reviews` is the
+**only** review route in the codebase. There is no read endpoint anywhere, so a review can be written
+and never seen. Aggregates (`averageRating`, `reviewCount`) are the only thing that surfaces.
+
+**What to build, in order:** (1) a cursor-paginated read route with sort and a has-media filter;
+(2) `commerce_review_media`; (3) `commerce_review_score` for the named sub-scores;
+(4) `commerce_review_vote` for helpful counts; (5) `commerce_review_reply`, seller-side, one per
+review.
+
+**Rule:** the verified-purchase badge is already earned structurally — a review requires a
+`completionId`, so it cannot exist without a completed order. Keep it that way; never add a
+free-floating review.
+
+---
+
+### A9. Product Q&A does not exist
+
+**Needed by:** `sections/questions-and-answers.tsx`.
+
+**What exists:** nothing for products. The only threaded primitives are `video_comment` (video domain)
+and `commerce_thread`/`commerce_message` (private, RFQ/quote-scoped). §12 Phase 7 already lists Q&A
+as deferred.
+
+**What to build:** `commerce_product_question` + `commerce_product_answer`, both moderated, answers
+attributable to the seller organization or a verified buyer.
+
+---
+
+### A10. Product comments
+
+**Needed by:** `sheets/comment-sheet.tsx` and `sheets/product-comment-thread.tsx`.
+
+**What exists:** nothing. The sheet imports `Comment`, `Reply` and `Review` from
+`src/types/video.ts` — the **video** domain's types, reused verbatim on a commerce surface.
+
+**What to build:** a decision first. Public comments on a B2B listing may be the wrong primitive
+where Q&A (A9) and private threads (A14) already exist. Nothing should be built here until that is
+settled.
+
+**Rule:** whatever ships, it does not reuse video comment types. Two domains sharing a row shape by
+accident is how a change to one silently breaks the other.
+
+---
+
+### A11. Engagement counters
+
+**Needed by:** `sections/engagement-bar.tsx` — comment 1.1k, favourite 3.7k, bookmark 414, share 3696.
+
+**What exists:** nothing for products. Every counter in the codebase is video-domain (`video_stats`,
+`video_save`, `video_share`, `video_like`).
+
+**What to build:** `commerce_product_engagement` (per-user save/bookmark rows) plus a counter
+projection, and per-viewer `hasSaved`/`hasBookmarked` on the product read.
+
+**Frontend today:** favourite and bookmark toggle the icon locally; the count never moves and nothing
+is sent.
+
+**Rule:** counts are integers on the wire. The mock renders "3.7k" and "8.8m" as strings — the client
+formats, the server counts.
+
+---
+
+### A12. No content reports
+
+**Needed by:** the PDP's "Report abuse" row.
+
+**What exists:** one report table, `research_program_content_report`, whose target CHECK admits only
+R&D posts and papers. Nothing targets a product, review, organization or message. `moderationState`
+on a product is moderator-set with no user-submitted row behind it.
+
+**What to build:** `commerce_content_report` with a target discriminator, feeding the existing
+`content_review_action` queue. §6.4 already lists `POST /commerce/reports`; it is unbuilt.
+
+**Frontend today:** a `<span>` reading "Report abuse (coming later)" — deliberately not a link.
+
+---
+
+### A13. There is no seller profile table
+
+**Needed by:** `sections/company-details-section.tsx` (six stats, rating, main categories, four
+capabilities), `sheets/company-details-sheet.tsx` (founded, location, business type, four factory
+photos, four freight-access rows, visit policy, two stakeholders) and
+`sheets/verified-capabilities-sheet.tsx` (four capabilities, five certifications).
+
+**What exists:** `commerce_organization` — **16 columns**, none of them profile depth.
+`commerce_provider_profile` exists but is keyed to _service providers_; a manufacturer selling
+products has no profile row at all. Of the six mock stats:
+
+| Stat                                   | Reality                                                                                                                                                           |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| On-time delivery rate                  | **projected but always `null`** — `commerce-trust-metrics.service.ts:98` says it "stays null until promised-delivery timestamps exist", and no such column exists |
+| Completed orders                       | real, derived                                                                                                                                                     |
+| Response time                          | exists for **providers only**, and is a manually-entered integer, not measured                                                                                    |
+| Year founded · Collaborating factories | do not exist                                                                                                                                                      |
+| Online revenue                         | does not exist — and see §14                                                                                                                                      |
+| Reorder rate                           | does not exist                                                                                                                                                    |
+
+**What to build:**
+
+1. **A promised-delivery timestamp** on the shipment or order line. Until it exists,
+   `onTimeShipmentRate` is a field the frontend renders that can never be non-null — the worst kind
+   of gap, because it looks wired.
+2. `commerce_seller_profile` mirroring the provider one, holding seller-declared `yearFounded`,
+   `factoryCount`, `businessType`, and a visit policy.
+3. `commerce_organization_media` for factory photos, and `commerce_organization_site_access` for the
+   road/sea/air/rail rows with distance detail.
+4. `commerce_organization_stakeholder` for ownership.
+5. `commerce_organization_capability` for OEM / customization / inspection / R&D.
+6. **Certifications**: `commerceDocumentKindEnum` has no certificate kind and
+   `commerceVerificationKindEnum` covers only identity, registration, tax, address and bank. Add a
+   `certification` kind plus a public projection of _approved_ certificates.
+7. Derive **reorder rate** and **response time** from order and message data rather than declaring
+   them.
+
+**Rule, and it is the whole point of splitting this list:** a derived stat and a declared stat must
+be visibly different on the wire. "98.6% on-time, measured across 412 completed orders" and "founded
+2009, per the seller" are different kinds of claim, and a projection that flattens them into one
+`stats: {label, value}[]` array — which is exactly the mock's shape — teaches the UI to present a
+seller's assertion as a platform measurement.
+
+---
+
+### A14. Threads cannot be opened from a product
+
+**Needed by:** `sections/store-and-chat-actions.tsx` — the PDP's "Chat now" button.
+
+**What exists:** `commerce_thread_resource_kind` has five values, but
+`POST /commerce/threads` accepts only `rfq | quote`. A buyer looking at a product has nothing to open.
+
+**What to build:** widen the accepted kinds, or define a product-scoped pre-sales thread that
+converts to an RFQ thread when one opens.
+
+**Rule:** §4.11 derives participants from organization memberships. A pre-sales thread has a buyer
+who may not yet have an organization — resolve that before widening, not after.
+
+---
+
+### A15. The buyer has no delivery address, and the order carries no deliverable one
+
+**Needed by:** `sections/deliver-to.tsx` and `sheets/address-sheet.tsx` — select, add and edit a
+delivery address, capped at five.
+
+**What exists, and this is the most serious gap in the list:**
+
+- `commerceOrganizationAddressKindEnum` is `billing | registered | warehouse | pickup | return`.
+  **There is no `delivery` or `shipping` kind.**
+- `assertOwnedDeliveryAddress` in `commerce-checkout.service.ts` filters on id + organization and
+  **does not filter on `addressKind` at all** — any address of any kind can be a delivery address.
+- The snapshot persisted onto the order is built from **plaintext columns only** — country, region,
+  locality, postal code. Street lines, recipient name and phone are encrypted and never make it in.
+  **A confirmed order therefore records a city and a postcode, not an address anything can ship to.**
+- There is no user-scoped address table anywhere; addresses belong to organizations.
+
+**What to build:** a `delivery` address kind; a kind filter in the checkout ownership check; and a
+decision about how a fulfilling seller obtains the full address — a decrypt-on-authorized-read path,
+or an encrypted snapshot the seller's key can open. Also a server-owned per-organization address cap
+to replace the frontend's local `MAX_SAVED_ADDRESSES = 5`.
+
+**Frontend today:** two hardcoded addresses in `useState` that evaporate on unmount.
+
+---
+
+### A16. Delivery cost is structurally zero
+
+**Needed by:** `sections/delivery-cost.tsx` ("Free Delivery", "Sept 23 to Sept 27") and
+`sheets/delivery-sheet.tsx` (per-leg mode picker with prices and durations, agent alternatives, a
+running estimate).
+
+**What exists:** `shippingInCents` is a real money column on four totals tables, each with a CHECK
+that `total = subtotal + tax + serviceFee + shipping - discount`. In the checkout path it is written
+as **literal `0`** — `commerce-checkout.service.ts:499` and `:788` — alongside `taxInCents: 0` and
+`serviceFeeInCents: 0`. The only way a non-zero value enters is a seller typing one onto a quote.
+There is no rate table, no carrier call, no distance or weight estimator, no delivery-date estimator.
+
+**What to build:** an indicative estimate assembled from the **existing** provider connector
+directory — `commerce_service_coverage` already models origin/destination, and
+`commerce_service_offering` already carries an indicative price range. That gives a real,
+attributable estimate without a carrier integration.
+
+**Rule:** an estimate is not a quote and must never be rendered as a promise. §14 blocks assurance
+language, and "Free Delivery" over a hardcoded date range is exactly the claim it blocks. A2 and A5
+are prerequisites — you cannot rate freight without weight and dimensions.
+
+---
+
+### A17. Samples are advertised but cannot be ordered
+
+**Needed by:** `sections/sample-price.tsx` — "Sample price: $1,410/set" and a "Get sample" button.
+
+**What exists:** `product.samplePolicy` (`unavailable | paid | refundable`),
+`product.samplePriceInCents`, a CHECK binding them, a facet, and both fields on the public
+projection. It is fully modelled **as an advertisement**.
+
+**What to build:** an `isSample` flag on the cart line, order line and their snapshots; sample
+pricing bypassing the MOQ and the tier ladder; and, for `refundable`, a link from the sample order to
+the credit applied to the later bulk order — otherwise the third enum value means nothing.
+
+**Frontend today:** a hardcoded price string and a handler-less button. Note the PDP renders the
+**real** `samplePolicy` and `samplePriceInCents` a few lines above it, so the mock row currently
+contradicts the wire.
+
+---
+
+### A18. Customization options
+
+**Needed by:** `sections/customization-options.tsx` and `sheets/customization-sheet.tsx` — four upload
+slots, each with its own accepted file types and minimum order quantity, plus a packaging-material
+choice with its own minimums.
+
+**What exists:** nothing. The only "packaging" in the schema is a member of the R&D
+`supplierCapabilityKindEnum`, unrelated to `product` or `commerce_organization`.
+
+**What to build:** `commerce_product_customization_option` (seller-declared: slot key, label, accepted
+MIME types, minimum order quantity) and `commerce_order_line_customization` holding the buyer's
+uploaded asset references, snapshotted onto the order line.
+
+**Rule:** the minimum order quantity per slot is a **commercial term** — a logo at 50 units and
+packaging artwork at 200 change what the buyer may order. The server enforces it at cart and
+checkout; the client's copy of the number is a hint. The mock enforces nothing.
+
+---
+
+### A19. Merchandising data-integrity gaps found while writing this
+
+Small, cheap, and each one currently lets a bad row exist:
+
+- **Hero slides have no CHECK tying `linkTargetKind` to `linkTargetId`/`linkTargetSlug`.** All three
+  are nullable and independent, so a slide can carry a kind with no target. The frontend guards by
+  requiring both before it builds an href.
+- **`product_image` has no unique index on `(productId, position)`** despite position 0 being the
+  main image by convention. Two rows can claim it.
+- **`category` and `organization` merchandising placements are storable but silently discarded.**
+  `storeMerchandisingEntityKindEnum` admits four kinds; `resolveEligibleMerchandisingItems` projects
+  two and `break`s on the others. A merchandiser can place a category in a rail and see it vanish
+  with no error.
+- **`store_pathway_item` has no time window** while `store_rail_placement` does (§15.2).
+
+---
+
+### A20. Blocked, not backlogged
+
+Two things the frontend mocks that must **not** become backend work until a decision exists — they
+belong in §14:
+
+- **Trade protection.** `sections/trade-protection.tsx` and its sheet already render four guarantees
+  in finished copy — "funds are only released once the order is confirmed", "full refund — no
+  back-and-forth". §4.9 and §14 both forbid claiming custody Qatoto does not have. The frontend keeps
+  this mock **hidden behind a decision**, not scheduled.
+- **Supplier revenue disclosure.** "Online revenue US $2.4M+" is a seller's commercial secret. Even
+  once derivable from order data, publishing it needs explicit seller consent and a policy — see the
+  new §14 entry.

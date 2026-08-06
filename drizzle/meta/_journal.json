@@ -379,6 +379,13 @@
       "when": 1785985000000,
       "tag": "0053_store_phase_7_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1786037619394,
+      "tag": "0054_store_phase_8_catalog_depth",
+      "breakpoints": true
     }
   ]
 }

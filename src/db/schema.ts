@@ -507,6 +507,51 @@ export const productModerationStateEnum = pgEnum("product_moderation_state", [
   "suspended",
 ]);
 
+/**
+ * Phase 8 catalog depth (STORE_BACKEND_STRUCTURE.md Appendix A2).
+ *
+ * `product_image` was photo-only and carried no discriminator, so a 360 spin or a
+ * video had nowhere to live. The column defaults to `photo`, which is what every
+ * pre-Phase-8 row is.
+ */
+export const productMediaKindEnum = pgEnum("product_media_kind", ["photo", "video", "spin_360"]);
+
+/**
+ * A variant is retired, never deleted: an order line snapshot references the
+ * variant it was bought from, and `restrict` on that FK would block the delete
+ * anyway (Appendix A1).
+ */
+export const commerceProductVariantStateEnum = pgEnum("commerce_product_variant_state", [
+  "active",
+  "retired",
+]);
+
+/**
+ * The product relation graph (STORE_BACKEND_STRUCTURE.md §15.3, Appendix A7).
+ *
+ * Directional on purpose — "this bolt is a spare part of that bicycle" does not
+ * invert. Symmetric meanings (`complements`, `compatible_with`) are stored as two
+ * rows so one query direction serves every read.
+ */
+export const commerceProductRelationKindEnum = pgEnum("commerce_product_relation_kind", [
+  "accessory_of",
+  "spare_part_of",
+  "consumable_for",
+  "compatible_with",
+  "complements",
+  "replaces",
+]);
+
+/**
+ * A seller saying its bolt fits a given bicycle is a CLAIM, not a fact (§15.3).
+ * This rides the wire on every companion so no client can render a claim as a
+ * check mark; only `moderator_curated` earns confirmatory language.
+ */
+export const commerceProductRelationSourceKindEnum = pgEnum(
+  "commerce_product_relation_source_kind",
+  ["seller_declared", "moderator_curated", "derived_cooccurrence"],
+);
+
 export const storePresentationAccentEnum = pgEnum("store_presentation_accent", [
   "amber",
   "slate",
@@ -1283,6 +1328,18 @@ export const product = pgTable(
     samplePriceInCents: integer("sample_price_in_cents"),
     leadTimeMinDays: integer("lead_time_min_days"),
     leadTimeMaxDays: integer("lead_time_max_days"),
+    /**
+     * Packaging geometry and mass (Appendix A5). Integers in NAMED UNITS —
+     * millimetres and grams — never a formatted string: "52 × 46 × 12 cm" cannot be
+     * filtered, compared, or freight-rated, and freight rating (A16) is the whole
+     * reason these exist. All three dimensions travel together or not at all.
+     */
+    packageLengthMm: integer("package_length_mm"),
+    packageWidthMm: integer("package_width_mm"),
+    packageHeightMm: integer("package_height_mm"),
+    packageGrossWeightGrams: integer("package_gross_weight_grams"),
+    /** How many sellable units are inside one package. NULL means unstated, not 1. */
+    unitsPerPackage: integer("units_per_package"),
     moderationState: productModerationStateEnum("moderation_state").default("pending").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -1338,6 +1395,131 @@ export const product = pgTable(
       sql`(model_number IS NULL OR char_length(model_number) BETWEEN 1 AND 120)
           AND (unit_of_measure IS NULL OR char_length(unit_of_measure) BETWEEN 1 AND 40)`,
     ),
+    // A5. Either every dimension is present or none is — two of three is not a box.
+    // Upper bounds are 50 m and 50 t, generous enough for a shipping container and
+    // tight enough that a unit mix-up (cm typed as mm) fails loudly.
+    check(
+      "product_package_dimensions_ck",
+      sql`(package_length_mm IS NULL AND package_width_mm IS NULL AND package_height_mm IS NULL)
+          OR (package_length_mm IS NOT NULL AND package_width_mm IS NOT NULL
+              AND package_height_mm IS NOT NULL
+              AND package_length_mm BETWEEN 1 AND 50000
+              AND package_width_mm BETWEEN 1 AND 50000
+              AND package_height_mm BETWEEN 1 AND 50000)`,
+    ),
+    check(
+      "product_package_mass_ck",
+      sql`package_gross_weight_grams IS NULL
+          OR package_gross_weight_grams BETWEEN 1 AND 50000000`,
+    ),
+    check(
+      "product_units_per_package_ck",
+      sql`units_per_package IS NULL OR units_per_package BETWEEN 1 AND 1000000`,
+    ),
+  ],
+);
+
+/**
+ * A buyable variation of a listing — "Sea blue", "480 V / 60 Hz" (Appendix A1).
+ *
+ * NOT A DISPLAY FEATURE. A variant changes price, stock, MOQ, gallery and what
+ * physically ships, so it reaches the cart, the inventory reservation and the
+ * immutable order-line snapshot. The rule that makes that safe: a product either
+ * has zero active variants (pre-Phase-8 behaviour, unchanged) or one or more, and
+ * in the second case a cart line WITHOUT a variant is rejected. An order that does
+ * not say which variant was bought is not shippable, and §2.2 forbids inferring it
+ * later from mutable listing data.
+ *
+ * Retired rather than deleted: `commerce_order_product_line.variant_id` is
+ * `restrict`, so a sold variant cannot be removed even if a seller wants it gone.
+ */
+export const commerceProductVariant = pgTable(
+  "commerce_product_variant",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    /** Buyer-facing label. Part of the order snapshot, so it is real commercial copy. */
+    name: text("name").notNull(),
+    /** Immutable URL identity within the product, like `product.publicSlug` is globally. */
+    publicSlug: text("public_slug").notNull(),
+    sku: text("sku"),
+    /** Authoritative unit price when this variant is selected. Overrides `product.priceInCents`. */
+    priceInCents: integer("price_in_cents").notNull(),
+    stockQuantity: integer("stock_quantity").default(0).notNull(),
+    /** NULL falls back to the product-level minimum derived from its tier ladder. */
+    minimumOrderQuantity: integer("minimum_order_quantity"),
+    position: integer("position").notNull(),
+    state: commerceProductVariantStateEnum("state").default("active").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_product_variant_slug_uidx").on(table.productId, table.publicSlug),
+    // Postgres UNIQUE permits many NULLs, so SKU stays optional per variant.
+    uniqueIndex("commerce_product_variant_sku_uidx").on(table.productId, table.sku),
+    uniqueIndex("commerce_product_variant_position_uidx").on(table.productId, table.position),
+    index("commerce_product_variant_product_state_idx").on(
+      table.productId,
+      table.state,
+      table.position,
+    ),
+    check(
+      "commerce_product_variant_slug_ck",
+      sql`public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(public_slug) BETWEEN 1 AND 80`,
+    ),
+    check("commerce_product_variant_name_ck", sql`char_length(name) BETWEEN 1 AND 120`),
+    check("commerce_product_variant_sku_ck", sql`sku IS NULL OR char_length(sku) BETWEEN 1 AND 80`),
+    check(
+      "commerce_product_variant_money_ck",
+      sql`price_in_cents >= 0 AND stock_quantity >= 0 AND position >= 0
+          AND (minimum_order_quantity IS NULL OR minimum_order_quantity > 0)`,
+    ),
+  ],
+);
+
+/**
+ * Five collapsible marketing cards on the PDP (Appendix A6).
+ *
+ * `product.keyFeatures` stays what it is — a `text[]` of short bullets with no
+ * identity. A highlight has a body and an image, and the schema comment on
+ * keyFeatures already anticipated this: "promote to a table only if features ever
+ * grow attributes".
+ */
+export const commerceProductHighlight = pgTable(
+  "commerce_product_highlight",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    bodyText: text("body_text").notNull(),
+    imageUrl: text("image_url"),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_product_highlight_position_uidx").on(table.productId, table.position),
+    check("commerce_product_highlight_title_ck", sql`char_length(title) BETWEEN 1 AND 120`),
+    check("commerce_product_highlight_body_ck", sql`char_length(body_text) BETWEEN 1 AND 2000`),
+    check("commerce_product_highlight_position_ck", sql`position >= 0`),
+    check(
+      "commerce_product_highlight_image_ck",
+      sql`image_url IS NULL OR (char_length(image_url) <= 2048 AND image_url LIKE 'https://%')`,
+    ),
   ],
 );
 
@@ -1353,13 +1535,43 @@ export const productImage = pgTable(
     productId: text("product_id")
       .notNull()
       .references(() => product.id, { onDelete: "cascade" }),
+    /**
+     * A1. NULL means "shared by every variant" — the gallery a variant-less product
+     * has always had. Non-NULL scopes the asset to one variant, so selecting
+     * "Sea blue" changes the gallery instead of only the price.
+     */
+    variantId: text("variant_id").references(() => commerceProductVariant.id, {
+      onDelete: "cascade",
+    }),
     // Cloudinary secure_url of the normalized asset.
     url: text("url").notNull(),
-    // 0 = main listing photo. Contiguous per product; re-packed on delete.
+    /** A2. Pre-Phase-8 rows are all photos, which is what the default records. */
+    mediaKind: productMediaKindEnum("media_kind").default("photo").notNull(),
+    altText: text("alt_text"),
+    widthPx: integer("width_px"),
+    heightPx: integer("height_px"),
+    // 0 = main listing photo. Contiguous per (product, variant); re-packed on delete.
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (table) => [index("product_image_productId_idx").on(table.productId)],
+  (table) => [
+    index("product_image_productId_idx").on(table.productId),
+    index("product_image_variantId_idx").on(table.variantId).where(sql`variant_id IS NOT NULL`),
+    check("product_image_position_ck", sql`position >= 0`),
+    check(
+      "product_image_alt_text_ck",
+      sql`alt_text IS NULL OR char_length(alt_text) BETWEEN 1 AND 300`,
+    ),
+    check(
+      "product_image_dimensions_ck",
+      sql`(width_px IS NULL AND height_px IS NULL)
+          OR (width_px IS NOT NULL AND height_px IS NOT NULL
+              AND width_px BETWEEN 1 AND 20000 AND height_px BETWEEN 1 AND 20000)`,
+    ),
+    // A19's "(productId, position) has no unique index" is closed in migration 0054
+    // as an EXPRESSION index over coalesce(variant_id, ''), which drizzle-kit cannot
+    // express here. See drizzle/0054_store_phase_8_catalog_depth.sql.
+  ],
 );
 
 // B2B volume pricing — buy at least `minimumOrderQuantity` to get
@@ -1374,13 +1586,30 @@ export const productPricingTier = pgTable(
     productId: text("product_id")
       .notNull()
       .references(() => product.id, { onDelete: "cascade" }),
+    /**
+     * A1. NULL is the product default ladder. Non-NULL is a ladder that applies only
+     * when that variant is selected, and it takes precedence over the default.
+     *
+     * Without this column, choosing a variant would silently discard B2B volume
+     * pricing — the tier price is an absolute unit price, so a product-level ladder
+     * cannot be combined with a different variant base price without lying about one
+     * of them.
+     */
+    variantId: text("variant_id").references(() => commerceProductVariant.id, {
+      onDelete: "cascade",
+    }),
     unitPriceInCents: integer("unit_price_in_cents").notNull(),
     minimumOrderQuantity: integer("minimum_order_quantity").notNull(),
     // Display order of the tier ladder.
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (table) => [index("product_pricing_tier_productId_idx").on(table.productId)],
+  (table) => [
+    index("product_pricing_tier_productId_idx").on(table.productId),
+    index("product_pricing_tier_variantId_idx")
+      .on(table.variantId)
+      .where(sql`variant_id IS NOT NULL`),
+  ],
 );
 
 /** Structured key/value specs for public product detail (STORE §4.4). */
@@ -1395,11 +1624,26 @@ export const commerceProductSpecification = pgTable(
       .references(() => product.id, { onDelete: "cascade" }),
     specificationKey: text("specification_key").notNull(),
     specificationValue: text("specification_value").notNull(),
+    /**
+     * A3. Free text, deliberately not an enum — the useful groupings for a chair
+     * ("Dimensions", "Materials") and a transformer ("Electrical", "Thermal") share
+     * nothing, exactly like `roleLabel` in §15.2. NULL is ungrouped, which is every
+     * pre-Phase-8 row.
+     *
+     * The key stays unique per PRODUCT, not per group: two groups claiming the same
+     * key would make the spec sheet ambiguous about which value is current.
+     */
+    specificationGroup: text("specification_group"),
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     index("commerce_product_specification_productId_idx").on(table.productId, table.position),
+    index("commerce_product_specification_group_idx").on(
+      table.productId,
+      table.specificationGroup,
+      table.position,
+    ),
     uniqueIndex("commerce_product_specification_product_key_uidx").on(
       table.productId,
       table.specificationKey,
@@ -1409,7 +1653,92 @@ export const commerceProductSpecification = pgTable(
       sql`char_length(specification_key) BETWEEN 1 AND 80
           AND char_length(specification_value) BETWEEN 1 AND 500`,
     ),
+    check(
+      "commerce_product_specification_group_ck",
+      sql`specification_group IS NULL OR char_length(specification_group) BETWEEN 1 AND 80`,
+    ),
     check("commerce_product_specification_position_ck", sql`position >= 0`),
+  ],
+);
+
+/**
+ * The product relation graph (STORE_BACKEND_STRUCTURE.md §15.3, Appendix A7).
+ *
+ * Before this table, NO table in the schema had two foreign keys to `product`, so
+ * "similar products", "frequently bought together", "compare", spare-part lookup
+ * from an order line and Phase 9's anchored pathway slots were all blocked on the
+ * same missing edge. One table serves all five.
+ *
+ * Both sides are `restrict`: a product someone declared a relation against is not
+ * silently deletable, and the seller must retract the claim first.
+ *
+ * THE RULE THAT GOVERNS THIS TABLE (§15.3): a `seller_declared` relation may drive
+ * discovery; it may NEVER be projected as verified compatibility. Fitment is a
+ * safety claim in every category where it matters — brake parts, electrical,
+ * load-bearing hardware — so `sourceKind` rides the wire on every read.
+ */
+export const commerceProductRelation = pgTable(
+  "commerce_product_relation",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    fromProductId: text("from_product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "restrict" }),
+    toProductId: text("to_product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "restrict" }),
+    relationKind: commerceProductRelationKindEnum("relation_kind").notNull(),
+    sourceKind: commerceProductRelationSourceKindEnum("source_kind")
+      .default("seller_declared")
+      .notNull(),
+    /** 0 first. Ordering within a kind on the PDP companions read. */
+    rank: integer("rank").default(0).notNull(),
+    /** Who asserted it. A moderator promotion overwrites neither of these. */
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    createdByOrganizationId: text("created_by_organization_id").references(
+      () => commerceOrganization.id,
+      { onDelete: "restrict" },
+    ),
+    verifiedByUserId: text("verified_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    verifiedAt: timestamp("verified_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_product_relation_edge_uidx").on(
+      table.fromProductId,
+      table.toProductId,
+      table.relationKind,
+    ),
+    index("commerce_product_relation_from_idx").on(
+      table.fromProductId,
+      table.relationKind,
+      table.rank,
+      table.id,
+    ),
+    index("commerce_product_relation_to_idx").on(table.toProductId, table.relationKind),
+    index("commerce_product_relation_org_idx")
+      .on(table.createdByOrganizationId)
+      .where(sql`created_by_organization_id IS NOT NULL`),
+    check("commerce_product_relation_self_ck", sql`from_product_id <> to_product_id`),
+    check("commerce_product_relation_rank_ck", sql`rank >= 0 AND rank <= 10000`),
+    // Verification attribution exists exactly when the row claims to be curated.
+    check(
+      "commerce_product_relation_verified_ck",
+      sql`(source_kind = 'moderator_curated'
+             AND verified_by_user_id IS NOT NULL AND verified_at IS NOT NULL)
+          OR (source_kind <> 'moderator_curated'
+             AND verified_by_user_id IS NULL AND verified_at IS NULL)`,
+    ),
   ],
 );
 
@@ -1450,6 +1779,17 @@ export const storeHeroSlide = pgTable(
     check(
       "store_hero_slide_window_ck",
       sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
+    ),
+    /**
+     * A19. The three link columns were nullable and independent, so a slide could
+     * carry a target kind with nothing to link to and the frontend had to guard by
+     * requiring both before building an href. A link is all three or none.
+     */
+    check(
+      "store_hero_slide_link_target_ck",
+      sql`(link_target_kind IS NULL AND link_target_id IS NULL AND link_target_slug IS NULL)
+          OR (link_target_kind IS NOT NULL AND link_target_id IS NOT NULL
+              AND link_target_slug IS NOT NULL)`,
     ),
   ],
 );
@@ -1504,6 +1844,14 @@ export const storePathwayItem = pgTable(
     entityKind: storeMerchandisingEntityKindEnum("entity_kind").notNull(),
     entityId: text("entity_id").notNull(),
     position: integer("position").notNull(),
+    /**
+     * A19. Pathway items were the only merchandising rows with no time window, while
+     * `store_rail_placement` has carried one since Phase 1 — so a seasonal member
+     * could not be scheduled in or out. (§15.2 replaces items with typed slots in
+     * Phase 9; the window is correct in both models.)
+     */
+    startsAt: timestamp("starts_at"),
+    endsAt: timestamp("ends_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -1514,6 +1862,10 @@ export const storePathwayItem = pgTable(
       table.entityId,
     ),
     check("store_pathway_item_position_ck", sql`position >= 0`),
+    check(
+      "store_pathway_item_window_ck",
+      sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
+    ),
   ],
 );
 
@@ -2660,6 +3012,19 @@ export const commerceOrderProductLine = pgTable(
       .notNull()
       .references(() => commerceOrder.id, { onDelete: "cascade" }),
     productId: text("product_id").references(() => product.id, { onDelete: "restrict" }),
+    /**
+     * A1. The variant this line was bought from, `restrict` so it survives as long as
+     * the order does.
+     */
+    variantId: text("variant_id").references(() => commerceProductVariant.id, {
+      onDelete: "restrict",
+    }),
+    /**
+     * "Sea blue" is a commercial fact, so it is snapshotted like every other one
+     * (§2.2). Reading the live variant name here would let a seller rename what a
+     * buyer already bought.
+     */
+    variantNameSnapshot: text("variant_name_snapshot"),
     titleSnapshot: text("title_snapshot").notNull(),
     specificationSnapshot: text("specification_snapshot").notNull(),
     quantityOrdered: integer("quantity_ordered").notNull(),
@@ -2685,6 +3050,14 @@ export const commerceOrderProductLine = pgTable(
       "commerce_order_product_line_money_ck",
       sql`unit_price_in_cents >= 0
           AND line_total_in_cents = (quantity_ordered::bigint * unit_price_in_cents)`,
+    ),
+    // A variant id without its name snapshot would be an order that knows which row
+    // it pointed at but not what the buyer was shown.
+    check(
+      "commerce_order_product_line_variant_ck",
+      sql`(variant_id IS NULL AND variant_name_snapshot IS NULL)
+          OR (variant_id IS NOT NULL AND variant_name_snapshot IS NOT NULL
+              AND char_length(variant_name_snapshot) BETWEEN 1 AND 120)`,
     ),
   ],
 );
@@ -2841,6 +3214,15 @@ export const commerceCartProductLine = pgTable(
     productId: text("product_id")
       .notNull()
       .references(() => product.id, { onDelete: "restrict" }),
+    /**
+     * A1. Required when the product has any active variant, forbidden when it has
+     * none. That rule spans two tables, so it cannot be a CHECK — it is enforced in
+     * `commerce-pricing.ts` under the same row locks that price the line, and again
+     * by a trigger in migration 0054 so a direct write cannot bypass it.
+     */
+    variantId: text("variant_id").references(() => commerceProductVariant.id, {
+      onDelete: "restrict",
+    }),
     quantity: integer("quantity").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -2849,8 +3231,14 @@ export const commerceCartProductLine = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_cart_product_line_uidx").on(table.cartId, table.productId),
+    // The (cartId, productId) uniqueness becomes (cartId, productId, variant) in
+    // migration 0054 as an expression index over coalesce(variant_id, ''), because
+    // Postgres UNIQUE permits many NULLs and drizzle-kit cannot emit an expression
+    // index. Two colours of one product are two lines; the same colour twice is one.
     index("commerce_cart_product_line_cart_idx").on(table.cartId, table.productId),
+    index("commerce_cart_product_line_variant_idx")
+      .on(table.variantId)
+      .where(sql`variant_id IS NOT NULL`),
     check("commerce_cart_product_line_qty_ck", sql`quantity > 0`),
   ],
 );
@@ -2983,6 +3371,13 @@ export const commerceInventoryReservation = pgTable(
     productId: text("product_id")
       .notNull()
       .references(() => product.id, { onDelete: "restrict" }),
+    /**
+     * A1. Stock is held against the variant, not the listing: reserving ten "Sea
+     * blue" must not consume "Signal red" stock.
+     */
+    variantId: text("variant_id").references(() => commerceProductVariant.id, {
+      onDelete: "restrict",
+    }),
     buyerOrganizationId: text("buyer_organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
@@ -3000,14 +3395,17 @@ export const commerceInventoryReservation = pgTable(
     releasedAt: timestamp("released_at"),
   },
   (table) => [
-    uniqueIndex("commerce_inventory_reservation_prepare_product_held_uidx")
-      .on(table.checkoutPrepareId, table.productId)
-      .where(sql`state = 'held' AND checkout_prepare_id IS NOT NULL`),
+    // Migration 0054 replaces this with the variant-aware expression index
+    // (checkout_prepare_id, product_id, coalesce(variant_id, '')), so one prepare can
+    // hold two variants of the same product.
     index("commerce_inventory_reservation_product_state_idx").on(
       table.productId,
       table.state,
       table.expiresAt,
     ),
+    index("commerce_inventory_reservation_variant_state_idx")
+      .on(table.variantId, table.state, table.expiresAt)
+      .where(sql`variant_id IS NOT NULL`),
     index("commerce_inventory_reservation_state_expires_idx").on(table.state, table.expiresAt),
     check(
       "commerce_inventory_reservation_qty_ck",
@@ -4572,6 +4970,8 @@ export const productRelations = relations(product, ({ one, many }) => ({
   images: many(productImage),
   pricingTiers: many(productPricingTier),
   specifications: many(commerceProductSpecification),
+  variants: many(commerceProductVariant),
+  highlights: many(commerceProductHighlight),
 }));
 
 export const commerceOrganizationRelations = relations(commerceOrganization, ({ one, many }) => ({
@@ -4687,10 +5087,56 @@ export const commerceOrganizationAuditEntryRelations = relations(
 
 export const productImageRelations = relations(productImage, ({ one }) => ({
   product: one(product, { fields: [productImage.productId], references: [product.id] }),
+  variant: one(commerceProductVariant, {
+    fields: [productImage.variantId],
+    references: [commerceProductVariant.id],
+  }),
 }));
 
 export const productPricingTierRelations = relations(productPricingTier, ({ one }) => ({
   product: one(product, { fields: [productPricingTier.productId], references: [product.id] }),
+  variant: one(commerceProductVariant, {
+    fields: [productPricingTier.variantId],
+    references: [commerceProductVariant.id],
+  }),
+}));
+
+// --- Phase 8 catalog depth relations (Appendix A1, A6, A7). Child-side only.
+
+export const commerceProductVariantRelations = relations(
+  commerceProductVariant,
+  ({ one, many }) => ({
+    product: one(product, {
+      fields: [commerceProductVariant.productId],
+      references: [product.id],
+    }),
+    images: many(productImage),
+    pricingTiers: many(productPricingTier),
+  }),
+);
+
+export const commerceProductHighlightRelations = relations(commerceProductHighlight, ({ one }) => ({
+  product: one(product, {
+    fields: [commerceProductHighlight.productId],
+    references: [product.id],
+  }),
+}));
+
+export const commerceProductRelationRelations = relations(commerceProductRelation, ({ one }) => ({
+  fromProduct: one(product, {
+    fields: [commerceProductRelation.fromProductId],
+    references: [product.id],
+    relationName: "productRelationFrom",
+  }),
+  toProduct: one(product, {
+    fields: [commerceProductRelation.toProductId],
+    references: [product.id],
+    relationName: "productRelationTo",
+  }),
+  createdByOrganization: one(commerceOrganization, {
+    fields: [commerceProductRelation.createdByOrganizationId],
+    references: [commerceOrganization.id],
+  }),
 }));
 
 // ---------------------------------------------------------------------------
