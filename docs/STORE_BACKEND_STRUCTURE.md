@@ -1265,7 +1265,7 @@ carrying `sourceKind` and a full product card. Written by the seller at
 `moderate_commerce` capability promotes a claim, and a `commerce_product_relation_verified_ck`
 constraint keeps reviewer attribution and `moderator_curated` in lockstep in both directions.
 
-**Still absent:** ranking and recommendation *selection* (Phase 10+), and the nightly
+**Still absent:** ranking and recommendation _selection_ (Phase 10+), and the nightly
 `derive-product-relations` co-occurrence job (§15.9). The `derived_cooccurrence` source kind exists
 in the enum; nothing writes it yet.
 

@@ -51,9 +51,18 @@ ranking, or anything blocked by §14.
 
 1. Migrations `0040`–`0053` applied and the Phase 6 and Phase 7 verify scripts green.
 2. No `store_hero_slide` row carries a partial link target — the `0054` preflight
-   raises and aborts the migration if any does. Fix with either
-   `UPDATE store_hero_slide SET link_target_kind = NULL, link_target_id = NULL,
-   link_target_slug = NULL WHERE ...` or by completing the target.
+   raises and aborts the migration if any does. Fix by completing the target, or by
+   clearing all three columns:
+
+    ```sql
+    UPDATE store_hero_slide
+       SET link_target_kind = NULL, link_target_id = NULL, link_target_slug = NULL
+     WHERE NOT (
+       (link_target_kind IS NULL AND link_target_id IS NULL AND link_target_slug IS NULL)
+       OR (link_target_kind IS NOT NULL AND link_target_id IS NOT NULL
+           AND link_target_slug IS NOT NULL)
+     );
+    ```
 
 ---
 
