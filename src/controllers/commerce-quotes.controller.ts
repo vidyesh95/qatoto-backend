@@ -105,16 +105,69 @@ const FxQuoteDetailSchema = z
   })
   .strict();
 
-const QuoteServiceDetailSchema = z.discriminatedUnion("kind", [
-  FreightQuoteDetailSchema,
-  CustomsQuoteDetailSchema,
-  InsuranceQuoteDetailSchema,
-  InspectionQuoteDetailSchema,
-  TestingQuoteDetailSchema,
-  MarketingQuoteDetailSchema,
-  WarehouseQuoteDetailSchema,
-  FxQuoteDetailSchema,
-]);
+const QuoteServiceDetailSchema = z
+  .discriminatedUnion("kind", [
+    FreightQuoteDetailSchema,
+    CustomsQuoteDetailSchema,
+    InsuranceQuoteDetailSchema,
+    InspectionQuoteDetailSchema,
+    TestingQuoteDetailSchema,
+    MarketingQuoteDetailSchema,
+    WarehouseQuoteDetailSchema,
+    FxQuoteDetailSchema,
+  ])
+  .superRefine((details, refinementContext) => {
+    if (details.kind === "insurance_provider") {
+      const hasCoverageLimit = details.coverageLimitInCents !== undefined;
+      const hasCurrency = details.currency !== undefined;
+      if (hasCoverageLimit !== hasCurrency) {
+        refinementContext.addIssue({
+          code: "custom",
+          message: "coverageLimitInCents and currency must be provided together.",
+          path: hasCoverageLimit ? ["currency"] : ["coverageLimitInCents"],
+        });
+      }
+    }
+
+    if (details.kind === "foreign_exchange_facilitator") {
+      const hasNotionalAmount = details.notionalAmountInCents !== undefined;
+      const hasNotionalCurrency = details.notionalCurrency !== undefined;
+      if (hasNotionalAmount !== hasNotionalCurrency) {
+        refinementContext.addIssue({
+          code: "custom",
+          message: "notionalAmountInCents and notionalCurrency must be provided together.",
+          path: hasNotionalAmount ? ["notionalCurrency"] : ["notionalAmountInCents"],
+        });
+      }
+    }
+  });
+
+const QuoteDeliverablePlanSchema = z
+  .array(
+    z
+      .object({
+        sequence: z.number().int().min(0),
+        title: z.string().trim().min(1).max(200),
+        isRequired: z.boolean().default(true),
+        dueAt: z.coerce.date().optional(),
+      })
+      .strict(),
+  )
+  .max(50)
+  .default([])
+  .superRefine((deliverables, refinementContext) => {
+    const seenSequences = new Set<number>();
+    for (const [deliverableIndex, deliverable] of deliverables.entries()) {
+      if (seenSequences.has(deliverable.sequence)) {
+        refinementContext.addIssue({
+          code: "custom",
+          message: "Deliverable sequences must be unique.",
+          path: [deliverableIndex, "sequence"],
+        });
+      }
+      seenSequences.add(deliverable.sequence);
+    }
+  });
 
 const QuoteProductLineSchema = z
   .object({
@@ -138,6 +191,7 @@ const QuoteServiceLineSchema = z
     leadTimeDays: z.number().int().min(0).max(3650).optional(),
     exclusionsSnapshot: z.string().trim().max(10_000).optional(),
     deliverableSnapshot: z.string().trim().max(10_000).optional(),
+    deliverables: QuoteDeliverablePlanSchema,
     siblingOrder: z.number().int().min(0),
     serviceDetail: QuoteServiceDetailSchema,
   })

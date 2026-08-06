@@ -28,18 +28,20 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–5 foundation shipped.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–6 foundation shipped and hardened.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
 > preparation and confirmation into direct-checkout orders, buyer/counterparty order queues and
 > cancellation, product shipments, standalone service engagements, commerce payment intents,
-> refunds, and a double-entry commerce journal (fake provider adapter only) are implemented. See
-> `docs/STORE_PHASE_5_ROLLOUT.md` for the payments/journal contract. Trade-assurance language,
-> real payment processors, shipment-leg/connector execution, and trust workflows described here
-> remain planned unless a section explicitly says otherwise. Product organization-ownership and
-> category columns remain in the documented expand/dual-write contract phase until non-null
-> enforcement is separately released.
+> refunds, a double-entry commerce journal (fake provider adapter only), shipment-leg command
+> execution, immutable typed engagement snapshots, contracted deliverable plans/results, and
+> derived fulfillment progress are implemented. See `docs/STORE_PHASE_5_ROLLOUT.md` for the
+> payments/journal contract and `docs/STORE_PHASE_6_ROLLOUT.md` for connector execution.
+> Trade-assurance language, real payment processors, external provider adapters/webhooks, and trust
+> workflows described here remain planned unless a section explicitly says otherwise. Product
+> organization-ownership and category columns remain in the documented expand/dual-write contract
+> phase until non-null enforcement is separately released.
 
 ---
 
@@ -808,7 +810,10 @@ Scheduled jobs:
 - Shipment legs and typed customs, insurance, inspection, lab, warehouse, marketing, and FX
   deliverables.
 - Derived end-to-end progress without coupling connector state machines.
-- **Shipped (command workflows + typed snapshots; no external provider adapters).** See
+- **Shipped and hardened (command workflows + typed snapshots + contracted deliverable plans; no
+  external provider adapters).** Migrations `0048`–`0050` close
+  command idempotency, deterministic snapshot lineage, money/currency pairing, lifecycle
+  reconciliation, and typed-read gaps. See
   `docs/STORE_PHASE_6_ROLLOUT.md` for migrate, verification, smoke flows, and rollback.
   Assurance language and live carrier/customs/insurance/lab/FX connectors remain blocked
   on legal/provider decisions (§14).

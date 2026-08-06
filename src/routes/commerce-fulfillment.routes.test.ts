@@ -361,7 +361,25 @@ describe("commerce fulfillment routes", () => {
     });
     phase6ServiceStubs.getServiceEngagementDetail.mockResolvedValue({
       success: true,
-      value: { id: "engagement-1", state: "awaiting_provider" },
+      value: {
+        id: "engagement-1",
+        state: "awaiting_provider",
+        executionSnapshot: {
+          kind: "customs_broker",
+          jurisdictions: ["US-CBP"],
+        },
+        deliverables: [
+          {
+            id: "deliverable-1",
+            state: "submitted",
+            result: {
+              kind: "customs_broker",
+              filingKind: "import_entry",
+              jurisdiction: "US-CBP",
+            },
+          },
+        ],
+      },
     });
 
     const shipmentResponse = await request(app).get("/commerce/shipments/shipment-1");
@@ -369,6 +387,17 @@ describe("commerce fulfillment routes", () => {
 
     expect(shipmentResponse.status).toBe(200);
     expect(engagementResponse.status).toBe(200);
+    expect(engagementResponse.body.data).toMatchObject({
+      executionSnapshot: { kind: "customs_broker", jurisdictions: ["US-CBP"] },
+      deliverables: [
+        {
+          result: {
+            kind: "customs_broker",
+            filingKind: "import_entry",
+          },
+        },
+      ],
+    });
   });
 
   it("lists authorized leg and engagement events", async () => {

@@ -132,6 +132,24 @@ const DeliverablePlanSchema = z
   })
   .strict();
 
+const DeliverablePlanListSchema = z
+  .array(DeliverablePlanSchema)
+  .max(50)
+  .default([])
+  .superRefine((deliverables, refinementContext) => {
+    const seenSequences = new Set<number>();
+    for (const [deliverableIndex, deliverable] of deliverables.entries()) {
+      if (seenSequences.has(deliverable.sequence)) {
+        refinementContext.addIssue({
+          code: "custom",
+          message: "Deliverable sequences must be unique.",
+          path: [deliverableIndex, "sequence"],
+        });
+      }
+      seenSequences.add(deliverable.sequence);
+    }
+  });
+
 const CustomsDetailSchema = z
   .object({
     kind: z.literal("customs_broker"),
@@ -205,16 +223,42 @@ const FreightDetailSchema = z
   })
   .strict();
 
-export const EngagementExecutionDetailSchema = z.discriminatedUnion("kind", [
-  FreightDetailSchema,
-  CustomsDetailSchema,
-  InsuranceDetailSchema,
-  InspectionDetailSchema,
-  TestingDetailSchema,
-  MarketingDetailSchema,
-  WarehouseDetailSchema,
-  FxDetailSchema,
-]);
+export const EngagementExecutionDetailSchema = z
+  .discriminatedUnion("kind", [
+    FreightDetailSchema,
+    CustomsDetailSchema,
+    InsuranceDetailSchema,
+    InspectionDetailSchema,
+    TestingDetailSchema,
+    MarketingDetailSchema,
+    WarehouseDetailSchema,
+    FxDetailSchema,
+  ])
+  .superRefine((details, refinementContext) => {
+    if (details.kind === "insurance_provider") {
+      const hasCoverageLimit = details.coverageLimitMinorUnits !== undefined;
+      const hasCurrency = details.currency !== undefined;
+      if (hasCoverageLimit !== hasCurrency) {
+        refinementContext.addIssue({
+          code: "custom",
+          message: "coverageLimitMinorUnits and currency must be provided together.",
+          path: hasCoverageLimit ? ["currency"] : ["coverageLimitMinorUnits"],
+        });
+      }
+    }
+
+    if (details.kind === "foreign_exchange_facilitator") {
+      const hasNotionalAmount = details.notionalAmountMinorUnits !== undefined;
+      const hasNotionalCurrency = details.notionalCurrency !== undefined;
+      if (hasNotionalAmount !== hasNotionalCurrency) {
+        refinementContext.addIssue({
+          code: "custom",
+          message: "notionalAmountMinorUnits and notionalCurrency must be provided together.",
+          path: hasNotionalAmount ? ["notionalCurrency"] : ["notionalAmountMinorUnits"],
+        });
+      }
+    }
+  });
 
 const CustomsDeliverableResultSchema = z
   .object({
@@ -308,16 +352,31 @@ const FreightDeliverableResultSchema = z
   })
   .strict();
 
-export const TypedDeliverableResultSchema = z.discriminatedUnion("kind", [
-  FreightDeliverableResultSchema,
-  CustomsDeliverableResultSchema,
-  InsuranceDeliverableResultSchema,
-  InspectionDeliverableResultSchema,
-  TestingDeliverableResultSchema,
-  WarehouseDeliverableResultSchema,
-  MarketingDeliverableResultSchema,
-  FxDeliverableResultSchema,
-]);
+export const TypedDeliverableResultSchema = z
+  .discriminatedUnion("kind", [
+    FreightDeliverableResultSchema,
+    CustomsDeliverableResultSchema,
+    InsuranceDeliverableResultSchema,
+    InspectionDeliverableResultSchema,
+    TestingDeliverableResultSchema,
+    WarehouseDeliverableResultSchema,
+    MarketingDeliverableResultSchema,
+    FxDeliverableResultSchema,
+  ])
+  .superRefine((result, refinementContext) => {
+    if (result.kind !== "insurance_provider") return;
+
+    const hasInsuredValue = result.insuredValueMinorUnits !== undefined;
+    const hasCoverageLimit = result.coverageLimitMinorUnits !== undefined;
+    const hasCurrency = result.currency !== undefined;
+    if ((hasInsuredValue || hasCoverageLimit) !== hasCurrency) {
+      refinementContext.addIssue({
+        code: "custom",
+        message: "currency is required exactly when an insurance amount is provided.",
+        path: ["currency"],
+      });
+    }
+  });
 
 export const ServiceEngagementCommandSchema = z.discriminatedUnion("command", [
   z
@@ -325,7 +384,7 @@ export const ServiceEngagementCommandSchema = z.discriminatedUnion("command", [
       command: z.literal("initialize"),
       expectedVersion: z.number().int().min(0),
       details: EngagementExecutionDetailSchema,
-      deliverables: z.array(DeliverablePlanSchema).max(50).default([]),
+      deliverables: DeliverablePlanListSchema,
     })
     .strict(),
   z

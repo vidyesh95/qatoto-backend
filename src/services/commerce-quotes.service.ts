@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
+  commerceEngagementDeliverable,
   commerceOrder,
   commerceOrderProductLine,
   commerceOrderServiceLine,
@@ -11,6 +12,7 @@ import {
   commerceQuote,
   commerceQuoteProductLine,
   commerceQuoteRevision,
+  commerceQuoteServiceDeliverablePlan,
   commerceQuoteServiceLine,
   commerceRfq,
   commerceRfqInvitation,
@@ -46,6 +48,8 @@ type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type QuoteRow = typeof commerceQuote.$inferSelect;
 type RevisionRow = typeof commerceQuoteRevision.$inferSelect;
 type OrderRow = typeof commerceOrder.$inferSelect;
+type QuoteDeliverablePlanRow = typeof commerceQuoteServiceDeliverablePlan.$inferSelect;
+type QuoteServiceLineRow = typeof commerceQuoteServiceLine.$inferSelect;
 type ProviderKind = (typeof commerceRfqServiceLine.$inferSelect)["providerKind"];
 type FreightTransportMode = (typeof freightQuoteServiceDetail.$inferSelect.transportModes)[number];
 
@@ -118,6 +122,52 @@ export type QuoteServiceDetailInput =
       readonly notionalCurrency?: string;
     };
 
+export type QuoteServiceDetailProjection =
+  | {
+      readonly kind: "freight_forwarder" | "logistics_operator";
+      readonly transportModes: readonly FreightTransportMode[];
+      readonly originCountryCode: string | null;
+      readonly destinationCountryCode: string | null;
+      readonly estimatedTransitDays: number | null;
+    }
+  | {
+      readonly kind: "customs_broker";
+      readonly jurisdictions: readonly string[];
+      readonly filingSummary: string | null;
+    }
+  | {
+      readonly kind: "insurance_provider";
+      readonly coverageClasses: readonly string[];
+      readonly coverageLimitInCents: number | null;
+      readonly currency: string | null;
+    }
+  | { readonly kind: "inspection_agency"; readonly includedStages: readonly string[] }
+  | {
+      readonly kind: "testing_certification_lab";
+      readonly standards: readonly string[];
+      readonly laboratoryLocation: string | null;
+    }
+  | {
+      readonly kind: "marketing_agency";
+      readonly channels: readonly string[];
+      readonly deliverablesSummary: string | null;
+    }
+  | {
+      readonly kind: "warehouse_provider";
+      readonly storageTypes: readonly string[];
+      readonly capacityUnits: string | null;
+      readonly temperatureControlled: boolean;
+    }
+  | {
+      readonly kind: "foreign_exchange_facilitator";
+      readonly currencyPair: string;
+      readonly rateFixedPoint: number;
+      readonly rateScale: number;
+      readonly settlementRail: string | null;
+      readonly notionalAmountInCents: number | null;
+      readonly notionalCurrency: string | null;
+    };
+
 export interface QuoteProductLineInput {
   readonly rfqProductLineId: string;
   readonly quantity: number;
@@ -137,8 +187,16 @@ export interface QuoteServiceLineInput {
   readonly leadTimeDays?: number;
   readonly exclusionsSnapshot?: string;
   readonly deliverableSnapshot?: string;
+  readonly deliverables: readonly QuoteDeliverablePlanInput[];
   readonly siblingOrder: number;
   readonly serviceDetail: QuoteServiceDetailInput;
+}
+
+export interface QuoteDeliverablePlanInput {
+  readonly sequence: number;
+  readonly title: string;
+  readonly isRequired: boolean;
+  readonly dueAt?: Date;
 }
 
 export interface AppendRevisionInput {
@@ -239,6 +297,14 @@ export interface QuoteDetailProjection {
           readonly leadTimeDays: number | null;
           readonly exclusionsSnapshot: string | null;
           readonly deliverableSnapshot: string | null;
+          readonly serviceDetail: QuoteServiceDetailProjection | null;
+          readonly deliverables: readonly {
+            readonly id: string;
+            readonly sequence: number;
+            readonly title: string;
+            readonly isRequired: boolean;
+            readonly dueAt: Date | null;
+          }[];
           readonly siblingOrder: number;
         }[];
       })
@@ -425,7 +491,7 @@ async function insertQuoteServiceDetail(
         quoteServiceLineId,
         coverageClasses: [...detail.coverageClasses],
         coverageLimitInCents: detail.coverageLimitInCents ?? null,
-        currency: detail.currency ?? "USD",
+        currency: detail.currency ?? null,
       });
       return { success: true, value: true };
     case "inspection_agency":
@@ -470,7 +536,7 @@ async function insertQuoteServiceDetail(
         rateScale: detail.rateScale,
         settlementRail: detail.settlementRail ?? null,
         notionalAmountInCents: detail.notionalAmountInCents ?? null,
-        notionalCurrency: detail.notionalCurrency ?? "USD",
+        notionalCurrency: detail.notionalCurrency ?? null,
       });
       return { success: true, value: true };
     }
@@ -823,6 +889,35 @@ export async function appendRevision(
           message: "serviceDetail.kind must match the RFQ service line provider kind.",
         };
       }
+      const deliverableSequences = serviceLine.deliverables.map(
+        (deliverable) => deliverable.sequence,
+      );
+      if (new Set(deliverableSequences).size !== deliverableSequences.length) {
+        return {
+          status: "validation" as const,
+          message: "Deliverable sequences must be unique within each service line.",
+        };
+      }
+      if (serviceLine.serviceDetail.kind === "insurance_provider") {
+        const hasCoverageLimit = serviceLine.serviceDetail.coverageLimitInCents !== undefined;
+        const hasCurrency = serviceLine.serviceDetail.currency !== undefined;
+        if (hasCoverageLimit !== hasCurrency) {
+          return {
+            status: "validation" as const,
+            message: "Insurance coverageLimitInCents and currency must be provided together.",
+          };
+        }
+      }
+      if (serviceLine.serviceDetail.kind === "foreign_exchange_facilitator") {
+        const hasNotionalAmount = serviceLine.serviceDetail.notionalAmountInCents !== undefined;
+        const hasNotionalCurrency = serviceLine.serviceDetail.notionalCurrency !== undefined;
+        if (hasNotionalAmount !== hasNotionalCurrency) {
+          return {
+            status: "validation" as const,
+            message: "FX notionalAmountInCents and notionalCurrency must be provided together.",
+          };
+        }
+      }
       serviceSubtotal += serviceLine.feeInCents;
     }
 
@@ -903,6 +998,15 @@ export async function appendRevision(
         .returning();
       if (!insertedServiceLine) {
         throw new Error("Quote service line insert returned no row.");
+      }
+      for (const deliverable of serviceLine.deliverables) {
+        await transaction.insert(commerceQuoteServiceDeliverablePlan).values({
+          quoteServiceLineId: insertedServiceLine.id,
+          sequence: deliverable.sequence,
+          title: deliverable.title,
+          isRequired: deliverable.isRequired,
+          dueAt: deliverable.dueAt ?? null,
+        });
       }
       const detailResult = await insertQuoteServiceDetail(
         transaction,
@@ -1172,6 +1276,134 @@ export async function listQuotesForRfq(
   return { success: true, value: { items } };
 }
 
+async function loadQuoteServiceDetailProjection(
+  serviceLine: QuoteServiceLineRow,
+): Promise<QuoteServiceDetailProjection | null> {
+  switch (serviceLine.providerKind) {
+    case "freight_forwarder":
+    case "logistics_operator": {
+      const [detail] = await db
+        .select()
+        .from(freightQuoteServiceDetail)
+        .where(eq(freightQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: serviceLine.providerKind,
+            transportModes: detail.transportModes,
+            originCountryCode: detail.originCountryCode,
+            destinationCountryCode: detail.destinationCountryCode,
+            estimatedTransitDays: detail.estimatedTransitDays,
+          }
+        : null;
+    }
+    case "customs_broker": {
+      const [detail] = await db
+        .select()
+        .from(customsBrokerageQuoteServiceDetail)
+        .where(eq(customsBrokerageQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: serviceLine.providerKind,
+            jurisdictions: detail.jurisdictions,
+            filingSummary: detail.filingSummary,
+          }
+        : null;
+    }
+    case "insurance_provider": {
+      const [detail] = await db
+        .select()
+        .from(insuranceQuoteServiceDetail)
+        .where(eq(insuranceQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: serviceLine.providerKind,
+            coverageClasses: detail.coverageClasses,
+            coverageLimitInCents: detail.coverageLimitInCents,
+            currency: detail.currency,
+          }
+        : null;
+    }
+    case "inspection_agency": {
+      const [detail] = await db
+        .select()
+        .from(inspectionQuoteServiceDetail)
+        .where(eq(inspectionQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .limit(1);
+      return detail
+        ? { kind: serviceLine.providerKind, includedStages: detail.includedStages }
+        : null;
+    }
+    case "testing_certification_lab": {
+      const [detail] = await db
+        .select()
+        .from(testingCertificationQuoteServiceDetail)
+        .where(eq(testingCertificationQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: serviceLine.providerKind,
+            standards: detail.standards,
+            laboratoryLocation: detail.laboratoryLocation,
+          }
+        : null;
+    }
+    case "marketing_agency": {
+      const [detail] = await db
+        .select()
+        .from(marketingQuoteServiceDetail)
+        .where(eq(marketingQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: serviceLine.providerKind,
+            channels: detail.channels,
+            deliverablesSummary: detail.deliverablesSummary,
+          }
+        : null;
+    }
+    case "warehouse_provider": {
+      const [detail] = await db
+        .select()
+        .from(warehouseQuoteServiceDetail)
+        .where(eq(warehouseQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: serviceLine.providerKind,
+            storageTypes: detail.storageTypes,
+            capacityUnits: detail.capacityUnits,
+            temperatureControlled: detail.temperatureControlled,
+          }
+        : null;
+    }
+    case "foreign_exchange_facilitator": {
+      const [detail] = await db
+        .select()
+        .from(foreignExchangeQuoteServiceDetail)
+        .where(eq(foreignExchangeQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: serviceLine.providerKind,
+            currencyPair: detail.currencyPair,
+            rateFixedPoint: detail.rateFixedPoint,
+            rateScale: detail.rateScale,
+            settlementRail: detail.settlementRail,
+            notionalAmountInCents: detail.notionalAmountInCents,
+            notionalCurrency: detail.notionalCurrency,
+          }
+        : null;
+    }
+    default: {
+      const exhaustiveCheck: never = serviceLine.providerKind;
+      throw new Error(`Unhandled quote provider kind: ${String(exhaustiveCheck)}`);
+    }
+  }
+}
+
 export async function getQuote(
   actor: QuoteActorContext,
   quoteId: string,
@@ -1229,6 +1461,38 @@ export async function getQuote(
         .from(commerceQuoteServiceLine)
         .where(eq(commerceQuoteServiceLine.revisionId, revisionForViewer.id))
         .orderBy(asc(commerceQuoteServiceLine.siblingOrder));
+      const serviceDetailEntries = await Promise.all(
+        serviceLines.map(async (serviceLine) => ({
+          quoteServiceLineId: serviceLine.id,
+          serviceDetail: await loadQuoteServiceDetailProjection(serviceLine),
+        })),
+      );
+      const serviceDetailByLineId = new Map(
+        serviceDetailEntries.map((entry) => [entry.quoteServiceLineId, entry.serviceDetail]),
+      );
+      const deliverablePlans =
+        serviceLines.length === 0
+          ? []
+          : await db
+              .select()
+              .from(commerceQuoteServiceDeliverablePlan)
+              .where(
+                inArray(
+                  commerceQuoteServiceDeliverablePlan.quoteServiceLineId,
+                  serviceLines.map((serviceLine) => serviceLine.id),
+                ),
+              )
+              .orderBy(
+                asc(commerceQuoteServiceDeliverablePlan.quoteServiceLineId),
+                asc(commerceQuoteServiceDeliverablePlan.sequence),
+              );
+      const deliverablePlansByServiceLineId = new Map<string, QuoteDeliverablePlanRow[]>();
+      for (const deliverablePlan of deliverablePlans) {
+        const existingPlans =
+          deliverablePlansByServiceLineId.get(deliverablePlan.quoteServiceLineId) ?? [];
+        existingPlans.push(deliverablePlan);
+        deliverablePlansByServiceLineId.set(deliverablePlan.quoteServiceLineId, existingPlans);
+      }
 
       latestRevisionProjection = {
         ...projectRevisionMoney(revisionForViewer),
@@ -1257,6 +1521,16 @@ export async function getQuote(
           leadTimeDays: line.leadTimeDays,
           exclusionsSnapshot: line.exclusionsSnapshot,
           deliverableSnapshot: line.deliverableSnapshot,
+          serviceDetail: serviceDetailByLineId.get(line.id) ?? null,
+          deliverables: (deliverablePlansByServiceLineId.get(line.id) ?? []).map(
+            (deliverablePlan) => ({
+              id: deliverablePlan.id,
+              sequence: deliverablePlan.sequence,
+              title: deliverablePlan.title,
+              isRequired: deliverablePlan.isRequired,
+              dueAt: deliverablePlan.dueAt,
+            }),
+          ),
           siblingOrder: line.siblingOrder,
         })),
       };
@@ -1405,6 +1679,37 @@ export async function acceptQuote(
         .select()
         .from(commerceQuoteServiceLine)
         .where(eq(commerceQuoteServiceLine.revisionId, revision.id));
+      const contractedDeliverablePlans =
+        serviceLines.length === 0
+          ? []
+          : await transaction
+              .select()
+              .from(commerceQuoteServiceDeliverablePlan)
+              .where(
+                inArray(
+                  commerceQuoteServiceDeliverablePlan.quoteServiceLineId,
+                  serviceLines.map((serviceLine) => serviceLine.id),
+                ),
+              )
+              .orderBy(
+                asc(commerceQuoteServiceDeliverablePlan.quoteServiceLineId),
+                asc(commerceQuoteServiceDeliverablePlan.sequence),
+              );
+      const contractedDeliverablePlansByServiceLineId = new Map<
+        string,
+        QuoteDeliverablePlanRow[]
+      >();
+      for (const contractedDeliverablePlan of contractedDeliverablePlans) {
+        const existingPlans =
+          contractedDeliverablePlansByServiceLineId.get(
+            contractedDeliverablePlan.quoteServiceLineId,
+          ) ?? [];
+        existingPlans.push(contractedDeliverablePlan);
+        contractedDeliverablePlansByServiceLineId.set(
+          contractedDeliverablePlan.quoteServiceLineId,
+          existingPlans,
+        );
+      }
 
       const [order] = await transaction
         .insert(commerceOrder)
@@ -1543,6 +1848,20 @@ export async function acceptQuote(
             .update(commerceServiceEngagement)
             .set({ executionContractState: "ready", updatedAt: now })
             .where(eq(commerceServiceEngagement.id, engagement.id));
+        }
+
+        for (const contractedDeliverablePlan of contractedDeliverablePlansByServiceLineId.get(
+          line.id,
+        ) ?? []) {
+          await transaction.insert(commerceEngagementDeliverable).values({
+            engagementId: engagement.id,
+            sequence: contractedDeliverablePlan.sequence,
+            title: contractedDeliverablePlan.title,
+            isRequired: contractedDeliverablePlan.isRequired,
+            state: "planned",
+            dueAt: contractedDeliverablePlan.dueAt,
+            createdByMemberId: actor.memberId,
+          });
         }
 
         await transaction.insert(commerceServiceEngagementEvent).values({

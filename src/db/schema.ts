@@ -2392,6 +2392,34 @@ export const commerceQuoteServiceLine = pgTable(
   ],
 );
 
+export const commerceQuoteServiceDeliverablePlan = pgTable(
+  "commerce_quote_service_deliverable_plan",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    quoteServiceLineId: text("quote_service_line_id")
+      .notNull()
+      .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    title: text("title").notNull(),
+    isRequired: boolean("is_required").default(true).notNull(),
+    dueAt: timestamp("due_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_quote_service_deliverable_plan_sequence_uidx").on(
+      table.quoteServiceLineId,
+      table.sequence,
+    ),
+    check("commerce_quote_service_deliverable_plan_sequence_ck", sql`sequence >= 0`),
+    check(
+      "commerce_quote_service_deliverable_plan_title_ck",
+      sql`char_length(title) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
 export const freightQuoteServiceDetail = pgTable("freight_quote_service_detail", {
   quoteServiceLineId: text("quote_service_line_id")
     .primaryKey()
@@ -2413,14 +2441,27 @@ export const customsBrokerageQuoteServiceDetail = pgTable(
   },
 );
 
-export const insuranceQuoteServiceDetail = pgTable("insurance_quote_service_detail", {
-  quoteServiceLineId: text("quote_service_line_id")
-    .primaryKey()
-    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
-  coverageClasses: text("coverage_classes").array().notNull().default([]),
-  coverageLimitInCents: integer("coverage_limit_in_cents"),
-  currency: text("currency").default("USD").notNull(),
-});
+export const insuranceQuoteServiceDetail = pgTable(
+  "insurance_quote_service_detail",
+  {
+    quoteServiceLineId: text("quote_service_line_id")
+      .primaryKey()
+      .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+    coverageClasses: text("coverage_classes").array().notNull().default([]),
+    coverageLimitInCents: integer("coverage_limit_in_cents"),
+    currency: text("currency"),
+  },
+  (_table) => [
+    check(
+      "insurance_quote_service_detail_amount_currency_pair_ck",
+      sql`(coverage_limit_in_cents IS NULL) = (currency IS NULL)`,
+    ),
+    check(
+      "insurance_quote_service_detail_currency_ck",
+      sql`currency IS NULL OR currency ~ '^[A-Z]{3}$'`,
+    ),
+  ],
+);
 
 export const inspectionQuoteServiceDetail = pgTable("inspection_quote_service_detail", {
   quoteServiceLineId: text("quote_service_line_id")
@@ -2469,7 +2510,7 @@ export const foreignExchangeQuoteServiceDetail = pgTable(
     rateScale: integer("rate_scale").notNull(),
     settlementRail: text("settlement_rail"),
     notionalAmountInCents: integer("notional_amount_in_cents"),
-    notionalCurrency: text("notional_currency").default("USD").notNull(),
+    notionalCurrency: text("notional_currency"),
   },
   (_table) => [
     check(
@@ -2482,7 +2523,11 @@ export const foreignExchangeQuoteServiceDetail = pgTable(
     ),
     check(
       "foreign_exchange_quote_service_detail_currency_ck",
-      sql`notional_currency ~ '^[A-Z]{3}$'`,
+      sql`notional_currency IS NULL OR notional_currency ~ '^[A-Z]{3}$'`,
+    ),
+    check(
+      "foreign_exchange_quote_service_detail_notional_currency_pair_ck",
+      sql`(notional_amount_in_cents IS NULL) = (notional_currency IS NULL)`,
     ),
   ],
 );
@@ -3444,11 +3489,15 @@ export const insuranceEngagementDetail = pgTable(
     coverageClasses: text("coverage_classes").array().notNull().default([]),
     /** Canonical integer string (no floats). */
     coverageLimitMinorUnits: text("coverage_limit_minor_units"),
-    currency: text("currency").default("USD").notNull(),
+    currency: text("currency"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (_table) => [
     check("insurance_engagement_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "insurance_engagement_detail_amount_currency_pair_ck",
+      sql`(coverage_limit_minor_units IS NULL) = (currency IS NULL)`,
+    ),
     check(
       "insurance_engagement_detail_limit_ck",
       sql`coverage_limit_minor_units IS NULL
@@ -3537,7 +3586,7 @@ export const foreignExchangeEngagementDetail = pgTable(
     rateScale: integer("rate_scale").notNull(),
     settlementRail: text("settlement_rail"),
     notionalAmountMinorUnits: text("notional_amount_minor_units"),
-    notionalCurrency: text("notional_currency").default("USD").notNull(),
+    notionalCurrency: text("notional_currency"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (_table) => [
@@ -3550,6 +3599,10 @@ export const foreignExchangeEngagementDetail = pgTable(
       sql`char_length(currency_pair) = 7 AND currency_pair ~ '^[A-Z]{3}/[A-Z]{3}$'`,
     ),
     check("foreign_exchange_engagement_detail_currency_ck", sql`notional_currency ~ '^[A-Z]{3}$'`),
+    check(
+      "foreign_exchange_engagement_detail_notional_currency_pair_ck",
+      sql`(notional_amount_minor_units IS NULL) = (notional_currency IS NULL)`,
+    ),
     check(
       "foreign_exchange_engagement_detail_notional_ck",
       sql`notional_amount_minor_units IS NULL
@@ -3641,6 +3694,19 @@ export const commerceEngagementDeliverableEvent = pgTable(
   ],
 );
 
+export const freightDeliverableDetail = pgTable(
+  "freight_deliverable_detail",
+  {
+    deliverableId: text("deliverable_id")
+      .primaryKey()
+      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+    summary: text("summary").notNull(),
+  },
+  (_table) => [
+    check("freight_deliverable_detail_summary_ck", sql`char_length(summary) BETWEEN 1 AND 2000`),
+  ],
+);
+
 export const customsBrokerageDeliverableDetail = pgTable(
   "customs_brokerage_deliverable_detail",
   {
@@ -3675,12 +3741,17 @@ export const insuranceDeliverableDetail = pgTable(
     coverageClass: text("coverage_class").notNull(),
     insuredValueMinorUnits: text("insured_value_minor_units"),
     coverageLimitMinorUnits: text("coverage_limit_minor_units"),
-    currency: text("currency").default("USD").notNull(),
+    currency: text("currency"),
     effectiveFrom: timestamp("effective_from"),
     effectiveTo: timestamp("effective_to"),
   },
   (_table) => [
     check("insurance_deliverable_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "insurance_deliverable_detail_amount_currency_pair_ck",
+      sql`(insured_value_minor_units IS NOT NULL OR coverage_limit_minor_units IS NOT NULL)
+          = (currency IS NOT NULL)`,
+    ),
     check(
       "insurance_deliverable_detail_text_ck",
       sql`char_length(policy_reference) BETWEEN 1 AND 200

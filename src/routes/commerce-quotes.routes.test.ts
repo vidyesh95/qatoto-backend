@@ -210,6 +210,14 @@ describe("commerce quote routes", () => {
             titleSnapshot: "Customs brokerage",
             scopeSnapshot: "Import entry",
             siblingOrder: 0,
+            deliverables: [
+              {
+                sequence: 0,
+                title: "Accepted customs entry",
+                isRequired: true,
+                dueAt: "2026-08-20T00:00:00.000Z",
+              },
+            ],
             serviceDetail: {
               kind: "customs_broker",
               jurisdictions: ["US-CBP"],
@@ -225,6 +233,14 @@ describe("commerce quote routes", () => {
       expect.objectContaining({
         serviceLines: [
           expect.objectContaining({
+            deliverables: [
+              {
+                sequence: 0,
+                title: "Accepted customs entry",
+                isRequired: true,
+                dueAt: new Date("2026-08-20T00:00:00.000Z"),
+              },
+            ],
             serviceDetail: {
               kind: "customs_broker",
               jurisdictions: ["US-CBP"],
@@ -233,6 +249,70 @@ describe("commerce quote routes", () => {
         ],
       }),
     );
+  });
+
+  it("rejects duplicate deliverable sequences and unpaired service-detail currencies", async () => {
+    const duplicateDeliverablesResponse = await request(app)
+      .post("/commerce/quotes/quote-1/revisions")
+      .set("Idempotency-Key", "revision-duplicate-deliverables")
+      .send({
+        currency: "USD",
+        validityDeadlineAt: "2026-09-01T00:00:00.000Z",
+        taxInCents: 0,
+        serviceFeeInCents: 0,
+        shippingInCents: 0,
+        discountInCents: 0,
+        productLines: [],
+        serviceLines: [
+          {
+            rfqServiceLineId: "rfq_svc_1",
+            feeInCents: 1000,
+            titleSnapshot: "Cargo insurance",
+            scopeSnapshot: "Transit coverage",
+            siblingOrder: 0,
+            deliverables: [
+              { sequence: 0, title: "Policy", isRequired: true },
+              { sequence: 0, title: "Certificate", isRequired: true },
+            ],
+            serviceDetail: {
+              kind: "insurance_provider",
+              coverageClasses: ["cargo"],
+              coverageLimitInCents: 100_000,
+              currency: "USD",
+            },
+          },
+        ],
+      });
+    expect(duplicateDeliverablesResponse.status).toBe(422);
+
+    const missingCurrencyResponse = await request(app)
+      .post("/commerce/quotes/quote-1/revisions")
+      .set("Idempotency-Key", "revision-missing-detail-currency")
+      .send({
+        currency: "USD",
+        validityDeadlineAt: "2026-09-01T00:00:00.000Z",
+        taxInCents: 0,
+        serviceFeeInCents: 0,
+        shippingInCents: 0,
+        discountInCents: 0,
+        productLines: [],
+        serviceLines: [
+          {
+            rfqServiceLineId: "rfq_svc_1",
+            feeInCents: 1000,
+            titleSnapshot: "Cargo insurance",
+            scopeSnapshot: "Transit coverage",
+            siblingOrder: 0,
+            serviceDetail: {
+              kind: "insurance_provider",
+              coverageClasses: ["cargo"],
+              coverageLimitInCents: 100_000,
+            },
+          },
+        ],
+      });
+    expect(missingCurrencyResponse.status).toBe(422);
+    expect(serviceStubs.appendRevision).not.toHaveBeenCalled();
   });
 
   it("maps REVISION_CHANGED from accept to 409", async () => {
@@ -288,5 +368,51 @@ describe("commerce quote routes", () => {
       expect.objectContaining({ organizationId: PROVIDER_ORGANIZATION_ID }),
       "rfq-1",
     );
+  });
+
+  it("returns typed service details and contracted deliverable plans on quote reads", async () => {
+    serviceStubs.getQuote.mockResolvedValue({
+      success: true,
+      value: {
+        id: "quote-1",
+        latestRevision: {
+          serviceLines: [
+            {
+              id: "quote-service-line-1",
+              serviceDetail: {
+                kind: "customs_broker",
+                jurisdictions: ["US-CBP"],
+                filingSummary: "Import entry",
+              },
+              deliverables: [
+                {
+                  id: "quote-deliverable-plan-1",
+                  sequence: 0,
+                  title: "Accepted customs entry",
+                  isRequired: true,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const response = await request(app).get("/commerce/quotes/quote-1");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.latestRevision.serviceLines[0]).toMatchObject({
+      serviceDetail: {
+        kind: "customs_broker",
+        jurisdictions: ["US-CBP"],
+      },
+      deliverables: [
+        {
+          sequence: 0,
+          title: "Accepted customs entry",
+          isRequired: true,
+        },
+      ],
+    });
   });
 });

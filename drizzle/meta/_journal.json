@@ -344,6 +344,20 @@
       "when": 1785960000000,
       "tag": "0048_store_phase_6_connector_execution",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1785965000000,
+      "tag": "0049_store_phase_6_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1785970000000,
+      "tag": "0050_store_phase_6_typed_contracts",
+      "breakpoints": true
     }
   ]
 }

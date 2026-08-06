@@ -1,5 +1,5 @@
 /**
- * Verifies Store Phase 6 database invariants after migration 0048.
+ * Verifies Store Phase 6 database invariants after migrations 0048 and 0049.
  *
  *   pnpm run db:verify-store-phase-6-constraints
  */
@@ -27,6 +27,7 @@ const EXPECTED_TABLES: readonly string[] = [
   "foreign_exchange_engagement_detail",
   "commerce_engagement_deliverable",
   "commerce_engagement_deliverable_event",
+  "freight_deliverable_detail",
   "customs_brokerage_deliverable_detail",
   "insurance_deliverable_detail",
   "inspection_deliverable_detail",
@@ -34,6 +35,18 @@ const EXPECTED_TABLES: readonly string[] = [
   "warehouse_deliverable_detail",
   "marketing_deliverable_detail",
   "foreign_exchange_deliverable_detail",
+  "commerce_quote_service_deliverable_plan",
+];
+
+const EXPECTED_SNAPSHOT_TRUNCATE_TRIGGERS: readonly string[] = [
+  "freight_engagement_detail_no_truncate",
+  "customs_brokerage_engagement_detail_no_truncate",
+  "insurance_engagement_detail_no_truncate",
+  "inspection_engagement_detail_no_truncate",
+  "testing_certification_engagement_detail_no_truncate",
+  "marketing_engagement_detail_no_truncate",
+  "warehouse_engagement_detail_no_truncate",
+  "foreign_exchange_engagement_detail_no_truncate",
 ];
 
 const EXPECTED_TRIGGERS: readonly string[] = [
@@ -53,6 +66,26 @@ const EXPECTED_TRIGGERS: readonly string[] = [
   "marketing_engagement_detail_append_only",
   "warehouse_engagement_detail_append_only",
   "foreign_exchange_engagement_detail_append_only",
+  ...EXPECTED_SNAPSHOT_TRUNCATE_TRIGGERS,
+];
+
+const EXPECTED_CONSTRAINTS: readonly string[] = [
+  "commerce_quote_service_deliverable_plan_pkey",
+  "commerce_quote_service_deliverable_plan_quote_service_line_id_commerce_quote_service_line_id_fk",
+  "commerce_quote_service_deliverable_plan_sequence_ck",
+  "commerce_quote_service_deliverable_plan_title_ck",
+  "freight_deliverable_detail_pkey",
+  "freight_deliverable_detail_deliverable_id_commerce_engagement_deliverable_id_fk",
+  "freight_deliverable_detail_summary_ck",
+  "insurance_quote_service_detail_amount_currency_pair_ck",
+  "foreign_exchange_quote_service_detail_notional_currency_pair_ck",
+  "insurance_engagement_detail_amount_currency_pair_ck",
+  "foreign_exchange_engagement_detail_notional_currency_pair_ck",
+  "insurance_deliverable_detail_amount_currency_pair_ck",
+];
+
+const EXPECTED_INDEXES: readonly string[] = [
+  "commerce_quote_service_deliverable_plan_sequence_uidx",
 ];
 
 async function countQuery(queryText: string, values: readonly unknown[] = []): Promise<number> {
@@ -86,9 +119,55 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
     [EXPECTED_TRIGGERS],
   );
   outcomes.push({
-    label: "Phase 6 append-only triggers exist",
+    label: "Phase 6 mutation-rejection triggers exist",
     passed: triggerCount === EXPECTED_TRIGGERS.length,
     detail: `${String(triggerCount)}/${String(EXPECTED_TRIGGERS.length)}`,
+  });
+
+  const snapshotTruncateTriggerCount = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM pg_trigger AS trigger_definition
+       INNER JOIN pg_class AS target_table
+         ON target_table.oid = trigger_definition.tgrelid
+       INNER JOIN pg_namespace AS target_schema
+         ON target_schema.oid = target_table.relnamespace
+      WHERE NOT trigger_definition.tgisinternal
+        AND target_schema.nspname = 'public'
+        AND trigger_definition.tgname = ANY($1)
+        AND pg_get_triggerdef(trigger_definition.oid) LIKE '%BEFORE TRUNCATE%'`,
+    [EXPECTED_SNAPSHOT_TRUNCATE_TRIGGERS],
+  );
+  outcomes.push({
+    label: "all immutable engagement snapshots reject truncate",
+    passed: snapshotTruncateTriggerCount === EXPECTED_SNAPSHOT_TRUNCATE_TRIGGERS.length,
+    detail: `${String(snapshotTruncateTriggerCount)}/${String(
+      EXPECTED_SNAPSHOT_TRUNCATE_TRIGGERS.length,
+    )}`,
+  });
+
+  const constraintCount = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM pg_constraint AS constraint_definition
+      WHERE constraint_definition.conname = ANY($1)`,
+    [EXPECTED_CONSTRAINTS],
+  );
+  outcomes.push({
+    label: "Phase 6 hardening constraints exist",
+    passed: constraintCount === EXPECTED_CONSTRAINTS.length,
+    detail: `${String(constraintCount)}/${String(EXPECTED_CONSTRAINTS.length)}`,
+  });
+
+  const indexCount = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND indexname = ANY($1)`,
+    [EXPECTED_INDEXES],
+  );
+  outcomes.push({
+    label: "Phase 6 hardening indexes exist",
+    passed: indexCount === EXPECTED_INDEXES.length,
+    detail: `${String(indexCount)}/${String(EXPECTED_INDEXES.length)}`,
   });
 
   const orphanLegs = await countQuery(
@@ -134,49 +213,66 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
     detail: `${String(duplicateLegSequences)} duplicate sequence(s)`,
   });
 
-  const mismatchedFreight = await countQuery(
-    `SELECT count(*) AS row_count
-       FROM freight_engagement_detail AS detail
-       INNER JOIN commerce_service_engagement AS engagement
-         ON engagement.id = detail.engagement_id
-      WHERE engagement.provider_kind NOT IN ('freight_forwarder', 'logistics_operator')`,
+  const invalidReadySnapshots = await countQuery(
+    `WITH typed_snapshots AS (
+       SELECT engagement_id, 'freight' AS snapshot_kind FROM freight_engagement_detail
+       UNION ALL
+       SELECT engagement_id, 'customs_brokerage' FROM customs_brokerage_engagement_detail
+       UNION ALL
+       SELECT engagement_id, 'insurance' FROM insurance_engagement_detail
+       UNION ALL
+       SELECT engagement_id, 'inspection' FROM inspection_engagement_detail
+       UNION ALL
+       SELECT engagement_id, 'testing_certification'
+         FROM testing_certification_engagement_detail
+       UNION ALL
+       SELECT engagement_id, 'marketing' FROM marketing_engagement_detail
+       UNION ALL
+       SELECT engagement_id, 'warehouse' FROM warehouse_engagement_detail
+       UNION ALL
+       SELECT engagement_id, 'foreign_exchange' FROM foreign_exchange_engagement_detail
+     )
+     SELECT count(*) AS row_count
+       FROM (
+         SELECT engagement.id
+           FROM commerce_service_engagement AS engagement
+           LEFT JOIN typed_snapshots AS snapshot
+             ON snapshot.engagement_id = engagement.id
+          WHERE engagement.execution_contract_state = 'ready'
+          GROUP BY engagement.id, engagement.provider_kind
+         HAVING count(snapshot.snapshot_kind) <> 1
+             OR NOT coalesce(
+               bool_or(
+                 CASE
+                   WHEN engagement.provider_kind IN (
+                     'freight_forwarder',
+                     'logistics_operator'
+                   ) THEN snapshot.snapshot_kind = 'freight'
+                   WHEN engagement.provider_kind = 'customs_broker'
+                     THEN snapshot.snapshot_kind = 'customs_brokerage'
+                   WHEN engagement.provider_kind = 'insurance_provider'
+                     THEN snapshot.snapshot_kind = 'insurance'
+                   WHEN engagement.provider_kind = 'inspection_agency'
+                     THEN snapshot.snapshot_kind = 'inspection'
+                   WHEN engagement.provider_kind = 'testing_certification_lab'
+                     THEN snapshot.snapshot_kind = 'testing_certification'
+                   WHEN engagement.provider_kind = 'marketing_agency'
+                     THEN snapshot.snapshot_kind = 'marketing'
+                   WHEN engagement.provider_kind = 'warehouse_provider'
+                     THEN snapshot.snapshot_kind = 'warehouse'
+                   WHEN engagement.provider_kind = 'foreign_exchange_facilitator'
+                     THEN snapshot.snapshot_kind = 'foreign_exchange'
+                   ELSE false
+                 END
+               ),
+               false
+             )
+       ) AS invalid_ready_engagements`,
   );
   outcomes.push({
-    label: "freight engagement details match freight/logistics kinds",
-    passed: mismatchedFreight === 0,
-    detail: `${String(mismatchedFreight)} mismatch(es)`,
-  });
-
-  const mismatchedCustoms = await countQuery(
-    `SELECT count(*) AS row_count
-       FROM customs_brokerage_engagement_detail AS detail
-       INNER JOIN commerce_service_engagement AS engagement
-         ON engagement.id = detail.engagement_id
-      WHERE engagement.provider_kind <> 'customs_broker'`,
-  );
-  outcomes.push({
-    label: "customs engagement details match customs_broker",
-    passed: mismatchedCustoms === 0,
-    detail: `${String(mismatchedCustoms)} mismatch(es)`,
-  });
-
-  const readyWithoutDetail = await countQuery(
-    `SELECT count(*) AS row_count
-       FROM commerce_service_engagement AS engagement
-      WHERE engagement.execution_contract_state = 'ready'
-        AND NOT EXISTS (SELECT 1 FROM freight_engagement_detail d WHERE d.engagement_id = engagement.id)
-        AND NOT EXISTS (SELECT 1 FROM customs_brokerage_engagement_detail d WHERE d.engagement_id = engagement.id)
-        AND NOT EXISTS (SELECT 1 FROM insurance_engagement_detail d WHERE d.engagement_id = engagement.id)
-        AND NOT EXISTS (SELECT 1 FROM inspection_engagement_detail d WHERE d.engagement_id = engagement.id)
-        AND NOT EXISTS (SELECT 1 FROM testing_certification_engagement_detail d WHERE d.engagement_id = engagement.id)
-        AND NOT EXISTS (SELECT 1 FROM marketing_engagement_detail d WHERE d.engagement_id = engagement.id)
-        AND NOT EXISTS (SELECT 1 FROM warehouse_engagement_detail d WHERE d.engagement_id = engagement.id)
-        AND NOT EXISTS (SELECT 1 FROM foreign_exchange_engagement_detail d WHERE d.engagement_id = engagement.id)`,
-  );
-  outcomes.push({
-    label: "ready engagements retain at least one typed detail snapshot",
-    passed: readyWithoutDetail === 0,
-    detail: `${String(readyWithoutDetail)} ready engagement(s) without snapshot`,
+    label: "ready engagements have exactly one kind-matched typed snapshot",
+    passed: invalidReadySnapshots === 0,
+    detail: `${String(invalidReadySnapshots)} invalid ready engagement(s)`,
   });
 
   const legacyWithDetail = await countQuery(
@@ -200,6 +296,61 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
     detail: `${String(legacyWithDetail)} contradictory engagement(s)`,
   });
 
+  const inconsistentSnapshotSources = await countQuery(
+    `WITH typed_snapshots AS (
+       SELECT engagement_id, source_quote_service_line_id
+         FROM freight_engagement_detail
+       UNION ALL
+       SELECT engagement_id, source_quote_service_line_id
+         FROM customs_brokerage_engagement_detail
+       UNION ALL
+       SELECT engagement_id, source_quote_service_line_id
+         FROM insurance_engagement_detail
+       UNION ALL
+       SELECT engagement_id, source_quote_service_line_id
+         FROM inspection_engagement_detail
+       UNION ALL
+       SELECT engagement_id, source_quote_service_line_id
+         FROM testing_certification_engagement_detail
+       UNION ALL
+       SELECT engagement_id, source_quote_service_line_id
+         FROM marketing_engagement_detail
+       UNION ALL
+       SELECT engagement_id, source_quote_service_line_id
+         FROM warehouse_engagement_detail
+       UNION ALL
+       SELECT engagement_id, source_quote_service_line_id
+         FROM foreign_exchange_engagement_detail
+     )
+     SELECT count(*) AS row_count
+       FROM typed_snapshots AS snapshot
+       INNER JOIN commerce_service_engagement AS engagement
+         ON engagement.id = snapshot.engagement_id
+       INNER JOIN commerce_order_service_line AS order_service_line
+         ON order_service_line.id = engagement.order_service_line_id
+       INNER JOIN commerce_order
+         ON commerce_order.id = engagement.order_id
+       LEFT JOIN commerce_quote_service_line AS quote_service_line
+         ON quote_service_line.id = snapshot.source_quote_service_line_id
+      WHERE engagement.order_id <> order_service_line.order_id
+         OR engagement.provider_kind <> order_service_line.provider_kind
+         OR snapshot.source_quote_service_line_id IS NULL
+         OR order_service_line.source_quote_service_line_id IS DISTINCT FROM
+            snapshot.source_quote_service_line_id
+         OR quote_service_line.id IS NULL
+         OR quote_service_line.provider_kind <> engagement.provider_kind
+         OR (
+           commerce_order.source = 'accepted_quote'
+           AND quote_service_line.revision_id IS DISTINCT FROM
+               commerce_order.accepted_quote_revision_id
+         )`,
+  );
+  outcomes.push({
+    label: "typed snapshot sources match engagement and order service lines",
+    passed: inconsistentSnapshotSources === 0,
+    detail: `${String(inconsistentSnapshotSources)} inconsistent source link(s)`,
+  });
+
   const orphanDeliverables = await countQuery(
     `SELECT count(*) AS row_count
        FROM commerce_engagement_deliverable AS deliverable
@@ -212,6 +363,99 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
     label: "deliverables retain engagements",
     passed: orphanDeliverables === 0,
     detail: `${String(orphanDeliverables)} orphan deliverable(s)`,
+  });
+
+  const orphanDeliverablePlans = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM commerce_quote_service_deliverable_plan AS deliverable_plan
+      WHERE NOT EXISTS (
+        SELECT 1
+          FROM commerce_quote_service_line AS quote_service_line
+         WHERE quote_service_line.id = deliverable_plan.quote_service_line_id
+      )`,
+  );
+  outcomes.push({
+    label: "quote deliverable plans retain quote service lines",
+    passed: orphanDeliverablePlans === 0,
+    detail: `${String(orphanDeliverablePlans)} orphan plan(s)`,
+  });
+
+  const duplicateDeliverablePlans = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM (
+         SELECT id
+           FROM commerce_quote_service_deliverable_plan
+          GROUP BY id
+         HAVING count(*) > 1
+         UNION ALL
+         SELECT quote_service_line_id || ':' || sequence::text
+           FROM commerce_quote_service_deliverable_plan
+          GROUP BY quote_service_line_id, sequence
+         HAVING count(*) > 1
+       ) AS duplicate_plans`,
+  );
+  outcomes.push({
+    label: "quote deliverable plan identities and sequences are unique",
+    passed: duplicateDeliverablePlans === 0,
+    detail: `${String(duplicateDeliverablePlans)} duplicate plan key(s)`,
+  });
+
+  const pairedCurrencyViolations = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM (
+         SELECT quote_service_line_id AS entity_id
+           FROM insurance_quote_service_detail
+          WHERE (coverage_limit_in_cents IS NULL) <> (currency IS NULL)
+         UNION ALL
+         SELECT quote_service_line_id AS entity_id
+           FROM foreign_exchange_quote_service_detail
+          WHERE (notional_amount_in_cents IS NULL) <> (notional_currency IS NULL)
+         UNION ALL
+         SELECT engagement_id AS entity_id
+           FROM insurance_engagement_detail
+          WHERE (coverage_limit_minor_units IS NULL) <> (currency IS NULL)
+         UNION ALL
+         SELECT engagement_id AS entity_id
+           FROM foreign_exchange_engagement_detail
+          WHERE (notional_amount_minor_units IS NULL) <> (notional_currency IS NULL)
+         UNION ALL
+         SELECT deliverable_id AS entity_id
+           FROM insurance_deliverable_detail
+          WHERE (insured_value_minor_units IS NOT NULL
+                 OR coverage_limit_minor_units IS NOT NULL)
+                <> (currency IS NOT NULL)
+       ) AS currency_violations`,
+  );
+  outcomes.push({
+    label: "optional monetary amounts retain paired currencies",
+    passed: pairedCurrencyViolations === 0,
+    detail: `${String(pairedCurrencyViolations)} pairing violation(s)`,
+  });
+
+  const nullableCurrencyColumnCount = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND is_nullable = 'YES'
+        AND column_default IS NULL
+        AND (
+          (table_name = 'insurance_engagement_detail' AND column_name = 'currency')
+          OR (table_name = 'insurance_quote_service_detail' AND column_name = 'currency')
+          OR (
+            table_name = 'foreign_exchange_engagement_detail'
+            AND column_name = 'notional_currency'
+          )
+          OR (
+            table_name = 'foreign_exchange_quote_service_detail'
+            AND column_name = 'notional_currency'
+          )
+          OR (table_name = 'insurance_deliverable_detail' AND column_name = 'currency')
+        )`,
+  );
+  outcomes.push({
+    label: "optional currencies are nullable without defaults",
+    passed: nullableCurrencyColumnCount === 5,
+    detail: `${String(nullableCurrencyColumnCount)}/5 columns`,
   });
 
   const duplicateCommandKeys = await countQuery(
@@ -229,7 +473,7 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
     detail: `${String(duplicateCommandKeys)} duplicate key(s)`,
   });
 
-  const missingVersionColumns = await countQuery(
+  const phaseColumnCount = await countQuery(
     `SELECT count(*) AS row_count
        FROM information_schema.columns
       WHERE table_schema = 'public'
@@ -242,8 +486,8 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
   );
   outcomes.push({
     label: "Phase 6 columns exist on shipment, engagement, and order service line",
-    passed: missingVersionColumns === 4,
-    detail: `${String(missingVersionColumns)}/4 columns`,
+    passed: phaseColumnCount === 4,
+    detail: `${String(phaseColumnCount)}/4 columns`,
   });
 
   return outcomes;
@@ -251,15 +495,15 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
 
 async function main(): Promise<void> {
   const outcomes = await verifyPhaseConstraints();
-  let failed = false;
+  let hasFailure = false;
   for (const outcome of outcomes) {
-    const mark = outcome.passed ? "PASS" : "FAIL";
-    console.log(`[${mark}] ${outcome.label} — ${outcome.detail}`);
-    if (!outcome.passed) failed = true;
+    const outcomeMark = outcome.passed ? "PASS" : "FAIL";
+    console.log(`[${outcomeMark}] ${outcome.label} — ${outcome.detail}`);
+    if (!outcome.passed) hasFailure = true;
   }
 
   await pool.end();
-  if (failed) {
+  if (hasFailure) {
     process.exitCode = 1;
   }
 }

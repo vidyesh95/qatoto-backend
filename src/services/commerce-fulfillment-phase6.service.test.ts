@@ -10,6 +10,8 @@ const { CreateShipmentWithLegsSchema, ServiceEngagementCommandSchema, ShipmentLe
   await import("#src/schemas/commerce-fulfillment.schemas.js");
 const { buildFulfillmentRequestFingerprint, computeFulfillmentProgress, isShipmentLegCommandAllowed } =
   await import("#src/services/commerce-fulfillment-phase6.service.js");
+const { deriveOrderAggregateState, deriveShipmentTerminalState } =
+  await import("#src/services/commerce-fulfillment-reconciliation.service.js");
 
 describe("commerce fulfillment Phase 6 schemas", () => {
   it("rejects create-shipment bodies with unknown keys", () => {
@@ -64,6 +66,77 @@ describe("commerce fulfillment Phase 6 schemas", () => {
     expect(ok.success).toBe(true);
   });
 
+  it("rejects duplicate deliverable sequences", () => {
+    const parsed = ServiceEngagementCommandSchema.safeParse({
+      command: "initialize",
+      expectedVersion: 0,
+      details: {
+        kind: "customs_broker",
+        jurisdictions: ["US-CBP"],
+      },
+      deliverables: [
+        { sequence: 0, title: "Entry filing", isRequired: true },
+        { sequence: 0, title: "Release notice", isRequired: true },
+      ],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("requires insurance and FX amounts to include their currencies", () => {
+    const insurance = ServiceEngagementCommandSchema.safeParse({
+      command: "initialize",
+      expectedVersion: 0,
+      details: {
+        kind: "insurance_provider",
+        coverageClasses: ["cargo"],
+        coverageLimitMinorUnits: "100000",
+      },
+      deliverables: [],
+    });
+    expect(insurance.success).toBe(false);
+
+    const foreignExchange = ServiceEngagementCommandSchema.safeParse({
+      command: "initialize",
+      expectedVersion: 0,
+      details: {
+        kind: "foreign_exchange_facilitator",
+        currencyPair: "USD/EUR",
+        rate: { units: "925", scale: 3 },
+        notionalAmountMinorUnits: "100000",
+      },
+      deliverables: [],
+    });
+    expect(foreignExchange.success).toBe(false);
+  });
+
+  it("requires an insurance deliverable currency exactly when amounts are present", () => {
+    const missingCurrency = ServiceEngagementCommandSchema.safeParse({
+      command: "submit_deliverable",
+      expectedVersion: 1,
+      deliverableId: "del_1",
+      result: {
+        kind: "insurance_provider",
+        policyReference: "POL-1",
+        coverageClass: "cargo",
+        insuredValueMinorUnits: "100000",
+      },
+    });
+    expect(missingCurrency.success).toBe(false);
+
+    const orphanCurrency = ServiceEngagementCommandSchema.safeParse({
+      command: "submit_deliverable",
+      expectedVersion: 1,
+      deliverableId: "del_1",
+      result: {
+        kind: "insurance_provider",
+        policyReference: "POL-1",
+        coverageClass: "cargo",
+        currency: "USD",
+      },
+    });
+    expect(orphanCurrency.success).toBe(false);
+  });
+
   it("rejects deliverable results that omit kind", () => {
     const parsed = ServiceEngagementCommandSchema.safeParse({
       command: "submit_deliverable",
@@ -102,6 +175,26 @@ describe("commerce fulfillment Phase 6 workflow helpers", () => {
     expect(isShipmentLegCommandAllowed("arrived", "complete")).toBe(true);
     expect(isShipmentLegCommandAllowed("completed", "cancel")).toBe(false);
     expect(isShipmentLegCommandAllowed("cancelled", "book")).toBe(false);
+  });
+
+  it("finalizes a shipment only when all effective legs are terminal", () => {
+    expect(deriveShipmentTerminalState([])).toBe(null);
+    expect(deriveShipmentTerminalState(["completed", "in_transit"])).toBe(null);
+    expect(deriveShipmentTerminalState(["completed", "cancelled"])).toBe("delivered");
+    expect(deriveShipmentTerminalState(["cancelled", "cancelled"])).toBe("cancelled");
+  });
+
+  it("keeps mixed and service-only orders open until all fulfillment work is terminal", () => {
+    expect(
+      deriveOrderAggregateState(
+        [{ quantityOrdered: 2, quantityFulfilled: 2, quantityCancelled: 0 }],
+        [{ state: "in_progress" }],
+        "in_fulfillment",
+      ),
+    ).toBe("partially_completed");
+    expect(deriveOrderAggregateState([], [{ state: "in_progress" }], "confirmed")).toBe("in_fulfillment");
+    expect(deriveOrderAggregateState([], [{ state: "completed" }], "in_fulfillment")).toBe("completed");
+    expect(deriveOrderAggregateState([], [{ state: "completed" }], "disputed")).toBe("disputed");
   });
 
   it("derives deterministic progress from legs and engagements", () => {

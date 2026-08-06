@@ -11,6 +11,7 @@ import {
   commerceFulfillmentCommand,
   commerceOrder,
   commerceOrderProductLine,
+  commerceOrderServiceLink,
   commerceServiceEngagement,
   commerceServiceEngagementEvent,
   commerceShipment,
@@ -22,6 +23,7 @@ import {
   customsBrokerageEngagementDetail,
   foreignExchangeDeliverableDetail,
   foreignExchangeEngagementDetail,
+  freightDeliverableDetail,
   freightEngagementDetail,
   inspectionDeliverableDetail,
   inspectionEngagementDetail,
@@ -41,6 +43,10 @@ import type {
   TypedDeliverableResultSchema,
 } from "#src/schemas/commerce-fulfillment.schemas.js";
 import {
+  reconcileOrderAggregateState,
+  reconcileShipmentStateFromLegs,
+} from "#src/services/commerce-fulfillment-reconciliation.service.js";
+import {
   memberCanOperateBuyer,
   memberCanOperateCounterparty,
   memberCanOperateProvider,
@@ -52,6 +58,7 @@ import type { Result } from "#src/types/index.js";
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type EngagementRow = typeof commerceServiceEngagement.$inferSelect;
 type EngagementState = EngagementRow["state"];
+type ProviderKind = EngagementRow["providerKind"];
 type LegRow = typeof commerceShipmentLeg.$inferSelect;
 type LegState = LegRow["state"];
 type DeliverableResult = z.infer<typeof TypedDeliverableResultSchema>;
@@ -80,6 +87,153 @@ export interface FulfillmentIdempotencyContext {
   readonly idempotencyKey: string;
   readonly requestFingerprint: string;
 }
+
+export type EngagementExecutionSnapshotProjection =
+  | {
+      readonly kind: "freight_forwarder" | "logistics_operator";
+      readonly sourceQuoteServiceLineId: string | null;
+      readonly transportModes: readonly string[];
+      readonly originCountryCode: string | null;
+      readonly destinationCountryCode: string | null;
+      readonly estimatedTransitDays: number | null;
+    }
+  | {
+      readonly kind: "customs_broker";
+      readonly sourceQuoteServiceLineId: string | null;
+      readonly jurisdictions: readonly string[];
+      readonly filingSummary: string | null;
+    }
+  | {
+      readonly kind: "insurance_provider";
+      readonly sourceQuoteServiceLineId: string | null;
+      readonly coverageClasses: readonly string[];
+      readonly coverageLimitMinorUnits: string | null;
+      readonly currency: string | null;
+    }
+  | {
+      readonly kind: "inspection_agency";
+      readonly sourceQuoteServiceLineId: string | null;
+      readonly includedStages: readonly string[];
+    }
+  | {
+      readonly kind: "testing_certification_lab";
+      readonly sourceQuoteServiceLineId: string | null;
+      readonly standards: readonly string[];
+      readonly laboratoryLocation: string | null;
+    }
+  | {
+      readonly kind: "marketing_agency";
+      readonly sourceQuoteServiceLineId: string | null;
+      readonly channels: readonly string[];
+      readonly deliverablesSummary: string | null;
+    }
+  | {
+      readonly kind: "warehouse_provider";
+      readonly sourceQuoteServiceLineId: string | null;
+      readonly storageTypes: readonly string[];
+      readonly capacityUnits: string | null;
+      readonly temperatureControlled: boolean;
+    }
+  | {
+      readonly kind: "foreign_exchange_facilitator";
+      readonly sourceQuoteServiceLineId: string | null;
+      readonly currencyPair: string;
+      readonly rate: { readonly units: string; readonly scale: number };
+      readonly settlementRail: string | null;
+      readonly notionalAmountMinorUnits: string | null;
+      readonly notionalCurrency: string | null;
+    };
+
+export type DeliverableResultProjection =
+  | { readonly kind: "freight_forwarder" | "logistics_operator"; readonly summary: string }
+  | {
+      readonly kind: "customs_broker";
+      readonly filingKind: string;
+      readonly jurisdiction: string;
+      readonly providerFilingReference: string | null;
+      readonly declarationReference: string | null;
+      readonly decision: string | null;
+    }
+  | {
+      readonly kind: "insurance_provider";
+      readonly policyReference: string;
+      readonly coverageClass: string;
+      readonly insuredValueMinorUnits: string | null;
+      readonly coverageLimitMinorUnits: string | null;
+      readonly currency: string | null;
+      readonly effectiveFrom: Date | null;
+      readonly effectiveTo: Date | null;
+    }
+  | {
+      readonly kind: "inspection_agency";
+      readonly stage: string;
+      readonly result: string;
+      readonly findingsSummary: string | null;
+      readonly inspectedQuantity: number | null;
+      readonly inspectedAt: Date | null;
+    }
+  | {
+      readonly kind: "testing_certification_lab";
+      readonly standard: string;
+      readonly specimenReference: string | null;
+      readonly result: string;
+      readonly laboratoryLocation: string | null;
+      readonly reportedAt: Date | null;
+    }
+  | {
+      readonly kind: "warehouse_provider";
+      readonly movementKind: string;
+      readonly quantityUnits: string;
+      readonly quantityScale: number;
+      readonly unitLabel: string;
+      readonly facilityIdentifier: string | null;
+      readonly occurredAt: Date | null;
+    }
+  | {
+      readonly kind: "marketing_agency";
+      readonly deliverableKind: string;
+      readonly channel: string;
+      readonly artifactUrl: string | null;
+      readonly metricsSummary: string | null;
+      readonly publishedAt: Date | null;
+    }
+  | {
+      readonly kind: "foreign_exchange_facilitator";
+      readonly currencyPair: string;
+      readonly rate: { readonly units: string; readonly scale: number };
+      readonly sellAmountMinorUnits: string;
+      readonly buyAmountMinorUnits: string;
+      readonly sellCurrency: string;
+      readonly buyCurrency: string;
+      readonly providerExecutionReference: string | null;
+      readonly confirmationState: string;
+    };
+
+export type ServiceEngagementDetailProjection = ReturnType<typeof projectEngagement> & {
+  readonly executionSnapshot: EngagementExecutionSnapshotProjection | null;
+  readonly deliverables: readonly {
+    readonly id: string;
+    readonly sequence: number;
+    readonly title: string;
+    readonly isRequired: boolean;
+    readonly state: (typeof commerceEngagementDeliverable.$inferSelect)["state"];
+    readonly dueAt: Date | null;
+    readonly submittedAt: Date | null;
+    readonly reviewedAt: Date | null;
+    readonly evidenceDocumentId: string | null;
+    readonly reviewNote: string | null;
+    readonly result: DeliverableResultProjection | null;
+  }[];
+  readonly events: readonly {
+    readonly id: string;
+    readonly sequence: number;
+    readonly previousState: EngagementState | null;
+    readonly nextState: EngagementState;
+    readonly commandKind: string;
+    readonly note: string | null;
+    readonly occurredAt: Date;
+  }[];
+};
 
 async function appendAuditOrThrow(
   transaction: DatabaseTransaction,
@@ -131,6 +285,11 @@ async function claimCommandReceipt(
     CommercePhase6Error
   >
 > {
+  const advisoryLockKey = `${actor.organizationId}:${idempotency.idempotencyKey}`;
+  await transaction.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${advisoryLockKey}, 0))`,
+  );
+
   const [existing] = await transaction
     .select()
     .from(commerceFulfillmentCommand)
@@ -220,6 +379,23 @@ export async function insertShipmentLegs(
     };
   }
 
+  const [shipment] = await transaction
+    .select()
+    .from(commerceShipment)
+    .where(eq(commerceShipment.id, shipmentId))
+    .limit(1);
+  if (!shipment) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+  const [order] = await transaction
+    .select()
+    .from(commerceOrder)
+    .where(eq(commerceOrder.id, shipment.orderId))
+    .limit(1);
+  if (!order) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
   for (const leg of legs) {
     if (leg.logisticsEngagementId) {
       const [engagement] = await transaction
@@ -235,6 +411,37 @@ export async function insertShipmentLegs(
         engagement.providerKind !== "logistics_operator"
       ) {
         return { success: false, error: { type: "PROVIDER_KIND_MISMATCH" } };
+      }
+      if (
+        engagement.buyerOrganizationId !== order.buyerOrganizationId ||
+        engagement.state === "cancelled" ||
+        engagement.state === "disputed"
+      ) {
+        return {
+          success: false,
+          error: {
+            type: "VALIDATION_FAILED",
+            message: "The logistics engagement must serve the shipment buyer and remain active.",
+          },
+        };
+      }
+      const [existingShipmentLink] = await transaction
+        .select({ id: commerceOrderServiceLink.id })
+        .from(commerceOrderServiceLink)
+        .where(
+          and(
+            eq(commerceOrderServiceLink.engagementId, engagement.id),
+            eq(commerceOrderServiceLink.orderId, shipment.orderId),
+            eq(commerceOrderServiceLink.shipmentId, shipment.id),
+          ),
+        )
+        .limit(1);
+      if (!existingShipmentLink) {
+        await transaction.insert(commerceOrderServiceLink).values({
+          engagementId: engagement.id,
+          orderId: shipment.orderId,
+          shipmentId: shipment.id,
+        });
       }
     }
   }
@@ -325,12 +532,6 @@ export async function executeShipmentLegCommand(
   const outcome = await db.transaction(async (transaction) => {
     const claim = await claimCommandReceipt(transaction, actor, idempotency);
     if (!claim.success) return { status: "error" as const, error: claim.error };
-    if (claim.value.status === "replay") {
-      return {
-        status: "replay" as const,
-        body: parseCommandReplayBody(claim.value.responseBody),
-      };
-    }
 
     const [leg] = await transaction
       .select()
@@ -350,19 +551,33 @@ export async function executeShipmentLegCommand(
       .select()
       .from(commerceOrder)
       .where(eq(commerceOrder.id, shipment.orderId))
+      .for("update")
       .limit(1);
     if (!order) return { status: "not_found" as const };
 
     let authorized = false;
     if (leg.logisticsEngagementId) {
-      const [engagement] = await transaction
-        .select()
+      const [engagementLink] = await transaction
+        .select({ engagement: commerceServiceEngagement })
         .from(commerceServiceEngagement)
-        .where(eq(commerceServiceEngagement.id, leg.logisticsEngagementId))
+        .innerJoin(
+          commerceOrderServiceLink,
+          eq(commerceOrderServiceLink.engagementId, commerceServiceEngagement.id),
+        )
+        .where(
+          and(
+            eq(commerceServiceEngagement.id, leg.logisticsEngagementId),
+            eq(commerceOrderServiceLink.orderId, shipment.orderId),
+            eq(commerceOrderServiceLink.shipmentId, shipment.id),
+          ),
+        )
         .limit(1);
       if (
-        engagement &&
-        engagement.providerOrganizationId === actor.organizationId &&
+        engagementLink &&
+        (engagementLink.engagement.providerKind === "freight_forwarder" ||
+          engagementLink.engagement.providerKind === "logistics_operator") &&
+        engagementLink.engagement.buyerOrganizationId === order.buyerOrganizationId &&
+        engagementLink.engagement.providerOrganizationId === actor.organizationId &&
         memberCanOperateProvider(actor.memberRole)
       ) {
         authorized = true;
@@ -381,6 +596,13 @@ export async function executeShipmentLegCommand(
         return { status: "forbidden" as const };
       }
       return { status: "not_found" as const };
+    }
+
+    if (claim.value.status === "replay") {
+      return {
+        status: "replay" as const,
+        body: parseCommandReplayBody(claim.value.responseBody),
+      };
     }
 
     if (leg.version !== command.expectedVersion) {
@@ -504,6 +726,9 @@ export async function executeShipmentLegCommand(
         .set({ state: "in_transit", version: shipment.version + 1, updatedAt: now })
         .where(eq(commerceShipment.id, shipment.id));
     }
+    if (nextState === "completed" || nextState === "cancelled") {
+      await reconcileShipmentStateFromLegs(transaction, shipment.id, now, actor.memberId);
+    }
 
     const projection = projectShipmentLeg(updated);
     await finalizeCommandReceipt(
@@ -597,6 +822,10 @@ async function insertTypedDeliverableDetail(
   switch (result.kind) {
     case "freight_forwarder":
     case "logistics_operator":
+      await transaction.insert(freightDeliverableDetail).values({
+        deliverableId,
+        summary: result.summary,
+      });
       return { success: true, value: true };
     case "customs_broker":
       await transaction.insert(customsBrokerageDeliverableDetail).values({
@@ -615,7 +844,7 @@ async function insertTypedDeliverableDetail(
         coverageClass: result.coverageClass,
         insuredValueMinorUnits: result.insuredValueMinorUnits ?? null,
         coverageLimitMinorUnits: result.coverageLimitMinorUnits ?? null,
-        currency: result.currency ?? "USD",
+        currency: result.currency ?? null,
         effectiveFrom: result.effectiveFrom === undefined ? null : new Date(result.effectiveFrom),
         effectiveTo: result.effectiveTo === undefined ? null : new Date(result.effectiveTo),
       });
@@ -716,7 +945,7 @@ async function ensureEngagementDetailFromInitialize(
         engagementId: engagement.id,
         coverageClasses: [...details.details.coverageClasses],
         coverageLimitMinorUnits: details.details.coverageLimitMinorUnits ?? null,
-        currency: details.details.currency ?? "USD",
+        currency: details.details.currency ?? null,
       });
       return { success: true, value: true };
     case "inspection_agency":
@@ -755,7 +984,7 @@ async function ensureEngagementDetailFromInitialize(
         rateScale: details.details.rate.scale,
         settlementRail: details.details.settlementRail ?? null,
         notionalAmountMinorUnits: details.details.notionalAmountMinorUnits ?? null,
-        notionalCurrency: details.details.notionalCurrency ?? "USD",
+        notionalCurrency: details.details.notionalCurrency ?? null,
       });
       return { success: true, value: true };
     default: {
@@ -795,12 +1024,23 @@ export async function executeServiceEngagementCommand(
   const outcome = await db.transaction(async (transaction) => {
     const claim = await claimCommandReceipt(transaction, actor, idempotency);
     if (!claim.success) return { status: "error" as const, error: claim.error };
-    if (claim.value.status === "replay") {
-      return {
-        status: "replay" as const,
-        body: parseCommandReplayBody(claim.value.responseBody),
-      };
-    }
+
+    const [engagementIdentity] = await transaction
+      .select({
+        id: commerceServiceEngagement.id,
+        orderId: commerceServiceEngagement.orderId,
+      })
+      .from(commerceServiceEngagement)
+      .where(eq(commerceServiceEngagement.id, engagementId))
+      .limit(1);
+    if (!engagementIdentity) return { status: "not_found" as const };
+
+    const [lockedOrder] = await transaction
+      .select({ id: commerceOrder.id })
+      .from(commerceOrder)
+      .where(eq(commerceOrder.id, engagementIdentity.orderId))
+      .for("update");
+    if (!lockedOrder) return { status: "not_found" as const };
 
     const [engagement] = await transaction
       .select()
@@ -812,18 +1052,6 @@ export async function executeServiceEngagementCommand(
     const isBuyer = engagement.buyerOrganizationId === actor.organizationId;
     const isProvider = engagement.providerOrganizationId === actor.organizationId;
     if (!isBuyer && !isProvider) return { status: "not_found" as const };
-
-    if (engagement.version !== command.expectedVersion) {
-      return { status: "version_conflict" as const, currentVersion: engagement.version };
-    }
-
-    if (
-      engagement.executionContractState === "legacy_missing_snapshot" &&
-      command.command !== "initialize" &&
-      command.command !== "cancel"
-    ) {
-      return { status: "contract_missing" as const };
-    }
 
     const now = new Date();
     let nextState: EngagementState = engagement.state;
@@ -850,27 +1078,45 @@ export async function executeServiceEngagementCommand(
       "cancel",
     ]);
 
-    if (providerCommands.has(command.command) && isProvider) {
-      if (!memberCanOperateProvider(actor.memberRole) && command.command !== "complete") {
-        return { status: "forbidden" as const };
-      }
-    } else if (buyerCommands.has(command.command) && isBuyer) {
-      if (!memberCanOperateBuyer(actor.memberRole)) {
-        return { status: "forbidden" as const };
-      }
-    } else if (
-      command.command === "complete" &&
+    const authorizedAsProvider =
       isProvider &&
-      memberCanOperateProvider(actor.memberRole)
-    ) {
-      // allowed
-    } else if (command.command === "cancel" && (isBuyer || isProvider)) {
-      const roleOk = isProvider
-        ? memberCanOperateProvider(actor.memberRole)
-        : memberCanOperateBuyer(actor.memberRole);
-      if (!roleOk) return { status: "forbidden" as const };
-    } else {
+      providerCommands.has(command.command) &&
+      memberCanOperateProvider(actor.memberRole);
+    const authorizedAsBuyer =
+      isBuyer && buyerCommands.has(command.command) && memberCanOperateBuyer(actor.memberRole);
+    if (!authorizedAsProvider && !authorizedAsBuyer) {
       return { status: "forbidden" as const };
+    }
+
+    if (claim.value.status === "replay") {
+      return {
+        status: "replay" as const,
+        body: parseCommandReplayBody(claim.value.responseBody),
+      };
+    }
+
+    if (
+      engagement.state === "completed" ||
+      engagement.state === "cancelled" ||
+      engagement.state === "disputed"
+    ) {
+      return {
+        status: "invalid_state" as const,
+        currentState: engagement.state,
+        command: command.command,
+      };
+    }
+
+    if (engagement.version !== command.expectedVersion) {
+      return { status: "version_conflict" as const, currentVersion: engagement.version };
+    }
+
+    if (
+      engagement.executionContractState === "legacy_missing_snapshot" &&
+      command.command !== "initialize" &&
+      command.command !== "cancel"
+    ) {
+      return { status: "contract_missing" as const };
     }
 
     switch (command.command) {
@@ -969,6 +1215,9 @@ export async function executeServiceEngagementCommand(
           }
         }
         await transaction
+          .delete(freightDeliverableDetail)
+          .where(eq(freightDeliverableDetail.deliverableId, deliverable.id));
+        await transaction
           .delete(customsBrokerageDeliverableDetail)
           .where(eq(customsBrokerageDeliverableDetail.deliverableId, deliverable.id));
         await transaction
@@ -1018,7 +1267,9 @@ export async function executeServiceEngagementCommand(
           .set({
             state: "submitted",
             submittedAt: now,
-            evidenceDocumentId: command.evidenceDocumentId ?? deliverable.evidenceDocumentId,
+            reviewedAt: null,
+            reviewNote: null,
+            evidenceDocumentId: command.evidenceDocumentId ?? null,
             updatedAt: now,
           })
           .where(eq(commerceEngagementDeliverable.id, deliverable.id));
@@ -1104,17 +1355,6 @@ export async function executeServiceEngagementCommand(
         break;
       }
       case "cancel":
-        if (
-          engagement.state === "completed" ||
-          engagement.state === "cancelled" ||
-          engagement.state === "disputed"
-        ) {
-          return {
-            status: "invalid_state" as const,
-            currentState: engagement.state,
-            command: command.command,
-          };
-        }
         nextState = "cancelled";
         cancelledAt = now;
         break;
@@ -1163,6 +1403,7 @@ export async function executeServiceEngagementCommand(
     if (!updated) {
       return { status: "version_conflict" as const, currentVersion: engagement.version };
     }
+    await reconcileOrderAggregateState(transaction, engagement.orderId, now);
 
     const projection = projectEngagement(updated);
     await finalizeCommandReceipt(
@@ -1311,10 +1552,302 @@ export async function getShipmentDetail(
   };
 }
 
+async function loadEngagementExecutionSnapshot(
+  engagement: EngagementRow,
+): Promise<EngagementExecutionSnapshotProjection | null> {
+  switch (engagement.providerKind) {
+    case "freight_forwarder":
+    case "logistics_operator": {
+      const [detail] = await db
+        .select()
+        .from(freightEngagementDetail)
+        .where(eq(freightEngagementDetail.engagementId, engagement.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: engagement.providerKind,
+            sourceQuoteServiceLineId: detail.sourceQuoteServiceLineId,
+            transportModes: detail.transportModes,
+            originCountryCode: detail.originCountryCode,
+            destinationCountryCode: detail.destinationCountryCode,
+            estimatedTransitDays: detail.estimatedTransitDays,
+          }
+        : null;
+    }
+    case "customs_broker": {
+      const [detail] = await db
+        .select()
+        .from(customsBrokerageEngagementDetail)
+        .where(eq(customsBrokerageEngagementDetail.engagementId, engagement.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: engagement.providerKind,
+            sourceQuoteServiceLineId: detail.sourceQuoteServiceLineId,
+            jurisdictions: detail.jurisdictions,
+            filingSummary: detail.filingSummary,
+          }
+        : null;
+    }
+    case "insurance_provider": {
+      const [detail] = await db
+        .select()
+        .from(insuranceEngagementDetail)
+        .where(eq(insuranceEngagementDetail.engagementId, engagement.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: engagement.providerKind,
+            sourceQuoteServiceLineId: detail.sourceQuoteServiceLineId,
+            coverageClasses: detail.coverageClasses,
+            coverageLimitMinorUnits: detail.coverageLimitMinorUnits,
+            currency: detail.currency,
+          }
+        : null;
+    }
+    case "inspection_agency": {
+      const [detail] = await db
+        .select()
+        .from(inspectionEngagementDetail)
+        .where(eq(inspectionEngagementDetail.engagementId, engagement.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: engagement.providerKind,
+            sourceQuoteServiceLineId: detail.sourceQuoteServiceLineId,
+            includedStages: detail.includedStages,
+          }
+        : null;
+    }
+    case "testing_certification_lab": {
+      const [detail] = await db
+        .select()
+        .from(testingCertificationEngagementDetail)
+        .where(eq(testingCertificationEngagementDetail.engagementId, engagement.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: engagement.providerKind,
+            sourceQuoteServiceLineId: detail.sourceQuoteServiceLineId,
+            standards: detail.standards,
+            laboratoryLocation: detail.laboratoryLocation,
+          }
+        : null;
+    }
+    case "marketing_agency": {
+      const [detail] = await db
+        .select()
+        .from(marketingEngagementDetail)
+        .where(eq(marketingEngagementDetail.engagementId, engagement.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: engagement.providerKind,
+            sourceQuoteServiceLineId: detail.sourceQuoteServiceLineId,
+            channels: detail.channels,
+            deliverablesSummary: detail.deliverablesSummary,
+          }
+        : null;
+    }
+    case "warehouse_provider": {
+      const [detail] = await db
+        .select()
+        .from(warehouseEngagementDetail)
+        .where(eq(warehouseEngagementDetail.engagementId, engagement.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: engagement.providerKind,
+            sourceQuoteServiceLineId: detail.sourceQuoteServiceLineId,
+            storageTypes: detail.storageTypes,
+            capacityUnits: detail.capacityUnits,
+            temperatureControlled: detail.temperatureControlled,
+          }
+        : null;
+    }
+    case "foreign_exchange_facilitator": {
+      const [detail] = await db
+        .select()
+        .from(foreignExchangeEngagementDetail)
+        .where(eq(foreignExchangeEngagementDetail.engagementId, engagement.id))
+        .limit(1);
+      return detail
+        ? {
+            kind: engagement.providerKind,
+            sourceQuoteServiceLineId: detail.sourceQuoteServiceLineId,
+            currencyPair: detail.currencyPair,
+            rate: { units: detail.rateFixedPointUnits, scale: detail.rateScale },
+            settlementRail: detail.settlementRail,
+            notionalAmountMinorUnits: detail.notionalAmountMinorUnits,
+            notionalCurrency: detail.notionalCurrency,
+          }
+        : null;
+    }
+    default: {
+      const exhaustiveCheck: never = engagement.providerKind;
+      throw new Error(`Unhandled engagement provider kind: ${String(exhaustiveCheck)}`);
+    }
+  }
+}
+
+async function loadTypedDeliverableResultMap(
+  providerKind: ProviderKind,
+  deliverableIds: readonly string[],
+): Promise<ReadonlyMap<string, DeliverableResultProjection>> {
+  const resultsByDeliverableId = new Map<string, DeliverableResultProjection>();
+  if (deliverableIds.length === 0) return resultsByDeliverableId;
+
+  switch (providerKind) {
+    case "freight_forwarder":
+    case "logistics_operator": {
+      const details = await db
+        .select()
+        .from(freightDeliverableDetail)
+        .where(inArray(freightDeliverableDetail.deliverableId, deliverableIds));
+      for (const detail of details) {
+        resultsByDeliverableId.set(detail.deliverableId, {
+          kind: providerKind,
+          summary: detail.summary,
+        });
+      }
+      return resultsByDeliverableId;
+    }
+    case "customs_broker": {
+      const details = await db
+        .select()
+        .from(customsBrokerageDeliverableDetail)
+        .where(inArray(customsBrokerageDeliverableDetail.deliverableId, deliverableIds));
+      for (const detail of details) {
+        resultsByDeliverableId.set(detail.deliverableId, {
+          kind: providerKind,
+          filingKind: detail.filingKind,
+          jurisdiction: detail.jurisdiction,
+          providerFilingReference: detail.providerFilingReference,
+          declarationReference: detail.declarationReference,
+          decision: detail.decision,
+        });
+      }
+      return resultsByDeliverableId;
+    }
+    case "insurance_provider": {
+      const details = await db
+        .select()
+        .from(insuranceDeliverableDetail)
+        .where(inArray(insuranceDeliverableDetail.deliverableId, deliverableIds));
+      for (const detail of details) {
+        resultsByDeliverableId.set(detail.deliverableId, {
+          kind: providerKind,
+          policyReference: detail.policyReference,
+          coverageClass: detail.coverageClass,
+          insuredValueMinorUnits: detail.insuredValueMinorUnits,
+          coverageLimitMinorUnits: detail.coverageLimitMinorUnits,
+          currency: detail.currency,
+          effectiveFrom: detail.effectiveFrom,
+          effectiveTo: detail.effectiveTo,
+        });
+      }
+      return resultsByDeliverableId;
+    }
+    case "inspection_agency": {
+      const details = await db
+        .select()
+        .from(inspectionDeliverableDetail)
+        .where(inArray(inspectionDeliverableDetail.deliverableId, deliverableIds));
+      for (const detail of details) {
+        resultsByDeliverableId.set(detail.deliverableId, {
+          kind: providerKind,
+          stage: detail.stage,
+          result: detail.result,
+          findingsSummary: detail.findingsSummary,
+          inspectedQuantity: detail.inspectedQuantity,
+          inspectedAt: detail.inspectedAt,
+        });
+      }
+      return resultsByDeliverableId;
+    }
+    case "testing_certification_lab": {
+      const details = await db
+        .select()
+        .from(testingCertificationDeliverableDetail)
+        .where(inArray(testingCertificationDeliverableDetail.deliverableId, deliverableIds));
+      for (const detail of details) {
+        resultsByDeliverableId.set(detail.deliverableId, {
+          kind: providerKind,
+          standard: detail.standard,
+          specimenReference: detail.specimenReference,
+          result: detail.result,
+          laboratoryLocation: detail.laboratoryLocation,
+          reportedAt: detail.reportedAt,
+        });
+      }
+      return resultsByDeliverableId;
+    }
+    case "warehouse_provider": {
+      const details = await db
+        .select()
+        .from(warehouseDeliverableDetail)
+        .where(inArray(warehouseDeliverableDetail.deliverableId, deliverableIds));
+      for (const detail of details) {
+        resultsByDeliverableId.set(detail.deliverableId, {
+          kind: providerKind,
+          movementKind: detail.movementKind,
+          quantityUnits: detail.quantityUnits,
+          quantityScale: detail.quantityScale,
+          unitLabel: detail.unitLabel,
+          facilityIdentifier: detail.facilityIdentifier,
+          occurredAt: detail.occurredAt,
+        });
+      }
+      return resultsByDeliverableId;
+    }
+    case "marketing_agency": {
+      const details = await db
+        .select()
+        .from(marketingDeliverableDetail)
+        .where(inArray(marketingDeliverableDetail.deliverableId, deliverableIds));
+      for (const detail of details) {
+        resultsByDeliverableId.set(detail.deliverableId, {
+          kind: providerKind,
+          deliverableKind: detail.deliverableKind,
+          channel: detail.channel,
+          artifactUrl: detail.artifactUrl,
+          metricsSummary: detail.metricsSummary,
+          publishedAt: detail.publishedAt,
+        });
+      }
+      return resultsByDeliverableId;
+    }
+    case "foreign_exchange_facilitator": {
+      const details = await db
+        .select()
+        .from(foreignExchangeDeliverableDetail)
+        .where(inArray(foreignExchangeDeliverableDetail.deliverableId, deliverableIds));
+      for (const detail of details) {
+        resultsByDeliverableId.set(detail.deliverableId, {
+          kind: providerKind,
+          currencyPair: detail.currencyPair,
+          rate: { units: detail.rateFixedPointUnits, scale: detail.rateScale },
+          sellAmountMinorUnits: detail.sellAmountMinorUnits,
+          buyAmountMinorUnits: detail.buyAmountMinorUnits,
+          sellCurrency: detail.sellCurrency,
+          buyCurrency: detail.buyCurrency,
+          providerExecutionReference: detail.providerExecutionReference,
+          confirmationState: detail.confirmationState,
+        });
+      }
+      return resultsByDeliverableId;
+    }
+    default: {
+      const exhaustiveCheck: never = providerKind;
+      throw new Error(`Unhandled deliverable provider kind: ${String(exhaustiveCheck)}`);
+    }
+  }
+}
+
 export async function getServiceEngagementDetail(
   actor: CommerceFulfillmentActorContext,
   engagementId: string,
-): Promise<Result<unknown, CommercePhase6Error>> {
+): Promise<Result<ServiceEngagementDetailProjection, CommercePhase6Error>> {
   const [engagement] = await db
     .select()
     .from(commerceServiceEngagement)
@@ -1328,7 +1861,7 @@ export async function getServiceEngagementDetail(
     return { success: false, error: { type: "NOT_FOUND" } };
   }
 
-  const [deliverables, events] = await Promise.all([
+  const [deliverables, events, executionSnapshot] = await Promise.all([
     db
       .select()
       .from(commerceEngagementDeliverable)
@@ -1342,12 +1875,18 @@ export async function getServiceEngagementDetail(
         asc(commerceServiceEngagementEvent.sequence),
         asc(commerceServiceEngagementEvent.id),
       ),
+    loadEngagementExecutionSnapshot(engagement),
   ]);
+  const deliverableResults = await loadTypedDeliverableResultMap(
+    engagement.providerKind,
+    deliverables.map((deliverable) => deliverable.id),
+  );
 
   return {
     success: true,
     value: {
       ...projectEngagement(engagement),
+      executionSnapshot,
       deliverables: deliverables.map((deliverable) => ({
         id: deliverable.id,
         sequence: deliverable.sequence,
@@ -1359,6 +1898,7 @@ export async function getServiceEngagementDetail(
         reviewedAt: deliverable.reviewedAt,
         evidenceDocumentId: deliverable.evidenceDocumentId,
         reviewNote: deliverable.reviewNote,
+        result: deliverableResults.get(deliverable.id) ?? null,
       })),
       events: events.map((event) => ({
         id: event.id,

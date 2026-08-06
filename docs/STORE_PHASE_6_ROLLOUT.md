@@ -3,7 +3,7 @@
 Shipment legs, typed service-engagement execution snapshots/deliverables, command
 idempotency receipts, and derived order fulfillment progress.
 
-**Status:** Ready to migrate after Phases 0–5.
+**Status:** Shipped and hardened through additive migrations `0048`–`0050`.
 
 This phase does **not** add external carrier/customs/insurance/lab adapters, webhooks,
 outbox workers, or trade-assurance claims. Commands are operator-driven against
@@ -16,12 +16,16 @@ platform-owned evidence documents and typed contractual snapshots.
 - Tables: `commerce_shipment_leg`, `commerce_shipment_leg_event`,
   `commerce_service_engagement_event`, `commerce_fulfillment_command`, typed engagement
   detail tables, `commerce_engagement_deliverable` (+ events), typed deliverable detail
-  tables
+  tables, and normalized `commerce_quote_service_deliverable_plan`
 - Columns: `commerce_shipment.version`, `commerce_service_engagement.version` +
   `execution_contract_state`, `commerce_order_service_line.source_quote_service_line_id`
 - Quote handoff: every service quote line requires exactly one typed `serviceDetail`;
-  accept copies the snapshot into the engagement execution table (or leaves
-  `legacy_missing_snapshot` when no typed history exists)
+  accept copies the snapshot and structured contracted deliverable plans into the engagement
+  execution tables (or leaves `legacy_missing_snapshot` when no deterministic typed history
+  exists)
+- Hardening: transaction-scoped command idempotency locks, tenant-safe logistics linkage,
+  terminal-state role guards, parent shipment/order reconciliation, paired money/currency
+  constraints, immutable snapshot `TRUNCATE` rejection, and typed detail/result reads
 - Routes:
     - `GET /commerce/orders/:orderId/fulfillment` (derived progress; not client-writable %)
     - `GET /commerce/shipments/:shipmentId`
@@ -45,7 +49,8 @@ platform-owned evidence documents and typed contractual snapshots.
 
 ## Deploy order
 
-1. Apply migration `0048_store_phase_6_connector_execution`:
+1. Apply migrations `0048_store_phase_6_connector_execution`,
+   `0049_store_phase_6_hardening`, and `0050_store_phase_6_typed_contracts`:
 
     ```bash
     pnpm run db:migrate
@@ -107,6 +112,8 @@ row exists. No external provider protocol is wired in Phase 6.
 - Leg sequences unique per shipment; leg/engagement/deliverable events gapless by sequence
 - Fulfillment command receipts unique on `(actor_organization_id, idempotency_key)`
 - Typed engagement detail rows match `provider_kind`
+- Accepted quote deliverable plans retain their source line and unique per-line sequence
+- Optional insurance/FX amounts always carry explicit paired currencies
 - `ready` engagements have a typed snapshot; `legacy_missing_snapshot` engagements do not
   invent one
 - Append-only triggers reject UPDATE/DELETE/TRUNCATE on event, command, and engagement

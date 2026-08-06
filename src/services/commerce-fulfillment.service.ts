@@ -4,16 +4,21 @@ import { db } from "#src/db/index.js";
 import {
   commerceOrder,
   commerceOrderProductLine,
+  commerceEngagementDeliverable,
   commerceServiceEngagement,
+  commerceServiceEngagementEvent,
   commerceShipment,
   commerceShipmentEvent,
   commerceShipmentLeg,
   commerceShipmentProductLine,
-  commerceEngagementDeliverable,
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { ShipmentLegInput } from "#src/schemas/commerce-fulfillment.schemas.js";
 import { insertShipmentLegs } from "#src/services/commerce-fulfillment-phase6.service.js";
+import {
+  finalizeShipmentState,
+  reconcileOrderAggregateState,
+} from "#src/services/commerce-fulfillment-reconciliation.service.js";
 import {
   memberCanOperateBuyer,
   memberCanOperateCounterparty,
@@ -427,23 +432,6 @@ async function loadShippedQuantitiesByOrderProductLine(
   return totals;
 }
 
-function nextOrderAggregateState(
-  productLines: readonly ProductLineRow[],
-  currentState: OrderState,
-): OrderState {
-  const allFulfilled = productLines.every(
-    (line) => line.quantityFulfilled + line.quantityCancelled >= line.quantityOrdered,
-  );
-  if (allFulfilled) return "completed";
-
-  const anyFulfilled = productLines.some((line) => line.quantityFulfilled > 0);
-  if (anyFulfilled) return "partially_completed";
-
-  return currentState === "pending_payment" || currentState === "confirmed"
-    ? "in_fulfillment"
-    : currentState;
-}
-
 /**
  * Appends an append-only shipment event. `delivered` is the one event kind with a side
  * effect: it increments `quantityFulfilled` on every line this shipment carries, exactly
@@ -503,50 +491,22 @@ export async function appendShipmentEvent(
 
     switch (input.eventKind) {
       case "delivered": {
-        const shipmentLines = await transaction
-          .select()
-          .from(commerceShipmentProductLine)
-          .where(eq(commerceShipmentProductLine.shipmentId, shipment.id));
-
-        for (const shipmentLine of shipmentLines) {
-          await transaction
-            .update(commerceOrderProductLine)
-            .set({
-              quantityFulfilled: sql`${commerceOrderProductLine.quantityFulfilled} + ${shipmentLine.quantity}`,
-            })
-            .where(eq(commerceOrderProductLine.id, shipmentLine.orderProductLineId));
-        }
-
-        await transaction
-          .update(commerceShipment)
-          .set({ state: "delivered", updatedAt: occurredAt })
-          .where(eq(commerceShipment.id, shipment.id));
-
-        const orderProductLines = await transaction
-          .select()
-          .from(commerceOrderProductLine)
-          .where(eq(commerceOrderProductLine.orderId, order.id));
-        const nextState = nextOrderAggregateState(orderProductLines, order.state);
-        if (nextState !== order.state) {
-          await transaction
-            .update(commerceOrder)
-            .set({ state: nextState, updatedAt: occurredAt })
-            .where(eq(commerceOrder.id, order.id));
-        }
+        await finalizeShipmentState(transaction, shipment.id, "delivered", occurredAt);
         break;
       }
       case "cancelled": {
-        await transaction
-          .update(commerceShipment)
-          .set({ state: "cancelled", updatedAt: occurredAt })
-          .where(eq(commerceShipment.id, shipment.id));
+        await finalizeShipmentState(transaction, shipment.id, "cancelled", occurredAt);
         break;
       }
       case "picked_up":
       case "in_transit": {
         await transaction
           .update(commerceShipment)
-          .set({ state: "in_transit", updatedAt: occurredAt })
+          .set({
+            state: "in_transit",
+            version: shipment.version + 1,
+            updatedAt: occurredAt,
+          })
           .where(eq(commerceShipment.id, shipment.id));
         break;
       }
@@ -742,6 +702,23 @@ export async function transitionServiceEngagement(
   }
 
   const outcome = await db.transaction(async (transaction) => {
+    const [engagementIdentity] = await transaction
+      .select({
+        id: commerceServiceEngagement.id,
+        orderId: commerceServiceEngagement.orderId,
+      })
+      .from(commerceServiceEngagement)
+      .where(eq(commerceServiceEngagement.id, engagementId))
+      .limit(1);
+    if (!engagementIdentity) return { status: "not_found" as const };
+
+    const [lockedOrder] = await transaction
+      .select({ id: commerceOrder.id })
+      .from(commerceOrder)
+      .where(eq(commerceOrder.id, engagementIdentity.orderId))
+      .for("update");
+    if (!lockedOrder) return { status: "not_found" as const };
+
     const [engagement] = await transaction
       .select()
       .from(commerceServiceEngagement)
@@ -813,6 +790,7 @@ export async function transitionServiceEngagement(
       .update(commerceServiceEngagement)
       .set({
         state: input.targetState,
+        version: engagement.version + 1,
         updatedAt: now,
         ...timestampPatchFor(input.targetState, now),
       })
@@ -826,6 +804,24 @@ export async function transitionServiceEngagement(
     if (!updatedEngagement) {
       return { status: "conflict" as const, message: "Engagement state changed concurrently." };
     }
+
+    const [latestEvent] = await transaction
+      .select({ sequence: commerceServiceEngagementEvent.sequence })
+      .from(commerceServiceEngagementEvent)
+      .where(eq(commerceServiceEngagementEvent.engagementId, engagement.id))
+      .orderBy(desc(commerceServiceEngagementEvent.sequence))
+      .limit(1);
+    await transaction.insert(commerceServiceEngagementEvent).values({
+      engagementId: engagement.id,
+      sequence: (latestEvent?.sequence ?? -1) + 1,
+      previousState: engagement.state,
+      nextState: input.targetState,
+      commandKind: "compatibility_transition",
+      note: input.note ?? null,
+      occurredAt: now,
+      createdByMemberId: actor.memberId,
+    });
+    await reconcileOrderAggregateState(transaction, engagement.orderId, now);
 
     await appendAuditOrThrow(transaction, {
       organizationId: actor.organizationId,
