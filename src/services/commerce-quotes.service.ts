@@ -17,14 +17,23 @@ import {
   commerceRfqProductLine,
   commerceRfqServiceLine,
   commerceServiceEngagement,
+  commerceServiceEngagementEvent,
+  customsBrokerageEngagementDetail,
   customsBrokerageQuoteServiceDetail,
+  foreignExchangeEngagementDetail,
   foreignExchangeQuoteServiceDetail,
+  freightEngagementDetail,
   freightQuoteServiceDetail,
+  inspectionEngagementDetail,
   inspectionQuoteServiceDetail,
+  insuranceEngagementDetail,
   insuranceQuoteServiceDetail,
+  marketingEngagementDetail,
   marketingQuoteServiceDetail,
   product,
+  testingCertificationEngagementDetail,
   testingCertificationQuoteServiceDetail,
+  warehouseEngagementDetail,
   warehouseQuoteServiceDetail,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
@@ -129,7 +138,7 @@ export interface QuoteServiceLineInput {
   readonly exclusionsSnapshot?: string;
   readonly deliverableSnapshot?: string;
   readonly siblingOrder: number;
-  readonly serviceDetail?: QuoteServiceDetailInput;
+  readonly serviceDetail: QuoteServiceDetailInput;
 }
 
 export interface AppendRevisionInput {
@@ -473,6 +482,154 @@ async function insertQuoteServiceDetail(
 }
 
 /**
+ * Copies an accepted typed quote service-line detail into the matching engagement
+ * execution snapshot. Returns whether a typed snapshot was written.
+ */
+async function copyAcceptedQuoteDetailToEngagement(
+  transaction: DatabaseTransaction,
+  engagementId: string,
+  quoteServiceLineId: string,
+  providerKind: ProviderKind,
+): Promise<boolean> {
+  switch (providerKind) {
+    case "freight_forwarder":
+    case "logistics_operator": {
+      const [detail] = await transaction
+        .select()
+        .from(freightQuoteServiceDetail)
+        .where(eq(freightQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .limit(1);
+      if (!detail) return false;
+      await transaction.insert(freightEngagementDetail).values({
+        engagementId,
+        sourceQuoteServiceLineId: quoteServiceLineId,
+        transportModes: detail.transportModes,
+        originCountryCode: detail.originCountryCode,
+        destinationCountryCode: detail.destinationCountryCode,
+        estimatedTransitDays: detail.estimatedTransitDays,
+      });
+      return true;
+    }
+    case "customs_broker": {
+      const [detail] = await transaction
+        .select()
+        .from(customsBrokerageQuoteServiceDetail)
+        .where(eq(customsBrokerageQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .limit(1);
+      if (!detail) return false;
+      await transaction.insert(customsBrokerageEngagementDetail).values({
+        engagementId,
+        sourceQuoteServiceLineId: quoteServiceLineId,
+        jurisdictions: detail.jurisdictions,
+        filingSummary: detail.filingSummary,
+      });
+      return true;
+    }
+    case "insurance_provider": {
+      const [detail] = await transaction
+        .select()
+        .from(insuranceQuoteServiceDetail)
+        .where(eq(insuranceQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .limit(1);
+      if (!detail) return false;
+      await transaction.insert(insuranceEngagementDetail).values({
+        engagementId,
+        sourceQuoteServiceLineId: quoteServiceLineId,
+        coverageClasses: detail.coverageClasses,
+        coverageLimitMinorUnits:
+          detail.coverageLimitInCents === null ? null : String(detail.coverageLimitInCents),
+        currency: detail.currency,
+      });
+      return true;
+    }
+    case "inspection_agency": {
+      const [detail] = await transaction
+        .select()
+        .from(inspectionQuoteServiceDetail)
+        .where(eq(inspectionQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .limit(1);
+      if (!detail) return false;
+      await transaction.insert(inspectionEngagementDetail).values({
+        engagementId,
+        sourceQuoteServiceLineId: quoteServiceLineId,
+        includedStages: detail.includedStages,
+      });
+      return true;
+    }
+    case "testing_certification_lab": {
+      const [detail] = await transaction
+        .select()
+        .from(testingCertificationQuoteServiceDetail)
+        .where(eq(testingCertificationQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .limit(1);
+      if (!detail) return false;
+      await transaction.insert(testingCertificationEngagementDetail).values({
+        engagementId,
+        sourceQuoteServiceLineId: quoteServiceLineId,
+        standards: detail.standards,
+        laboratoryLocation: detail.laboratoryLocation,
+      });
+      return true;
+    }
+    case "marketing_agency": {
+      const [detail] = await transaction
+        .select()
+        .from(marketingQuoteServiceDetail)
+        .where(eq(marketingQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .limit(1);
+      if (!detail) return false;
+      await transaction.insert(marketingEngagementDetail).values({
+        engagementId,
+        sourceQuoteServiceLineId: quoteServiceLineId,
+        channels: detail.channels,
+        deliverablesSummary: detail.deliverablesSummary,
+      });
+      return true;
+    }
+    case "warehouse_provider": {
+      const [detail] = await transaction
+        .select()
+        .from(warehouseQuoteServiceDetail)
+        .where(eq(warehouseQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .limit(1);
+      if (!detail) return false;
+      await transaction.insert(warehouseEngagementDetail).values({
+        engagementId,
+        sourceQuoteServiceLineId: quoteServiceLineId,
+        storageTypes: detail.storageTypes,
+        capacityUnits: detail.capacityUnits,
+        temperatureControlled: detail.temperatureControlled,
+      });
+      return true;
+    }
+    case "foreign_exchange_facilitator": {
+      const [detail] = await transaction
+        .select()
+        .from(foreignExchangeQuoteServiceDetail)
+        .where(eq(foreignExchangeQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .limit(1);
+      if (!detail) return false;
+      await transaction.insert(foreignExchangeEngagementDetail).values({
+        engagementId,
+        sourceQuoteServiceLineId: quoteServiceLineId,
+        currencyPair: detail.currencyPair,
+        rateFixedPointUnits: String(detail.rateFixedPoint),
+        rateScale: detail.rateScale,
+        settlementRail: detail.settlementRail,
+        notionalAmountMinorUnits:
+          detail.notionalAmountInCents === null ? null : String(detail.notionalAmountInCents),
+        notionalCurrency: detail.notionalCurrency,
+      });
+      return true;
+    }
+    default: {
+      const exhaustiveKind: never = providerKind;
+      throw new Error(`Unhandled provider kind: ${JSON.stringify(exhaustiveKind)}`);
+    }
+  }
+}
+
+/**
  * Provider creates an empty quote shell against an open RFQ they are invited to
  * or eligible to match. One quote per provider per RFQ.
  */
@@ -654,10 +811,13 @@ export async function appendRevision(
           message: "rfqServiceLineId does not belong to this RFQ.",
         };
       }
-      if (
-        serviceLine.serviceDetail &&
-        serviceLine.serviceDetail.kind !== rfqServiceLine.providerKind
-      ) {
+      if (!serviceLine.serviceDetail) {
+        return {
+          status: "validation" as const,
+          message: "Every service line requires exactly one typed serviceDetail.",
+        };
+      }
+      if (serviceLine.serviceDetail.kind !== rfqServiceLine.providerKind) {
         return {
           status: "validation" as const,
           message: "serviceDetail.kind must match the RFQ service line provider kind.",
@@ -744,20 +904,18 @@ export async function appendRevision(
       if (!insertedServiceLine) {
         throw new Error("Quote service line insert returned no row.");
       }
-      if (serviceLine.serviceDetail) {
-        const detailResult = await insertQuoteServiceDetail(
-          transaction,
-          insertedServiceLine.id,
-          rfqServiceLine.providerKind,
-          serviceLine.serviceDetail,
-        );
-        if (!detailResult.success) {
-          const detailError = detailResult.error;
-          if (detailError.type !== "VALIDATION_FAILED") {
-            throw new Error(`Unexpected service detail error: ${detailError.type}`);
-          }
-          return { status: "validation" as const, message: detailError.message };
+      const detailResult = await insertQuoteServiceDetail(
+        transaction,
+        insertedServiceLine.id,
+        rfqServiceLine.providerKind,
+        serviceLine.serviceDetail,
+      );
+      if (!detailResult.success) {
+        const detailError = detailResult.error;
+        if (detailError.type !== "VALIDATION_FAILED") {
+          throw new Error(`Unexpected service detail error: ${detailError.type}`);
         }
+        return { status: "validation" as const, message: detailError.message };
       }
     }
 
@@ -1348,6 +1506,7 @@ export async function acceptQuote(
             scopeSnapshot: line.scopeSnapshot,
             feeInCents: line.feeInCents,
             siblingOrder: line.siblingOrder,
+            sourceQuoteServiceLineId: line.id,
           })
           .returning();
         if (!orderServiceLine) {
@@ -1363,6 +1522,8 @@ export async function acceptQuote(
             orderServiceLineId: orderServiceLine.id,
             providerKind: line.providerKind,
             state: "awaiting_provider",
+            executionContractState: "legacy_missing_snapshot",
+            version: 0,
             titleSnapshot: line.titleSnapshot,
             scopeSnapshot: line.scopeSnapshot,
           })
@@ -1370,6 +1531,30 @@ export async function acceptQuote(
         if (!engagement) {
           throw new Error("Service engagement insert returned no row.");
         }
+
+        const hasTypedSnapshot = await copyAcceptedQuoteDetailToEngagement(
+          transaction,
+          engagement.id,
+          line.id,
+          line.providerKind,
+        );
+        if (hasTypedSnapshot) {
+          await transaction
+            .update(commerceServiceEngagement)
+            .set({ executionContractState: "ready", updatedAt: now })
+            .where(eq(commerceServiceEngagement.id, engagement.id));
+        }
+
+        await transaction.insert(commerceServiceEngagementEvent).values({
+          engagementId: engagement.id,
+          sequence: 0,
+          previousState: null,
+          nextState: "awaiting_provider",
+          commandKind: "created_from_accepted_quote",
+          note: null,
+          occurredAt: now,
+          createdByMemberId: actor.memberId,
+        });
 
         await transaction.insert(commerceOrderServiceLink).values({
           engagementId: engagement.id,
@@ -1389,6 +1574,7 @@ export async function acceptQuote(
             orderId: order.id,
             orderServiceLineId: orderServiceLine.id,
             providerKind: line.providerKind,
+            executionContractState: hasTypedSnapshot ? "ready" : "legacy_missing_snapshot",
           },
           occurredAt: now,
         });

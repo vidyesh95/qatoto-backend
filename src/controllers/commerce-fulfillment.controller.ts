@@ -1,6 +1,13 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import {
+  CreateShipmentWithLegsSchema,
+  ServiceEngagementCommandSchema,
+  ShipmentLegCommandSchema,
+} from "#src/schemas/commerce-fulfillment.schemas.js";
+import * as commerceFulfillmentPhase6Service from "#src/services/commerce-fulfillment-phase6.service.js";
+import type { CommercePhase6Error } from "#src/services/commerce-fulfillment-phase6.service.js";
 import * as commerceFulfillmentService from "#src/services/commerce-fulfillment.service.js";
 import type { CommerceFulfillmentError } from "#src/services/commerce-fulfillment.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
@@ -9,13 +16,10 @@ import type { ApiResponse } from "#src/types/index.js";
 const EmptyObjectSchema = z.object({}).strict();
 const OrderIdParamsSchema = z.object({ orderId: z.string().trim().min(1).max(200) }).strict();
 const ShipmentIdParamsSchema = z.object({ shipmentId: z.string().trim().min(1).max(200) }).strict();
+const LegIdParamsSchema = z.object({ legId: z.string().trim().min(1).max(200) }).strict();
 const EngagementIdParamsSchema = z
   .object({ engagementId: z.string().trim().min(1).max(200) })
   .strict();
-const CountryCodeSchema = z
-  .string()
-  .trim()
-  .regex(/^[A-Z]{2}$/);
 
 const ListQuerySchema = z
   .object({
@@ -28,24 +32,7 @@ const ListServiceEngagementsQuerySchema = ListQuerySchema.extend({
   role: z.enum(["buyer", "provider"]).optional(),
 }).strict();
 
-const ShipmentProductLineSchema = z
-  .object({
-    orderProductLineId: z.string().trim().min(1).max(200),
-    quantity: z.number().int().positive(),
-  })
-  .strict();
-
-export const CreateShipmentSchema = z
-  .object({
-    lines: z.array(ShipmentProductLineSchema).min(1).max(200),
-    originCountryCode: CountryCodeSchema.optional(),
-    originLocality: z.string().trim().min(1).max(150).optional(),
-    destinationCountryCode: CountryCodeSchema.optional(),
-    destinationLocality: z.string().trim().min(1).max(150).optional(),
-    packageCount: z.number().int().positive(),
-    totalWeightGrams: z.number().int().positive().optional(),
-  })
-  .strict();
+export const CreateShipmentSchema = CreateShipmentWithLegsSchema;
 
 export const AppendShipmentEventSchema = z
   .object({
@@ -105,6 +92,20 @@ function requireCommerceActor(
   };
 }
 
+function requireIdempotencyKey(req: Request, res: Response): string | null {
+  const rawHeader = req.headers["idempotency-key"];
+  const key = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  if (key === undefined || key.length < 8 || key.length > 200) {
+    res.status(400).json({
+      status: "error",
+      statusCode: 400,
+      message: "This request requires an Idempotency-Key header between 8 and 200 characters.",
+    } satisfies ApiResponse);
+    return null;
+  }
+  return key;
+}
+
 function mapFulfillmentError(res: Response, error: CommerceFulfillmentError): void {
   switch (error.type) {
     case "NOT_FOUND":
@@ -152,6 +153,96 @@ function mapFulfillmentError(res: Response, error: CommerceFulfillmentError): vo
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce fulfillment error: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+function mapPhase6Error(res: Response, error: CommercePhase6Error): void {
+  switch (error.type) {
+    case "NOT_FOUND":
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "Not found.",
+      } satisfies ApiResponse);
+      return;
+    case "FORBIDDEN":
+      res.status(403).json({
+        status: "error",
+        statusCode: 403,
+        message: "This action is not permitted.",
+      } satisfies ApiResponse);
+      return;
+    case "INVALID_STATE":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: `Command ${error.command} is not valid from state ${error.currentState}.`,
+        data: { currentState: error.currentState, command: error.command },
+      } satisfies ApiResponse);
+      return;
+    case "VERSION_CONFLICT":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "The resource version changed. Reload and retry.",
+        data: { currentVersion: error.currentVersion },
+      } satisfies ApiResponse);
+      return;
+    case "IDEMPOTENCY_CONFLICT":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "This Idempotency-Key was already used for a different request.",
+      } satisfies ApiResponse);
+      return;
+    case "PROVIDER_KIND_MISMATCH":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Provider kind does not match the engagement.",
+      } satisfies ApiResponse);
+      return;
+    case "CONTRACT_SNAPSHOT_MISSING":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message:
+          "This engagement is missing an accepted typed execution snapshot. Initialize it before continuing.",
+      } satisfies ApiResponse);
+      return;
+    case "REQUIRED_DELIVERABLES_INCOMPLETE":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "Required deliverables are incomplete.",
+        data: { deliverableIds: error.deliverableIds },
+      } satisfies ApiResponse);
+      return;
+    case "DOCUMENT_NOT_AVAILABLE":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Evidence document is not available.",
+      } satisfies ApiResponse);
+      return;
+    case "VALIDATION_FAILED":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: error.message,
+      } satisfies ApiResponse);
+      return;
+    case "CONFLICT":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: error.message,
+      } satisfies ApiResponse);
+      return;
+    default: {
+      const exhaustiveCheck: never = error;
+      throw new Error(`Unhandled Phase 6 fulfillment error: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }
@@ -278,6 +369,225 @@ export async function transitionServiceEngagement(req: Request, res: Response): 
     status: "success",
     statusCode: 200,
     message: "Service engagement transitioned.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function getOrderFulfillment(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = OrderIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.getOrderFulfillment(
+    actor,
+    params.data.orderId,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Order fulfillment loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function getShipment(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ShipmentIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.getShipmentDetail(
+    actor,
+    params.data.shipmentId,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Shipment loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function getServiceEngagement(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = EngagementIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.getServiceEngagementDetail(
+    actor,
+    params.data.engagementId,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Service engagement loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function executeShipmentLegCommand(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+  const idempotencyKey = requireIdempotencyKey(req, res);
+  if (!idempotencyKey) return;
+
+  const params = LegIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = ShipmentLegCommandSchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.executeShipmentLegCommand(
+    actor,
+    params.data.legId,
+    {
+      idempotencyKey,
+      requestFingerprint: commerceFulfillmentPhase6Service.buildFulfillmentRequestFingerprint({
+        path: req.originalUrl,
+        body: body.data,
+      }),
+    },
+    body.data,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Shipment leg command executed.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function executeServiceEngagementCommand(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+  const idempotencyKey = requireIdempotencyKey(req, res);
+  if (!idempotencyKey) return;
+
+  const params = EngagementIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = ServiceEngagementCommandSchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.executeServiceEngagementCommand(
+    actor,
+    params.data.engagementId,
+    {
+      idempotencyKey,
+      requestFingerprint: commerceFulfillmentPhase6Service.buildFulfillmentRequestFingerprint({
+        path: req.originalUrl,
+        body: body.data,
+      }),
+    },
+    body.data,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Service engagement command executed.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function listShipmentLegEvents(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = LegIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.listShipmentLegEvents(
+    actor,
+    params.data.legId,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Shipment leg events loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function listServiceEngagementEvents(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = EngagementIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.listServiceEngagementEvents(
+    actor,
+    params.data.engagementId,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Service engagement events loaded.",
     data: result.value,
   } satisfies ApiResponse);
 }

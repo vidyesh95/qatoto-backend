@@ -9,6 +9,13 @@ import { requireAuth } from "#src/middleware/require-auth.js";
 
 const router = express.Router();
 
+router.get(
+  "/orders/:orderId/fulfillment",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentController.getOrderFulfillment,
+);
+
 router.post(
   "/orders/:orderId/shipments",
   requireAuth,
@@ -17,6 +24,13 @@ router.post(
   compactBody,
   idempotency({ required: true, scope: "active_organization" }),
   commerceFulfillmentController.createShipment,
+);
+
+router.get(
+  "/shipments/:shipmentId",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentController.getShipment,
 );
 
 router.post(
@@ -29,11 +43,52 @@ router.post(
   commerceFulfillmentController.appendShipmentEvent,
 );
 
+router.post(
+  "/shipment-legs/:legId/commands",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentWriteLimiter,
+  compactBody,
+  idempotency({ required: true, scope: "active_organization" }),
+  commerceFulfillmentController.executeShipmentLegCommand,
+);
+
+router.get(
+  "/shipment-legs/:legId/events",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentController.listShipmentLegEvents,
+);
+
 router.get(
   "/service-engagements",
   requireAuth,
   requireActiveCommerceOrganization,
   commerceFulfillmentController.listServiceEngagements,
+);
+
+router.get(
+  "/service-engagements/:engagementId",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentController.getServiceEngagement,
+);
+
+router.get(
+  "/service-engagements/:engagementId/events",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentController.listServiceEngagementEvents,
+);
+
+router.post(
+  "/service-engagements/:engagementId/commands",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentWriteLimiter,
+  compactBody,
+  idempotency({ required: true, scope: "active_organization" }),
+  commerceFulfillmentController.executeServiceEngagementCommand,
 );
 
 router.post(

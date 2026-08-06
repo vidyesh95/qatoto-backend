@@ -808,6 +808,10 @@ Scheduled jobs:
 - Shipment legs and typed customs, insurance, inspection, lab, warehouse, marketing, and FX
   deliverables.
 - Derived end-to-end progress without coupling connector state machines.
+- **Shipped (command workflows + typed snapshots; no external provider adapters).** See
+  `docs/STORE_PHASE_6_ROLLOUT.md` for migrate, verification, smoke flows, and rollback.
+  Assurance language and live carrier/customs/insurance/lab/FX connectors remain blocked
+  on legal/provider decisions (§14).
 
 ### Phase 7 — trust and optimization
 

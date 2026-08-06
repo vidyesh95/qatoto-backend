@@ -337,6 +337,13 @@
       "when": 1785955000000,
       "tag": "0047_store_phase_5_payments",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1785960000000,
+      "tag": "0048_store_phase_6_connector_execution",
+      "breakpoints": true
     }
   ]
 }

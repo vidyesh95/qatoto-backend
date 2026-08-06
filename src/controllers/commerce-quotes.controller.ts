@@ -139,7 +139,7 @@ const QuoteServiceLineSchema = z
     exclusionsSnapshot: z.string().trim().max(10_000).optional(),
     deliverableSnapshot: z.string().trim().max(10_000).optional(),
     siblingOrder: z.number().int().min(0),
-    serviceDetail: QuoteServiceDetailSchema.optional(),
+    serviceDetail: QuoteServiceDetailSchema,
   })
   .strict();
 

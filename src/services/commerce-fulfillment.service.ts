@@ -7,9 +7,13 @@ import {
   commerceServiceEngagement,
   commerceShipment,
   commerceShipmentEvent,
+  commerceShipmentLeg,
   commerceShipmentProductLine,
+  commerceEngagementDeliverable,
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import type { ShipmentLegInput } from "#src/schemas/commerce-fulfillment.schemas.js";
+import { insertShipmentLegs } from "#src/services/commerce-fulfillment-phase6.service.js";
 import {
   memberCanOperateBuyer,
   memberCanOperateCounterparty,
@@ -69,6 +73,7 @@ export interface CreateShipmentInput {
   readonly destinationLocality?: string;
   readonly packageCount: number;
   readonly totalWeightGrams?: number;
+  readonly legs?: readonly ShipmentLegInput[];
 }
 
 export interface ShipmentProductLineProjection {
@@ -331,6 +336,26 @@ export async function createShipment(
       createdByMemberId: actor.memberId,
     });
 
+    if (input.legs !== undefined && input.legs.length > 0) {
+      const legsResult = await insertShipmentLegs(
+        transaction,
+        insertedShipment.id,
+        actor.memberId,
+        input.legs,
+      );
+      if (!legsResult.success) {
+        return {
+          status: "validation_failed" as const,
+          message:
+            legsResult.error.type === "VALIDATION_FAILED"
+              ? legsResult.error.message
+              : legsResult.error.type === "PROVIDER_KIND_MISMATCH"
+                ? "logisticsEngagementId must reference a freight or logistics engagement."
+                : "Shipment legs could not be created.",
+        };
+      }
+    }
+
     if (order.state === "pending_payment" || order.state === "confirmed") {
       await transaction
         .update(commerceOrder)
@@ -452,6 +477,19 @@ export async function appendShipmentEvent(
 
     if (SHIPMENT_TERMINAL_STATES.includes(shipment.state)) {
       return { status: "conflict" as const, message: "This shipment is already finalized." };
+    }
+
+    if (input.eventKind === "delivered" || input.eventKind === "cancelled") {
+      const [legCount] = await transaction
+        .select({ count: sql<number>`count(*)::int` })
+        .from(commerceShipmentLeg)
+        .where(eq(commerceShipmentLeg.shipmentId, shipment.id));
+      if ((legCount?.count ?? 0) > 0) {
+        return {
+          status: "conflict" as const,
+          message: "Shipments with legs must be advanced through shipment-leg commands.",
+        };
+      }
     }
 
     const occurredAt = input.occurredAt ?? new Date();
@@ -737,6 +775,39 @@ export async function transitionServiceEngagement(
       return { status: "invalid_state" as const };
     }
 
+    if (input.targetState === "completed") {
+      const requiredRows = await transaction
+        .select({
+          id: commerceEngagementDeliverable.id,
+          state: commerceEngagementDeliverable.state,
+        })
+        .from(commerceEngagementDeliverable)
+        .where(
+          and(
+            eq(commerceEngagementDeliverable.engagementId, engagement.id),
+            eq(commerceEngagementDeliverable.isRequired, true),
+          ),
+        );
+      const incompleteIds = requiredRows
+        .filter(
+          (row) => row.state !== "accepted" && row.state !== "waived" && row.state !== "cancelled",
+        )
+        .map((row) => row.id);
+      if (incompleteIds.length > 0) {
+        return {
+          status: "validation_failed" as const,
+          message: `Required deliverables are incomplete: ${incompleteIds.join(", ")}`,
+        };
+      }
+      if (engagement.executionContractState === "legacy_missing_snapshot") {
+        return {
+          status: "validation_failed" as const,
+          message:
+            "This engagement is missing an accepted typed execution snapshot. Initialize it before completing.",
+        };
+      }
+    }
+
     const now = new Date();
     const [updatedEngagement] = await transaction
       .update(commerceServiceEngagement)
@@ -782,6 +853,8 @@ export async function transitionServiceEngagement(
       return { success: false, error: { type: "FORBIDDEN" } };
     case "invalid_state":
       return { success: false, error: { type: "INVALID_STATE" } };
+    case "validation_failed":
+      return { success: false, error: { type: "VALIDATION_FAILED", message: outcome.message } };
     case "conflict":
       return { success: false, error: { type: "CONFLICT", message: outcome.message } };
     case "transitioned":

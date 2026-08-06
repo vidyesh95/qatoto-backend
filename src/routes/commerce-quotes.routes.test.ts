@@ -155,6 +155,86 @@ describe("commerce quote routes", () => {
     expect(serviceStubs.appendRevision).not.toHaveBeenCalled();
   });
 
+  it("requires typed serviceDetail on every quote service line", async () => {
+    const response = await request(app)
+      .post("/commerce/quotes/quote-1/revisions")
+      .set("Idempotency-Key", "revision-missing-service-detail")
+      .send({
+        currency: "USD",
+        validityDeadlineAt: "2026-09-01T00:00:00.000Z",
+        taxInCents: 0,
+        serviceFeeInCents: 0,
+        shippingInCents: 0,
+        discountInCents: 0,
+        productLines: [],
+        serviceLines: [
+          {
+            rfqServiceLineId: "rfq_svc_1",
+            feeInCents: 1000,
+            titleSnapshot: "Customs brokerage",
+            scopeSnapshot: "Import entry",
+            siblingOrder: 0,
+          },
+        ],
+      });
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.appendRevision).not.toHaveBeenCalled();
+  });
+
+  it("accepts a revision when serviceDetail matches provider kind shape", async () => {
+    serviceStubs.appendRevision.mockResolvedValue({
+      success: true,
+      value: {
+        id: "quote-1",
+        latestRevisionNumber: 1,
+        status: "draft",
+      },
+    });
+
+    const response = await request(app)
+      .post("/commerce/quotes/quote-1/revisions")
+      .set("Idempotency-Key", "revision-with-service-detail")
+      .send({
+        currency: "USD",
+        validityDeadlineAt: "2026-09-01T00:00:00.000Z",
+        taxInCents: 0,
+        serviceFeeInCents: 0,
+        shippingInCents: 0,
+        discountInCents: 0,
+        productLines: [],
+        serviceLines: [
+          {
+            rfqServiceLineId: "rfq_svc_1",
+            feeInCents: 1000,
+            titleSnapshot: "Customs brokerage",
+            scopeSnapshot: "Import entry",
+            siblingOrder: 0,
+            serviceDetail: {
+              kind: "customs_broker",
+              jurisdictions: ["US-CBP"],
+            },
+          },
+        ],
+      });
+
+    expect(response.status).toBe(201);
+    expect(serviceStubs.appendRevision).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: PROVIDER_ORGANIZATION_ID }),
+      "quote-1",
+      expect.objectContaining({
+        serviceLines: [
+          expect.objectContaining({
+            serviceDetail: {
+              kind: "customs_broker",
+              jurisdictions: ["US-CBP"],
+            },
+          }),
+        ],
+      }),
+    );
+  });
+
   it("maps REVISION_CHANGED from accept to 409", async () => {
     activeRole.value = "buyer";
     serviceStubs.acceptQuote.mockResolvedValue({

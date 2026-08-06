@@ -480,6 +480,11 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "payment_refund_created",
     "payment_refund_settled",
     "payment_refund_failed",
+    "shipment_leg_created",
+    "shipment_leg_command_executed",
+    "service_engagement_command_executed",
+    "engagement_deliverable_submitted",
+    "engagement_deliverable_reviewed",
   ],
 );
 
@@ -679,6 +684,52 @@ export const commerceShipmentEventKindEnum = pgEnum("commerce_shipment_event_kin
   "exception",
   "cancelled",
 ]);
+
+/** Shipment-leg transport modes (Phase 6). Multimodal belongs to offerings, not a single leg. */
+export const commerceShipmentLegModeEnum = pgEnum("commerce_shipment_leg_mode", [
+  "air",
+  "sea",
+  "land",
+  "rail",
+]);
+
+export const commerceShipmentLegStateEnum = pgEnum("commerce_shipment_leg_state", [
+  "planned",
+  "booked",
+  "in_transit",
+  "arrived",
+  "completed",
+  "cancelled",
+]);
+
+export const commerceShipmentLegEventKindEnum = pgEnum("commerce_shipment_leg_event_kind", [
+  "created",
+  "booked",
+  "departed",
+  "arrived",
+  "completed",
+  "exception",
+  "cancelled",
+]);
+
+/**
+ * Whether an engagement has an immutable accepted-quote execution snapshot.
+ * Legacy Phase 4 engagements without typed quote details are fail-closed for Phase 6 writes.
+ */
+export const commerceExecutionContractStateEnum = pgEnum("commerce_execution_contract_state", [
+  "ready",
+  "legacy_missing_snapshot",
+]);
+
+export const commerceEngagementDeliverableStateEnum = pgEnum(
+  "commerce_engagement_deliverable_state",
+  ["planned", "submitted", "accepted", "waived", "cancelled"],
+);
+
+export const commerceFulfillmentCommandTargetKindEnum = pgEnum(
+  "commerce_fulfillment_command_target_kind",
+  ["shipment", "shipment_leg", "service_engagement", "engagement_deliverable"],
+);
 
 /**
  * Commerce payment provider identity (STORE Phase 5).
@@ -2569,6 +2620,11 @@ export const commerceOrderServiceLine = pgTable(
     scopeSnapshot: text("scope_snapshot").notNull(),
     feeInCents: bigint("fee_in_cents", { mode: "number" }).notNull(),
     siblingOrder: integer("sibling_order").notNull(),
+    /** Accepted quote service-line identity for typed execution snapshot handoff (Phase 6). */
+    sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+      () => commerceQuoteServiceLine.id,
+      { onDelete: "restrict" },
+    ),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -2971,6 +3027,10 @@ export const commerceServiceEngagement = pgTable(
       .references(() => commerceOrderServiceLine.id, { onDelete: "restrict" }),
     providerKind: commerceProviderKindSlugEnum("provider_kind").notNull(),
     state: commerceServiceEngagementStateEnum("state").default("awaiting_provider").notNull(),
+    executionContractState: commerceExecutionContractStateEnum("execution_contract_state")
+      .default("legacy_missing_snapshot")
+      .notNull(),
+    version: integer("version").default(0).notNull(),
     titleSnapshot: text("title_snapshot").notNull(),
     scopeSnapshot: text("scope_snapshot").notNull(),
     scheduledAt: timestamp("scheduled_at"),
@@ -2995,6 +3055,7 @@ export const commerceServiceEngagement = pgTable(
       table.state,
       table.id,
     ),
+    check("commerce_service_engagement_version_ck", sql`version >= 0`),
   ],
 );
 
@@ -3008,6 +3069,7 @@ export const commerceShipment = pgTable(
       .notNull()
       .references(() => commerceOrder.id, { onDelete: "restrict" }),
     state: commerceShipmentStateEnum("state").default("planned").notNull(),
+    version: integer("version").default(0).notNull(),
     originCountryCode: text("origin_country_code"),
     originLocality: text("origin_locality"),
     destinationCountryCode: text("destination_country_code"),
@@ -3027,6 +3089,7 @@ export const commerceShipment = pgTable(
     index("commerce_shipment_order_idx").on(table.orderId, table.id),
     check("commerce_shipment_package_ck", sql`package_count > 0`),
     check("commerce_shipment_weight_ck", sql`total_weight_grams IS NULL OR total_weight_grams > 0`),
+    check("commerce_shipment_version_ck", sql`version >= 0`),
     check(
       "commerce_shipment_country_ck",
       sql`(origin_country_code IS NULL OR origin_country_code ~ '^[A-Z]{2}$')
@@ -3122,6 +3185,638 @@ export const commerceShipmentEvent = pgTable(
     check(
       "commerce_shipment_event_description_ck",
       sql`description IS NULL OR char_length(description) BETWEEN 1 AND 2000`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Store Phase 6 — shipment legs, typed connector execution, deliverables.
+// See docs/STORE_BACKEND_STRUCTURE.md §4.10, §6.4, §12 Phase 6.
+// ---------------------------------------------------------------------------
+
+export const commerceShipmentLeg = pgTable(
+  "commerce_shipment_leg",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    shipmentId: text("shipment_id")
+      .notNull()
+      .references(() => commerceShipment.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    mode: commerceShipmentLegModeEnum("mode").notNull(),
+    state: commerceShipmentLegStateEnum("state").default("planned").notNull(),
+    version: integer("version").default(0).notNull(),
+    originCountryCode: text("origin_country_code").notNull(),
+    originLocality: text("origin_locality"),
+    originLocationIdentifier: text("origin_location_identifier"),
+    destinationCountryCode: text("destination_country_code").notNull(),
+    destinationLocality: text("destination_locality"),
+    destinationLocationIdentifier: text("destination_location_identifier"),
+    logisticsEngagementId: text("logistics_engagement_id").references(
+      () => commerceServiceEngagement.id,
+      { onDelete: "restrict" },
+    ),
+    carrierReference: text("carrier_reference"),
+    trackingReference: text("tracking_reference"),
+    estimatedDepartureAt: timestamp("estimated_departure_at"),
+    estimatedArrivalAt: timestamp("estimated_arrival_at"),
+    actualDepartureAt: timestamp("actual_departure_at"),
+    actualArrivalAt: timestamp("actual_arrival_at"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_shipment_leg_sequence_uidx").on(table.shipmentId, table.sequence),
+    index("commerce_shipment_leg_shipment_idx").on(table.shipmentId, table.id),
+    index("commerce_shipment_leg_engagement_idx").on(table.logisticsEngagementId),
+    check("commerce_shipment_leg_sequence_ck", sql`sequence >= 0`),
+    check("commerce_shipment_leg_version_ck", sql`version >= 0`),
+    check(
+      "commerce_shipment_leg_country_ck",
+      sql`origin_country_code ~ '^[A-Z]{2}$' AND destination_country_code ~ '^[A-Z]{2}$'`,
+    ),
+    check(
+      "commerce_shipment_leg_location_ck",
+      sql`(origin_location_identifier IS NULL OR char_length(origin_location_identifier) BETWEEN 1 AND 80)
+          AND (destination_location_identifier IS NULL OR char_length(destination_location_identifier) BETWEEN 1 AND 80)
+          AND (origin_locality IS NULL OR char_length(origin_locality) BETWEEN 1 AND 150)
+          AND (destination_locality IS NULL OR char_length(destination_locality) BETWEEN 1 AND 150)
+          AND (carrier_reference IS NULL OR char_length(carrier_reference) BETWEEN 1 AND 200)
+          AND (tracking_reference IS NULL OR char_length(tracking_reference) BETWEEN 1 AND 200)`,
+    ),
+  ],
+);
+
+export const commerceShipmentLegEvent = pgTable(
+  "commerce_shipment_leg_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    shipmentLegId: text("shipment_leg_id")
+      .notNull()
+      .references(() => commerceShipmentLeg.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    eventKind: commerceShipmentLegEventKindEnum("event_kind").notNull(),
+    occurredAt: timestamp("occurred_at").notNull(),
+    description: text("description"),
+    carrierReference: text("carrier_reference"),
+    trackingReference: text("tracking_reference"),
+    locationIdentifier: text("location_identifier"),
+    evidenceDocumentId: text("evidence_document_id").references(
+      () => commerceEncryptedDocument.id,
+      { onDelete: "restrict" },
+    ),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_shipment_leg_event_sequence_uidx").on(
+      table.shipmentLegId,
+      table.sequence,
+    ),
+    index("commerce_shipment_leg_event_leg_idx").on(
+      table.shipmentLegId,
+      table.occurredAt,
+      table.id,
+    ),
+    check("commerce_shipment_leg_event_sequence_ck", sql`sequence >= 0`),
+    check(
+      "commerce_shipment_leg_event_text_ck",
+      sql`(description IS NULL OR char_length(description) BETWEEN 1 AND 2000)
+          AND (carrier_reference IS NULL OR char_length(carrier_reference) BETWEEN 1 AND 200)
+          AND (tracking_reference IS NULL OR char_length(tracking_reference) BETWEEN 1 AND 200)
+          AND (location_identifier IS NULL OR char_length(location_identifier) BETWEEN 1 AND 80)`,
+    ),
+  ],
+);
+
+export const commerceServiceEngagementEvent = pgTable(
+  "commerce_service_engagement_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    engagementId: text("engagement_id")
+      .notNull()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    previousState: commerceServiceEngagementStateEnum("previous_state"),
+    nextState: commerceServiceEngagementStateEnum("next_state").notNull(),
+    commandKind: text("command_kind").notNull(),
+    note: text("note"),
+    occurredAt: timestamp("occurred_at").notNull(),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_service_engagement_event_sequence_uidx").on(
+      table.engagementId,
+      table.sequence,
+    ),
+    index("commerce_service_engagement_event_engagement_idx").on(
+      table.engagementId,
+      table.occurredAt,
+      table.id,
+    ),
+    check("commerce_service_engagement_event_sequence_ck", sql`sequence >= 0`),
+    check(
+      "commerce_service_engagement_event_text_ck",
+      sql`char_length(command_kind) BETWEEN 1 AND 80
+          AND (note IS NULL OR char_length(note) BETWEEN 1 AND 2000)`,
+    ),
+  ],
+);
+
+export const commerceFulfillmentCommand = pgTable(
+  "commerce_fulfillment_command",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    actorOrganizationId: text("actor_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    actorUserId: text("actor_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    actorMemberId: text("actor_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    targetKind: commerceFulfillmentCommandTargetKindEnum("target_kind").notNull(),
+    targetId: text("target_id").notNull(),
+    commandKind: text("command_kind").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestFingerprint: text("request_fingerprint").notNull(),
+    resultingVersion: integer("resulting_version"),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: text("response_body").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_fulfillment_command_idempotency_uidx").on(
+      table.actorOrganizationId,
+      table.idempotencyKey,
+    ),
+    index("commerce_fulfillment_command_target_idx").on(table.targetKind, table.targetId, table.id),
+    check(
+      "commerce_fulfillment_command_text_ck",
+      sql`char_length(command_kind) BETWEEN 1 AND 80
+          AND char_length(idempotency_key) BETWEEN 8 AND 200
+          AND char_length(request_fingerprint) = 64
+          AND response_status BETWEEN 200 AND 299`,
+    ),
+  ],
+);
+
+export const freightEngagementDetail = pgTable(
+  "freight_engagement_detail",
+  {
+    engagementId: text("engagement_id")
+      .primaryKey()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+      () => commerceQuoteServiceLine.id,
+      { onDelete: "restrict" },
+    ),
+    transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
+    originCountryCode: text("origin_country_code"),
+    destinationCountryCode: text("destination_country_code"),
+    estimatedTransitDays: integer("estimated_transit_days"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (_table) => [
+    check(
+      "freight_engagement_detail_country_ck",
+      sql`(origin_country_code IS NULL OR origin_country_code ~ '^[A-Z]{2}$')
+          AND (destination_country_code IS NULL OR destination_country_code ~ '^[A-Z]{2}$')`,
+    ),
+    check(
+      "freight_engagement_detail_transit_ck",
+      sql`estimated_transit_days IS NULL OR estimated_transit_days >= 0`,
+    ),
+  ],
+);
+
+export const customsBrokerageEngagementDetail = pgTable(
+  "customs_brokerage_engagement_detail",
+  {
+    engagementId: text("engagement_id")
+      .primaryKey()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+      () => commerceQuoteServiceLine.id,
+      { onDelete: "restrict" },
+    ),
+    jurisdictions: text("jurisdictions").array().notNull().default([]),
+    filingSummary: text("filing_summary"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (_table) => [
+    check(
+      "customs_brokerage_engagement_detail_summary_ck",
+      sql`filing_summary IS NULL OR char_length(filing_summary) BETWEEN 1 AND 4000`,
+    ),
+  ],
+);
+
+export const insuranceEngagementDetail = pgTable(
+  "insurance_engagement_detail",
+  {
+    engagementId: text("engagement_id")
+      .primaryKey()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+      () => commerceQuoteServiceLine.id,
+      { onDelete: "restrict" },
+    ),
+    coverageClasses: text("coverage_classes").array().notNull().default([]),
+    /** Canonical integer string (no floats). */
+    coverageLimitMinorUnits: text("coverage_limit_minor_units"),
+    currency: text("currency").default("USD").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (_table) => [
+    check("insurance_engagement_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "insurance_engagement_detail_limit_ck",
+      sql`coverage_limit_minor_units IS NULL
+          OR coverage_limit_minor_units ~ '^(0|[1-9][0-9]{0,37})$'`,
+    ),
+  ],
+);
+
+export const inspectionEngagementDetail = pgTable("inspection_engagement_detail", {
+  engagementId: text("engagement_id")
+    .primaryKey()
+    .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+  sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+    () => commerceQuoteServiceLine.id,
+    { onDelete: "restrict" },
+  ),
+  includedStages: text("included_stages").array().notNull().default([]),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const testingCertificationEngagementDetail = pgTable(
+  "testing_certification_engagement_detail",
+  {
+    engagementId: text("engagement_id")
+      .primaryKey()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+      () => commerceQuoteServiceLine.id,
+      { onDelete: "restrict" },
+    ),
+    standards: text("standards").array().notNull().default([]),
+    laboratoryLocation: text("laboratory_location"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+);
+
+export const marketingEngagementDetail = pgTable(
+  "marketing_engagement_detail",
+  {
+    engagementId: text("engagement_id")
+      .primaryKey()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+      () => commerceQuoteServiceLine.id,
+      { onDelete: "restrict" },
+    ),
+    channels: text("channels").array().notNull().default([]),
+    deliverablesSummary: text("deliverables_summary"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (_table) => [
+    check(
+      "marketing_engagement_detail_summary_ck",
+      sql`deliverables_summary IS NULL OR char_length(deliverables_summary) BETWEEN 1 AND 4000`,
+    ),
+  ],
+);
+
+export const warehouseEngagementDetail = pgTable("warehouse_engagement_detail", {
+  engagementId: text("engagement_id")
+    .primaryKey()
+    .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+  sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+    () => commerceQuoteServiceLine.id,
+    { onDelete: "restrict" },
+  ),
+  storageTypes: text("storage_types").array().notNull().default([]),
+  capacityUnits: text("capacity_units"),
+  temperatureControlled: boolean("temperature_controlled").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const foreignExchangeEngagementDetail = pgTable(
+  "foreign_exchange_engagement_detail",
+  {
+    engagementId: text("engagement_id")
+      .primaryKey()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+      () => commerceQuoteServiceLine.id,
+      { onDelete: "restrict" },
+    ),
+    currencyPair: text("currency_pair").notNull(),
+    /** Fixed-point mantissa as canonical digit string; pair with rateScale. */
+    rateFixedPointUnits: text("rate_fixed_point_units").notNull(),
+    rateScale: integer("rate_scale").notNull(),
+    settlementRail: text("settlement_rail"),
+    notionalAmountMinorUnits: text("notional_amount_minor_units"),
+    notionalCurrency: text("notional_currency").default("USD").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (_table) => [
+    check(
+      "foreign_exchange_engagement_detail_rate_ck",
+      sql`rate_fixed_point_units ~ '^[1-9][0-9]{0,37}$' AND rate_scale BETWEEN 0 AND 12`,
+    ),
+    check(
+      "foreign_exchange_engagement_detail_pair_ck",
+      sql`char_length(currency_pair) = 7 AND currency_pair ~ '^[A-Z]{3}/[A-Z]{3}$'`,
+    ),
+    check("foreign_exchange_engagement_detail_currency_ck", sql`notional_currency ~ '^[A-Z]{3}$'`),
+    check(
+      "foreign_exchange_engagement_detail_notional_ck",
+      sql`notional_amount_minor_units IS NULL
+          OR notional_amount_minor_units ~ '^(0|[1-9][0-9]{0,37})$'`,
+    ),
+  ],
+);
+
+export const commerceEngagementDeliverable = pgTable(
+  "commerce_engagement_deliverable",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    engagementId: text("engagement_id")
+      .notNull()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    title: text("title").notNull(),
+    isRequired: boolean("is_required").default(true).notNull(),
+    state: commerceEngagementDeliverableStateEnum("state").default("planned").notNull(),
+    dueAt: timestamp("due_at"),
+    submittedAt: timestamp("submitted_at"),
+    reviewedAt: timestamp("reviewed_at"),
+    evidenceDocumentId: text("evidence_document_id").references(
+      () => commerceEncryptedDocument.id,
+      { onDelete: "restrict" },
+    ),
+    reviewNote: text("review_note"),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_engagement_deliverable_sequence_uidx").on(
+      table.engagementId,
+      table.sequence,
+    ),
+    index("commerce_engagement_deliverable_engagement_idx").on(
+      table.engagementId,
+      table.state,
+      table.id,
+    ),
+    check("commerce_engagement_deliverable_sequence_ck", sql`sequence >= 0`),
+    check(
+      "commerce_engagement_deliverable_text_ck",
+      sql`char_length(title) BETWEEN 1 AND 200
+          AND (review_note IS NULL OR char_length(review_note) BETWEEN 1 AND 2000)`,
+    ),
+  ],
+);
+
+export const commerceEngagementDeliverableEvent = pgTable(
+  "commerce_engagement_deliverable_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    deliverableId: text("deliverable_id")
+      .notNull()
+      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    previousState: commerceEngagementDeliverableStateEnum("previous_state"),
+    nextState: commerceEngagementDeliverableStateEnum("next_state").notNull(),
+    commandKind: text("command_kind").notNull(),
+    note: text("note"),
+    occurredAt: timestamp("occurred_at").notNull(),
+    createdByMemberId: text("created_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_engagement_deliverable_event_sequence_uidx").on(
+      table.deliverableId,
+      table.sequence,
+    ),
+    check("commerce_engagement_deliverable_event_sequence_ck", sql`sequence >= 0`),
+    check(
+      "commerce_engagement_deliverable_event_text_ck",
+      sql`char_length(command_kind) BETWEEN 1 AND 80
+          AND (note IS NULL OR char_length(note) BETWEEN 1 AND 2000)`,
+    ),
+  ],
+);
+
+export const customsBrokerageDeliverableDetail = pgTable(
+  "customs_brokerage_deliverable_detail",
+  {
+    deliverableId: text("deliverable_id")
+      .primaryKey()
+      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+    filingKind: text("filing_kind").notNull(),
+    jurisdiction: text("jurisdiction").notNull(),
+    providerFilingReference: text("provider_filing_reference"),
+    declarationReference: text("declaration_reference"),
+    decision: text("decision"),
+  },
+  (_table) => [
+    check(
+      "customs_brokerage_deliverable_detail_text_ck",
+      sql`char_length(filing_kind) BETWEEN 1 AND 80
+          AND char_length(jurisdiction) BETWEEN 1 AND 80
+          AND (provider_filing_reference IS NULL OR char_length(provider_filing_reference) BETWEEN 1 AND 200)
+          AND (declaration_reference IS NULL OR char_length(declaration_reference) BETWEEN 1 AND 200)
+          AND (decision IS NULL OR decision IN ('cleared', 'rejected', 'pending'))`,
+    ),
+  ],
+);
+
+export const insuranceDeliverableDetail = pgTable(
+  "insurance_deliverable_detail",
+  {
+    deliverableId: text("deliverable_id")
+      .primaryKey()
+      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+    policyReference: text("policy_reference").notNull(),
+    coverageClass: text("coverage_class").notNull(),
+    insuredValueMinorUnits: text("insured_value_minor_units"),
+    coverageLimitMinorUnits: text("coverage_limit_minor_units"),
+    currency: text("currency").default("USD").notNull(),
+    effectiveFrom: timestamp("effective_from"),
+    effectiveTo: timestamp("effective_to"),
+  },
+  (_table) => [
+    check("insurance_deliverable_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "insurance_deliverable_detail_text_ck",
+      sql`char_length(policy_reference) BETWEEN 1 AND 200
+          AND char_length(coverage_class) BETWEEN 1 AND 80
+          AND (insured_value_minor_units IS NULL OR insured_value_minor_units ~ '^(0|[1-9][0-9]{0,37})$')
+          AND (coverage_limit_minor_units IS NULL OR coverage_limit_minor_units ~ '^(0|[1-9][0-9]{0,37})$')`,
+    ),
+  ],
+);
+
+export const inspectionDeliverableDetail = pgTable(
+  "inspection_deliverable_detail",
+  {
+    deliverableId: text("deliverable_id")
+      .primaryKey()
+      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+    stage: text("stage").notNull(),
+    result: text("result").notNull(),
+    findingsSummary: text("findings_summary"),
+    inspectedQuantity: integer("inspected_quantity"),
+    inspectedAt: timestamp("inspected_at"),
+  },
+  (_table) => [
+    check(
+      "inspection_deliverable_detail_result_ck",
+      sql`result IN ('passed', 'conditional', 'failed')
+          AND char_length(stage) BETWEEN 1 AND 80
+          AND (findings_summary IS NULL OR char_length(findings_summary) BETWEEN 1 AND 4000)
+          AND (inspected_quantity IS NULL OR inspected_quantity > 0)`,
+    ),
+  ],
+);
+
+export const testingCertificationDeliverableDetail = pgTable(
+  "testing_certification_deliverable_detail",
+  {
+    deliverableId: text("deliverable_id")
+      .primaryKey()
+      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+    standard: text("standard").notNull(),
+    specimenReference: text("specimen_reference"),
+    result: text("result").notNull(),
+    laboratoryLocation: text("laboratory_location"),
+    reportedAt: timestamp("reported_at"),
+  },
+  (_table) => [
+    check(
+      "testing_certification_deliverable_detail_result_ck",
+      sql`result IN ('passed', 'failed', 'inconclusive')
+          AND char_length(standard) BETWEEN 1 AND 120
+          AND (specimen_reference IS NULL OR char_length(specimen_reference) BETWEEN 1 AND 200)
+          AND (laboratory_location IS NULL OR char_length(laboratory_location) BETWEEN 1 AND 200)`,
+    ),
+  ],
+);
+
+export const warehouseDeliverableDetail = pgTable(
+  "warehouse_deliverable_detail",
+  {
+    deliverableId: text("deliverable_id")
+      .primaryKey()
+      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+    movementKind: text("movement_kind").notNull(),
+    quantityUnits: text("quantity_units").notNull(),
+    quantityScale: integer("quantity_scale").notNull(),
+    unitLabel: text("unit_label").notNull(),
+    facilityIdentifier: text("facility_identifier"),
+    occurredAt: timestamp("occurred_at"),
+  },
+  (_table) => [
+    check(
+      "warehouse_deliverable_detail_movement_ck",
+      sql`movement_kind IN ('receipt', 'putaway', 'pick', 'release', 'adjustment')
+          AND quantity_units ~ '^(0|[1-9][0-9]{0,37})$'
+          AND quantity_scale BETWEEN 0 AND 12
+          AND char_length(unit_label) BETWEEN 1 AND 40
+          AND (facility_identifier IS NULL OR char_length(facility_identifier) BETWEEN 1 AND 120)`,
+    ),
+  ],
+);
+
+export const marketingDeliverableDetail = pgTable(
+  "marketing_deliverable_detail",
+  {
+    deliverableId: text("deliverable_id")
+      .primaryKey()
+      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+    deliverableKind: text("deliverable_kind").notNull(),
+    channel: text("channel").notNull(),
+    artifactUrl: text("artifact_url"),
+    metricsSummary: text("metrics_summary"),
+    publishedAt: timestamp("published_at"),
+  },
+  (_table) => [
+    check(
+      "marketing_deliverable_detail_text_ck",
+      sql`char_length(deliverable_kind) BETWEEN 1 AND 80
+          AND char_length(channel) BETWEEN 1 AND 80
+          AND (artifact_url IS NULL OR char_length(artifact_url) BETWEEN 1 AND 2000)
+          AND (metrics_summary IS NULL OR char_length(metrics_summary) BETWEEN 1 AND 4000)`,
+    ),
+  ],
+);
+
+export const foreignExchangeDeliverableDetail = pgTable(
+  "foreign_exchange_deliverable_detail",
+  {
+    deliverableId: text("deliverable_id")
+      .primaryKey()
+      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+    currencyPair: text("currency_pair").notNull(),
+    rateFixedPointUnits: text("rate_fixed_point_units").notNull(),
+    rateScale: integer("rate_scale").notNull(),
+    sellAmountMinorUnits: text("sell_amount_minor_units").notNull(),
+    buyAmountMinorUnits: text("buy_amount_minor_units").notNull(),
+    sellCurrency: text("sell_currency").notNull(),
+    buyCurrency: text("buy_currency").notNull(),
+    providerExecutionReference: text("provider_execution_reference"),
+    confirmationState: text("confirmation_state").default("provider_confirmed").notNull(),
+  },
+  (_table) => [
+    check(
+      "foreign_exchange_deliverable_detail_rate_ck",
+      sql`rate_fixed_point_units ~ '^[1-9][0-9]{0,37}$' AND rate_scale BETWEEN 0 AND 12`,
+    ),
+    check(
+      "foreign_exchange_deliverable_detail_pair_ck",
+      sql`char_length(currency_pair) = 7 AND currency_pair ~ '^[A-Z]{3}/[A-Z]{3}$'
+          AND sell_currency ~ '^[A-Z]{3}$' AND buy_currency ~ '^[A-Z]{3}$'`,
+    ),
+    check(
+      "foreign_exchange_deliverable_detail_amounts_ck",
+      sql`sell_amount_minor_units ~ '^(0|[1-9][0-9]{0,37})$'
+          AND buy_amount_minor_units ~ '^(0|[1-9][0-9]{0,37})$'
+          AND confirmation_state IN ('provider_confirmed')
+          AND (provider_execution_reference IS NULL OR char_length(provider_execution_reference) BETWEEN 1 AND 200)`,
     ),
   ],
 );

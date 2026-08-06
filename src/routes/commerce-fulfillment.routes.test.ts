@@ -97,7 +97,21 @@ const serviceStubs = vi.hoisted(() => ({
   transitionServiceEngagement: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
+const phase6ServiceStubs = vi.hoisted(() => ({
+  getOrderFulfillment: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  getShipmentDetail: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  getServiceEngagementDetail: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  executeShipmentLegCommand: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  executeServiceEngagementCommand: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  listShipmentLegEvents: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  listServiceEngagementEvents: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  buildFulfillmentRequestFingerprint: vi.fn<(payload: unknown) => string>((payload: unknown) =>
+    JSON.stringify(payload),
+  ),
+}));
+
 vi.mock("#src/services/commerce-fulfillment.service.js", () => serviceStubs);
+vi.mock("#src/services/commerce-fulfillment-phase6.service.js", () => phase6ServiceStubs);
 
 describe("commerce fulfillment routes", () => {
   let app: Express;
@@ -181,5 +195,196 @@ describe("commerce fulfillment routes", () => {
       "engagement-1",
       { targetState: "completed" },
     );
+  });
+
+  it("rejects shipment creation with unknown body keys", async () => {
+    const response = await request(app)
+      .post("/commerce/orders/order-1/shipments")
+      .set("Idempotency-Key", "shipment-create-unknown-key")
+      .send({
+        lines: [{ orderProductLineId: "opl_1", quantity: 1 }],
+        packageCount: 1,
+        unexpected: true,
+      });
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.createShipment).not.toHaveBeenCalled();
+  });
+
+  it("passes optional legs through create shipment", async () => {
+    serviceStubs.createShipment.mockResolvedValue({
+      success: true,
+      value: {
+        id: "shipment-2",
+        orderId: "order-1",
+        state: "planned",
+        packageCount: 1,
+        productLines: [],
+        events: [],
+      },
+    });
+
+    const response = await request(app)
+      .post("/commerce/orders/order-1/shipments")
+      .set("Idempotency-Key", "shipment-create-with-legs")
+      .send({
+        lines: [{ orderProductLineId: "opl_1", quantity: 1 }],
+        packageCount: 1,
+        legs: [
+          {
+            sequence: 0,
+            mode: "sea",
+            originCountryCode: "CN",
+            destinationCountryCode: "US",
+          },
+        ],
+      });
+
+    expect(response.status).toBe(201);
+    expect(serviceStubs.createShipment).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: ORGANIZATION_ID }),
+      "order-1",
+      expect.objectContaining({
+        legs: [
+          expect.objectContaining({
+            sequence: 0,
+            mode: "sea",
+            originCountryCode: "CN",
+            destinationCountryCode: "US",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("loads derived order fulfillment progress", async () => {
+    phase6ServiceStubs.getOrderFulfillment.mockResolvedValue({
+      success: true,
+      value: {
+        orderId: "order-1",
+        overallState: "in_progress",
+        progress: { completedUnits: 1, totalUnits: 2, basisPoints: 5000 },
+      },
+    });
+
+    const response = await request(app).get("/commerce/orders/order-1/fulfillment");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.progress.basisPoints).toBe(5000);
+    expect(phase6ServiceStubs.getOrderFulfillment).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: ORGANIZATION_ID }),
+      "order-1",
+    );
+  });
+
+  it("requires Idempotency-Key for shipment-leg commands", async () => {
+    const response = await request(app)
+      .post("/commerce/shipment-legs/leg-1/commands")
+      .send({ command: "book", expectedVersion: 0 });
+
+    expect(response.status).toBe(400);
+    expect(phase6ServiceStubs.executeShipmentLegCommand).not.toHaveBeenCalled();
+  });
+
+  it("maps VERSION_CONFLICT from leg commands to 409", async () => {
+    phase6ServiceStubs.executeShipmentLegCommand.mockResolvedValue({
+      success: false,
+      error: { type: "VERSION_CONFLICT", currentVersion: 4 },
+    });
+
+    const response = await request(app)
+      .post("/commerce/shipment-legs/leg-1/commands")
+      .set("Idempotency-Key", "leg-book-stale-version")
+      .send({ command: "book", expectedVersion: 3 });
+
+    expect(response.status).toBe(409);
+    expect(response.body.data).toMatchObject({ currentVersion: 4 });
+    expect(phase6ServiceStubs.executeShipmentLegCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: ORGANIZATION_ID }),
+      "leg-1",
+      expect.objectContaining({ idempotencyKey: "leg-book-stale-version" }),
+      { command: "book", expectedVersion: 3 },
+    );
+  });
+
+  it("maps CONTRACT_SNAPSHOT_MISSING from engagement commands to 409", async () => {
+    phase6ServiceStubs.executeServiceEngagementCommand.mockResolvedValue({
+      success: false,
+      error: { type: "CONTRACT_SNAPSHOT_MISSING" },
+    });
+
+    const response = await request(app)
+      .post("/commerce/service-engagements/engagement-1/commands")
+      .set("Idempotency-Key", "engagement-start-missing-snapshot")
+      .send({ command: "start", expectedVersion: 0 });
+
+    expect(response.status).toBe(409);
+    expect(phase6ServiceStubs.executeServiceEngagementCommand).toHaveBeenCalled();
+  });
+
+  it("maps REQUIRED_DELIVERABLES_INCOMPLETE to 409 with deliverable ids", async () => {
+    phase6ServiceStubs.executeServiceEngagementCommand.mockResolvedValue({
+      success: false,
+      error: {
+        type: "REQUIRED_DELIVERABLES_INCOMPLETE",
+        deliverableIds: ["del_1", "del_2"],
+      },
+    });
+
+    const response = await request(app)
+      .post("/commerce/service-engagements/engagement-1/commands")
+      .set("Idempotency-Key", "engagement-complete-incomplete")
+      .send({ command: "complete", expectedVersion: 2 });
+
+    expect(response.status).toBe(409);
+    expect(response.body.data).toMatchObject({ deliverableIds: ["del_1", "del_2"] });
+  });
+
+  it("maps IDEMPOTENCY_CONFLICT to 409", async () => {
+    phase6ServiceStubs.executeShipmentLegCommand.mockResolvedValue({
+      success: false,
+      error: { type: "IDEMPOTENCY_CONFLICT" },
+    });
+
+    const response = await request(app)
+      .post("/commerce/shipment-legs/leg-1/commands")
+      .set("Idempotency-Key", "leg-fingerprint-conflict")
+      .send({ command: "depart", expectedVersion: 1 });
+
+    expect(response.status).toBe(409);
+  });
+
+  it("loads shipment and engagement details for authorized actors", async () => {
+    phase6ServiceStubs.getShipmentDetail.mockResolvedValue({
+      success: true,
+      value: { id: "shipment-1", state: "planned", legs: [] },
+    });
+    phase6ServiceStubs.getServiceEngagementDetail.mockResolvedValue({
+      success: true,
+      value: { id: "engagement-1", state: "awaiting_provider" },
+    });
+
+    const shipmentResponse = await request(app).get("/commerce/shipments/shipment-1");
+    const engagementResponse = await request(app).get("/commerce/service-engagements/engagement-1");
+
+    expect(shipmentResponse.status).toBe(200);
+    expect(engagementResponse.status).toBe(200);
+  });
+
+  it("lists authorized leg and engagement events", async () => {
+    phase6ServiceStubs.listShipmentLegEvents.mockResolvedValue({
+      success: true,
+      value: [{ eventKind: "created", sequence: 0 }],
+    });
+    phase6ServiceStubs.listServiceEngagementEvents.mockResolvedValue({
+      success: true,
+      value: [{ nextState: "scheduled", sequence: 0 }],
+    });
+
+    const legEvents = await request(app).get("/commerce/shipment-legs/leg-1/events");
+    const engagementEvents = await request(app).get("/commerce/service-engagements/engagement-1/events");
+
+    expect(legEvents.status).toBe(200);
+    expect(engagementEvents.status).toBe(200);
   });
 });
