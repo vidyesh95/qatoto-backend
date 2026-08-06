@@ -3,7 +3,11 @@ import express from "express";
 import * as productsController from "#src/controllers/products.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
-import { productCreateLimiter, productImageUploadLimiter } from "#src/middleware/rate-limit.js";
+import {
+  productCatalogDepthWriteLimiter,
+  productCreateLimiter,
+  productImageUploadLimiter,
+} from "#src/middleware/rate-limit.js";
 import { requireActiveSellerCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadProductImage } from "#src/middleware/upload-product-image.js";
@@ -65,6 +69,31 @@ router.delete(
   compactBody,
   idempotency({ scope: "active_organization" }),
   productsController.deleteProduct,
+);
+
+/**
+ * PUT /products/:id/variants
+ * Replace the variant set (Appendix A1). Declared before `/:id/images/...` for the
+ * same reason `/mine` precedes `/:id` — a literal segment must never be read as an id.
+ */
+router.put(
+  "/:id/variants",
+  productCatalogDepthWriteLimiter,
+  longFormBody,
+  idempotency({ scope: "active_organization" }),
+  productsController.replaceVariants,
+);
+
+/**
+ * PUT /products/:id/highlights
+ * Replace the highlight cards (Appendix A6).
+ */
+router.put(
+  "/:id/highlights",
+  productCatalogDepthWriteLimiter,
+  longFormBody,
+  idempotency({ scope: "active_organization" }),
+  productsController.replaceHighlights,
 );
 
 /**

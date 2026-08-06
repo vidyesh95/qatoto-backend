@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, count, desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNull, sql } from "drizzle-orm";
 
 import type {
   CreateProductInput,
@@ -9,7 +9,9 @@ import type {
 import { db } from "#src/db/index.js";
 import {
   commerceCategory,
+  commerceProductHighlight,
   commerceProductSpecification,
+  commerceProductVariant,
   product,
   productImage,
   productPricingTier,
@@ -65,13 +67,22 @@ type ProductPublishOutcome =
 /** One image of a listing, as read back to the client. */
 export interface ProductImageView {
   readonly id: string;
+  /** A1. Null is the shared gallery; non-null scopes the asset to one variant. */
+  readonly variantId: string | null;
   readonly url: string;
+  /** A2. What makes a 360 spin or a video expressible at all. */
+  readonly mediaKind: "photo" | "video" | "spin_360";
+  readonly altText: string | null;
+  readonly widthPx: number | null;
+  readonly heightPx: number | null;
   readonly position: number;
 }
 
 /** One B2B pricing tier, as read back to the client. */
 export interface PricingTierView {
   readonly id: string;
+  /** A1. Null is the product default ladder; non-null applies to one variant. */
+  readonly variantId: string | null;
   readonly unitPriceInCents: number;
   readonly minimumOrderQuantity: number;
   readonly position: number;
@@ -81,6 +92,31 @@ export interface PricingTierView {
 export interface ProductSpecificationView {
   readonly key: string;
   readonly value: string;
+  /** A3. Null is ungrouped, which is every pre-Phase-8 row. */
+  readonly group: string | null;
+  readonly position: number;
+}
+
+/** A1. One buyable variation, as read back to its owning seller. */
+export interface ProductVariantView {
+  readonly id: string;
+  readonly name: string;
+  readonly publicSlug: string;
+  readonly sku: string | null;
+  readonly priceInCents: number;
+  readonly stockQuantity: number;
+  readonly minimumOrderQuantity: number | null;
+  readonly position: number;
+  readonly state: "active" | "retired";
+  readonly pricingTiers: readonly PricingTierView[];
+}
+
+/** A6. One marketing highlight card. */
+export interface ProductHighlightView {
+  readonly id: string;
+  readonly title: string;
+  readonly bodyText: string;
+  readonly imageUrl: string | null;
   readonly position: number;
 }
 
@@ -112,10 +148,17 @@ export interface PublicProduct {
   readonly samplePriceInCents: number | null;
   readonly leadTimeMinDays: number | null;
   readonly leadTimeMaxDays: number | null;
+  readonly packageLengthMm: number | null;
+  readonly packageWidthMm: number | null;
+  readonly packageHeightMm: number | null;
+  readonly packageGrossWeightGrams: number | null;
+  readonly unitsPerPackage: number | null;
   readonly moderationState: "pending" | "approved" | "rejected" | "suspended";
   readonly images: readonly ProductImageView[];
   readonly pricingTiers: readonly PricingTierView[];
   readonly specifications: readonly ProductSpecificationView[];
+  readonly variants: readonly ProductVariantView[];
+  readonly highlights: readonly ProductHighlightView[];
 }
 
 /** Compact row for the My Products list (maps 1:1 to products-page.tsx). */
@@ -163,17 +206,28 @@ const PRODUCT_SCALAR_COLUMNS = {
   samplePriceInCents: product.samplePriceInCents,
   leadTimeMinDays: product.leadTimeMinDays,
   leadTimeMaxDays: product.leadTimeMaxDays,
+  packageLengthMm: product.packageLengthMm,
+  packageWidthMm: product.packageWidthMm,
+  packageHeightMm: product.packageHeightMm,
+  packageGrossWeightGrams: product.packageGrossWeightGrams,
+  unitsPerPackage: product.unitsPerPackage,
   moderationState: product.moderationState,
 } as const;
 
 const PRODUCT_IMAGE_VIEW_COLUMNS = {
   id: productImage.id,
+  variantId: productImage.variantId,
   url: productImage.url,
+  mediaKind: productImage.mediaKind,
+  altText: productImage.altText,
+  widthPx: productImage.widthPx,
+  heightPx: productImage.heightPx,
   position: productImage.position,
 } as const;
 
 const PRICING_TIER_VIEW_COLUMNS = {
   id: productPricingTier.id,
+  variantId: productPricingTier.variantId,
   unitPriceInCents: productPricingTier.unitPriceInCents,
   minimumOrderQuantity: productPricingTier.minimumOrderQuantity,
   position: productPricingTier.position,
@@ -182,7 +236,28 @@ const PRICING_TIER_VIEW_COLUMNS = {
 const PRODUCT_SPECIFICATION_VIEW_COLUMNS = {
   key: commerceProductSpecification.specificationKey,
   value: commerceProductSpecification.specificationValue,
+  group: commerceProductSpecification.specificationGroup,
   position: commerceProductSpecification.position,
+} as const;
+
+const PRODUCT_VARIANT_VIEW_COLUMNS = {
+  id: commerceProductVariant.id,
+  name: commerceProductVariant.name,
+  publicSlug: commerceProductVariant.publicSlug,
+  sku: commerceProductVariant.sku,
+  priceInCents: commerceProductVariant.priceInCents,
+  stockQuantity: commerceProductVariant.stockQuantity,
+  minimumOrderQuantity: commerceProductVariant.minimumOrderQuantity,
+  position: commerceProductVariant.position,
+  state: commerceProductVariant.state,
+} as const;
+
+const PRODUCT_HIGHLIGHT_VIEW_COLUMNS = {
+  id: commerceProductHighlight.id,
+  title: commerceProductHighlight.title,
+  bodyText: commerceProductHighlight.bodyText,
+  imageUrl: commerceProductHighlight.imageUrl,
+  position: commerceProductHighlight.position,
 } as const;
 
 type ProductScalarRow = {
@@ -210,6 +285,8 @@ function toPublicProduct(
   images: readonly ProductImageView[],
   pricingTiers: readonly PricingTierView[],
   specifications: readonly ProductSpecificationView[],
+  variants: readonly ProductVariantView[] = [],
+  highlights: readonly ProductHighlightView[] = [],
 ): PublicProduct {
   if (row.categoryId === null) {
     throw new Error(`Product ${row.id} is missing its canonical commerce category.`);
@@ -238,17 +315,28 @@ function toPublicProduct(
     samplePriceInCents: row.samplePriceInCents,
     leadTimeMinDays: row.leadTimeMinDays,
     leadTimeMaxDays: row.leadTimeMaxDays,
+    packageLengthMm: row.packageLengthMm,
+    packageWidthMm: row.packageWidthMm,
+    packageHeightMm: row.packageHeightMm,
+    packageGrossWeightGrams: row.packageGrossWeightGrams,
+    unitsPerPackage: row.unitsPerPackage,
     moderationState: row.moderationState,
     images,
     pricingTiers,
     specifications,
+    variants,
+    highlights,
   };
 }
 
 async function replaceProductSpecifications(
   transaction: DatabaseTransaction,
   productId: string,
-  specifications: readonly { readonly key: string; readonly value: string }[],
+  specifications: readonly {
+    readonly key: string;
+    readonly value: string;
+    readonly group?: string | undefined;
+  }[],
 ): Promise<readonly ProductSpecificationView[]> {
   await transaction
     .delete(commerceProductSpecification)
@@ -263,6 +351,7 @@ async function replaceProductSpecifications(
         productId,
         specificationKey: specification.key,
         specificationValue: specification.value,
+        specificationGroup: specification.group ?? null,
         position: index,
       })),
     )
@@ -305,7 +394,167 @@ async function loadOrganizationProduct(
     .where(eq(commerceProductSpecification.productId, productId))
     .orderBy(asc(commerceProductSpecification.position));
 
-  return toPublicProduct(row, images, pricingTiers, specifications);
+  const variantRows = await db
+    .select(PRODUCT_VARIANT_VIEW_COLUMNS)
+    .from(commerceProductVariant)
+    .where(eq(commerceProductVariant.productId, productId))
+    .orderBy(asc(commerceProductVariant.position));
+
+  const highlights = await db
+    .select(PRODUCT_HIGHLIGHT_VIEW_COLUMNS)
+    .from(commerceProductHighlight)
+    .where(eq(commerceProductHighlight.productId, productId))
+    .orderBy(asc(commerceProductHighlight.position));
+
+  const variants: ProductVariantView[] = variantRows.map((variantRow) => ({
+    ...variantRow,
+    pricingTiers: pricingTiers.filter((tier) => tier.variantId === variantRow.id),
+  }));
+
+  return toPublicProduct(
+    row,
+    images,
+    // The seller edits the product ladder here; variant ladders ride their variant.
+    pricingTiers.filter((tier) => tier.variantId === null),
+    specifications,
+    variants,
+    highlights,
+  );
+}
+
+/**
+ * Replaces the whole variant set (A1).
+ *
+ * DELETE-THEN-INSERT IS WRONG HERE, unlike for specifications and tiers. A variant
+ * id is referenced by cart lines, reservations and order-line snapshots under
+ * `restrict`, so recreating one would either fail or silently orphan a buyer's cart.
+ * Instead: variants named in the payload are upserted by `publicSlug` (the seller's
+ * stable handle for one), and variants left out are RETIRED, not deleted.
+ */
+async function replaceProductVariants(
+  transaction: DatabaseTransaction,
+  productId: string,
+  variants: readonly {
+    readonly name: string;
+    readonly publicSlug: string;
+    readonly sku?: string | undefined;
+    readonly priceInCents: number;
+    readonly stockQuantity: number;
+    readonly minimumOrderQuantity?: number | undefined;
+    readonly pricingTiers: readonly {
+      readonly unitPriceInCents: number;
+      readonly minimumOrderQuantity: number;
+    }[];
+  }[],
+): Promise<void> {
+  const existingVariants = await transaction
+    .select({
+      id: commerceProductVariant.id,
+      publicSlug: commerceProductVariant.publicSlug,
+    })
+    .from(commerceProductVariant)
+    .where(eq(commerceProductVariant.productId, productId));
+  const existingIdBySlug = new Map(
+    existingVariants.map((variant) => [variant.publicSlug, variant.id]),
+  );
+
+  /**
+   * `position` is uniquely indexed per product, so writing final positions directly
+   * would collide with a variant still sitting at that position. Park everything
+   * beyond the incoming range first, in one statement.
+   */
+  const positionParkingOffset = existingVariants.length + variants.length + 1000;
+  await transaction
+    .update(commerceProductVariant)
+    .set({ position: sql`${commerceProductVariant.position} + ${positionParkingOffset}` })
+    .where(eq(commerceProductVariant.productId, productId));
+
+  const keptVariantIds: string[] = [];
+  for (const [index, variant] of variants.entries()) {
+    const existingId = existingIdBySlug.get(variant.publicSlug);
+    const variantId = existingId ?? randomUUID();
+    if (existingId === undefined) {
+      await transaction.insert(commerceProductVariant).values({
+        id: variantId,
+        productId,
+        name: variant.name,
+        publicSlug: variant.publicSlug,
+        sku: variant.sku ?? null,
+        priceInCents: variant.priceInCents,
+        stockQuantity: variant.stockQuantity,
+        minimumOrderQuantity: variant.minimumOrderQuantity ?? null,
+        position: index,
+        state: "active",
+      });
+    } else {
+      await transaction
+        .update(commerceProductVariant)
+        .set({
+          name: variant.name,
+          sku: variant.sku ?? null,
+          priceInCents: variant.priceInCents,
+          stockQuantity: variant.stockQuantity,
+          minimumOrderQuantity: variant.minimumOrderQuantity ?? null,
+          position: index,
+          // A retired slug being sent again is a deliberate un-retirement.
+          state: "active",
+        })
+        .where(eq(commerceProductVariant.id, variantId));
+    }
+    keptVariantIds.push(variantId);
+
+    await transaction
+      .delete(productPricingTier)
+      .where(eq(productPricingTier.variantId, variantId));
+    if (variant.pricingTiers.length > 0) {
+      await transaction.insert(productPricingTier).values(
+        variant.pricingTiers.map((tier, tierIndex) => ({
+          productId,
+          variantId,
+          unitPriceInCents: tier.unitPriceInCents,
+          minimumOrderQuantity: tier.minimumOrderQuantity,
+          position: tierIndex,
+        })),
+      );
+    }
+  }
+
+  const retiredVariants = existingVariants.filter(
+    (variant) => !keptVariantIds.includes(variant.id),
+  );
+  for (const [index, variant] of retiredVariants.entries()) {
+    await transaction
+      .update(commerceProductVariant)
+      .set({ state: "retired", position: variants.length + index })
+      .where(eq(commerceProductVariant.id, variant.id));
+  }
+}
+
+/** A6. Highlights have no downstream references, so replace-all is safe. */
+async function replaceProductHighlights(
+  transaction: DatabaseTransaction,
+  productId: string,
+  highlights: readonly {
+    readonly title: string;
+    readonly bodyText: string;
+    readonly imageUrl?: string | undefined;
+  }[],
+): Promise<void> {
+  await transaction
+    .delete(commerceProductHighlight)
+    .where(eq(commerceProductHighlight.productId, productId));
+  if (highlights.length === 0) {
+    return;
+  }
+  await transaction.insert(commerceProductHighlight).values(
+    highlights.map((highlight, index) => ({
+      productId,
+      title: highlight.title,
+      bodyText: highlight.bodyText,
+      imageUrl: highlight.imageUrl ?? null,
+      position: index,
+    })),
+  );
 }
 
 /** Confirm the caller owns this listing; returns the id or null. */
@@ -487,6 +736,11 @@ export async function createProduct(
             samplePriceInCents: input.samplePriceInCents ?? null,
             leadTimeMinDays: input.leadTimeMinDays ?? null,
             leadTimeMaxDays: input.leadTimeMaxDays ?? null,
+            packageLengthMm: input.packageLengthMm ?? null,
+            packageWidthMm: input.packageWidthMm ?? null,
+            packageHeightMm: input.packageHeightMm ?? null,
+            packageGrossWeightGrams: input.packageGrossWeightGrams ?? null,
+            unitsPerPackage: input.unitsPerPackage ?? null,
             // status ("draft"), moderationState ("pending"), and currency ("USD") use defaults.
           })
           .returning(PRODUCT_SCALAR_COLUMNS);
@@ -596,6 +850,12 @@ export async function updateProduct(
     scalarUpdates.samplePriceInCents = patch.samplePriceInCents;
   if (patch.leadTimeMinDays !== undefined) scalarUpdates.leadTimeMinDays = patch.leadTimeMinDays;
   if (patch.leadTimeMaxDays !== undefined) scalarUpdates.leadTimeMaxDays = patch.leadTimeMaxDays;
+  if (patch.packageLengthMm !== undefined) scalarUpdates.packageLengthMm = patch.packageLengthMm;
+  if (patch.packageWidthMm !== undefined) scalarUpdates.packageWidthMm = patch.packageWidthMm;
+  if (patch.packageHeightMm !== undefined) scalarUpdates.packageHeightMm = patch.packageHeightMm;
+  if (patch.packageGrossWeightGrams !== undefined)
+    scalarUpdates.packageGrossWeightGrams = patch.packageGrossWeightGrams;
+  if (patch.unitsPerPackage !== undefined) scalarUpdates.unitsPerPackage = patch.unitsPerPackage;
 
   try {
     const outcome = await db.transaction(
@@ -633,7 +893,16 @@ export async function updateProduct(
         }
 
         if (patch.pricingTiers !== undefined) {
-          await tx.delete(productPricingTier).where(eq(productPricingTier.productId, productId));
+          /**
+           * A1: `isNull(variantId)` scopes this to the PRODUCT ladder. Without it, a
+           * PATCH touching product tiers would delete every variant's ladder too —
+           * the same class of bug the `productFieldShapes` comment above documents.
+           */
+          await tx
+            .delete(productPricingTier)
+            .where(
+              and(eq(productPricingTier.productId, productId), isNull(productPricingTier.variantId)),
+            );
           if (patch.pricingTiers.length > 0) {
             await tx.insert(productPricingTier).values(
               patch.pricingTiers.map((tier, index) => ({
@@ -683,6 +952,101 @@ export async function updateProduct(
 }
 
 /**
+ * Replace the listing's variant set (A1). Ownership is enforced in the same
+ * transaction, so a caller who does not own the listing gets NOT_FOUND and cannot
+ * tell it from a missing id.
+ */
+export async function replaceVariants(
+  sellerOrganizationId: string,
+  productId: string,
+  variants: readonly {
+    readonly name: string;
+    readonly publicSlug: string;
+    readonly sku?: string | undefined;
+    readonly priceInCents: number;
+    readonly stockQuantity: number;
+    readonly minimumOrderQuantity?: number | undefined;
+    readonly pricingTiers: readonly {
+      readonly unitPriceInCents: number;
+      readonly minimumOrderQuantity: number;
+    }[];
+  }[],
+): Promise<Result<PublicProduct, ProductError>> {
+  try {
+    const owned = await db.transaction(
+      async (tx) => {
+        const ownedId = await (async () => {
+          const [row] = await tx
+            .select({ id: product.id })
+            .from(product)
+            .where(
+              and(
+                eq(product.id, productId),
+                eq(product.sellerOrganizationId, sellerOrganizationId),
+              ),
+            );
+          return row?.id ?? null;
+        })();
+        if (ownedId === null) return false;
+
+        await replaceProductVariants(tx, productId, variants);
+        return true;
+      },
+      { isolationLevel: "serializable" },
+    );
+    if (!owned) {
+      return { success: false, error: { type: "NOT_FOUND", productId } };
+    }
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      return { success: false, error: { type: "SKU_TAKEN", sku: "" } };
+    }
+    throw error;
+  }
+
+  const reloaded = await loadOrganizationProduct(sellerOrganizationId, productId);
+  if (!reloaded) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+  // Variant names and the price floor are both indexed, so search must be refreshed.
+  await enqueueProductSearchDocumentRefresh(productId);
+  return { success: true, value: reloaded };
+}
+
+/** Replace the listing's highlight cards (A6). */
+export async function replaceHighlights(
+  sellerOrganizationId: string,
+  productId: string,
+  highlights: readonly {
+    readonly title: string;
+    readonly bodyText: string;
+    readonly imageUrl?: string | undefined;
+  }[],
+): Promise<Result<PublicProduct, ProductError>> {
+  const owned = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({ id: product.id })
+      .from(product)
+      .where(
+        and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
+      );
+    if (!row) return false;
+    await replaceProductHighlights(tx, productId, highlights);
+    return true;
+  });
+  if (!owned) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  const reloaded = await loadOrganizationProduct(sellerOrganizationId, productId);
+  if (!reloaded) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+  await enqueueProductSearchDocumentRefresh(productId);
+  return { success: true, value: reloaded };
+}
+
+/**
  * Attach one image to a listing: ownership guard → count guard → sharp
  * validate/normalize (untrusted bytes) → Cloudinary upload → row at next
  * position. The DB row id IS the Cloudinary public-id segment, so a later delete
@@ -692,16 +1056,46 @@ export async function addProductImage(
   sellerOrganizationId: string,
   productId: string,
   rawImageBytes: Buffer,
+  options: {
+    readonly variantId?: string | undefined;
+    readonly mediaKind?: "photo" | "video" | "spin_360" | undefined;
+    readonly altText?: string | undefined;
+  } = {},
 ): Promise<Result<ProductImageView, ProductError>> {
   const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
   if (!ownedId) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
 
-  const [imageCount] = await db
-    .select({ value: count() })
-    .from(productImage)
-    .where(eq(productImage.productId, productId));
+  /**
+   * A1: a variant gallery is scoped to the variant, so both the cap and the next
+   * position are counted within that gallery. `NOT_FOUND` when the variant is not
+   * this product's — the same non-probeable answer ownership failures give.
+   */
+  const targetVariantId = options.variantId ?? null;
+  if (targetVariantId !== null) {
+    const [ownedVariant] = await db
+      .select({ id: commerceProductVariant.id })
+      .from(commerceProductVariant)
+      .where(
+        and(
+          eq(commerceProductVariant.id, targetVariantId),
+          eq(commerceProductVariant.productId, productId),
+        ),
+      );
+    if (!ownedVariant) {
+      return { success: false, error: { type: "NOT_FOUND", productId } };
+    }
+  }
+
+  const galleryScope = and(
+    eq(productImage.productId, productId),
+    targetVariantId === null
+      ? isNull(productImage.variantId)
+      : eq(productImage.variantId, targetVariantId),
+  );
+
+  const [imageCount] = await db.select({ value: count() }).from(productImage).where(galleryScope);
   const currentCount = imageCount?.value ?? 0;
 
   if (currentCount >= MAX_PRODUCT_IMAGES) {
@@ -727,12 +1121,54 @@ export async function addProductImage(
     .values({
       id: imageId,
       productId,
+      variantId: targetVariantId,
       url: upload.value.secureUrl,
+      // A2. Measured from the normalized bytes, never taken from the client.
+      mediaKind: options.mediaKind ?? "photo",
+      altText: options.altText ?? null,
+      widthPx: normalized.value.width,
+      heightPx: normalized.value.height,
       position: currentCount,
     })
     .returning(PRODUCT_IMAGE_VIEW_COLUMNS);
 
   return { success: true, value: imageRow };
+}
+
+/**
+ * Re-pack gallery positions to be contiguous from 0 WITHIN EACH (product, variant)
+ * gallery, in the order the caller gives.
+ *
+ * TWO STATEMENTS, NOT A PER-ROW LOOP. Migration 0054 made
+ * `(product_id, coalesce(variant_id, ''), position)` unique, and an expression index
+ * cannot be DEFERRABLE — so writing final positions one row at a time transiently
+ * collides with a row still sitting on that position. Parking every row far beyond
+ * the range first makes the second pass collision-free.
+ */
+async function repackGalleryPositions(
+  transaction: DatabaseTransaction,
+  productId: string,
+  orderedImages: readonly { readonly id: string; readonly variantId: string | null }[],
+): Promise<void> {
+  if (orderedImages.length === 0) {
+    return;
+  }
+  const parkingOffset = orderedImages.length + 1000;
+  await transaction
+    .update(productImage)
+    .set({ position: sql`${productImage.position} + ${parkingOffset}` })
+    .where(eq(productImage.productId, productId));
+
+  const nextPositionByGallery = new Map<string, number>();
+  for (const image of orderedImages) {
+    const galleryKey = image.variantId ?? "";
+    const position = nextPositionByGallery.get(galleryKey) ?? 0;
+    nextPositionByGallery.set(galleryKey, position + 1);
+    await transaction
+      .update(productImage)
+      .set({ position })
+      .where(eq(productImage.id, image.id));
+  }
 }
 
 /**
@@ -769,17 +1205,12 @@ export async function deleteProductImageById(
       .where(and(eq(productImage.id, imageId), eq(productImage.productId, productId)));
 
     const remaining = await tx
-      .select({ id: productImage.id })
+      .select({ id: productImage.id, variantId: productImage.variantId })
       .from(productImage)
       .where(eq(productImage.productId, productId))
-      .orderBy(asc(productImage.position));
+      .orderBy(asc(productImage.position), asc(productImage.id));
 
-    for (let position = 0; position < remaining.length; position += 1) {
-      await tx
-        .update(productImage)
-        .set({ position })
-        .where(eq(productImage.id, remaining[position].id));
-    }
+    await repackGalleryPositions(tx, productId, remaining);
   });
 
   const owned = await loadOrganizationProduct(sellerOrganizationId, productId);
@@ -805,7 +1236,7 @@ export async function reorderImages(
   }
 
   const existing = await db
-    .select({ id: productImage.id })
+    .select({ id: productImage.id, variantId: productImage.variantId })
     .from(productImage)
     .where(eq(productImage.productId, productId));
   const existingIds = existing.map((row) => row.id);
@@ -820,13 +1251,19 @@ export async function reorderImages(
     return { success: false, error: { type: "IMAGE_ORDER_MISMATCH" } };
   }
 
+  /**
+   * A1: positions are contiguous per gallery, so the requested order is applied
+   * WITHIN each variant's gallery rather than as one flat sequence. A seller
+   * reordering the whole list still gets the relative order they asked for.
+   */
+  const variantIdByImageId = new Map(existing.map((row) => [row.id, row.variantId]));
+  const orderedImages = imageIds.map((imageId) => ({
+    id: imageId,
+    variantId: variantIdByImageId.get(imageId) ?? null,
+  }));
+
   await db.transaction(async (tx) => {
-    for (let position = 0; position < imageIds.length; position += 1) {
-      await tx
-        .update(productImage)
-        .set({ position })
-        .where(and(eq(productImage.id, imageIds[position]), eq(productImage.productId, productId)));
-    }
+    await repackGalleryPositions(tx, productId, orderedImages);
   });
 
   const owned = await loadOrganizationProduct(sellerOrganizationId, productId);

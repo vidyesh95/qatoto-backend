@@ -184,6 +184,29 @@ export const productImageUploadLimiter = createLimiter({
   limit: 60,
 });
 
+/**
+ * PUT /products/:id/variants and /highlights — a replace-the-set write that
+ * rewrites up to 50 variants and their pricing ladders in one serializable
+ * transaction (Appendix A1/A6). 60/min per seller is generous for an editor and
+ * still bounds the write amplification.
+ */
+export const productCatalogDepthWriteLimiter = createLimiter({
+  namespace: "productCatalogDepthWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
+ * PUT /commerce/products/:productId/relations and the moderator verify route
+ * (§15.3). Relation writes touch the discovery graph every PDP reads, so they are
+ * capped tighter than ordinary listing edits.
+ */
+export const commerceProductRelationWriteLimiter = createLimiter({
+  namespace: "commerceProductRelationWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
 // ---------------------------------------------------------------------------
 // Research & Development (R_AND_D_BACKEND_STRUCTURE.md §4a).
 //

@@ -63,12 +63,24 @@ const productFieldShapes = {
   samplePriceInCents: z.number().int().positive().optional(),
   leadTimeMinDays: z.number().int().min(0).max(3650).optional(),
   leadTimeMaxDays: z.number().int().min(0).max(3650).optional(),
+  /**
+   * A5. Millimetres and grams, never a formatted string — a freight rate cannot be
+   * computed from "52 × 46 × 12 cm". The all-or-nothing dimension rule is enforced
+   * by `packageDimensionsComplete` below and again by a CHECK.
+   */
+  packageLengthMm: z.number().int().min(1).max(50_000).optional(),
+  packageWidthMm: z.number().int().min(1).max(50_000).optional(),
+  packageHeightMm: z.number().int().min(1).max(50_000).optional(),
+  packageGrossWeightGrams: z.number().int().min(1).max(50_000_000).optional(),
+  unitsPerPackage: z.number().int().min(1).max(1_000_000).optional(),
   specifications: z
     .array(
       z
         .object({
           key: z.string().trim().min(1).max(80),
           value: z.string().trim().min(1).max(500),
+          /** A3. Free text; the useful groups for a chair and a transformer differ. */
+          group: z.string().trim().min(1).max(80).optional(),
         })
         .strict(),
     )
@@ -80,6 +92,64 @@ const productFieldShapes = {
       "Specification keys must be unique within a listing.",
     ),
 };
+
+/** A1. One variation, with its own price, stock and optional MOQ and ladder. */
+const ProductVariantSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    publicSlug: z
+      .string()
+      .trim()
+      .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "publicSlug must be kebab-case.")
+      .max(80),
+    sku: z.string().trim().min(1).max(80).optional(),
+    priceInCents: z.number().int().min(0),
+    stockQuantity: z.number().int().min(0),
+    minimumOrderQuantity: z.number().int().min(1).optional(),
+    pricingTiers: z.array(PricingTierSchema).max(10).default([]),
+  })
+  .strict();
+
+/**
+ * Replaces the whole variant set. Empty means "this product is not sold by
+ * variant" — the same shape `pricingTiers` and `specifications` already use, so a
+ * seller removes variants by sending fewer, never by a separate delete route.
+ */
+export const ReplaceProductVariantsSchema = z
+  .object({
+    variants: z
+      .array(ProductVariantSchema)
+      .max(50)
+      .refine(
+        (entries) => new Set(entries.map((entry) => entry.publicSlug)).size === entries.length,
+        "Variant slugs must be unique within a listing.",
+      )
+      .refine(
+        (entries) =>
+          new Set(
+            entries.flatMap((entry) => (entry.sku === undefined ? [] : [entry.sku])),
+          ).size === entries.filter((entry) => entry.sku !== undefined).length,
+        "Variant SKUs must be unique within a listing.",
+      ),
+  })
+  .strict();
+
+/** A6. Richer than `keyFeatures`: title, body, and an image. */
+export const ReplaceProductHighlightsSchema = z
+  .object({
+    highlights: z
+      .array(
+        z
+          .object({
+            title: z.string().trim().min(1).max(120),
+            bodyText: z.string().trim().min(1).max(2000),
+            imageUrl: z.string().trim().url().max(2048).startsWith("https://").optional(),
+          })
+          .strict(),
+      )
+      .max(12),
+  })
+  .strict();
 
 /**
  * The listing fields the client may set on CREATE, where a default is the correct
@@ -134,6 +204,22 @@ function samplePolicyHasPrice(data: {
   return true;
 }
 
+/**
+ * A5. Two of three dimensions is not a box. Enforced here so the seller gets a 422
+ * naming the field, and again by `product_package_dimensions_ck` so a direct write
+ * cannot store a half-measured package.
+ */
+function packageDimensionsComplete(data: {
+  packageLengthMm?: number;
+  packageWidthMm?: number;
+  packageHeightMm?: number;
+}): boolean {
+  const provided = [data.packageLengthMm, data.packageWidthMm, data.packageHeightMm].filter(
+    (dimension) => dimension !== undefined,
+  ).length;
+  return provided === 0 || provided === 3;
+}
+
 function leadTimeRangeValid(data: { leadTimeMinDays?: number; leadTimeMaxDays?: number }): boolean {
   if (data.leadTimeMinDays === undefined && data.leadTimeMaxDays === undefined) {
     return true;
@@ -156,6 +242,10 @@ export const CreateProductSchema = ProductFieldsSchema.refine(
   .refine(leadTimeRangeValid, {
     error: "leadTimeMaxDays must be >= leadTimeMinDays when either is set.",
     path: ["leadTimeMaxDays"],
+  })
+  .refine(packageDimensionsComplete, {
+    error: "Package length, width and height must be provided together.",
+    path: ["packageLengthMm"],
   });
 
 /**
@@ -178,7 +268,22 @@ export const UpdateProductSchema = z
   .refine(leadTimeRangeValid, {
     error: "leadTimeMaxDays must be >= leadTimeMinDays when either is set.",
     path: ["leadTimeMaxDays"],
+  })
+  .refine(packageDimensionsComplete, {
+    error: "Package length, width and height must be provided together.",
+    path: ["packageLengthMm"],
   });
+
+/**
+ * A1 + A2. The optional multipart text fields accompanying an image upload.
+ * `.strict()` would reject multer's own bookkeeping keys, so this deliberately
+ * strips unknown keys instead — the file itself arrives on `req.file`.
+ */
+const UploadImageFieldsSchema = z.object({
+  variantId: z.string().trim().min(1).max(200).optional(),
+  mediaKind: z.enum(["photo", "video", "spin_360"]).optional(),
+  altText: z.string().trim().min(1).max(300).optional(),
+});
 
 const ReorderImagesSchema = z.object({ imageIds: z.array(z.string()).min(1) }).strict();
 const ProductParamsSchema = z.object({ id: z.string().trim().min(1).max(200) }).strict();
@@ -458,10 +563,22 @@ export async function uploadImage(req: Request, res: Response): Promise<void> {
     return;
   }
 
+  /**
+   * A1 + A2. Multipart text fields, so every value arrives as a string; the
+   * dimensions are measured from the decoded bytes rather than accepted here.
+   */
+  const parsedUploadFields = UploadImageFieldsSchema.safeParse(req.body);
+  if (!parsedUploadFields.success) return respondValidationFailed(res, parsedUploadFields.error);
+
   const uploadResult = await productsService.addProductImage(
     commerceContext.organizationId,
     parsedParams.data.id,
     req.file.buffer,
+    {
+      variantId: parsedUploadFields.data.variantId,
+      mediaKind: parsedUploadFields.data.mediaKind,
+      altText: parsedUploadFields.data.altText,
+    },
   );
   if (!uploadResult.success) {
     respondProductError(res, uploadResult.error);
@@ -475,6 +592,74 @@ export async function uploadImage(req: Request, res: Response): Promise<void> {
     data: uploadResult.value,
   };
   res.status(201).json(response);
+}
+
+/**
+ * PUT /products/:id/variants
+ * Replace the listing's variant set (Appendix A1). Sending an empty array means the
+ * listing is not sold by variant; variants left out are retired, never deleted,
+ * because order-line snapshots reference them.
+ */
+export async function replaceVariants(req: Request, res: Response): Promise<void> {
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  const parsedBody = ReplaceProductVariantsSchema.safeParse(req.body);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+  if (!parsedBody.success) return respondValidationFailed(res, parsedBody.error);
+
+  const result = await productsService.replaceVariants(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+    parsedBody.data.variants,
+  );
+  if (!result.success) {
+    respondProductError(res, result.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Variants updated successfully",
+    data: result.value,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * PUT /products/:id/highlights
+ * Replace the listing's highlight cards (Appendix A6).
+ */
+export async function replaceHighlights(req: Request, res: Response): Promise<void> {
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  const parsedBody = ReplaceProductHighlightsSchema.safeParse(req.body);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+  if (!parsedBody.success) return respondValidationFailed(res, parsedBody.error);
+
+  const result = await productsService.replaceHighlights(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+    parsedBody.data.highlights,
+  );
+  if (!result.success) {
+    respondProductError(res, result.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Highlights updated successfully",
+    data: result.value,
+  };
+  res.status(200).json(response);
 }
 
 /**
