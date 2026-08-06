@@ -4,7 +4,9 @@ import { db } from "#src/db/index.js";
 import {
   commerceCategory,
   commerceOrganization,
+  commerceProductHighlight,
   commerceProductSpecification,
+  commerceProductVariant,
   product,
   productImage,
   productPricingTier,
@@ -57,6 +59,15 @@ export interface StoreProductCardProjection {
   readonly compareAtPriceInCents: number | null;
   readonly minimumOrderQuantity: number | null;
   readonly stockState: StoreStockState;
+  /**
+   * A1. True means `priceInCents` is a "from" price and the buyer must choose a
+   * variant before the line can be added to a cart — the client cannot infer that
+   * from the price alone, and guessing wrong produces a 422 at add time.
+   */
+  readonly hasVariants: boolean;
+  readonly variantCount: number;
+  /** A4. Stored since Phase 0, simply never projected until now. */
+  readonly condition: (typeof product.$inferSelect)["condition"];
   readonly samplePolicy: (typeof product.$inferSelect)["samplePolicy"];
   readonly leadTimeMinDays: number | null;
   readonly leadTimeMaxDays: number | null;
@@ -67,6 +78,54 @@ export interface StoreProductCardProjection {
   readonly fulfillmentMetrics: StoreFulfillmentMetrics;
 }
 
+/** A5. Integers in named units — never a formatted string a client cannot compare. */
+export interface StorePackagingProjection {
+  readonly packageLengthMm: number | null;
+  readonly packageWidthMm: number | null;
+  readonly packageHeightMm: number | null;
+  readonly packageGrossWeightGrams: number | null;
+  readonly unitsPerPackage: number | null;
+}
+
+/** A1. One buyable variation, with its own price, stock, MOQ and gallery. */
+export interface StoreProductVariantProjection {
+  readonly id: string;
+  readonly publicSlug: string;
+  readonly name: string;
+  readonly priceInCents: number;
+  readonly minimumOrderQuantity: number | null;
+  readonly stockState: StoreStockState;
+  readonly position: number;
+  readonly images: readonly StoreProductMediaProjection[];
+  readonly pricingTiers: readonly StoreProductPricingTierProjection[];
+}
+
+/** A2. `mediaKind` is what makes a 360 spin or a video expressible at all. */
+export interface StoreProductMediaProjection {
+  readonly id: string;
+  readonly url: string;
+  readonly mediaKind: (typeof productImage.$inferSelect)["mediaKind"];
+  readonly altText: string | null;
+  readonly widthPx: number | null;
+  readonly heightPx: number | null;
+  readonly position: number;
+}
+
+export interface StoreProductPricingTierProjection {
+  readonly unitPriceInCents: number;
+  readonly minimumOrderQuantity: number;
+  readonly position: number;
+}
+
+/** A6. Richer than `keyFeatures`: a title, a body, and an image. */
+export interface StoreProductHighlightProjection {
+  readonly id: string;
+  readonly title: string;
+  readonly bodyText: string;
+  readonly imageUrl: string | null;
+  readonly position: number;
+}
+
 export interface StoreProductDetailProjection extends StoreProductCardProjection {
   readonly description: string | null;
   readonly keyFeatures: readonly string[];
@@ -74,19 +133,17 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
   readonly countryOfOriginCode: string | null;
   readonly unitOfMeasure: string | null;
   readonly samplePriceInCents: number | null;
-  readonly images: readonly {
-    readonly id: string;
-    readonly url: string;
-    readonly position: number;
-  }[];
-  readonly pricingTiers: readonly {
-    readonly unitPriceInCents: number;
-    readonly minimumOrderQuantity: number;
-    readonly position: number;
-  }[];
+  readonly packaging: StorePackagingProjection;
+  /** Shared gallery. Variant-scoped media lives on the variant, not here. */
+  readonly images: readonly StoreProductMediaProjection[];
+  readonly pricingTiers: readonly StoreProductPricingTierProjection[];
+  readonly variants: readonly StoreProductVariantProjection[];
+  readonly highlights: readonly StoreProductHighlightProjection[];
   readonly specifications: readonly {
     readonly key: string;
     readonly value: string;
+    /** A3. Null is ungrouped, which is every pre-Phase-8 row. */
+    readonly group: string | null;
     readonly position: number;
   }[];
   readonly categoryTrail: readonly StoreCategoryProjection[];
@@ -194,7 +251,16 @@ async function loadMainImageUrls(productIds: readonly string[]): Promise<Map<str
     })
     .from(productImage)
     .where(inArray(productImage.productId, [...productIds]))
-    .orderBy(asc(productImage.position));
+    /**
+     * A1 + A2: shared media wins the card. Every variant gallery has its own
+     * position 0, so ordering by position alone would let an arbitrary variant's
+     * first image become the product's card image.
+     */
+    .orderBy(
+      sql`${productImage.variantId} IS NOT NULL`,
+      asc(productImage.position),
+      asc(productImage.id),
+    );
 
   const map = new Map<string, string>();
   for (const row of rows) {
@@ -223,6 +289,52 @@ async function loadMinimumOrderQuantities(
     .groupBy(productPricingTier.productId);
 
   return new Map(rows.map((row) => [row.productId, row.minimumOrderQuantity]));
+}
+
+/**
+ * A1. Once a product has active variants, the product row's own price and stock
+ * stop being what a buyer can act on: the card must show the cheapest variant
+ * ("from" pricing) and the stock actually available across variants. Reading
+ * `product.priceInCents` in that case would advertise a price nothing sells at.
+ */
+interface ProductVariantAggregate {
+  readonly activeVariantCount: number;
+  readonly lowestPriceInCents: number;
+  readonly totalStockQuantity: number;
+}
+
+async function loadVariantAggregates(
+  productIds: readonly string[],
+): Promise<Map<string, ProductVariantAggregate>> {
+  if (productIds.length === 0) {
+    return new Map();
+  }
+  const rows = await db
+    .select({
+      productId: commerceProductVariant.productId,
+      activeVariantCount: sql<number>`count(*)`.mapWith(Number),
+      lowestPriceInCents: sql<number>`min(${commerceProductVariant.priceInCents})`.mapWith(Number),
+      totalStockQuantity: sql<number>`sum(${commerceProductVariant.stockQuantity})`.mapWith(Number),
+    })
+    .from(commerceProductVariant)
+    .where(
+      and(
+        inArray(commerceProductVariant.productId, [...productIds]),
+        eq(commerceProductVariant.state, "active"),
+      ),
+    )
+    .groupBy(commerceProductVariant.productId);
+
+  return new Map(
+    rows.map((row) => [
+      row.productId,
+      {
+        activeVariantCount: row.activeVariantCount,
+        lowestPriceInCents: row.lowestPriceInCents,
+        totalStockQuantity: row.totalStockQuantity,
+      },
+    ]),
+  );
 }
 
 export async function listActiveCategories(input: {
@@ -475,6 +587,7 @@ function mapProductCard(
     readonly priceInCents: number;
     readonly compareAtPriceInCents: number | null;
     readonly stockQuantity: number;
+    readonly condition: (typeof product.$inferSelect)["condition"];
     readonly samplePolicy: (typeof product.$inferSelect)["samplePolicy"];
     readonly leadTimeMinDays: number | null;
     readonly leadTimeMaxDays: number | null;
@@ -492,6 +605,7 @@ function mapProductCard(
   minimumOrderQuantity: number | null,
   reviewMetrics: StoreReviewMetrics = EMPTY_REVIEW_METRICS,
   fulfillmentMetrics: StoreFulfillmentMetrics = EMPTY_FULFILLMENT_METRICS,
+  variantAggregate: ProductVariantAggregate | null = null,
 ): StoreProductCardProjection {
   if (row.publicSlug === null) {
     throw new Error("Eligible product missing publicSlug.");
@@ -502,14 +616,21 @@ function mapProductCard(
     title: row.title,
     brand: row.brand,
     currency: row.currency,
-    priceInCents: row.priceInCents,
+    priceInCents: variantAggregate?.lowestPriceInCents ?? row.priceInCents,
     compareAtPriceInCents: row.compareAtPriceInCents,
     minimumOrderQuantity,
+    /**
+     * A1: a card whose variants are all out of stock is unavailable even when the
+     * product row still carries stock, and vice versa.
+     */
     stockState: deriveStockState({
-      stockQuantity: row.stockQuantity,
+      stockQuantity: variantAggregate?.totalStockQuantity ?? row.stockQuantity,
       leadTimeMinDays: row.leadTimeMinDays,
       leadTimeMaxDays: row.leadTimeMaxDays,
     }),
+    hasVariants: variantAggregate !== null,
+    variantCount: variantAggregate?.activeVariantCount ?? 0,
+    condition: row.condition,
     samplePolicy: row.samplePolicy,
     leadTimeMinDays: row.leadTimeMinDays,
     leadTimeMaxDays: row.leadTimeMaxDays,
@@ -534,6 +655,7 @@ const productSelectFields = {
   priceInCents: product.priceInCents,
   compareAtPriceInCents: product.compareAtPriceInCents,
   stockQuantity: product.stockQuantity,
+  condition: product.condition,
   samplePolicy: product.samplePolicy,
   leadTimeMinDays: product.leadTimeMinDays,
   leadTimeMaxDays: product.leadTimeMaxDays,
@@ -614,12 +736,13 @@ export async function listEligibleProducts(input: {
   const pageRows = rows.slice(0, input.limit);
   const productIds = pageRows.map((row) => row.id);
   const organizationIds = [...new Set(pageRows.map((row) => row.organizationId))];
-  const [imageMap, moqMap, productReviewMetrics, organizationFulfillmentMetrics] =
+  const [imageMap, moqMap, productReviewMetrics, organizationFulfillmentMetrics, variantAggregates] =
     await Promise.all([
       loadMainImageUrls(productIds),
       loadMinimumOrderQuantities(productIds),
       loadProductReviewMetrics(productIds),
       loadOrganizationFulfillmentMetrics(organizationIds),
+      loadVariantAggregates(productIds),
     ]);
   const items = pageRows.map((row) =>
     mapProductCard(
@@ -628,6 +751,7 @@ export async function listEligibleProducts(input: {
       moqMap.get(row.id) ?? null,
       productReviewMetrics.get(row.id) ?? EMPTY_REVIEW_METRICS,
       organizationFulfillmentMetrics.get(row.organizationId) ?? EMPTY_FULFILLMENT_METRICS,
+      variantAggregates.get(row.id) ?? null,
     ),
   );
 
@@ -682,6 +806,11 @@ export async function getPublicProductBySlug(
       countryOfOriginCode: product.countryOfOriginCode,
       unitOfMeasure: product.unitOfMeasure,
       samplePriceInCents: product.samplePriceInCents,
+      packageLengthMm: product.packageLengthMm,
+      packageWidthMm: product.packageWidthMm,
+      packageHeightMm: product.packageHeightMm,
+      packageGrossWeightGrams: product.packageGrossWeightGrams,
+      unitsPerPackage: product.unitsPerPackage,
     })
     .from(product)
     .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
@@ -694,25 +823,34 @@ export async function getPublicProductBySlug(
   }
 
   const [
-    images,
-    pricingTiers,
+    allImages,
+    allPricingTiers,
     specifications,
+    highlights,
+    variantRows,
     categoryTrail,
     moqMap,
     productReviewMetrics,
     organizationFulfillmentMetrics,
+    variantAggregates,
   ] = await Promise.all([
     db
       .select({
         id: productImage.id,
+        variantId: productImage.variantId,
         url: productImage.url,
+        mediaKind: productImage.mediaKind,
+        altText: productImage.altText,
+        widthPx: productImage.widthPx,
+        heightPx: productImage.heightPx,
         position: productImage.position,
       })
       .from(productImage)
       .where(eq(productImage.productId, row.id))
-      .orderBy(asc(productImage.position)),
+      .orderBy(asc(productImage.position), asc(productImage.id)),
     db
       .select({
+        variantId: productPricingTier.variantId,
         unitPriceInCents: productPricingTier.unitPriceInCents,
         minimumOrderQuantity: productPricingTier.minimumOrderQuantity,
         position: productPricingTier.position,
@@ -724,26 +862,109 @@ export async function getPublicProductBySlug(
       .select({
         key: commerceProductSpecification.specificationKey,
         value: commerceProductSpecification.specificationValue,
+        group: commerceProductSpecification.specificationGroup,
         position: commerceProductSpecification.position,
       })
       .from(commerceProductSpecification)
       .where(eq(commerceProductSpecification.productId, row.id))
       .orderBy(asc(commerceProductSpecification.position)),
+    db
+      .select({
+        id: commerceProductHighlight.id,
+        title: commerceProductHighlight.title,
+        bodyText: commerceProductHighlight.bodyText,
+        imageUrl: commerceProductHighlight.imageUrl,
+        position: commerceProductHighlight.position,
+      })
+      .from(commerceProductHighlight)
+      .where(eq(commerceProductHighlight.productId, row.id))
+      .orderBy(asc(commerceProductHighlight.position)),
+    db
+      .select({
+        id: commerceProductVariant.id,
+        publicSlug: commerceProductVariant.publicSlug,
+        name: commerceProductVariant.name,
+        priceInCents: commerceProductVariant.priceInCents,
+        stockQuantity: commerceProductVariant.stockQuantity,
+        minimumOrderQuantity: commerceProductVariant.minimumOrderQuantity,
+        position: commerceProductVariant.position,
+      })
+      .from(commerceProductVariant)
+      .where(
+        and(
+          eq(commerceProductVariant.productId, row.id),
+          // Retired variants stay in order snapshots but leave the storefront.
+          eq(commerceProductVariant.state, "active"),
+        ),
+      )
+      .orderBy(asc(commerceProductVariant.position)),
     buildCategoryTrail(row.categoryId),
     loadMinimumOrderQuantities([row.id]),
     loadProductReviewMetrics([row.id]),
     loadOrganizationFulfillmentMetrics([row.organizationId]),
+    loadVariantAggregates([row.id]),
   ]);
+
+  const toMediaProjection = (media: (typeof allImages)[number]): StoreProductMediaProjection => ({
+    id: media.id,
+    url: media.url,
+    mediaKind: media.mediaKind,
+    altText: media.altText,
+    widthPx: media.widthPx,
+    heightPx: media.heightPx,
+    position: media.position,
+  });
+
+  const sharedImages = allImages
+    .filter((media) => media.variantId === null)
+    .map(toMediaProjection);
+  const sharedPricingTiers = allPricingTiers
+    .filter((tier) => tier.variantId === null)
+    .map(({ unitPriceInCents, minimumOrderQuantity, position }) => ({
+      unitPriceInCents,
+      minimumOrderQuantity,
+      position,
+    }));
+
+  const variants: StoreProductVariantProjection[] = variantRows.map((variantRow) => {
+    const variantTiers = allPricingTiers
+      .filter((tier) => tier.variantId === variantRow.id)
+      .map(({ unitPriceInCents, minimumOrderQuantity, position }) => ({
+        unitPriceInCents,
+        minimumOrderQuantity,
+        position,
+      }));
+    return {
+      id: variantRow.id,
+      publicSlug: variantRow.publicSlug,
+      name: variantRow.name,
+      priceInCents: variantRow.priceInCents,
+      minimumOrderQuantity: variantRow.minimumOrderQuantity,
+      stockState: deriveStockState({
+        stockQuantity: variantRow.stockQuantity,
+        leadTimeMinDays: row.leadTimeMinDays,
+        leadTimeMaxDays: row.leadTimeMaxDays,
+      }),
+      position: variantRow.position,
+      images: allImages
+        .filter((media) => media.variantId === variantRow.id)
+        .map(toMediaProjection),
+      // A variant with no ladder of its own inherits the product's, matching how
+      // `loadPurchasableProductForCheckout` prices it.
+      pricingTiers: variantTiers.length > 0 ? variantTiers : sharedPricingTiers,
+    };
+  });
 
   const card = mapProductCard(
     row,
-    images[0]?.url ?? null,
+    sharedImages[0]?.url ?? variants[0]?.images[0]?.url ?? null,
     moqMap.get(row.id) ??
-      (pricingTiers.length > 0
-        ? Math.min(...pricingTiers.map((tier) => tier.minimumOrderQuantity))
+      (sharedPricingTiers.length > 0
+        ? Math.min(...sharedPricingTiers.map((tier) => tier.minimumOrderQuantity))
         : null),
     productReviewMetrics.get(row.id) ?? EMPTY_REVIEW_METRICS,
     organizationFulfillmentMetrics.get(row.organizationId) ?? EMPTY_FULFILLMENT_METRICS,
+    variantAggregates.get(row.id) ?? null,
   );
   return {
     success: true,
@@ -755,8 +976,17 @@ export async function getPublicProductBySlug(
       countryOfOriginCode: row.countryOfOriginCode,
       unitOfMeasure: row.unitOfMeasure,
       samplePriceInCents: row.samplePriceInCents,
-      images,
-      pricingTiers,
+      packaging: {
+        packageLengthMm: row.packageLengthMm,
+        packageWidthMm: row.packageWidthMm,
+        packageHeightMm: row.packageHeightMm,
+        packageGrossWeightGrams: row.packageGrossWeightGrams,
+        unitsPerPackage: row.unitsPerPackage,
+      },
+      images: sharedImages,
+      pricingTiers: sharedPricingTiers,
+      variants,
+      highlights,
       specifications,
       categoryTrail,
     },

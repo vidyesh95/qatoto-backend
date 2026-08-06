@@ -4,7 +4,9 @@ import { db } from "#src/db/index.js";
 import {
   commerceCategory,
   commerceOrganization,
+  commerceProductHighlight,
   commerceProductSpecification,
+  commerceProductVariant,
   commerceProviderKindLink,
   commerceProviderProfile,
   commerceServiceOffering,
@@ -402,15 +404,50 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
     .from(productPricingTier)
     .where(eq(productPricingTier.productId, productId));
 
-  const [specificationRows, categorySynonymRow] = await Promise.all([
+  /**
+   * A1. Search must advertise the price a buyer can actually pay. Once a product
+   * sells by variant, `product.priceInCents` is not that price — the cheapest active
+   * variant is, and a facet or sort built on the stale column would rank the catalog
+   * by a number nothing sells at.
+   */
+  const [variantPriceRow] = await db
+    .select({
+      lowestPriceInCents: sql<number | null>`min(${commerceProductVariant.priceInCents})`,
+    })
+    .from(commerceProductVariant)
+    .where(
+      and(
+        eq(commerceProductVariant.productId, productId),
+        eq(commerceProductVariant.state, "active"),
+      ),
+    );
+  const searchPriceInCents = variantPriceRow?.lowestPriceInCents ?? row.priceInCents;
+
+  const [specificationRows, variantNameRows, highlightRows, categorySynonymRow] = await Promise.all([
     db
       .select({
         key: commerceProductSpecification.specificationKey,
         value: commerceProductSpecification.specificationValue,
+        group: commerceProductSpecification.specificationGroup,
       })
       .from(commerceProductSpecification)
       .where(eq(commerceProductSpecification.productId, productId))
       .orderBy(asc(commerceProductSpecification.position)),
+    db
+      .select({ name: commerceProductVariant.name })
+      .from(commerceProductVariant)
+      .where(
+        and(
+          eq(commerceProductVariant.productId, productId),
+          eq(commerceProductVariant.state, "active"),
+        ),
+      )
+      .orderBy(asc(commerceProductVariant.position)),
+    db
+      .select({ title: commerceProductHighlight.title })
+      .from(commerceProductHighlight)
+      .where(eq(commerceProductHighlight.productId, productId))
+      .orderBy(asc(commerceProductHighlight.position)),
     row.categoryId === null
       ? Promise.resolve(undefined)
       : db
@@ -435,7 +472,14 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
     row.description,
     row.organizationDisplayName,
     ...(categorySynonymRow?.searchSynonyms ?? []),
-    ...specificationRows.flatMap((specification) => [specification.key, specification.value]),
+    ...specificationRows.flatMap((specification) => [
+      specification.key,
+      specification.value,
+      specification.group,
+    ]),
+    // "Sea blue" and a highlight title are things buyers type; both are public.
+    ...variantNameRows.map((variant) => variant.name),
+    ...highlightRows.map((highlight) => highlight.title),
   ]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
     .join(" ");
@@ -455,7 +499,7 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
       categoryId: row.categoryId,
       categorySlug: row.categorySlug,
       providerKind: null,
-      priceInCents: row.priceInCents,
+      priceInCents: searchPriceInCents,
       currency: row.currency,
       minimumOrderQuantity: moqRow?.minimumOrderQuantity ?? null,
       searchText,
@@ -474,7 +518,7 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
         organizationCountryCode: row.organizationCountryCode,
         categoryId: row.categoryId,
         categorySlug: row.categorySlug,
-        priceInCents: row.priceInCents,
+        priceInCents: searchPriceInCents,
         currency: row.currency,
         minimumOrderQuantity: moqRow?.minimumOrderQuantity ?? null,
         searchText,
