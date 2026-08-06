@@ -14,7 +14,21 @@ const ProductIdParamsSchema = z.object({ productId: z.string().trim().min(1).max
 export const SetCartItemSchema = z
   .object({
     quantity: z.number().int().positive(),
+    /**
+     * A1. Required by the server whenever the product has active variants — the
+     * absence of a value here is exactly what produces `VARIANT_REQUIRED`, so it
+     * stays optional in the schema and mandatory in the domain.
+     */
+    variantId: z.string().trim().min(1).max(200).optional(),
   })
+  .strict();
+
+/**
+ * Naming a variant removes that line; omitting one removes every line for the
+ * product, which is what "remove this product from my cart" means.
+ */
+const RemoveCartItemQuerySchema = z
+  .object({ variantId: z.string().trim().min(1).max(200).optional() })
   .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
@@ -107,6 +121,36 @@ function mapCartError(res: Response, error: CommerceCartError): void {
         data: { availableQuantity: error.availableQuantity },
       } satisfies ApiResponse);
       return;
+    // 422, not 409: the request is malformed for this product rather than in
+    // conflict with current state — the buyer must name a variant to proceed.
+    case "VARIANT_REQUIRED":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "This product is sold by variant. Choose a variant to add it to the cart.",
+      } satisfies ApiResponse);
+      return;
+    case "VARIANT_NOT_APPLICABLE":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "This product is not sold by variant.",
+      } satisfies ApiResponse);
+      return;
+    case "VARIANT_NOT_FOUND":
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "Not found.",
+      } satisfies ApiResponse);
+      return;
+    case "VARIANT_NOT_PURCHASABLE":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "This variant is no longer purchasable.",
+      } satisfies ApiResponse);
+      return;
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce cart error: ${JSON.stringify(exhaustiveCheck)}`);
@@ -152,6 +196,7 @@ export async function setCartItem(req: Request, res: Response): Promise<void> {
     actor,
     params.data.productId,
     body.data.quantity,
+    body.data.variantId ?? null,
   );
   if (!result.success) {
     mapCartError(res, result.error);
@@ -168,8 +213,12 @@ export async function setCartItem(req: Request, res: Response): Promise<void> {
 export async function removeCartItem(req: Request, res: Response): Promise<void> {
   const actor = requireCommerceActor(req, res);
   if (!actor) return;
-  if (!parseNoQuery(req, res)) return;
 
+  const query = RemoveCartItemQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
   const params = ProductIdParamsSchema.safeParse(req.params);
   if (!params.success) {
     sendZodError(res, params.error);
@@ -181,7 +230,11 @@ export async function removeCartItem(req: Request, res: Response): Promise<void>
     return;
   }
 
-  const result = await commerceCartService.removeCartItem(actor, params.data.productId);
+  const result = await commerceCartService.removeCartItem(
+    actor,
+    params.data.productId,
+    query.data.variantId ?? null,
+  );
   if (!result.success) {
     mapCartError(res, result.error);
     return;

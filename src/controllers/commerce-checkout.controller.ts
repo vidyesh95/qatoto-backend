@@ -139,6 +139,22 @@ function mapCheckoutError(res: Response, error: CommerceCheckoutError): void {
         data: { productId: error.productId, availableQuantity: error.availableQuantity },
       } satisfies ApiResponse);
       return;
+    case "VARIANT_REQUIRED":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "A cart line is missing its variant. Choose a variant before checking out.",
+        data: { productId: error.productId },
+      } satisfies ApiResponse);
+      return;
+    case "VARIANT_NOT_PURCHASABLE":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "A cart line references a variant that is no longer purchasable.",
+        data: { productId: error.productId },
+      } satisfies ApiResponse);
+      return;
     case "PRICE_CHANGED":
       res.status(409).json({
         status: "error",

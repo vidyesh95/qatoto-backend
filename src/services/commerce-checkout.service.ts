@@ -14,10 +14,12 @@ import {
   commerceOrderProductLine,
   commerceOrganization,
   commerceOrganizationAddress,
+  commerceProductVariant,
   product,
 } from "#src/db/schema.js";
 import {
   buildSpecificationSnapshot,
+  inventoryScopeKey,
   loadHeldQuantitiesByProduct,
   loadPurchasableProductForCheckout,
   type CommercePricingError,
@@ -47,6 +49,13 @@ export type CommerceCheckoutError =
   | { type: "PRODUCT_NOT_PURCHASABLE"; productId: string }
   | { type: "BELOW_MINIMUM_ORDER_QUANTITY"; productId: string; minimumOrderQuantity: number }
   | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
+  /**
+   * A1. Distinct from `PRODUCT_NOT_PURCHASABLE` because the product IS purchasable —
+   * the line just does not say which variant, and flattening the two would tell a
+   * buyer to give up on a listing they can still buy.
+   */
+  | { type: "VARIANT_REQUIRED"; productId: string }
+  | { type: "VARIANT_NOT_PURCHASABLE"; productId: string }
   | {
       type: "PRICE_CHANGED";
       productId: string;
@@ -156,6 +165,14 @@ function mapPricingErrorToCheckoutError(
       };
     case "INSUFFICIENT_STOCK":
       return { type: "INSUFFICIENT_STOCK", productId, availableQuantity: error.availableQuantity };
+    case "VARIANT_REQUIRED":
+      return { type: "VARIANT_REQUIRED", productId };
+    case "VARIANT_NOT_APPLICABLE":
+    case "VARIANT_NOT_FOUND":
+    case "VARIANT_NOT_PURCHASABLE":
+      // All three mean "the variant on this line cannot be bought". Splitting them
+      // on the wire would let a buyer probe which variant ids exist.
+      return { type: "VARIANT_NOT_PURCHASABLE", productId };
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce pricing error: ${JSON.stringify(exhaustiveCheck)}`);
@@ -404,11 +421,7 @@ export async function prepareCheckout(
       await supersedeActiveCheckoutPrepares(transaction, cart.id, now);
 
       const productIds = lines.map((line) => line.productId);
-      const heldQuantityByProductId = await loadHeldQuantitiesByProduct(
-        transaction,
-        productIds,
-        now,
-      );
+      const heldQuantityByScope = await loadHeldQuantitiesByProduct(transaction, productIds, now);
 
       const pricedLines: (PricedProductLine & { readonly siblingOrder: number })[] = [];
       for (const line of lines) {
@@ -416,7 +429,8 @@ export async function prepareCheckout(
           transaction,
           line.productId,
           line.quantity,
-          heldQuantityByProductId.get(line.productId) ?? 0,
+          heldQuantityByScope.get(inventoryScopeKey(line.productId, line.variantId)) ?? 0,
+          line.variantId,
         );
         if (!priced.success) {
           return {
@@ -452,11 +466,14 @@ export async function prepareCheckout(
           .values({
             prepareId: prepare.id,
             productId: pricedLine.productId,
+            variantId: pricedLine.variantId,
+            variantNameSnapshot: pricedLine.variantName,
             sellerOrganizationId: pricedLine.sellerOrganizationId,
             titleSnapshot: pricedLine.title,
             specificationSnapshot: buildSpecificationSnapshot({
               brand: pricedLine.brand,
               description: pricedLine.description,
+              variantName: pricedLine.variantName,
             }),
             quantity: pricedLine.quantity,
             unitPriceInCents: pricedLine.unitPriceInCents,
@@ -471,6 +488,7 @@ export async function prepareCheckout(
 
         await transaction.insert(commerceInventoryReservation).values({
           productId: pricedLine.productId,
+          variantId: pricedLine.variantId,
           buyerOrganizationId: actor.organizationId,
           cartId: cart.id,
           checkoutPrepareId: prepare.id,
@@ -694,7 +712,10 @@ export async function confirmCheckout(
           transaction,
           prepareLine.productId,
           prepareLine.quantity,
-          heldQuantityExcludingSelf.get(prepareLine.productId) ?? 0,
+          heldQuantityExcludingSelf.get(
+            inventoryScopeKey(prepareLine.productId, prepareLine.variantId),
+          ) ?? 0,
+          prepareLine.variantId,
         );
         if (!revalidated.success) {
           return {
@@ -804,6 +825,8 @@ export async function confirmCheckout(
           await transaction.insert(commerceOrderProductLine).values({
             orderId: order.id,
             productId: line.productId,
+            variantId: line.variantId,
+            variantNameSnapshot: line.variantNameSnapshot,
             titleSnapshot: line.titleSnapshot,
             specificationSnapshot: line.specificationSnapshot,
             quantityOrdered: line.quantity,
@@ -814,10 +837,24 @@ export async function confirmCheckout(
           });
 
           if (!line.isMadeToOrder) {
-            await transaction
-              .update(product)
-              .set({ stockQuantity: sql`${product.stockQuantity} - ${line.quantity}` })
-              .where(eq(product.id, line.productId));
+            /**
+             * A1: stock is drawn from whichever row owns it. Decrementing the
+             * product when a variant was bought would take units from a pool the
+             * buyer never bought out of, and leave the sold variant sellable.
+             */
+            if (line.variantId === null) {
+              await transaction
+                .update(product)
+                .set({ stockQuantity: sql`${product.stockQuantity} - ${line.quantity}` })
+                .where(eq(product.id, line.productId));
+            } else {
+              await transaction
+                .update(commerceProductVariant)
+                .set({
+                  stockQuantity: sql`${commerceProductVariant.stockQuantity} - ${line.quantity}`,
+                })
+                .where(eq(commerceProductVariant.id, line.variantId));
+            }
           }
         }
 

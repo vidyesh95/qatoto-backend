@@ -3299,6 +3299,16 @@ export const commerceCheckoutPrepareProductLine = pgTable(
     productId: text("product_id")
       .notNull()
       .references(() => product.id, { onDelete: "restrict" }),
+    /**
+     * A1. The prepare row is the authoritative snapshot confirm builds orders from,
+     * so the variant has to be recorded here rather than re-read from the cart —
+     * re-deriving it at confirm time would be recomputing a commercial fact from
+     * mutable data, which §0 forbids.
+     */
+    variantId: text("variant_id").references(() => commerceProductVariant.id, {
+      onDelete: "restrict",
+    }),
+    variantNameSnapshot: text("variant_name_snapshot"),
     sellerOrganizationId: text("seller_organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
@@ -3313,7 +3323,11 @@ export const commerceCheckoutPrepareProductLine = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_checkout_prepare_product_line_uidx").on(table.prepareId, table.productId),
+    // Uniqueness becomes (prepareId, productId, coalesce(variant_id, '')) in
+    // migration 0055 — one prepare may carry two colours of the same product.
+    index("commerce_checkout_prepare_product_line_variant_idx")
+      .on(table.variantId)
+      .where(sql`variant_id IS NOT NULL`),
     index("commerce_checkout_prepare_product_line_prepare_idx").on(
       table.prepareId,
       table.siblingOrder,
@@ -3324,6 +3338,12 @@ export const commerceCheckoutPrepareProductLine = pgTable(
       sql`unit_price_in_cents >= 0
           AND line_total_in_cents = (quantity::bigint * unit_price_in_cents)
           AND currency ~ '^[A-Z]{3}$'`,
+    ),
+    check(
+      "commerce_checkout_prepare_product_line_variant_ck",
+      sql`(variant_id IS NULL AND variant_name_snapshot IS NULL)
+          OR (variant_id IS NOT NULL AND variant_name_snapshot IS NOT NULL
+              AND char_length(variant_name_snapshot) BETWEEN 1 AND 120)`,
     ),
   ],
 );

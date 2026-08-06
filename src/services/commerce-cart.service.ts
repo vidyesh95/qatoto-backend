@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -7,9 +7,11 @@ import {
   commerceCheckoutPrepare,
   commerceInventoryReservation,
   commerceOrganization,
+  commerceProductVariant,
   product,
 } from "#src/db/schema.js";
 import {
+  inventoryScopeKey,
   loadHeldQuantitiesByProduct,
   loadPurchasableProductForCheckout,
   type CommercePricingError,
@@ -37,6 +39,15 @@ export type CommerceCartError =
   | { type: "PRODUCT_NOT_PURCHASABLE" }
   | { type: "BELOW_MINIMUM_ORDER_QUANTITY"; minimumOrderQuantity: number }
   | { type: "INSUFFICIENT_STOCK"; availableQuantity: number }
+  /**
+   * A1. Unlike the three tags above, these ARE top-level results: a line that does
+   * not name a required variant is not a stale line, it is an unbuyable request, and
+   * accepting it would put an unshippable row in the cart.
+   */
+  | { type: "VARIANT_REQUIRED" }
+  | { type: "VARIANT_NOT_APPLICABLE" }
+  | { type: "VARIANT_NOT_FOUND" }
+  | { type: "VARIANT_NOT_PURCHASABLE" }
   | { type: "VALIDATION_FAILED"; message: string }
   | { type: "ORGANIZATION_NOT_ACTIVE" };
 
@@ -49,6 +60,9 @@ export interface CommerceCartActorContext {
 
 export interface CommerceCartItemProjection {
   readonly productId: string;
+  /** Null only for products with no active variants (Appendix A1). */
+  readonly variantId: string | null;
+  readonly variantName: string | null;
   readonly quantity: number;
   readonly title: string;
   readonly currency: string | null;
@@ -246,7 +260,7 @@ export async function getCart(
   const basicsByProductId = new Map(basicsRows.map((row) => [row.id, row]));
 
   const now = new Date();
-  const heldQuantityByProductId = await loadHeldQuantitiesByProduct(db, productIds, now);
+  const heldQuantityByScope = await loadHeldQuantitiesByProduct(db, productIds, now);
 
   const items: CommerceCartItemProjection[] = [];
   const subtotalByCurrency = new Map<string, number>();
@@ -256,13 +270,18 @@ export async function getCart(
       db,
       line.productId,
       line.quantity,
-      heldQuantityByProductId.get(line.productId) ?? 0,
+      heldQuantityByScope.get(inventoryScopeKey(line.productId, line.variantId)) ?? 0,
+      line.variantId,
     );
 
     if (!priced.success) {
       const basics = basicsByProductId.get(line.productId);
       items.push({
         productId: line.productId,
+        variantId: line.variantId,
+        // The variant may itself be what went stale, so the stored id is reported
+        // without pretending we could still resolve its name.
+        variantName: null,
         quantity: line.quantity,
         title: basics?.title ?? "Unknown product",
         currency: basics?.currency ?? null,
@@ -277,6 +296,8 @@ export async function getCart(
 
     items.push({
       productId: line.productId,
+      variantId: priced.value.variantId,
+      variantName: priced.value.variantName,
       quantity: line.quantity,
       title: priced.value.title,
       currency: priced.value.currency,
@@ -325,6 +346,7 @@ export async function setCartItem(
   actor: CommerceCartActorContext,
   productId: string,
   quantity: number,
+  requestedVariantId: string | null = null,
 ): Promise<Result<CommerceCartProjection, CommerceCartError>> {
   if (!Number.isInteger(quantity) || quantity <= 0 || quantity > MAXIMUM_CART_LINE_QUANTITY) {
     return {
@@ -347,16 +369,76 @@ export async function setCartItem(
       .limit(1);
     if (!productRow) return { status: "not_found" as const };
 
+    /**
+     * A1. Which variant is being bought is decided here, not at prepare time: a
+     * cart line naming no variant for a product that has them cannot be priced,
+     * reserved, or shipped, so it must never become a row.
+     */
+    const activeVariants = await transaction
+      .select({ id: commerceProductVariant.id })
+      .from(commerceProductVariant)
+      .where(
+        and(
+          eq(commerceProductVariant.productId, productId),
+          eq(commerceProductVariant.state, "active"),
+        ),
+      );
+
+    if (requestedVariantId === null && activeVariants.length > 0) {
+      return { status: "variant_required" as const };
+    }
+    if (requestedVariantId !== null && activeVariants.length === 0) {
+      return { status: "variant_not_applicable" as const };
+    }
+    if (
+      requestedVariantId !== null &&
+      !activeVariants.some((variant) => variant.id === requestedVariantId)
+    ) {
+      // Retired-but-owned and belongs-to-another-product are both "not buyable";
+      // separating them would let a buyer probe another seller's variant ids.
+      const [existingVariant] = await transaction
+        .select({ productId: commerceProductVariant.productId })
+        .from(commerceProductVariant)
+        .where(eq(commerceProductVariant.id, requestedVariantId))
+        .limit(1);
+      return existingVariant && existingVariant.productId === productId
+        ? { status: "variant_not_purchasable" as const }
+        : { status: "variant_not_found" as const };
+    }
+
     const cart = await getOrCreateCartForUpdate(transaction, actor.organizationId);
     const now = new Date();
 
-    await transaction
-      .insert(commerceCartProductLine)
-      .values({ cartId: cart.id, productId, quantity })
-      .onConflictDoUpdate({
-        target: [commerceCartProductLine.cartId, commerceCartProductLine.productId],
-        set: { quantity, updatedAt: now },
-      });
+    /**
+     * Select-then-write rather than ON CONFLICT: uniqueness is now the expression
+     * index `(cart_id, product_id, coalesce(variant_id, ''))`, which drizzle cannot
+     * name as a conflict target. `getOrCreateCartForUpdate` holds the cart row lock,
+     * so concurrent writers to one cart serialize here.
+     */
+    const [existingLine] = await transaction
+      .select({ id: commerceCartProductLine.id })
+      .from(commerceCartProductLine)
+      .where(
+        and(
+          eq(commerceCartProductLine.cartId, cart.id),
+          eq(commerceCartProductLine.productId, productId),
+          requestedVariantId === null
+            ? isNull(commerceCartProductLine.variantId)
+            : eq(commerceCartProductLine.variantId, requestedVariantId),
+        ),
+      )
+      .limit(1);
+
+    if (existingLine) {
+      await transaction
+        .update(commerceCartProductLine)
+        .set({ quantity, updatedAt: now })
+        .where(eq(commerceCartProductLine.id, existingLine.id));
+    } else {
+      await transaction
+        .insert(commerceCartProductLine)
+        .values({ cartId: cart.id, productId, variantId: requestedVariantId, quantity });
+    }
 
     await supersedeActiveCheckoutPrepares(transaction, cart.id, now);
 
@@ -367,7 +449,12 @@ export async function setCartItem(
       actorMemberRoleSnapshot: actor.memberRole,
       targetEntityType: "commerce_cart_product_line",
       targetEntityId: productId,
-      payload: { cartId: cart.id, productId, quantity: String(quantity) },
+      payload: {
+        cartId: cart.id,
+        productId,
+        variantId: requestedVariantId ?? "",
+        quantity: String(quantity),
+      },
       occurredAt: now,
     });
 
@@ -379,6 +466,14 @@ export async function setCartItem(
       return { success: false, error: { type: "ORGANIZATION_NOT_ACTIVE" } };
     case "not_found":
       return { success: false, error: { type: "NOT_FOUND" } };
+    case "variant_required":
+      return { success: false, error: { type: "VARIANT_REQUIRED" } };
+    case "variant_not_applicable":
+      return { success: false, error: { type: "VARIANT_NOT_APPLICABLE" } };
+    case "variant_not_found":
+      return { success: false, error: { type: "VARIANT_NOT_FOUND" } };
+    case "variant_not_purchasable":
+      return { success: false, error: { type: "VARIANT_NOT_PURCHASABLE" } };
     case "updated":
       return getCart(actor);
     default: {
@@ -388,10 +483,17 @@ export async function setCartItem(
   }
 }
 
-/** Removes one line. Also supersedes any active checkout preparation for this cart. */
+/**
+ * Removes one line. Also supersedes any active checkout preparation for this cart.
+ *
+ * A1: with variants, one product can occupy several lines. Naming a variant removes
+ * that line; omitting one removes every line for the product, which is what
+ * "remove this product from my cart" means.
+ */
 export async function removeCartItem(
   actor: CommerceCartActorContext,
   productId: string,
+  requestedVariantId: string | null = null,
 ): Promise<Result<CommerceCartProjection, CommerceCartError>> {
   const outcome = await db.transaction(async (transaction) => {
     const organizationIsActive = await assertOrganizationActive(transaction, actor.organizationId);
@@ -411,6 +513,9 @@ export async function removeCartItem(
         and(
           eq(commerceCartProductLine.cartId, cart.id),
           eq(commerceCartProductLine.productId, productId),
+          requestedVariantId === null
+            ? undefined
+            : eq(commerceCartProductLine.variantId, requestedVariantId),
         ),
       )
       .returning({ id: commerceCartProductLine.id });
@@ -425,7 +530,7 @@ export async function removeCartItem(
       actorMemberRoleSnapshot: actor.memberRole,
       targetEntityType: "commerce_cart_product_line",
       targetEntityId: productId,
-      payload: { cartId: cart.id, productId },
+      payload: { cartId: cart.id, productId, variantId: requestedVariantId ?? "" },
       occurredAt: now,
     });
 
