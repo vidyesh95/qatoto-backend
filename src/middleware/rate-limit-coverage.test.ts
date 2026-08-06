@@ -67,6 +67,7 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/commerce", specifier: "#src/routes/commerce-cart.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-orders.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-fulfillment.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-catalog.routes.js", exportName: "default" },
   { mountPath: "/store", specifier: "#src/routes/store.routes.js", exportName: "default" },
 ];
 

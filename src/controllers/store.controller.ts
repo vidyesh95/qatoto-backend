@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";
 import * as storeMerchandisingService from "#src/services/store-merchandising.service.js";
@@ -258,6 +259,37 @@ export async function getProduct(req: Request, res: Response): Promise<void> {
     statusCode: 200,
     message: "Product.",
     data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * GET /store/products/:productSlug/companions (§15.7).
+ *
+ * Grouped by `relationKind`, each companion carrying `sourceKind` so a client can
+ * never render a seller's compatibility claim as a verified one (§15.3).
+ */
+export async function getProductCompanions(req: Request, res: Response): Promise<void> {
+  const params = ProductParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const result = await commerceProductRelationsService.listProductCompanions(
+    params.data.productSlug,
+  );
+  if (!result.success) {
+    res.status(404).json({
+      status: "error",
+      statusCode: 404,
+      message: "Product not found.",
+    } satisfies ApiResponse);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Product companions.",
+    data: { groups: result.value },
   } satisfies ApiResponse);
 }
 

@@ -503,9 +503,7 @@ async function replaceProductVariants(
     }
     keptVariantIds.push(variantId);
 
-    await transaction
-      .delete(productPricingTier)
-      .where(eq(productPricingTier.variantId, variantId));
+    await transaction.delete(productPricingTier).where(eq(productPricingTier.variantId, variantId));
     if (variant.pricingTiers.length > 0) {
       await transaction.insert(productPricingTier).values(
         variant.pricingTiers.map((tier, tierIndex) => ({
@@ -901,7 +899,10 @@ export async function updateProduct(
           await tx
             .delete(productPricingTier)
             .where(
-              and(eq(productPricingTier.productId, productId), isNull(productPricingTier.variantId)),
+              and(
+                eq(productPricingTier.productId, productId),
+                isNull(productPricingTier.variantId),
+              ),
             );
           if (patch.pricingTiers.length > 0) {
             await tx.insert(productPricingTier).values(
@@ -1164,10 +1165,7 @@ async function repackGalleryPositions(
     const galleryKey = image.variantId ?? "";
     const position = nextPositionByGallery.get(galleryKey) ?? 0;
     nextPositionByGallery.set(galleryKey, position + 1);
-    await transaction
-      .update(productImage)
-      .set({ position })
-      .where(eq(productImage.id, image.id));
+    await transaction.update(productImage).set({ position }).where(eq(productImage.id, image.id));
   }
 }
 

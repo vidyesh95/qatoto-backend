@@ -423,40 +423,42 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
     );
   const searchPriceInCents = variantPriceRow?.lowestPriceInCents ?? row.priceInCents;
 
-  const [specificationRows, variantNameRows, highlightRows, categorySynonymRow] = await Promise.all([
-    db
-      .select({
-        key: commerceProductSpecification.specificationKey,
-        value: commerceProductSpecification.specificationValue,
-        group: commerceProductSpecification.specificationGroup,
-      })
-      .from(commerceProductSpecification)
-      .where(eq(commerceProductSpecification.productId, productId))
-      .orderBy(asc(commerceProductSpecification.position)),
-    db
-      .select({ name: commerceProductVariant.name })
-      .from(commerceProductVariant)
-      .where(
-        and(
-          eq(commerceProductVariant.productId, productId),
-          eq(commerceProductVariant.state, "active"),
-        ),
-      )
-      .orderBy(asc(commerceProductVariant.position)),
-    db
-      .select({ title: commerceProductHighlight.title })
-      .from(commerceProductHighlight)
-      .where(eq(commerceProductHighlight.productId, productId))
-      .orderBy(asc(commerceProductHighlight.position)),
-    row.categoryId === null
-      ? Promise.resolve(undefined)
-      : db
-          .select({ searchSynonyms: commerceCategory.searchSynonyms })
-          .from(commerceCategory)
-          .where(eq(commerceCategory.id, row.categoryId))
-          .limit(1)
-          .then((rows) => rows[0]),
-  ]);
+  const [specificationRows, variantNameRows, highlightRows, categorySynonymRow] = await Promise.all(
+    [
+      db
+        .select({
+          key: commerceProductSpecification.specificationKey,
+          value: commerceProductSpecification.specificationValue,
+          group: commerceProductSpecification.specificationGroup,
+        })
+        .from(commerceProductSpecification)
+        .where(eq(commerceProductSpecification.productId, productId))
+        .orderBy(asc(commerceProductSpecification.position)),
+      db
+        .select({ name: commerceProductVariant.name })
+        .from(commerceProductVariant)
+        .where(
+          and(
+            eq(commerceProductVariant.productId, productId),
+            eq(commerceProductVariant.state, "active"),
+          ),
+        )
+        .orderBy(asc(commerceProductVariant.position)),
+      db
+        .select({ title: commerceProductHighlight.title })
+        .from(commerceProductHighlight)
+        .where(eq(commerceProductHighlight.productId, productId))
+        .orderBy(asc(commerceProductHighlight.position)),
+      row.categoryId === null
+        ? Promise.resolve(undefined)
+        : db
+            .select({ searchSynonyms: commerceCategory.searchSynonyms })
+            .from(commerceCategory)
+            .where(eq(commerceCategory.id, row.categoryId))
+            .limit(1)
+            .then((rows) => rows[0]),
+    ],
+  );
 
   const isEligible =
     row.status === "active" &&

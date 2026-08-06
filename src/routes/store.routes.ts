@@ -17,6 +17,12 @@ storeRouter.get("/categories", storeController.listCategories);
 storeRouter.get("/categories/:slug", storeController.getCategory);
 storeRouter.get("/search", storeController.search);
 storeRouter.get("/products/:productSlug", storeController.getProduct);
+/**
+ * Relation-graph companions for a product detail page (§15.7). Declared after the
+ * detail route; Express matches the longer path on its own, and keeping them
+ * adjacent makes the pair obvious.
+ */
+storeRouter.get("/products/:productSlug/companions", storeController.getProductCompanions);
 storeRouter.get("/organizations/:organizationSlug", storeController.getOrganizationStorefront);
 storeRouter.get("/providers", storeController.listProviders);
 storeRouter.get("/providers/:organizationSlug", storeController.getProvider);

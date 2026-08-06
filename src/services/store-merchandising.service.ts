@@ -30,6 +30,21 @@ export type MerchandisingItemProjection =
       readonly entityId: string;
       readonly offering: commerceProvidersService.PublicOfferingCard;
       readonly provider: commerceProvidersService.PublicProviderCard;
+    }
+  /**
+   * A19. `store_merchandising_entity_kind` has admitted these two since Phase 1 and
+   * the projection dropped them silently, so a merchandiser could place a category
+   * in a rail and see nothing rendered and no error raised.
+   */
+  | {
+      readonly entityKind: "category";
+      readonly entityId: string;
+      readonly category: storeCatalogService.StoreCategoryProjection;
+    }
+  | {
+      readonly entityKind: "organization";
+      readonly entityId: string;
+      readonly organization: storeCatalogService.StoreSellerProjection;
     };
 
 function merchandisingWindowOpen(table: { readonly startsAt: unknown; readonly endsAt: unknown }) {
@@ -51,14 +66,26 @@ async function resolveEligibleMerchandisingItems(
   const offeringIds = placements
     .filter((placement) => placement.entityKind === "provider_offering")
     .map((placement) => placement.entityId);
+  const categoryIds = placements
+    .filter((placement) => placement.entityKind === "category")
+    .map((placement) => placement.entityId);
+  const organizationIds = placements
+    .filter((placement) => placement.entityKind === "organization")
+    .map((placement) => placement.entityId);
 
-  const [products, offerings] = await Promise.all([
+  const [products, offerings, categories, organizations] = await Promise.all([
     storeCatalogService.resolveEligibleProductCardsByIds(productIds),
     commerceProvidersService.resolveEligiblePublicOfferingsByIds(offeringIds),
+    storeCatalogService.resolveEligibleCategoriesByIds(categoryIds),
+    storeCatalogService.resolveEligibleOrganizationCardsByIds(organizationIds),
   ]);
 
   const productsById = new Map(products.map((productCard) => [productCard.id, productCard]));
   const offeringsById = new Map(offerings.map((entry) => [entry.offering.id, entry]));
+  const categoriesById = new Map(categories.map((category) => [category.id, category]));
+  const organizationsById = new Map(
+    organizations.map((organization) => [organization.organizationId, organization]),
+  );
 
   const resolved: MerchandisingItemProjection[] = [];
   for (const placement of placements) {
@@ -84,10 +111,26 @@ async function resolveEligibleMerchandisingItems(
         });
         break;
       }
-      case "category":
-      case "organization":
-        // Home/rails currently project product and offering cards only.
+      case "category": {
+        const category = categoriesById.get(placement.entityId);
+        if (category === undefined) break;
+        resolved.push({
+          entityKind: "category",
+          entityId: placement.entityId,
+          category,
+        });
         break;
+      }
+      case "organization": {
+        const organization = organizationsById.get(placement.entityId);
+        if (organization === undefined) break;
+        resolved.push({
+          entityKind: "organization",
+          entityId: placement.entityId,
+          organization,
+        });
+        break;
+      }
       default: {
         const exhaustiveKind: never = placement.entityKind;
         void exhaustiveKind;
@@ -386,7 +429,11 @@ export async function getPathwayBySlug(pathwaySlug: string): Promise<
       position: storePathwayItem.position,
     })
     .from(storePathwayItem)
-    .where(eq(storePathwayItem.pathwayId, pathway.id))
+    // A19: pathway items now carry the same scheduling window rail placements have
+    // had since Phase 1, so a seasonal member can be scheduled in and out.
+    .where(
+      and(eq(storePathwayItem.pathwayId, pathway.id), merchandisingWindowOpen(storePathwayItem)),
+    )
     .orderBy(asc(storePathwayItem.position), asc(storePathwayItem.id));
 
   const items = await resolveEligibleMerchandisingItems(placements);

@@ -126,9 +126,8 @@ export const ReplaceProductVariantsSchema = z
       )
       .refine(
         (entries) =>
-          new Set(
-            entries.flatMap((entry) => (entry.sku === undefined ? [] : [entry.sku])),
-          ).size === entries.filter((entry) => entry.sku !== undefined).length,
+          new Set(entries.flatMap((entry) => (entry.sku === undefined ? [] : [entry.sku]))).size ===
+          entries.filter((entry) => entry.sku !== undefined).length,
         "Variant SKUs must be unique within a listing.",
       ),
   })

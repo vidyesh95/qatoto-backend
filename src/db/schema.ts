@@ -490,6 +490,13 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "review_created",
     "dispute_opened",
     "dispute_decided",
+    /**
+     * Phase 8 (§15.3). A compatibility claim is a safety claim in the categories
+     * where it matters — brake parts, electrical, load-bearing hardware — so both
+     * the seller's assertion and the moderator's promotion of it are auditable.
+     */
+    "product_relations_declared",
+    "product_relation_verified",
   ],
 );
 
@@ -1556,7 +1563,9 @@ export const productImage = pgTable(
   },
   (table) => [
     index("product_image_productId_idx").on(table.productId),
-    index("product_image_variantId_idx").on(table.variantId).where(sql`variant_id IS NOT NULL`),
+    index("product_image_variantId_idx")
+      .on(table.variantId)
+      .where(sql`variant_id IS NOT NULL`),
     check("product_image_position_ck", sql`position >= 0`),
     check(
       "product_image_alt_text_ck",

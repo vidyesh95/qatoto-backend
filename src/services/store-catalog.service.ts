@@ -736,14 +736,19 @@ export async function listEligibleProducts(input: {
   const pageRows = rows.slice(0, input.limit);
   const productIds = pageRows.map((row) => row.id);
   const organizationIds = [...new Set(pageRows.map((row) => row.organizationId))];
-  const [imageMap, moqMap, productReviewMetrics, organizationFulfillmentMetrics, variantAggregates] =
-    await Promise.all([
-      loadMainImageUrls(productIds),
-      loadMinimumOrderQuantities(productIds),
-      loadProductReviewMetrics(productIds),
-      loadOrganizationFulfillmentMetrics(organizationIds),
-      loadVariantAggregates(productIds),
-    ]);
+  const [
+    imageMap,
+    moqMap,
+    productReviewMetrics,
+    organizationFulfillmentMetrics,
+    variantAggregates,
+  ] = await Promise.all([
+    loadMainImageUrls(productIds),
+    loadMinimumOrderQuantities(productIds),
+    loadProductReviewMetrics(productIds),
+    loadOrganizationFulfillmentMetrics(organizationIds),
+    loadVariantAggregates(productIds),
+  ]);
   const items = pageRows.map((row) =>
     mapProductCard(
       row,
@@ -773,6 +778,73 @@ export async function listEligibleProducts(input: {
   };
 }
 
+/**
+ * A19. Resolve active categories for an ordered id list.
+ *
+ * `store_merchandising_entity_kind` has admitted `category` since Phase 1, but the
+ * projection had no case for it, so a merchandiser could place a category in a rail
+ * and watch it vanish with no error. Placing something and seeing nothing is worse
+ * than being told the kind is unsupported.
+ */
+export async function resolveEligibleCategoriesByIds(
+  categoryIds: readonly string[],
+): Promise<readonly StoreCategoryProjection[]> {
+  if (categoryIds.length === 0) {
+    return [];
+  }
+  const rows = await db
+    .select({
+      id: commerceCategory.id,
+      slug: commerceCategory.slug,
+      name: commerceCategory.name,
+      parentCategoryId: commerceCategory.parentCategoryId,
+      siblingOrder: commerceCategory.siblingOrder,
+      imageUrl: commerceCategory.imageUrl,
+    })
+    .from(commerceCategory)
+    .where(
+      and(inArray(commerceCategory.id, [...categoryIds]), eq(commerceCategory.state, "active")),
+    );
+
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return categoryIds.flatMap((categoryId) => {
+    const row = byId.get(categoryId);
+    return row === undefined ? [] : [row];
+  });
+}
+
+/** A19. The organization counterpart, using the same public-visibility rules. */
+export async function resolveEligibleOrganizationCardsByIds(
+  organizationIds: readonly string[],
+): Promise<readonly StoreSellerProjection[]> {
+  if (organizationIds.length === 0) {
+    return [];
+  }
+  const rows = await db
+    .select({
+      organizationId: commerceOrganization.id,
+      organizationSlug: commerceOrganization.slug,
+      organizationDisplayName: commerceOrganization.displayName,
+      organizationCountryCode: commerceOrganization.countryCode,
+      organizationLogoUrl: commerceOrganization.logoUrl,
+      organizationSummary: commerceOrganization.summary,
+    })
+    .from(commerceOrganization)
+    .where(
+      and(
+        inArray(commerceOrganization.id, [...organizationIds]),
+        eq(commerceOrganization.tradeState, "active"),
+        eq(commerceOrganization.visibility, "public"),
+      ),
+    );
+
+  const byId = new Map(rows.map((row) => [row.organizationId, toSellerProjection(row)]));
+  return organizationIds.flatMap((organizationId) => {
+    const card = byId.get(organizationId);
+    return card === undefined ? [] : [card];
+  });
+}
+
 /** Resolve eligible product cards for an ordered id list, dropping ineligible ids. */
 export async function resolveEligibleProductCardsByIds(
   productIds: readonly string[],
@@ -792,6 +864,27 @@ export async function resolveEligibleProductCardsByIds(
     const card = byId.get(productId);
     return card === undefined ? [] : [card];
   });
+}
+
+/** A2. Strips the internal `variantId` used only to split shared vs variant galleries. */
+function toMediaProjection(media: {
+  readonly id: string;
+  readonly url: string;
+  readonly mediaKind: (typeof productImage.$inferSelect)["mediaKind"];
+  readonly altText: string | null;
+  readonly widthPx: number | null;
+  readonly heightPx: number | null;
+  readonly position: number;
+}): StoreProductMediaProjection {
+  return {
+    id: media.id,
+    url: media.url,
+    mediaKind: media.mediaKind,
+    altText: media.altText,
+    widthPx: media.widthPx,
+    heightPx: media.heightPx,
+    position: media.position,
+  };
 }
 
 export async function getPublicProductBySlug(
@@ -905,19 +998,7 @@ export async function getPublicProductBySlug(
     loadVariantAggregates([row.id]),
   ]);
 
-  const toMediaProjection = (media: (typeof allImages)[number]): StoreProductMediaProjection => ({
-    id: media.id,
-    url: media.url,
-    mediaKind: media.mediaKind,
-    altText: media.altText,
-    widthPx: media.widthPx,
-    heightPx: media.heightPx,
-    position: media.position,
-  });
-
-  const sharedImages = allImages
-    .filter((media) => media.variantId === null)
-    .map(toMediaProjection);
+  const sharedImages = allImages.filter((media) => media.variantId === null).map(toMediaProjection);
   const sharedPricingTiers = allPricingTiers
     .filter((tier) => tier.variantId === null)
     .map(({ unitPriceInCents, minimumOrderQuantity, position }) => ({
@@ -946,9 +1027,7 @@ export async function getPublicProductBySlug(
         leadTimeMaxDays: row.leadTimeMaxDays,
       }),
       position: variantRow.position,
-      images: allImages
-        .filter((media) => media.variantId === variantRow.id)
-        .map(toMediaProjection),
+      images: allImages.filter((media) => media.variantId === variantRow.id).map(toMediaProjection),
       // A variant with no ladder of its own inherits the product's, matching how
       // `loadPurchasableProductForCheckout` prices it.
       pricingTiers: variantTiers.length > 0 ? variantTiers : sharedPricingTiers,
