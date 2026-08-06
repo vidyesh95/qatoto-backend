@@ -8,10 +8,19 @@ vi.mock("dotenv/config", () => ({}));
 
 const { CreateShipmentWithLegsSchema, ServiceEngagementCommandSchema, ShipmentLegCommandSchema } =
   await import("#src/schemas/commerce-fulfillment.schemas.js");
-const { buildFulfillmentRequestFingerprint, computeFulfillmentProgress, isShipmentLegCommandAllowed } =
-  await import("#src/services/commerce-fulfillment-phase6.service.js");
-const { deriveOrderAggregateState, deriveShipmentTerminalState } =
-  await import("#src/services/commerce-fulfillment-reconciliation.service.js");
+const {
+  buildFulfillmentRequestFingerprint,
+  canExecuteServiceEngagementCommandForOrderState,
+  canExecuteShipmentLegCommandForOrderState,
+  computeFulfillmentProgress,
+  isShipmentLegCommandAllowed,
+} = await import("#src/services/commerce-fulfillment-phase6.service.js");
+const {
+  canExecutePaidFulfillmentForOrderState,
+  deriveOrderAggregateState,
+  deriveShipmentTerminalState,
+  isRequiredDeliverableSatisfied,
+} = await import("#src/services/commerce-fulfillment-reconciliation.service.js");
 
 describe("commerce fulfillment Phase 6 schemas", () => {
   it("rejects create-shipment bodies with unknown keys", () => {
@@ -223,6 +232,40 @@ describe("commerce fulfillment Phase 6 workflow helpers", () => {
         "pending_payment",
       ),
     ).toBe("pending_payment");
+  });
+
+  it("blocks paid fulfillment execution before payment and during disputes", () => {
+    expect(canExecutePaidFulfillmentForOrderState("pending_payment")).toBe(false);
+    expect(canExecutePaidFulfillmentForOrderState("payment_processing")).toBe(false);
+    expect(canExecutePaidFulfillmentForOrderState("confirmed")).toBe(true);
+    expect(canExecutePaidFulfillmentForOrderState("in_fulfillment")).toBe(true);
+    expect(canExecutePaidFulfillmentForOrderState("partially_completed")).toBe(true);
+    expect(canExecutePaidFulfillmentForOrderState("disputed")).toBe(false);
+    expect(canExecutePaidFulfillmentForOrderState("completed")).toBe(false);
+  });
+
+  it("allows contract preparation but not service execution before payment", () => {
+    expect(canExecuteServiceEngagementCommandForOrderState("pending_payment", "initialize")).toBe(true);
+    expect(canExecuteServiceEngagementCommandForOrderState("payment_processing", "normalize_deliverables")).toBe(true);
+    expect(canExecuteServiceEngagementCommandForOrderState("pending_payment", "cancel")).toBe(true);
+    expect(canExecuteServiceEngagementCommandForOrderState("pending_payment", "schedule")).toBe(false);
+    expect(canExecuteServiceEngagementCommandForOrderState("payment_processing", "submit_deliverable")).toBe(false);
+    expect(canExecuteServiceEngagementCommandForOrderState("disputed", "cancel")).toBe(false);
+    expect(canExecuteServiceEngagementCommandForOrderState("confirmed", "start")).toBe(true);
+  });
+
+  it("keeps exception evidence appendable while an order is disputed", () => {
+    expect(canExecuteShipmentLegCommandForOrderState("disputed", "report_exception")).toBe(true);
+    expect(canExecuteShipmentLegCommandForOrderState("disputed", "complete")).toBe(false);
+    expect(canExecuteShipmentLegCommandForOrderState("confirmed", "complete")).toBe(true);
+  });
+
+  it("requires accepted or waived required deliverables before completion", () => {
+    expect(isRequiredDeliverableSatisfied("accepted")).toBe(true);
+    expect(isRequiredDeliverableSatisfied("waived")).toBe(true);
+    expect(isRequiredDeliverableSatisfied("cancelled")).toBe(false);
+    expect(isRequiredDeliverableSatisfied("submitted")).toBe(false);
+    expect(isRequiredDeliverableSatisfied("planned")).toBe(false);
   });
 
   it("derives deterministic progress from legs and engagements", () => {

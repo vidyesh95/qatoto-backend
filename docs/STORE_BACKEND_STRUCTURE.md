@@ -822,8 +822,10 @@ Scheduled jobs:
 
 ### Phase 7 — trust and optimization
 
-- **Trust MVP shipped:** verified reviews, disputes, server-issued completions, and privacy-safe
-  provider/product metrics. See `docs/STORE_PHASE_7_ROLLOUT.md`.
+- **Trust MVP shipped and hardened (`0052`–`0053`):** verified reviews, disputes,
+  server-issued completions, privacy-safe provider/product metrics, database-bound trust
+  relationships, and fulfillment freezes while an order is disputed. See
+  `docs/STORE_PHASE_7_ROLLOUT.md`.
 - Still deferred: Q&A, content reports, ranking, recommendations, abuse-operations automation,
   and trade-assurance financial remedies.
 

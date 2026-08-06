@@ -11,6 +11,41 @@ import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-org
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+const COMPLETION_ELIGIBLE_ORDER_STATES: ReadonlySet<(typeof commerceOrder.$inferSelect)["state"]> =
+  new Set(["confirmed", "in_fulfillment", "partially_completed", "completed"]);
+
+export function isOrderEligibleForCompletion(
+  orderState: (typeof commerceOrder.$inferSelect)["state"],
+): boolean {
+  return COMPLETION_ELIGIBLE_ORDER_STATES.has(orderState);
+}
+
+export function isProductLineEligibleForCompletion(input: {
+  readonly quantityOrdered: number;
+  readonly quantityFulfilled: number;
+  readonly quantityCancelled: number;
+}): boolean {
+  return (
+    input.quantityFulfilled > 0 &&
+    input.quantityFulfilled + input.quantityCancelled >= input.quantityOrdered
+  );
+}
+
+export function isServiceEngagementEligibleForCompletion(input: {
+  readonly state: (typeof commerceServiceEngagement.$inferSelect)["state"];
+  readonly executionContractState: (typeof commerceServiceEngagement.$inferSelect)["executionContractState"];
+  readonly requiresDeliverableNormalization: boolean;
+  readonly buyerOrganizationId: string;
+  readonly providerOrganizationId: string;
+}): boolean {
+  return (
+    input.state === "completed" &&
+    input.executionContractState === "ready" &&
+    !input.requiresDeliverableNormalization &&
+    input.buyerOrganizationId !== input.providerOrganizationId
+  );
+}
+
 async function appendAuditOrThrow(
   transaction: DatabaseTransaction,
   input: Parameters<typeof appendCommerceOrganizationAuditEntry>[1],
@@ -43,6 +78,9 @@ export async function issueCompletionsForOrder(
   if (order.buyerOrganizationId === order.counterpartyOrganizationId) {
     return;
   }
+  if (!isOrderEligibleForCompletion(order.state)) {
+    return;
+  }
 
   const eligibleProductLines = await transaction
     .select()
@@ -56,6 +94,8 @@ export async function issueCompletionsForOrder(
     );
 
   for (const productLine of eligibleProductLines) {
+    if (!isProductLineEligibleForCompletion(productLine)) continue;
+
     const [existing] = await transaction
       .select({ id: commerceCompletion.id })
       .from(commerceCompletion)
@@ -107,7 +147,7 @@ export async function issueCompletionsForOrder(
     );
 
   for (const engagement of completedEngagements) {
-    if (engagement.buyerOrganizationId === engagement.providerOrganizationId) continue;
+    if (!isServiceEngagementEligibleForCompletion(engagement)) continue;
 
     const [existing] = await transaction
       .select({ id: commerceCompletion.id })

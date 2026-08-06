@@ -172,6 +172,7 @@ INNER JOIN commerce_order
 WHERE order_product_line.quantity_fulfilled > 0
   AND (order_product_line.quantity_fulfilled + order_product_line.quantity_cancelled)
       >= order_product_line.quantity_ordered
+  AND commerce_order.state IN ('confirmed', 'in_fulfillment', 'partially_completed', 'completed')
   AND commerce_order.buyer_organization_id <> commerce_order.counterparty_organization_id
   AND NOT EXISTS (
     SELECT 1 FROM commerce_completion AS existing
@@ -201,7 +202,19 @@ SELECT
   NULL,
   coalesce(engagement.completed_at, engagement.updated_at, engagement.created_at)
 FROM commerce_service_engagement AS engagement
+INNER JOIN commerce_order
+  ON commerce_order.id = engagement.order_id
 WHERE engagement.state = 'completed'
+  AND engagement.execution_contract_state = 'ready'
+  AND engagement.requires_deliverable_normalization = false
+  AND NOT EXISTS (
+    SELECT 1
+      FROM commerce_engagement_deliverable AS deliverable
+     WHERE deliverable.engagement_id = engagement.id
+       AND deliverable.is_required
+       AND deliverable.state NOT IN ('accepted', 'waived')
+  )
+  AND commerce_order.state IN ('confirmed', 'in_fulfillment', 'partially_completed', 'completed')
   AND engagement.buyer_organization_id <> engagement.provider_organization_id
   AND NOT EXISTS (
     SELECT 1 FROM commerce_completion AS existing

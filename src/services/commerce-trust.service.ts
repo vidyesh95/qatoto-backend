@@ -9,7 +9,7 @@ import {
   commerceOrganizationMember,
   commerceReview,
 } from "#src/db/schema.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type {
   CreateDisputeInput,
   CreateReviewInput,
@@ -31,6 +31,7 @@ export type CommerceTrustError =
   | { type: "NOT_FOUND" }
   | { type: "FORBIDDEN" }
   | { type: "SELF_REVIEW_FORBIDDEN" }
+  | { type: "DISPUTE_PARTY_MODERATION_FORBIDDEN" }
   | { type: "INVALID_STATE"; message: string }
   | { type: "CONFLICT"; message: string }
   | { type: "INVALID_CURSOR" }
@@ -75,6 +76,44 @@ const DISPUTABLE_ORDER_STATES: readonly OrderState[] = [
   "partially_completed",
   "completed",
 ];
+
+export function evaluateReviewRelationship(input: {
+  readonly actorOrganizationId: string;
+  readonly buyerOrganizationId: string;
+  readonly counterpartyOrganizationId: string;
+}): "eligible" | "not_found" | "self_review" {
+  if (input.buyerOrganizationId !== input.actorOrganizationId) return "not_found";
+  if (input.buyerOrganizationId === input.counterpartyOrganizationId) return "self_review";
+  return "eligible";
+}
+
+export function evaluateDisputeOpeningRelationship(input: {
+  readonly actorOrganizationId: string;
+  readonly buyerOrganizationId: string;
+  readonly counterpartyOrganizationId: string;
+  readonly orderState: OrderState;
+}): "eligible" | "not_found" | "forbidden" | "invalid_state" {
+  const actorIsOrderParty =
+    input.buyerOrganizationId === input.actorOrganizationId ||
+    input.counterpartyOrganizationId === input.actorOrganizationId;
+  if (!actorIsOrderParty) return "not_found";
+  if (input.buyerOrganizationId === input.counterpartyOrganizationId) return "forbidden";
+  if (input.buyerOrganizationId !== input.actorOrganizationId) return "forbidden";
+  if (!DISPUTABLE_ORDER_STATES.includes(input.orderState)) return "invalid_state";
+  return "eligible";
+}
+
+export function isModeratorMemberOfDisputeParty(input: {
+  readonly moderatorOrganizationIds: readonly string[];
+  readonly buyerOrganizationId: string;
+  readonly counterpartyOrganizationId: string;
+}): boolean {
+  return input.moderatorOrganizationIds.some(
+    (organizationId) =>
+      organizationId === input.buyerOrganizationId ||
+      organizationId === input.counterpartyOrganizationId,
+  );
+}
 
 async function appendAuditOrThrow(
   transaction: DatabaseTransaction,
@@ -131,15 +170,17 @@ export async function createReview(
       .where(eq(commerceCompletion.id, completionId))
       .for("update");
     if (!completion) return { status: "not_found" as const };
-    if (completion.buyerOrganizationId !== actor.organizationId) {
-      return { status: "not_found" as const };
-    }
-    if (completion.buyerOrganizationId === completion.counterpartyOrganizationId) {
-      return { status: "self_review" as const };
+    const reviewRelationship = evaluateReviewRelationship({
+      actorOrganizationId: actor.organizationId,
+      buyerOrganizationId: completion.buyerOrganizationId,
+      counterpartyOrganizationId: completion.counterpartyOrganizationId,
+    });
+    if (reviewRelationship !== "eligible") {
+      return { status: reviewRelationship };
     }
 
     const [existing] = await transaction
-      .select({ id: commerceReview.id })
+      .select()
       .from(commerceReview)
       .where(
         and(
@@ -149,6 +190,9 @@ export async function createReview(
       )
       .limit(1);
     if (existing) {
+      if (existing.rating === input.rating && existing.body === input.body) {
+        return { status: "existing" as const, review: existing };
+      }
       return {
         status: "conflict" as const,
         message: "This organization has already reviewed this completion.",
@@ -199,6 +243,7 @@ export async function createReview(
       return { success: false, error: { type: "SELF_REVIEW_FORBIDDEN" } };
     case "conflict":
       return { success: false, error: { type: "CONFLICT", message: outcome.message } };
+    case "existing":
     case "created":
       return { success: true, value: projectReview(outcome.review) };
     default: {
@@ -224,38 +269,40 @@ export async function openDispute(
       .where(eq(commerceOrder.id, orderId))
       .for("update");
     if (!order) return { status: "not_found" as const };
-    if (
-      order.buyerOrganizationId !== actor.organizationId &&
-      order.counterpartyOrganizationId !== actor.organizationId
-    ) {
+    const disputeOpeningRelationship = evaluateDisputeOpeningRelationship({
+      actorOrganizationId: actor.organizationId,
+      buyerOrganizationId: order.buyerOrganizationId,
+      counterpartyOrganizationId: order.counterpartyOrganizationId,
+      orderState: order.state,
+    });
+    if (disputeOpeningRelationship === "not_found") {
       return { status: "not_found" as const };
     }
-    if (order.buyerOrganizationId !== actor.organizationId) {
-      // MVP: only the buyer organization may open a dispute case.
+    if (disputeOpeningRelationship === "forbidden") {
       return { status: "forbidden" as const };
-    }
-    if (order.state === "disputed" || order.state === "cancelled") {
-      return {
-        status: "invalid_state" as const,
-        message: "This order cannot enter a new dispute from its current state.",
-      };
-    }
-    if (!DISPUTABLE_ORDER_STATES.includes(order.state)) {
-      return {
-        status: "invalid_state" as const,
-        message: "Disputes require a confirmed or fulfilled order.",
-      };
     }
 
     const [existingOpenDispute] = await transaction
-      .select({ id: commerceDispute.id })
+      .select()
       .from(commerceDispute)
       .where(and(eq(commerceDispute.orderId, order.id), eq(commerceDispute.state, "open")))
       .limit(1);
     if (existingOpenDispute) {
+      if (
+        existingOpenDispute.reasonCode === input.reasonCode &&
+        existingOpenDispute.summary === input.summary
+      ) {
+        return { status: "existing" as const, dispute: existingOpenDispute };
+      }
       return {
         status: "conflict" as const,
         message: "An open dispute already exists for this order.",
+      };
+    }
+    if (disputeOpeningRelationship === "invalid_state") {
+      return {
+        status: "invalid_state" as const,
+        message: "Disputes require a confirmed or fulfilled order.",
       };
     }
 
@@ -333,6 +380,7 @@ export async function openDispute(
       return { success: false, error: { type: "INVALID_STATE", message: outcome.message } };
     case "conflict":
       return { success: false, error: { type: "CONFLICT", message: outcome.message } };
+    case "existing":
     case "created":
       return { success: true, value: projectDispute(outcome.dispute) };
     default: {
@@ -365,12 +413,12 @@ export async function listDisputesForModerator(
   const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
   let cursorPredicate: SQL | undefined;
   if (input.cursor) {
-    const decodedCursor = decodeStoreCursor(input.cursor);
+    const decodedCursor = decodeTimestampStoreCursor(input.cursor);
     if (!decodedCursor) return { success: false, error: { type: "INVALID_CURSOR" } };
     cursorPredicate = or(
-      lt(commerceDispute.createdAt, new Date(decodedCursor.sortKey)),
+      lt(commerceDispute.createdAt, decodedCursor.sortKey),
       and(
-        eq(commerceDispute.createdAt, new Date(decodedCursor.sortKey)),
+        eq(commerceDispute.createdAt, decodedCursor.sortKey),
         gt(commerceDispute.id, decodedCursor.id),
       ),
     );
@@ -437,19 +485,15 @@ export async function decideDispute(
     const memberships = await transaction
       .select({ organizationId: commerceOrganizationMember.organizationId })
       .from(commerceOrganizationMember)
-      .where(
-        and(
-          eq(commerceOrganizationMember.userId, moderatorUserId),
-          eq(commerceOrganizationMember.state, "active"),
-          or(
-            eq(commerceOrganizationMember.organizationId, dispute.buyerOrganizationId),
-            eq(commerceOrganizationMember.organizationId, dispute.counterpartyOrganizationId),
-          ),
-        ),
-      )
-      .limit(1);
-    if (memberships.length > 0) {
-      return { status: "self_review" as const };
+      .where(eq(commerceOrganizationMember.userId, moderatorUserId));
+    if (
+      isModeratorMemberOfDisputeParty({
+        moderatorOrganizationIds: memberships.map((membership) => membership.organizationId),
+        buyerOrganizationId: dispute.buyerOrganizationId,
+        counterpartyOrganizationId: dispute.counterpartyOrganizationId,
+      })
+    ) {
+      return { status: "party_moderation_forbidden" as const };
     }
 
     const [order] = await transaction
@@ -458,6 +502,12 @@ export async function decideDispute(
       .where(eq(commerceOrder.id, dispute.orderId))
       .for("update");
     if (!order) return { status: "not_found" as const };
+    if (order.state !== "disputed") {
+      return {
+        status: "conflict" as const,
+        message: "The order is no longer frozen by this dispute.",
+      };
+    }
 
     const now = new Date();
     const [updated] = await transaction
@@ -472,10 +522,7 @@ export async function decideDispute(
       .where(and(eq(commerceDispute.id, dispute.id), eq(commerceDispute.state, "open")))
       .returning();
     if (!updated) {
-      return {
-        status: "conflict" as const,
-        message: "Dispute was decided concurrently.",
-      };
+      throw new Error("Locked open dispute vanished while recording its decision.");
     }
 
     const [eventCount] = await transaction
@@ -491,11 +538,13 @@ export async function decideDispute(
       occurredAt: now,
     });
 
-    if (order.state === "disputed") {
-      await transaction
-        .update(commerceOrder)
-        .set({ state: dispute.priorOrderState, updatedAt: now })
-        .where(eq(commerceOrder.id, order.id));
+    const [restoredOrder] = await transaction
+      .update(commerceOrder)
+      .set({ state: dispute.priorOrderState, updatedAt: now })
+      .where(and(eq(commerceOrder.id, order.id), eq(commerceOrder.state, "disputed")))
+      .returning({ id: commerceOrder.id });
+    if (!restoredOrder) {
+      throw new Error("Locked disputed order vanished while restoring its prior state.");
     }
 
     await appendAuditOrThrow(transaction, {
@@ -520,8 +569,8 @@ export async function decideDispute(
   switch (outcome.status) {
     case "not_found":
       return { success: false, error: { type: "NOT_FOUND" } };
-    case "self_review":
-      return { success: false, error: { type: "SELF_REVIEW_FORBIDDEN" } };
+    case "party_moderation_forbidden":
+      return { success: false, error: { type: "DISPUTE_PARTY_MODERATION_FORBIDDEN" } };
     case "invalid_state":
       return { success: false, error: { type: "INVALID_STATE", message: outcome.message } };
     case "conflict":

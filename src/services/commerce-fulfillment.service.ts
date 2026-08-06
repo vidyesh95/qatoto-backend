@@ -12,12 +12,14 @@ import {
   commerceShipmentLeg,
   commerceShipmentProductLine,
 } from "#src/db/schema.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { ShipmentLegInput } from "#src/schemas/commerce-fulfillment.schemas.js";
 import { issueCompletionsForOrder } from "#src/services/commerce-completion.service.js";
 import { insertShipmentLegs } from "#src/services/commerce-fulfillment-phase6.service.js";
 import {
+  canExecutePaidFulfillmentForOrderState,
   finalizeShipmentState,
+  isRequiredDeliverableSatisfied,
   reconcileOrderAggregateState,
 } from "#src/services/commerce-fulfillment-reconciliation.service.js";
 import {
@@ -462,6 +464,10 @@ export async function appendShipmentEvent(
       return { status: "not_found" as const };
     }
 
+    if (input.eventKind !== "exception" && !canExecutePaidFulfillmentForOrderState(order.state)) {
+      return { status: "invalid_state" as const };
+    }
+
     if (SHIPMENT_TERMINAL_STATES.includes(shipment.state)) {
       return { status: "conflict" as const, message: "This shipment is already finalized." };
     }
@@ -479,22 +485,35 @@ export async function appendShipmentEvent(
       }
     }
 
-    const occurredAt = input.occurredAt ?? new Date();
+    const recordedAt = new Date();
+    const claimedOccurredAt = input.occurredAt ?? recordedAt;
     await transaction.insert(commerceShipmentEvent).values({
       shipmentId: shipment.id,
       eventKind: input.eventKind,
-      occurredAt,
+      occurredAt: claimedOccurredAt,
       description: input.description ?? null,
       createdByMemberId: actor.memberId,
     });
 
     switch (input.eventKind) {
       case "delivered": {
-        await finalizeShipmentState(transaction, shipment.id, "delivered", occurredAt);
+        await finalizeShipmentState(
+          transaction,
+          shipment.id,
+          "delivered",
+          recordedAt,
+          actor.actorUserId,
+        );
         break;
       }
       case "cancelled": {
-        await finalizeShipmentState(transaction, shipment.id, "cancelled", occurredAt);
+        await finalizeShipmentState(
+          transaction,
+          shipment.id,
+          "cancelled",
+          recordedAt,
+          actor.actorUserId,
+        );
         break;
       }
       case "picked_up":
@@ -504,7 +523,7 @@ export async function appendShipmentEvent(
           .set({
             state: "in_transit",
             version: shipment.version + 1,
-            updatedAt: occurredAt,
+            updatedAt: recordedAt,
           })
           .where(eq(commerceShipment.id, shipment.id));
         break;
@@ -526,8 +545,12 @@ export async function appendShipmentEvent(
       actorMemberRoleSnapshot: actor.memberRole,
       targetEntityType: "commerce_shipment",
       targetEntityId: shipment.id,
-      payload: { shipmentId: shipment.id, eventKind: input.eventKind },
-      occurredAt,
+      payload: {
+        shipmentId: shipment.id,
+        eventKind: input.eventKind,
+        claimedOccurredAt: claimedOccurredAt.toISOString(),
+      },
+      occurredAt: recordedAt,
     });
 
     return { status: "recorded" as const, shipmentId: shipment.id };
@@ -536,6 +559,8 @@ export async function appendShipmentEvent(
   switch (outcome.status) {
     case "not_found":
       return { success: false, error: { type: "NOT_FOUND" } };
+    case "invalid_state":
+      return { success: false, error: { type: "INVALID_STATE" } };
     case "conflict":
       return { success: false, error: { type: "CONFLICT", message: outcome.message } };
     case "recorded": {
@@ -575,7 +600,8 @@ export async function listServiceEngagements(
   input: ListServiceEngagementsInput,
 ): Promise<Result<ServiceEngagementListPage, CommerceFulfillmentError>> {
   const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -594,9 +620,9 @@ export async function listServiceEngagements(
     decodedCursor === null
       ? undefined
       : or(
-          lt(commerceServiceEngagement.createdAt, new Date(decodedCursor.sortKey)),
+          lt(commerceServiceEngagement.createdAt, decodedCursor.sortKey),
           and(
-            eq(commerceServiceEngagement.createdAt, new Date(decodedCursor.sortKey)),
+            eq(commerceServiceEngagement.createdAt, decodedCursor.sortKey),
             gt(commerceServiceEngagement.id, decodedCursor.id),
           ),
         );
@@ -712,7 +738,7 @@ export async function transitionServiceEngagement(
     if (!engagementIdentity) return { status: "not_found" as const };
 
     const [lockedOrder] = await transaction
-      .select({ id: commerceOrder.id })
+      .select({ id: commerceOrder.id, state: commerceOrder.state })
       .from(commerceOrder)
       .where(eq(commerceOrder.id, engagementIdentity.orderId))
       .for("update");
@@ -746,6 +772,13 @@ export async function transitionServiceEngagement(
       return { status: "forbidden" as const };
     }
 
+    const isPrepaymentCancellation =
+      (lockedOrder.state === "pending_payment" || lockedOrder.state === "payment_processing") &&
+      input.targetState === "cancelled";
+    if (!canExecutePaidFulfillmentForOrderState(lockedOrder.state) && !isPrepaymentCancellation) {
+      return { status: "invalid_state" as const };
+    }
+
     const allowedTargets = ENGAGEMENT_TRANSITIONS[engagement.state];
     if (!allowedTargets.has(input.targetState)) {
       return { status: "invalid_state" as const };
@@ -765,9 +798,7 @@ export async function transitionServiceEngagement(
           ),
         );
       const incompleteIds = requiredRows
-        .filter(
-          (row) => row.state !== "accepted" && row.state !== "waived" && row.state !== "cancelled",
-        )
+        .filter((row) => !isRequiredDeliverableSatisfied(row.state))
         .map((row) => row.id);
       if (incompleteIds.length > 0) {
         return {

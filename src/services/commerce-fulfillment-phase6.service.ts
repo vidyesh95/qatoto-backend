@@ -44,6 +44,8 @@ import type {
 } from "#src/schemas/commerce-fulfillment.schemas.js";
 import { issueCompletionsForOrder } from "#src/services/commerce-completion.service.js";
 import {
+  canExecutePaidFulfillmentForOrderState,
+  isRequiredDeliverableSatisfied,
   reconcileOrderAggregateState,
   reconcileShipmentStateFromLegs,
 } from "#src/services/commerce-fulfillment-reconciliation.service.js";
@@ -88,6 +90,25 @@ export interface CommerceFulfillmentActorContext {
 export interface FulfillmentIdempotencyContext {
   readonly idempotencyKey: string;
   readonly requestFingerprint: string;
+}
+
+const PREPAYMENT_SERVICE_ENGAGEMENT_COMMANDS: ReadonlySet<ServiceEngagementCommand["command"]> =
+  new Set(["initialize", "normalize_deliverables", "cancel"]);
+
+export function canExecuteServiceEngagementCommandForOrderState(
+  orderState: (typeof commerceOrder.$inferSelect)["state"],
+  command: ServiceEngagementCommand["command"],
+): boolean {
+  if (canExecutePaidFulfillmentForOrderState(orderState)) return true;
+  if (orderState !== "pending_payment" && orderState !== "payment_processing") return false;
+  return PREPAYMENT_SERVICE_ENGAGEMENT_COMMANDS.has(command);
+}
+
+export function canExecuteShipmentLegCommandForOrderState(
+  orderState: (typeof commerceOrder.$inferSelect)["state"],
+  command: ShipmentLegCommand["command"],
+): boolean {
+  return command === "report_exception" || canExecutePaidFulfillmentForOrderState(orderState);
 }
 
 export type EngagementExecutionSnapshotProjection =
@@ -415,17 +436,12 @@ export async function insertShipmentLegs(
         return { success: false, error: { type: "PROVIDER_KIND_MISMATCH" } };
       }
       if (
+        engagement.orderId !== shipment.orderId ||
         engagement.buyerOrganizationId !== order.buyerOrganizationId ||
         engagement.state === "cancelled" ||
         engagement.state === "disputed"
       ) {
-        return {
-          success: false,
-          error: {
-            type: "VALIDATION_FAILED",
-            message: "The logistics engagement must serve the shipment buyer and remain active.",
-          },
-        };
+        return { success: false, error: { type: "NOT_FOUND" } };
       }
       const [existingShipmentLink] = await transaction
         .select({ id: commerceOrderServiceLink.id })
@@ -607,6 +623,14 @@ export async function executeShipmentLegCommand(
       };
     }
 
+    if (!canExecuteShipmentLegCommandForOrderState(order.state, command.command)) {
+      return {
+        status: "invalid_state" as const,
+        currentState: order.state,
+        command: command.command,
+      };
+    }
+
     if (leg.version !== command.expectedVersion) {
       return { status: "version_conflict" as const, currentVersion: leg.version };
     }
@@ -729,7 +753,13 @@ export async function executeShipmentLegCommand(
         .where(eq(commerceShipment.id, shipment.id));
     }
     if (nextState === "completed" || nextState === "cancelled") {
-      await reconcileShipmentStateFromLegs(transaction, shipment.id, now, actor.memberId);
+      await reconcileShipmentStateFromLegs(
+        transaction,
+        shipment.id,
+        now,
+        actor.memberId,
+        actor.actorUserId,
+      );
     }
 
     const projection = projectShipmentLeg(updated);
@@ -809,11 +839,7 @@ async function loadRequiredIncompleteDeliverableIds(
         eq(commerceEngagementDeliverable.isRequired, true),
       ),
     );
-  return rows
-    .filter(
-      (row) => row.state !== "accepted" && row.state !== "waived" && row.state !== "cancelled",
-    )
-    .map((row) => row.id);
+  return rows.filter((row) => !isRequiredDeliverableSatisfied(row.state)).map((row) => row.id);
 }
 
 async function insertTypedDeliverableDetail(
@@ -1040,7 +1066,7 @@ export async function executeServiceEngagementCommand(
     if (!engagementIdentity) return { status: "not_found" as const };
 
     const [lockedOrder] = await transaction
-      .select({ id: commerceOrder.id })
+      .select({ id: commerceOrder.id, state: commerceOrder.state })
       .from(commerceOrder)
       .where(eq(commerceOrder.id, engagementIdentity.orderId))
       .for("update");
@@ -1099,6 +1125,14 @@ export async function executeServiceEngagementCommand(
       return {
         status: "replay" as const,
         body: parseCommandReplayBody(claim.value.responseBody),
+      };
+    }
+
+    if (!canExecuteServiceEngagementCommandForOrderState(lockedOrder.state, command.command)) {
+      return {
+        status: "invalid_state" as const,
+        currentState: lockedOrder.state,
+        command: command.command,
       };
     }
 
@@ -1310,6 +1344,8 @@ export async function executeServiceEngagementCommand(
           nextState: "submitted",
           commandKind: "submit_deliverable",
           note: command.note ?? null,
+          resultSnapshotJson: JSON.stringify(command.result),
+          evidenceDocumentId: command.evidenceDocumentId ?? null,
           occurredAt: now,
           createdByMemberId: actor.memberId,
         });

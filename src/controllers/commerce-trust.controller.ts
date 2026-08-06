@@ -83,6 +83,13 @@ function mapTrustError(res: Response, error: CommerceTrustError): void {
         message: "Self-review is not allowed.",
       } satisfies ApiResponse);
       return;
+    case "DISPUTE_PARTY_MODERATION_FORBIDDEN":
+      res.status(403).json({
+        status: "error",
+        statusCode: 403,
+        message: "A member of a dispute party cannot decide that dispute.",
+      } satisfies ApiResponse);
+      return;
     case "INVALID_STATE":
       res.status(409).json({
         status: "error",

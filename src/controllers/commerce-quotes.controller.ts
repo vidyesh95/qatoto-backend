@@ -211,7 +211,32 @@ export const AppendQuoteRevisionSchema = z
     productLines: z.array(QuoteProductLineSchema).max(200),
     serviceLines: z.array(QuoteServiceLineSchema).max(200),
   })
-  .strict();
+  .strict()
+  .superRefine((revision, refinementContext) => {
+    const seenProductLineIds = new Set<string>();
+    for (const [lineIndex, productLine] of revision.productLines.entries()) {
+      if (seenProductLineIds.has(productLine.rfqProductLineId)) {
+        refinementContext.addIssue({
+          code: "custom",
+          message: "rfqProductLineId values must be unique.",
+          path: ["productLines", lineIndex, "rfqProductLineId"],
+        });
+      }
+      seenProductLineIds.add(productLine.rfqProductLineId);
+    }
+
+    const seenServiceLineIds = new Set<string>();
+    for (const [lineIndex, serviceLine] of revision.serviceLines.entries()) {
+      if (seenServiceLineIds.has(serviceLine.rfqServiceLineId)) {
+        refinementContext.addIssue({
+          code: "custom",
+          message: "rfqServiceLineId values must be unique.",
+          path: ["serviceLines", lineIndex, "rfqServiceLineId"],
+        });
+      }
+      seenServiceLineIds.add(serviceLine.rfqServiceLineId);
+    }
+  });
 
 export const AcceptQuoteSchema = z
   .object({

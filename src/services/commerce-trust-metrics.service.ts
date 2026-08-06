@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { commerceCompletion, commerceReview } from "#src/db/schema.js";
+import { commerceCompletion, commerceOrder, commerceReview } from "#src/db/schema.js";
 
 export interface ProductReviewMetrics {
   readonly averageRating: number | null;
@@ -109,10 +109,12 @@ export async function loadOrganizationFulfillmentMetrics(
       completedOrderCount: sql<number>`count(distinct ${commerceCompletion.orderId})::int`,
     })
     .from(commerceCompletion)
+    .innerJoin(commerceOrder, eq(commerceOrder.id, commerceCompletion.orderId))
     .where(
       and(
         inArray(commerceCompletion.counterpartyOrganizationId, [...organizationIds]),
         eq(commerceCompletion.targetKind, "product_order_line"),
+        eq(commerceOrder.state, "completed"),
       ),
     )
     .groupBy(commerceCompletion.counterpartyOrganizationId);

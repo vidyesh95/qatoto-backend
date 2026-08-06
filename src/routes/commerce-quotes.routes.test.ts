@@ -251,6 +251,37 @@ describe("commerce quote routes", () => {
     );
   });
 
+  it("rejects duplicate RFQ line identities before quote persistence", async () => {
+    const duplicateServiceLine = {
+      rfqServiceLineId: "rfq_svc_1",
+      feeInCents: 1000,
+      titleSnapshot: "Customs brokerage",
+      scopeSnapshot: "Import entry",
+      siblingOrder: 0,
+      deliverables: [],
+      serviceDetail: {
+        kind: "customs_broker",
+        jurisdictions: ["US-CBP"],
+      },
+    };
+    const response = await request(app)
+      .post("/commerce/quotes/quote-1/revisions")
+      .set("Idempotency-Key", "revision-duplicate-rfq-lines")
+      .send({
+        currency: "USD",
+        validityDeadlineAt: "2026-09-01T00:00:00.000Z",
+        taxInCents: 0,
+        serviceFeeInCents: 0,
+        shippingInCents: 0,
+        discountInCents: 0,
+        productLines: [],
+        serviceLines: [duplicateServiceLine, { ...duplicateServiceLine, siblingOrder: 1 }],
+      });
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.appendRevision).not.toHaveBeenCalled();
+  });
+
   it("rejects duplicate deliverable sequences and unpaired service-detail currencies", async () => {
     const duplicateDeliverablesResponse = await request(app)
       .post("/commerce/quotes/quote-1/revisions")

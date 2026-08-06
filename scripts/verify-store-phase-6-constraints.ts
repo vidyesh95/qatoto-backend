@@ -70,6 +70,7 @@ const EXPECTED_TRIGGERS: readonly string[] = [
 ];
 
 const EXPECTED_CONSTRAINTS: readonly string[] = [
+  "commerce_service_engagement_provenance_ck",
   "commerce_quote_service_deliverable_plan_pkey",
   "commerce_quote_service_deliverable_plan_quote_service_line_id_commerce_quote_service_line_id_fk",
   "commerce_quote_service_deliverable_plan_sequence_ck",

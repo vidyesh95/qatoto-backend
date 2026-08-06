@@ -3731,6 +3731,11 @@ export const commerceEngagementDeliverableEvent = pgTable(
     nextState: commerceEngagementDeliverableStateEnum("next_state").notNull(),
     commandKind: text("command_kind").notNull(),
     note: text("note"),
+    resultSnapshotJson: text("result_snapshot_json"),
+    evidenceDocumentId: text("evidence_document_id").references(
+      () => commerceEncryptedDocument.id,
+      { onDelete: "restrict" },
+    ),
     occurredAt: timestamp("occurred_at").notNull(),
     createdByMemberId: text("created_by_member_id")
       .notNull()
@@ -3747,6 +3752,14 @@ export const commerceEngagementDeliverableEvent = pgTable(
       "commerce_engagement_deliverable_event_text_ck",
       sql`char_length(command_kind) BETWEEN 1 AND 80
           AND (note IS NULL OR char_length(note) BETWEEN 1 AND 2000)`,
+    ),
+    check(
+      "commerce_engagement_deliverable_event_result_snapshot_ck",
+      sql`result_snapshot_json IS NULL
+          OR (
+            char_length(result_snapshot_json) BETWEEN 2 AND 20000
+            AND jsonb_typeof(result_snapshot_json::jsonb) = 'object'
+          )`,
     ),
   ],
 );
@@ -4377,10 +4390,16 @@ export const commerceCompletion = pgTable(
       "commerce_completion_target_ck",
       sql`(target_kind = 'product_order_line'
               AND order_product_line_id IS NOT NULL
-              AND service_engagement_id IS NULL)
+              AND service_engagement_id IS NULL
+              AND product_id IS NOT NULL)
           OR (target_kind = 'service_engagement'
               AND service_engagement_id IS NOT NULL
-              AND order_product_line_id IS NULL)`,
+              AND order_product_line_id IS NULL
+              AND product_id IS NULL)`,
+    ),
+    check(
+      "commerce_completion_counterparty_ck",
+      sql`buyer_organization_id <> counterparty_organization_id`,
     ),
   ],
 );
@@ -4492,6 +4511,19 @@ export const commerceDispute = pgTable(
           OR (state IN ('closed', 'dismissed')
               AND decided_at IS NOT NULL
               AND decided_by_user_id IS NOT NULL)`,
+    ),
+    check(
+      "commerce_dispute_parties_ck",
+      sql`opened_by_organization_id = buyer_organization_id
+          AND buyer_organization_id <> counterparty_organization_id`,
+    ),
+    check(
+      "commerce_dispute_prior_state_ck",
+      sql`prior_order_state IN ('confirmed', 'in_fulfillment', 'partially_completed', 'completed')`,
+    ),
+    check(
+      "commerce_dispute_prior_snapshot_ck",
+      sql`(order_snapshot_json::jsonb->>'state') IS NOT DISTINCT FROM prior_order_state::text`,
     ),
   ],
 );

@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
+  commerceEngagementDeliverable,
   commerceOrder,
   commerceOrderProductLine,
   commerceServiceEngagement,
@@ -15,6 +16,27 @@ import { issueCompletionsForOrder } from "#src/services/commerce-completion.serv
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type OrderState = typeof commerceOrder.$inferSelect.state;
 type ShipmentTerminalState = "delivered" | "cancelled";
+
+const FULFILLMENT_EXECUTION_ORDER_STATES: ReadonlySet<OrderState> = new Set([
+  "confirmed",
+  "in_fulfillment",
+  "partially_completed",
+]);
+
+/**
+ * Fulfillment may execute only after payment confirmation and before the order becomes
+ * terminal or disputed. Contract preparation and cancellation are handled separately by
+ * callers because neither advances paid fulfillment work.
+ */
+export function canExecutePaidFulfillmentForOrderState(orderState: OrderState): boolean {
+  return FULFILLMENT_EXECUTION_ORDER_STATES.has(orderState);
+}
+
+export function isRequiredDeliverableSatisfied(
+  deliverableState: (typeof commerceEngagementDeliverable.$inferSelect)["state"],
+): boolean {
+  return deliverableState === "accepted" || deliverableState === "waived";
+}
 
 export function deriveShipmentTerminalState(
   shipmentLegStates: readonly (typeof commerceShipmentLeg.$inferSelect.state)[],
@@ -117,6 +139,7 @@ export async function finalizeShipmentState(
   shipmentId: string,
   targetState: ShipmentTerminalState,
   occurredAt: Date,
+  actorUserId: string | null,
 ): Promise<boolean> {
   const [shipment] = await transaction
     .select()
@@ -162,7 +185,7 @@ export async function finalizeShipmentState(
     .where(eq(commerceShipment.id, shipment.id));
 
   await reconcileOrderAggregateState(transaction, order.id, occurredAt);
-  await issueCompletionsForOrder(transaction, order.id, occurredAt, null);
+  await issueCompletionsForOrder(transaction, order.id, occurredAt, actorUserId);
 
   return true;
 }
@@ -172,6 +195,7 @@ export async function reconcileShipmentStateFromLegs(
   shipmentId: string,
   occurredAt: Date,
   createdByMemberId: string,
+  actorUserId: string,
 ): Promise<void> {
   const shipmentLegs = await transaction
     .select({ state: commerceShipmentLeg.state })
@@ -184,7 +208,13 @@ export async function reconcileShipmentStateFromLegs(
   );
   if (targetState === null) return;
 
-  const finalized = await finalizeShipmentState(transaction, shipmentId, targetState, occurredAt);
+  const finalized = await finalizeShipmentState(
+    transaction,
+    shipmentId,
+    targetState,
+    occurredAt,
+    actorUserId,
+  );
   if (!finalized) return;
 
   await transaction.insert(commerceShipmentEvent).values({

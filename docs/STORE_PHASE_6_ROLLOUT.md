@@ -27,8 +27,10 @@ platform-owned evidence documents and typed contractual snapshots.
   `operator_initialized` provenance without inventing a quote source.
 - Historical free-text `deliverable_snapshot` obligations without structured plans mark
   `requires_deliverable_normalization` and block completion until `normalize_deliverables`.
-- Payment gate: shipments and order-state advancement require `confirmed` (or later
-  fulfillment states). `pending_payment` / `payment_processing` are preserved.
+- Payment gate: shipment-leg and service-engagement execution require `confirmed` (or later
+  non-terminal fulfillment states). Contract initialization/normalization and pre-payment
+  cancellation remain available, while `pending_payment` / `payment_processing` cannot execute
+  paid work and `disputed` orders freeze fulfillment.
 - Routes:
     - `GET /commerce/orders/:orderId/fulfillment` (derived progress; not client-writable %)
     - `GET /commerce/shipments/:shipmentId`
@@ -60,13 +62,13 @@ platform-owned evidence documents and typed contractual snapshots.
     pnpm run db:migrate
     ```
 
-2. Deploy API (no new worker queues in this phase).
-
-3. Verify constraints:
+2. Verify constraints before exposing Phase 6 routes:
 
     ```bash
     pnpm run db:verify-store-phase-6-constraints
     ```
+
+3. Deploy API (no new worker queues in this phase).
 
 4. Smoke (authorized org actors):
 
@@ -74,6 +76,10 @@ platform-owned evidence documents and typed contractual snapshots.
       `execution_contract_state = ready`, `execution_contract_provenance = accepted_quote`,
       and matching detail row present
     - Create a shipment only after the order is `confirmed` (not `pending_payment`)
+    - Service `schedule`, `start`, deliverable, and completion commands fail before payment;
+      contract preparation and cancellation remain available
+    - Open a dispute and confirm shipment-leg, shipment-event, and engagement state advancement
+      is rejected until a moderator restores the prior order state
     - Engagement `initialize` on legacy rows sets `operator_initialized` provenance and
       does not invent a quote source line
     - Historical free-text deliverable obligations require `normalize_deliverables` before
@@ -130,5 +136,7 @@ row exists. No external provider protocol is wired in Phase 6.
   deterministic source identity
 - Unpaid orders (`pending_payment` / `payment_processing`) are never advanced by
   fulfillment reconciliation
+- Unpaid service engagements cannot execute paid work, and disputed orders cannot advance
+  fulfillment through either Phase 6 commands or Phase 4 compatibility routes
 - Append-only triggers reject UPDATE/DELETE/TRUNCATE on event, command, and engagement
   detail tables and remain enabled after migrations

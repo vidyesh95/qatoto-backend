@@ -189,6 +189,50 @@ describe("commerce trust routes", () => {
     );
   });
 
+  it("replays review creation without invoking the trust module twice", async () => {
+    serviceStubs.createReview.mockResolvedValue({
+      success: true,
+      value: {
+        id: "review_replay",
+        completionId: "cmpl_1",
+        subjectOrganizationId: "commerce_org_seller",
+        productId: "prd_1",
+        rating: 5,
+        body: "Excellent quality",
+        visibility: "visible",
+        createdAt: "2026-08-06T00:00:00.000Z",
+      },
+    });
+
+    const firstResponse = await request(app)
+      .post("/commerce/completions/cmpl_1/reviews")
+      .set("Idempotency-Key", "review-replay-key")
+      .send({ rating: 5, body: "Excellent quality" });
+    const replayResponse = await request(app)
+      .post("/commerce/completions/cmpl_1/reviews")
+      .set("Idempotency-Key", "review-replay-key")
+      .send({ rating: 5, body: "Excellent quality" });
+
+    expect(firstResponse.status).toBe(201);
+    expect(replayResponse.status).toBe(201);
+    expect(replayResponse.headers["idempotency-replayed"]).toBe("true");
+    expect(serviceStubs.createReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps duplicate review conflicts to 409", async () => {
+    serviceStubs.createReview.mockResolvedValue({
+      success: false,
+      error: { type: "CONFLICT", message: "Already reviewed." },
+    });
+
+    const response = await request(app)
+      .post("/commerce/completions/cmpl_1/reviews")
+      .set("Idempotency-Key", "review-conflict-key")
+      .send({ rating: 4, body: "Already submitted" });
+
+    expect(response.status).toBe(409);
+  });
+
   it("opens a dispute for an order", async () => {
     serviceStubs.openDispute.mockResolvedValue({
       success: true,
@@ -216,6 +260,20 @@ describe("commerce trust routes", () => {
     expect(response.body.data.state).toBe("open");
   });
 
+  it("maps a second open dispute to 409", async () => {
+    serviceStubs.openDispute.mockResolvedValue({
+      success: false,
+      error: { type: "CONFLICT", message: "An open dispute already exists." },
+    });
+
+    const response = await request(app)
+      .post("/commerce/orders/order_1/disputes")
+      .set("Idempotency-Key", "dispute-conflict-key")
+      .send({ reasonCode: "quality_issue", summary: "Duplicate dispute" });
+
+    expect(response.status).toBe(409);
+  });
+
   it("lists moderator disputes", async () => {
     serviceStubs.listDisputesForModerator.mockResolvedValue({
       success: true,
@@ -226,6 +284,13 @@ describe("commerce trust routes", () => {
 
     expect(response.status).toBe(200);
     expect(serviceStubs.listDisputesForModerator).toHaveBeenCalled();
+  });
+
+  it("rejects unknown moderator list query keys with 422", async () => {
+    const response = await request(app).get("/commerce/admin/disputes?unexpected=true");
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.listDisputesForModerator).not.toHaveBeenCalled();
   });
 
   it("decides a dispute", async () => {
@@ -253,5 +318,20 @@ describe("commerce trust routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.state).toBe("closed");
+  });
+
+  it("rejects dispute decisions by members of either dispute party", async () => {
+    serviceStubs.decideDispute.mockResolvedValue({
+      success: false,
+      error: { type: "DISPUTE_PARTY_MODERATION_FORBIDDEN" },
+    });
+
+    const response = await request(app)
+      .post("/commerce/admin/disputes/dispute_1/decisions")
+      .set("Idempotency-Key", "decide-party-key")
+      .send({ decision: "dismissed" });
+
+    expect(response.status).toBe(403);
+    expect(response.body.message).toContain("dispute party");
   });
 });
