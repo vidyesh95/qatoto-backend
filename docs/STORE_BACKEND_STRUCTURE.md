@@ -28,7 +28,7 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–8 shipped and hardened.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–9 shipped and hardened.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
@@ -39,25 +39,29 @@
 > derived fulfillment progress, server-issued completions, verified reviews, disputes, and
 > privacy-safe review/completion metrics are implemented. Phase 8 adds **product variants,
 > media kinds, specification groups, packaging geometry, product highlights, the product
-> relation graph, and the merchandising integrity fixes**. See `docs/STORE_PHASE_5_ROLLOUT.md`
+> relation graph, and the merchandising integrity fixes**. Phase 9 adds **guided pathway slots
+> and ranked candidates, anchored sets resolved from the relation graph, read-time per-currency
+> set totals, honest degradation, authoring and moderation, cart seeding, and the nightly
+> co-occurrence derivation job**. See `docs/STORE_PHASE_5_ROLLOUT.md`
 > for the payments/journal contract, `docs/STORE_PHASE_6_ROLLOUT.md` for connector execution,
-> `docs/STORE_PHASE_7_ROLLOUT.md` for the trust MVP, and `docs/STORE_PHASE_8_ROLLOUT.md` for
-> catalog depth.
+> `docs/STORE_PHASE_7_ROLLOUT.md` for the trust MVP, `docs/STORE_PHASE_8_ROLLOUT.md` for
+> catalog depth, and `docs/STORE_PHASE_9_ROLLOUT.md` for guided pathways.
 > Trade-assurance language, real payment processors, external provider adapters/webhooks, Q&A,
 > content reports, ranking, and recommendations remain planned unless a section explicitly says
 > otherwise. Product organization-ownership and category columns remain in the documented
 > expand/dual-write contract phase until non-null enforcement is separately released.
 >
 > **What is NOT built, and what the frontend is standing in for meanwhile:**
-> [§15](#15-guided-pathways--the-buy-the-set-surface) specifies **guided pathways** — the buy-the-set
-> surface whose tables exist as a flat list and whose feature does not; §15.3's relation graph is now
-> built, which is what unblocks anchored sets. [Appendix A](#appendix-a--what-the-frontend-needs-and-this-backend-does-not-have)
+> [Appendix A](#appendix-a--what-the-frontend-needs-and-this-backend-does-not-have)
 > is the register of every remaining store feature the frontend renders as mock UI, with the tables,
-> columns and routes each one needs. Two entries there still describe fields that reach the wire and
-> can never carry a real value: `onTimeShipmentRate` is hardcoded `null`, and the
-> `trending_placeholder` rail strategy returns an empty list unconditionally. Checkout
-> `shippingInCents` is still written literal `0` — Phase 8 supplies the weight and dimensions A16
-> needs to rate freight, but not the estimate itself.
+> columns and routes each one needs. One entry there still describes a field that reaches the wire and
+> can never carry a real value: `onTimeShipmentRate` is hardcoded `null`. The
+> `trending_placeholder` rail strategy still returns an empty list unconditionally — Phase 9 shipped
+> the co-occurrence job §15.9 called its honest replacement, but trending is _ranking_, which §12
+> defers, so the strategy remains unbuilt rather than broken. Checkout
+> `shippingInCents` is still written literal `0` (`commerce-checkout.service.ts:515-517` and
+> `:807-809`) — Phase 8 supplies the weight and dimensions A16 needs to rate freight, but not the
+> estimate itself.
 
 ---
 
@@ -860,9 +864,13 @@ Scheduled jobs:
 
 - Slots, candidates, anchors and pathway images (§15.2), set pricing (§15.4), authoring and
   moderation (§15.5), degradation signals (§15.6), the derivation job (§15.9).
-- **Not started**, but no longer blocked: Phase 8 shipped the relation graph anchored sets resolve
-  their slots from, and gave `store_pathway_item` the scheduling window §15.2 asked for. The
-  remaining work is the slot/candidate model itself.
+- **Shipped and hardened (`0057`–`0058`).** See `docs/STORE_PHASE_9_ROLLOUT.md`. Three things
+  the specification did not anticipate turned out to be load-bearing. A slot candidate carries a
+  `variantId`, because A1's rule refuses a cart line naming no variant and a candidate without
+  one would be a piece the set advertises and cannot sell. Derived candidates are computed at
+  read time and never stored, because a stored copy is stale the moment a seller edits the graph.
+  And the authoring surface serves two principals through one route set — a seller with an
+  organization and a merchandiser with none — which is why idempotency there is user-scoped.
 
 ### Phase 10 — the public voice
 
@@ -922,10 +930,15 @@ The following require legal, provider, or product decisions before implementatio
   frontend's company block renders "Online revenue US $2.4M+" (Appendix A13). Even once the figure is
   derivable from order data, publishing a seller's commercial performance is a disclosure decision,
   not an aggregation one.
-- **how a seller obtains a buyer's full delivery address.** Street lines, recipient name and phone are
-  encrypted, and the order snapshot today records only country, region, locality and postal code
-  (Appendix A15). Either an authorized decrypt path or a seller-openable encrypted snapshot has to be
-  chosen before fulfillment can be honest about what it knows.
+- ~~**how a seller obtains a buyer's full delivery address.**~~ **DECIDED: an authorized decrypt
+  path.** A seller organization with an active order fetches the buyer's decrypted street lines,
+  recipient name and phone through a server route that authorizes the caller against that specific
+  order, rate-limits, and writes an audit entry per read. The alternative — a seller-openable
+  encrypted snapshot — was not chosen: it would put ciphertext a seller can decrypt at rest
+  indefinitely, with no record of when it was opened, whereas a decrypt path makes every access an
+  auditable event and revocable by closing the order. The order snapshot keeps its redacted
+  plaintext columns for display; the decrypt path is the only route to the rest. **Not built** —
+  it is Phase 11 work (Appendix A15).
 
 Until decided, the backend stores no fabricated guarantee and the frontend displays no claim that
 money, shipment, certification, insurance, or compliance is assured.
@@ -940,11 +953,12 @@ scheduled work, and no backend entry exists to make it true.
 
 ## 15. Guided pathways — the buy-the-set surface
 
-> **Status: the relation graph is built; the set surface is not.** §15.3's
-> `commerce_product_relation` shipped in Phase 8 and is live at
-> `GET /store/products/:productSlug/companions`. `store_pathway` and `store_pathway_item` still model
-> a flat ordered list of entity ids — they did gain the per-item time window §15.2 asked for, but
-> slots, candidates, anchors, set pricing and degradation signals remain unbuilt (Phase 9).
+> **Status: built (Phase 9, migrations `0057`–`0058`).** §15.3's `commerce_product_relation`
+> shipped in Phase 8; `store_pathway_slot` and `store_pathway_slot_candidate` shipped in Phase 9,
+> along with anchors, pathway images, read-time set pricing, degradation signals, authoring and
+> moderation, cart seeding and the derivation job. `store_pathway_item` is backfilled, deprecated
+> and no longer read; a later migration drops it. Where the implementation departs from the text
+> below, the departure is noted inline and explained in `docs/STORE_PHASE_9_ROLLOUT.md`.
 
 ### 15.1 A pathway is a composition, not a rail
 
@@ -971,20 +985,20 @@ is a pathway whose slots were resolved rather than typed.
 
 ### 15.2 Slots, not items
 
-Today's `store_pathway_item` is `(pathwayId, entityKind, entityId, position)` with an **untyped,
-un-FK'd `entityId`**. Three things follow, and all three are wrong for a set:
+Before Phase 9, `store_pathway_item` was `(pathwayId, entityKind, entityId, position)` with an **untyped,
+un-FK'd `entityId`**. Three things followed from that, and all three were wrong for a set:
 
-1. **A dead member vanishes silently.** `resolveEligibleMerchandisingItems` drops any id that is no
-   longer publicly eligible, so a five-piece look renders as three pieces with nothing saying a
-   piece is missing. For a rail that is correct — a shorter rail is still a rail. For a set it is a
+1. **A dead member vanished silently.** `resolveEligibleMerchandisingItems` drops any id that is no
+   longer publicly eligible, so a five-piece look rendered as three pieces with nothing saying a
+   piece was missing. For a rail that is correct — a shorter rail is still a rail. For a set it is a
    lie: the buyer believes they are seeing the whole kit.
-2. **Pathway items are the only merchandising rows with no time window.** `store_rail_placement`
-   carries `startsAt`/`endsAt`; `store_pathway_item` carries neither, so a seasonal member cannot be
-   scheduled in or out.
-3. **`getPathwayBySlug` returns every item, unbounded** — no limit, no cursor. A 200-piece kit is
+2. **Pathway items were the only merchandising rows with no time window.** `store_rail_placement`
+   has carried `startsAt`/`endsAt` since Phase 1; items carried neither until A19, so a seasonal
+   member could not be scheduled in or out.
+3. **`getPathwayBySlug` returned every item, unbounded** — no limit, no cursor. A 200-piece kit was
    one response.
 
-Replace it with two tables.
+It was replaced by two tables.
 
 `store_pathway_slot` — a **role** in the set, not a product:
 
@@ -1000,10 +1014,17 @@ Replace it with two tables.
 `store_pathway_slot_candidate` — the products that can fill a slot:
 
 - `id`, `slotId`, `productId` **with a real foreign key**
+- `variantId` — **added in Phase 9, not in the original text.** A1's rule refuses a cart line
+  naming no variant for a product that has active variants, so a candidate without one would be
+  a piece the set advertises and cannot sell. A database trigger binds the variant to its own
+  product and requires it to be active.
 - `rank` — 0 is the default the set shows first
 - `sourceKind` — `curated | derived` (§15.3), so a swap suggested by the graph is distinguishable
-  from one a merchandiser chose
-- unique `(slotId, productId)`
+  from one a merchandiser chose. **Only `curated` rows are stored**: derived candidates are
+  resolved from the relation graph at read time, because a stored copy would be stale the moment
+  a seller edits the graph.
+- unique `(slotId, productId, coalesce(variantId, ''))` — one product in two variants is two
+  legitimate candidates for the same role, the expression-index shape `0054`/`0055` established
 
 **Why candidates rather than one product per slot.** It is what makes a swap possible ("show me a
 cheaper saddle"), and it is what turns today's silent shrink into a fall-through: when rank 0 is out
@@ -1090,7 +1111,7 @@ one is true.
 | GET    | `/store/pathways/:pathwaySlug`            | Slots, ranked candidates, per-currency set totals, completeness; cursor over slots         |
 | GET    | `/store/products/:productSlug/companions` | Relation-graph companions for a PDP, grouped by `relationKind`, each carrying `sourceKind` |
 
-`GET /store/pathways/:pathwaySlug` replaces today's unbounded flat `items` array. Set totals are an
+`GET /store/pathways/:pathwaySlug` replaced the unbounded flat `items` array. Set totals are an
 array keyed by currency — a kit sourced from three countries has three totals and no single number,
 and inventing one would mean converting currencies without an FX quote.
 
@@ -1109,18 +1130,37 @@ and inventing one would mean converting currencies without an FX quote.
 
 All writes take `Idempotency-Key` and are organization-scoped like every other commerce write.
 
-The last two rows shipped in Phase 8; everything above them is Phase 9. The verify route is scoped
-to the user rather than an organization, because a moderator acts for the platform and may not
-belong to a commerce organization at all.
+The last two rows shipped in Phase 8; everything above them shipped in Phase 9. The verify route is
+scoped to the user rather than an organization, because a moderator acts for the platform and may
+not belong to a commerce organization at all.
+
+Two routes exist that this table does not list, and both exist because without them the ones it
+does list are unreachable: `GET /commerce/pathways/mine` (an author cannot edit a draft it cannot
+find) and `GET /commerce/admin/pathways` (a reviewer would have to be handed an id out of band,
+which is how a review step quietly stops happening). The queue projection carries
+`ownCandidateShare` — §15.5's self-dealing signal, surfaced for a reviewer rather than
+auto-rejected, because a bicycle maker legitimately supplies most of a bicycle kit.
+
+Every write here takes `Idempotency-Key`, scoped to the **user** rather than the active
+organization: the organization scope refuses a caller who has none, which would lock out exactly
+the platform merchandiser §15.5 grants this surface to.
 
 ### 15.9 Derivation job
 
-`derive-product-relations` — nightly, in the pattern of `refresh-store-search-document`: mine
-co-occurrence from completed order lines into `derived_cooccurrence` relations with a rank, never
-overwriting a `moderator_curated` or `seller_declared` row.
+`derive-product-relations` — **shipped in Phase 9.** Nightly at 02:40 UTC through a tick queue, in
+the pattern of the other store jobs: mines co-occurrence from completed order lines into
+`derived_cooccurrence` relations with a rank, never overwriting a `moderator_curated` or
+`seller_declared` row. Because the unique index is `(from, to, relationKind)` and carries no source
+kind, a pair that already has a human-authored edge of that kind is skipped entirely rather than
+upserted — an upsert would silently rewrite a moderator's decision as a machine guess.
 
-This is also the honest replacement for the `trending_placeholder` rail strategy, which today returns
-an empty list unconditionally and will keep doing so until something computes trending.
+Edges are written as `complements` only. Co-occurrence is **not** evidence of fitment: it cannot
+support `compatible_with` or `spare_part_of`, and claiming otherwise would turn a correlation into
+the safety claim §15.3 reserves for `moderator_curated`.
+
+This job is the raw material for a `trending` rail strategy, but that strategy is **not built**:
+`trending_placeholder` still returns an empty list, because trending is ranking and §12 defers
+ranking past Phase 9.
 
 ---
 
@@ -1265,9 +1305,10 @@ carrying `sourceKind` and a full product card. Written by the seller at
 `moderate_commerce` capability promotes a claim, and a `commerce_product_relation_verified_ck`
 constraint keeps reviewer attribution and `moderator_curated` in lockstep in both directions.
 
-**Still absent:** ranking and recommendation _selection_ (Phase 10+), and the nightly
-`derive-product-relations` co-occurrence job (§15.9). The `derived_cooccurrence` source kind exists
-in the enum; nothing writes it yet.
+**Shipped since:** the nightly `derive-product-relations` co-occurrence job (§15.9, Phase 9) now
+writes `derived_cooccurrence` rows, which nothing produced when the source kind first shipped.
+
+**Still absent:** ranking and recommendation _selection_ (Phase 10+).
 
 ---
 
@@ -1431,10 +1472,15 @@ delivery address, capped at five.
   **A confirmed order therefore records a city and a postcode, not an address anything can ship to.**
 - There is no user-scoped address table anywhere; addresses belong to organizations.
 
-**What to build:** a `delivery` address kind; a kind filter in the checkout ownership check; and a
-decision about how a fulfilling seller obtains the full address — a decrypt-on-authorized-read path,
-or an encrypted snapshot the seller's key can open. Also a server-owned per-organization address cap
-to replace the frontend's local `MAX_SAVED_ADDRESSES = 5`.
+**What to build:** a `delivery` address kind; a kind filter in the checkout ownership check; and the
+decrypt path §14 has now **decided** on — a seller organization with an active order reads the
+buyer's street lines, recipient name and phone through an authorized, rate-limited, per-read audited
+route, rather than through a seller-openable encrypted snapshot. Also a server-owned
+per-organization address cap to replace the frontend's local `MAX_SAVED_ADDRESSES = 5`.
+
+**Current line references** (the earlier ones drifted): `commerceOrganizationAddressKindEnum` at
+`schema.ts:399`, `assertOwnedDeliveryAddress` at `commerce-checkout.service.ts:200`, the redacted
+snapshot builder at `:187`, and `commerce_order.buyer_address_snapshot` at `schema.ts:2971`.
 
 **Frontend today:** two hardcoded addresses in `useState` that evaporate on unmount.
 
@@ -1517,8 +1563,9 @@ All four were small, cheap, and each one let a bad row exist. All four are close
   `resolveEligibleCategoriesByIds` / `resolveEligibleOrganizationCardsByIds`, using the same
   public-eligibility rules products and offerings already used. Placing something and seeing
   nothing rendered, with no error, was the worst of the four.
-- **`store_pathway_item` carries `startsAt`/`endsAt`** and `getPathwayBySlug` filters on the window,
-  matching `store_rail_placement` since Phase 1 (§15.2).
+- **`store_pathway_item` carries `startsAt`/`endsAt`** and the pathway read filters on the window,
+  matching `store_rail_placement` since Phase 1 (§15.2). Phase 9 carried the window onto
+  `store_pathway_slot` and retired the item table from every read path.
 
 ---
 

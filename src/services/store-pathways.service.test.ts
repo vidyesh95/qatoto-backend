@@ -9,6 +9,44 @@ vi.mock("dotenv/config", () => ({}));
 const { aggregateCurrencyTotals, deriveSlotState } = await import("#src/services/store-pathways.service.js");
 
 type SlotProjection = Parameters<typeof aggregateCurrencyTotals>[0][number];
+type ProductCard = SlotProjection["candidates"][number]["product"];
+
+/**
+ * Built in full rather than asserted from `{}`: the card is irrelevant to the two pure
+ * functions under test, but a type assertion here would be the one place in this suite
+ * that lies about a shape, and it costs nothing to be honest.
+ */
+function buildProductCard(key: string): ProductCard {
+  return {
+    id: `product_${key}`,
+    publicSlug: `product-${key}`,
+    title: `Product ${key}`,
+    brand: null,
+    currency: "USD",
+    priceInCents: 1000,
+    compareAtPriceInCents: null,
+    minimumOrderQuantity: 1,
+    stockState: "in_stock",
+    hasVariants: false,
+    variantCount: 0,
+    condition: "new",
+    samplePolicy: "unavailable",
+    leadTimeMinDays: null,
+    leadTimeMaxDays: null,
+    mainImageUrl: null,
+    seller: {
+      organizationId: "commerce_org_seller",
+      slug: "seller",
+      displayName: "Seller",
+      countryCode: "IN",
+      logoUrl: null,
+      summary: null,
+    },
+    category: { id: "cat_1", slug: "lighting", name: "Lighting" },
+    reviewMetrics: { averageRating: null, reviewCount: 0 },
+    fulfillmentMetrics: { onTimeShipmentRate: null, completedOrderCount: 0 },
+  };
+}
 
 function buildCandidate(input: {
   readonly key: string;
@@ -42,7 +80,7 @@ function buildCandidate(input: {
     variantId: null,
     variantName: null,
     // The card is irrelevant to the two pure functions under test.
-    product: {} as SlotProjection["candidates"][number]["product"],
+    product: buildProductCard(input.key),
     pricing,
   };
 }
