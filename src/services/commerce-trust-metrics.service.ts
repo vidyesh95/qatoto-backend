@@ -79,9 +79,7 @@ export const EMPTY_REVIEW_SCORE_AVERAGES: ReviewScoreAverages = {
 
 /** `avg(rating)::text` comes back as a numeric string; two decimal places is enough. */
 function parseAverage(rawAverage: string | null): number | null {
-  return rawAverage === null
-    ? null
-    : Number.parseFloat(Number(rawAverage).toFixed(2));
+  return rawAverage === null ? null : Number.parseFloat(Number(rawAverage).toFixed(2));
 }
 
 /**
@@ -167,11 +165,7 @@ export const EMPTY_MEASURED_METRICS: OrganizationMeasuredMetrics = {
 };
 
 /** Rates are shipped as fractions rounded to four places, never pre-formatted strings. */
-function deriveRate(
-  numerator: number,
-  denominator: number,
-  minimumSample: number,
-): number | null {
+function deriveRate(numerator: number, denominator: number, minimumSample: number): number | null {
   if (denominator < minimumSample || denominator === 0) return null;
   return Number.parseFloat((numerator / denominator).toFixed(4));
 }
@@ -212,9 +206,7 @@ export async function loadProductReviewMetrics(
     if (row.productId === null) continue;
     metrics.set(row.productId, {
       averageRating:
-        row.averageRating === null
-          ? null
-          : Number.parseFloat(Number(row.averageRating).toFixed(2)),
+        row.averageRating === null ? null : Number.parseFloat(Number(row.averageRating).toFixed(2)),
       reviewCount: row.reviewCount,
     });
   }
@@ -251,9 +243,7 @@ export async function loadOrganizationReviewMetrics(
   for (const row of rows) {
     metrics.set(row.subjectOrganizationId, {
       averageRating:
-        row.averageRating === null
-          ? null
-          : Number.parseFloat(Number(row.averageRating).toFixed(2)),
+        row.averageRating === null ? null : Number.parseFloat(Number(row.averageRating).toFixed(2)),
       reviewCount: row.reviewCount,
     });
   }
@@ -287,24 +277,18 @@ export async function loadOrganizationFulfillmentMetrics(
     metrics.set(organizationId, EMPTY_FULFILLMENT_METRICS);
   }
   for (const row of completionRows) {
-    const current =
-      metrics.get(row.counterpartyOrganizationId) ?? EMPTY_FULFILLMENT_METRICS;
+    const current = metrics.get(row.counterpartyOrganizationId) ?? EMPTY_FULFILLMENT_METRICS;
     metrics.set(row.counterpartyOrganizationId, {
       ...current,
       completedOrderCount: row.completedOrderCount,
     });
   }
   for (const row of onTimeRows) {
-    const current =
-      metrics.get(row.counterpartyOrganizationId) ?? EMPTY_FULFILLMENT_METRICS;
+    const current = metrics.get(row.counterpartyOrganizationId) ?? EMPTY_FULFILLMENT_METRICS;
     metrics.set(row.counterpartyOrganizationId, {
       ...current,
       onTimeSampleSize: row.onTimeSampleSize,
-      onTimeShipmentRate: deriveRate(
-        row.onTimeCount,
-        row.onTimeSampleSize,
-        ON_TIME_MINIMUM_SAMPLE,
-      ),
+      onTimeShipmentRate: deriveRate(row.onTimeCount, row.onTimeSampleSize, ON_TIME_MINIMUM_SAMPLE),
     });
   }
   return metrics;
@@ -319,9 +303,7 @@ function deliveredOrdersSubquery() {
   return db
     .select({
       orderId: commerceShipment.orderId,
-      deliveredAt: sql<Date>`max(${commerceShipmentEvent.occurredAt})`.as(
-        "delivered_at",
-      ),
+      deliveredAt: sql<Date>`max(${commerceShipmentEvent.occurredAt})`.as("delivered_at"),
     })
     .from(commerceShipment)
     .innerJoin(
@@ -345,9 +327,7 @@ function completedOrderCountQuery(requestedIds: readonly string[]) {
     .innerJoin(commerceOrder, eq(commerceOrder.id, commerceCompletion.orderId))
     .where(
       and(
-        inArray(commerceCompletion.counterpartyOrganizationId, [
-          ...requestedIds,
-        ]),
+        inArray(commerceCompletion.counterpartyOrganizationId, [...requestedIds]),
         eq(commerceCompletion.targetKind, "product_order_line"),
         eq(commerceOrder.state, "completed"),
       ),
@@ -419,10 +399,7 @@ export async function loadOrganizationMeasuredMetrics(
         ),
       ),
     )
-    .groupBy(
-      commerceOrder.counterpartyOrganizationId,
-      commerceOrder.buyerOrganizationId,
-    )
+    .groupBy(commerceOrder.counterpartyOrganizationId, commerceOrder.buyerOrganizationId)
     .as("buyer_order_counts");
 
   /**
@@ -465,57 +442,49 @@ export async function loadOrganizationMeasuredMetrics(
     )
     .as("adjacent_messages");
 
-  const [completionRows, onTimeRows, reorderRows, responseRows] =
-    await Promise.all([
-      completedOrderCountQuery(requestedIds),
-      onTimeQuery(requestedIds),
+  const [completionRows, onTimeRows, reorderRows, responseRows] = await Promise.all([
+    completedOrderCountQuery(requestedIds),
+    onTimeQuery(requestedIds),
 
-      db
-        .select({
-          counterpartyOrganizationId:
-            buyerOrderCounts.counterpartyOrganizationId,
-          buyerCount: sql<number>`count(*)::int`,
-          repeatBuyerCount: sql<number>`count(*) filter (where ${buyerOrderCounts.orderCount} >= 2)::int`,
-        })
-        .from(buyerOrderCounts)
-        .groupBy(buyerOrderCounts.counterpartyOrganizationId),
+    db
+      .select({
+        counterpartyOrganizationId: buyerOrderCounts.counterpartyOrganizationId,
+        buyerCount: sql<number>`count(*)::int`,
+        repeatBuyerCount: sql<number>`count(*) filter (where ${buyerOrderCounts.orderCount} >= 2)::int`,
+      })
+      .from(buyerOrderCounts)
+      .groupBy(buyerOrderCounts.counterpartyOrganizationId),
 
-      db
-        .select({
-          organizationId: adjacentMessages.organizationId,
-          responseSampleSize: sql<number>`count(*)::int`,
-          /**
-           * MEDIAN, not mean. One thread left unanswered over a weekend moves a mean by
-           * hours and a median not at all, and "typically replies within N hours" is the
-           * claim a buyer reads into this number.
-           */
-          medianHours: sql<
-            string | null
-          >`(percentile_cont(0.5) within group (order by extract(epoch from (${adjacentMessages.createdAt} - ${adjacentMessages.previousCreatedAt})) / 3600.0))::text`,
-        })
-        .from(adjacentMessages)
-        .where(
-          and(
-            inArray(adjacentMessages.organizationId, requestedIds),
-            // A reply, not a follow-up to itself: the preceding message must be another org's.
-            isNotNull(adjacentMessages.previousOrganizationId),
-            ne(
-              adjacentMessages.previousOrganizationId,
-              adjacentMessages.organizationId,
-            ),
-          ),
-        )
-        .groupBy(adjacentMessages.organizationId),
-    ]);
+    db
+      .select({
+        organizationId: adjacentMessages.organizationId,
+        responseSampleSize: sql<number>`count(*)::int`,
+        /**
+         * MEDIAN, not mean. One thread left unanswered over a weekend moves a mean by
+         * hours and a median not at all, and "typically replies within N hours" is the
+         * claim a buyer reads into this number.
+         */
+        medianHours: sql<
+          string | null
+        >`(percentile_cont(0.5) within group (order by extract(epoch from (${adjacentMessages.createdAt} - ${adjacentMessages.previousCreatedAt})) / 3600.0))::text`,
+      })
+      .from(adjacentMessages)
+      .where(
+        and(
+          inArray(adjacentMessages.organizationId, requestedIds),
+          // A reply, not a follow-up to itself: the preceding message must be another org's.
+          isNotNull(adjacentMessages.previousOrganizationId),
+          ne(adjacentMessages.previousOrganizationId, adjacentMessages.organizationId),
+        ),
+      )
+      .groupBy(adjacentMessages.organizationId),
+  ]);
 
   for (const organizationId of requestedIds) {
     metrics.set(organizationId, EMPTY_MEASURED_METRICS);
   }
 
-  function mergeInto(
-    organizationId: string,
-    patch: Partial<OrganizationMeasuredMetrics>,
-  ): void {
+  function mergeInto(organizationId: string, patch: Partial<OrganizationMeasuredMetrics>): void {
     const current = metrics.get(organizationId) ?? EMPTY_MEASURED_METRICS;
     metrics.set(organizationId, { ...current, ...patch });
   }
@@ -528,30 +497,20 @@ export async function loadOrganizationMeasuredMetrics(
   for (const row of onTimeRows) {
     mergeInto(row.counterpartyOrganizationId, {
       onTimeSampleSize: row.onTimeSampleSize,
-      onTimeShipmentRate: deriveRate(
-        row.onTimeCount,
-        row.onTimeSampleSize,
-        ON_TIME_MINIMUM_SAMPLE,
-      ),
+      onTimeShipmentRate: deriveRate(row.onTimeCount, row.onTimeSampleSize, ON_TIME_MINIMUM_SAMPLE),
     });
   }
   for (const row of reorderRows) {
     mergeInto(row.counterpartyOrganizationId, {
       reorderSampleSize: row.buyerCount,
-      reorderRate: deriveRate(
-        row.repeatBuyerCount,
-        row.buyerCount,
-        REORDER_MINIMUM_BUYERS,
-      ),
+      reorderRate: deriveRate(row.repeatBuyerCount, row.buyerCount, REORDER_MINIMUM_BUYERS),
     });
   }
   for (const row of responseRows) {
     mergeInto(row.organizationId, {
       responseSampleSize: row.responseSampleSize,
       measuredResponseTimeHours:
-        row.responseSampleSize < RESPONSE_MINIMUM_SAMPLE
-          ? null
-          : parseAverage(row.medianHours),
+        row.responseSampleSize < RESPONSE_MINIMUM_SAMPLE ? null : parseAverage(row.medianHours),
     });
   }
   return metrics;
@@ -713,10 +672,7 @@ export async function loadProductReviewScoreAverages(
       scoreCount: sql<number>`count(*)::int`,
     })
     .from(commerceReviewScore)
-    .innerJoin(
-      commerceReview,
-      eq(commerceReview.id, commerceReviewScore.reviewId),
-    )
+    .innerJoin(commerceReview, eq(commerceReview.id, commerceReviewScore.reviewId))
     .where(
       and(
         inArray(commerceReview.productId, [...productIds]),
@@ -732,8 +688,7 @@ export async function loadProductReviewScoreAverages(
 export async function loadOrganizationReviewScoreAverages(
   organizationIds: readonly string[],
 ): Promise<ReadonlyMap<string, ReviewScoreAverages>> {
-  if (organizationIds.length === 0)
-    return new Map<string, ReviewScoreAverages>();
+  if (organizationIds.length === 0) return new Map<string, ReviewScoreAverages>();
 
   const rows = await db
     .select({
@@ -743,10 +698,7 @@ export async function loadOrganizationReviewScoreAverages(
       scoreCount: sql<number>`count(*)::int`,
     })
     .from(commerceReviewScore)
-    .innerJoin(
-      commerceReview,
-      eq(commerceReview.id, commerceReviewScore.reviewId),
-    )
+    .innerJoin(commerceReview, eq(commerceReview.id, commerceReviewScore.reviewId))
     .where(
       and(
         inArray(commerceReview.subjectOrganizationId, [...organizationIds]),

@@ -6,8 +6,7 @@ stubServerEnvironment();
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
-const { aggregateCurrencyTotals, deriveSlotState } =
-  await import("#src/services/store-pathways.service.js");
+const { aggregateCurrencyTotals, deriveSlotState } = await import("#src/services/store-pathways.service.js");
 
 type SlotProjection = Parameters<typeof aggregateCurrencyTotals>[0][number];
 type ProductCard = SlotProjection["candidates"][number]["product"];
@@ -45,11 +44,7 @@ function buildProductCard(key: string): ProductCard {
     },
     category: { id: "cat_1", slug: "lighting", name: "Lighting" },
     reviewMetrics: { averageRating: null, reviewCount: 0 },
-    fulfillmentMetrics: {
-      onTimeShipmentRate: null,
-      onTimeSampleSize: 0,
-      completedOrderCount: 0,
-    },
+    fulfillmentMetrics: { onTimeShipmentRate: null, onTimeSampleSize: 0, completedOrderCount: 0 },
   };
 }
 
@@ -57,8 +52,7 @@ function buildCandidate(input: {
   readonly key: string;
   readonly currency?: string;
   readonly lineTotalInCents?: number;
-  readonly status?:
-    "priced" | "unpriced" | "unavailable" | "variant_selection_required";
+  readonly status?: "priced" | "unpriced" | "unavailable" | "variant_selection_required";
 }): SlotProjection["candidates"][number] {
   const status = input.status ?? "priced";
   const pricing =
@@ -72,10 +66,7 @@ function buildCandidate(input: {
           stockState: "in_stock",
         } as const)
       : status === "unavailable"
-        ? ({
-            status: "unavailable",
-            pricingError: { type: "INSUFFICIENT_STOCK", availableQuantity: 0 },
-          } as const)
+        ? ({ status: "unavailable", pricingError: { type: "INSUFFICIENT_STOCK", availableQuantity: 0 } } as const)
         : status === "variant_selection_required"
           ? ({ status: "variant_selection_required" } as const)
           : ({ status: "unpriced" } as const);
@@ -133,17 +124,10 @@ describe("guided pathway slot state (§15.6)", () => {
   });
 
   it("is unavailable when nothing can fill it, rather than the slot disappearing", () => {
-    expect(
-      deriveSlotState({
-        candidates: [{ key: "candidate_a" }],
-        chosenCandidateKey: null,
-      }),
-    ).toBe("unavailable");
+    expect(deriveSlotState({ candidates: [{ key: "candidate_a" }], chosenCandidateKey: null })).toBe("unavailable");
     // A slot with no candidates at all is still a slot: an absent slot and a slot with
     // nothing in it are different facts, and only the second one is true.
-    expect(deriveSlotState({ candidates: [], chosenCandidateKey: null })).toBe(
-      "unavailable",
-    );
+    expect(deriveSlotState({ candidates: [], chosenCandidateKey: null })).toBe("unavailable");
   });
 });
 
@@ -154,35 +138,19 @@ describe("guided pathway set totals (§15.4)", () => {
         id: "slot_1",
         chosenCandidateKey: "candidate_a",
         candidates: [
-          buildCandidate({
-            key: "candidate_a",
-            currency: "USD",
-            lineTotalInCents: 2500,
-          }),
+          buildCandidate({ key: "candidate_a", currency: "USD", lineTotalInCents: 2500 }),
           // Not chosen, so its price must not reach the total.
-          buildCandidate({
-            key: "candidate_b",
-            currency: "USD",
-            lineTotalInCents: 9900,
-          }),
+          buildCandidate({ key: "candidate_b", currency: "USD", lineTotalInCents: 9900 }),
         ],
       }),
       buildSlot({
         id: "slot_2",
         chosenCandidateKey: "candidate_c",
-        candidates: [
-          buildCandidate({
-            key: "candidate_c",
-            currency: "USD",
-            lineTotalInCents: 500,
-          }),
-        ],
+        candidates: [buildCandidate({ key: "candidate_c", currency: "USD", lineTotalInCents: 500 })],
       }),
     ]);
 
-    expect(totals).toEqual([
-      { currency: "USD", subtotalInCents: 3000, slotCount: 2 },
-    ]);
+    expect(totals).toEqual([{ currency: "USD", subtotalInCents: 3000, slotCount: 2 }]);
   });
 
   it("returns one total per currency and never converts between them", () => {
@@ -190,24 +158,12 @@ describe("guided pathway set totals (§15.4)", () => {
       buildSlot({
         id: "slot_1",
         chosenCandidateKey: "candidate_a",
-        candidates: [
-          buildCandidate({
-            key: "candidate_a",
-            currency: "USD",
-            lineTotalInCents: 1000,
-          }),
-        ],
+        candidates: [buildCandidate({ key: "candidate_a", currency: "USD", lineTotalInCents: 1000 })],
       }),
       buildSlot({
         id: "slot_2",
         chosenCandidateKey: "candidate_b",
-        candidates: [
-          buildCandidate({
-            key: "candidate_b",
-            currency: "INR",
-            lineTotalInCents: 7000,
-          }),
-        ],
+        candidates: [buildCandidate({ key: "candidate_b", currency: "INR", lineTotalInCents: 7000 })],
       }),
     ]);
 
@@ -222,33 +178,21 @@ describe("guided pathway set totals (§15.4)", () => {
       buildSlot({
         id: "slot_1",
         chosenCandidateKey: "candidate_a",
-        candidates: [
-          buildCandidate({
-            key: "candidate_a",
-            currency: "USD",
-            lineTotalInCents: 1200,
-          }),
-        ],
+        candidates: [buildCandidate({ key: "candidate_a", currency: "USD", lineTotalInCents: 1200 })],
       }),
       buildSlot({
         id: "slot_2",
         chosenCandidateKey: null,
-        candidates: [
-          buildCandidate({ key: "candidate_b", status: "unavailable" }),
-        ],
+        candidates: [buildCandidate({ key: "candidate_b", status: "unavailable" })],
       }),
       buildSlot({
         id: "slot_3",
         chosenCandidateKey: "candidate_c",
-        candidates: [
-          buildCandidate({ key: "candidate_c", status: "unpriced" }),
-        ],
+        candidates: [buildCandidate({ key: "candidate_c", status: "unpriced" })],
       }),
     ]);
 
-    expect(totals).toEqual([
-      { currency: "USD", subtotalInCents: 1200, slotCount: 1 },
-    ]);
+    expect(totals).toEqual([{ currency: "USD", subtotalInCents: 1200, slotCount: 1 }]);
   });
 
   it("has no total at all when the set can fill nothing", () => {
@@ -257,12 +201,7 @@ describe("guided pathway set totals (§15.4)", () => {
         buildSlot({
           id: "slot_1",
           chosenCandidateKey: null,
-          candidates: [
-            buildCandidate({
-              key: "candidate_a",
-              status: "variant_selection_required",
-            }),
-          ],
+          candidates: [buildCandidate({ key: "candidate_a", status: "variant_selection_required" })],
         }),
       ]),
     ).toEqual([]);

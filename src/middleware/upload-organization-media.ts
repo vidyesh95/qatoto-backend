@@ -60,10 +60,7 @@ export function uploadOrganizationMediaImage(
       return;
     }
 
-    if (
-      uploadError instanceof Error &&
-      uploadError.message === "UNSUPPORTED_MIME"
-    ) {
+    if (uploadError instanceof Error && uploadError.message === "UNSUPPORTED_MIME") {
       res.status(422).json({
         status: "error",
         statusCode: 422,

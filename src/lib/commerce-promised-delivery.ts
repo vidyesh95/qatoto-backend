@@ -33,11 +33,8 @@ export function derivePromisedDeliveryAt(input: {
   readonly leadTimeMaxDays: number | null;
 }): Date | null {
   if (input.leadTimeMaxDays === null) return null;
-  if (!Number.isInteger(input.leadTimeMaxDays) || input.leadTimeMaxDays < 0)
-    return null;
-  return new Date(
-    input.orderedAt.getTime() + input.leadTimeMaxDays * MILLISECONDS_PER_DAY,
-  );
+  if (!Number.isInteger(input.leadTimeMaxDays) || input.leadTimeMaxDays < 0) return null;
+  return new Date(input.orderedAt.getTime() + input.leadTimeMaxDays * MILLISECONDS_PER_DAY);
 }
 
 /**
@@ -52,14 +49,11 @@ export function derivePromisedDeliveryAt(input: {
  * commitment than a fully-declared order, but it is a real one, and dropping it would let a
  * seller escape measurement by leaving one line's lead time blank.
  */
-export function latestPromisedDeliveryAt(
-  linePromises: readonly (Date | null)[],
-): Date | null {
+export function latestPromisedDeliveryAt(linePromises: readonly (Date | null)[]): Date | null {
   let latest: Date | null = null;
   for (const promise of linePromises) {
     if (promise === null) continue;
-    if (latest === null || promise.getTime() > latest.getTime())
-      latest = promise;
+    if (latest === null || promise.getTime() > latest.getTime()) latest = promise;
   }
   return latest;
 }

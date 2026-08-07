@@ -26,23 +26,17 @@ vi.mock("#src/db/index.js", () => ({
   db: {
     // Handing the stub to the callback is what lets the test call the service with a
     // correctly typed transaction and no type assertion anywhere.
-    transaction: (run: (transaction: unknown) => Promise<unknown>) =>
-      run(transactionStub),
+    transaction: (run: (transaction: unknown) => Promise<unknown>) => run(transactionStub),
   },
   pool: {},
 }));
 
 const { db } = await import("#src/db/index.js");
-const { appendCommerceOrganizationAuditEntry } =
-  await import("#src/services/commerce-organization-audit.service.js");
+const { appendCommerceOrganizationAuditEntry } = await import("#src/services/commerce-organization-audit.service.js");
 
-type AuditAppendInput = Parameters<
-  typeof appendCommerceOrganizationAuditEntry
->[1];
+type AuditAppendInput = Parameters<typeof appendCommerceOrganizationAuditEntry>[1];
 
-function buildAppendInput(
-  payload: AuditAppendInput["payload"],
-): AuditAppendInput {
+function buildAppendInput(payload: AuditAppendInput["payload"]): AuditAppendInput {
   return {
     organizationId: "commerce_org_1",
     eventKind: "address_changed",
@@ -72,18 +66,11 @@ describe("commerce organization audit payload guard", () => {
     const appended = await db.transaction(async (transaction) =>
       appendCommerceOrganizationAuditEntry(
         transaction,
-        buildAppendInput({
-          action: "created",
-          kind: "delivery",
-          isDefault: true,
-        }),
+        buildAppendInput({ action: "created", kind: "delivery", isDefault: true }),
       ),
     );
 
-    expect(appended).toEqual({
-      success: true,
-      value: { auditEntryId: "audit_1" },
-    });
+    expect(appended).toEqual({ success: true, value: { auditEntryId: "audit_1" } });
     expect(insertedRowsRef.rows).toHaveLength(1);
   });
 
@@ -107,10 +94,7 @@ describe("commerce organization audit payload guard", () => {
     const appended = await db.transaction(async (transaction) =>
       appendCommerceOrganizationAuditEntry(
         transaction,
-        buildAppendInput({
-          action: "created",
-          contact: { phone: "+91 99999 99999" },
-        }),
+        buildAppendInput({ action: "created", contact: { phone: "+91 99999 99999" } }),
       ),
     );
 
@@ -139,10 +123,7 @@ describe("A13 seller profile audit payload shapes", () => {
 
   async function append(payload: AuditAppendInput["payload"]) {
     return db.transaction(async (transaction) =>
-      appendCommerceOrganizationAuditEntry(
-        transaction,
-        buildAppendInput(payload),
-      ),
+      appendCommerceOrganizationAuditEntry(transaction, buildAppendInput(payload)),
     );
   }
 
@@ -178,9 +159,7 @@ describe("A13 seller profile audit payload shapes", () => {
       success: false,
       error: { type: "UNSAFE_PAYLOAD", fieldPath: "$.filename" },
     });
-    await expect(
-      append({ objectStorageKey: "qatoto/commerce-organizations/x" }),
-    ).resolves.toEqual({
+    await expect(append({ objectStorageKey: "qatoto/commerce-organizations/x" })).resolves.toEqual({
       success: false,
       error: { type: "UNSAFE_PAYLOAD", fieldPath: "$.objectStorageKey" },
     });
@@ -192,9 +171,10 @@ describe("A13 seller profile audit payload shapes", () => {
       success: true,
       value: { auditEntryId: "audit_1" },
     });
-    await expect(
-      append({ capabilityKinds: ["oem", "sample_production"] }),
-    ).resolves.toEqual({ success: true, value: { auditEntryId: "audit_1" } });
+    await expect(append({ capabilityKinds: ["oem", "sample_production"] })).resolves.toEqual({
+      success: true,
+      value: { auditEntryId: "audit_1" },
+    });
   });
 
   /**
@@ -235,9 +215,7 @@ describe("A13 seller profile audit payload shapes", () => {
    * carries neither, so this pins the boundary rather than the choice.
    */
   it("refuses a certification payload naming a registration number", async () => {
-    await expect(
-      append({ registrationNumber: "U74999MH2009PTC000000" }),
-    ).resolves.toEqual({
+    await expect(append({ registrationNumber: "U74999MH2009PTC000000" })).resolves.toEqual({
       success: false,
       error: { type: "UNSAFE_PAYLOAD", fieldPath: "$.registrationNumber" },
     });

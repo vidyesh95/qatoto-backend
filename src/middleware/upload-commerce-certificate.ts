@@ -34,11 +34,7 @@ const certificateUpload = multer({
     fields: CERTIFICATE_TEXT_FIELD_LIMIT,
   },
   fileFilter: (_req, file, callback) => {
-    if (
-      COMMERCE_EVIDENCE_MEDIA_TYPES.some(
-        (mediaType) => mediaType === file.mimetype,
-      )
-    ) {
+    if (COMMERCE_EVIDENCE_MEDIA_TYPES.some((mediaType) => mediaType === file.mimetype)) {
       callback(null, true);
       return;
     }
@@ -46,11 +42,7 @@ const certificateUpload = multer({
   },
 });
 
-export function uploadCommerceCertificate(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
+export function uploadCommerceCertificate(req: Request, res: Response, next: NextFunction): void {
   certificateUpload.single("evidence")(req, res, (uploadError: unknown) => {
     if (!uploadError) {
       next();

@@ -1,10 +1,7 @@
 import type { Express } from "express";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-import {
-  estimateBodyBytes,
-  maxLengthFromPattern,
-} from "#src/middleware/json-body-budget.js";
+import { estimateBodyBytes, maxLengthFromPattern } from "#src/middleware/json-body-budget.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 
 /**
@@ -26,9 +23,7 @@ import { stubServerEnvironment } from "#src/test-support/server-env.js";
 stubServerEnvironment();
 
 vi.mock("dotenv/config", () => ({}));
-vi.mock("#src/db/index.js", async () =>
-  (await import("#src/test-support/database-mock.js")).databaseModuleMock(),
-);
+vi.mock("#src/db/index.js", async () => (await import("#src/test-support/database-mock.js")).databaseModuleMock());
 
 const COMPACT_BYTES = 16 * 1024;
 const LONG_FORM_BYTES = 128 * 1024;
@@ -50,9 +45,7 @@ interface MountedRoute {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    (typeof value === "object" || typeof value === "function") && value !== null
-  );
+  return (typeof value === "object" || typeof value === "function") && value !== null;
 }
 
 /** Every verb route reachable through a router, recursing into mounted sub-routers. */
@@ -71,12 +64,7 @@ function collectRoutes(router: unknown, prefix: string): MountedRoute[] {
       const path: unknown = Reflect.get(route, "path");
       const methods: unknown = Reflect.get(route, "methods");
       const routeStack: unknown = Reflect.get(route, "stack");
-      if (
-        typeof path !== "string" ||
-        !isRecord(methods) ||
-        !Array.isArray(routeStack)
-      )
-        continue;
+      if (typeof path !== "string" || !isRecord(methods) || !Array.isArray(routeStack)) continue;
 
       const verbs = Object.entries(methods)
         .filter(([, enabled]) => enabled === true)
@@ -96,9 +84,7 @@ function collectRoutes(router: unknown, prefix: string): MountedRoute[] {
               const entryMethod: unknown = Reflect.get(entry, "method");
               return entryMethod === method || entryMethod === undefined;
             })
-            .map((entry) =>
-              isRecord(entry) ? Reflect.get(entry, "handle") : undefined,
-            ),
+            .map((entry) => (isRecord(entry) ? Reflect.get(entry, "handle") : undefined)),
         });
       }
       continue;
@@ -117,11 +103,7 @@ function collectRoutes(router: unknown, prefix: string): MountedRoute[] {
 
 function sourceOf(route: MountedRoute): string {
   return route.handlers
-    .map((handler) =>
-      typeof handler === "function"
-        ? Function.prototype.toString.call(handler)
-        : "",
-    )
+    .map((handler) => (typeof handler === "function" ? Function.prototype.toString.call(handler) : ""))
     .join("\n");
 }
 
@@ -134,11 +116,7 @@ let routes: readonly MountedRoute[];
  * routers and skipped the rest — three matches out of seventy-one, and both sweeps passing on
  * the strength of it. The handler references are the same objects either way.
  */
-let rndChains: readonly {
-  method: string;
-  path: string;
-  handlers: readonly unknown[];
-}[];
+let rndChains: readonly { method: string; path: string; handlers: readonly unknown[] }[];
 let bodyLimitOf: (handler: unknown) => number | undefined;
 let multerHandlers: readonly unknown[];
 let bodies: typeof import("#src/docs/openapi-rnd-bodies.js").RND_REQUEST_BODIES;
@@ -216,16 +194,12 @@ describe("per-route body caps", () => {
     // Every rule below filters on something. If the walk returns nothing, or the body
     // detector matches nothing, all of them pass by comparing zero to zero.
     expect(routes.length).toBeGreaterThan(180);
-    expect(
-      routes.filter((route) => READS_BODY.test(sourceOf(route))).length,
-    ).toBeGreaterThanOrEqual(90);
+    expect(routes.filter((route) => READS_BODY.test(sourceOf(route))).length).toBeGreaterThanOrEqual(90);
   });
 
   it("gives every body-reading route a declared cap", () => {
     const undeclared = routes
-      .filter(
-        (route) => READS_BODY.test(sourceOf(route)) && !isMultipart(route),
-      )
+      .filter((route) => READS_BODY.test(sourceOf(route)) && !isMultipart(route))
       .filter((route) => declaredCap(route) === undefined)
       .map((route) => `${route.method.toUpperCase()} ${route.path}`);
 
@@ -241,9 +215,7 @@ describe("per-route body caps", () => {
     const misordered = routes
       .filter((route) => declaredCap(route) !== undefined)
       .filter((route) => {
-        const capIndex = route.handlers.findIndex(
-          (handler) => bodyLimitOf(handler) !== undefined,
-        );
+        const capIndex = route.handlers.findIndex((handler) => bodyLimitOf(handler) !== undefined);
         return capIndex === route.handlers.length - 1;
       })
       .map((route) => `${route.method.toUpperCase()} ${route.path}`);
@@ -257,9 +229,7 @@ describe("per-route body caps", () => {
     // runtime, but it documents a cap that does not exist.
     const spurious = routes
       .filter((route) => declaredCap(route) !== undefined)
-      .filter(
-        (route) => !READS_BODY.test(sourceOf(route)) || isMultipart(route),
-      )
+      .filter((route) => !READS_BODY.test(sourceOf(route)) || isMultipart(route))
       .map((route) => `${route.method.toUpperCase()} ${route.path}`);
 
     expect([...new Set(spurious)].toSorted()).toEqual([]);
@@ -285,14 +255,10 @@ describe("per-route body caps", () => {
       if (budget.kind === "unbounded") {
         // Nothing safe to tighten to, so it keeps the ceiling.
         if (cap < LONG_FORM_BYTES) {
-          tooTight.push(
-            `${route.method} ${route.path} — unbounded (${budget.reason}), capped at ${String(cap)}B`,
-          );
+          tooTight.push(`${route.method} ${route.path} — unbounded (${budget.reason}), capped at ${String(cap)}B`);
         }
       } else if (budget.bytes > cap) {
-        tooTight.push(
-          `${route.method} ${route.path} — needs ${String(budget.bytes)}B, capped at ${String(cap)}B`,
-        );
+        tooTight.push(`${route.method} ${route.path} — needs ${String(budget.bytes)}B, capped at ${String(cap)}B`);
       }
     }
 
@@ -321,9 +287,7 @@ describe("per-route body caps", () => {
 
       const cap = declaredCap(route);
       if (cap !== undefined && cap > COMPACT_BYTES) {
-        oversized.push(
-          `${route.method} ${route.path} — fits ${String(budget.bytes)}B, carries ${String(cap)}B`,
-        );
+        oversized.push(`${route.method} ${route.path} — fits ${String(budget.bytes)}B, carries ${String(cap)}B`);
       }
     }
 
@@ -338,23 +302,17 @@ describe("estimateBodyBytes", () => {
     // on a larger cap, which is the safe direction.
     const budget = estimateBodyBytes({ type: "string", maxLength: 1000 });
 
-    expect(budget.kind === "bounded" && budget.bytes).toBeGreaterThanOrEqual(
-      4000,
-    );
+    expect(budget.kind === "bounded" && budget.bytes).toBeGreaterThanOrEqual(4000);
   });
 
   it("reports a string with no derivable maximum as unbounded", () => {
-    expect(estimateBodyBytes({ type: "string", minLength: 1 }).kind).toBe(
-      "unbounded",
-    );
+    expect(estimateBodyBytes({ type: "string", minLength: 1 }).kind).toBe("unbounded");
   });
 
   it("derives a bound from a format rather than calling it unbounded", () => {
     // `z.uuid()` emits no maxLength. Treating it as unmeasurable would leave a third of the
     // surface on the larger cap for no reason at all.
-    expect(estimateBodyBytes({ type: "string", format: "uuid" }).kind).toBe(
-      "bounded",
-    );
+    expect(estimateBodyBytes({ type: "string", format: "uuid" }).kind).toBe("bounded");
   });
 
   it("takes the widest arm of a union", () => {
@@ -371,9 +329,7 @@ describe("estimateBodyBytes", () => {
   it("propagates unboundedness out of a nested property", () => {
     const budget = estimateBodyBytes({
       type: "object",
-      properties: {
-        nested: { type: "object", properties: { open: { type: "string" } } },
-      },
+      properties: { nested: { type: "object", properties: { open: { type: "string" } } } },
     });
 
     expect(budget.kind).toBe("unbounded");
@@ -382,21 +338,9 @@ describe("estimateBodyBytes", () => {
 
 describe("maxLengthFromPattern", () => {
   it.each([
-    {
-      pattern: String.raw`^\d{1,15}$`,
-      expected: 15,
-      why: "a bounded repetition takes its maximum",
-    },
-    {
-      pattern: String.raw`^\d{4}-\d{2}-\d{2}$`,
-      expected: 10,
-      why: "literals and repetitions sum",
-    },
-    {
-      pattern: "^[A-Z]{2}$",
-      expected: 2,
-      why: "a character class is one atom",
-    },
+    { pattern: String.raw`^\d{1,15}$`, expected: 15, why: "a bounded repetition takes its maximum" },
+    { pattern: String.raw`^\d{4}-\d{2}-\d{2}$`, expected: 10, why: "literals and repetitions sum" },
+    { pattern: "^[A-Z]{2}$", expected: 2, why: "a character class is one atom" },
     { pattern: String.raw`^\d?$`, expected: 1, why: "`?` is at most one" },
   ])("bounds $why", ({ pattern, expected }) => {
     expect(maxLengthFromPattern(pattern)).toBe(expected);
@@ -407,10 +351,7 @@ describe("maxLengthFromPattern", () => {
     { pattern: String.raw`^\d*$`, why: "a star" },
     { pattern: String.raw`^\d{2,}$`, why: "an open lower bound" },
     { pattern: "^(a|b)$", why: "alternation this does not parse" },
-    {
-      pattern: String.raw`\d{2}`,
-      why: "an unanchored pattern, which can match anywhere",
-    },
+    { pattern: String.raw`\d{2}`, why: "an unanchored pattern, which can match anywhere" },
   ])("refuses to bound $why", ({ pattern }) => {
     // Undefined keeps the route on the cap it already has. Guessing would shrink a cap below
     // what the server accepts, which is the one outcome to avoid.

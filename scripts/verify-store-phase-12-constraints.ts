@@ -156,14 +156,8 @@ const FORBIDDEN_ENUM_VALUES: readonly {
   readonly value: string;
 }[] = [{ typeName: "commerce_certification_state", value: "expired" }];
 
-async function countQuery(
-  queryText: string,
-  values: readonly unknown[] = [],
-): Promise<number> {
-  const queryResult = await pool.query<{ readonly row_count: string }>(
-    queryText,
-    [...values],
-  );
+async function countQuery(queryText: string, values: readonly unknown[] = []): Promise<number> {
+  const queryResult = await pool.query<{ readonly row_count: string }>(queryText, [...values]);
   return Number(queryResult.rows[0]?.row_count ?? 0);
 }
 
@@ -282,8 +276,7 @@ async function verifyPresence(): Promise<readonly CheckOutcome[]> {
     ],
   );
   outcomes.push({
-    label:
-      "certification state has no `expired` value (lapsing is a read-time comparison)",
+    label: "certification state has no `expired` value (lapsing is a read-time comparison)",
     status: forbiddenEnumCount === 0 ? "pass" : "fail",
     detail: `${String(forbiddenEnumCount)} forbidden value(s)`,
   });
@@ -348,8 +341,7 @@ async function verifyStoredData(): Promise<readonly CheckOutcome[]> {
       WHERE state = 'approved' AND valid_until < current_date`,
   );
   outcomes.push({
-    label:
-      "lapsed-but-approved certifications are known (read filter must exclude them)",
+    label: "lapsed-but-approved certifications are known (read filter must exclude them)",
     status: "pass",
     detail: `${String(lapsedApproved)} lapsed approval(s) held back by the read filter`,
   });
@@ -363,8 +355,7 @@ async function verifyStoredData(): Promise<readonly CheckOutcome[]> {
          OR evidence.organization_id <> certification.organization_id`,
   );
   outcomes.push({
-    label:
-      "every certification's evidence is its own organization's certification document",
+    label: "every certification's evidence is its own organization's certification document",
     status: certificationEvidenceMismatch === 0 ? "pass" : "fail",
     detail: `${String(certificationEvidenceMismatch)} mismatched evidence row(s)`,
   });
@@ -412,8 +403,7 @@ async function verifyStoredData(): Promise<readonly CheckOutcome[]> {
              OR column_name LIKE '%contact%')`,
   );
   outcomes.push({
-    label:
-      "stakeholders carry no contact column (the absence is the safety argument)",
+    label: "stakeholders carry no contact column (the absence is the safety argument)",
     status: stakeholderContactColumns === 0 ? "pass" : "fail",
     detail: `${String(stakeholderContactColumns)} contact column(s)`,
   });
@@ -462,9 +452,7 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
     outcomes.push({
       label: "a founding year of 1700 is rejected",
       status: yearFoundedRejected ? "pass" : "fail",
-      detail: yearFoundedRejected
-        ? "refused"
-        : "ACCEPTED — the CHECK does not bite",
+      detail: yearFoundedRejected ? "refused" : "ACCEPTED — the CHECK does not bite",
     });
 
     const negativeCountRejected = await violationIsRejected(
@@ -475,9 +463,7 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
     outcomes.push({
       label: "a negative factory count is rejected",
       status: negativeCountRejected ? "pass" : "fail",
-      detail: negativeCountRejected
-        ? "refused"
-        : "ACCEPTED — the CHECK does not bite",
+      detail: negativeCountRejected ? "refused" : "ACCEPTED — the CHECK does not bite",
     });
 
     const zeroDimensionRejected = await violationIsRejected(
@@ -490,9 +476,7 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
     outcomes.push({
       label: "a company photo with zero width is rejected",
       status: zeroDimensionRejected ? "pass" : "fail",
-      detail: zeroDimensionRejected
-        ? "refused"
-        : "ACCEPTED — the CHECK does not bite",
+      detail: zeroDimensionRejected ? "refused" : "ACCEPTED — the CHECK does not bite",
     });
 
     const httpMediaRejected = await violationIsRejected(
@@ -505,9 +489,7 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
     outcomes.push({
       label: "a plain-http company photo url is rejected",
       status: httpMediaRejected ? "pass" : "fail",
-      detail: httpMediaRejected
-        ? "refused"
-        : "ACCEPTED — the CHECK does not bite",
+      detail: httpMediaRejected ? "refused" : "ACCEPTED — the CHECK does not bite",
     });
 
     /**
@@ -517,14 +499,12 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
      * smoke script or a real seller already wrote and the script dies before asserting
      * anything. It did exactly that once.
      */
-    await client.query(
-      `DELETE FROM commerce_organization_stakeholder WHERE organization_id = $1`,
-      [organizationId],
-    );
-    await client.query(
-      `DELETE FROM commerce_organization_capability WHERE organization_id = $1`,
-      [organizationId],
-    );
+    await client.query(`DELETE FROM commerce_organization_stakeholder WHERE organization_id = $1`, [
+      organizationId,
+    ]);
+    await client.query(`DELETE FROM commerce_organization_capability WHERE organization_id = $1`, [
+      organizationId,
+    ]);
 
     // The position uniqueness that lets the PUT-replace writes skip A2's re-packing dance.
     await client.query(
@@ -543,9 +523,7 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
     outcomes.push({
       label: "two stakeholders cannot share a position",
       status: duplicatePositionRejected ? "pass" : "fail",
-      detail: duplicatePositionRejected
-        ? "refused"
-        : "ACCEPTED — the index does not bite",
+      detail: duplicatePositionRejected ? "refused" : "ACCEPTED — the index does not bite",
     });
 
     await client.query(
@@ -564,9 +542,7 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
     outcomes.push({
       label: "a capability cannot be declared twice",
       status: duplicateCapabilityRejected ? "pass" : "fail",
-      detail: duplicateCapabilityRejected
-        ? "refused"
-        : "ACCEPTED — the index does not bite",
+      detail: duplicateCapabilityRejected ? "refused" : "ACCEPTED — the index does not bite",
     });
 
     /**
@@ -599,9 +575,7 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
     outcomes.push({
       label: "a certificate valid until before it is valid from is rejected",
       status: invalidValidityRejected ? "pass" : "fail",
-      detail: invalidValidityRejected
-        ? "refused"
-        : "ACCEPTED — the CHECK does not bite",
+      detail: invalidValidityRejected ? "refused" : "ACCEPTED — the CHECK does not bite",
     });
 
     const selfApprovalRejected = await violationIsRejected(
@@ -617,9 +591,7 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
     outcomes.push({
       label: "a certification approved by its own submitter is rejected",
       status: selfApprovalRejected ? "pass" : "fail",
-      detail: selfApprovalRejected
-        ? "refused"
-        : "ACCEPTED — the CHECK does not bite",
+      detail: selfApprovalRejected ? "refused" : "ACCEPTED — the CHECK does not bite",
     });
 
     const approvalWithoutReviewerRejected = await violationIsRejected(
@@ -634,9 +606,7 @@ async function verifyViolationsAreRejected(): Promise<readonly CheckOutcome[]> {
     outcomes.push({
       label: "an approved certification with no reviewer is rejected",
       status: approvalWithoutReviewerRejected ? "pass" : "fail",
-      detail: approvalWithoutReviewerRejected
-        ? "refused"
-        : "ACCEPTED — the CHECK does not bite",
+      detail: approvalWithoutReviewerRejected ? "refused" : "ACCEPTED — the CHECK does not bite",
     });
 
     return outcomes;
@@ -658,11 +628,7 @@ async function main(): Promise<void> {
   let hasSkip = false;
   for (const outcome of outcomes) {
     const outcomeMark =
-      outcome.status === "pass"
-        ? "PASS"
-        : outcome.status === "skip"
-          ? "SKIP"
-          : "FAIL";
+      outcome.status === "pass" ? "PASS" : outcome.status === "skip" ? "SKIP" : "FAIL";
     console.log(`[${outcomeMark}] ${outcome.label} — ${outcome.detail}`);
     if (outcome.status === "fail") hasFailure = true;
     if (outcome.status === "skip") hasSkip = true;

@@ -13,9 +13,7 @@ const OrganizationIdSchema = z
 const MediaParamsSchema = OrganizationIdSchema.extend({
   mediaId: z.string().uuid(),
 }).strict();
-const CertificationParamsSchema = z
-  .object({ certificationId: z.string().uuid() })
-  .strict();
+const CertificationParamsSchema = z.object({ certificationId: z.string().uuid() }).strict();
 
 /**
  * Hand-written mirrors of the pgEnums, and they must be widened WITH the enum. A value
@@ -29,18 +27,8 @@ const BusinessTypeSchema = z.enum([
   "agent",
   "distributor",
 ]);
-const VisitPolicySchema = z.enum([
-  "welcome",
-  "by_appointment",
-  "not_available",
-]);
-const MediaKindSchema = z.enum([
-  "factory",
-  "office",
-  "warehouse",
-  "production_line",
-  "showcase",
-]);
+const VisitPolicySchema = z.enum(["welcome", "by_appointment", "not_available"]);
+const MediaKindSchema = z.enum(["factory", "office", "warehouse", "production_line", "showcase"]);
 const SiteAccessModeSchema = z.enum(["road", "sea", "air", "rail"]);
 const CapabilityKindSchema = z.enum([
   "oem",
@@ -84,19 +72,10 @@ export const UpsertSellerProfileSchema = z
     visitPolicy: VisitPolicySchema.nullable().optional(),
     acceptingCustomOrders: z.boolean().optional(),
     publicSummary: z.string().trim().max(4000).nullable().optional(),
-    declaredResponseTimeHours: z
-      .number()
-      .int()
-      .min(0)
-      .max(8760)
-      .nullable()
-      .optional(),
+    declaredResponseTimeHours: z.number().int().min(0).max(8760).nullable().optional(),
   })
   .strict()
-  .refine(
-    (patch) => Object.keys(patch).length > 0,
-    "At least one field is required.",
-  );
+  .refine((patch) => Object.keys(patch).length > 0, "At least one field is required.");
 
 export const ReplaceSiteAccessSchema = z
   .object({
@@ -106,13 +85,7 @@ export const ReplaceSiteAccessSchema = z
           .object({
             accessMode: SiteAccessModeSchema,
             facilityName: z.string().trim().min(1).max(200),
-            distanceKm: z
-              .number()
-              .int()
-              .min(0)
-              .max(40_000)
-              .nullable()
-              .optional(),
+            distanceKm: z.number().int().min(0).max(40_000).nullable().optional(),
             notes: z.string().trim().max(1000).nullable().optional(),
           })
           .strict(),
@@ -164,9 +137,7 @@ export const AddOrganizationMediaSchema = z
   })
   .strict();
 
-const IsoDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected an ISO date (YYYY-MM-DD).");
+const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected an ISO date (YYYY-MM-DD).");
 
 export const SubmitCertificationSchema = z
   .object({
@@ -223,10 +194,7 @@ function parseNoQuery(req: Request, res: Response): boolean {
   return true;
 }
 
-function respondSellerProfileError(
-  res: Response,
-  error: CommerceSellerProfileError,
-): void {
+function respondSellerProfileError(res: Response, error: CommerceSellerProfileError): void {
   switch (error.type) {
     case "NOT_FOUND":
       res.status(404).json({
@@ -290,18 +258,13 @@ function respondSellerProfileError(
       return;
     default: {
       const exhaustiveCheck: never = error;
-      throw new Error(
-        `Unhandled seller profile error: ${JSON.stringify(exhaustiveCheck)}`,
-      );
+      throw new Error(`Unhandled seller profile error: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }
 
 function describeImageRejection(
-  imageError: Extract<
-    CommerceSellerProfileError,
-    { type: "IMAGE_REJECTED" }
-  >["imageError"],
+  imageError: Extract<CommerceSellerProfileError, { type: "IMAGE_REJECTED" }>["imageError"],
 ): string {
   switch (imageError.type) {
     case "NOT_AN_IMAGE":
@@ -314,17 +277,12 @@ function describeImageRejection(
       return "The image exceeds the maximum supported dimensions.";
     default: {
       const exhaustiveCheck: never = imageError;
-      throw new Error(
-        `Unhandled image error: ${JSON.stringify(exhaustiveCheck)}`,
-      );
+      throw new Error(`Unhandled image error: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }
 
-export async function upsertSellerProfile(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function upsertSellerProfile(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;
@@ -347,10 +305,7 @@ export async function upsertSellerProfile(
   } satisfies ApiResponse);
 }
 
-export async function replaceSiteAccess(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function replaceSiteAccess(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;
@@ -373,10 +328,7 @@ export async function replaceSiteAccess(
   } satisfies ApiResponse);
 }
 
-export async function replaceStakeholders(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function replaceStakeholders(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;
@@ -399,10 +351,7 @@ export async function replaceStakeholders(
   } satisfies ApiResponse);
 }
 
-export async function replaceCapabilities(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function replaceCapabilities(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;
@@ -425,10 +374,7 @@ export async function replaceCapabilities(
   } satisfies ApiResponse);
 }
 
-export async function addOrganizationMedia(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function addOrganizationMedia(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;
@@ -461,10 +407,7 @@ export async function addOrganizationMedia(
   } satisfies ApiResponse);
 }
 
-export async function reorderOrganizationMedia(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function reorderOrganizationMedia(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;
@@ -473,15 +416,12 @@ export async function reorderOrganizationMedia(
   if (!params.success) return validationError(res, params.error);
   if (!body.success) return validationError(res, body.error);
 
-  const reordered = await commerceSellerProfileService.reorderOrganizationMedia(
-    {
-      userId: authContext.userId,
-      organizationId: params.data.organizationId,
-      mediaIdsInOrder: body.data.mediaIdsInOrder,
-    },
-  );
-  if (!reordered.success)
-    return respondSellerProfileError(res, reordered.error);
+  const reordered = await commerceSellerProfileService.reorderOrganizationMedia({
+    userId: authContext.userId,
+    organizationId: params.data.organizationId,
+    mediaIdsInOrder: body.data.mediaIdsInOrder,
+  });
+  if (!reordered.success) return respondSellerProfileError(res, reordered.error);
   res.status(200).json({
     status: "success",
     statusCode: 200,
@@ -490,23 +430,18 @@ export async function reorderOrganizationMedia(
   } satisfies ApiResponse);
 }
 
-export async function deleteOrganizationMedia(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function deleteOrganizationMedia(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;
   const params = MediaParamsSchema.safeParse(req.params);
   if (!params.success) return validationError(res, params.error);
 
-  const deleted = await commerceSellerProfileService.deleteOrganizationMediaRow(
-    {
-      userId: authContext.userId,
-      organizationId: params.data.organizationId,
-      mediaId: params.data.mediaId,
-    },
-  );
+  const deleted = await commerceSellerProfileService.deleteOrganizationMediaRow({
+    userId: authContext.userId,
+    organizationId: params.data.organizationId,
+    mediaId: params.data.mediaId,
+  });
   if (!deleted.success) return respondSellerProfileError(res, deleted.error);
   res.status(200).json({
     status: "success",
@@ -516,10 +451,7 @@ export async function deleteOrganizationMedia(
   } satisfies ApiResponse);
 }
 
-export async function submitCertification(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function submitCertification(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;
@@ -531,10 +463,7 @@ export async function submitCertification(
    * The magic-byte check is the same one verification evidence uses. The multipart
    * `mimetype` header is a claim by the uploader; the decoded content is the fact.
    */
-  if (
-    !req.file ||
-    !evidenceBytesMatchMediaType(req.file.buffer, req.file.mimetype)
-  ) {
+  if (!req.file || !evidenceBytesMatchMediaType(req.file.buffer, req.file.mimetype)) {
     res.status(422).json({
       status: "error",
       statusCode: 422,
@@ -556,8 +485,7 @@ export async function submitCertification(
     mediaType: req.file.mimetype,
     originalFileName: req.file.originalname,
   });
-  if (!submitted.success)
-    return respondSellerProfileError(res, submitted.error);
+  if (!submitted.success) return respondSellerProfileError(res, submitted.error);
   res.status(201).json({
     status: "success",
     statusCode: 201,
@@ -566,10 +494,7 @@ export async function submitCertification(
   } satisfies ApiResponse);
 }
 
-export async function listCertifications(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function listCertifications(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;
@@ -589,10 +514,7 @@ export async function listCertifications(
   } satisfies ApiResponse);
 }
 
-export async function decideCertification(
-  req: Request,
-  res: Response,
-): Promise<void> {
+export async function decideCertification(req: Request, res: Response): Promise<void> {
   const authContext = authenticatedRequest(req, res);
   if (!authContext) return;
   if (!parseNoQuery(req, res)) return;

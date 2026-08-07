@@ -9,15 +9,15 @@ const ORDERED_AT = new Date("2026-08-07T12:00:00.000Z");
 
 describe("derivePromisedDeliveryAt (A13)", () => {
   it("adds the declared lead time in whole UTC days", () => {
-    expect(
-      derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: 14 }),
-    ).toEqual(new Date("2026-08-21T12:00:00.000Z"));
+    expect(derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: 14 })).toEqual(
+      new Date("2026-08-21T12:00:00.000Z"),
+    );
   });
 
   it("treats a same-day lead time as the ordering instant", () => {
-    expect(
-      derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: 0 }),
-    ).toEqual(ORDERED_AT);
+    expect(derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: 0 })).toEqual(
+      ORDERED_AT,
+    );
   });
 
   /**
@@ -34,12 +34,8 @@ describe("derivePromisedDeliveryAt (A13)", () => {
   });
 
   it("refuses a negative or fractional lead time rather than inventing a date", () => {
-    expect(
-      derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: -3 }),
-    ).toBeNull();
-    expect(
-      derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: 2.5 }),
-    ).toBeNull();
+    expect(derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: -3 })).toBeNull();
+    expect(derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: 2.5 })).toBeNull();
   });
 
   it("crosses a DST boundary without shifting, because the arithmetic is UTC", () => {
@@ -76,12 +72,8 @@ describe("latestPromisedDeliveryAt (A13)", () => {
    * time.
    */
   it("ignores undeclared lines rather than voiding the whole order's promise", () => {
-    expect(
-      latestPromisedDeliveryAt([
-        null,
-        new Date("2026-09-01T00:00:00.000Z"),
-        null,
-      ]),
-    ).toEqual(new Date("2026-09-01T00:00:00.000Z"));
+    expect(latestPromisedDeliveryAt([null, new Date("2026-09-01T00:00:00.000Z"), null])).toEqual(
+      new Date("2026-09-01T00:00:00.000Z"),
+    );
   });
 });

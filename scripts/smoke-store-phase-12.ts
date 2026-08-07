@@ -71,18 +71,12 @@ function stringField(source: Record<string, unknown>, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function numberField(
-  source: Record<string, unknown>,
-  key: string,
-): number | null {
+function numberField(source: Record<string, unknown>, key: string): number | null {
   const value = source[key];
   return typeof value === "number" ? value : null;
 }
 
-function arrayField(
-  source: Record<string, unknown>,
-  key: string,
-): readonly unknown[] {
+function arrayField(source: Record<string, unknown>, key: string): readonly unknown[] {
   const value = source[key];
   return Array.isArray(value) ? value : [];
 }
@@ -161,8 +155,7 @@ async function callMultipart(
   },
 ): Promise<ApiResult> {
   const form = new FormData();
-  for (const [key, value] of Object.entries(options.fields))
-    form.append(key, value);
+  for (const [key, value] of Object.entries(options.fields)) form.append(key, value);
   form.append(
     options.file.fieldName,
     new Blob([new Uint8Array(options.file.bytes)], {
@@ -222,8 +215,7 @@ async function signIn(email: string): Promise<Actor> {
     .map((cookie) => cookie.split(";")[0] ?? "")
     .filter((cookie) => cookie.startsWith("better-auth.session_token="))
     .join("; ");
-  if (sessionCookie === "")
-    throw new Error(`No session cookie returned for ${email}.`);
+  if (sessionCookie === "") throw new Error(`No session cookie returned for ${email}.`);
   await new Promise((resolve) => setTimeout(resolve, 2500));
   return { cookie: sessionCookie };
 }
@@ -232,10 +224,7 @@ async function signIn(email: string): Promise<Actor> {
 // The declared profile.
 // ---------------------------------------------------------------------------
 
-async function smokeDeclaredProfile(
-  seller: Actor,
-  buyer: Actor,
-): Promise<void> {
+async function smokeDeclaredProfile(seller: Actor, buyer: Actor): Promise<void> {
   const saved = await callApi(
     "PATCH",
     `/commerce/organizations/${SELLER_ORGANIZATION_ID}/seller-profile`,
@@ -249,8 +238,7 @@ async function smokeDeclaredProfile(
         visitPolicy: "by_appointment",
         acceptingCustomOrders: true,
         declaredResponseTimeHours: 6,
-        publicSummary:
-          "Contract furniture manufacturer, banquet and hospitality seating.",
+        publicSummary: "Contract furniture manufacturer, banquet and hospitality seating.",
       },
       idempotencyPrefix: "profile",
     },
@@ -378,8 +366,7 @@ async function smokeReplaceCollections(seller: Actor): Promise<void> {
   );
   record(
     "site access replaces to three rows with contiguous positions",
-    siteAccess.status === 200 &&
-      arrayField(dataOf(siteAccess), "rows").length === 3,
+    siteAccess.status === 200 && arrayField(dataOf(siteAccess), "rows").length === 3,
     `${String(siteAccess.status)} rows=${String(arrayField(dataOf(siteAccess), "rows").length)}`,
   );
 
@@ -399,8 +386,7 @@ async function smokeReplaceCollections(seller: Actor): Promise<void> {
   );
   record(
     "stakeholders replace to two rows",
-    stakeholders.status === 200 &&
-      arrayField(dataOf(stakeholders), "rows").length === 2,
+    stakeholders.status === 200 && arrayField(dataOf(stakeholders), "rows").length === 2,
     `${String(stakeholders.status)} rows=${String(arrayField(dataOf(stakeholders), "rows").length)}`,
   );
 
@@ -410,9 +396,7 @@ async function smokeReplaceCollections(seller: Actor): Promise<void> {
     {
       actor: seller,
       body: {
-        rows: [
-          { fullName: "R. Iyer", roleTitle: "MD", email: "r@example.invalid" },
-        ],
+        rows: [{ fullName: "R. Iyer", roleTitle: "MD", email: "r@example.invalid" }],
       },
       idempotencyPrefix: "stakeholders-contact",
     },
@@ -439,8 +423,7 @@ async function smokeReplaceCollections(seller: Actor): Promise<void> {
   );
   record(
     "capabilities replace to two rows",
-    capabilities.status === 200 &&
-      arrayField(dataOf(capabilities), "rows").length === 2,
+    capabilities.status === 200 && arrayField(dataOf(capabilities), "rows").length === 2,
     `${String(capabilities.status)} rows=${String(arrayField(dataOf(capabilities), "rows").length)}`,
   );
 
@@ -475,9 +458,7 @@ async function smokeReplaceCollections(seller: Actor): Promise<void> {
     {
       actor: seller,
       body: {
-        rows: [
-          { accessMode: "sea", facilityName: "Nhava Sheva", distanceKm: 62 },
-        ],
+        rows: [{ accessMode: "sea", facilityName: "Nhava Sheva", distanceKm: 62 }],
       },
       idempotencyPrefix: "site-access-restore",
     },
@@ -514,32 +495,24 @@ async function smokeIdempotency(seller: Actor): Promise<void> {
   );
   record(
     "a replayed idempotency key returns one business result",
-    first.status === 200 &&
-      replay.status === 200 &&
-      replay.rawText === first.rawText,
+    first.status === 200 && replay.status === 200 && replay.rawText === first.rawText,
     `first=${String(first.status)} replay=${String(replay.status)} identical=${String(replay.rawText === first.rawText)}`,
   );
 }
 
-async function smokeCompanyMedia(
-  seller: Actor,
-  buyer: Actor,
-): Promise<string | null> {
+async function smokeCompanyMedia(seller: Actor, buyer: Actor): Promise<string | null> {
   const photoBytes = await factoryPhotoPngBytes();
-  const uploaded = await callMultipart(
-    `/commerce/organizations/${SELLER_ORGANIZATION_ID}/media`,
-    {
-      actor: seller,
-      fields: { mediaKind: "factory", altText: "Assembly line" },
-      file: {
-        fieldName: "image",
-        fileName: "factory.png",
-        mediaType: "image/png",
-        bytes: photoBytes,
-      },
-      idempotencyPrefix: "media",
+  const uploaded = await callMultipart(`/commerce/organizations/${SELLER_ORGANIZATION_ID}/media`, {
+    actor: seller,
+    fields: { mediaKind: "factory", altText: "Assembly line" },
+    file: {
+      fieldName: "image",
+      fileName: "factory.png",
+      mediaType: "image/png",
+      bytes: photoBytes,
     },
-  );
+    idempotencyPrefix: "media",
+  });
   const mediaId = stringField(dataOf(uploaded), "id");
   record(
     "a company photo uploads and reports server-measured dimensions",
@@ -625,11 +598,7 @@ function minimalPdfBytes(): Buffer {
   );
 }
 
-async function smokeCertifications(
-  seller: Actor,
-  buyer: Actor,
-  staff: Actor,
-): Promise<void> {
+async function smokeCertifications(seller: Actor, buyer: Actor, staff: Actor): Promise<void> {
   const submitted = await callMultipart(
     `/commerce/organizations/${SELLER_ORGANIZATION_ID}/certifications`,
     {
@@ -654,8 +623,7 @@ async function smokeCertifications(
   const certificationId = stringField(dataOf(submitted), "id");
   record(
     "a certification submits and lands pending",
-    submitted.status === 201 &&
-      stringField(dataOf(submitted), "state") === "pending",
+    submitted.status === 201 && stringField(dataOf(submitted), "state") === "pending",
     `${String(submitted.status)} state=${stringField(dataOf(submitted), "state")}`,
   );
   record(
@@ -666,11 +634,7 @@ async function smokeCertifications(
   );
 
   if (certificationId === "") {
-    record(
-      "certification decision flow",
-      false,
-      "no certification id to decide",
-    );
+    record("certification decision flow", false, "no certification id to decide");
     return;
   }
 
@@ -679,13 +643,10 @@ async function smokeCertifications(
    * approval publishes it — that is the entire difference between this table and the
    * declared capability rows beside it.
    */
-  const beforeApproval = await callApi(
-    "GET",
-    `/store/organizations/${SELLER_ORGANIZATION_SLUG}`,
-  );
+  const beforeApproval = await callApi("GET", `/store/organizations/${SELLER_ORGANIZATION_SLUG}`);
   const declaredBefore = asRecord(dataOf(beforeApproval)["declaredProfile"]);
-  const publishedIdsBefore = arrayField(declaredBefore, "certifications").map(
-    (entry) => stringField(asRecord(entry), "id"),
+  const publishedIdsBefore = arrayField(declaredBefore, "certifications").map((entry) =>
+    stringField(asRecord(entry), "id"),
   );
   /**
    * Asserted by IDENTITY, not by count. An earlier run of this script leaves approved
@@ -740,8 +701,7 @@ async function smokeCertifications(
   );
   record(
     "a moderator approves the certification",
-    approved.status === 200 &&
-      stringField(dataOf(approved), "state") === "approved",
+    approved.status === 200 && stringField(dataOf(approved), "state") === "approved",
     `${String(approved.status)} state=${stringField(dataOf(approved), "state")}`,
   );
 
@@ -782,8 +742,7 @@ async function smokeCertifications(
   );
   record(
     "the seller sees its own certifications with review state",
-    ownerView.status === 200 &&
-      arrayField(dataOf(ownerView), "items").length >= 1,
+    ownerView.status === 200 && arrayField(dataOf(ownerView), "items").length >= 1,
     `${String(ownerView.status)} items=${String(arrayField(dataOf(ownerView), "items").length)}`,
   );
   record(
@@ -810,10 +769,7 @@ async function smokeCertifications(
 // ---------------------------------------------------------------------------
 
 async function smokePublicStorefront(): Promise<void> {
-  const storefront = await callApi(
-    "GET",
-    `/store/organizations/${SELLER_ORGANIZATION_SLUG}`,
-  );
+  const storefront = await callApi("GET", `/store/organizations/${SELLER_ORGANIZATION_SLUG}`);
   const data = dataOf(storefront);
   const declared = asRecord(data["declaredProfile"]);
   const measured = asRecord(data["measuredMetrics"]);
@@ -835,8 +791,7 @@ async function smokePublicStorefront(): Promise<void> {
   );
   record(
     "the seller's assertions live only under declaredProfile",
-    numberField(declared, "yearFounded") === 2009 &&
-      !("yearFounded" in measured),
+    numberField(declared, "yearFounded") === 2009 && !("yearFounded" in measured),
     `declared.yearFounded=${String(numberField(declared, "yearFounded"))} measured.yearFounded=${String("yearFounded" in measured)}`,
   );
   record(
@@ -869,9 +824,7 @@ async function smokePublicStorefront(): Promise<void> {
   record(
     "every measured rate ships its sample size",
     hasSampleSizes,
-    hasSampleSizes
-      ? "all three present"
-      : JSON.stringify(measured).slice(0, 160),
+    hasSampleSizes ? "all three present" : JSON.stringify(measured).slice(0, 160),
   );
 
   /**
@@ -895,8 +848,7 @@ async function smokePublicStorefront(): Promise<void> {
    */
   record(
     "the sample thresholds are not on the wire",
-    !storefront.rawText.includes("minimumSample") &&
-      !storefront.rawText.includes("threshold"),
+    !storefront.rawText.includes("minimumSample") && !storefront.rawText.includes("threshold"),
     "absent",
   );
 
@@ -908,10 +860,7 @@ async function smokePublicStorefront(): Promise<void> {
     "absent",
   );
 
-  const missing = await callApi(
-    "GET",
-    "/store/organizations/no-such-company-slug",
-  );
+  const missing = await callApi("GET", "/store/organizations/no-such-company-slug");
   record(
     "an unknown storefront slug is 404",
     missing.status === 404,
@@ -943,8 +892,7 @@ async function smokeProviderDetail(): Promise<void> {
    */
   record(
     "the provider card names its self-reported response time as declared",
-    "declaredResponseTimeHours" in providerCard &&
-      !("averageResponseTimeHours" in providerCard),
+    "declaredResponseTimeHours" in providerCard && !("averageResponseTimeHours" in providerCard),
     `declaredResponseTimeHours=${String("declaredResponseTimeHours" in providerCard)} averageResponseTimeHours=${String("averageResponseTimeHours" in providerCard)}`,
   );
 }

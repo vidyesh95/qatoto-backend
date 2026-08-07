@@ -20,10 +20,7 @@ import {
 } from "#src/lib/cloudinary.js";
 import { encryptCommerceDocument } from "#src/lib/commerce-document-encryption.js";
 import { encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
-import {
-  validateAndNormalizeImage,
-  type ImageValidationError,
-} from "#src/lib/image.js";
+import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import {
   deletePrivateCommerceDocument,
   uploadPrivateCommerceDocument,
@@ -65,10 +62,7 @@ export type CommerceSellerProfileError =
  */
 const PROFILE_MANAGERS: readonly MemberRole[] = ["owner", "administrator"];
 /** Certification evidence is compliance paperwork, so it matches VERIFICATION_MANAGERS. */
-const CERTIFICATION_MANAGERS: readonly MemberRole[] = [
-  "owner",
-  "administrator",
-];
+const CERTIFICATION_MANAGERS: readonly MemberRole[] = ["owner", "administrator"];
 const CERTIFICATION_READERS: readonly MemberRole[] = [
   "owner",
   "administrator",
@@ -199,9 +193,7 @@ function projectMedia(row: MediaRow): OrganizationMediaProjection {
   };
 }
 
-function projectSiteAccess(
-  row: SiteAccessRow,
-): OrganizationSiteAccessProjection {
+function projectSiteAccess(row: SiteAccessRow): OrganizationSiteAccessProjection {
   return {
     id: row.id,
     accessMode: row.accessMode,
@@ -212,9 +204,7 @@ function projectSiteAccess(
   };
 }
 
-function projectStakeholder(
-  row: StakeholderRow,
-): OrganizationStakeholderProjection {
+function projectStakeholder(row: StakeholderRow): OrganizationStakeholderProjection {
   return {
     id: row.id,
     fullName: row.fullName,
@@ -224,9 +214,7 @@ function projectStakeholder(
   };
 }
 
-function projectCapability(
-  row: CapabilityRow,
-): OrganizationCapabilityProjection {
+function projectCapability(row: CapabilityRow): OrganizationCapabilityProjection {
   return {
     id: row.id,
     capabilityKind: row.capabilityKind,
@@ -235,9 +223,7 @@ function projectCapability(
   };
 }
 
-function projectCertification(
-  row: CertificationRow,
-): OrganizationCertificationProjection {
+function projectCertification(row: CertificationRow): OrganizationCertificationProjection {
   return {
     id: row.id,
     standardName: row.standardName,
@@ -302,14 +288,9 @@ async function appendAuditOrThrow(
   transaction: DatabaseTransaction,
   input: Parameters<typeof appendCommerceOrganizationAuditEntry>[1],
 ): Promise<void> {
-  const appended = await appendCommerceOrganizationAuditEntry(
-    transaction,
-    input,
-  );
+  const appended = await appendCommerceOrganizationAuditEntry(transaction, input);
   if (!appended.success) {
-    throw new Error(
-      `Seller profile audit append failed: ${appended.error.type}`,
-    );
+    throw new Error(`Seller profile audit append failed: ${appended.error.type}`);
   }
 }
 
@@ -361,9 +342,7 @@ export async function loadSellerDeclaredProfiles(
     db
       .select()
       .from(commerceOrganizationSiteAccess)
-      .where(
-        inArray(commerceOrganizationSiteAccess.organizationId, requestedIds),
-      )
+      .where(inArray(commerceOrganizationSiteAccess.organizationId, requestedIds))
       .orderBy(
         asc(commerceOrganizationSiteAccess.organizationId),
         asc(commerceOrganizationSiteAccess.position),
@@ -371,9 +350,7 @@ export async function loadSellerDeclaredProfiles(
     db
       .select()
       .from(commerceOrganizationStakeholder)
-      .where(
-        inArray(commerceOrganizationStakeholder.organizationId, requestedIds),
-      )
+      .where(inArray(commerceOrganizationStakeholder.organizationId, requestedIds))
       .orderBy(
         asc(commerceOrganizationStakeholder.organizationId),
         asc(commerceOrganizationStakeholder.position),
@@ -381,9 +358,7 @@ export async function loadSellerDeclaredProfiles(
     db
       .select()
       .from(commerceOrganizationCapability)
-      .where(
-        inArray(commerceOrganizationCapability.organizationId, requestedIds),
-      )
+      .where(inArray(commerceOrganizationCapability.organizationId, requestedIds))
       .orderBy(
         asc(commerceOrganizationCapability.organizationId),
         asc(commerceOrganizationCapability.position),
@@ -400,10 +375,7 @@ export async function loadSellerDeclaredProfiles(
       .from(commerceOrganizationCertification)
       .where(
         and(
-          inArray(
-            commerceOrganizationCertification.organizationId,
-            requestedIds,
-          ),
+          inArray(commerceOrganizationCertification.organizationId, requestedIds),
           eq(commerceOrganizationCertification.state, "approved"),
           sql`${commerceOrganizationCertification.validUntil} >= current_date`,
         ),
@@ -420,37 +392,25 @@ export async function loadSellerDeclaredProfiles(
     existing.push(projectMedia(row));
     mediaByOrganization.set(row.organizationId, existing);
   }
-  const siteAccessByOrganization = new Map<
-    string,
-    OrganizationSiteAccessProjection[]
-  >();
+  const siteAccessByOrganization = new Map<string, OrganizationSiteAccessProjection[]>();
   for (const row of siteAccessRows) {
     const existing = siteAccessByOrganization.get(row.organizationId) ?? [];
     existing.push(projectSiteAccess(row));
     siteAccessByOrganization.set(row.organizationId, existing);
   }
-  const stakeholdersByOrganization = new Map<
-    string,
-    OrganizationStakeholderProjection[]
-  >();
+  const stakeholdersByOrganization = new Map<string, OrganizationStakeholderProjection[]>();
   for (const row of stakeholderRows) {
     const existing = stakeholdersByOrganization.get(row.organizationId) ?? [];
     existing.push(projectStakeholder(row));
     stakeholdersByOrganization.set(row.organizationId, existing);
   }
-  const capabilitiesByOrganization = new Map<
-    string,
-    OrganizationCapabilityProjection[]
-  >();
+  const capabilitiesByOrganization = new Map<string, OrganizationCapabilityProjection[]>();
   for (const row of capabilityRows) {
     const existing = capabilitiesByOrganization.get(row.organizationId) ?? [];
     existing.push(projectCapability(row));
     capabilitiesByOrganization.set(row.organizationId, existing);
   }
-  const certificationsByOrganization = new Map<
-    string,
-    OrganizationCertificationProjection[]
-  >();
+  const certificationsByOrganization = new Map<string, OrganizationCertificationProjection[]>();
   for (const row of certificationRows) {
     const existing = certificationsByOrganization.get(row.organizationId) ?? [];
     existing.push(projectCertification(row));
@@ -473,8 +433,7 @@ export async function loadSellerDeclaredProfiles(
       siteAccess: siteAccessByOrganization.get(row.organizationId) ?? [],
       stakeholders: stakeholdersByOrganization.get(row.organizationId) ?? [],
       capabilities: capabilitiesByOrganization.get(row.organizationId) ?? [],
-      certifications:
-        certificationsByOrganization.get(row.organizationId) ?? [],
+      certifications: certificationsByOrganization.get(row.organizationId) ?? [],
     });
   }
 
@@ -490,8 +449,7 @@ export async function loadSellerDeclaredProfiles(
     const siteAccess = siteAccessByOrganization.get(organizationId) ?? [];
     const stakeholders = stakeholdersByOrganization.get(organizationId) ?? [];
     const capabilities = capabilitiesByOrganization.get(organizationId) ?? [];
-    const certifications =
-      certificationsByOrganization.get(organizationId) ?? [];
+    const certifications = certificationsByOrganization.get(organizationId) ?? [];
     if (
       media.length === 0 &&
       siteAccess.length === 0 &&
@@ -549,14 +507,8 @@ export async function upsertSellerProfile(input: {
   readonly userId: string;
   readonly organizationId: string;
   readonly patch: UpsertSellerProfileInput;
-}): Promise<
-  Result<SellerDeclaredProfileProjection, CommerceSellerProfileError>
-> {
-  const access = await requireMembershipRole(
-    input.userId,
-    input.organizationId,
-    PROFILE_MANAGERS,
-  );
+}): Promise<Result<SellerDeclaredProfileProjection, CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
   if (!access.success) return access;
 
   await db.transaction(async (transaction) => {
@@ -594,8 +546,7 @@ export async function upsertSellerProfile(input: {
 
   const reloaded = await loadSellerDeclaredProfiles([input.organizationId]);
   const profile = reloaded.get(input.organizationId);
-  if (!profile)
-    throw new Error("Seller profile vanished immediately after upsert.");
+  if (!profile) throw new Error("Seller profile vanished immediately after upsert.");
   return { success: true, value: profile };
 }
 
@@ -633,17 +584,8 @@ export async function replaceSiteAccess(input: {
   readonly userId: string;
   readonly organizationId: string;
   readonly rows: readonly SiteAccessInput[];
-}): Promise<
-  Result<
-    readonly OrganizationSiteAccessProjection[],
-    CommerceSellerProfileError
-  >
-> {
-  const access = await requireMembershipRole(
-    input.userId,
-    input.organizationId,
-    PROFILE_MANAGERS,
-  );
+}): Promise<Result<readonly OrganizationSiteAccessProjection[], CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
   if (!access.success) return access;
   if (input.rows.length > MAXIMUM_SITE_ACCESS_ROWS) {
     return {
@@ -659,9 +601,7 @@ export async function replaceSiteAccess(input: {
     const occurredAt = new Date();
     await transaction
       .delete(commerceOrganizationSiteAccess)
-      .where(
-        eq(commerceOrganizationSiteAccess.organizationId, input.organizationId),
-      );
+      .where(eq(commerceOrganizationSiteAccess.organizationId, input.organizationId));
 
     const inserted =
       input.rows.length === 0
@@ -702,17 +642,8 @@ export async function replaceStakeholders(input: {
   readonly userId: string;
   readonly organizationId: string;
   readonly rows: readonly StakeholderInput[];
-}): Promise<
-  Result<
-    readonly OrganizationStakeholderProjection[],
-    CommerceSellerProfileError
-  >
-> {
-  const access = await requireMembershipRole(
-    input.userId,
-    input.organizationId,
-    PROFILE_MANAGERS,
-  );
+}): Promise<Result<readonly OrganizationStakeholderProjection[], CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
   if (!access.success) return access;
   if (input.rows.length > MAXIMUM_STAKEHOLDERS) {
     return {
@@ -728,12 +659,7 @@ export async function replaceStakeholders(input: {
     const occurredAt = new Date();
     await transaction
       .delete(commerceOrganizationStakeholder)
-      .where(
-        eq(
-          commerceOrganizationStakeholder.organizationId,
-          input.organizationId,
-        ),
-      );
+      .where(eq(commerceOrganizationStakeholder.organizationId, input.organizationId));
 
     const inserted =
       input.rows.length === 0
@@ -779,17 +705,8 @@ export async function replaceCapabilities(input: {
   readonly userId: string;
   readonly organizationId: string;
   readonly rows: readonly CapabilityInput[];
-}): Promise<
-  Result<
-    readonly OrganizationCapabilityProjection[],
-    CommerceSellerProfileError
-  >
-> {
-  const access = await requireMembershipRole(
-    input.userId,
-    input.organizationId,
-    PROFILE_MANAGERS,
-  );
+}): Promise<Result<readonly OrganizationCapabilityProjection[], CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
   if (!access.success) return access;
 
   const distinctKinds = new Set(input.rows.map((row) => row.capabilityKind));
@@ -807,9 +724,7 @@ export async function replaceCapabilities(input: {
     const occurredAt = new Date();
     await transaction
       .delete(commerceOrganizationCapability)
-      .where(
-        eq(commerceOrganizationCapability.organizationId, input.organizationId),
-      );
+      .where(eq(commerceOrganizationCapability.organizationId, input.organizationId));
 
     const inserted =
       input.rows.length === 0
@@ -857,11 +772,7 @@ export async function addOrganizationMedia(input: {
   readonly altText: string | null;
   readonly imageBytes: Buffer;
 }): Promise<Result<OrganizationMediaProjection, CommerceSellerProfileError>> {
-  const access = await requireMembershipRole(
-    input.userId,
-    input.organizationId,
-    PROFILE_MANAGERS,
-  );
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
   if (!access.success) return access;
 
   /**
@@ -905,9 +816,7 @@ export async function addOrganizationMedia(input: {
       const [counted] = await transaction
         .select({ mediaCount: sql<number>`count(*)::int` })
         .from(commerceOrganizationMedia)
-        .where(
-          eq(commerceOrganizationMedia.organizationId, input.organizationId),
-        );
+        .where(eq(commerceOrganizationMedia.organizationId, input.organizationId));
       const currentCount = counted?.mediaCount ?? 0;
       if (currentCount >= MAXIMUM_MEDIA_PER_ORGANIZATION) {
         return { status: "limit_reached" as const };
@@ -984,14 +893,8 @@ export async function reorderOrganizationMedia(input: {
   readonly userId: string;
   readonly organizationId: string;
   readonly mediaIdsInOrder: readonly string[];
-}): Promise<
-  Result<readonly OrganizationMediaProjection[], CommerceSellerProfileError>
-> {
-  const access = await requireMembershipRole(
-    input.userId,
-    input.organizationId,
-    PROFILE_MANAGERS,
-  );
+}): Promise<Result<readonly OrganizationMediaProjection[], CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
   if (!access.success) return access;
 
   const outcome = await db.transaction(async (transaction) => {
@@ -1017,9 +920,7 @@ export async function reorderOrganizationMedia(input: {
       .set({
         position: sql`${commerceOrganizationMedia.position} + ${existingIds.size + 1000}`,
       })
-      .where(
-        eq(commerceOrganizationMedia.organizationId, input.organizationId),
-      );
+      .where(eq(commerceOrganizationMedia.organizationId, input.organizationId));
 
     for (const [index, mediaId] of input.mediaIdsInOrder.entries()) {
       await transaction
@@ -1069,11 +970,7 @@ export async function deleteOrganizationMediaRow(input: {
   readonly organizationId: string;
   readonly mediaId: string;
 }): Promise<Result<{ readonly deleted: true }, CommerceSellerProfileError>> {
-  const access = await requireMembershipRole(
-    input.userId,
-    input.organizationId,
-    PROFILE_MANAGERS,
-  );
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
   if (!access.success) return access;
 
   const removed = await db.transaction(async (transaction) => {
@@ -1200,8 +1097,7 @@ export async function submitCertification(input: {
           updatedAt: occurredAt,
         })
         .returning();
-      if (!document)
-        throw new Error("Certification document insert returned no row.");
+      if (!document) throw new Error("Certification document insert returned no row.");
 
       const [row] = await transaction
         .insert(commerceOrganizationCertification)
@@ -1246,16 +1142,11 @@ export async function submitCertification(input: {
     });
     return { success: true, value: projectOwnedCertification(certification) };
   } catch (submissionError: unknown) {
-    return handleCertificationSubmissionFailure(
-      submissionError,
-      uploaded.value.objectKey,
-    );
+    return handleCertificationSubmissionFailure(submissionError, uploaded.value.objectKey);
   }
 }
 
-function projectOwnedCertification(
-  row: CertificationRow,
-): OwnedCertificationProjection {
+function projectOwnedCertification(row: CertificationRow): OwnedCertificationProjection {
   return {
     ...projectCertification(row),
     state: row.state,
@@ -1268,9 +1159,7 @@ function projectOwnedCertification(
 export async function listCertifications(input: {
   readonly userId: string;
   readonly organizationId: string;
-}): Promise<
-  Result<readonly OwnedCertificationProjection[], CommerceSellerProfileError>
-> {
+}): Promise<Result<readonly OwnedCertificationProjection[], CommerceSellerProfileError>> {
   const access = await requireMembershipRole(
     input.userId,
     input.organizationId,
@@ -1281,12 +1170,7 @@ export async function listCertifications(input: {
   const rows = await db
     .select()
     .from(commerceOrganizationCertification)
-    .where(
-      eq(
-        commerceOrganizationCertification.organizationId,
-        input.organizationId,
-      ),
-    )
+    .where(eq(commerceOrganizationCertification.organizationId, input.organizationId))
     .orderBy(
       asc(commerceOrganizationCertification.standardName),
       asc(commerceOrganizationCertification.id),
@@ -1295,8 +1179,7 @@ export async function listCertifications(input: {
 }
 
 export type CertificationDecision =
-  | { readonly kind: "approve" }
-  | { readonly kind: "reject"; readonly decisionReason: string };
+  { readonly kind: "approve" } | { readonly kind: "reject"; readonly decisionReason: string };
 
 /**
  * A moderator approves or rejects. Platform capability, NOT an organization role — a
@@ -1308,10 +1191,7 @@ export async function decideCertification(input: {
   readonly certificationId: string;
   readonly decision: CertificationDecision;
 }): Promise<Result<OwnedCertificationProjection, CommerceSellerProfileError>> {
-  const capability = await requirePlatformCapability(
-    input.moderatorUserId,
-    "moderate_commerce",
-  );
+  const capability = await requirePlatformCapability(input.moderatorUserId, "moderate_commerce");
   if (!capability.success) {
     return { success: false, error: { type: "PLATFORM_CAPABILITY_REQUIRED" } };
   }
@@ -1435,8 +1315,7 @@ async function handleCertificationSubmissionFailure(
       success: false,
       error: {
         type: "CONFLICT",
-        message:
-          "This certificate number is already recorded for this standard.",
+        message: "This certificate number is already recorded for this standard.",
       },
     };
   }
