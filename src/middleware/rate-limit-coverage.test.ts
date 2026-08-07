@@ -68,6 +68,20 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/commerce", specifier: "#src/routes/commerce-orders.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-fulfillment.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-catalog.routes.js", exportName: "default" },
+  /**
+   * These three were mounted in `app.ts` and MISSING from this list, so every mutating
+   * route they own passed the assertion below without ever being looked at — including
+   * the whole trust surface. Found while adding Phase 10; the omission is the exact
+   * failure mode the header comment above predicted.
+   */
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-trust.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-payments.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-merchandising.routes.js", exportName: "default" },
+  // Phase 10 (Appendix A9, A11, A12, A14).
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-product-qa.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-content-reports.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-product-inquiry.routes.js", exportName: "default" },
+  { mountPath: "/store", specifier: "#src/routes/commerce-product-engagement.routes.js", exportName: "default" },
   { mountPath: "/store", specifier: "#src/routes/store.routes.js", exportName: "default" },
 ];
 

@@ -28,7 +28,7 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–9 and 11 shipped and hardened.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–11 shipped and hardened.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
@@ -49,10 +49,14 @@
 > for the payments/journal contract, `docs/STORE_PHASE_6_ROLLOUT.md` for connector execution,
 > `docs/STORE_PHASE_7_ROLLOUT.md` for the trust MVP, `docs/STORE_PHASE_8_ROLLOUT.md` for
 > catalog depth, `docs/STORE_PHASE_9_ROLLOUT.md` for guided pathways, and
-> `docs/STORE_PHASE_11_ROLLOUT.md` for buyer logistics.
-> Trade-assurance language, real payment processors, external provider adapters/webhooks, Q&A,
-> content reports, ranking, and recommendations remain planned unless a section explicitly says
-> otherwise. **Product organization-ownership and category columns are now NOT NULL** —
+> `docs/STORE_PHASE_11_ROLLOUT.md` for buyer logistics, and
+> `docs/STORE_PHASE_10_ROLLOUT.md` for the public voice. Phase 10 adds **review reads with media,
+> sub-scores, helpful votes and seller replies; product Q&A; user-scoped engagement counters;
+> content reports with a commerce moderation queue; and pre-sales product inquiries**.
+> Trade-assurance language, real payment processors, external provider adapters/webhooks, ranking,
+> and recommendations remain planned unless a section explicitly says otherwise. **A10 (public
+> product comments) stays deliberately unbuilt** pending the product decision the appendix asks
+> for. **Product organization-ownership and category columns are now NOT NULL** —
 > migration `0063` closed Phase 0's contract phase, dropping the expand-phase fill trigger
 > and making `seller_organization_id`, `created_by_user_id` and `category_id` mandatory.
 > The legacy `seller_id` and `category` enum survive: both still have readers, and
@@ -539,21 +543,24 @@ audit event. A seller/provider cannot review or resolve its own case.
 Public reads use `attachOptionalUser`, strict query parsing, bounded limits, deterministic ordering,
 and buyer-safe projections.
 
-| Method | Route                                     | Purpose                                                               |
-| ------ | ----------------------------------------- | --------------------------------------------------------------------- |
-| GET    | `/store/home`                             | Curated hero, categories, pathways, provider shortcuts, product rails |
-| GET    | `/store/categories`                       | Root or parent-scoped active categories                               |
-| GET    | `/store/categories/:slug`                 | Category metadata, children, facets, first result page                |
-| GET    | `/store/search`                           | Product/provider search with server-side filters and cursor           |
-| GET    | `/store/products/:productSlug`            | Public product detail, tiers, seller/storefront projection            |
-| GET    | `/store/organizations/:organizationSlug`  | Public company storefront                                             |
-| GET    | `/store/providers`                        | Filterable provider directory                                         |
-| GET    | `/store/providers/:organizationSlug`      | Public provider profile and active offerings                          |
-| GET    | `/store/services/:offeringSlug`           | One active service offering                                           |
-| GET    | `/store/pathways`                         | Active guided sets — see §15                                          |
-| GET    | `/store/pathways/:pathwaySlug`            | Pathway slots, ranked candidates, set totals, completeness (§15.7)    |
-| GET    | `/store/products/:productSlug/companions` | Relation-graph companions for a product detail page (§15.7)           |
-| GET    | `/store/rails/:railSlug`                  | Paginated curated/ranked feed                                         |
+| Method | Route                                            | Purpose                                                               |
+| ------ | ------------------------------------------------ | --------------------------------------------------------------------- |
+| GET    | `/store/home`                                    | Curated hero, categories, pathways, provider shortcuts, product rails |
+| GET    | `/store/categories`                              | Root or parent-scoped active categories                               |
+| GET    | `/store/categories/:slug`                        | Category metadata, children, facets, first result page                |
+| GET    | `/store/search`                                  | Product/provider search with server-side filters and cursor           |
+| GET    | `/store/products/:productSlug`                   | Public product detail, tiers, seller/storefront projection            |
+| GET    | `/store/organizations/:organizationSlug`         | Public company storefront                                             |
+| GET    | `/store/providers`                               | Filterable provider directory                                         |
+| GET    | `/store/providers/:organizationSlug`             | Public provider profile and active offerings                          |
+| GET    | `/store/services/:offeringSlug`                  | One active service offering                                           |
+| GET    | `/store/pathways`                                | Active guided sets — see §15                                          |
+| GET    | `/store/pathways/:pathwaySlug`                   | Pathway slots, ranked candidates, set totals, completeness (§15.7)    |
+| GET    | `/store/products/:productSlug/companions`        | Relation-graph companions for a product detail page (§15.7)           |
+| GET    | `/store/rails/:railSlug`                         | Paginated curated/ranked feed                                         |
+| GET    | `/store/products/:productSlug/reviews`           | Reviews with summary, histogram and sub-scores — A8                   |
+| GET    | `/store/organizations/:organizationSlug/reviews` | Reviews of a seller or provider, incl. product-less ones — A8         |
+| GET    | `/store/products/:productSlug/questions`         | Public Q&A with a seller-first answer preview — A9                    |
 
 `category-slugs` and `pathway-slugs` mock endpoints are not durable public API requirements.
 Dynamic routes should render on demand; build-time static parameter generation may use a bounded
@@ -650,18 +657,23 @@ started, not that payment, booking, testing, or settlement succeeded.
 
 ### 6.4 Fulfillment, messages, and trust
 
-| Method | Route                                                     | Result                               |
-| ------ | --------------------------------------------------------- | ------------------------------------ |
-| POST   | `/commerce/orders/:orderId/shipments`                     | Seller creates shipment plan         |
-| POST   | `/commerce/shipments/:shipmentId/events`                  | Authorized append-only event         |
-| GET    | `/commerce/service-engagements`                           | Buyer/provider engagement list       |
-| POST   | `/commerce/service-engagements/:engagementId/transitions` | Valid state transition               |
-| POST   | `/commerce/threads`                                       | Create or return scoped thread       |
-| GET    | `/commerce/threads/:threadId/messages`                    | Cursor-paginated authorized messages |
-| POST   | `/commerce/threads/:threadId/messages`                    | Append message                       |
-| POST   | `/commerce/orders/:orderId/disputes`                      | Open dispute with idempotency        |
-| POST   | `/commerce/completions/:completionId/reviews`             | Verified review                      |
-| POST   | `/commerce/reports`                                       | Report product/provider/content      |
+| Method | Route                                                     | Result                                                   |
+| ------ | --------------------------------------------------------- | -------------------------------------------------------- |
+| POST   | `/commerce/orders/:orderId/shipments`                     | Seller creates shipment plan                             |
+| POST   | `/commerce/shipments/:shipmentId/events`                  | Authorized append-only event                             |
+| GET    | `/commerce/service-engagements`                           | Buyer/provider engagement list                           |
+| POST   | `/commerce/service-engagements/:engagementId/transitions` | Valid state transition                                   |
+| POST   | `/commerce/threads`                                       | Create or return scoped thread                           |
+| GET    | `/commerce/threads/:threadId/messages`                    | Cursor-paginated authorized messages                     |
+| POST   | `/commerce/threads/:threadId/messages`                    | Append message                                           |
+| POST   | `/commerce/orders/:orderId/disputes`                      | Open dispute with idempotency                            |
+| POST   | `/commerce/completions/:completionId/reviews`             | Verified review                                          |
+| POST   | `/commerce/reports`                                       | Report product/review/question/answer/organization — A12 |
+| GET    | `/commerce/admin/content-reports`                         | Moderation queue — A12                                   |
+| POST   | `/commerce/admin/content-reports/:reportId/decisions`     | Action or dismiss a report — A12                         |
+| POST   | `/commerce/admin/content/restore`                         | Un-hide content — A12                                    |
+| POST   | `/commerce/products/:productId/inquiries`                 | Open or return a pre-sales inquiry — A14                 |
+| GET    | `/commerce/inquiries`                                     | Buyer/seller inquiry inbox — A14                         |
 
 ---
 
@@ -883,8 +895,17 @@ Scheduled jobs:
 
 - Review reads, media, sub-scores, helpful votes and seller replies (A8); Q&A (A9); content reports
   (A12); engagement counters (A11); product-scoped threads (A14).
-- **Not started.** A8 first: a review that can be written and never read is the sharpest of these
-  gaps, and the table already exists.
+- **Shipped (`0064`–`0068`).** See `docs/STORE_PHASE_10_ROLLOUT.md`. Four things the
+  specification did not anticipate turned out to be load-bearing. **A12's premise was wrong** —
+  commerce reports cannot feed `content_review_action`, whose `video_id` is NOT NULL, so a parallel
+  `commerce_moderation_action` ships instead. **A14 could not key its thread on the product**:
+  `commerce_thread_resource_uidx` would have collapsed every buyer into one thread per product, so
+  a `commerce_product_inquiry` row became the resource the thread points at. **A11 is user-scoped,
+  not organization-scoped**, because `tradeState` starts `pending` and an org-keyed bookmark would
+  sit behind staff verification. And **an automatic moderation hide cannot enter the platform audit
+  chain**, whose `actorUserId` is NOT NULL, which is why `commerce_moderation_action.actionSource`
+  exists.
+- A10 (product comments) remains deliberately out: the appendix requires a product decision first.
 
 ### Phase 11 — buyer logistics
 
@@ -1326,7 +1347,7 @@ writes `derived_cooccurrence` rows, which nothing produced when the source kind 
 
 ---
 
-### A8. Reviews are write-only
+### A8. Reviews are write-only — **SHIPPED (Phase 10)**
 
 **Needed by:** `sections/ratings-and-reviews.tsx` — a rating summary, three sub-score bars (Service,
 Shipping, Quality), a video strip, a photo strip, filter and sort chips, and review cards with
@@ -1337,10 +1358,23 @@ productId, rating 1–5, body, visibility}`. `POST /commerce/completions/:comple
 **only** review route in the codebase. There is no read endpoint anywhere, so a review can be written
 and never seen. Aggregates (`averageRating`, `reviewCount`) are the only thing that surfaces.
 
-**What to build, in order:** (1) a cursor-paginated read route with sort and a has-media filter;
-(2) `commerce_review_media`; (3) `commerce_review_score` for the named sub-scores;
-(4) `commerce_review_vote` for helpful counts; (5) `commerce_review_reply`, seller-side, one per
-review.
+**What exists now:** all five, in that order.
+`GET /store/products/:productSlug/reviews` and `GET /store/organizations/:organizationSlug/reviews`
+carry four sorts, a rating filter and a `hasMedia` filter over five partial keyset indexes; plus
+`commerce_review_media`, `commerce_review_score`, `commerce_review_vote` and
+`commerce_review_reply` (whose `reviewId` IS the primary key, so a second reply is
+unrepresentable rather than merely rejected).
+
+The organization route is not padding: `commerce_review.productId` is nullable because a
+service-engagement completion has no product, so reviews of a freight forwarder were unreachable
+from anywhere.
+
+**Review video is a YouTube link, not an upload** — this codebase has no first-party video ingest,
+and `mediaKind` discriminates the two supply shapes rather than making every column nullable.
+
+**The summary is computed over every visible review in scope, never the filtered subset.** The
+filter chips display those counts; a summary that narrowed with the filter would renumber the
+chips as you click them.
 
 **Rule:** the verified-purchase badge is already earned structurally — a review requires a
 `completionId`, so it cannot exist without a completed order. Keep it that way; never add a
@@ -1348,7 +1382,7 @@ free-floating review.
 
 ---
 
-### A9. Product Q&A does not exist
+### A9. Product Q&A — **SHIPPED (Phase 10)**
 
 **Needed by:** `sections/questions-and-answers.tsx`.
 
@@ -1356,8 +1390,15 @@ free-floating review.
 and `commerce_thread`/`commerce_message` (private, RFQ/quote-scoped). §12 Phase 7 already lists Q&A
 as deferred.
 
-**What to build:** `commerce_product_question` + `commerce_product_answer`, both moderated, answers
-attributable to the seller organization or a verified buyer.
+**What exists now:** `commerce_product_question` and `commerce_product_answer`, post-moderated
+through A12. A question carries **no organization column** — it is asked by a person, and
+snapshotting the asker's employer publishes it, which is a §14-shaped disclosure Q&A does not need
+to make.
+
+**`authorKind` is derived, never sent.** A seller answer is bound by trigger to the organization
+that owns the product; a verified-buyer answer must cite a `commerce_completion` for that product
+and that organization, so the badge is earned structurally exactly as A8 demands of reviews.
+Refusing a caller with neither standing is also what stops Q&A quietly becoming A10.
 
 ---
 
@@ -1377,15 +1418,26 @@ accident is how a change to one silently breaks the other.
 
 ---
 
-### A11. Engagement counters
+### A11. Engagement counters — **SHIPPED (Phase 10)**
 
 **Needed by:** `sections/engagement-bar.tsx` — comment 1.1k, favourite 3.7k, bookmark 414, share 3696.
 
 **What exists:** nothing for products. Every counter in the codebase is video-domain (`video_stats`,
 `video_save`, `video_share`, `video_like`).
 
-**What to build:** `commerce_product_engagement` (per-user save/bookmark rows) plus a counter
-projection, and per-viewer `hasSaved`/`hasBookmarked` on the product read.
+**What exists now:** `commerce_product_engagement` (per-USER save/bookmark rows),
+`commerce_product_share`, and `commerce_product_stats` for the counters, with
+`engagement.viewer.hasSaved` / `hasBookmarked` on the product read.
+
+**User-scoped, not organization-scoped**, and the reason is `commerce_organization.tradeState`: it
+starts `pending` and only a staff decision makes it `active`, so an org-keyed bookmark would put a
+single tap behind human verification, flicker for a user in several organizations, and let any
+`viewer`-role colleague empty the team's list. The real B2B need — a named, owned, permissioned
+sourcing shortlist — is its own object and is not delivered here.
+
+**`viewer` is `null` for an anonymous caller**, not `{hasSaved: false}`: "not saved" and "we do not
+know who you are" are different facts. And **`commentCount` is absent**, because A10 has no table
+and a hardcoded zero is precisely the A13 failure this list exists to avoid.
 
 **Frontend today:** favourite and bookmark toggle the icon locally; the count never moves and nothing
 is sent.
@@ -1395,7 +1447,7 @@ formats, the server counts.
 
 ---
 
-### A12. No content reports
+### A12. Content reports — **SHIPPED (Phase 10)**
 
 **Needed by:** the PDP's "Report abuse" row.
 
@@ -1403,8 +1455,24 @@ formats, the server counts.
 R&D posts and papers. Nothing targets a product, review, organization or message. `moderationState`
 on a product is moderator-set with no user-submitted row behind it.
 
-**What to build:** `commerce_content_report` with a target discriminator, feeding the existing
-`content_review_action` queue. §6.4 already lists `POST /commerce/reports`; it is unbuilt.
+**This entry's plan was wrong, and the correction shipped with it.** Commerce reports cannot feed
+`content_review_action`: its `videoId` is NOT NULL with a cascade to `video`. Generalizing that
+table would also merge two queues gated by DIFFERENT capabilities — `moderate_content` and
+`moderate_commerce` — into one, the coupling capabilities exist to prevent. R&D already built its
+own `research_program_moderation_action` rather than reuse it.
+
+**What exists now:** `commerce_content_report` with five nullable foreign keys and an XOR check
+(the wire still takes one `targetId`), and a parallel `commerce_moderation_action`.
+`POST /commerce/reports` plus four `/commerce/admin/*` routes.
+
+**Post-moderation needed a griefing answer.** Only user-authored content auto-hides, at three
+distinct open reporters counted in the report's own transaction; a product or organization never
+does, because delisting is a commercial action requiring a human. Dismissing restores an
+auto-hide.
+
+**`actionSource` exists because `platform_audit_entry.actorUserId` is NOT NULL.** An automatic hide
+names nobody, so rather than weaken the hash chain it is recorded with no moderator and no audit
+entry, bound by a check in both directions.
 
 **Frontend today:** a `<span>` reading "Report abuse (coming later)" — deliberately not a link.
 
@@ -1455,18 +1523,29 @@ seller's assertion as a platform measurement.
 
 ---
 
-### A14. Threads cannot be opened from a product
+### A14. Threads from a product — **SHIPPED (Phase 10)**
 
 **Needed by:** `sections/store-and-chat-actions.tsx` — the PDP's "Chat now" button.
 
 **What exists:** `commerce_thread_resource_kind` has five values, but
 `POST /commerce/threads` accepts only `rfq | quote`. A buyer looking at a product has nothing to open.
 
-**What to build:** widen the accepted kinds, or define a product-scoped pre-sales thread that
-converts to an RFQ thread when one opens.
+**Widening to `product` would have been a cross-tenant leak.** `commerce_thread_resource_uidx` is
+unique on `(resourceKind, resourceId)`, so a thread keyed on the product id is ONE THREAD PER
+PRODUCT ACROSS ALL BUYERS — `assertThreadParticipant` would admit every buyer organization that
+ever inquired and hand each of them every other buyer's negotiation.
 
-**Rule:** §4.11 derives participants from organization memberships. A pre-sales thread has a buyer
-who may not yet have an organization — resolve that before widening, not after.
+**What exists now:** `commerce_product_inquiry` is the resource the thread points at, so the unique
+index is correct unmodified — one thread per inquiry, one inquiry per (product, buyer
+organization) — and `commerce_message` is untouched. `POST /commerce/products/:productId/inquiries`
+and `GET /commerce/inquiries`, with `convertedToRfqId` recording a conversion as a POINTER: an RFQ
+thread holds every invited provider, so merging a one-to-one pre-sales chat into it would show one
+seller's conversation to its competitors.
+
+**The rule, resolved rather than dodged:** the gate stays, and A9 shipped first so the buyer who
+cannot clear it is not dead-ended. The product read states which control to offer through
+`contactAffordance: "chat" | "ask_question" | "sign_in"` — a fact about the caller, which the
+caller already knows.
 
 ---
 
