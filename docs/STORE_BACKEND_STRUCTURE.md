@@ -74,9 +74,9 @@
 > can never carry a real value** — `onTimeShipmentRate` was the last one, and Phase 12 supplied the
 > promised-delivery timestamp it needed (A13). It is `null` only below its sample threshold, and
 > `onTimeSampleSize` rides alongside so "not enough data" is distinguishable from "not wired". The
-> `trending_placeholder` rail strategy still returns an empty list unconditionally — Phase 9 shipped
-> the co-occurrence job §15.9 called its honest replacement, but trending is _ranking_, which §12
-> defers, so the strategy remains unbuilt rather than broken. Checkout
+> `trending_placeholder` rail strategy still returns an empty list unconditionally and always will
+> — **Phase 13 shipped `trending` and `recommended` alongside it**, and the placeholder is kept
+> forever so that backing the ranking engine out stays a per-rail data edit rather than a deploy. Checkout
 > `shippingInCents` is still written literal `0` (`commerce-checkout.service.ts:515-517` and
 > `:807-809`) — Phase 8 supplies the weight and dimensions A16 needs to rate freight, but not the
 > estimate itself, and A16 records that as the decision rather than the gap.
@@ -952,6 +952,28 @@ Scheduled jobs:
   a certification sends six, so every submission returned a flat 422 until it got its own
   parser. Only the HTTP smoke could have found that.
 
+### Phase 13 — ranking, trending and recommendations
+
+- The anti-fraud trending and ranking engine specified in
+  [`STORE_TRENDING_SPEC_V2_2.md`](STORE_TRENDING_SPEC_V2_2.md): a product view beacon,
+  qualified-order velocity, demand-anchored freshness, hierarchical category priors, subnet
+  concentration, refund and cancellation penalties, an observe-only circuit breaker, and the
+  `trending` / `recommended` rail strategies that replace `trending_placeholder`.
+- **Shipped and hardened (`0073`-`0081`).** See `docs/STORE_PHASE_13_ROLLOUT.md`. Four things
+  worth carrying forward. **The store observed no views at all** — saves, bookmarks and shares
+  were counted and attention was not, so a conversion rate had no denominator and two of the
+  specification's ten refinements had no input; the beacon is the largest new surface in the
+  phase and everything else could have been built without it. **The share counter was a live
+  hole**: anonymous callers incremented it with no dedup of any kind, harmless only while
+  nothing read it, which is exactly what this phase changed — so it was fixed before the
+  signal was wired, not after. **`commerce_order` had no durable lifecycle instant**: the
+  audit stream never records the payment-settled transition and records nothing at all for
+  the reconciliation-driven ones, so `confirmed_at` had to be added rather than derived, and
+  nothing is backfilled because the only candidate source was a mutable `updated_at`. And
+  **the subnet penalty carries a floor the specification did not ask for**, because one
+  procurement team behind one office NAT is indistinguishable from a click farm on the
+  evidence this schema holds — on the seeded fixtures they read 0.98 and 0.91.
+
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
 ---
@@ -1223,9 +1245,10 @@ Edges are written as `complements` only. Co-occurrence is **not** evidence of fi
 support `compatible_with` or `spare_part_of`, and claiming otherwise would turn a correlation into
 the safety claim §15.3 reserves for `moderator_curated`.
 
-This job is the raw material for a `trending` rail strategy, but that strategy is **not built**:
-`trending_placeholder` still returns an empty list, because trending is ranking and §12 defers
-ranking past Phase 9.
+This job was the raw material for a `trending` rail strategy, and **Phase 13 built it**. The
+`trending` and `recommended` strategies now read `commerce_product_ranking_state`.
+`trending_placeholder` survives, still returning an empty list, and is deliberately never
+removed: while it exists, backing Phase 13 out is a per-rail data edit rather than a deploy.
 
 ---
 
@@ -1432,16 +1455,26 @@ Refusing a caller with neither standing is also what stops Q&A quietly becoming 
 
 ---
 
-### A10. Product comments
+### A10. Product comments — **CLOSED, NOT BUILT (Phase 13)**
 
 **Needed by:** `sheets/comment-sheet.tsx` and `sheets/product-comment-thread.tsx`.
 
 **What exists:** nothing. The sheet imports `Comment`, `Reply` and `Review` from
 `src/types/video.ts` — the **video** domain's types, reused verbatim on a commerce surface.
 
-**What to build:** a decision first. Public comments on a B2B listing may be the wrong primitive
-where Q&A (A9) and private threads (A14) already exist. Nothing should be built here until that is
-settled.
+**DECIDED IN PHASE 13: NOT BUILT, AND THE ENTRY IS CLOSED.** Public comments on a B2B listing
+are the wrong primitive where Q&A (A9), reviews (A8) and private inquiries (A14) already exist.
+All three require standing — a review needs a `completionId`, an answer needs a seller
+relationship or a verified purchase, an inquiry needs an authenticated buyer organization — and
+a free-floating comment would be the only public text surface on a listing with no purchase
+proof and no standing requirement behind it. That is precisely what A9 was shaped to avoid
+becoming.
+
+Neither reference market disagrees: Alibaba gives buyers reviews, Q&A and private chat and
+nothing free-floating, and Amazon removed customer comments from product pages in 2020 because
+they were unmoderatable and carried no purchase proof.
+
+The mock sheets should be deleted rather than left implying scheduled work.
 
 **Rule:** whatever ships, it does not reuse video comment types. Two domains sharing a row shape by
 accident is how a change to one silently breaks the other.
