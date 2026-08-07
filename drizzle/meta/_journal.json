@@ -484,6 +484,34 @@
       "when": 1786037689394,
       "tag": "0068_store_phase_10_product_inquiry",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1786105694394,
+      "tag": "0069_store_phase_12_enums",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1786105699394,
+      "tag": "0070_store_phase_12_seller_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1786105704394,
+      "tag": "0071_store_phase_12_certifications",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1786105709394,
+      "tag": "0072_store_phase_12_promised_delivery",
+      "breakpoints": true
     }
   ]
 }

@@ -54,7 +54,11 @@ export const imageSourceEnum = pgEnum("image_source", ["oauth", "user"]);
 
 // Platform-wide staff role, NOT project-scoped (R_AND_D_BACKEND_STRUCTURE.md §4a
 // Layer 3). NULL for ordinary users, which is almost everyone.
-export const platformRoleEnum = pgEnum("platform_role", ["moderator", "auditor", "admin"]);
+export const platformRoleEnum = pgEnum("platform_role", [
+  "moderator",
+  "auditor",
+  "admin",
+]);
 
 export const user = pgTable(
   "user",
@@ -282,7 +286,10 @@ export const rateLimitBucket = pgTable(
     // `emailKey` reads an unbounded body field, and a btree index row caps at ~2704 bytes,
     // so an oversized key would be an attacker-triggerable write failure on the OTP path.
     // The store hashes anything longer to `sha256:<hex>` before it reaches SQL.
-    check("rate_limit_bucket_key_ck", sql`char_length(bucket_key) BETWEEN 1 AND 256`),
+    check(
+      "rate_limit_bucket_key_ck",
+      sql`char_length(bucket_key) BETWEEN 1 AND 256`,
+    ),
     check("rate_limit_bucket_hits_ck", sql`hit_count >= 0`),
   ],
 );
@@ -294,12 +301,15 @@ export const userRelations = relations(user, ({ many }) => ({
   handleReservations: many(handleReservation),
 }));
 
-export const handleReservationRelations = relations(handleReservation, ({ one }) => ({
-  user: one(user, {
-    fields: [handleReservation.userId],
-    references: [user.id],
+export const handleReservationRelations = relations(
+  handleReservation,
+  ({ one }) => ({
+    user: one(user, {
+      fields: [handleReservation.userId],
+      references: [user.id],
+    }),
   }),
-}));
+);
 
 export const sessionRelations = relations(session, ({ one }) => ({
   user: one(user, {
@@ -351,50 +361,50 @@ export const productCategoryEnum = pgEnum("product_category", [
 ]);
 
 // Physical condition of the item. Wizard's New/Refurbished/Used, lowercased.
-export const productConditionEnum = pgEnum("product_condition", ["new", "refurbished", "used"]);
+export const productConditionEnum = pgEnum("product_condition", [
+  "new",
+  "refurbished",
+  "used",
+]);
 
 // Listing lifecycle. `draft` = seller is still building it / abandoned the
 // wizard (visible only to them); `active` = published, buyer-visible. The
 // draft→active transition is gated server-side (POST /products/:id/publish).
 export const productStatusEnum = pgEnum("product_status", ["draft", "active"]);
 
-export const commerceOrganizationTypeEnum = pgEnum("commerce_organization_type", [
-  "company",
-  "sole_proprietor",
-  "cooperative",
-  "government",
-  "nonprofit",
-]);
+export const commerceOrganizationTypeEnum = pgEnum(
+  "commerce_organization_type",
+  ["company", "sole_proprietor", "cooperative", "government", "nonprofit"],
+);
 
-export const commerceOrganizationTradeStateEnum = pgEnum("commerce_organization_trade_state", [
-  "pending",
-  "active",
-  "suspended",
-  "closed",
-]);
+export const commerceOrganizationTradeStateEnum = pgEnum(
+  "commerce_organization_trade_state",
+  ["pending", "active", "suspended", "closed"],
+);
 
-export const commerceOrganizationVisibilityEnum = pgEnum("commerce_organization_visibility", [
-  "private",
-  "public",
-]);
+export const commerceOrganizationVisibilityEnum = pgEnum(
+  "commerce_organization_visibility",
+  ["private", "public"],
+);
 
-export const commerceOrganizationMemberRoleEnum = pgEnum("commerce_organization_member_role", [
-  "owner",
-  "administrator",
-  "buyer",
-  "seller",
-  "provider_operator",
-  "finance",
-  "support",
-  "viewer",
-]);
+export const commerceOrganizationMemberRoleEnum = pgEnum(
+  "commerce_organization_member_role",
+  [
+    "owner",
+    "administrator",
+    "buyer",
+    "seller",
+    "provider_operator",
+    "finance",
+    "support",
+    "viewer",
+  ],
+);
 
-export const commerceOrganizationMemberStateEnum = pgEnum("commerce_organization_member_state", [
-  "invited",
-  "active",
-  "suspended",
-  "left",
-]);
+export const commerceOrganizationMemberStateEnum = pgEnum(
+  "commerce_organization_member_state",
+  ["invited", "active", "suspended", "left"],
+);
 
 /**
  * `delivery` arrived with Phase 11 (Appendix A15). Until then there was no kind meaning
@@ -402,29 +412,26 @@ export const commerceOrganizationMemberStateEnum = pgEnum("commerce_organization
  * organization only and a seller's registered office could be a buyer's delivery
  * address. Appended, not inserted: `ALTER TYPE ... ADD VALUE` puts new labels last.
  */
-export const commerceOrganizationAddressKindEnum = pgEnum("commerce_organization_address_kind", [
-  "billing",
-  "registered",
-  "warehouse",
-  "pickup",
-  "return",
-  "delivery",
-]);
+export const commerceOrganizationAddressKindEnum = pgEnum(
+  "commerce_organization_address_kind",
+  ["billing", "registered", "warehouse", "pickup", "return", "delivery"],
+);
 
-export const commerceVerificationKindEnum = pgEnum("commerce_verification_kind", [
-  "business_registration",
-  "tax_registration",
-  "identity",
-  "address",
-  "bank_account",
-]);
+export const commerceVerificationKindEnum = pgEnum(
+  "commerce_verification_kind",
+  [
+    "business_registration",
+    "tax_registration",
+    "identity",
+    "address",
+    "bank_account",
+  ],
+);
 
-export const commerceVerificationStateEnum = pgEnum("commerce_verification_state", [
-  "pending",
-  "approved",
-  "rejected",
-  "superseded",
-]);
+export const commerceVerificationStateEnum = pgEnum(
+  "commerce_verification_state",
+  ["pending", "approved", "rejected", "superseded"],
+);
 
 export const commerceCategoryStateEnum = pgEnum("commerce_category_state", [
   "draft",
@@ -445,6 +452,13 @@ export const commerceDocumentKindEnum = pgEnum("commerce_document_kind", [
    * commercial material, and only the fulfilling seller has any reason to open it.
    */
   "customization_artwork",
+  /**
+   * A13. The scan behind an ISO / CE / RoHS certification claim. Private for the same
+   * reason business registration is: a certificate carries registration numbers, site
+   * addresses and signatures. The PUBLIC projection of an approved certification is
+   * metadata only and never references this document.
+   */
+  "certification_evidence",
 ]);
 
 export const commerceDocumentStateEnum = pgEnum("commerce_document_state", [
@@ -552,7 +566,106 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "review_reply_published",
     "review_reply_withdrawn",
     "product_inquiry_opened",
+    /**
+     * Phase 12 (Appendix A13). Seller-declared company depth, and the certifications a
+     * moderator approves before any of it is presented as checked.
+     *
+     * The payload convention above applies unchanged and is why
+     * `organization_media_changed` carries mediaId / mediaKind / position: a Cloudinary
+     * upload's natural payload key is `filename`, which `FORBIDDEN_PAYLOAD_KEY` matches,
+     * and `publicId` is a storage handle an audit log has no reason to hold.
+     *
+     * `certification_submitted` carries certificationId / standardName and NOT the
+     * evidence object key — `object.*key` is matched too. The evidence is reachable from
+     * the certification row; duplicating its location into immutable history only widens
+     * where a private document's address is written down.
+     */
+    "seller_profile_updated",
+    "organization_media_changed",
+    "site_access_changed",
+    "stakeholders_changed",
+    "capabilities_changed",
+    "certification_submitted",
+    "certification_decided",
   ],
+);
+
+// --- Seller profile depth (Appendix A13, Phase 12).
+//
+// Everything in this block describes what a SELLER ASSERTS about itself. None of it is
+// checked, and the projection keeps it in its own object for exactly that reason: a
+// declared stat and a measured one must not be renderable through the same code path
+// (A13's closing rule). The one exception is `commerce_certification_state`, which
+// tracks a moderator's decision rather than a seller's claim.
+
+/**
+ * What kind of business a seller says it is. Closed vocabulary rather than free text so
+ * the directory can filter on it — `manufacturer_trading` is one entity doing both, not
+ * a missing decision, and it is the single most common answer in this market.
+ */
+export const commerceSellerBusinessTypeEnum = pgEnum(
+  "commerce_seller_business_type",
+  [
+    "manufacturer",
+    "trading_company",
+    "manufacturer_trading",
+    "agent",
+    "distributor",
+  ],
+);
+
+/** What a company photo is OF. Drives grouping in the company sheet, nothing more. */
+export const commerceOrganizationMediaKindEnum = pgEnum(
+  "commerce_organization_media_kind",
+  ["factory", "office", "warehouse", "production_line", "showcase"],
+);
+
+/**
+ * How freight reaches a seller's site. Deliberately the same four modes as
+ * `commerce_shipment_leg_mode`, because they describe the same physical world — but a
+ * SEPARATE type: a site-access row is a seller's claim about its neighbourhood, and a
+ * shipment leg is a booked movement. Sharing the type would invite a join that means
+ * nothing.
+ */
+export const commerceSiteAccessModeEnum = pgEnum("commerce_site_access_mode", [
+  "road",
+  "sea",
+  "air",
+  "rail",
+]);
+
+/** Declared production capabilities. `oem`/`odm` are the terms buyers actually search. */
+export const commerceOrganizationCapabilityKindEnum = pgEnum(
+  "commerce_organization_capability_kind",
+  [
+    "oem",
+    "odm",
+    "customization",
+    "in_house_inspection",
+    "in_house_rnd",
+    "sample_production",
+  ],
+);
+
+/** Whether a buyer may visit the factory. A policy, not an invitation. */
+export const commerceVisitPolicyEnum = pgEnum("commerce_visit_policy", [
+  "welcome",
+  "by_appointment",
+  "not_available",
+]);
+
+/**
+ * A certification's review lifecycle.
+ *
+ * NOTE WHAT IS NOT HERE: `expired`. Lapsing is not a state transition — it is
+ * `valid_until < current_date`, evaluated at read time. An `expired` state would need a
+ * nightly job to flip it and would therefore be WRONG between ticks, publishing a lapsed
+ * certificate until the next run. `withdrawn` stays because that one is an action a
+ * seller takes.
+ */
+export const commerceCertificationStateEnum = pgEnum(
+  "commerce_certification_state",
+  ["pending", "approved", "rejected", "withdrawn"],
 );
 
 // Public catalog buyer-contract fields (STORE_BACKEND_STRUCTURE.md §4.4).
@@ -576,17 +689,21 @@ export const productModerationStateEnum = pgEnum("product_moderation_state", [
  * video had nowhere to live. The column defaults to `photo`, which is what every
  * pre-Phase-8 row is.
  */
-export const productMediaKindEnum = pgEnum("product_media_kind", ["photo", "video", "spin_360"]);
+export const productMediaKindEnum = pgEnum("product_media_kind", [
+  "photo",
+  "video",
+  "spin_360",
+]);
 
 /**
  * A variant is retired, never deleted: an order line snapshot references the
  * variant it was bought from, and `restrict` on that FK would block the delete
  * anyway (Appendix A1).
  */
-export const commerceProductVariantStateEnum = pgEnum("commerce_product_variant_state", [
-  "active",
-  "retired",
-]);
+export const commerceProductVariantStateEnum = pgEnum(
+  "commerce_product_variant_state",
+  ["active", "retired"],
+);
 
 /**
  * The product relation graph (STORE_BACKEND_STRUCTURE.md §15.3, Appendix A7).
@@ -595,14 +712,17 @@ export const commerceProductVariantStateEnum = pgEnum("commerce_product_variant_
  * invert. Symmetric meanings (`complements`, `compatible_with`) are stored as two
  * rows so one query direction serves every read.
  */
-export const commerceProductRelationKindEnum = pgEnum("commerce_product_relation_kind", [
-  "accessory_of",
-  "spare_part_of",
-  "consumable_for",
-  "compatible_with",
-  "complements",
-  "replaces",
-]);
+export const commerceProductRelationKindEnum = pgEnum(
+  "commerce_product_relation_kind",
+  [
+    "accessory_of",
+    "spare_part_of",
+    "consumable_for",
+    "compatible_with",
+    "complements",
+    "replaces",
+  ],
+);
 
 /**
  * A seller saying its bolt fits a given bicycle is a CLAIM, not a fact (§15.3).
@@ -622,10 +742,10 @@ export const commerceProductRelationKindEnum = pgEnum("commerce_product_relation
  * object with its own audit trail. Delivering it accidentally, as an unnamed org-wide
  * bag anyone can empty, would be worse than not delivering it.
  */
-export const commerceProductEngagementKindEnum = pgEnum("commerce_product_engagement_kind", [
-  "saved",
-  "bookmarked",
-]);
+export const commerceProductEngagementKindEnum = pgEnum(
+  "commerce_product_engagement_kind",
+  ["saved", "bookmarked"],
+);
 
 /**
  * Visibility of user-generated commerce content (STORE Appendix A9, A12).
@@ -635,12 +755,15 @@ export const commerceProductEngagementKindEnum = pgEnum("commerce_product_engage
  * automatic threshold hide is not a human decision — flattening them would make the
  * moderation queue lie about who acted.
  */
-export const commerceUgcVisibilityStateEnum = pgEnum("commerce_ugc_visibility_state", [
-  "visible",
-  "hidden_pending_review",
-  "hidden_by_moderator",
-  "removed_by_author",
-]);
+export const commerceUgcVisibilityStateEnum = pgEnum(
+  "commerce_ugc_visibility_state",
+  [
+    "visible",
+    "hidden_pending_review",
+    "hidden_by_moderator",
+    "removed_by_author",
+  ],
+);
 
 /**
  * Who wrote an answer (STORE Appendix A9).
@@ -649,10 +772,10 @@ export const commerceUgcVisibilityStateEnum = pgEnum("commerce_ugc_visibility_st
  * a badge asserted by the frontend is the most direct §0 violation available.
  * Moderators moderate; they do not answer, so there is no `moderator` member.
  */
-export const commerceProductAnswerAuthorKindEnum = pgEnum("commerce_product_answer_author_kind", [
-  "seller",
-  "verified_buyer",
-]);
+export const commerceProductAnswerAuthorKindEnum = pgEnum(
+  "commerce_product_answer_author_kind",
+  ["seller", "verified_buyer"],
+);
 
 /**
  * What a commerce content report can point at (STORE Appendix A12).
@@ -663,13 +786,10 @@ export const commerceProductAnswerAuthorKindEnum = pgEnum("commerce_product_answ
  * negotiation, which is a §14 disclosure decision rather than an aggregation one. The
  * existing escalation path for harm inside a thread is a dispute.
  */
-export const commerceContentTargetKindEnum = pgEnum("commerce_content_target_kind", [
-  "product",
-  "review",
-  "question",
-  "answer",
-  "organization",
-]);
+export const commerceContentTargetKindEnum = pgEnum(
+  "commerce_content_target_kind",
+  ["product", "review", "question", "answer", "organization"],
+);
 
 /**
  * Why something was reported (STORE Appendix A12).
@@ -678,29 +798,34 @@ export const commerceContentTargetKindEnum = pgEnum("commerce_content_target_kin
  * this is mostly about GOODS, `plagiarism` and `misinformation` are R&D words, and
  * sharing one type would mean adding `counterfeit` puts it on the R&D report form.
  */
-export const commerceContentReportReasonEnum = pgEnum("commerce_content_report_reason", [
-  "spam",
-  "counterfeit",
-  "prohibited_item",
-  "misleading_claim",
-  "intellectual_property",
-  "harassment",
-  "off_topic",
-  "other",
-]);
+export const commerceContentReportReasonEnum = pgEnum(
+  "commerce_content_report_reason",
+  [
+    "spam",
+    "counterfeit",
+    "prohibited_item",
+    "misleading_claim",
+    "intellectual_property",
+    "harassment",
+    "off_topic",
+    "other",
+  ],
+);
 
-export const commerceContentReportStatusEnum = pgEnum("commerce_content_report_status", [
-  "open",
-  "actioned",
-  "dismissed",
-]);
+export const commerceContentReportStatusEnum = pgEnum(
+  "commerce_content_report_status",
+  ["open", "actioned", "dismissed"],
+);
 
-export const commerceModerationActionKindEnum = pgEnum("commerce_moderation_action_kind", [
-  "content_hidden",
-  "content_restored",
-  "report_dismissed",
-  "product_moderation_state_changed",
-]);
+export const commerceModerationActionKindEnum = pgEnum(
+  "commerce_moderation_action_kind",
+  [
+    "content_hidden",
+    "content_restored",
+    "report_dismissed",
+    "product_moderation_state_changed",
+  ],
+);
 
 /**
  * Who took a moderation action (STORE Appendix A12) — and the reason this column
@@ -713,10 +838,10 @@ export const commerceModerationActionKindEnum = pgEnum("commerce_moderation_acti
  * no audit entry, and `commerce_moderation_action_source_ck` binds those three columns
  * to this value in both directions.
  */
-export const commerceModerationActionSourceEnum = pgEnum("commerce_moderation_action_source", [
-  "moderator",
-  "automatic",
-]);
+export const commerceModerationActionSourceEnum = pgEnum(
+  "commerce_moderation_action_source",
+  ["moderator", "automatic"],
+);
 
 export const commerceProductRelationSourceKindEnum = pgEnum(
   "commerce_product_relation_source_kind",
@@ -758,12 +883,10 @@ export const storePathwaySlotCandidateSourceKindEnum = pgEnum(
   ["curated", "derived"],
 );
 
-export const storeMerchandisingEntityKindEnum = pgEnum("store_merchandising_entity_kind", [
-  "product",
-  "category",
-  "organization",
-  "provider_offering",
-]);
+export const storeMerchandisingEntityKindEnum = pgEnum(
+  "store_merchandising_entity_kind",
+  ["product", "category", "organization", "provider_offering"],
+);
 
 export const storeRailStrategyEnum = pgEnum("store_rail_strategy", [
   "curated",
@@ -771,42 +894,40 @@ export const storeRailStrategyEnum = pgEnum("store_rail_strategy", [
   "trending_placeholder",
 ]);
 
-export const storeSearchDocumentKindEnum = pgEnum("store_search_document_kind", [
-  "product",
-  "provider_offering",
-]);
+export const storeSearchDocumentKindEnum = pgEnum(
+  "store_search_document_kind",
+  ["product", "provider_offering"],
+);
 
-export const commerceProviderKindSlugEnum = pgEnum("commerce_provider_kind_slug", [
-  "freight_forwarder",
-  "logistics_operator",
-  "customs_broker",
-  "insurance_provider",
-  "inspection_agency",
-  "testing_certification_lab",
-  "marketing_agency",
-  "warehouse_provider",
-  "foreign_exchange_facilitator",
-]);
+export const commerceProviderKindSlugEnum = pgEnum(
+  "commerce_provider_kind_slug",
+  [
+    "freight_forwarder",
+    "logistics_operator",
+    "customs_broker",
+    "insurance_provider",
+    "inspection_agency",
+    "testing_certification_lab",
+    "marketing_agency",
+    "warehouse_provider",
+    "foreign_exchange_facilitator",
+  ],
+);
 
 export const commerceProviderVerificationStateEnum = pgEnum(
   "commerce_provider_verification_state",
   ["unverified", "documents_pending", "verified", "rejected", "suspended"],
 );
 
-export const commerceServiceOfferingStateEnum = pgEnum("commerce_service_offering_state", [
-  "draft",
-  "pending_review",
-  "active",
-  "suspended",
-  "retired",
-]);
+export const commerceServiceOfferingStateEnum = pgEnum(
+  "commerce_service_offering_state",
+  ["draft", "pending_review", "active", "suspended", "retired"],
+);
 
-export const commerceServicePricingModelEnum = pgEnum("commerce_service_pricing_model", [
-  "quote_only",
-  "fixed_fee",
-  "per_unit",
-  "subscription",
-]);
+export const commerceServicePricingModelEnum = pgEnum(
+  "commerce_service_pricing_model",
+  ["quote_only", "fixed_fee", "per_unit", "subscription"],
+);
 
 export const freightTransportModeEnum = pgEnum("freight_transport_mode", [
   "air",
@@ -835,14 +956,10 @@ export const commerceRfqVisibilityEnum = pgEnum("commerce_rfq_visibility", [
   "matched_providers",
 ]);
 
-export const commerceRfqInvitationStateEnum = pgEnum("commerce_rfq_invitation_state", [
-  "pending",
-  "sent",
-  "read",
-  "responded",
-  "withdrawn",
-  "expired",
-]);
+export const commerceRfqInvitationStateEnum = pgEnum(
+  "commerce_rfq_invitation_state",
+  ["pending", "sent", "read", "responded", "withdrawn", "expired"],
+);
 
 export const commerceQuoteStatusEnum = pgEnum("commerce_quote_status", [
   "draft",
@@ -879,47 +996,43 @@ export const commerceOrderStateEnum = pgEnum("commerce_order_state", [
  * other buyer's negotiation. The inquiry row is what keeps the unique index correct:
  * one thread per inquiry, one inquiry per (product, buyer organization).
  */
-export const commerceThreadResourceKindEnum = pgEnum("commerce_thread_resource_kind", [
-  "rfq",
-  "quote",
-  "order",
-  "service_engagement",
-  "dispute",
-  "product_inquiry",
-]);
+export const commerceThreadResourceKindEnum = pgEnum(
+  "commerce_thread_resource_kind",
+  ["rfq", "quote", "order", "service_engagement", "dispute", "product_inquiry"],
+);
 
-export const commerceThreadParticipantRoleEnum = pgEnum("commerce_thread_participant_role", [
-  "buyer",
-  "provider",
-  "moderator",
-]);
+export const commerceThreadParticipantRoleEnum = pgEnum(
+  "commerce_thread_participant_role",
+  ["buyer", "provider", "moderator"],
+);
 
 export const commerceInventoryReservationStateEnum = pgEnum(
   "commerce_inventory_reservation_state",
   ["held", "consumed", "released", "expired"],
 );
 
-export const commerceCheckoutPrepareStateEnum = pgEnum("commerce_checkout_prepare_state", [
-  "active",
-  "consumed",
-  "superseded",
-  "expired",
-]);
+export const commerceCheckoutPrepareStateEnum = pgEnum(
+  "commerce_checkout_prepare_state",
+  ["active", "consumed", "superseded", "expired"],
+);
 
-export const commerceCheckoutGroupStateEnum = pgEnum("commerce_checkout_group_state", [
-  "confirmed",
-  "cancelled",
-]);
+export const commerceCheckoutGroupStateEnum = pgEnum(
+  "commerce_checkout_group_state",
+  ["confirmed", "cancelled"],
+);
 
-export const commerceServiceEngagementStateEnum = pgEnum("commerce_service_engagement_state", [
-  "awaiting_provider",
-  "scheduled",
-  "in_progress",
-  "awaiting_buyer",
-  "completed",
-  "cancelled",
-  "disputed",
-]);
+export const commerceServiceEngagementStateEnum = pgEnum(
+  "commerce_service_engagement_state",
+  [
+    "awaiting_provider",
+    "scheduled",
+    "in_progress",
+    "awaiting_buyer",
+    "completed",
+    "cancelled",
+    "disputed",
+  ],
+);
 
 export const commerceShipmentStateEnum = pgEnum("commerce_shipment_state", [
   "planned",
@@ -928,50 +1041,43 @@ export const commerceShipmentStateEnum = pgEnum("commerce_shipment_state", [
   "cancelled",
 ]);
 
-export const commerceShipmentEventKindEnum = pgEnum("commerce_shipment_event_kind", [
-  "created",
-  "picked_up",
-  "in_transit",
-  "delivered",
-  "exception",
-  "cancelled",
-]);
+export const commerceShipmentEventKindEnum = pgEnum(
+  "commerce_shipment_event_kind",
+  ["created", "picked_up", "in_transit", "delivered", "exception", "cancelled"],
+);
 
 /** Shipment-leg transport modes (Phase 6). Multimodal belongs to offerings, not a single leg. */
-export const commerceShipmentLegModeEnum = pgEnum("commerce_shipment_leg_mode", [
-  "air",
-  "sea",
-  "land",
-  "rail",
-]);
+export const commerceShipmentLegModeEnum = pgEnum(
+  "commerce_shipment_leg_mode",
+  ["air", "sea", "land", "rail"],
+);
 
-export const commerceShipmentLegStateEnum = pgEnum("commerce_shipment_leg_state", [
-  "planned",
-  "booked",
-  "in_transit",
-  "arrived",
-  "completed",
-  "cancelled",
-]);
+export const commerceShipmentLegStateEnum = pgEnum(
+  "commerce_shipment_leg_state",
+  ["planned", "booked", "in_transit", "arrived", "completed", "cancelled"],
+);
 
-export const commerceShipmentLegEventKindEnum = pgEnum("commerce_shipment_leg_event_kind", [
-  "created",
-  "booked",
-  "departed",
-  "arrived",
-  "completed",
-  "exception",
-  "cancelled",
-]);
+export const commerceShipmentLegEventKindEnum = pgEnum(
+  "commerce_shipment_leg_event_kind",
+  [
+    "created",
+    "booked",
+    "departed",
+    "arrived",
+    "completed",
+    "exception",
+    "cancelled",
+  ],
+);
 
 /**
  * Whether an engagement has an immutable accepted-quote execution snapshot.
  * Legacy Phase 4 engagements without typed quote details are fail-closed for Phase 6 writes.
  */
-export const commerceExecutionContractStateEnum = pgEnum("commerce_execution_contract_state", [
-  "ready",
-  "legacy_missing_snapshot",
-]);
+export const commerceExecutionContractStateEnum = pgEnum(
+  "commerce_execution_contract_state",
+  ["ready", "legacy_missing_snapshot"],
+);
 
 /**
  * How an engagement's typed execution snapshot was established.
@@ -993,15 +1099,15 @@ export const commerceFulfillmentCommandTargetKindEnum = pgEnum(
   ["shipment", "shipment_leg", "service_engagement", "engagement_deliverable"],
 );
 
-export const commerceCompletionTargetKindEnum = pgEnum("commerce_completion_target_kind", [
-  "product_order_line",
-  "service_engagement",
-]);
+export const commerceCompletionTargetKindEnum = pgEnum(
+  "commerce_completion_target_kind",
+  ["product_order_line", "service_engagement"],
+);
 
-export const commerceReviewVisibilityEnum = pgEnum("commerce_review_visibility", [
-  "visible",
-  "hidden",
-]);
+export const commerceReviewVisibilityEnum = pgEnum(
+  "commerce_review_visibility",
+  ["visible", "hidden"],
+);
 
 /**
  * Review media kind (STORE Appendix A8).
@@ -1014,10 +1120,10 @@ export const commerceReviewVisibilityEnum = pgEnum("commerce_review_visibility",
  * `commerce_review_media_supply_ck` discriminates on this value rather than making
  * every column nullable and hoping.
  */
-export const commerceReviewMediaKindEnum = pgEnum("commerce_review_media_kind", [
-  "photo",
-  "youtube_video",
-]);
+export const commerceReviewMediaKindEnum = pgEnum(
+  "commerce_review_media_kind",
+  ["photo", "youtube_video"],
+);
 
 /**
  * Named review sub-scores (STORE Appendix A8) — the three bars the ratings section
@@ -1026,11 +1132,10 @@ export const commerceReviewMediaKindEnum = pgEnum("commerce_review_media_kind", 
  * seen. Contrast `commerce_product_specification.specificationGroup`, which IS free
  * text because the useful groupings for a chair and a transformer share nothing.
  */
-export const commerceReviewScoreAxisEnum = pgEnum("commerce_review_score_axis", [
-  "service",
-  "shipping",
-  "quality",
-]);
+export const commerceReviewScoreAxisEnum = pgEnum(
+  "commerce_review_score_axis",
+  ["service", "shipping", "quality"],
+);
 
 export const commerceDisputeStateEnum = pgEnum("commerce_dispute_state", [
   "open",
@@ -1038,12 +1143,10 @@ export const commerceDisputeStateEnum = pgEnum("commerce_dispute_state", [
   "dismissed",
 ]);
 
-export const commerceDisputeEventKindEnum = pgEnum("commerce_dispute_event_kind", [
-  "opened",
-  "note_added",
-  "closed",
-  "dismissed",
-]);
+export const commerceDisputeEventKindEnum = pgEnum(
+  "commerce_dispute_event_kind",
+  ["opened", "note_added", "closed", "dismissed"],
+);
 
 /**
  * Commerce payment provider identity (STORE Phase 5).
@@ -1052,33 +1155,36 @@ export const commerceDisputeEventKindEnum = pgEnum("commerce_dispute_event_kind"
  * funding rows, and the fake adapter is fail-closed outside local/test environments.
  * `stripe` is reserved so switching a real processor on is an INSERT, not a migration.
  */
-export const commercePaymentProviderEnum = pgEnum("commerce_payment_provider", ["fake", "stripe"]);
+export const commercePaymentProviderEnum = pgEnum("commerce_payment_provider", [
+  "fake",
+  "stripe",
+]);
 
 /**
  * Payment intent lifecycle (STORE_BACKEND_STRUCTURE.md §4.9):
  * `created → requires_action | processing → authorized → settled`
  * Terminal alternatives: `failed | cancelled | partially_refunded | refunded | disputed`.
  */
-export const commercePaymentIntentStateEnum = pgEnum("commerce_payment_intent_state", [
-  "created",
-  "requires_action",
-  "processing",
-  "authorized",
-  "settled",
-  "failed",
-  "cancelled",
-  "partially_refunded",
-  "refunded",
-  "disputed",
-]);
+export const commercePaymentIntentStateEnum = pgEnum(
+  "commerce_payment_intent_state",
+  [
+    "created",
+    "requires_action",
+    "processing",
+    "authorized",
+    "settled",
+    "failed",
+    "cancelled",
+    "partially_refunded",
+    "refunded",
+    "disputed",
+  ],
+);
 
-export const commerceProviderTransferStateEnum = pgEnum("commerce_provider_transfer_state", [
-  "created",
-  "submitted",
-  "settled",
-  "failed",
-  "cancelled",
-]);
+export const commerceProviderTransferStateEnum = pgEnum(
+  "commerce_provider_transfer_state",
+  ["created", "submitted", "settled", "failed", "cancelled"],
+);
 
 /**
  * A17. A credit is minted once by a completed refundable sample order and spent once.
@@ -1090,10 +1196,10 @@ export const commerceProviderTransferStateEnum = pgEnum("commerce_provider_trans
  * what the buyer supplies, and therefore in what a selection must carry. Modelling them
  * as one nullable-everything row would let a selection supply neither.
  */
-export const commerceProductCustomizationKindEnum = pgEnum("commerce_product_customization_kind", [
-  "file_upload",
-  "choice",
-]);
+export const commerceProductCustomizationKindEnum = pgEnum(
+  "commerce_product_customization_kind",
+  ["file_upload", "choice"],
+);
 
 /** Retire, never delete: an order line references the option it was bought under. */
 export const commerceProductCustomizationOptionStateEnum = pgEnum(
@@ -1101,11 +1207,10 @@ export const commerceProductCustomizationOptionStateEnum = pgEnum(
   ["active", "retired"],
 );
 
-export const commerceSampleCreditStateEnum = pgEnum("commerce_sample_credit_state", [
-  "available",
-  "consumed",
-  "expired",
-]);
+export const commerceSampleCreditStateEnum = pgEnum(
+  "commerce_sample_credit_state",
+  ["available", "consumed", "expired"],
+);
 
 export const commerceRefundStateEnum = pgEnum("commerce_refund_state", [
   "created",
@@ -1126,14 +1231,17 @@ export const commerceRefundStateEnum = pgEnum("commerce_refund_state", [
  *   - `refunds_payable` — owed back to the buyer
  *   - `reconciliation_suspense` — provider/ledger delta until a human resolves it
  */
-export const commerceJournalAccountKindEnum = pgEnum("commerce_journal_account_kind", [
-  "buyer_clearing",
-  "order_held",
-  "seller_payable",
-  "platform_fee",
-  "refunds_payable",
-  "reconciliation_suspense",
-]);
+export const commerceJournalAccountKindEnum = pgEnum(
+  "commerce_journal_account_kind",
+  [
+    "buyer_clearing",
+    "order_held",
+    "seller_payable",
+    "platform_fee",
+    "refunds_payable",
+    "reconciliation_suspense",
+  ],
+);
 
 export const commerceJournalKindEnum = pgEnum("commerce_journal_kind", [
   "payment_authorized",
@@ -1144,23 +1252,20 @@ export const commerceJournalKindEnum = pgEnum("commerce_journal_kind", [
   "reversal",
 ]);
 
-export const commerceJournalEntrySettlementEnum = pgEnum("commerce_journal_entry_settlement", [
-  "pending",
-  "settled",
-  "failed",
-]);
+export const commerceJournalEntrySettlementEnum = pgEnum(
+  "commerce_journal_entry_settlement",
+  ["pending", "settled", "failed"],
+);
 
-export const commercePaymentOutboxKindEnum = pgEnum("commerce_payment_outbox_kind", [
-  "submit_payment_intent",
-  "submit_refund",
-]);
+export const commercePaymentOutboxKindEnum = pgEnum(
+  "commerce_payment_outbox_kind",
+  ["submit_payment_intent", "submit_refund"],
+);
 
-export const commercePaymentOutboxStateEnum = pgEnum("commerce_payment_outbox_state", [
-  "pending",
-  "processing",
-  "completed",
-  "failed",
-]);
+export const commercePaymentOutboxStateEnum = pgEnum(
+  "commerce_payment_outbox_state",
+  ["pending", "processing", "completed", "failed"],
+);
 
 /**
  * A legal commerce identity. Registration and tax identifiers are ciphertext
@@ -1178,9 +1283,14 @@ export const commerceOrganization = pgTable(
     normalizedLegalName: text("normalized_legal_name").notNull(),
     displayName: text("display_name").notNull(),
     summary: text("summary"),
-    organizationType: commerceOrganizationTypeEnum("organization_type").notNull(),
-    tradeState: commerceOrganizationTradeStateEnum("trade_state").default("pending").notNull(),
-    visibility: commerceOrganizationVisibilityEnum("visibility").default("private").notNull(),
+    organizationType:
+      commerceOrganizationTypeEnum("organization_type").notNull(),
+    tradeState: commerceOrganizationTradeStateEnum("trade_state")
+      .default("pending")
+      .notNull(),
+    visibility: commerceOrganizationVisibilityEnum("visibility")
+      .default("private")
+      .notNull(),
     countryCode: text("country_code").notNull(),
     registrationNumberEncrypted: text("registration_number_encrypted"),
     taxIdentifierEncrypted: text("tax_identifier_encrypted"),
@@ -1201,7 +1311,10 @@ export const commerceOrganization = pgTable(
       table.normalizedLegalName,
       table.countryCode,
     ),
-    index("commerce_organization_tradeState_idx").on(table.tradeState, table.id),
+    index("commerce_organization_tradeState_idx").on(
+      table.tradeState,
+      table.id,
+    ),
     check(
       "commerce_organization_slug_ck",
       sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 100`,
@@ -1235,7 +1348,9 @@ export const commerceOrganizationMember = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "restrict" }),
     role: commerceOrganizationMemberRoleEnum("role").notNull(),
-    state: commerceOrganizationMemberStateEnum("state").default("invited").notNull(),
+    state: commerceOrganizationMemberStateEnum("state")
+      .default("invited")
+      .notNull(),
     invitedByUserId: text("invited_by_user_id").references(() => user.id, {
       onDelete: "set null",
     }),
@@ -1248,8 +1363,14 @@ export const commerceOrganizationMember = pgTable(
       .notNull(),
   },
   (table) => [
-    index("commerce_organization_member_organizationId_idx").on(table.organizationId, table.state),
-    index("commerce_organization_member_userId_idx").on(table.userId, table.state),
+    index("commerce_organization_member_organizationId_idx").on(
+      table.organizationId,
+      table.state,
+    ),
+    index("commerce_organization_member_userId_idx").on(
+      table.userId,
+      table.state,
+    ),
     // At most one current membership. Historical `left` rows remain append-only
     // history, while invited/active/suspended are mutually exclusive per user/org.
     uniqueIndex("commerce_organization_member_current_uidx")
@@ -1301,7 +1422,10 @@ export const commerceOrganizationAddress = pgTable(
     uniqueIndex("commerce_organization_address_default_uidx")
       .on(table.organizationId, table.addressKind)
       .where(sql`is_default = true`),
-    check("commerce_organization_address_country_ck", sql`country_code ~ '^[A-Z]{2}$'`),
+    check(
+      "commerce_organization_address_country_ck",
+      sql`country_code ~ '^[A-Z]{2}$'`,
+    ),
     check(
       "commerce_organization_address_text_ck",
       sql`(label IS NULL OR char_length(label) BETWEEN 1 AND 100)
@@ -1347,14 +1471,19 @@ export const commerceEncryptedDocument = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_encrypted_document_objectStorageKey_uidx").on(table.objectStorageKey),
+    uniqueIndex("commerce_encrypted_document_objectStorageKey_uidx").on(
+      table.objectStorageKey,
+    ),
     index("commerce_encrypted_document_organizationId_idx").on(
       table.organizationId,
       table.documentKind,
       table.createdAt,
     ),
     check("commerce_encrypted_document_size_ck", sql`file_byte_size > 0`),
-    check("commerce_encrypted_document_sha_ck", sql`content_sha256 ~ '^[0-9a-f]{64}$'`),
+    check(
+      "commerce_encrypted_document_sha_ck",
+      sql`content_sha256 ~ '^[0-9a-f]{64}$'`,
+    ),
     check(
       "commerce_encrypted_document_encryption_ck",
       sql`char_length(encryption_algorithm) BETWEEN 1 AND 50
@@ -1374,7 +1503,8 @@ export const commerceOrganizationVerification = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
-    verificationKind: commerceVerificationKindEnum("verification_kind").notNull(),
+    verificationKind:
+      commerceVerificationKindEnum("verification_kind").notNull(),
     state: commerceVerificationStateEnum("state").default("pending").notNull(),
     evidenceDocumentId: text("evidence_document_id")
       .notNull()
@@ -1414,6 +1544,381 @@ export const commerceOrganizationVerification = pgTable(
     check(
       "commerce_organization_verification_reviewer_ck",
       sql`reviewed_by_user_id IS NULL OR reviewed_by_user_id <> submitted_by_user_id`,
+    ),
+  ],
+);
+
+/**
+ * Seller-declared company depth (Appendix A13, Phase 12).
+ *
+ * WHY THIS TABLE EXISTS AT ALL: `commerce_provider_profile` is keyed to SERVICE
+ * PROVIDERS, so a manufacturer selling products had no profile row anywhere and the whole
+ * company-details surface was mock. This mirrors that table's shape deliberately — one
+ * row per organization, keyed on the organization, cascade on delete — so the two read
+ * paths stay recognisably the same thing for two different trade roles.
+ *
+ * EVERY COLUMN HERE IS A CLAIM. Nothing on this row is verified, measured, or derived,
+ * which is why the projection puts it under `declaredProfile` and never merges it with
+ * `measuredMetrics`. That separation IS A13's rule: "98.6% on-time, measured across 412
+ * completed orders" and "founded 2009, per the seller" are different kinds of statement,
+ * and a flat `stats: {label, value}[]` array teaches the UI to present the second as the
+ * first.
+ */
+export const commerceSellerProfile = pgTable(
+  "commerce_seller_profile",
+  {
+    organizationId: text("organization_id")
+      .primaryKey()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    yearFounded: integer("year_founded"),
+    factoryCount: integer("factory_count"),
+    totalStaffCount: integer("total_staff_count"),
+    productionLineCount: integer("production_line_count"),
+    factoryAreaSquareMetres: integer("factory_area_square_metres"),
+    businessType: commerceSellerBusinessTypeEnum("business_type"),
+    visitPolicy: commerceVisitPolicyEnum("visit_policy"),
+    acceptingCustomOrders: boolean("accepting_custom_orders")
+      .default(false)
+      .notNull(),
+    publicSummary: text("public_summary"),
+    /**
+     * SELLER-TYPED, NOT MEASURED — the same shape as
+     * `commerce_provider_profile.averageResponseTimeHours`, and named to say so. The
+     * measured figure lives nowhere on this table: it is computed from message
+     * timestamps by `loadOrganizationMeasuredResponseTimes` and projected separately.
+     * Phase 12 renamed nothing on the provider row but stopped shipping it as a sibling
+     * of derived metrics, which is what it had been since Phase 2.
+     */
+    declaredResponseTimeHours: integer("declared_response_time_hours"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_seller_profile_businessType_idx").on(table.businessType),
+    /**
+     * The upper bound is a FIXED YEAR, not `extract(year from now())`. `now()` is not
+     * IMMUTABLE and Postgres refuses it in a CHECK. The real rule — a founding year is
+     * not in the future — is enforced in Zod at the boundary, where it can read a clock.
+     * This constraint exists to stop a typo like `20250`, not to be the whole rule.
+     */
+    check(
+      "commerce_seller_profile_year_founded_ck",
+      sql`year_founded IS NULL OR year_founded BETWEEN 1800 AND 2100`,
+    ),
+    check(
+      "commerce_seller_profile_counts_ck",
+      sql`(factory_count IS NULL OR factory_count >= 0)
+          AND (total_staff_count IS NULL OR total_staff_count >= 0)
+          AND (production_line_count IS NULL OR production_line_count >= 0)
+          AND (factory_area_square_metres IS NULL OR factory_area_square_metres >= 0)`,
+    ),
+    check(
+      "commerce_seller_profile_response_ck",
+      sql`declared_response_time_hours IS NULL OR declared_response_time_hours BETWEEN 0 AND 8760`,
+    ),
+    check(
+      "commerce_seller_profile_text_ck",
+      sql`public_summary IS NULL OR char_length(public_summary) <= 4000`,
+    ),
+  ],
+);
+
+/**
+ * Factory / office / warehouse photography (A13 item 3).
+ *
+ * PLATFORM-HOSTED, not a seller-supplied URL. `commerce_product_highlight.imageUrl` and
+ * `commerce_organization.logoUrl` both take an https string, and this table deliberately
+ * departs from that precedent: these images are uploaded through Cloudinary like
+ * `product_image`, so the platform controls the bytes. A factory photo is the one image
+ * class here that routinely carries EXIF GPS, and a seller pasting a hotlink cannot have
+ * it stripped.
+ *
+ * `widthPx`/`heightPx` are measured from the DECODED BYTES, never accepted from the
+ * client — the rule A2 established for `product_image`.
+ */
+export const commerceOrganizationMedia = pgTable(
+  "commerce_organization_media",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    mediaKind: commerceOrganizationMediaKindEnum("media_kind").notNull(),
+    imageUrl: text("image_url").notNull(),
+    /** Retained so deletion can destroy the remote asset, never projected publicly. */
+    cloudinaryPublicId: text("cloudinary_public_id").notNull(),
+    altText: text("alt_text"),
+    widthPx: integer("width_px").notNull(),
+    heightPx: integer("height_px").notNull(),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_organization_media_position_uidx").on(
+      table.organizationId,
+      table.position,
+    ),
+    index("commerce_organization_media_kind_idx").on(
+      table.organizationId,
+      table.mediaKind,
+    ),
+    check("commerce_organization_media_position_ck", sql`position >= 0`),
+    check(
+      "commerce_organization_media_dimensions_ck",
+      sql`width_px > 0 AND height_px > 0`,
+    ),
+    check(
+      "commerce_organization_media_url_ck",
+      sql`char_length(image_url) <= 2048 AND image_url LIKE 'https://%'
+          AND (alt_text IS NULL OR char_length(alt_text) <= 500)`,
+    ),
+  ],
+);
+
+/**
+ * Declared freight access to the seller's site (A13 item 3) — "nearest seaport: Nhava
+ * Sheva, 62 km".
+ *
+ * `distanceKm` is an INTEGER IN A NAMED UNIT, never the formatted string the mock
+ * rendered. A13's sibling entry A5 made the same call about package dimensions and for
+ * the same reason: prose cannot be filtered, compared, or freight-rated.
+ */
+export const commerceOrganizationSiteAccess = pgTable(
+  "commerce_organization_site_access",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    accessMode: commerceSiteAccessModeEnum("access_mode").notNull(),
+    facilityName: text("facility_name").notNull(),
+    distanceKm: integer("distance_km"),
+    notes: text("notes"),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_organization_site_access_position_uidx").on(
+      table.organizationId,
+      table.position,
+    ),
+    check("commerce_organization_site_access_position_ck", sql`position >= 0`),
+    check(
+      "commerce_organization_site_access_distance_ck",
+      sql`distance_km IS NULL OR (distance_km >= 0 AND distance_km <= 40000)`,
+    ),
+    check(
+      "commerce_organization_site_access_text_ck",
+      sql`char_length(facility_name) BETWEEN 1 AND 200
+          AND (notes IS NULL OR char_length(notes) <= 1000)`,
+    ),
+  ],
+);
+
+/**
+ * Named company officers (A13 item 4).
+ *
+ * NOTE WHAT THIS TABLE CANNOT HOLD: an email address, a phone number, or any other way
+ * to reach the person named. That absence is not an oversight and is not to be filled in
+ * later — it is the entire reason these rows are safe to publish. A name and a role title
+ * are what a company already prints on its own website; a direct line to a named
+ * individual is personal data, and adding a column for it would silently convert a public
+ * projection into a disclosure.
+ *
+ * Stored plaintext for the same reason: there is nothing here to encrypt.
+ */
+export const commerceOrganizationStakeholder = pgTable(
+  "commerce_organization_stakeholder",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    fullName: text("full_name").notNull(),
+    roleTitle: text("role_title").notNull(),
+    photoUrl: text("photo_url"),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_organization_stakeholder_position_uidx").on(
+      table.organizationId,
+      table.position,
+    ),
+    check("commerce_organization_stakeholder_position_ck", sql`position >= 0`),
+    check(
+      "commerce_organization_stakeholder_text_ck",
+      sql`char_length(full_name) BETWEEN 1 AND 200
+          AND char_length(role_title) BETWEEN 1 AND 200
+          AND (photo_url IS NULL OR (char_length(photo_url) <= 2048 AND photo_url LIKE 'https://%'))`,
+    ),
+  ],
+);
+
+/**
+ * Declared production capabilities (A13 item 5) — OEM, ODM, in-house inspection.
+ *
+ * Unique on `(organizationId, capabilityKind)` rather than on position: claiming OEM
+ * twice is not an ordering question, it is one row. Position still exists so the seller
+ * controls display order.
+ *
+ * A capability here is DECLARED. `sheets/verified-capabilities-sheet.tsx` is named for
+ * what it renders, not for what these rows prove — only the certifications alongside them
+ * carry a moderator's decision.
+ */
+export const commerceOrganizationCapability = pgTable(
+  "commerce_organization_capability",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    capabilityKind:
+      commerceOrganizationCapabilityKindEnum("capability_kind").notNull(),
+    detail: text("detail"),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_organization_capability_kind_uidx").on(
+      table.organizationId,
+      table.capabilityKind,
+    ),
+    check("commerce_organization_capability_position_ck", sql`position >= 0`),
+    check(
+      "commerce_organization_capability_detail_ck",
+      sql`detail IS NULL OR char_length(detail) <= 1000`,
+    ),
+  ],
+);
+
+/**
+ * ISO / CE / RoHS / BSCI certifications (A13 item 6).
+ *
+ * A13'S PLAN FOR THIS WAS WRONG, AND THIS TABLE IS THE CORRECTION. The appendix said to
+ * "add a `certification` kind" to `commerceVerificationKindEnum` and reuse
+ * `commerce_organization_verification`. That table carries
+ * `commerce_organization_verification_pending_uidx`, unique on
+ * `(organization_id, verification_kind)` WHERE state = 'pending' — so an organization
+ * could hold exactly ONE pending certificate, and a supplier has ISO 9001 and CE and RoHS
+ * and BSCI. It also has no name, issuer, standard or expiry column, so an approved row
+ * could not say what it certifies or when it lapses, and the platform would publish
+ * lapsed certificates indefinitely. Phase 10 made the same call for
+ * `commerce_content_report` rather than generalizing the R&D report table.
+ *
+ * What it DOES borrow is the decision-integrity shape: the same three-way state/reviewer
+ * CHECK, and the same rule that a reviewer cannot be the submitter (§11).
+ *
+ * The public projection is METADATA ONLY. `evidenceDocumentId` never rides the wire in
+ * any form — no id, no URL, no short-lived token. A certificate scan carries registration
+ * numbers, site addresses and signatures, and §11 keeps private objects private.
+ */
+export const commerceOrganizationCertification = pgTable(
+  "commerce_organization_certification",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    /** "ISO 9001:2015", "CE", "RoHS 3". Free text: the vocabulary is the world's. */
+    standardName: text("standard_name").notNull(),
+    issuerName: text("issuer_name").notNull(),
+    certificateNumber: text("certificate_number").notNull(),
+    scopeSummary: text("scope_summary"),
+    validFrom: date("valid_from").notNull(),
+    validUntil: date("valid_until").notNull(),
+    evidenceDocumentId: text("evidence_document_id")
+      .notNull()
+      .references(() => commerceEncryptedDocument.id, { onDelete: "restrict" }),
+    state: commerceCertificationStateEnum("state").default("pending").notNull(),
+    submittedByUserId: text("submitted_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    decisionReason: text("decision_reason"),
+    submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+    decidedAt: timestamp("decided_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /**
+     * The public read's exact predicate: approved, for this organization, not yet lapsed.
+     * `validUntil` trails the state so the index also orders the "expiring soon" view an
+     * owner sees.
+     */
+    index("commerce_organization_certification_public_idx").on(
+      table.organizationId,
+      table.state,
+      table.validUntil,
+    ),
+    /**
+     * One live claim per (organization, standard, certificate number). Rejected rows are
+     * excluded so a seller can resubmit a corrected application after a rejection —
+     * without this predicate a typo in the number would be permanently unusable.
+     */
+    uniqueIndex("commerce_organization_certification_identity_uidx")
+      .on(table.organizationId, table.standardName, table.certificateNumber)
+      .where(sql`state <> 'rejected'`),
+    check(
+      "commerce_organization_certification_validity_ck",
+      sql`valid_until > valid_from`,
+    ),
+    check(
+      "commerce_organization_certification_decision_ck",
+      sql`(state = 'pending' AND reviewed_by_user_id IS NULL AND decision_reason IS NULL AND decided_at IS NULL)
+          OR (state = 'approved' AND reviewed_by_user_id IS NOT NULL AND decision_reason IS NULL AND decided_at IS NOT NULL)
+          OR (state = 'rejected' AND reviewed_by_user_id IS NOT NULL
+              AND decision_reason IS NOT NULL AND char_length(decision_reason) BETWEEN 1 AND 2000
+              AND decided_at IS NOT NULL)
+          OR (state = 'withdrawn' AND reviewed_by_user_id IS NULL AND decision_reason IS NULL
+              AND decided_at IS NOT NULL)`,
+    ),
+    /** A seller cannot approve its own certificate. Same rule as verification evidence. */
+    check(
+      "commerce_organization_certification_reviewer_ck",
+      sql`reviewed_by_user_id IS NULL OR reviewed_by_user_id <> submitted_by_user_id`,
+    ),
+    check(
+      "commerce_organization_certification_text_ck",
+      sql`char_length(standard_name) BETWEEN 1 AND 200
+          AND char_length(issuer_name) BETWEEN 1 AND 200
+          AND char_length(certificate_number) BETWEEN 1 AND 120
+          AND (scope_summary IS NULL OR char_length(scope_summary) <= 2000)`,
     ),
   ],
 );
@@ -1480,8 +1985,12 @@ export const commerceOrganizationAuditEntry = pgTable(
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     eventKind: commerceOrganizationAuditEventKindEnum("event_kind").notNull(),
-    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "restrict" }),
-    actorMemberRoleSnapshot: commerceOrganizationMemberRoleEnum("actor_member_role_snapshot"),
+    actorUserId: text("actor_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    actorMemberRoleSnapshot: commerceOrganizationMemberRoleEnum(
+      "actor_member_role_snapshot",
+    ),
     targetEntityType: text("target_entity_type").notNull(),
     targetEntityId: text("target_entity_id").notNull(),
     payloadJson: text("payload_json").default("{}").notNull(),
@@ -1592,7 +2101,9 @@ export const product = pgTable(
     modelNumber: text("model_number"),
     countryOfOriginCode: text("country_of_origin_code"),
     unitOfMeasure: text("unit_of_measure"),
-    samplePolicy: productSamplePolicyEnum("sample_policy").default("unavailable").notNull(),
+    samplePolicy: productSamplePolicyEnum("sample_policy")
+      .default("unavailable")
+      .notNull(),
     samplePriceInCents: integer("sample_price_in_cents"),
     leadTimeMinDays: integer("lead_time_min_days"),
     leadTimeMaxDays: integer("lead_time_max_days"),
@@ -1608,7 +2119,9 @@ export const product = pgTable(
     packageGrossWeightGrams: integer("package_gross_weight_grams"),
     /** How many sellable units are inside one package. NULL means unstated, not 1. */
     unitsPerPackage: integer("units_per_package"),
-    moderationState: productModerationStateEnum("moderation_state").default("pending").notNull(),
+    moderationState: productModerationStateEnum("moderation_state")
+      .default("pending")
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -1637,7 +2150,10 @@ export const product = pgTable(
     uniqueIndex("product_seller_sku_unq").on(table.sellerId, table.sku),
     // An organization can't reuse one SKU across its listings. Postgres UNIQUE
     // permits many NULLs, so SKU stays optional.
-    uniqueIndex("product_sellerOrganization_sku_unq").on(table.sellerOrganizationId, table.sku),
+    uniqueIndex("product_sellerOrganization_sku_unq").on(
+      table.sellerOrganizationId,
+      table.sku,
+    ),
     check(
       "product_public_slug_ck",
       sql`public_slug IS NULL OR (public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(public_slug) BETWEEN 3 AND 120)`,
@@ -1729,10 +2245,19 @@ export const commerceProductVariant = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_product_variant_slug_uidx").on(table.productId, table.publicSlug),
+    uniqueIndex("commerce_product_variant_slug_uidx").on(
+      table.productId,
+      table.publicSlug,
+    ),
     // Postgres UNIQUE permits many NULLs, so SKU stays optional per variant.
-    uniqueIndex("commerce_product_variant_sku_uidx").on(table.productId, table.sku),
-    uniqueIndex("commerce_product_variant_position_uidx").on(table.productId, table.position),
+    uniqueIndex("commerce_product_variant_sku_uidx").on(
+      table.productId,
+      table.sku,
+    ),
+    uniqueIndex("commerce_product_variant_position_uidx").on(
+      table.productId,
+      table.position,
+    ),
     index("commerce_product_variant_product_state_idx").on(
       table.productId,
       table.state,
@@ -1742,8 +2267,14 @@ export const commerceProductVariant = pgTable(
       "commerce_product_variant_slug_ck",
       sql`public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(public_slug) BETWEEN 1 AND 80`,
     ),
-    check("commerce_product_variant_name_ck", sql`char_length(name) BETWEEN 1 AND 120`),
-    check("commerce_product_variant_sku_ck", sql`sku IS NULL OR char_length(sku) BETWEEN 1 AND 80`),
+    check(
+      "commerce_product_variant_name_ck",
+      sql`char_length(name) BETWEEN 1 AND 120`,
+    ),
+    check(
+      "commerce_product_variant_sku_ck",
+      sql`sku IS NULL OR char_length(sku) BETWEEN 1 AND 80`,
+    ),
     check(
       "commerce_product_variant_money_ck",
       sql`price_in_cents >= 0 AND stock_quantity >= 0 AND position >= 0
@@ -1780,9 +2311,18 @@ export const commerceProductHighlight = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_product_highlight_position_uidx").on(table.productId, table.position),
-    check("commerce_product_highlight_title_ck", sql`char_length(title) BETWEEN 1 AND 120`),
-    check("commerce_product_highlight_body_ck", sql`char_length(body_text) BETWEEN 1 AND 2000`),
+    uniqueIndex("commerce_product_highlight_position_uidx").on(
+      table.productId,
+      table.position,
+    ),
+    check(
+      "commerce_product_highlight_title_ck",
+      sql`char_length(title) BETWEEN 1 AND 120`,
+    ),
+    check(
+      "commerce_product_highlight_body_ck",
+      sql`char_length(body_text) BETWEEN 1 AND 2000`,
+    ),
     check("commerce_product_highlight_position_ck", sql`position >= 0`),
     check(
       "commerce_product_highlight_image_ck",
@@ -1908,7 +2448,10 @@ export const commerceProductSpecification = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_product_specification_productId_idx").on(table.productId, table.position),
+    index("commerce_product_specification_productId_idx").on(
+      table.productId,
+      table.position,
+    ),
     index("commerce_product_specification_group_idx").on(
       table.productId,
       table.specificationGroup,
@@ -1995,12 +2538,21 @@ export const commerceProductRelation = pgTable(
       table.rank,
       table.id,
     ),
-    index("commerce_product_relation_to_idx").on(table.toProductId, table.relationKind),
+    index("commerce_product_relation_to_idx").on(
+      table.toProductId,
+      table.relationKind,
+    ),
     index("commerce_product_relation_org_idx")
       .on(table.createdByOrganizationId)
       .where(sql`created_by_organization_id IS NOT NULL`),
-    check("commerce_product_relation_self_ck", sql`from_product_id <> to_product_id`),
-    check("commerce_product_relation_rank_ck", sql`rank >= 0 AND rank <= 10000`),
+    check(
+      "commerce_product_relation_self_ck",
+      sql`from_product_id <> to_product_id`,
+    ),
+    check(
+      "commerce_product_relation_rank_ck",
+      sql`rank >= 0 AND rank <= 10000`,
+    ),
     // Verification attribution exists exactly when the row claims to be curated.
     check(
       "commerce_product_relation_verified_ck",
@@ -2033,11 +2585,14 @@ export const commerceProductEngagement = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    engagementKind: commerceProductEngagementKindEnum("engagement_kind").notNull(),
+    engagementKind:
+      commerceProductEngagementKindEnum("engagement_kind").notNull(),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
   },
   (table) => [
-    primaryKey({ columns: [table.productId, table.userId, table.engagementKind] }),
+    primaryKey({
+      columns: [table.productId, table.userId, table.engagementKind],
+    }),
     /** "My saved products", newest first — the list this table exists to render. */
     index("commerce_product_engagement_user_idx").on(
       table.userId,
@@ -2046,7 +2601,10 @@ export const commerceProductEngagement = pgTable(
       table.productId,
     ),
     /** Counter reconciliation in the phase verifier. */
-    index("commerce_product_engagement_product_idx").on(table.productId, table.engagementKind),
+    index("commerce_product_engagement_product_idx").on(
+      table.productId,
+      table.engagementKind,
+    ),
   ],
 );
 
@@ -2072,7 +2630,11 @@ export const commerceProductShare = pgTable(
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_product_share_product_idx").on(table.productId, table.createdAt, table.id),
+    index("commerce_product_share_product_idx").on(
+      table.productId,
+      table.createdAt,
+      table.id,
+    ),
   ],
 );
 
@@ -2102,7 +2664,9 @@ export const commerceProductStats = pgTable(
     /** Visible questions (A9). */
     questionCount: integer("question_count").default(0).notNull(),
     /** Visible questions carrying at least one visible answer (A9). */
-    answeredQuestionCount: integer("answered_question_count").default(0).notNull(),
+    answeredQuestionCount: integer("answered_question_count")
+      .default(0)
+      .notNull(),
     lastEngagementAt: timestamp("last_engagement_at", { precision: 3 }),
   },
   (table) => [
@@ -2112,7 +2676,10 @@ export const commerceProductStats = pgTable(
           AND question_count >= 0 AND answered_question_count >= 0
           AND answered_question_count <= question_count`,
     ),
-    index("commerce_product_stats_saved_idx").on(table.savedCount, table.productId),
+    index("commerce_product_stats_saved_idx").on(
+      table.savedCount,
+      table.productId,
+    ),
   ],
 );
 
@@ -2150,7 +2717,9 @@ export const commerceProductQuestion = pgTable(
     /** Drives the "answered by the seller" badge without a join on the list read. */
     hasSellerAnswer: boolean("has_seller_answer").default(false).notNull(),
     hiddenAt: timestamp("hidden_at", { precision: 3 }),
-    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, { onDelete: "restrict" }),
+    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { precision: 3 })
       .defaultNow()
@@ -2169,7 +2738,10 @@ export const commerceProductQuestion = pgTable(
       table.createdAt,
       table.id,
     ),
-    check("commerce_product_question_body_ck", sql`char_length(body_text) BETWEEN 1 AND 1000`),
+    check(
+      "commerce_product_question_body_ck",
+      sql`char_length(body_text) BETWEEN 1 AND 1000`,
+    ),
     check("commerce_product_question_answer_count_ck", sql`answer_count >= 0`),
     /**
      * A hidden row records WHEN and, for a moderator hide, BY WHOM. An author
@@ -2210,16 +2782,23 @@ export const commerceProductAnswer = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     authorMemberId: text("author_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
-    verifiedCompletionId: text("verified_completion_id").references(() => commerceCompletion.id, {
-      onDelete: "restrict",
-    }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
+    verifiedCompletionId: text("verified_completion_id").references(
+      () => commerceCompletion.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     bodyText: text("body_text").notNull(),
     visibilityState: commerceUgcVisibilityStateEnum("visibility_state")
       .default("visible")
       .notNull(),
     hiddenAt: timestamp("hidden_at", { precision: 3 }),
-    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, { onDelete: "restrict" }),
+    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { precision: 3 })
       .defaultNow()
@@ -2236,12 +2815,19 @@ export const commerceProductAnswer = pgTable(
       table.questionId,
       table.authorOrganizationId,
     ),
-    index("commerce_product_answer_question_idx").on(table.questionId, table.createdAt, table.id),
+    index("commerce_product_answer_question_idx").on(
+      table.questionId,
+      table.createdAt,
+      table.id,
+    ),
     index("commerce_product_answer_organization_idx").on(
       table.authorOrganizationId,
       table.createdAt,
     ),
-    check("commerce_product_answer_body_ck", sql`char_length(body_text) BETWEEN 1 AND 4000`),
+    check(
+      "commerce_product_answer_body_ck",
+      sql`char_length(body_text) BETWEEN 1 AND 4000`,
+    ),
     /** The badge and its proof travel together, in both directions. */
     check(
       "commerce_product_answer_verified_ck",
@@ -2279,8 +2865,15 @@ export const storeHeroSlide = pgTable(
       .notNull(),
   },
   (table) => [
-    index("store_hero_slide_state_order_idx").on(table.state, table.siblingOrder, table.id),
-    check("store_hero_slide_title_ck", sql`char_length(title) BETWEEN 1 AND 120`),
+    index("store_hero_slide_state_order_idx").on(
+      table.state,
+      table.siblingOrder,
+      table.id,
+    ),
+    check(
+      "store_hero_slide_title_ck",
+      sql`char_length(title) BETWEEN 1 AND 120`,
+    ),
     check(
       "store_hero_slide_subtitle_ck",
       sql`subtitle IS NULL OR char_length(subtitle) BETWEEN 1 AND 280`,
@@ -2339,9 +2932,12 @@ export const storePathway = pgTable(
      * moderator — without which a seller composes a set entirely from its own SKUs
      * and a curated look becomes an advertisement.
      */
-    ownerOrganizationId: text("owner_organization_id").references(() => commerceOrganization.id, {
-      onDelete: "restrict",
-    }),
+    ownerOrganizationId: text("owner_organization_id").references(
+      () => commerceOrganization.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     createdByUserId: text("created_by_user_id").references(() => user.id, {
       onDelete: "restrict",
     }),
@@ -2368,7 +2964,11 @@ export const storePathway = pgTable(
     index("store_pathway_anchor_idx")
       .on(table.anchorProductId)
       .where(sql`anchor_product_id IS NOT NULL`),
-    index("store_pathway_moderation_queue_idx").on(table.state, table.submittedAt, table.id),
+    index("store_pathway_moderation_queue_idx").on(
+      table.state,
+      table.submittedAt,
+      table.id,
+    ),
     check(
       "store_pathway_images_ck",
       sql`(hero_image_url IS NULL OR (char_length(hero_image_url) <= 2048 AND hero_image_url LIKE 'https://%'))
@@ -2486,7 +3086,9 @@ export const storePathwaySlot = pgTable(
     /** How many units of the chosen candidate: one saddle, twelve bolts. */
     quantity: integer("quantity").default(1).notNull(),
     siblingOrder: integer("sibling_order").notNull(),
-    derivedRelationKind: commerceProductRelationKindEnum("derived_relation_kind"),
+    derivedRelationKind: commerceProductRelationKindEnum(
+      "derived_relation_kind",
+    ),
     startsAt: timestamp("starts_at"),
     endsAt: timestamp("ends_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -2496,10 +3098,23 @@ export const storePathwaySlot = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("store_pathway_slot_order_uidx").on(table.pathwayId, table.siblingOrder),
-    index("store_pathway_slot_pathway_idx").on(table.pathwayId, table.siblingOrder, table.id),
-    check("store_pathway_slot_role_label_ck", sql`char_length(role_label) BETWEEN 1 AND 80`),
-    check("store_pathway_slot_quantity_ck", sql`quantity BETWEEN 1 AND 1000000`),
+    uniqueIndex("store_pathway_slot_order_uidx").on(
+      table.pathwayId,
+      table.siblingOrder,
+    ),
+    index("store_pathway_slot_pathway_idx").on(
+      table.pathwayId,
+      table.siblingOrder,
+      table.id,
+    ),
+    check(
+      "store_pathway_slot_role_label_ck",
+      sql`char_length(role_label) BETWEEN 1 AND 80`,
+    ),
+    check(
+      "store_pathway_slot_quantity_ck",
+      sql`quantity BETWEEN 1 AND 1000000`,
+    ),
     check("store_pathway_slot_order_ck", sql`sibling_order >= 0`),
     check(
       "store_pathway_slot_window_ck",
@@ -2539,7 +3154,9 @@ export const storePathwaySlotCandidate = pgTable(
     }),
     /** 0 is the default the set shows first. */
     rank: integer("rank").default(0).notNull(),
-    sourceKind: storePathwaySlotCandidateSourceKindEnum("source_kind").default("curated").notNull(),
+    sourceKind: storePathwaySlotCandidateSourceKindEnum("source_kind")
+      .default("curated")
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -2557,11 +3174,21 @@ export const storePathwaySlotCandidate = pgTable(
       table.productId,
       sql`coalesce(${table.variantId}, '')`,
     ),
-    index("store_pathway_slot_candidate_rank_idx").on(table.slotId, table.rank, table.id),
+    index("store_pathway_slot_candidate_rank_idx").on(
+      table.slotId,
+      table.rank,
+      table.id,
+    ),
     index("store_pathway_slot_candidate_product_idx").on(table.productId),
-    check("store_pathway_slot_candidate_rank_ck", sql`rank >= 0 AND rank <= 10000`),
+    check(
+      "store_pathway_slot_candidate_rank_ck",
+      sql`rank >= 0 AND rank <= 10000`,
+    ),
     /** Derived candidates are computed at read time; only curated rows are stored. */
-    check("store_pathway_slot_candidate_source_ck", sql`source_kind = 'curated'`),
+    check(
+      "store_pathway_slot_candidate_source_ck",
+      sql`source_kind = 'curated'`,
+    ),
   ],
 );
 
@@ -2591,7 +3218,10 @@ export const storeRail = pgTable(
       sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 100`,
     ),
     check("store_rail_title_ck", sql`char_length(title) BETWEEN 1 AND 120`),
-    check("store_rail_window_ck", sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`),
+    check(
+      "store_rail_window_ck",
+      sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
+    ),
   ],
 );
 
@@ -2675,20 +3305,32 @@ export const storeSearchDocument = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("store_search_document_kind_entity_uidx").on(table.documentKind, table.entityId),
+    uniqueIndex("store_search_document_kind_entity_uidx").on(
+      table.documentKind,
+      table.entityId,
+    ),
     index("store_search_document_eligible_title_idx")
       .on(table.isEligible, table.title, table.id)
       .where(sql`is_eligible`),
-    index("store_search_document_organization_idx").on(table.organizationId, table.id),
+    index("store_search_document_organization_idx").on(
+      table.organizationId,
+      table.id,
+    ),
     index("store_search_document_category_idx").on(table.categoryId, table.id),
-    index("store_search_document_provider_kind_idx").on(table.providerKind, table.id),
+    index("store_search_document_provider_kind_idx").on(
+      table.providerKind,
+      table.id,
+    ),
     index("store_search_document_fts_idx").using("gin", table.searchDocument),
     check(
       "store_search_document_slug_ck",
       sql`public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
           AND organization_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
     ),
-    check("store_search_document_country_ck", sql`organization_country_code ~ '^[A-Z]{2}$'`),
+    check(
+      "store_search_document_country_ck",
+      sql`organization_country_code ~ '^[A-Z]{2}$'`,
+    ),
   ],
 );
 
@@ -2704,7 +3346,10 @@ export const commerceProviderKind = pgTable(
   },
   (table) => [
     uniqueIndex("commerce_provider_kind_order_uidx").on(table.siblingOrder),
-    check("commerce_provider_kind_label_ck", sql`char_length(label) BETWEEN 1 AND 80`),
+    check(
+      "commerce_provider_kind_label_ck",
+      sql`char_length(label) BETWEEN 1 AND 80`,
+    ),
   ],
 );
 
@@ -2716,7 +3361,9 @@ export const commerceProviderProfile = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "cascade" }),
     publicSummary: text("public_summary"),
     supportPolicy: text("support_policy"),
-    verificationState: commerceProviderVerificationStateEnum("verification_state")
+    verificationState: commerceProviderVerificationStateEnum(
+      "verification_state",
+    )
       .default("unverified")
       .notNull(),
     acceptingRequests: boolean("accepting_requests").default(true).notNull(),
@@ -2729,7 +3376,9 @@ export const commerceProviderProfile = pgTable(
       .notNull(),
   },
   (table) => [
-    index("commerce_provider_profile_verification_idx").on(table.verificationState),
+    index("commerce_provider_profile_verification_idx").on(
+      table.verificationState,
+    ),
     check(
       "commerce_provider_profile_text_ck",
       sql`(public_summary IS NULL OR char_length(public_summary) <= 4000)
@@ -2751,11 +3400,15 @@ export const commerceProviderKindLink = pgTable(
       .$defaultFn(() => randomUUID()),
     organizationId: text("organization_id")
       .notNull()
-      .references(() => commerceProviderProfile.organizationId, { onDelete: "cascade" }),
+      .references(() => commerceProviderProfile.organizationId, {
+        onDelete: "cascade",
+      }),
     providerKind: commerceProviderKindSlugEnum("provider_kind")
       .notNull()
       .references(() => commerceProviderKind.slug, { onDelete: "restrict" }),
-    verificationState: commerceProviderVerificationStateEnum("verification_state")
+    verificationState: commerceProviderVerificationStateEnum(
+      "verification_state",
+    )
       .default("unverified")
       .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -2769,7 +3422,10 @@ export const commerceProviderKindLink = pgTable(
       table.organizationId,
       table.providerKind,
     ),
-    index("commerce_provider_kind_link_kind_idx").on(table.providerKind, table.verificationState),
+    index("commerce_provider_kind_link_kind_idx").on(
+      table.providerKind,
+      table.verificationState,
+    ),
   ],
 );
 
@@ -2782,7 +3438,9 @@ export const commerceServiceOffering = pgTable(
     slug: text("slug").notNull(),
     providerOrganizationId: text("provider_organization_id")
       .notNull()
-      .references(() => commerceProviderProfile.organizationId, { onDelete: "restrict" }),
+      .references(() => commerceProviderProfile.organizationId, {
+        onDelete: "restrict",
+      }),
     providerKind: commerceProviderKindSlugEnum("provider_kind")
       .notNull()
       .references(() => commerceProviderKind.slug, { onDelete: "restrict" }),
@@ -2813,12 +3471,19 @@ export const commerceServiceOffering = pgTable(
       table.state,
       table.id,
     ),
-    index("commerce_service_offering_kind_state_idx").on(table.providerKind, table.state, table.id),
+    index("commerce_service_offering_kind_state_idx").on(
+      table.providerKind,
+      table.state,
+      table.id,
+    ),
     check(
       "commerce_service_offering_slug_ck",
       sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 120`,
     ),
-    check("commerce_service_offering_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
+    check(
+      "commerce_service_offering_title_ck",
+      sql`char_length(title) BETWEEN 1 AND 200`,
+    ),
     check(
       "commerce_service_offering_summary_ck",
       sql`summary IS NULL OR char_length(summary) <= 4000`,
@@ -2838,7 +3503,10 @@ export const commerceServiceOffering = pgTable(
               AND maximum_lead_time_days >= minimum_lead_time_days
               AND maximum_lead_time_days <= 3650)`,
     ),
-    check("commerce_service_offering_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_service_offering_currency_ck",
+      sql`currency ~ '^[A-Z]{3}$'`,
+    ),
   ],
 );
 
@@ -2856,8 +3524,12 @@ export const commerceServiceCoverage = pgTable(
     originRegionLabel: text("origin_region_label"),
     destinationRegionLabel: text("destination_region_label"),
     locationIdentifier: text("location_identifier"),
-    supportsHazardousGoods: boolean("supports_hazardous_goods").default(false).notNull(),
-    supportsConsolidation: boolean("supports_consolidation").default(false).notNull(),
+    supportsHazardousGoods: boolean("supports_hazardous_goods")
+      .default(false)
+      .notNull(),
+    supportsConsolidation: boolean("supports_consolidation")
+      .default(false)
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -2883,10 +3555,17 @@ export const freightOfferingDetail = pgTable("freight_offering_detail", {
   offeringId: text("offering_id")
     .primaryKey()
     .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
-  transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
-  supportsConsolidation: boolean("supports_consolidation").default(false).notNull(),
+  transportModes: freightTransportModeEnum("transport_modes")
+    .array()
+    .notNull()
+    .default([]),
+  supportsConsolidation: boolean("supports_consolidation")
+    .default(false)
+    .notNull(),
   supportsContainers: boolean("supports_containers").default(false).notNull(),
-  supportsHazardousGoods: boolean("supports_hazardous_goods").default(false).notNull(),
+  supportsHazardousGoods: boolean("supports_hazardous_goods")
+    .default(false)
+    .notNull(),
 });
 
 export const customsBrokerageOfferingDetail = pgTable(
@@ -2914,14 +3593,20 @@ export const insuranceOfferingDetail = pgTable(
     offeringId: text("offering_id")
       .primaryKey()
       .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
-    cargoCoverageClasses: text("cargo_coverage_classes").array().notNull().default([]),
+    cargoCoverageClasses: text("cargo_coverage_classes")
+      .array()
+      .notNull()
+      .default([]),
     coverageLimitMinInCents: integer("coverage_limit_min_in_cents"),
     coverageLimitMaxInCents: integer("coverage_limit_max_in_cents"),
     currency: text("currency").default("USD").notNull(),
     exclusionsDocumentReference: text("exclusions_document_reference"),
   },
   (_table) => [
-    check("insurance_offering_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "insurance_offering_detail_currency_ck",
+      sql`currency ~ '^[A-Z]{3}$'`,
+    ),
     check(
       "insurance_offering_detail_limits_ck",
       sql`(coverage_limit_min_in_cents IS NULL AND coverage_limit_max_in_cents IS NULL)
@@ -2942,14 +3627,23 @@ export const inspectionOfferingDetail = pgTable("inspection_offering_detail", {
   loadingSupervision: boolean("loading_supervision").default(false).notNull(),
 });
 
-export const testingCertificationOfferingDetail = pgTable("testing_certification_offering_detail", {
-  offeringId: text("offering_id")
-    .primaryKey()
-    .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
-  standards: text("standards").array().notNull().default([]),
-  accreditationBodies: text("accreditation_bodies").array().notNull().default([]),
-  laboratoryLocations: text("laboratory_locations").array().notNull().default([]),
-});
+export const testingCertificationOfferingDetail = pgTable(
+  "testing_certification_offering_detail",
+  {
+    offeringId: text("offering_id")
+      .primaryKey()
+      .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
+    standards: text("standards").array().notNull().default([]),
+    accreditationBodies: text("accreditation_bodies")
+      .array()
+      .notNull()
+      .default([]),
+    laboratoryLocations: text("laboratory_locations")
+      .array()
+      .notNull()
+      .default([]),
+  },
+);
 
 export const marketingOfferingDetail = pgTable(
   "marketing_offering_detail",
@@ -2959,7 +3653,10 @@ export const marketingOfferingDetail = pgTable(
       .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
     channels: text("channels").array().notNull().default([]),
     targetRegions: text("target_regions").array().notNull().default([]),
-    languageCapabilities: text("language_capabilities").array().notNull().default([]),
+    languageCapabilities: text("language_capabilities")
+      .array()
+      .notNull()
+      .default([]),
     engagementModel: text("engagement_model"),
   },
   (_table) => [
@@ -2977,7 +3674,9 @@ export const warehouseOfferingDetail = pgTable(
       .primaryKey()
       .references(() => commerceServiceOffering.id, { onDelete: "cascade" }),
     storageTypes: text("storage_types").array().notNull().default([]),
-    temperatureControlled: boolean("temperature_controlled").default(false).notNull(),
+    temperatureControlled: boolean("temperature_controlled")
+      .default(false)
+      .notNull(),
     bondedStatus: boolean("bonded_status").default(false).notNull(),
     capacityUnits: text("capacity_units"),
   },
@@ -3002,7 +3701,10 @@ export const foreignExchangeOfferingDetail = pgTable(
     notionalCurrency: text("notional_currency").default("USD").notNull(),
   },
   (_table) => [
-    check("foreign_exchange_offering_detail_currency_ck", sql`notional_currency ~ '^[A-Z]{3}$'`),
+    check(
+      "foreign_exchange_offering_detail_currency_ck",
+      sql`notional_currency ~ '^[A-Z]{3}$'`,
+    ),
     check(
       "foreign_exchange_offering_detail_notional_ck",
       sql`(minimum_notional_in_cents IS NULL AND maximum_notional_in_cents IS NULL)
@@ -3028,11 +3730,15 @@ export const commerceRfq = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     title: text("title").notNull(),
     description: text("description"),
     state: commerceRfqStateEnum("state").default("draft").notNull(),
-    visibility: commerceRfqVisibilityEnum("visibility").default("invited_only").notNull(),
+    visibility: commerceRfqVisibilityEnum("visibility")
+      .default("invited_only")
+      .notNull(),
     responseDeadlineAt: timestamp("response_deadline_at"),
     desiredDeliveryStartsAt: timestamp("desired_delivery_starts_at"),
     desiredDeliveryEndsAt: timestamp("desired_delivery_ends_at"),
@@ -3055,8 +3761,15 @@ export const commerceRfq = pgTable(
       .notNull(),
   },
   (table) => [
-    index("commerce_rfq_buyer_state_idx").on(table.buyerOrganizationId, table.state, table.id),
-    index("commerce_rfq_deadline_idx").on(table.responseDeadlineAt, table.state),
+    index("commerce_rfq_buyer_state_idx").on(
+      table.buyerOrganizationId,
+      table.state,
+      table.id,
+    ),
+    index("commerce_rfq_deadline_idx").on(
+      table.responseDeadlineAt,
+      table.state,
+    ),
     check("commerce_rfq_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
     check(
       "commerce_rfq_description_ck",
@@ -3099,18 +3812,30 @@ export const commerceRfqProductLine = pgTable(
     rfqId: text("rfq_id")
       .notNull()
       .references(() => commerceRfq.id, { onDelete: "cascade" }),
-    productId: text("product_id").references(() => product.id, { onDelete: "restrict" }),
-    categoryId: text("category_id").references(() => commerceCategory.id, { onDelete: "restrict" }),
+    productId: text("product_id").references(() => product.id, {
+      onDelete: "restrict",
+    }),
+    categoryId: text("category_id").references(() => commerceCategory.id, {
+      onDelete: "restrict",
+    }),
     requestedTitle: text("requested_title").notNull(),
-    requestedSpecificationSnapshot: text("requested_specification_snapshot").notNull(),
+    requestedSpecificationSnapshot: text(
+      "requested_specification_snapshot",
+    ).notNull(),
     quantity: integer("quantity").notNull(),
     unitLabel: text("unit_label").notNull(),
     siblingOrder: integer("sibling_order").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_rfq_product_line_rfq_idx").on(table.rfqId, table.siblingOrder),
-    uniqueIndex("commerce_rfq_product_line_order_uidx").on(table.rfqId, table.siblingOrder),
+    index("commerce_rfq_product_line_rfq_idx").on(
+      table.rfqId,
+      table.siblingOrder,
+    ),
+    uniqueIndex("commerce_rfq_product_line_order_uidx").on(
+      table.rfqId,
+      table.siblingOrder,
+    ),
     check(
       "commerce_rfq_product_line_title_ck",
       sql`char_length(requested_title) BETWEEN 1 AND 200`,
@@ -3120,7 +3845,10 @@ export const commerceRfqProductLine = pgTable(
       sql`char_length(requested_specification_snapshot) BETWEEN 1 AND 10000`,
     ),
     check("commerce_rfq_product_line_quantity_ck", sql`quantity > 0`),
-    check("commerce_rfq_product_line_unit_ck", sql`char_length(unit_label) BETWEEN 1 AND 40`),
+    check(
+      "commerce_rfq_product_line_unit_ck",
+      sql`char_length(unit_label) BETWEEN 1 AND 40`,
+    ),
     check("commerce_rfq_product_line_order_ck", sql`sibling_order >= 0`),
   ],
 );
@@ -3135,9 +3863,12 @@ export const commerceRfqServiceLine = pgTable(
       .notNull()
       .references(() => commerceRfq.id, { onDelete: "cascade" }),
     providerKind: commerceProviderKindSlugEnum("provider_kind").notNull(),
-    serviceOfferingId: text("service_offering_id").references(() => commerceServiceOffering.id, {
-      onDelete: "restrict",
-    }),
+    serviceOfferingId: text("service_offering_id").references(
+      () => commerceServiceOffering.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     linkedProductLineId: text("linked_product_line_id").references(
       () => commerceRfqProductLine.id,
       {
@@ -3149,9 +3880,18 @@ export const commerceRfqServiceLine = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_rfq_service_line_rfq_idx").on(table.rfqId, table.siblingOrder),
-    index("commerce_rfq_service_line_kind_idx").on(table.providerKind, table.rfqId),
-    uniqueIndex("commerce_rfq_service_line_order_uidx").on(table.rfqId, table.siblingOrder),
+    index("commerce_rfq_service_line_rfq_idx").on(
+      table.rfqId,
+      table.siblingOrder,
+    ),
+    index("commerce_rfq_service_line_kind_idx").on(
+      table.providerKind,
+      table.rfqId,
+    ),
+    uniqueIndex("commerce_rfq_service_line_order_uidx").on(
+      table.rfqId,
+      table.siblingOrder,
+    ),
     check(
       "commerce_rfq_service_line_summary_ck",
       sql`char_length(requirement_summary) BETWEEN 1 AND 4000`,
@@ -3161,19 +3901,27 @@ export const commerceRfqServiceLine = pgTable(
 );
 
 /** Typed RFQ requirement extension — freight / logistics. */
-export const freightRfqRequirementDetail = pgTable("freight_rfq_requirement_detail", {
-  serviceLineId: text("service_line_id")
-    .primaryKey()
-    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
-  transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
-  originCountryCode: text("origin_country_code"),
-  destinationCountryCode: text("destination_country_code"),
-  requiresConsolidation: boolean("requires_consolidation").default(false).notNull(),
-  requiresHazardousGoodsSupport: boolean("requires_hazardous_goods_support")
-    .default(false)
-    .notNull(),
-  cargoDescription: text("cargo_description"),
-});
+export const freightRfqRequirementDetail = pgTable(
+  "freight_rfq_requirement_detail",
+  {
+    serviceLineId: text("service_line_id")
+      .primaryKey()
+      .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+    transportModes: freightTransportModeEnum("transport_modes")
+      .array()
+      .notNull()
+      .default([]),
+    originCountryCode: text("origin_country_code"),
+    destinationCountryCode: text("destination_country_code"),
+    requiresConsolidation: boolean("requires_consolidation")
+      .default(false)
+      .notNull(),
+    requiresHazardousGoodsSupport: boolean("requires_hazardous_goods_support")
+      .default(false)
+      .notNull(),
+    cargoDescription: text("cargo_description"),
+  },
+);
 
 export const customsBrokerageRfqRequirementDetail = pgTable(
   "customs_brokerage_rfq_requirement_detail",
@@ -3188,24 +3936,33 @@ export const customsBrokerageRfqRequirementDetail = pgTable(
   },
 );
 
-export const insuranceRfqRequirementDetail = pgTable("insurance_rfq_requirement_detail", {
-  serviceLineId: text("service_line_id")
-    .primaryKey()
-    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
-  cargoCoverageClasses: text("cargo_coverage_classes").array().notNull().default([]),
-  coverageLimitInCents: integer("coverage_limit_in_cents"),
-  currency: text("currency").default("USD").notNull(),
-});
+export const insuranceRfqRequirementDetail = pgTable(
+  "insurance_rfq_requirement_detail",
+  {
+    serviceLineId: text("service_line_id")
+      .primaryKey()
+      .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+    cargoCoverageClasses: text("cargo_coverage_classes")
+      .array()
+      .notNull()
+      .default([]),
+    coverageLimitInCents: integer("coverage_limit_in_cents"),
+    currency: text("currency").default("USD").notNull(),
+  },
+);
 
-export const inspectionRfqRequirementDetail = pgTable("inspection_rfq_requirement_detail", {
-  serviceLineId: text("service_line_id")
-    .primaryKey()
-    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
-  preProduction: boolean("pre_production").default(false).notNull(),
-  duringProduction: boolean("during_production").default(false).notNull(),
-  preShipment: boolean("pre_shipment").default(false).notNull(),
-  loadingSupervision: boolean("loading_supervision").default(false).notNull(),
-});
+export const inspectionRfqRequirementDetail = pgTable(
+  "inspection_rfq_requirement_detail",
+  {
+    serviceLineId: text("service_line_id")
+      .primaryKey()
+      .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+    preProduction: boolean("pre_production").default(false).notNull(),
+    duringProduction: boolean("during_production").default(false).notNull(),
+    preShipment: boolean("pre_shipment").default(false).notNull(),
+    loadingSupervision: boolean("loading_supervision").default(false).notNull(),
+  },
+);
 
 export const testingCertificationRfqRequirementDetail = pgTable(
   "testing_certification_rfq_requirement_detail",
@@ -3218,24 +3975,37 @@ export const testingCertificationRfqRequirementDetail = pgTable(
   },
 );
 
-export const marketingRfqRequirementDetail = pgTable("marketing_rfq_requirement_detail", {
-  serviceLineId: text("service_line_id")
-    .primaryKey()
-    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
-  channels: text("channels").array().notNull().default([]),
-  targetRegions: text("target_regions").array().notNull().default([]),
-  languageCapabilities: text("language_capabilities").array().notNull().default([]),
-});
+export const marketingRfqRequirementDetail = pgTable(
+  "marketing_rfq_requirement_detail",
+  {
+    serviceLineId: text("service_line_id")
+      .primaryKey()
+      .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+    channels: text("channels").array().notNull().default([]),
+    targetRegions: text("target_regions").array().notNull().default([]),
+    languageCapabilities: text("language_capabilities")
+      .array()
+      .notNull()
+      .default([]),
+  },
+);
 
-export const warehouseRfqRequirementDetail = pgTable("warehouse_rfq_requirement_detail", {
-  serviceLineId: text("service_line_id")
-    .primaryKey()
-    .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
-  storageTypes: text("storage_types").array().notNull().default([]),
-  temperatureControlled: boolean("temperature_controlled").default(false).notNull(),
-  bondedStatusRequired: boolean("bonded_status_required").default(false).notNull(),
-  capacityUnits: text("capacity_units"),
-});
+export const warehouseRfqRequirementDetail = pgTable(
+  "warehouse_rfq_requirement_detail",
+  {
+    serviceLineId: text("service_line_id")
+      .primaryKey()
+      .references(() => commerceRfqServiceLine.id, { onDelete: "cascade" }),
+    storageTypes: text("storage_types").array().notNull().default([]),
+    temperatureControlled: boolean("temperature_controlled")
+      .default(false)
+      .notNull(),
+    bondedStatusRequired: boolean("bonded_status_required")
+      .default(false)
+      .notNull(),
+    capacityUnits: text("capacity_units"),
+  },
+);
 
 export const foreignExchangeRfqRequirementDetail = pgTable(
   "foreign_exchange_rfq_requirement_detail",
@@ -3265,7 +4035,9 @@ export const commerceRfqInvitation = pgTable(
     state: commerceRfqInvitationStateEnum("state").default("pending").notNull(),
     invitedByMemberId: text("invited_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     sentAt: timestamp("sent_at"),
     readAt: timestamp("read_at"),
     respondedAt: timestamp("responded_at"),
@@ -3302,11 +4074,16 @@ export const commerceRfqDocument = pgTable(
       .references(() => commerceEncryptedDocument.id, { onDelete: "restrict" }),
     attachedByMemberId: text("attached_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_rfq_document_uidx").on(table.rfqId, table.encryptedDocumentId),
+    uniqueIndex("commerce_rfq_document_uidx").on(
+      table.rfqId,
+      table.encryptedDocumentId,
+    ),
     index("commerce_rfq_document_rfq_idx").on(table.rfqId),
   ],
 );
@@ -3325,9 +4102,13 @@ export const commerceQuote = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     status: commerceQuoteStatusEnum("status").default("draft").notNull(),
-    latestRevisionNumber: integer("latest_revision_number").default(0).notNull(),
+    latestRevisionNumber: integer("latest_revision_number")
+      .default(0)
+      .notNull(),
     acceptedRevisionNumber: integer("accepted_revision_number"),
     submittedAt: timestamp("submitted_at"),
     acceptedAt: timestamp("accepted_at"),
@@ -3341,7 +4122,10 @@ export const commerceQuote = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_quote_rfq_provider_uidx").on(table.rfqId, table.providerOrganizationId),
+    uniqueIndex("commerce_quote_rfq_provider_uidx").on(
+      table.rfqId,
+      table.providerOrganizationId,
+    ),
     uniqueIndex("commerce_quote_accepted_revision_uidx")
       .on(table.id, table.acceptedRevisionNumber)
       .where(sql`status = 'accepted' AND accepted_revision_number IS NOT NULL`),
@@ -3350,7 +4134,11 @@ export const commerceQuote = pgTable(
       table.status,
       table.id,
     ),
-    index("commerce_quote_rfq_status_idx").on(table.rfqId, table.status, table.id),
+    index("commerce_quote_rfq_status_idx").on(
+      table.rfqId,
+      table.status,
+      table.id,
+    ),
     check("commerce_quote_revision_ck", sql`latest_revision_number >= 0`),
     check(
       "commerce_quote_accepted_revision_ck",
@@ -3375,22 +4163,36 @@ export const commerceQuoteRevision = pgTable(
     validityDeadlineAt: timestamp("validity_deadline_at").notNull(),
     subtotalInCents: bigint("subtotal_in_cents", { mode: "number" }).notNull(),
     taxInCents: bigint("tax_in_cents", { mode: "number" }).default(0).notNull(),
-    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" }).default(0).notNull(),
-    shippingInCents: bigint("shipping_in_cents", { mode: "number" }).default(0).notNull(),
-    discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
+    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
+    shippingInCents: bigint("shipping_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
+    discountInCents: bigint("discount_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
     totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
     paymentTerms: text("payment_terms"),
     incoterm: text("incoterm"),
     notes: text("notes"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     submittedAt: timestamp("submitted_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_quote_revision_number_uidx").on(table.quoteId, table.revisionNumber),
-    index("commerce_quote_revision_validity_idx").on(table.validityDeadlineAt, table.submittedAt),
+    uniqueIndex("commerce_quote_revision_number_uidx").on(
+      table.quoteId,
+      table.revisionNumber,
+    ),
+    index("commerce_quote_revision_validity_idx").on(
+      table.validityDeadlineAt,
+      table.submittedAt,
+    ),
     check("commerce_quote_revision_number_ck", sql`revision_number > 0`),
     check("commerce_quote_revision_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
     check(
@@ -3422,8 +4224,12 @@ export const commerceQuoteProductLine = pgTable(
       .notNull()
       .references(() => commerceRfqProductLine.id, { onDelete: "restrict" }),
     quantity: integer("quantity").notNull(),
-    unitPriceInCents: bigint("unit_price_in_cents", { mode: "number" }).notNull(),
-    lineTotalInCents: bigint("line_total_in_cents", { mode: "number" }).notNull(),
+    unitPriceInCents: bigint("unit_price_in_cents", {
+      mode: "number",
+    }).notNull(),
+    lineTotalInCents: bigint("line_total_in_cents", {
+      mode: "number",
+    }).notNull(),
     titleSnapshot: text("title_snapshot").notNull(),
     specificationSnapshot: text("specification_snapshot").notNull(),
     leadTimeDays: integer("lead_time_days"),
@@ -3432,7 +4238,10 @@ export const commerceQuoteProductLine = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_quote_product_line_revision_idx").on(table.revisionId, table.siblingOrder),
+    index("commerce_quote_product_line_revision_idx").on(
+      table.revisionId,
+      table.siblingOrder,
+    ),
     uniqueIndex("commerce_quote_product_line_rfq_uidx").on(
       table.revisionId,
       table.rfqProductLineId,
@@ -3473,7 +4282,10 @@ export const commerceQuoteServiceLine = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_quote_service_line_revision_idx").on(table.revisionId, table.siblingOrder),
+    index("commerce_quote_service_line_revision_idx").on(
+      table.revisionId,
+      table.siblingOrder,
+    ),
     uniqueIndex("commerce_quote_service_line_rfq_uidx").on(
       table.revisionId,
       table.rfqServiceLineId,
@@ -3507,7 +4319,10 @@ export const commerceQuoteServiceDeliverablePlan = pgTable(
       table.quoteServiceLineId,
       table.sequence,
     ),
-    check("commerce_quote_service_deliverable_plan_sequence_ck", sql`sequence >= 0`),
+    check(
+      "commerce_quote_service_deliverable_plan_sequence_ck",
+      sql`sequence >= 0`,
+    ),
     check(
       "commerce_quote_service_deliverable_plan_title_ck",
       sql`char_length(title) BETWEEN 1 AND 200`,
@@ -3515,15 +4330,21 @@ export const commerceQuoteServiceDeliverablePlan = pgTable(
   ],
 );
 
-export const freightQuoteServiceDetail = pgTable("freight_quote_service_detail", {
-  quoteServiceLineId: text("quote_service_line_id")
-    .primaryKey()
-    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
-  transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
-  originCountryCode: text("origin_country_code"),
-  destinationCountryCode: text("destination_country_code"),
-  estimatedTransitDays: integer("estimated_transit_days"),
-});
+export const freightQuoteServiceDetail = pgTable(
+  "freight_quote_service_detail",
+  {
+    quoteServiceLineId: text("quote_service_line_id")
+      .primaryKey()
+      .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+    transportModes: freightTransportModeEnum("transport_modes")
+      .array()
+      .notNull()
+      .default([]),
+    originCountryCode: text("origin_country_code"),
+    destinationCountryCode: text("destination_country_code"),
+    estimatedTransitDays: integer("estimated_transit_days"),
+  },
+);
 
 export const customsBrokerageQuoteServiceDetail = pgTable(
   "customs_brokerage_quote_service_detail",
@@ -3558,12 +4379,15 @@ export const insuranceQuoteServiceDetail = pgTable(
   ],
 );
 
-export const inspectionQuoteServiceDetail = pgTable("inspection_quote_service_detail", {
-  quoteServiceLineId: text("quote_service_line_id")
-    .primaryKey()
-    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
-  includedStages: text("included_stages").array().notNull().default([]),
-});
+export const inspectionQuoteServiceDetail = pgTable(
+  "inspection_quote_service_detail",
+  {
+    quoteServiceLineId: text("quote_service_line_id")
+      .primaryKey()
+      .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+    includedStages: text("included_stages").array().notNull().default([]),
+  },
+);
 
 export const testingCertificationQuoteServiceDetail = pgTable(
   "testing_certification_quote_service_detail",
@@ -3576,22 +4400,30 @@ export const testingCertificationQuoteServiceDetail = pgTable(
   },
 );
 
-export const marketingQuoteServiceDetail = pgTable("marketing_quote_service_detail", {
-  quoteServiceLineId: text("quote_service_line_id")
-    .primaryKey()
-    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
-  channels: text("channels").array().notNull().default([]),
-  deliverablesSummary: text("deliverables_summary"),
-});
+export const marketingQuoteServiceDetail = pgTable(
+  "marketing_quote_service_detail",
+  {
+    quoteServiceLineId: text("quote_service_line_id")
+      .primaryKey()
+      .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+    channels: text("channels").array().notNull().default([]),
+    deliverablesSummary: text("deliverables_summary"),
+  },
+);
 
-export const warehouseQuoteServiceDetail = pgTable("warehouse_quote_service_detail", {
-  quoteServiceLineId: text("quote_service_line_id")
-    .primaryKey()
-    .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
-  storageTypes: text("storage_types").array().notNull().default([]),
-  capacityUnits: text("capacity_units"),
-  temperatureControlled: boolean("temperature_controlled").default(false).notNull(),
-});
+export const warehouseQuoteServiceDetail = pgTable(
+  "warehouse_quote_service_detail",
+  {
+    quoteServiceLineId: text("quote_service_line_id")
+      .primaryKey()
+      .references(() => commerceQuoteServiceLine.id, { onDelete: "cascade" }),
+    storageTypes: text("storage_types").array().notNull().default([]),
+    capacityUnits: text("capacity_units"),
+    temperatureControlled: boolean("temperature_controlled")
+      .default(false)
+      .notNull(),
+  },
+);
 
 export const foreignExchangeQuoteServiceDetail = pgTable(
   "foreign_exchange_quote_service_detail",
@@ -3646,9 +4478,12 @@ export const commerceOrder = pgTable(
     checkoutGroupId: text("checkout_group_id"),
     source: commerceOrderSourceEnum("source").notNull(),
     state: commerceOrderStateEnum("state").default("pending_payment").notNull(),
-    acceptedQuoteId: text("accepted_quote_id").references(() => commerceQuote.id, {
-      onDelete: "restrict",
-    }),
+    acceptedQuoteId: text("accepted_quote_id").references(
+      () => commerceQuote.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     acceptedQuoteRevisionId: text("accepted_quote_revision_id").references(
       () => commerceQuoteRevision.id,
       { onDelete: "restrict" },
@@ -3656,14 +4491,22 @@ export const commerceOrder = pgTable(
     currency: text("currency").notNull(),
     subtotalInCents: bigint("subtotal_in_cents", { mode: "number" }).notNull(),
     taxInCents: bigint("tax_in_cents", { mode: "number" }).default(0).notNull(),
-    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" }).default(0).notNull(),
-    shippingInCents: bigint("shipping_in_cents", { mode: "number" }).default(0).notNull(),
-    discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
+    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
+    shippingInCents: bigint("shipping_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
+    discountInCents: bigint("discount_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
     totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
     paymentTermsSnapshot: text("payment_terms_snapshot"),
     incotermSnapshot: text("incoterm_snapshot"),
     buyerLegalNameSnapshot: text("buyer_legal_name_snapshot").notNull(),
-    counterpartyLegalNameSnapshot: text("counterparty_legal_name_snapshot").notNull(),
+    counterpartyLegalNameSnapshot: text(
+      "counterparty_legal_name_snapshot",
+    ).notNull(),
     /**
      * REDACTED BY DESIGN: country, region, locality, postal code. Street lines,
      * recipient name and phone are encrypted on the address row and deliberately do
@@ -3683,9 +4526,28 @@ export const commerceOrder = pgTable(
       () => commerceOrganizationAddress.id,
       { onDelete: "restrict" },
     ),
+    /**
+     * A13. WHAT THE BUYER WAS TOLD, fixed at the moment the order was created and never
+     * recomputed. The latest promise across this order's product lines, which is the
+     * baseline `onTimeShipmentRate` measures the delivered shipment event against.
+     *
+     * DERIVED AT CONFIRM, NEVER SELLER-TYPED LATER. A seller entering a target date when
+     * it creates the shipment would be setting the bar after it already knew the outcome,
+     * and the metric would grade itself. Direct-checkout orders compute it from
+     * `commerce_checkout_prepare_product_line.leadTimeMaxDaysSnapshot`; quote-originated
+     * orders from the `commerce_quote_product_line.leadTimeDays` that already existed.
+     *
+     * NULLABLE, and null means no seller on this order declared a lead time. Such an
+     * order is absent from the on-time denominator rather than counted as met or missed.
+     * Nothing backfills it: inventing a commitment for orders placed before this column
+     * existed would fabricate the very measurement this fixes.
+     */
+    promisedDeliveryAt: timestamp("promised_delivery_at"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -3693,19 +4555,33 @@ export const commerceOrder = pgTable(
       .notNull(),
   },
   (table) => [
+    /**
+     * The on-time metric's driving index: a counterparty's orders that carry a promise.
+     * Partial, because most historical rows never will.
+     */
+    index("commerce_order_promised_delivery_idx")
+      .on(table.counterpartyOrganizationId, table.promisedDeliveryAt)
+      .where(sql`promised_delivery_at IS NOT NULL`),
     uniqueIndex("commerce_order_accepted_quote_uidx")
       .on(table.acceptedQuoteId)
       .where(sql`accepted_quote_id IS NOT NULL`),
     uniqueIndex("commerce_order_accepted_revision_uidx")
       .on(table.acceptedQuoteRevisionId)
       .where(sql`accepted_quote_revision_id IS NOT NULL`),
-    index("commerce_order_buyer_idx").on(table.buyerOrganizationId, table.state, table.id),
+    index("commerce_order_buyer_idx").on(
+      table.buyerOrganizationId,
+      table.state,
+      table.id,
+    ),
     index("commerce_order_counterparty_idx").on(
       table.counterpartyOrganizationId,
       table.state,
       table.id,
     ),
-    index("commerce_order_checkout_group_idx").on(table.checkoutGroupId, table.id),
+    index("commerce_order_checkout_group_idx").on(
+      table.checkoutGroupId,
+      table.id,
+    ),
     index("commerce_order_delivery_address_idx")
       .on(table.deliveryAddressId)
       .where(sql`delivery_address_id IS NOT NULL`),
@@ -3736,7 +4612,9 @@ export const commerceOrderProductLine = pgTable(
     orderId: text("order_id")
       .notNull()
       .references(() => commerceOrder.id, { onDelete: "cascade" }),
-    productId: text("product_id").references(() => product.id, { onDelete: "restrict" }),
+    productId: text("product_id").references(() => product.id, {
+      onDelete: "restrict",
+    }),
     /**
      * A1. The variant this line was bought from, `restrict` so it survives as long as
      * the order does.
@@ -3763,13 +4641,29 @@ export const commerceOrderProductLine = pgTable(
     quantityFulfilled: integer("quantity_fulfilled").default(0).notNull(),
     quantityCancelled: integer("quantity_cancelled").default(0).notNull(),
     quantityRefunded: integer("quantity_refunded").default(0).notNull(),
-    unitPriceInCents: bigint("unit_price_in_cents", { mode: "number" }).notNull(),
-    lineTotalInCents: bigint("line_total_in_cents", { mode: "number" }).notNull(),
+    unitPriceInCents: bigint("unit_price_in_cents", {
+      mode: "number",
+    }).notNull(),
+    lineTotalInCents: bigint("line_total_in_cents", {
+      mode: "number",
+    }).notNull(),
+    /**
+     * A13. This line's own promise — an immutable commercial snapshot like every other
+     * column here. `commerce_order.promisedDeliveryAt` is the latest of these.
+     *
+     * Per line and not only per order because one order can span lead times, and a
+     * partially-shipped order needs to know which line was late. The aggregate metric
+     * reads the order; a future per-line view has the fact it needs without a migration.
+     */
+    promisedDeliveryAt: timestamp("promised_delivery_at"),
     siblingOrder: integer("sibling_order").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_order_product_line_order_idx").on(table.orderId, table.siblingOrder),
+    index("commerce_order_product_line_order_idx").on(
+      table.orderId,
+      table.siblingOrder,
+    ),
     check(
       "commerce_order_product_line_qty_ck",
       sql`quantity_ordered > 0
@@ -3815,7 +4709,10 @@ export const commerceOrderServiceLine = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_order_service_line_order_idx").on(table.orderId, table.siblingOrder),
+    index("commerce_order_service_line_order_idx").on(
+      table.orderId,
+      table.siblingOrder,
+    ),
     check("commerce_order_service_line_fee_ck", sql`fee_in_cents >= 0`),
   ],
 );
@@ -3833,7 +4730,9 @@ export const commerceThread = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -3841,8 +4740,14 @@ export const commerceThread = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_thread_resource_uidx").on(table.resourceKind, table.resourceId),
-    index("commerce_thread_org_idx").on(table.createdByOrganizationId, table.id),
+    uniqueIndex("commerce_thread_resource_uidx").on(
+      table.resourceKind,
+      table.resourceId,
+    ),
+    index("commerce_thread_org_idx").on(
+      table.createdByOrganizationId,
+      table.id,
+    ),
   ],
 );
 
@@ -3858,12 +4763,19 @@ export const commerceThreadParticipant = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
-    participantRole: commerceThreadParticipantRoleEnum("participant_role").notNull(),
+    participantRole:
+      commerceThreadParticipantRoleEnum("participant_role").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_thread_participant_uidx").on(table.threadId, table.organizationId),
-    index("commerce_thread_participant_org_idx").on(table.organizationId, table.threadId),
+    uniqueIndex("commerce_thread_participant_uidx").on(
+      table.threadId,
+      table.organizationId,
+    ),
+    index("commerce_thread_participant_org_idx").on(
+      table.organizationId,
+      table.threadId,
+    ),
   ],
 );
 
@@ -3881,13 +4793,22 @@ export const commerceMessage = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     authorMemberId: text("author_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     bodyText: text("body_text").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_message_thread_idx").on(table.threadId, table.createdAt, table.id),
-    check("commerce_message_body_ck", sql`char_length(body_text) BETWEEN 1 AND 10000`),
+    index("commerce_message_thread_idx").on(
+      table.threadId,
+      table.createdAt,
+      table.id,
+    ),
+    check(
+      "commerce_message_body_ck",
+      sql`char_length(body_text) BETWEEN 1 AND 10000`,
+    ),
   ],
 );
 
@@ -3906,7 +4827,10 @@ export const commerceMessageAttachment = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_message_attachment_uidx").on(table.messageId, table.encryptedDocumentId),
+    uniqueIndex("commerce_message_attachment_uidx").on(
+      table.messageId,
+      table.encryptedDocumentId,
+    ),
     index("commerce_message_attachment_message_idx").on(table.messageId),
   ],
 );
@@ -3930,7 +4854,9 @@ export const commerceCart = pgTable(
       .$onUpdate(() => /* @__PURE__ */ new Date())
       .notNull(),
   },
-  (table) => [uniqueIndex("commerce_cart_buyer_uidx").on(table.buyerOrganizationId)],
+  (table) => [
+    uniqueIndex("commerce_cart_buyer_uidx").on(table.buyerOrganizationId),
+  ],
 );
 
 export const commerceCartProductLine = pgTable(
@@ -3974,7 +4900,10 @@ export const commerceCartProductLine = pgTable(
     // migration 0054 as an expression index over coalesce(variant_id, ''), because
     // Postgres UNIQUE permits many NULLs and drizzle-kit cannot emit an expression
     // index. Two colours of one product are two lines; the same colour twice is one.
-    index("commerce_cart_product_line_cart_idx").on(table.cartId, table.productId),
+    index("commerce_cart_product_line_cart_idx").on(
+      table.cartId,
+      table.productId,
+    ),
     index("commerce_cart_product_line_variant_idx")
       .on(table.variantId)
       .where(sql`variant_id IS NOT NULL`),
@@ -3998,7 +4927,9 @@ export const commerceCheckoutPrepare = pgTable(
     buyerOrganizationId: text("buyer_organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
-    state: commerceCheckoutPrepareStateEnum("state").default("active").notNull(),
+    state: commerceCheckoutPrepareStateEnum("state")
+      .default("active")
+      .notNull(),
     deliveryAddressId: text("delivery_address_id").references(
       () => commerceOrganizationAddress.id,
       {
@@ -4010,7 +4941,9 @@ export const commerceCheckoutPrepare = pgTable(
     prepareIdempotencyKey: text("prepare_idempotency_key"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -4021,7 +4954,10 @@ export const commerceCheckoutPrepare = pgTable(
     uniqueIndex("commerce_checkout_prepare_idempotency_uidx")
       .on(table.buyerOrganizationId, table.prepareIdempotencyKey)
       .where(sql`prepare_idempotency_key IS NOT NULL`),
-    index("commerce_checkout_prepare_state_expires_idx").on(table.state, table.expiresAt),
+    index("commerce_checkout_prepare_state_expires_idx").on(
+      table.state,
+      table.expiresAt,
+    ),
     index("commerce_checkout_prepare_cart_idx").on(table.cartId, table.state),
   ],
 );
@@ -4054,12 +4990,31 @@ export const commerceCheckoutPrepareProductLine = pgTable(
     titleSnapshot: text("title_snapshot").notNull(),
     specificationSnapshot: text("specification_snapshot").notNull(),
     quantity: integer("quantity").notNull(),
-    unitPriceInCents: bigint("unit_price_in_cents", { mode: "number" }).notNull(),
-    lineTotalInCents: bigint("line_total_in_cents", { mode: "number" }).notNull(),
+    unitPriceInCents: bigint("unit_price_in_cents", {
+      mode: "number",
+    }).notNull(),
+    lineTotalInCents: bigint("line_total_in_cents", {
+      mode: "number",
+    }).notNull(),
     currency: text("currency").notNull(),
     isMadeToOrder: boolean("is_made_to_order").default(false).notNull(),
     /** A17. Snapshotted from the cart line so confirm can carry it to the order. */
     isSample: boolean("is_sample").default(false).notNull(),
+    /**
+     * A13. The seller's advertised maximum lead time AT THE MOMENT OF PREPARATION, which
+     * is what `promised_delivery_at` on the order line is computed from at confirm.
+     *
+     * It rides the prepare row rather than being re-read at confirm because
+     * `confirmCheckout` builds each order line VERBATIM from this table and never touches
+     * the cart or the product again — the same constraint A18's customization selections
+     * had to route around. Re-reading `product.leadTimeMaxDays` at confirm would derive a
+     * commitment from listing data the buyer never saw, which is exactly what §0 forbids
+     * for prices and forbids here for the same reason.
+     *
+     * NULLABLE, and null means "this seller declared no lead time", not "zero days". Such
+     * a line produces no promise and is excluded from the on-time denominator entirely.
+     */
+    leadTimeMaxDaysSnapshot: integer("lead_time_max_days_snapshot"),
     siblingOrder: integer("sibling_order").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -4074,6 +5029,11 @@ export const commerceCheckoutPrepareProductLine = pgTable(
       table.siblingOrder,
     ),
     check("commerce_checkout_prepare_product_line_qty_ck", sql`quantity > 0`),
+    check(
+      "commerce_checkout_prepare_product_line_lead_time_ck",
+      sql`lead_time_max_days_snapshot IS NULL
+          OR (lead_time_max_days_snapshot >= 0 AND lead_time_max_days_snapshot <= 3650)`,
+    ),
     check(
       "commerce_checkout_prepare_product_line_money_ck",
       sql`unit_price_in_cents >= 0
@@ -4101,9 +5061,15 @@ export const commerceCheckoutPrepareCurrencyTotal = pgTable(
     currency: text("currency").notNull(),
     subtotalInCents: bigint("subtotal_in_cents", { mode: "number" }).notNull(),
     taxInCents: bigint("tax_in_cents", { mode: "number" }).default(0).notNull(),
-    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" }).default(0).notNull(),
-    shippingInCents: bigint("shipping_in_cents", { mode: "number" }).default(0).notNull(),
-    discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
+    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
+    shippingInCents: bigint("shipping_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
+    discountInCents: bigint("discount_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
     totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -4112,7 +5078,10 @@ export const commerceCheckoutPrepareCurrencyTotal = pgTable(
       table.prepareId,
       table.currency,
     ),
-    check("commerce_checkout_prepare_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_checkout_prepare_currency_ck",
+      sql`currency ~ '^[A-Z]{3}$'`,
+    ),
     check(
       "commerce_checkout_prepare_currency_money_ck",
       sql`subtotal_in_cents >= 0 AND tax_in_cents >= 0 AND service_fee_in_cents >= 0
@@ -4142,11 +5111,18 @@ export const commerceInventoryReservation = pgTable(
     buyerOrganizationId: text("buyer_organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
-    cartId: text("cart_id").references(() => commerceCart.id, { onDelete: "restrict" }),
-    checkoutPrepareId: text("checkout_prepare_id").references(() => commerceCheckoutPrepare.id, {
+    cartId: text("cart_id").references(() => commerceCart.id, {
       onDelete: "restrict",
     }),
-    orderId: text("order_id").references(() => commerceOrder.id, { onDelete: "restrict" }),
+    checkoutPrepareId: text("checkout_prepare_id").references(
+      () => commerceCheckoutPrepare.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    orderId: text("order_id").references(() => commerceOrder.id, {
+      onDelete: "restrict",
+    }),
     quantity: integer("quantity").notNull(),
     isMadeToOrder: boolean("is_made_to_order").default(false).notNull(),
     /**
@@ -4155,7 +5131,9 @@ export const commerceInventoryReservation = pgTable(
      * product could only reserve for one of them.
      */
     isSample: boolean("is_sample").default(false).notNull(),
-    state: commerceInventoryReservationStateEnum("state").default("held").notNull(),
+    state: commerceInventoryReservationStateEnum("state")
+      .default("held")
+      .notNull(),
     expiresAt: timestamp("expires_at").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     consumedAt: timestamp("consumed_at"),
@@ -4173,7 +5151,10 @@ export const commerceInventoryReservation = pgTable(
     index("commerce_inventory_reservation_variant_state_idx")
       .on(table.variantId, table.state, table.expiresAt)
       .where(sql`variant_id IS NOT NULL`),
-    index("commerce_inventory_reservation_state_expires_idx").on(table.state, table.expiresAt),
+    index("commerce_inventory_reservation_state_expires_idx").on(
+      table.state,
+      table.expiresAt,
+    ),
     check(
       "commerce_inventory_reservation_qty_ck",
       sql`(is_made_to_order = true AND quantity = 0) OR (is_made_to_order = false AND quantity > 0)`,
@@ -4200,12 +5181,16 @@ export const commerceCheckoutGroup = pgTable(
     checkoutPrepareId: text("checkout_prepare_id")
       .notNull()
       .references(() => commerceCheckoutPrepare.id, { onDelete: "restrict" }),
-    state: commerceCheckoutGroupStateEnum("state").default("confirmed").notNull(),
+    state: commerceCheckoutGroupStateEnum("state")
+      .default("confirmed")
+      .notNull(),
     deliveryAddressSnapshot: text("delivery_address_snapshot"),
     confirmIdempotencyKey: text("confirm_idempotency_key"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -4213,11 +5198,16 @@ export const commerceCheckoutGroup = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_checkout_group_prepare_uidx").on(table.checkoutPrepareId),
+    uniqueIndex("commerce_checkout_group_prepare_uidx").on(
+      table.checkoutPrepareId,
+    ),
     uniqueIndex("commerce_checkout_group_idempotency_uidx")
       .on(table.buyerOrganizationId, table.confirmIdempotencyKey)
       .where(sql`confirm_idempotency_key IS NOT NULL`),
-    index("commerce_checkout_group_buyer_idx").on(table.buyerOrganizationId, table.id),
+    index("commerce_checkout_group_buyer_idx").on(
+      table.buyerOrganizationId,
+      table.id,
+    ),
   ],
 );
 
@@ -4233,9 +5223,15 @@ export const commerceCheckoutGroupCurrencyTotal = pgTable(
     currency: text("currency").notNull(),
     subtotalInCents: bigint("subtotal_in_cents", { mode: "number" }).notNull(),
     taxInCents: bigint("tax_in_cents", { mode: "number" }).default(0).notNull(),
-    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" }).default(0).notNull(),
-    shippingInCents: bigint("shipping_in_cents", { mode: "number" }).default(0).notNull(),
-    discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
+    serviceFeeInCents: bigint("service_fee_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
+    shippingInCents: bigint("shipping_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
+    discountInCents: bigint("discount_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
     totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -4274,8 +5270,12 @@ export const commerceServiceEngagement = pgTable(
       .notNull()
       .references(() => commerceOrderServiceLine.id, { onDelete: "restrict" }),
     providerKind: commerceProviderKindSlugEnum("provider_kind").notNull(),
-    state: commerceServiceEngagementStateEnum("state").default("awaiting_provider").notNull(),
-    executionContractState: commerceExecutionContractStateEnum("execution_contract_state")
+    state: commerceServiceEngagementStateEnum("state")
+      .default("awaiting_provider")
+      .notNull(),
+    executionContractState: commerceExecutionContractStateEnum(
+      "execution_contract_state",
+    )
       .default("legacy_missing_snapshot")
       .notNull(),
     /**
@@ -4289,7 +5289,9 @@ export const commerceServiceEngagement = pgTable(
      * True when a historical free-text deliverable obligation exists without structured
      * deliverable rows. Completion fails closed until `normalize_deliverables`.
      */
-    requiresDeliverableNormalization: boolean("requires_deliverable_normalization")
+    requiresDeliverableNormalization: boolean(
+      "requires_deliverable_normalization",
+    )
       .default(false)
       .notNull(),
     version: integer("version").default(0).notNull(),
@@ -4306,7 +5308,9 @@ export const commerceServiceEngagement = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_service_engagement_order_line_uidx").on(table.orderServiceLineId),
+    uniqueIndex("commerce_service_engagement_order_line_uidx").on(
+      table.orderServiceLineId,
+    ),
     check(
       "commerce_service_engagement_provenance_ck",
       sql`(execution_contract_state = 'legacy_missing_snapshot' AND execution_contract_provenance IS NULL)
@@ -4345,7 +5349,9 @@ export const commerceShipment = pgTable(
     totalWeightGrams: integer("total_weight_grams"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -4355,7 +5361,10 @@ export const commerceShipment = pgTable(
   (table) => [
     index("commerce_shipment_order_idx").on(table.orderId, table.id),
     check("commerce_shipment_package_ck", sql`package_count > 0`),
-    check("commerce_shipment_weight_ck", sql`total_weight_grams IS NULL OR total_weight_grams > 0`),
+    check(
+      "commerce_shipment_weight_ck",
+      sql`total_weight_grams IS NULL OR total_weight_grams > 0`,
+    ),
     check("commerce_shipment_version_ck", sql`version >= 0`),
     check(
       "commerce_shipment_country_ck",
@@ -4444,11 +5453,17 @@ export const commerceShipmentEvent = pgTable(
     description: text("description"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("commerce_shipment_event_shipment_idx").on(table.shipmentId, table.occurredAt, table.id),
+    index("commerce_shipment_event_shipment_idx").on(
+      table.shipmentId,
+      table.occurredAt,
+      table.id,
+    ),
     check(
       "commerce_shipment_event_description_ck",
       sql`description IS NULL OR char_length(description) BETWEEN 1 AND 2000`,
@@ -4492,7 +5507,9 @@ export const commerceShipmentLeg = pgTable(
     actualArrivalAt: timestamp("actual_arrival_at"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -4500,9 +5517,14 @@ export const commerceShipmentLeg = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_shipment_leg_sequence_uidx").on(table.shipmentId, table.sequence),
+    uniqueIndex("commerce_shipment_leg_sequence_uidx").on(
+      table.shipmentId,
+      table.sequence,
+    ),
     index("commerce_shipment_leg_shipment_idx").on(table.shipmentId, table.id),
-    index("commerce_shipment_leg_engagement_idx").on(table.logisticsEngagementId),
+    index("commerce_shipment_leg_engagement_idx").on(
+      table.logisticsEngagementId,
+    ),
     check("commerce_shipment_leg_sequence_ck", sql`sequence >= 0`),
     check("commerce_shipment_leg_version_ck", sql`version >= 0`),
     check(
@@ -4543,7 +5565,9 @@ export const commerceShipmentLegEvent = pgTable(
     ),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -4584,7 +5608,9 @@ export const commerceServiceEngagementEvent = pgTable(
     occurredAt: timestamp("occurred_at").notNull(),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -4620,8 +5646,11 @@ export const commerceFulfillmentCommand = pgTable(
       .references(() => user.id, { onDelete: "restrict" }),
     actorMemberId: text("actor_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
-    targetKind: commerceFulfillmentCommandTargetKindEnum("target_kind").notNull(),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
+    targetKind:
+      commerceFulfillmentCommandTargetKindEnum("target_kind").notNull(),
     targetId: text("target_id").notNull(),
     commandKind: text("command_kind").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
@@ -4636,7 +5665,11 @@ export const commerceFulfillmentCommand = pgTable(
       table.actorOrganizationId,
       table.idempotencyKey,
     ),
-    index("commerce_fulfillment_command_target_idx").on(table.targetKind, table.targetId, table.id),
+    index("commerce_fulfillment_command_target_idx").on(
+      table.targetKind,
+      table.targetId,
+      table.id,
+    ),
     check(
       "commerce_fulfillment_command_text_ck",
       sql`char_length(command_kind) BETWEEN 1 AND 80
@@ -4657,7 +5690,10 @@ export const freightEngagementDetail = pgTable(
       () => commerceQuoteServiceLine.id,
       { onDelete: "restrict" },
     ),
-    transportModes: freightTransportModeEnum("transport_modes").array().notNull().default([]),
+    transportModes: freightTransportModeEnum("transport_modes")
+      .array()
+      .notNull()
+      .default([]),
     originCountryCode: text("origin_country_code"),
     destinationCountryCode: text("destination_country_code"),
     estimatedTransitDays: integer("estimated_transit_days"),
@@ -4715,7 +5751,10 @@ export const insuranceEngagementDetail = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (_table) => [
-    check("insurance_engagement_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "insurance_engagement_detail_currency_ck",
+      sql`currency ~ '^[A-Z]{3}$'`,
+    ),
     check(
       "insurance_engagement_detail_amount_currency_pair_ck",
       sql`(coverage_limit_minor_units IS NULL) = (currency IS NULL)`,
@@ -4728,17 +5767,20 @@ export const insuranceEngagementDetail = pgTable(
   ],
 );
 
-export const inspectionEngagementDetail = pgTable("inspection_engagement_detail", {
-  engagementId: text("engagement_id")
-    .primaryKey()
-    .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
-  sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
-    () => commerceQuoteServiceLine.id,
-    { onDelete: "restrict" },
-  ),
-  includedStages: text("included_stages").array().notNull().default([]),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export const inspectionEngagementDetail = pgTable(
+  "inspection_engagement_detail",
+  {
+    engagementId: text("engagement_id")
+      .primaryKey()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+      () => commerceQuoteServiceLine.id,
+      { onDelete: "restrict" },
+    ),
+    includedStages: text("included_stages").array().notNull().default([]),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+);
 
 export const testingCertificationEngagementDetail = pgTable(
   "testing_certification_engagement_detail",
@@ -4778,19 +5820,24 @@ export const marketingEngagementDetail = pgTable(
   ],
 );
 
-export const warehouseEngagementDetail = pgTable("warehouse_engagement_detail", {
-  engagementId: text("engagement_id")
-    .primaryKey()
-    .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
-  sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
-    () => commerceQuoteServiceLine.id,
-    { onDelete: "restrict" },
-  ),
-  storageTypes: text("storage_types").array().notNull().default([]),
-  capacityUnits: text("capacity_units"),
-  temperatureControlled: boolean("temperature_controlled").default(false).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export const warehouseEngagementDetail = pgTable(
+  "warehouse_engagement_detail",
+  {
+    engagementId: text("engagement_id")
+      .primaryKey()
+      .references(() => commerceServiceEngagement.id, { onDelete: "cascade" }),
+    sourceQuoteServiceLineId: text("source_quote_service_line_id").references(
+      () => commerceQuoteServiceLine.id,
+      { onDelete: "restrict" },
+    ),
+    storageTypes: text("storage_types").array().notNull().default([]),
+    capacityUnits: text("capacity_units"),
+    temperatureControlled: boolean("temperature_controlled")
+      .default(false)
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+);
 
 export const foreignExchangeEngagementDetail = pgTable(
   "foreign_exchange_engagement_detail",
@@ -4820,7 +5867,10 @@ export const foreignExchangeEngagementDetail = pgTable(
       "foreign_exchange_engagement_detail_pair_ck",
       sql`char_length(currency_pair) = 7 AND currency_pair ~ '^[A-Z]{3}/[A-Z]{3}$'`,
     ),
-    check("foreign_exchange_engagement_detail_currency_ck", sql`notional_currency ~ '^[A-Z]{3}$'`),
+    check(
+      "foreign_exchange_engagement_detail_currency_ck",
+      sql`notional_currency ~ '^[A-Z]{3}$'`,
+    ),
     check(
       "foreign_exchange_engagement_detail_notional_currency_pair_ck",
       sql`(notional_amount_minor_units IS NULL) = (notional_currency IS NULL)`,
@@ -4845,7 +5895,9 @@ export const commerceEngagementDeliverable = pgTable(
     sequence: integer("sequence").notNull(),
     title: text("title").notNull(),
     isRequired: boolean("is_required").default(true).notNull(),
-    state: commerceEngagementDeliverableStateEnum("state").default("planned").notNull(),
+    state: commerceEngagementDeliverableStateEnum("state")
+      .default("planned")
+      .notNull(),
     dueAt: timestamp("due_at"),
     submittedAt: timestamp("submitted_at"),
     reviewedAt: timestamp("reviewed_at"),
@@ -4856,7 +5908,9 @@ export const commerceEngagementDeliverable = pgTable(
     reviewNote: text("review_note"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -4890,7 +5944,9 @@ export const commerceEngagementDeliverableEvent = pgTable(
       .$defaultFn(() => randomUUID()),
     deliverableId: text("deliverable_id")
       .notNull()
-      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+      .references(() => commerceEngagementDeliverable.id, {
+        onDelete: "cascade",
+      }),
     sequence: integer("sequence").notNull(),
     previousState: commerceEngagementDeliverableStateEnum("previous_state"),
     nextState: commerceEngagementDeliverableStateEnum("next_state").notNull(),
@@ -4904,7 +5960,9 @@ export const commerceEngagementDeliverableEvent = pgTable(
     occurredAt: timestamp("occurred_at").notNull(),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -4912,7 +5970,10 @@ export const commerceEngagementDeliverableEvent = pgTable(
       table.deliverableId,
       table.sequence,
     ),
-    check("commerce_engagement_deliverable_event_sequence_ck", sql`sequence >= 0`),
+    check(
+      "commerce_engagement_deliverable_event_sequence_ck",
+      sql`sequence >= 0`,
+    ),
     check(
       "commerce_engagement_deliverable_event_text_ck",
       sql`char_length(command_kind) BETWEEN 1 AND 80
@@ -4934,11 +5995,16 @@ export const freightDeliverableDetail = pgTable(
   {
     deliverableId: text("deliverable_id")
       .primaryKey()
-      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+      .references(() => commerceEngagementDeliverable.id, {
+        onDelete: "cascade",
+      }),
     summary: text("summary").notNull(),
   },
   (_table) => [
-    check("freight_deliverable_detail_summary_ck", sql`char_length(summary) BETWEEN 1 AND 2000`),
+    check(
+      "freight_deliverable_detail_summary_ck",
+      sql`char_length(summary) BETWEEN 1 AND 2000`,
+    ),
   ],
 );
 
@@ -4947,7 +6013,9 @@ export const customsBrokerageDeliverableDetail = pgTable(
   {
     deliverableId: text("deliverable_id")
       .primaryKey()
-      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+      .references(() => commerceEngagementDeliverable.id, {
+        onDelete: "cascade",
+      }),
     filingKind: text("filing_kind").notNull(),
     jurisdiction: text("jurisdiction").notNull(),
     providerFilingReference: text("provider_filing_reference"),
@@ -4971,7 +6039,9 @@ export const insuranceDeliverableDetail = pgTable(
   {
     deliverableId: text("deliverable_id")
       .primaryKey()
-      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+      .references(() => commerceEngagementDeliverable.id, {
+        onDelete: "cascade",
+      }),
     policyReference: text("policy_reference").notNull(),
     coverageClass: text("coverage_class").notNull(),
     insuredValueMinorUnits: text("insured_value_minor_units"),
@@ -4981,7 +6051,10 @@ export const insuranceDeliverableDetail = pgTable(
     effectiveTo: timestamp("effective_to"),
   },
   (_table) => [
-    check("insurance_deliverable_detail_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "insurance_deliverable_detail_currency_ck",
+      sql`currency ~ '^[A-Z]{3}$'`,
+    ),
     check(
       "insurance_deliverable_detail_amount_currency_pair_ck",
       sql`(insured_value_minor_units IS NOT NULL OR coverage_limit_minor_units IS NOT NULL)
@@ -5002,7 +6075,9 @@ export const inspectionDeliverableDetail = pgTable(
   {
     deliverableId: text("deliverable_id")
       .primaryKey()
-      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+      .references(() => commerceEngagementDeliverable.id, {
+        onDelete: "cascade",
+      }),
     stage: text("stage").notNull(),
     result: text("result").notNull(),
     findingsSummary: text("findings_summary"),
@@ -5025,7 +6100,9 @@ export const testingCertificationDeliverableDetail = pgTable(
   {
     deliverableId: text("deliverable_id")
       .primaryKey()
-      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+      .references(() => commerceEngagementDeliverable.id, {
+        onDelete: "cascade",
+      }),
     standard: text("standard").notNull(),
     specimenReference: text("specimen_reference"),
     result: text("result").notNull(),
@@ -5048,7 +6125,9 @@ export const warehouseDeliverableDetail = pgTable(
   {
     deliverableId: text("deliverable_id")
       .primaryKey()
-      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+      .references(() => commerceEngagementDeliverable.id, {
+        onDelete: "cascade",
+      }),
     movementKind: text("movement_kind").notNull(),
     quantityUnits: text("quantity_units").notNull(),
     quantityScale: integer("quantity_scale").notNull(),
@@ -5073,7 +6152,9 @@ export const marketingDeliverableDetail = pgTable(
   {
     deliverableId: text("deliverable_id")
       .primaryKey()
-      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+      .references(() => commerceEngagementDeliverable.id, {
+        onDelete: "cascade",
+      }),
     deliverableKind: text("deliverable_kind").notNull(),
     channel: text("channel").notNull(),
     artifactUrl: text("artifact_url"),
@@ -5096,7 +6177,9 @@ export const foreignExchangeDeliverableDetail = pgTable(
   {
     deliverableId: text("deliverable_id")
       .primaryKey()
-      .references(() => commerceEngagementDeliverable.id, { onDelete: "cascade" }),
+      .references(() => commerceEngagementDeliverable.id, {
+        onDelete: "cascade",
+      }),
     currencyPair: text("currency_pair").notNull(),
     rateFixedPointUnits: text("rate_fixed_point_units").notNull(),
     rateScale: integer("rate_scale").notNull(),
@@ -5105,7 +6188,9 @@ export const foreignExchangeDeliverableDetail = pgTable(
     sellCurrency: text("sell_currency").notNull(),
     buyCurrency: text("buy_currency").notNull(),
     providerExecutionReference: text("provider_execution_reference"),
-    confirmationState: text("confirmation_state").default("provider_confirmed").notNull(),
+    confirmationState: text("confirmation_state")
+      .default("provider_confirmed")
+      .notNull(),
   },
   (_table) => [
     check(
@@ -5163,7 +6248,9 @@ export const commercePaymentIntent = pgTable(
     cancelledAt: timestamp("cancelled_at"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -5171,7 +6258,9 @@ export const commercePaymentIntent = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_payment_intent_idempotency_uidx").on(table.idempotencyKey),
+    uniqueIndex("commerce_payment_intent_idempotency_uidx").on(
+      table.idempotencyKey,
+    ),
     uniqueIndex("commerce_payment_intent_provider_ref_uidx")
       .on(table.provider, table.providerPaymentRef)
       .where(sql`provider_payment_ref IS NOT NULL`),
@@ -5183,8 +6272,16 @@ export const commercePaymentIntent = pgTable(
         sql`state IN ('created', 'requires_action', 'processing', 'authorized', 'settled', 'partially_refunded', 'refunded', 'disputed')`,
       ),
     index("commerce_payment_intent_order_idx").on(table.orderId, table.id),
-    index("commerce_payment_intent_buyer_idx").on(table.buyerOrganizationId, table.state, table.id),
-    index("commerce_payment_intent_state_idx").on(table.state, table.updatedAt, table.id),
+    index("commerce_payment_intent_buyer_idx").on(
+      table.buyerOrganizationId,
+      table.state,
+      table.id,
+    ),
+    index("commerce_payment_intent_state_idx").on(
+      table.state,
+      table.updatedAt,
+      table.id,
+    ),
     check("commerce_payment_intent_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
     check("commerce_payment_intent_amount_ck", sql`amount_in_cents > 0`),
     check(
@@ -5208,15 +6305,20 @@ export const commerceProviderTransfer = pgTable(
     paymentIntentId: text("payment_intent_id")
       .notNull()
       .references(() => commercePaymentIntent.id, { onDelete: "restrict" }),
-    refundId: text("refund_id").references((): AnyPgColumn => commerceRefund.id, {
-      onDelete: "set null",
-    }),
+    refundId: text("refund_id").references(
+      (): AnyPgColumn => commerceRefund.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     orderId: text("order_id")
       .notNull()
       .references(() => commerceOrder.id, { onDelete: "restrict" }),
     provider: commercePaymentProviderEnum("provider").notNull(),
     direction: text("direction").notNull(),
-    state: commerceProviderTransferStateEnum("state").default("created").notNull(),
+    state: commerceProviderTransferStateEnum("state")
+      .default("created")
+      .notNull(),
     amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
     currency: text("currency").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
@@ -5232,15 +6334,30 @@ export const commerceProviderTransfer = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_provider_transfer_idempotency_uidx").on(table.idempotencyKey),
+    uniqueIndex("commerce_provider_transfer_idempotency_uidx").on(
+      table.idempotencyKey,
+    ),
     uniqueIndex("commerce_provider_transfer_provider_ref_uidx")
       .on(table.provider, table.providerTransferRef)
       .where(sql`provider_transfer_ref IS NOT NULL`),
-    index("commerce_provider_transfer_intent_idx").on(table.paymentIntentId, table.id),
+    index("commerce_provider_transfer_intent_idx").on(
+      table.paymentIntentId,
+      table.id,
+    ),
     index("commerce_provider_transfer_order_idx").on(table.orderId, table.id),
-    index("commerce_provider_transfer_state_idx").on(table.state, table.updatedAt, table.id),
-    check("commerce_provider_transfer_direction_ck", sql`direction IN ('inbound', 'outbound')`),
-    check("commerce_provider_transfer_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    index("commerce_provider_transfer_state_idx").on(
+      table.state,
+      table.updatedAt,
+      table.id,
+    ),
+    check(
+      "commerce_provider_transfer_direction_ck",
+      sql`direction IN ('inbound', 'outbound')`,
+    ),
+    check(
+      "commerce_provider_transfer_currency_ck",
+      sql`currency ~ '^[A-Z]{3}$'`,
+    ),
     check("commerce_provider_transfer_amount_ck", sql`amount_in_cents > 0`),
   ],
 );
@@ -5272,7 +6389,9 @@ export const commerceRefund = pgTable(
     failedAt: timestamp("failed_at"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -5313,7 +6432,10 @@ export const commerceJournalAccount = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_journal_account_order_kind_uidx").on(table.orderId, table.kind),
+    uniqueIndex("commerce_journal_account_order_kind_uidx").on(
+      table.orderId,
+      table.kind,
+    ),
     check("commerce_journal_account_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
   ],
 );
@@ -5336,17 +6458,25 @@ export const commerceJournalEntry = pgTable(
     description: text("description").notNull(),
     currency: text("currency").notNull(),
     occurredAt: timestamp("occurred_at").notNull(),
-    settlement: commerceJournalEntrySettlementEnum("settlement").default("pending").notNull(),
+    settlement: commerceJournalEntrySettlementEnum("settlement")
+      .default("pending")
+      .notNull(),
     linkedPaymentIntentId: text("linked_payment_intent_id").references(
       () => commercePaymentIntent.id,
       { onDelete: "set null" },
     ),
-    linkedRefundId: text("linked_refund_id").references(() => commerceRefund.id, {
-      onDelete: "set null",
-    }),
-    linkedTransferId: text("linked_transfer_id").references(() => commerceProviderTransfer.id, {
-      onDelete: "set null",
-    }),
+    linkedRefundId: text("linked_refund_id").references(
+      () => commerceRefund.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    linkedTransferId: text("linked_transfer_id").references(
+      () => commerceProviderTransfer.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     reversesJournalEntryId: text("reverses_journal_entry_id").references(
       (): AnyPgColumn => commerceJournalEntry.id,
       { onDelete: "restrict" },
@@ -5360,13 +6490,18 @@ export const commerceJournalEntry = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_journal_entry_order_seq_uidx").on(table.orderId, table.sequenceNumber),
+    uniqueIndex("commerce_journal_entry_order_seq_uidx").on(
+      table.orderId,
+      table.sequenceNumber,
+    ),
     index("commerce_journal_entry_order_occurred_idx").on(
       table.orderId,
       table.occurredAt,
       table.id,
     ),
-    index("commerce_journal_entry_payment_intent_idx").on(table.linkedPaymentIntentId),
+    index("commerce_journal_entry_payment_intent_idx").on(
+      table.linkedPaymentIntentId,
+    ),
     check("commerce_journal_entry_sequence_ck", sql`sequence_number >= 1`),
     check("commerce_journal_entry_hash_ck", sql`entry_hash ~ '^[0-9a-f]{64}$'`),
     check(
@@ -5379,7 +6514,10 @@ export const commerceJournalEntry = pgTable(
       sql`(kind <> 'reversal') OR (reverses_journal_entry_id IS NOT NULL)`,
     ),
     check("commerce_journal_entry_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
-    check("commerce_journal_entry_description_ck", sql`char_length(description) BETWEEN 1 AND 500`),
+    check(
+      "commerce_journal_entry_description_ck",
+      sql`char_length(description) BETWEEN 1 AND 500`,
+    ),
   ],
 );
 
@@ -5403,14 +6541,22 @@ export const commerceJournalLine = pgTable(
       .notNull()
       .references(() => commerceJournalAccount.id, { onDelete: "restrict" }),
     accountKind: commerceJournalAccountKindEnum("account_kind").notNull(),
-    signedAmountInCents: bigint("signed_amount_in_cents", { mode: "bigint" }).notNull(),
+    signedAmountInCents: bigint("signed_amount_in_cents", {
+      mode: "bigint",
+    }).notNull(),
     lineIndex: integer("line_index").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_journal_line_entry_index_uidx").on(table.journalEntryId, table.lineIndex),
+    uniqueIndex("commerce_journal_line_entry_index_uidx").on(
+      table.journalEntryId,
+      table.lineIndex,
+    ),
     index("commerce_journal_line_account_idx").on(table.accountId, table.id),
-    index("commerce_journal_line_order_kind_idx").on(table.orderId, table.accountKind),
+    index("commerce_journal_line_order_kind_idx").on(
+      table.orderId,
+      table.accountKind,
+    ),
     check("commerce_journal_line_index_ck", sql`line_index >= 0`),
     check("commerce_journal_line_amount_ck", sql`signed_amount_in_cents <> 0`),
   ],
@@ -5428,10 +6574,15 @@ export const commercePaymentOutbox = pgTable(
       .$defaultFn(() => randomUUID()),
     kind: commercePaymentOutboxKindEnum("kind").notNull(),
     state: commercePaymentOutboxStateEnum("state").default("pending").notNull(),
-    paymentIntentId: text("payment_intent_id").references(() => commercePaymentIntent.id, {
+    paymentIntentId: text("payment_intent_id").references(
+      () => commercePaymentIntent.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    refundId: text("refund_id").references(() => commerceRefund.id, {
       onDelete: "restrict",
     }),
-    refundId: text("refund_id").references(() => commerceRefund.id, { onDelete: "restrict" }),
     transferId: text("transfer_id")
       .notNull()
       .references(() => commerceProviderTransfer.id, { onDelete: "restrict" }),
@@ -5450,7 +6601,11 @@ export const commercePaymentOutbox = pgTable(
   },
   (table) => [
     uniqueIndex("commerce_payment_outbox_transfer_uidx").on(table.transferId),
-    index("commerce_payment_outbox_pending_idx").on(table.state, table.availableAt, table.id),
+    index("commerce_payment_outbox_pending_idx").on(
+      table.state,
+      table.availableAt,
+      table.id,
+    ),
     check(
       "commerce_payment_outbox_target_ck",
       sql`(kind = 'submit_payment_intent' AND payment_intent_id IS NOT NULL AND refund_id IS NULL)
@@ -5473,14 +6628,24 @@ export const commercePaymentWebhookEvent = pgTable(
     provider: commercePaymentProviderEnum("provider").notNull(),
     providerEventId: text("provider_event_id").notNull(),
     eventType: text("event_type").notNull(),
-    paymentIntentId: text("payment_intent_id").references(() => commercePaymentIntent.id, {
+    paymentIntentId: text("payment_intent_id").references(
+      () => commercePaymentIntent.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    transferId: text("transfer_id").references(
+      () => commerceProviderTransfer.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    refundId: text("refund_id").references(() => commerceRefund.id, {
       onDelete: "set null",
     }),
-    transferId: text("transfer_id").references(() => commerceProviderTransfer.id, {
+    orderId: text("order_id").references(() => commerceOrder.id, {
       onDelete: "set null",
     }),
-    refundId: text("refund_id").references(() => commerceRefund.id, { onDelete: "set null" }),
-    orderId: text("order_id").references(() => commerceOrder.id, { onDelete: "set null" }),
     payloadJson: text("payload_json").notNull(),
     receivedAt: timestamp("received_at").defaultNow().notNull(),
     processedAt: timestamp("processed_at"),
@@ -5494,7 +6659,10 @@ export const commercePaymentWebhookEvent = pgTable(
     index("commerce_payment_webhook_event_unprocessed_idx")
       .on(table.receivedAt, table.id)
       .where(sql`processed_at IS NULL`),
-    check("commerce_payment_webhook_event_type_ck", sql`char_length(event_type) BETWEEN 1 AND 120`),
+    check(
+      "commerce_payment_webhook_event_type_ck",
+      sql`char_length(event_type) BETWEEN 1 AND 120`,
+    ),
     check(
       "commerce_payment_webhook_event_payload_ck",
       sql`char_length(payload_json) BETWEEN 2 AND 50000 AND payload_json LIKE '{%'`,
@@ -5532,7 +6700,9 @@ export const commerceCompletion = pgTable(
       () => commerceServiceEngagement.id,
       { onDelete: "restrict" },
     ),
-    productId: text("product_id").references(() => product.id, { onDelete: "restrict" }),
+    productId: text("product_id").references(() => product.id, {
+      onDelete: "restrict",
+    }),
     completedAt: timestamp("completed_at").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -5543,7 +6713,10 @@ export const commerceCompletion = pgTable(
     uniqueIndex("commerce_completion_engagement_uidx")
       .on(table.serviceEngagementId)
       .where(sql`service_engagement_id IS NOT NULL`),
-    index("commerce_completion_buyer_idx").on(table.buyerOrganizationId, table.completedAt),
+    index("commerce_completion_buyer_idx").on(
+      table.buyerOrganizationId,
+      table.completedAt,
+    ),
     index("commerce_completion_counterparty_idx").on(
       table.counterpartyOrganizationId,
       table.completedAt,
@@ -5602,10 +6775,15 @@ export const commerceSampleCredit = pgTable(
       .references(() => commerceOrder.id, { onDelete: "restrict" }),
     amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
     currency: text("currency").notNull(),
-    state: commerceSampleCreditStateEnum("state").default("available").notNull(),
-    consumedByOrderId: text("consumed_by_order_id").references(() => commerceOrder.id, {
-      onDelete: "restrict",
-    }),
+    state: commerceSampleCreditStateEnum("state")
+      .default("available")
+      .notNull(),
+    consumedByOrderId: text("consumed_by_order_id").references(
+      () => commerceOrder.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     consumedAt: timestamp("consumed_at"),
     expiresAt: timestamp("expires_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -5619,7 +6797,9 @@ export const commerceSampleCredit = pgTable(
      * One credit per sample order. Completion issuance is idempotent and may run more
      * than once for an order, so this is what stops a replay minting a second credit.
      */
-    uniqueIndex("commerce_sample_credit_source_order_uidx").on(table.sourceOrderId),
+    uniqueIndex("commerce_sample_credit_source_order_uidx").on(
+      table.sourceOrderId,
+    ),
     index("commerce_sample_credit_spendable_idx")
       .on(table.buyerOrganizationId, table.sellerOrganizationId, table.currency)
       .where(sql`state = 'available'`),
@@ -5657,15 +6837,23 @@ export const commerceProductCustomizationOption = pgTable(
     /** Stable machine key, snake_case, so a renamed label does not orphan a selection. */
     slotKey: text("slot_key").notNull(),
     label: text("label").notNull(),
-    customizationKind: commerceProductCustomizationKindEnum("customization_kind").notNull(),
+    customizationKind:
+      commerceProductCustomizationKindEnum("customization_kind").notNull(),
     /** Upload slots only. Verified against DECODED BYTES at upload, never the declared type. */
-    acceptedMediaTypes: text("accepted_media_types").array().default([]).notNull(),
+    acceptedMediaTypes: text("accepted_media_types")
+      .array()
+      .default([])
+      .notNull(),
     /** Choice slots only. */
     choiceValues: text("choice_values").array().default([]).notNull(),
-    minimumOrderQuantity: integer("minimum_order_quantity").default(1).notNull(),
+    minimumOrderQuantity: integer("minimum_order_quantity")
+      .default(1)
+      .notNull(),
     isRequired: boolean("is_required").default(false).notNull(),
     position: integer("position").notNull(),
-    state: commerceProductCustomizationOptionStateEnum("state").default("active").notNull(),
+    state: commerceProductCustomizationOptionStateEnum("state")
+      .default("active")
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -5698,7 +6886,10 @@ export const commerceProductCustomizationOption = pgTable(
       "commerce_product_customization_option_moq_ck",
       sql`minimum_order_quantity BETWEEN 1 AND 1000000`,
     ),
-    check("commerce_product_customization_option_position_ck", sql`position >= 0`),
+    check(
+      "commerce_product_customization_option_position_ck",
+      sql`position >= 0`,
+    ),
     check(
       "commerce_product_customization_option_kind_ck",
       sql`(customization_kind = 'file_upload'
@@ -5730,7 +6921,9 @@ export const commerceCartLineCustomization = pgTable(
       .references(() => commerceCartProductLine.id, { onDelete: "cascade" }),
     customizationOptionId: text("customization_option_id")
       .notNull()
-      .references(() => commerceProductCustomizationOption.id, { onDelete: "restrict" }),
+      .references(() => commerceProductCustomizationOption.id, {
+        onDelete: "restrict",
+      }),
     encryptedDocumentId: text("encrypted_document_id").references(
       () => commerceEncryptedDocument.id,
       { onDelete: "restrict" },
@@ -5761,10 +6954,14 @@ export const commerceCheckoutPrepareLineCustomization = pgTable(
       .$defaultFn(() => randomUUID()),
     prepareProductLineId: text("prepare_product_line_id")
       .notNull()
-      .references(() => commerceCheckoutPrepareProductLine.id, { onDelete: "cascade" }),
+      .references(() => commerceCheckoutPrepareProductLine.id, {
+        onDelete: "cascade",
+      }),
     customizationOptionId: text("customization_option_id")
       .notNull()
-      .references(() => commerceProductCustomizationOption.id, { onDelete: "restrict" }),
+      .references(() => commerceProductCustomizationOption.id, {
+        onDelete: "restrict",
+      }),
     encryptedDocumentId: text("encrypted_document_id").references(
       () => commerceEncryptedDocument.id,
       { onDelete: "restrict" },
@@ -5798,7 +6995,9 @@ export const commerceOrderLineCustomization = pgTable(
       .references(() => commerceOrderProductLine.id, { onDelete: "cascade" }),
     customizationOptionId: text("customization_option_id")
       .notNull()
-      .references(() => commerceProductCustomizationOption.id, { onDelete: "restrict" }),
+      .references(() => commerceProductCustomizationOption.id, {
+        onDelete: "restrict",
+      }),
     encryptedDocumentId: text("encrypted_document_id").references(
       () => commerceEncryptedDocument.id,
       { onDelete: "restrict" },
@@ -5813,7 +7012,9 @@ export const commerceOrderLineCustomization = pgTable(
       table.orderProductLineId,
       table.slotKeySnapshot,
     ),
-    index("commerce_order_line_customization_option_idx").on(table.customizationOptionId),
+    index("commerce_order_line_customization_option_idx").on(
+      table.customizationOptionId,
+    ),
     check(
       "commerce_order_line_customization_supply_ck",
       sql`(encrypted_document_id IS NOT NULL AND choice_value IS NULL)
@@ -5836,14 +7037,20 @@ export const commerceReview = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     reviewerMemberId: text("reviewer_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     subjectOrganizationId: text("subject_organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
-    productId: text("product_id").references(() => product.id, { onDelete: "restrict" }),
+    productId: text("product_id").references(() => product.id, {
+      onDelete: "restrict",
+    }),
     rating: integer("rating").notNull(),
     body: text("body").notNull(),
-    visibility: commerceReviewVisibilityEnum("visibility").default("visible").notNull(),
+    visibility: commerceReviewVisibilityEnum("visibility")
+      .default("visible")
+      .notNull(),
     /**
      * DENORMALIZED counters (STORE Appendix A8), moved in the same transaction as the
      * row that caused them — `commerce_review_vote` and `commerce_review_media`.
@@ -5874,7 +7081,10 @@ export const commerceReview = pgTable(
       table.completionId,
       table.reviewerOrganizationId,
     ),
-    index("commerce_review_subject_idx").on(table.subjectOrganizationId, table.visibility),
+    index("commerce_review_subject_idx").on(
+      table.subjectOrganizationId,
+      table.visibility,
+    ),
     index("commerce_review_product_idx")
       .on(table.productId, table.visibility)
       .where(sql`product_id IS NOT NULL`),
@@ -5896,17 +7106,27 @@ export const commerceReview = pgTable(
       .on(table.productId, table.helpfulCount.desc(), table.id)
       .where(sql`visibility = 'visible' AND product_id IS NOT NULL`),
     index("commerce_review_product_rating_idx")
-      .on(table.productId, table.rating.desc(), table.createdAt.desc(), table.id)
+      .on(
+        table.productId,
+        table.rating.desc(),
+        table.createdAt.desc(),
+        table.id,
+      )
       .where(sql`visibility = 'visible' AND product_id IS NOT NULL`),
     index("commerce_review_product_media_idx")
       .on(table.productId, table.createdAt.desc(), table.id)
-      .where(sql`visibility = 'visible' AND product_id IS NOT NULL AND media_count > 0`),
+      .where(
+        sql`visibility = 'visible' AND product_id IS NOT NULL AND media_count > 0`,
+      ),
     index("commerce_review_subject_recent_idx")
       .on(table.subjectOrganizationId, table.createdAt.desc(), table.id)
       .where(sql`visibility = 'visible'`),
     check("commerce_review_rating_ck", sql`rating BETWEEN 1 AND 5`),
     check("commerce_review_body_ck", sql`char_length(body) BETWEEN 1 AND 4000`),
-    check("commerce_review_self_ck", sql`reviewer_organization_id <> subject_organization_id`),
+    check(
+      "commerce_review_self_ck",
+      sql`reviewer_organization_id <> subject_organization_id`,
+    ),
     check("commerce_review_helpful_count_ck", sql`helpful_count >= 0`),
     /**
      * The upper bound mirrors `commerce_review_media_position_ck`. Two constraints
@@ -5940,7 +7160,9 @@ export const commerceReviewMedia = pgTable(
     reviewId: text("review_id")
       .notNull()
       .references(() => commerceReview.id, { onDelete: "cascade" }),
-    mediaKind: commerceReviewMediaKindEnum("media_kind").default("photo").notNull(),
+    mediaKind: commerceReviewMediaKindEnum("media_kind")
+      .default("photo")
+      .notNull(),
     /** Cloudinary secure URL; NULL for a YouTube link. */
     url: text("url"),
     /** 11-character YouTube id; NULL for an uploaded photo. */
@@ -5956,7 +7178,10 @@ export const commerceReviewMedia = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_review_media_position_uidx").on(table.reviewId, table.position),
+    uniqueIndex("commerce_review_media_position_uidx").on(
+      table.reviewId,
+      table.position,
+    ),
     check("commerce_review_media_position_ck", sql`position BETWEEN 0 AND 5`),
     /**
      * Kind-discriminated supply. A photo carries a URL and measured dimensions; a
@@ -6035,7 +7260,9 @@ export const commerceReviewVote = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     voterMemberId: text("voter_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     voterUserId: text("voter_user_id")
       .notNull()
       .references(() => user.id, { onDelete: "restrict" }),
@@ -6043,7 +7270,10 @@ export const commerceReviewVote = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.reviewId, table.voterOrganizationId] }),
-    index("commerce_review_vote_organization_idx").on(table.voterOrganizationId, table.createdAt),
+    index("commerce_review_vote_organization_idx").on(
+      table.voterOrganizationId,
+      table.createdAt,
+    ),
   ],
 );
 
@@ -6067,7 +7297,9 @@ export const commerceReviewReply = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     responderMemberId: text("responder_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     body: text("body").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -6080,7 +7312,10 @@ export const commerceReviewReply = pgTable(
       table.responderOrganizationId,
       table.createdAt,
     ),
-    check("commerce_review_reply_body_ck", sql`char_length(body) BETWEEN 1 AND 2000`),
+    check(
+      "commerce_review_reply_body_ck",
+      sql`char_length(body) BETWEEN 1 AND 2000`,
+    ),
   ],
 );
 
@@ -6121,14 +7356,19 @@ export const commerceProductInquiry = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     buyerMemberId: text("buyer_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     /** Snapshotted at open time so the seller's inbox is one index scan, not a join. */
     sellerOrganizationId: text("seller_organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
-    convertedToRfqId: text("converted_to_rfq_id").references(() => commerceRfq.id, {
-      onDelete: "set null",
-    }),
+    convertedToRfqId: text("converted_to_rfq_id").references(
+      () => commerceRfq.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { precision: 3 })
       .defaultNow()
@@ -6179,21 +7419,33 @@ export const commerceContentReport = pgTable(
       .primaryKey()
       .$defaultFn(() => randomUUID()),
     targetKind: commerceContentTargetKindEnum("target_kind").notNull(),
-    productId: text("product_id").references(() => product.id, { onDelete: "cascade" }),
-    reviewId: text("review_id").references(() => commerceReview.id, { onDelete: "cascade" }),
-    questionId: text("question_id").references(() => commerceProductQuestion.id, {
+    productId: text("product_id").references(() => product.id, {
       onDelete: "cascade",
     }),
+    reviewId: text("review_id").references(() => commerceReview.id, {
+      onDelete: "cascade",
+    }),
+    questionId: text("question_id").references(
+      () => commerceProductQuestion.id,
+      {
+        onDelete: "cascade",
+      },
+    ),
     answerId: text("answer_id").references(() => commerceProductAnswer.id, {
       onDelete: "cascade",
     }),
-    organizationId: text("organization_id").references(() => commerceOrganization.id, {
-      onDelete: "cascade",
-    }),
+    organizationId: text("organization_id").references(
+      () => commerceOrganization.id,
+      {
+        onDelete: "cascade",
+      },
+    ),
     reason: commerceContentReportReasonEnum("reason").notNull(),
     detailText: text("detail_text"),
     /** SET NULL: a deleted account must not erase the report it filed. */
-    reporterUserId: text("reporter_user_id").references(() => user.id, { onDelete: "set null" }),
+    reporterUserId: text("reporter_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     /** Optional context. A reporter need not act for an organization. */
     reporterOrganizationId: text("reporter_organization_id").references(
       () => commerceOrganization.id,
@@ -6228,7 +7480,11 @@ export const commerceContentReport = pgTable(
       .on(table.organizationId, table.reporterUserId)
       .where(sql`organization_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
     /** The queue, oldest first. */
-    index("commerce_content_report_queue_idx").on(table.status, table.createdAt, table.id),
+    index("commerce_content_report_queue_idx").on(
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
     index("commerce_content_report_target_idx").on(
       table.targetKind,
       table.status,
@@ -6277,35 +7533,53 @@ export const commerceModerationAction = pgTable(
       .$defaultFn(() => randomUUID()),
     actionKind: commerceModerationActionKindEnum("action_kind").notNull(),
     targetKind: commerceContentTargetKindEnum("target_kind").notNull(),
-    productId: text("product_id").references(() => product.id, { onDelete: "set null" }),
-    reviewId: text("review_id").references(() => commerceReview.id, { onDelete: "set null" }),
-    questionId: text("question_id").references(() => commerceProductQuestion.id, {
+    productId: text("product_id").references(() => product.id, {
       onDelete: "set null",
     }),
+    reviewId: text("review_id").references(() => commerceReview.id, {
+      onDelete: "set null",
+    }),
+    questionId: text("question_id").references(
+      () => commerceProductQuestion.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     answerId: text("answer_id").references(() => commerceProductAnswer.id, {
       onDelete: "set null",
     }),
-    organizationId: text("organization_id").references(() => commerceOrganization.id, {
-      onDelete: "set null",
-    }),
+    organizationId: text("organization_id").references(
+      () => commerceOrganization.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     reportId: text("report_id").references(() => commerceContentReport.id, {
       onDelete: "set null",
     }),
     actionSource: commerceModerationActionSourceEnum("action_source").notNull(),
-    moderatorUserId: text("moderator_user_id").references(() => user.id, { onDelete: "restrict" }),
+    moderatorUserId: text("moderator_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
     moderatorRoleSnapshot: text("moderator_role_snapshot"),
     reasonNote: text("reason_note").notNull(),
     /** The hash-chain entry, for staff actions only. An automatic hide has none. */
-    auditEntryId: text("audit_entry_id").references(() => platformAuditEntry.id, {
-      onDelete: "restrict",
-    }),
+    auditEntryId: text("audit_entry_id").references(
+      () => platformAuditEntry.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
   },
   (table) => [
     uniqueIndex("commerce_moderation_action_audit_uidx")
       .on(table.auditEntryId)
       .where(sql`audit_entry_id IS NOT NULL`),
-    index("commerce_moderation_action_timeline_idx").on(table.createdAt, table.id),
+    index("commerce_moderation_action_timeline_idx").on(
+      table.createdAt,
+      table.id,
+    ),
     index("commerce_moderation_action_moderator_idx")
       .on(table.moderatorUserId, table.createdAt)
       .where(sql`moderator_user_id IS NOT NULL`),
@@ -6340,7 +7614,10 @@ export const commerceModerationAction = pgTable(
           AND (action_source = 'moderator') = (moderator_role_snapshot IS NOT NULL)
           AND (action_source = 'moderator') = (audit_entry_id IS NOT NULL)`,
     ),
-    check("commerce_moderation_action_reason_ck", sql`char_length(reason_note) BETWEEN 1 AND 2000`),
+    check(
+      "commerce_moderation_action_reason_ck",
+      sql`char_length(reason_note) BETWEEN 1 AND 2000`,
+    ),
     check(
       "commerce_moderation_action_role_ck",
       sql`moderator_role_snapshot IS NULL OR char_length(moderator_role_snapshot) BETWEEN 1 AND 40`,
@@ -6362,7 +7639,9 @@ export const commerceDispute = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     openedByMemberId: text("opened_by_member_id")
       .notNull()
-      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+      .references(() => commerceOrganizationMember.id, {
+        onDelete: "restrict",
+      }),
     buyerOrganizationId: text("buyer_organization_id")
       .notNull()
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
@@ -6389,13 +7668,21 @@ export const commerceDispute = pgTable(
     uniqueIndex("commerce_dispute_open_order_uidx")
       .on(table.orderId)
       .where(sql`state = 'open'`),
-    index("commerce_dispute_buyer_idx").on(table.buyerOrganizationId, table.state, table.id),
+    index("commerce_dispute_buyer_idx").on(
+      table.buyerOrganizationId,
+      table.state,
+      table.id,
+    ),
     index("commerce_dispute_counterparty_idx").on(
       table.counterpartyOrganizationId,
       table.state,
       table.id,
     ),
-    index("commerce_dispute_state_idx").on(table.state, table.createdAt, table.id),
+    index("commerce_dispute_state_idx").on(
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
     check(
       "commerce_dispute_reason_ck",
       sql`char_length(reason_code) BETWEEN 1 AND 80
@@ -6440,14 +7727,22 @@ export const commerceDisputeEvent = pgTable(
       .references(() => commerceDispute.id, { onDelete: "cascade" }),
     sequence: integer("sequence").notNull(),
     eventKind: commerceDisputeEventKindEnum("event_kind").notNull(),
-    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "restrict" }),
+    actorUserId: text("actor_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
     note: text("note"),
     occurredAt: timestamp("occurred_at").defaultNow().notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("commerce_dispute_event_sequence_uidx").on(table.disputeId, table.sequence),
-    index("commerce_dispute_event_timeline_idx").on(table.disputeId, table.occurredAt),
+    uniqueIndex("commerce_dispute_event_sequence_uidx").on(
+      table.disputeId,
+      table.sequence,
+    ),
+    index("commerce_dispute_event_timeline_idx").on(
+      table.disputeId,
+      table.occurredAt,
+    ),
     check("commerce_dispute_event_sequence_ck", sql`sequence >= 0`),
     check(
       "commerce_dispute_event_note_ck",
@@ -6477,23 +7772,26 @@ export const productRelations = relations(product, ({ one, many }) => ({
   highlights: many(commerceProductHighlight),
 }));
 
-export const commerceOrganizationRelations = relations(commerceOrganization, ({ one, many }) => ({
-  createdByUser: one(user, {
-    fields: [commerceOrganization.createdByUserId],
-    references: [user.id],
+export const commerceOrganizationRelations = relations(
+  commerceOrganization,
+  ({ one, many }) => ({
+    createdByUser: one(user, {
+      fields: [commerceOrganization.createdByUserId],
+      references: [user.id],
+    }),
+    members: many(commerceOrganizationMember),
+    addresses: many(commerceOrganizationAddress),
+    encryptedDocuments: many(commerceEncryptedDocument),
+    verifications: many(commerceOrganizationVerification),
+    auditEntries: many(commerceOrganizationAuditEntry),
+    products: many(product),
+    providerProfile: one(commerceProviderProfile, {
+      fields: [commerceOrganization.id],
+      references: [commerceProviderProfile.organizationId],
+    }),
+    activeSessions: many(session),
   }),
-  members: many(commerceOrganizationMember),
-  addresses: many(commerceOrganizationAddress),
-  encryptedDocuments: many(commerceEncryptedDocument),
-  verifications: many(commerceOrganizationVerification),
-  auditEntries: many(commerceOrganizationAuditEntry),
-  products: many(product),
-  providerProfile: one(commerceProviderProfile, {
-    fields: [commerceOrganization.id],
-    references: [commerceProviderProfile.organizationId],
-  }),
-  activeSessions: many(session),
-}));
+);
 
 export const commerceOrganizationMemberRelations = relations(
   commerceOrganizationMember,
@@ -6564,15 +7862,20 @@ export const commerceOrganizationVerificationRelations = relations(
   }),
 );
 
-export const commerceCategoryRelations = relations(commerceCategory, ({ one, many }) => ({
-  parentCategory: one(commerceCategory, {
-    fields: [commerceCategory.parentCategoryId],
-    references: [commerceCategory.id],
-    relationName: "commerceCategoryHierarchy",
+export const commerceCategoryRelations = relations(
+  commerceCategory,
+  ({ one, many }) => ({
+    parentCategory: one(commerceCategory, {
+      fields: [commerceCategory.parentCategoryId],
+      references: [commerceCategory.id],
+      relationName: "commerceCategoryHierarchy",
+    }),
+    childCategories: many(commerceCategory, {
+      relationName: "commerceCategoryHierarchy",
+    }),
+    products: many(product),
   }),
-  childCategories: many(commerceCategory, { relationName: "commerceCategoryHierarchy" }),
-  products: many(product),
-}));
+);
 
 export const commerceOrganizationAuditEntryRelations = relations(
   commerceOrganizationAuditEntry,
@@ -6589,20 +7892,29 @@ export const commerceOrganizationAuditEntryRelations = relations(
 );
 
 export const productImageRelations = relations(productImage, ({ one }) => ({
-  product: one(product, { fields: [productImage.productId], references: [product.id] }),
+  product: one(product, {
+    fields: [productImage.productId],
+    references: [product.id],
+  }),
   variant: one(commerceProductVariant, {
     fields: [productImage.variantId],
     references: [commerceProductVariant.id],
   }),
 }));
 
-export const productPricingTierRelations = relations(productPricingTier, ({ one }) => ({
-  product: one(product, { fields: [productPricingTier.productId], references: [product.id] }),
-  variant: one(commerceProductVariant, {
-    fields: [productPricingTier.variantId],
-    references: [commerceProductVariant.id],
+export const productPricingTierRelations = relations(
+  productPricingTier,
+  ({ one }) => ({
+    product: one(product, {
+      fields: [productPricingTier.productId],
+      references: [product.id],
+    }),
+    variant: one(commerceProductVariant, {
+      fields: [productPricingTier.variantId],
+      references: [commerceProductVariant.id],
+    }),
   }),
-}));
+);
 
 // --- Phase 8 catalog depth relations (Appendix A1, A6, A7). Child-side only.
 
@@ -6618,49 +7930,61 @@ export const commerceProductVariantRelations = relations(
   }),
 );
 
-export const commerceProductHighlightRelations = relations(commerceProductHighlight, ({ one }) => ({
-  product: one(product, {
-    fields: [commerceProductHighlight.productId],
-    references: [product.id],
+export const commerceProductHighlightRelations = relations(
+  commerceProductHighlight,
+  ({ one }) => ({
+    product: one(product, {
+      fields: [commerceProductHighlight.productId],
+      references: [product.id],
+    }),
   }),
-}));
+);
 
-export const commerceProductRelationRelations = relations(commerceProductRelation, ({ one }) => ({
-  fromProduct: one(product, {
-    fields: [commerceProductRelation.fromProductId],
-    references: [product.id],
-    relationName: "productRelationFrom",
+export const commerceProductRelationRelations = relations(
+  commerceProductRelation,
+  ({ one }) => ({
+    fromProduct: one(product, {
+      fields: [commerceProductRelation.fromProductId],
+      references: [product.id],
+      relationName: "productRelationFrom",
+    }),
+    toProduct: one(product, {
+      fields: [commerceProductRelation.toProductId],
+      references: [product.id],
+      relationName: "productRelationTo",
+    }),
+    createdByOrganization: one(commerceOrganization, {
+      fields: [commerceProductRelation.createdByOrganizationId],
+      references: [commerceOrganization.id],
+    }),
   }),
-  toProduct: one(product, {
-    fields: [commerceProductRelation.toProductId],
-    references: [product.id],
-    relationName: "productRelationTo",
-  }),
-  createdByOrganization: one(commerceOrganization, {
-    fields: [commerceProductRelation.createdByOrganizationId],
-    references: [commerceOrganization.id],
-  }),
-}));
+);
 
-export const storePathwayRelations = relations(storePathway, ({ one, many }) => ({
-  anchorProduct: one(product, {
-    fields: [storePathway.anchorProductId],
-    references: [product.id],
+export const storePathwayRelations = relations(
+  storePathway,
+  ({ one, many }) => ({
+    anchorProduct: one(product, {
+      fields: [storePathway.anchorProductId],
+      references: [product.id],
+    }),
+    ownerOrganization: one(commerceOrganization, {
+      fields: [storePathway.ownerOrganizationId],
+      references: [commerceOrganization.id],
+    }),
+    slots: many(storePathwaySlot),
   }),
-  ownerOrganization: one(commerceOrganization, {
-    fields: [storePathway.ownerOrganizationId],
-    references: [commerceOrganization.id],
-  }),
-  slots: many(storePathwaySlot),
-}));
+);
 
-export const storePathwaySlotRelations = relations(storePathwaySlot, ({ one, many }) => ({
-  pathway: one(storePathway, {
-    fields: [storePathwaySlot.pathwayId],
-    references: [storePathway.id],
+export const storePathwaySlotRelations = relations(
+  storePathwaySlot,
+  ({ one, many }) => ({
+    pathway: one(storePathway, {
+      fields: [storePathwaySlot.pathwayId],
+      references: [storePathway.id],
+    }),
+    candidates: many(storePathwaySlotCandidate),
   }),
-  candidates: many(storePathwaySlotCandidate),
-}));
+);
 
 export const storePathwaySlotCandidateRelations = relations(
   storePathwaySlotCandidate,
@@ -6739,9 +8063,17 @@ export const projectStageEnum = pgEnum("project_stage", [
   "go_to_market",
 ]);
 
-export const roleCommitmentEnum = pgEnum("role_commitment", ["full_time", "part_time", "hobby"]);
+export const roleCommitmentEnum = pgEnum("role_commitment", [
+  "full_time",
+  "part_time",
+  "hobby",
+]);
 
-export const compensationKindEnum = pgEnum("compensation_kind", ["salary", "one_time", "equity"]);
+export const compensationKindEnum = pgEnum("compensation_kind", [
+  "salary",
+  "one_time",
+  "equity",
+]);
 
 // Replaces the frontend's free-prose `earnedAsLabel`. Shipping English sentences from
 // the server forces three native clients to render un-localizable strings, and lets a
@@ -6755,13 +8087,16 @@ export const compensationKindEnum = pgEnum("compensation_kind", ["salary", "one_
 // outright. They stay in the type so migration 0010's existing rows remain readable;
 // `open_role_compensation_policy_pairing_ck` (migration 0018) makes them UNWRITABLE, and
 // the two new values are the only ones a cash strand accepts.
-export const compensationEarnedAsPolicyEnum = pgEnum("compensation_earned_as_policy", [
-  "milestone_escrow_release", // RETIRED — readable, never writable
-  "on_completion_escrow_release", // RETIRED — readable, never writable
-  "slicing_pie_vesting", // equity, and equity only
-  "off_platform_payroll", // DEFAULT for cash: paid by the company, reported here (§7A)
-  "direct_transfer", // one-off, paid directly, reported here (§7A)
-]);
+export const compensationEarnedAsPolicyEnum = pgEnum(
+  "compensation_earned_as_policy",
+  [
+    "milestone_escrow_release", // RETIRED — readable, never writable
+    "on_completion_escrow_release", // RETIRED — readable, never writable
+    "slicing_pie_vesting", // equity, and equity only
+    "off_platform_payroll", // DEFAULT for cash: paid by the company, reported here (§7A)
+    "direct_transfer", // one-off, paid directly, reported here (§7A)
+  ],
+);
 
 // How a member is engaged (§4d). FOUNDER-DECLARED, never inferred: the tax, wage-law and
 // social-contribution treatment differ per branch, and misclassification liability belongs
@@ -6779,44 +8114,43 @@ export const engagementKindEnum = pgEnum("engagement_kind", [
 // `superseded` is what a later effective-dated agreement does to the one before it;
 // `withdrawn` is a proposal nobody accepted. Neither is a deletion — a finalized statement
 // line pins `sourceAgreementId` forever.
-export const compensationAgreementStatusEnum = pgEnum("compensation_agreement_status", [
-  "proposed",
-  "active",
-  "superseded",
-  "withdrawn",
-]);
+export const compensationAgreementStatusEnum = pgEnum(
+  "compensation_agreement_status",
+  ["proposed", "active", "superseded", "withdrawn"],
+);
 
 // A compensation period's lifecycle (§4d, §7A.3). `finalized` is terminal and hash-frozen;
 // a correction supersedes the period with a new one rather than editing it, the same way
 // the audit chain corrects by reversal rather than by UPDATE (§4f).
-export const compensationPeriodStatusEnum = pgEnum("compensation_period_status", [
-  "open",
-  "finalized",
-  "superseded",
-]);
+export const compensationPeriodStatusEnum = pgEnum(
+  "compensation_period_status",
+  ["open", "finalized", "superseded"],
+);
 
 // One line per member per kind per period (§7A.3). A cash line carries money and no basis
 // points; an equity line carries basis points and no money. Equity is NOT money and the
 // two must never be summed — `compensation_period_line_kind_ck` encodes that rather than
 // leaving it to a comment.
-export const compensationPeriodLineKindEnum = pgEnum("compensation_period_line_kind", [
-  "cash_retainer",
-  "cash_hourly",
-  "equity_delta",
-]);
+export const compensationPeriodLineKindEnum = pgEnum(
+  "compensation_period_line_kind",
+  ["cash_retainer", "cash_hourly", "equity_delta"],
+);
 
 // How the founder says they paid, on a payment ATTESTATION (§7A's
 // `compensation_payment_record`). A key, never an instrument: this domain stores no account
 // number, no IBAN, no UPI handle and no card detail, so the enum names the rail and the
 // free-text `reference_note` carries a human note like a UTR or a payroll run id.
-export const compensationPaymentMethodKeyEnum = pgEnum("compensation_payment_method_key", [
-  "bank_transfer",
-  "sepa_transfer",
-  "upi",
-  "payroll_provider",
-  "cash",
-  "other",
-]);
+export const compensationPaymentMethodKeyEnum = pgEnum(
+  "compensation_payment_method_key",
+  [
+    "bank_transfer",
+    "sepa_transfer",
+    "upi",
+    "payroll_provider",
+    "cash",
+    "other",
+  ],
+);
 
 // The ONE verification status, shared by daily logs (§8), effort claims (§9) and
 // research effort logs (§10).
@@ -6826,19 +8160,26 @@ export const compensationPaymentMethodKeyEnum = pgEnum("compensation_payment_met
 // a near-disjoint variant of it during drafting, and Postgres puts types and tables in
 // one namespace. Reserving costs one CREATE TYPE, and an unused type is free to
 // redefine; discovering the collision at §9 is not.
-export const effortVerificationStatusEnum = pgEnum("effort_verification_status", [
-  "not_run", // no claim submitted yet
-  "queued", // enqueued, worker has not started
-  "running", // pipeline in flight
-  "verified", // all four steps passed → slices awarded
-  "flagged_for_review", // a step flagged → allocation withheld pending human review
-  "unverified", // no digital receipts → zero slices
-]);
+export const effortVerificationStatusEnum = pgEnum(
+  "effort_verification_status",
+  [
+    "not_run", // no claim submitted yet
+    "queued", // enqueued, worker has not started
+    "running", // pipeline in flight
+    "verified", // all four steps passed → slices awarded
+    "flagged_for_review", // a step flagged → allocation withheld pending human review
+    "unverified", // no digital receipts → zero slices
+  ],
+);
 
 // Shared by market insights and demand signals (§6), and by §7's investor-confidence
 // signal later. Declared in the §4d shared block rather than the §6 domain block because
 // more than one section reads it.
-export const trendDirectionEnum = pgEnum("trend_direction", ["up", "down", "flat"]);
+export const trendDirectionEnum = pgEnum("trend_direction", [
+  "up",
+  "down",
+  "flat",
+]);
 
 // --- Domain enums (§5)
 
@@ -6848,20 +8189,21 @@ export const researchProjectStatusEnum = pgEnum("research_project_status", [
   "archived", // withdrawn but preserved — members, slices and escrow history reference it
 ]);
 
-export const openRoleStatusEnum = pgEnum("open_role_status", ["open", "closed", "filled"]);
+export const openRoleStatusEnum = pgEnum("open_role_status", [
+  "open",
+  "closed",
+  "filled",
+]);
 
 export const projectApplicationKindEnum = pgEnum("project_application_kind", [
   "role_interest", // fired from an OpenRole card
   "join_request", // "Request to join", no role attached
 ]);
 
-export const projectApplicationStatusEnum = pgEnum("project_application_status", [
-  "pending",
-  "accepted",
-  "declined",
-  "withdrawn",
-  "expired",
-]);
+export const projectApplicationStatusEnum = pgEnum(
+  "project_application_status",
+  ["pending", "accepted", "declined", "withdrawn", "expired"],
+);
 
 export const projectInviteStatusEnum = pgEnum("project_invite_status", [
   "pending",
@@ -6880,10 +8222,13 @@ export const researchCategoryStatusEnum = pgEnum("research_category_status", [
 // Why a member's stint ended. Kept alongside the interval so §9 can distinguish a
 // voluntary departure from a removal without joining back to the member row's
 // current state, which by then describes a LATER stint.
-export const memberIntervalEndReasonEnum = pgEnum("member_interval_end_reason", [
-  "left", // self-departed
-  "removed", // removed by a founder
-]);
+export const memberIntervalEndReasonEnum = pgEnum(
+  "member_interval_end_reason",
+  [
+    "left", // self-departed
+    "removed", // removed by a founder
+  ],
+);
 
 // --- Domain enums (§6 discovery)
 
@@ -6928,23 +8273,29 @@ export const problemClusterStatusEnum = pgEnum("problem_cluster_status", [
   "hidden", // moderator-hidden; excluded from public reads, NOT deleted
 ]);
 
-export const clusterMergeProposalStatusEnum = pgEnum("cluster_merge_proposal_status", [
-  "pending",
-  "approved",
-  "rejected",
-  "superseded", // one side was itself merged elsewhere first
-]);
+export const clusterMergeProposalStatusEnum = pgEnum(
+  "cluster_merge_proposal_status",
+  [
+    "pending",
+    "approved",
+    "rejected",
+    "superseded", // one side was itself merged elsewhere first
+  ],
+);
 
-export const clusterMergeProposalSourceEnum = pgEnum("cluster_merge_proposal_source", [
-  "job_similarity",
-  "moderator",
-]);
+export const clusterMergeProposalSourceEnum = pgEnum(
+  "cluster_merge_proposal_source",
+  ["job_similarity", "moderator"],
+);
 
-export const problemClusterLinkSourceEnum = pgEnum("problem_cluster_link_source", [
-  "origin", // the project was BORN from this cluster — at most one per project
-  "founder_declared", // an additional cluster the founder says the project addresses
-  "moderator",
-]);
+export const problemClusterLinkSourceEnum = pgEnum(
+  "problem_cluster_link_source",
+  [
+    "origin", // the project was BORN from this cluster — at most one per project
+    "founder_declared", // an additional cluster the founder says the project addresses
+    "moderator",
+  ],
+);
 
 export const discoveryRegionKindEnum = pgEnum("discovery_region_kind", [
   "global",
@@ -6954,7 +8305,10 @@ export const discoveryRegionKindEnum = pgEnum("discovery_region_kind", [
 
 // Whether a cached geocode resolved. A miss is cached TOO — see geocodeCache: re-asking a
 // provider that already said "no such place" is a rate-limit burn that always fails.
-export const geocodeStatusEnum = pgEnum("geocode_status", ["resolved", "not_found"]);
+export const geocodeStatusEnum = pgEnum("geocode_status", [
+  "resolved",
+  "not_found",
+]);
 
 // `MarketInsight.statValue` is the sneakiest field on the surface: the mocks carry
 // "+34%", "68M people", "3× coverage" and "-22%" in ONE string column. It decomposes into
@@ -6967,18 +8321,21 @@ export const marketInsightStatKindEnum = pgEnum("market_insight_stat_kind", [
   "multiplier", // "3× coverage" — strictly positive
 ]);
 
-export const marketInsightStatUnitKeyEnum = pgEnum("market_insight_stat_unit_key", [
-  "percent",
-  "multiple",
-  "people",
-  "households",
-  "tonnes",
-  "litres",
-  "hectares",
-  // DOLLARS, not cents, and this is deliberate — see marketInsight.statValueMilli.
-  "usd_dollars",
-  "count", // dimensionless fallback
-]);
+export const marketInsightStatUnitKeyEnum = pgEnum(
+  "market_insight_stat_unit_key",
+  [
+    "percent",
+    "multiple",
+    "people",
+    "households",
+    "tonnes",
+    "litres",
+    "hectares",
+    // DOLLARS, not cents, and this is deliberate — see marketInsight.statValueMilli.
+    "usd_dollars",
+    "count", // dimensionless fallback
+  ],
+);
 
 export const talentAvailabilityEnum = pgEnum("talent_availability", [
   "open_to_work",
@@ -7003,12 +8360,15 @@ export const talentProfileVisibilityEnum = pgEnum("talent_profile_visibility", [
  * assert their own trust level is worse than no directory: the whole value of the field is
  * that only a platform moderator moves it.
  */
-export const supplierVerificationStateEnum = pgEnum("supplier_verification_state", [
-  "unverified", // listed, nothing checked
-  "documents_pending", // a moderator has asked for paperwork
-  "verified", // a moderator confirmed the entity exists and does what it claims
-  "suspended", // listed but withdrawn from results pending a decision
-]);
+export const supplierVerificationStateEnum = pgEnum(
+  "supplier_verification_state",
+  [
+    "unverified", // listed, nothing checked
+    "documents_pending", // a moderator has asked for paperwork
+    "verified", // a moderator confirmed the entity exists and does what it claims
+    "suspended", // listed but withdrawn from results pending a decision
+  ],
+);
 
 /** What a supplier can actually do. A curated vocabulary, never free text (§6). */
 export const supplierCapabilityKindEnum = pgEnum("supplier_capability_kind", [
@@ -7036,12 +8396,10 @@ export const supplierContactPolicyEnum = pgEnum("supplier_contact_policy", [
 ]);
 
 /** A project's own record of who it has approached. Never a claim about the supplier. */
-export const projectSupplierEngagementStatusEnum = pgEnum("project_supplier_engagement_status", [
-  "considering",
-  "contacted",
-  "contracted",
-  "ended",
-]);
+export const projectSupplierEngagementStatusEnum = pgEnum(
+  "project_supplier_engagement_status",
+  ["considering", "contacted", "contracted", "ended"],
+);
 
 /**
  * The project taxonomy. A TABLE, not a pgEnum, because the wizard's step 1 explicitly
@@ -7073,7 +8431,9 @@ export const researchCategory = pgTable(
     // NOT NULL DEFAULT 'other' so a user-minted category gets a working pin immediately,
     // without waiting on a moderator. Absent from every create schema — a minter must not
     // be able to choose their own map iconography — and assigned on approval instead.
-    pinIconKey: categoryPinIconKeyEnum("pin_icon_key").default("other").notNull(),
+    pinIconKey: categoryPinIconKeyEnum("pin_icon_key")
+      .default("other")
+      .notNull(),
     // NULL for seeded rows. `set null`, NOT cascade (§4f) — deleting a user must not
     // delete a taxonomy every other project points at.
     createdByUserId: text("created_by_user_id").references(() => user.id, {
@@ -7184,7 +8544,11 @@ export const researchProject = pgTable(
     index("research_project_categoryId_idx").on(table.categoryId),
     // §4c rule 4: every ORDER BY that feeds pagination ends in a UNIQUE column, or a
     // cursor silently skips rows. Matches ORDER BY published_at DESC, id DESC.
-    index("research_project_status_publishedAt_idx").on(table.status, table.publishedAt, table.id),
+    index("research_project_status_publishedAt_idx").on(
+      table.status,
+      table.publishedAt,
+      table.id,
+    ),
     // The equity band is bounded in the DB as well as in Zod. The Zod refine catches a
     // single hostile payload; this catches an inverted band assembled across TWO
     // PATCHes, which no single-request check can see.
@@ -7205,7 +8569,10 @@ export const researchProject = pgTable(
       "research_project_archived_at_ck",
       sql`(status = 'archived') = (archived_at IS NOT NULL)`,
     ),
-    check("research_project_seed_roles_ck", sql`cardinality(seed_roles_needed) <= 20`),
+    check(
+      "research_project_seed_roles_ck",
+      sql`cardinality(seed_roles_needed) <= 20`,
+    ),
   ],
 );
 
@@ -7242,7 +8609,9 @@ export const projectStats = pgTable(
     teamMemberCount: integer("team_member_count").default(1).notNull(),
     openRoleCount: integer("open_role_count").default(0).notNull(),
     // Founder-facing only; never in the public projection.
-    pendingApplicationCount: integer("pending_application_count").default(0).notNull(),
+    pendingApplicationCount: integer("pending_application_count")
+      .default(0)
+      .notNull(),
     // IANA zone. Without it "a day" is undefined and a distributed team double-counts
     // a streak. Set to UTC at create and NOT WRITABLE by any endpoint in this phase: a
     // client-settable day boundary is a client-settable input into an equity
@@ -7306,8 +8675,15 @@ export const projectOpenRole = pgTable(
   },
   (table) => [
     index("project_open_role_projectId_idx").on(table.projectId),
-    index("project_open_role_status_commitment_idx").on(table.status, table.commitment),
-    index("project_open_role_status_createdAt_idx").on(table.status, table.createdAt, table.id),
+    index("project_open_role_status_commitment_idx").on(
+      table.status,
+      table.commitment,
+    ),
+    index("project_open_role_status_createdAt_idx").on(
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
     // GET /open-roles?skill= is otherwise a sequential scan over every open role on the
     // platform.
     index("project_open_role_skills_gin").using("gin", table.skills),
@@ -7353,14 +8729,19 @@ export const openRoleCompensation = pgTable(
       .notNull()
       .references(() => projectOpenRole.id, { onDelete: "cascade" }),
     kind: compensationKindEnum("kind").notNull(),
-    salaryMinInCentsPerMonth: bigint("salary_min_in_cents_per_month", { mode: "number" }),
-    salaryMaxInCentsPerMonth: bigint("salary_max_in_cents_per_month", { mode: "number" }),
+    salaryMinInCentsPerMonth: bigint("salary_min_in_cents_per_month", {
+      mode: "number",
+    }),
+    salaryMaxInCentsPerMonth: bigint("salary_max_in_cents_per_month", {
+      mode: "number",
+    }),
     oneTimeMinInCents: bigint("one_time_min_in_cents", { mode: "number" }),
     oneTimeMaxInCents: bigint("one_time_max_in_cents", { mode: "number" }),
     // Advertised offer only. NEVER a granted share — grants come solely from §9.
     equityBasisPointsMin: integer("equity_basis_points_min"),
     equityBasisPointsMax: integer("equity_basis_points_max"),
-    earnedAsPolicy: compensationEarnedAsPolicyEnum("earned_as_policy").notNull(),
+    earnedAsPolicy:
+      compensationEarnedAsPolicyEnum("earned_as_policy").notNull(),
     // Optional prose ALONGSIDE the policy, never instead of it.
     earnedAsNote: text("earned_as_note"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -7368,8 +8749,14 @@ export const openRoleCompensation = pgTable(
   (table) => [
     // Enforces the frontend type's documented "at most one strand per kind" invariant
     // in the database instead of in a comment.
-    uniqueIndex("open_role_compensation_openRoleId_kind_unq").on(table.openRoleId, table.kind),
-    index("open_role_compensation_kind_equityMin_idx").on(table.kind, table.equityBasisPointsMin),
+    uniqueIndex("open_role_compensation_openRoleId_kind_unq").on(
+      table.openRoleId,
+      table.kind,
+    ),
+    index("open_role_compensation_kind_equityMin_idx").on(
+      table.kind,
+      table.equityBasisPointsMin,
+    ),
     index("open_role_compensation_kind_salaryMin_idx").on(
       table.kind,
       table.salaryMinInCentsPerMonth,
@@ -7479,7 +8866,10 @@ export const projectApplication = pgTable(
       .notNull(),
   },
   (table) => [
-    index("project_application_projectId_status_idx").on(table.projectId, table.status),
+    index("project_application_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+    ),
     index("project_application_applicantUserId_idx").on(table.applicantUserId),
     index("project_application_openRoleId_idx").on(table.openRoleId),
     index("project_application_expiresAt_idx")
@@ -7512,7 +8902,10 @@ export const projectApplication = pgTable(
       "project_application_decided_at_ck",
       sql`(status IN ('pending','expired')) = (decided_at IS NULL)`,
     ),
-    check("project_application_selected_skills_ck", sql`cardinality(selected_skills) <= 30`),
+    check(
+      "project_application_selected_skills_ck",
+      sql`cardinality(selected_skills) <= 30`,
+    ),
   ],
 );
 
@@ -7553,8 +8946,14 @@ export const projectInvite = pgTable(
       .notNull(),
   },
   (table) => [
-    index("project_invite_inviteeUserId_status_idx").on(table.inviteeUserId, table.status),
-    index("project_invite_projectId_status_idx").on(table.projectId, table.status),
+    index("project_invite_inviteeUserId_status_idx").on(
+      table.inviteeUserId,
+      table.status,
+    ),
+    index("project_invite_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+    ),
     index("project_invite_openRoleId_idx").on(table.openRoleId),
     index("project_invite_expiresAt_idx")
       .on(table.expiresAt)
@@ -7566,7 +8965,10 @@ export const projectInvite = pgTable(
       .on(table.projectId, table.inviteeUserId)
       .where(sql`status = 'pending' AND open_role_id IS NULL`),
     // Self-invite is the cheapest way to fabricate a membership provenance record.
-    check("project_invite_no_self_ck", sql`invitee_user_id <> invited_by_user_id`),
+    check(
+      "project_invite_no_self_ck",
+      sql`invitee_user_id <> invited_by_user_id`,
+    ),
     check(
       "project_invite_responded_at_ck",
       sql`(status IN ('pending','expired')) = (responded_at IS NULL)`,
@@ -7605,7 +9007,9 @@ export const projectMember = pgTable(
       .references(() => user.id, { onDelete: "restrict" }),
     // Server-owned. Accepting an application always yields `contributor`; `founder` is
     // written exactly once, by the create transaction, and is never assignable.
-    projectRole: projectMemberRoleEnum("project_role").default("contributor").notNull(),
+    projectRole: projectMemberRoleEnum("project_role")
+      .default("contributor")
+      .notNull(),
     // Free DISPLAY text ("Refrigeration Engineer"). Distinct from projectRole, which is
     // a permission — and never consulted by an authorization check.
     roleTitle: text("role_title"),
@@ -7617,12 +9021,18 @@ export const projectMember = pgTable(
     joinedAt: timestamp("joined_at").defaultNow().notNull(),
     leftAt: timestamp("left_at"),
     // Provenance. `set null` — the membership outlives the request that created it.
-    sourceApplicationId: text("source_application_id").references(() => projectApplication.id, {
-      onDelete: "set null",
-    }),
-    sourceInviteId: text("source_invite_id").references(() => projectInvite.id, {
-      onDelete: "set null",
-    }),
+    sourceApplicationId: text("source_application_id").references(
+      () => projectApplication.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    sourceInviteId: text("source_invite_id").references(
+      () => projectInvite.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     // Who ended this person's accrual — exactly the record a §9 dispute needs.
     removedByUserId: text("removed_by_user_id").references(() => user.id, {
       onDelete: "set null",
@@ -7637,9 +9047,12 @@ export const projectMember = pgTable(
     // NULL for the founder row (nobody granted it — the create transaction wrote it) and
     // for every row predating this column. `escrow-releases.service.ts` treats NULL on an
     // `admin` row as un-provenanced and refuses it as an approver.
-    roleGrantedByUserId: text("role_granted_by_user_id").references(() => user.id, {
-      onDelete: "set null",
-    }),
+    roleGrantedByUserId: text("role_granted_by_user_id").references(
+      () => user.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -7649,22 +9062,34 @@ export const projectMember = pgTable(
   (table) => [
     // One membership row per person per project, EVER. Re-joining reactivates this row
     // and opens a new interval rather than inserting a second one.
-    uniqueIndex("project_member_projectId_userId_unq").on(table.projectId, table.userId),
+    uniqueIndex("project_member_projectId_userId_unq").on(
+      table.projectId,
+      table.userId,
+    ),
     index("project_member_userId_idx").on(table.userId),
-    index("project_member_projectId_status_idx").on(table.projectId, table.status),
+    index("project_member_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+    ),
     // Exactly one founder per project, enforced by Postgres rather than by hope.
     // Deliberately NOT filtered on status: a `left` founder still occupies the slot, so
     // founder transfer must DEMOTE then PROMOTE inside ONE transaction.
     uniqueIndex("project_member_projectId_founder_unq")
       .on(table.projectId)
       .where(sql`project_role = 'founder'`),
-    check("project_member_left_at_ck", sql`(status = 'active') = (left_at IS NULL)`),
+    check(
+      "project_member_left_at_ck",
+      sql`(status = 'active') = (left_at IS NULL)`,
+    ),
     // Reactivation must CLEAR removedByUserId, or this raises 23514 on re-join.
     check(
       "project_member_removed_by_ck",
       sql`(removed_by_user_id IS NULL) OR (status = 'removed')`,
     ),
-    check("project_member_left_after_joined_ck", sql`left_at IS NULL OR left_at >= joined_at`),
+    check(
+      "project_member_left_after_joined_ck",
+      sql`left_at IS NULL OR left_at >= joined_at`,
+    ),
     check("project_member_skills_ck", sql`cardinality(skills) <= 30`),
     // THE FOUR-EYES RULE, AT THE COLUMN LEVEL (§4a, §7). An `admin` cannot have granted
     // themselves the role that lets them co-sign a payout. Postgres refuses the row; no
@@ -7704,7 +9129,9 @@ export const projectMemberInterval = pgTable(
     // NULL while the stint is open.
     leftAt: timestamp("left_at"),
     endedReason: memberIntervalEndReasonEnum("ended_reason"),
-    endedByUserId: text("ended_by_user_id").references(() => user.id, { onDelete: "restrict" }),
+    endedByUserId: text("ended_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -7718,7 +9145,10 @@ export const projectMemberInterval = pgTable(
     uniqueIndex("project_member_interval_open_unq")
       .on(table.memberId)
       .where(sql`left_at IS NULL`),
-    check("project_member_interval_order_ck", sql`left_at IS NULL OR left_at > joined_at`),
+    check(
+      "project_member_interval_order_ck",
+      sql`left_at IS NULL OR left_at > joined_at`,
+    ),
     // A closed stint names why and (for a removal) by whom; an open one names neither.
     check(
       "project_member_interval_ended_ck",
@@ -7786,7 +9216,10 @@ export const projectStageTransition = pgTable(
       table.createdAt,
       table.id,
     ),
-    check("project_stage_transition_distinct_ck", sql`from_stage IS DISTINCT FROM to_stage`),
+    check(
+      "project_stage_transition_distinct_ck",
+      sql`from_stage IS DISTINCT FROM to_stage`,
+    ),
   ],
 );
 
@@ -7815,9 +9248,12 @@ export const discoveryRegion = pgTable(
     slug: text("slug").notNull(),
     label: text("label").notNull(),
     kind: discoveryRegionKindEnum("kind").notNull(),
-    parentRegionId: text("parent_region_id").references((): AnyPgColumn => discoveryRegion.id, {
-      onDelete: "restrict",
-    }),
+    parentRegionId: text("parent_region_id").references(
+      (): AnyPgColumn => discoveryRegion.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     // `text` + a regex CHECK rather than char(2): bpchar blank-pads on comparison, which
     // makes 'KE' and 'KE ' equal in some contexts and not others.
     countryCode: text("country_code"),
@@ -7836,7 +9272,10 @@ export const discoveryRegion = pgTable(
           AND (country_code IS NULL OR country_code ~ '^[A-Z]{2}$')`,
     ),
     // Exactly one root, and it is the global row.
-    check("discovery_region_root_ck", sql`(kind = 'global') = (parent_region_id IS NULL)`),
+    check(
+      "discovery_region_root_ck",
+      sql`(kind = 'global') = (parent_region_id IS NULL)`,
+    ),
   ],
 );
 
@@ -7914,7 +9353,9 @@ export const geocodeCache = pgTable(
     countryCode: text("country_code"),
     // Resolved from countryCode at cache-write time. `restrict`: a region row that
     // submissions point at through this cache must not disappear.
-    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    regionId: text("region_id").references(() => discoveryRegion.id, {
+      onDelete: "restrict",
+    }),
     // A human-readable place name FROM THE PROVIDER, e.g. "Nakuru County, Kenya". This is
     // what the map renders — never the reporter's own typing, which is unverified.
     resolvedLabel: text("resolved_label"),
@@ -7939,7 +9380,10 @@ export const geocodeCache = pgTable(
           AND (longitude_microdegrees IS NULL
                OR longitude_microdegrees BETWEEN -180000000 AND 180000000)`,
     ),
-    check("geocode_cache_country_ck", sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`),
+    check(
+      "geocode_cache_country_ck",
+      sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`,
+    ),
   ],
 );
 
@@ -7982,11 +9426,16 @@ export const problemSubmission = pgTable(
     latitudeMicrodegrees: integer("latitude_microdegrees"),
     longitudeMicrodegrees: integer("longitude_microdegrees"),
     countryCode: text("country_code"),
-    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "restrict" }),
-    status: problemSubmissionStatusEnum("status").default("queued").notNull(),
-    clusterId: text("cluster_id").references((): AnyPgColumn => problemCluster.id, {
+    regionId: text("region_id").references(() => discoveryRegion.id, {
       onDelete: "restrict",
     }),
+    status: problemSubmissionStatusEnum("status").default("queued").notNull(),
+    clusterId: text("cluster_id").references(
+      (): AnyPgColumn => problemCluster.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     clusteredAt: timestamp("clustered_at"),
     // 0..10000 basis points. The text similarity that justified the attach — auditable,
     // and the input a merge proposal is later re-derived from.
@@ -8086,19 +9535,31 @@ export const problemCluster = pgTable(
       .notNull()
       .references(() => researchCategory.id, { onDelete: "restrict" }),
     // --- Geography. Job-written, recomputed from the full member set on every attach.
-    centroidLatitudeMicrodegrees: integer("centroid_latitude_microdegrees").notNull(),
-    centroidLongitudeMicrodegrees: integer("centroid_longitude_microdegrees").notNull(),
+    centroidLatitudeMicrodegrees: integer(
+      "centroid_latitude_microdegrees",
+    ).notNull(),
+    centroidLongitudeMicrodegrees: integer(
+      "centroid_longitude_microdegrees",
+    ).notNull(),
     // The exact rational behind the centroid. bigint: 1e6 members × 180e6 = 1.8e14, far
     // past int4 and comfortably inside 2^53.
-    centroidLatitudeSumMicrodegrees: bigint("centroid_latitude_sum_microdegrees", {
-      mode: "number",
-    }).notNull(),
-    centroidLongitudeSumMicrodegrees: bigint("centroid_longitude_sum_microdegrees", {
-      mode: "number",
-    }).notNull(),
+    centroidLatitudeSumMicrodegrees: bigint(
+      "centroid_latitude_sum_microdegrees",
+      {
+        mode: "number",
+      },
+    ).notNull(),
+    centroidLongitudeSumMicrodegrees: bigint(
+      "centroid_longitude_sum_microdegrees",
+      {
+        mode: "number",
+      },
+    ).notNull(),
     centroidSampleCount: integer("centroid_sample_count").notNull(),
     countryCode: text("country_code"),
-    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    regionId: text("region_id").references(() => discoveryRegion.id, {
+      onDelete: "restrict",
+    }),
     // Reverse-geocoded from the centroid. "Nakuru County, Kenya".
     locationLabel: text("location_label"),
     status: problemClusterStatusEnum("status").default("active").notNull(),
@@ -8109,7 +9570,9 @@ export const problemCluster = pgTable(
     // --- THE SYBIL SURFACE (§6). A cache of
     //     COUNT(DISTINCT reporter_user_id) FILTER (WHERE counts_toward_distinct_reporters),
     //     over IDENTIFIED submissions only. Reconciled nightly by the score job.
-    distinctReporterCount: integer("distinct_reporter_count").default(0).notNull(),
+    distinctReporterCount: integer("distinct_reporter_count")
+      .default(0)
+      .notNull(),
     submissionCount: integer("submission_count").default(0).notNull(),
     firstReportedAt: timestamp("first_reported_at").notNull(),
     lastReportedAt: timestamp("last_reported_at").notNull(),
@@ -8135,7 +9598,10 @@ export const problemCluster = pgTable(
       .where(sql`status = 'active'`),
     // Viewport bounding-box query, so the map fetches what is on screen, not the planet.
     index("problem_cluster_active_bbox_idx")
-      .on(table.centroidLatitudeMicrodegrees, table.centroidLongitudeMicrodegrees)
+      .on(
+        table.centroidLatitudeMicrodegrees,
+        table.centroidLongitudeMicrodegrees,
+      )
       .where(sql`status = 'active'`),
     index("problem_cluster_category_score_idx")
       .on(table.categoryId, table.currentOpportunityScorePoints, table.id)
@@ -8143,7 +9609,9 @@ export const problemCluster = pgTable(
     index("problem_cluster_region_score_idx")
       .on(table.regionId, table.currentOpportunityScorePoints, table.id)
       .where(sql`status = 'active'`),
-    index("problem_cluster_mergedIntoClusterId_idx").on(table.mergedIntoClusterId),
+    index("problem_cluster_mergedIntoClusterId_idx").on(
+      table.mergedIntoClusterId,
+    ),
     check(
       "problem_cluster_centroid_range_ck",
       sql`centroid_latitude_microdegrees BETWEEN -90000000 AND 90000000
@@ -8161,14 +9629,20 @@ export const problemCluster = pgTable(
       sql`(status = 'merged') = (merged_into_cluster_id IS NOT NULL)
           AND (merged_into_cluster_id IS DISTINCT FROM id)`,
     ),
-    check("problem_cluster_reported_order_ck", sql`last_reported_at >= first_reported_at`),
+    check(
+      "problem_cluster_reported_order_ck",
+      sql`last_reported_at >= first_reported_at`,
+    ),
     check(
       "problem_cluster_score_ck",
       sql`(current_opportunity_score_points IS NULL
            OR current_opportunity_score_points BETWEEN 0 AND 100)
           AND (current_opportunity_score_points IS NULL) = (score_computed_at IS NULL)`,
     ),
-    check("problem_cluster_country_ck", sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`),
+    check(
+      "problem_cluster_country_ck",
+      sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`,
+    ),
   ],
 );
 
@@ -8215,7 +9689,9 @@ export const problemClusterScoreSnapshot = pgTable(
     recencyComponentPoints: integer("recency_component_points").notNull(),
     scarcityComponentPoints: integer("scarcity_component_points").notNull(),
     // The §4c hashVersion analogue: the formula may evolve without invalidating history.
-    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version")
+      .default(1)
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     // NO updatedAt, deliberately. An append-only table has nothing to update.
   },
@@ -8281,8 +9757,12 @@ export const problemClusterMergeProposal = pgTable(
     targetClusterId: text("target_cluster_id")
       .notNull()
       .references(() => problemCluster.id, { onDelete: "restrict" }),
-    status: clusterMergeProposalStatusEnum("status").default("pending").notNull(),
-    source: clusterMergeProposalSourceEnum("source").default("job_similarity").notNull(),
+    status: clusterMergeProposalStatusEnum("status")
+      .default("pending")
+      .notNull(),
+    source: clusterMergeProposalSourceEnum("source")
+      .default("job_similarity")
+      .notNull(),
     // The evidence, in integers: 0..10000 basis points of text similarity, and an integer
     // metre distance from the fixed integer approximation — never float haversine (§6).
     similarityBasisPoints: integer("similarity_basis_points").notNull(),
@@ -8308,8 +9788,12 @@ export const problemClusterMergeProposal = pgTable(
     index("problem_cluster_merge_proposal_pending_idx")
       .on(table.createdAt, table.id)
       .where(sql`status = 'pending'`),
-    index("problem_cluster_merge_proposal_sourceClusterId_idx").on(table.sourceClusterId),
-    index("problem_cluster_merge_proposal_targetClusterId_idx").on(table.targetClusterId),
+    index("problem_cluster_merge_proposal_sourceClusterId_idx").on(
+      table.sourceClusterId,
+    ),
+    index("problem_cluster_merge_proposal_targetClusterId_idx").on(
+      table.targetClusterId,
+    ),
     check(
       "problem_cluster_merge_proposal_distinct_ck",
       sql`source_cluster_id <> target_cluster_id`,
@@ -8346,7 +9830,9 @@ export const problemClusterProjectLink = pgTable(
       .notNull()
       .references(() => researchProject.id, { onDelete: "restrict" }),
     source: problemClusterLinkSourceEnum("source").notNull(),
-    linkedByUserId: text("linked_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    linkedByUserId: text("linked_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -8399,7 +9885,9 @@ export const marketInsight = pgTable(
     // one string carrying an attribution, a citation and a date the client cannot format.
     sourceName: text("source_name").notNull(),
     sourceUrl: text("source_url"),
-    sourcePublishedDate: date("source_published_date", { mode: "string" }).notNull(),
+    sourcePublishedDate: date("source_published_date", {
+      mode: "string",
+    }).notNull(),
     // NULL until an editor publishes. Public reads filter on this being non-null.
     publishedAt: timestamp("published_at"),
     createdByUserId: text("created_by_user_id").references(() => user.id, {
@@ -8445,7 +9933,10 @@ export const marketInsight = pgTable(
           OR (trend_direction = 'down' AND stat_value_milli < 0)
           OR (trend_direction = 'flat' AND stat_value_milli = 0)`,
     ),
-    check("market_insight_headline_ck", sql`char_length(headline) BETWEEN 1 AND 240`),
+    check(
+      "market_insight_headline_ck",
+      sql`char_length(headline) BETWEEN 1 AND 240`,
+    ),
   ],
 );
 
@@ -8478,7 +9969,9 @@ export const marketInsightProjectLink = pgTable(
     insightId: text("insight_id")
       .notNull()
       .references(() => marketInsight.id, { onDelete: "restrict" }),
-    linkedByUserId: text("linked_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    linkedByUserId: text("linked_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -8530,7 +10023,9 @@ export const demandSignalSnapshot = pgTable(
     distinctReporterCount: integer("distinct_reporter_count").notNull(),
     relatedProjectCount: integer("related_project_count").notNull(),
     openRoleCount: integer("open_role_count").notNull(),
-    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version")
+      .default(1)
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -8539,7 +10034,10 @@ export const demandSignalSnapshot = pgTable(
       table.categoryId,
       table.regionId,
     ),
-    uniqueIndex("demand_signal_snapshot_asOf_rank_unq").on(table.asOf, table.rank),
+    uniqueIndex("demand_signal_snapshot_asOf_rank_unq").on(
+      table.asOf,
+      table.rank,
+    ),
     index("demand_signal_snapshot_cell_asOf_idx").on(
       table.categoryId,
       table.regionId,
@@ -8547,7 +10045,10 @@ export const demandSignalSnapshot = pgTable(
       table.id,
     ),
     check("demand_signal_snapshot_rank_ck", sql`rank >= 1`),
-    check("demand_signal_snapshot_score_ck", sql`demand_score_points BETWEEN 0 AND 100`),
+    check(
+      "demand_signal_snapshot_score_ck",
+      sql`demand_score_points BETWEEN 0 AND 100`,
+    ),
     check(
       "demand_signal_snapshot_window_ck",
       sql`window_ends_at > window_starts_at AND as_of >= window_ends_at`,
@@ -8595,10 +10096,16 @@ export const talentProfile = pgTable(
     locationLabel: text("location_label"),
     // The ?region= filter joins THIS, never the label (§6: "join rather than
     // string-match"). The client picks a region id; it does not type a string.
-    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "set null" }),
-    availability: talentAvailabilityEnum("availability").default("unavailable").notNull(),
+    regionId: text("region_id").references(() => discoveryRegion.id, {
+      onDelete: "set null",
+    }),
+    availability: talentAvailabilityEnum("availability")
+      .default("unavailable")
+      .notNull(),
     commitment: roleCommitmentEnum("commitment"),
-    visibility: talentProfileVisibilityEnum("visibility").default("private").notNull(),
+    visibility: talentProfileVisibilityEnum("visibility")
+      .default("private")
+      .notNull(),
     publishedAt: timestamp("published_at"),
     // Server-owned, the product.currency / research_project.currency precedent. §4b: no
     // currency field in any request body, and a talent ask has no project to inherit one
@@ -8636,7 +10143,10 @@ export const talentProfile = pgTable(
           AND (cached_projects_completed_count IS NULL OR cached_projects_completed_count >= 0)
           AND (cached_effort_minutes_logged IS NULL) = (projection_computed_at IS NULL)`,
     ),
-    check("talent_profile_headline_ck", sql`char_length(headline_role) BETWEEN 1 AND 120`),
+    check(
+      "talent_profile_headline_ck",
+      sql`char_length(headline_role) BETWEEN 1 AND 120`,
+    ),
     check("talent_profile_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
   ],
 );
@@ -8697,8 +10207,12 @@ export const talentCompensationAsk = pgTable(
       .notNull()
       .references(() => talentProfile.userId, { onDelete: "cascade" }),
     kind: compensationKindEnum("kind").notNull(),
-    salaryMinInCentsPerMonth: bigint("salary_min_in_cents_per_month", { mode: "number" }),
-    salaryMaxInCentsPerMonth: bigint("salary_max_in_cents_per_month", { mode: "number" }),
+    salaryMinInCentsPerMonth: bigint("salary_min_in_cents_per_month", {
+      mode: "number",
+    }),
+    salaryMaxInCentsPerMonth: bigint("salary_max_in_cents_per_month", {
+      mode: "number",
+    }),
     oneTimeMinInCents: bigint("one_time_min_in_cents", { mode: "number" }),
     oneTimeMaxInCents: bigint("one_time_max_in_cents", { mode: "number" }),
     equityBasisPointsMin: integer("equity_basis_points_min"),
@@ -8712,7 +10226,10 @@ export const talentCompensationAsk = pgTable(
       table.talentProfileUserId,
       table.kind,
     ),
-    index("talent_compensation_ask_kind_equityMin_idx").on(table.kind, table.equityBasisPointsMin),
+    index("talent_compensation_ask_kind_equityMin_idx").on(
+      table.kind,
+      table.equityBasisPointsMin,
+    ),
     index("talent_compensation_ask_kind_salaryMin_idx").on(
       table.kind,
       table.salaryMinInCentsPerMonth,
@@ -8802,8 +10319,14 @@ export const supplierCapability = pgTable(
     index("supplier_capability_active_label_idx")
       .on(table.label, table.id)
       .where(sql`is_active`),
-    check("supplier_capability_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
-    check("supplier_capability_label_ck", sql`char_length(label) BETWEEN 1 AND 80`),
+    check(
+      "supplier_capability_slug_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
+    ),
+    check(
+      "supplier_capability_label_ck",
+      sql`char_length(label) BETWEEN 1 AND 80`,
+    ),
   ],
 );
 
@@ -8822,11 +10345,15 @@ export const supplier = pgTable(
     summary: text("summary"),
     // `restrict` — the seeded region taxonomy must not vanish under a listing that filters
     // on it. Nullable: a supplier with no confirmed region is honest, "global" is not.
-    regionId: text("region_id").references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    regionId: text("region_id").references(() => discoveryRegion.id, {
+      onDelete: "restrict",
+    }),
     verificationState: supplierVerificationStateEnum("verification_state")
       .default("unverified")
       .notNull(),
-    contactPolicy: supplierContactPolicyEnum("contact_policy").default("no_contact").notNull(),
+    contactPolicy: supplierContactPolicyEnum("contact_policy")
+      .default("no_contact")
+      .notNull(),
     // Host-allowlisted before storage, like every third-party URL in this schema — it is a
     // string a client will put in an href.
     websiteUrl: text("website_url"),
@@ -8841,7 +10368,9 @@ export const supplier = pgTable(
       { onDelete: "set null" },
     ),
     // R2: attribution that must never block an account deletion.
-    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -8862,7 +10391,10 @@ export const supplier = pgTable(
       .where(sql`commerce_organization_id IS NOT NULL`),
     check("supplier_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
     check("supplier_name_ck", sql`char_length(name) BETWEEN 1 AND 120`),
-    check("supplier_summary_ck", sql`summary IS NULL OR char_length(summary) <= 2000`),
+    check(
+      "supplier_summary_ck",
+      sql`summary IS NULL OR char_length(summary) <= 2000`,
+    ),
     check(
       "supplier_quantities_ck",
       sql`(lead_time_days IS NULL OR lead_time_days BETWEEN 0 AND 3650)
@@ -8871,7 +10403,10 @@ export const supplier = pgTable(
     // "Email them directly" is not actionable without somewhere to find the address.
     // Written as an explicit implication rather than the boolean-ordering trick
     // (`a <= b`), which is valid Postgres and unreadable at review time.
-    check("supplier_contact_ck", sql`contact_policy <> 'direct_email' OR website_url IS NOT NULL`),
+    check(
+      "supplier_contact_ck",
+      sql`contact_policy <> 'direct_email' OR website_url IS NOT NULL`,
+    ),
   ],
 );
 
@@ -8917,7 +10452,9 @@ export const projectSupplierEngagement = pgTable(
     supplierId: text("supplier_id")
       .notNull()
       .references(() => supplier.id, { onDelete: "restrict" }),
-    status: projectSupplierEngagementStatusEnum("status").default("considering").notNull(),
+    status: projectSupplierEngagementStatusEnum("status")
+      .default("considering")
+      .notNull(),
     note: text("note"),
     // `restrict`: membership is never hard-deleted anyway (§4a), and this row records who
     // on the team made the call.
@@ -8938,7 +10475,10 @@ export const projectSupplierEngagement = pgTable(
       table.supplierId,
     ),
     index("project_supplier_engagement_supplierId_idx").on(table.supplierId),
-    check("project_supplier_engagement_note_ck", sql`note IS NULL OR char_length(note) <= 2000`),
+    check(
+      "project_supplier_engagement_note_ck",
+      sql`note IS NULL OR char_length(note) <= 2000`,
+    ),
   ],
 );
 
@@ -8977,7 +10517,11 @@ export const jobFailure = pgTable(
     index("job_failure_unresolved_idx")
       .on(table.failedAt, table.id)
       .where(sql`resolved_at IS NULL`),
-    index("job_failure_queueName_failedAt_idx").on(table.queueName, table.failedAt, table.id),
+    index("job_failure_queueName_failedAt_idx").on(
+      table.queueName,
+      table.failedAt,
+      table.id,
+    ),
     uniqueIndex("job_failure_sourceJobId_unq").on(table.sourceJobId),
     check("job_failure_attempt_ck", sql`attempt_count >= 0`),
   ],
@@ -8989,25 +10533,37 @@ export const jobFailure = pgTable(
 // a construct that appears nowhere in the existing blocks, for something db.query.*
 // never reads. relationName is used only where one child has TWO relations to `user`.
 
-export const researchCategoryRelations = relations(researchCategory, ({ one, many }) => ({
-  createdBy: one(user, { fields: [researchCategory.createdByUserId], references: [user.id] }),
-  projects: many(researchProject),
-}));
-
-export const researchProjectRelations = relations(researchProject, ({ one, many }) => ({
-  founder: one(user, { fields: [researchProject.founderUserId], references: [user.id] }),
-  category: one(researchCategory, {
-    fields: [researchProject.categoryId],
-    references: [researchCategory.id],
+export const researchCategoryRelations = relations(
+  researchCategory,
+  ({ one, many }) => ({
+    createdBy: one(user, {
+      fields: [researchCategory.createdByUserId],
+      references: [user.id],
+    }),
+    projects: many(researchProject),
   }),
-  stats: one(projectStats),
-  members: many(projectMember),
-  openRoles: many(projectOpenRole),
-  applications: many(projectApplication),
-  invites: many(projectInvite),
-  watchers: many(projectWatcher),
-  stageTransitions: many(projectStageTransition),
-}));
+);
+
+export const researchProjectRelations = relations(
+  researchProject,
+  ({ one, many }) => ({
+    founder: one(user, {
+      fields: [researchProject.founderUserId],
+      references: [user.id],
+    }),
+    category: one(researchCategory, {
+      fields: [researchProject.categoryId],
+      references: [researchCategory.id],
+    }),
+    stats: one(projectStats),
+    members: many(projectMember),
+    openRoles: many(projectOpenRole),
+    applications: many(projectApplication),
+    invites: many(projectInvite),
+    watchers: many(projectWatcher),
+    stageTransitions: many(projectStageTransition),
+  }),
+);
 
 export const projectStatsRelations = relations(projectStats, ({ one }) => ({
   project: one(researchProject, {
@@ -9016,42 +10572,51 @@ export const projectStatsRelations = relations(projectStats, ({ one }) => ({
   }),
 }));
 
-export const projectOpenRoleRelations = relations(projectOpenRole, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [projectOpenRole.projectId],
-    references: [researchProject.id],
+export const projectOpenRoleRelations = relations(
+  projectOpenRole,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [projectOpenRole.projectId],
+      references: [researchProject.id],
+    }),
+    compensation: many(openRoleCompensation),
+    applications: many(projectApplication),
   }),
-  compensation: many(openRoleCompensation),
-  applications: many(projectApplication),
-}));
+);
 
-export const openRoleCompensationRelations = relations(openRoleCompensation, ({ one }) => ({
-  openRole: one(projectOpenRole, {
-    fields: [openRoleCompensation.openRoleId],
-    references: [projectOpenRole.id],
+export const openRoleCompensationRelations = relations(
+  openRoleCompensation,
+  ({ one }) => ({
+    openRole: one(projectOpenRole, {
+      fields: [openRoleCompensation.openRoleId],
+      references: [projectOpenRole.id],
+    }),
   }),
-}));
+);
 
-export const projectApplicationRelations = relations(projectApplication, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [projectApplication.projectId],
-    references: [researchProject.id],
+export const projectApplicationRelations = relations(
+  projectApplication,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [projectApplication.projectId],
+      references: [researchProject.id],
+    }),
+    openRole: one(projectOpenRole, {
+      fields: [projectApplication.openRoleId],
+      references: [projectOpenRole.id],
+    }),
+    applicant: one(user, {
+      fields: [projectApplication.applicantUserId],
+      references: [user.id],
+      relationName: "projectApplicationApplicant",
+    }),
+    reviewedBy: one(user, {
+      fields: [projectApplication.reviewedByUserId],
+      references: [user.id],
+      relationName: "projectApplicationReviewer",
+    }),
   }),
-  openRole: one(projectOpenRole, {
-    fields: [projectApplication.openRoleId],
-    references: [projectOpenRole.id],
-  }),
-  applicant: one(user, {
-    fields: [projectApplication.applicantUserId],
-    references: [user.id],
-    relationName: "projectApplicationApplicant",
-  }),
-  reviewedBy: one(user, {
-    fields: [projectApplication.reviewedByUserId],
-    references: [user.id],
-    relationName: "projectApplicationReviewer",
-  }),
-}));
+);
 
 export const projectInviteRelations = relations(projectInvite, ({ one }) => ({
   project: one(researchProject, {
@@ -9074,79 +10639,100 @@ export const projectInviteRelations = relations(projectInvite, ({ one }) => ({
   }),
 }));
 
-export const projectMemberRelations = relations(projectMember, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [projectMember.projectId],
-    references: [researchProject.id],
+export const projectMemberRelations = relations(
+  projectMember,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [projectMember.projectId],
+      references: [researchProject.id],
+    }),
+    member: one(user, {
+      fields: [projectMember.userId],
+      references: [user.id],
+      relationName: "projectMemberUser",
+    }),
+    removedBy: one(user, {
+      fields: [projectMember.removedByUserId],
+      references: [user.id],
+      relationName: "projectMemberRemovedBy",
+    }),
+    sourceApplication: one(projectApplication, {
+      fields: [projectMember.sourceApplicationId],
+      references: [projectApplication.id],
+    }),
+    sourceInvite: one(projectInvite, {
+      fields: [projectMember.sourceInviteId],
+      references: [projectInvite.id],
+    }),
+    intervals: many(projectMemberInterval),
   }),
-  member: one(user, {
-    fields: [projectMember.userId],
-    references: [user.id],
-    relationName: "projectMemberUser",
-  }),
-  removedBy: one(user, {
-    fields: [projectMember.removedByUserId],
-    references: [user.id],
-    relationName: "projectMemberRemovedBy",
-  }),
-  sourceApplication: one(projectApplication, {
-    fields: [projectMember.sourceApplicationId],
-    references: [projectApplication.id],
-  }),
-  sourceInvite: one(projectInvite, {
-    fields: [projectMember.sourceInviteId],
-    references: [projectInvite.id],
-  }),
-  intervals: many(projectMemberInterval),
-}));
+);
 
-export const projectMemberIntervalRelations = relations(projectMemberInterval, ({ one }) => ({
-  member: one(projectMember, {
-    fields: [projectMemberInterval.memberId],
-    references: [projectMember.id],
+export const projectMemberIntervalRelations = relations(
+  projectMemberInterval,
+  ({ one }) => ({
+    member: one(projectMember, {
+      fields: [projectMemberInterval.memberId],
+      references: [projectMember.id],
+    }),
+    endedBy: one(user, {
+      fields: [projectMemberInterval.endedByUserId],
+      references: [user.id],
+    }),
   }),
-  endedBy: one(user, { fields: [projectMemberInterval.endedByUserId], references: [user.id] }),
-}));
+);
 
 export const projectWatcherRelations = relations(projectWatcher, ({ one }) => ({
   project: one(researchProject, {
     fields: [projectWatcher.projectId],
     references: [researchProject.id],
   }),
-  watcher: one(user, { fields: [projectWatcher.userId], references: [user.id] }),
-}));
-
-export const projectStageTransitionRelations = relations(projectStageTransition, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [projectStageTransition.projectId],
-    references: [researchProject.id],
-  }),
-  changedBy: one(user, {
-    fields: [projectStageTransition.changedByUserId],
+  watcher: one(user, {
+    fields: [projectWatcher.userId],
     references: [user.id],
   }),
 }));
+
+export const projectStageTransitionRelations = relations(
+  projectStageTransition,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [projectStageTransition.projectId],
+      references: [researchProject.id],
+    }),
+    changedBy: one(user, {
+      fields: [projectStageTransition.changedByUserId],
+      references: [user.id],
+    }),
+  }),
+);
 
 // --- §6 discovery relations. Child-side only, same convention as above. `relationName`
 // appears only where one child holds TWO relations to the same parent, which the linter
 // cannot disambiguate on its own.
 
-export const discoveryRegionRelations = relations(discoveryRegion, ({ one, many }) => ({
-  parentRegion: one(discoveryRegion, {
-    fields: [discoveryRegion.parentRegionId],
-    references: [discoveryRegion.id],
-    relationName: "region_parent",
+export const discoveryRegionRelations = relations(
+  discoveryRegion,
+  ({ one, many }) => ({
+    parentRegion: one(discoveryRegion, {
+      fields: [discoveryRegion.parentRegionId],
+      references: [discoveryRegion.id],
+      relationName: "region_parent",
+    }),
+    childRegions: many(discoveryRegion, { relationName: "region_parent" }),
   }),
-  childRegions: many(discoveryRegion, { relationName: "region_parent" }),
-}));
+);
 
-export const discoverySkillRelations = relations(discoverySkill, ({ one, many }) => ({
-  category: one(researchCategory, {
-    fields: [discoverySkill.categoryId],
-    references: [researchCategory.id],
+export const discoverySkillRelations = relations(
+  discoverySkill,
+  ({ one, many }) => ({
+    category: one(researchCategory, {
+      fields: [discoverySkill.categoryId],
+      references: [researchCategory.id],
+    }),
+    talentProfileSkills: many(talentProfileSkill),
   }),
-  talentProfileSkills: many(talentProfileSkill),
-}));
+);
 
 export const geocodeCacheRelations = relations(geocodeCache, ({ one }) => ({
   region: one(discoveryRegion, {
@@ -9155,41 +10741,52 @@ export const geocodeCacheRelations = relations(geocodeCache, ({ one }) => ({
   }),
 }));
 
-export const problemSubmissionRelations = relations(problemSubmission, ({ one }) => ({
-  reporter: one(user, { fields: [problemSubmission.reporterUserId], references: [user.id] }),
-  category: one(researchCategory, {
-    fields: [problemSubmission.categoryId],
-    references: [researchCategory.id],
+export const problemSubmissionRelations = relations(
+  problemSubmission,
+  ({ one }) => ({
+    reporter: one(user, {
+      fields: [problemSubmission.reporterUserId],
+      references: [user.id],
+    }),
+    category: one(researchCategory, {
+      fields: [problemSubmission.categoryId],
+      references: [researchCategory.id],
+    }),
+    region: one(discoveryRegion, {
+      fields: [problemSubmission.regionId],
+      references: [discoveryRegion.id],
+    }),
+    cluster: one(problemCluster, {
+      fields: [problemSubmission.clusterId],
+      references: [problemCluster.id],
+    }),
   }),
-  region: one(discoveryRegion, {
-    fields: [problemSubmission.regionId],
-    references: [discoveryRegion.id],
-  }),
-  cluster: one(problemCluster, {
-    fields: [problemSubmission.clusterId],
-    references: [problemCluster.id],
-  }),
-}));
+);
 
-export const problemClusterRelations = relations(problemCluster, ({ one, many }) => ({
-  category: one(researchCategory, {
-    fields: [problemCluster.categoryId],
-    references: [researchCategory.id],
+export const problemClusterRelations = relations(
+  problemCluster,
+  ({ one, many }) => ({
+    category: one(researchCategory, {
+      fields: [problemCluster.categoryId],
+      references: [researchCategory.id],
+    }),
+    region: one(discoveryRegion, {
+      fields: [problemCluster.regionId],
+      references: [discoveryRegion.id],
+    }),
+    mergedInto: one(problemCluster, {
+      fields: [problemCluster.mergedIntoClusterId],
+      references: [problemCluster.id],
+      relationName: "cluster_merged_into",
+    }),
+    absorbedClusters: many(problemCluster, {
+      relationName: "cluster_merged_into",
+    }),
+    submissions: many(problemSubmission),
+    scoreSnapshots: many(problemClusterScoreSnapshot),
+    projectLinks: many(problemClusterProjectLink),
   }),
-  region: one(discoveryRegion, {
-    fields: [problemCluster.regionId],
-    references: [discoveryRegion.id],
-  }),
-  mergedInto: one(problemCluster, {
-    fields: [problemCluster.mergedIntoClusterId],
-    references: [problemCluster.id],
-    relationName: "cluster_merged_into",
-  }),
-  absorbedClusters: many(problemCluster, { relationName: "cluster_merged_into" }),
-  submissions: many(problemSubmission),
-  scoreSnapshots: many(problemClusterScoreSnapshot),
-  projectLinks: many(problemClusterProjectLink),
-}));
+);
 
 export const problemClusterScoreSnapshotRelations = relations(
   problemClusterScoreSnapshot,
@@ -9245,69 +10842,93 @@ export const problemClusterProjectLinkRelations = relations(
   }),
 );
 
-export const marketInsightRelations = relations(marketInsight, ({ one, many }) => ({
-  region: one(discoveryRegion, {
-    fields: [marketInsight.regionId],
-    references: [discoveryRegion.id],
+export const marketInsightRelations = relations(
+  marketInsight,
+  ({ one, many }) => ({
+    region: one(discoveryRegion, {
+      fields: [marketInsight.regionId],
+      references: [discoveryRegion.id],
+    }),
+    category: one(researchCategory, {
+      fields: [marketInsight.categoryId],
+      references: [researchCategory.id],
+    }),
+    createdBy: one(user, {
+      fields: [marketInsight.createdByUserId],
+      references: [user.id],
+    }),
+    projectLinks: many(marketInsightProjectLink),
   }),
-  category: one(researchCategory, {
-    fields: [marketInsight.categoryId],
-    references: [researchCategory.id],
-  }),
-  createdBy: one(user, { fields: [marketInsight.createdByUserId], references: [user.id] }),
-  projectLinks: many(marketInsightProjectLink),
-}));
+);
 
-export const marketInsightProjectLinkRelations = relations(marketInsightProjectLink, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [marketInsightProjectLink.projectId],
-    references: [researchProject.id],
+export const marketInsightProjectLinkRelations = relations(
+  marketInsightProjectLink,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [marketInsightProjectLink.projectId],
+      references: [researchProject.id],
+    }),
+    insight: one(marketInsight, {
+      fields: [marketInsightProjectLink.insightId],
+      references: [marketInsight.id],
+    }),
+    linkedBy: one(user, {
+      fields: [marketInsightProjectLink.linkedByUserId],
+      references: [user.id],
+    }),
   }),
-  insight: one(marketInsight, {
-    fields: [marketInsightProjectLink.insightId],
-    references: [marketInsight.id],
-  }),
-  linkedBy: one(user, { fields: [marketInsightProjectLink.linkedByUserId], references: [user.id] }),
-}));
+);
 
-export const demandSignalSnapshotRelations = relations(demandSignalSnapshot, ({ one }) => ({
-  category: one(researchCategory, {
-    fields: [demandSignalSnapshot.categoryId],
-    references: [researchCategory.id],
+export const demandSignalSnapshotRelations = relations(
+  demandSignalSnapshot,
+  ({ one }) => ({
+    category: one(researchCategory, {
+      fields: [demandSignalSnapshot.categoryId],
+      references: [researchCategory.id],
+    }),
+    region: one(discoveryRegion, {
+      fields: [demandSignalSnapshot.regionId],
+      references: [discoveryRegion.id],
+    }),
   }),
-  region: one(discoveryRegion, {
-    fields: [demandSignalSnapshot.regionId],
-    references: [discoveryRegion.id],
-  }),
-}));
+);
 
-export const talentProfileRelations = relations(talentProfile, ({ one, many }) => ({
-  user: one(user, { fields: [talentProfile.userId], references: [user.id] }),
-  region: one(discoveryRegion, {
-    fields: [talentProfile.regionId],
-    references: [discoveryRegion.id],
+export const talentProfileRelations = relations(
+  talentProfile,
+  ({ one, many }) => ({
+    user: one(user, { fields: [talentProfile.userId], references: [user.id] }),
+    region: one(discoveryRegion, {
+      fields: [talentProfile.regionId],
+      references: [discoveryRegion.id],
+    }),
+    skills: many(talentProfileSkill),
+    compensationAsks: many(talentCompensationAsk),
   }),
-  skills: many(talentProfileSkill),
-  compensationAsks: many(talentCompensationAsk),
-}));
+);
 
-export const talentProfileSkillRelations = relations(talentProfileSkill, ({ one }) => ({
-  talentProfile: one(talentProfile, {
-    fields: [talentProfileSkill.talentProfileUserId],
-    references: [talentProfile.userId],
+export const talentProfileSkillRelations = relations(
+  talentProfileSkill,
+  ({ one }) => ({
+    talentProfile: one(talentProfile, {
+      fields: [talentProfileSkill.talentProfileUserId],
+      references: [talentProfile.userId],
+    }),
+    skill: one(discoverySkill, {
+      fields: [talentProfileSkill.skillId],
+      references: [discoverySkill.id],
+    }),
   }),
-  skill: one(discoverySkill, {
-    fields: [talentProfileSkill.skillId],
-    references: [discoverySkill.id],
-  }),
-}));
+);
 
-export const talentCompensationAskRelations = relations(talentCompensationAsk, ({ one }) => ({
-  talentProfile: one(talentProfile, {
-    fields: [talentCompensationAsk.talentProfileUserId],
-    references: [talentProfile.userId],
+export const talentCompensationAskRelations = relations(
+  talentCompensationAsk,
+  ({ one }) => ({
+    talentProfile: one(talentProfile, {
+      fields: [talentCompensationAsk.talentProfileUserId],
+      references: [talentProfile.userId],
+    }),
   }),
-}));
+);
 
 // --- Go-to-market (§11i). Child-side only, matching the convention above.
 
@@ -9320,16 +10941,19 @@ export const supplierRelations = relations(supplier, ({ one, many }) => ({
   engagements: many(projectSupplierEngagement),
 }));
 
-export const supplierCapabilityLinkRelations = relations(supplierCapabilityLink, ({ one }) => ({
-  supplier: one(supplier, {
-    fields: [supplierCapabilityLink.supplierId],
-    references: [supplier.id],
+export const supplierCapabilityLinkRelations = relations(
+  supplierCapabilityLink,
+  ({ one }) => ({
+    supplier: one(supplier, {
+      fields: [supplierCapabilityLink.supplierId],
+      references: [supplier.id],
+    }),
+    capability: one(supplierCapability, {
+      fields: [supplierCapabilityLink.capabilityId],
+      references: [supplierCapability.id],
+    }),
   }),
-  capability: one(supplierCapability, {
-    fields: [supplierCapabilityLink.capabilityId],
-    references: [supplierCapability.id],
-  }),
-}));
+);
 
 export const projectSupplierEngagementRelations = relations(
   projectSupplierEngagement,
@@ -9391,11 +11015,18 @@ export const projectSupplierEngagementRelations = relations(
 // migration 0008 uses for the citext extension.
 // ---------------------------------------------------------------------------
 
-export const workshopTaskPriorityEnum = pgEnum("workshop_task_priority", ["high", "medium", "low"]);
+export const workshopTaskPriorityEnum = pgEnum("workshop_task_priority", [
+  "high",
+  "medium",
+  "low",
+]);
 
 // Where a workshop file's bytes live. `external_link` is the only value produced today;
 // `hosted` exists so restoring presigned S3 upload (Appendix A) is an insert.
-export const workshopFileSourceEnum = pgEnum("workshop_file_source", ["external_link", "hosted"]);
+export const workshopFileSourceEnum = pgEnum("workshop_file_source", [
+  "external_link",
+  "hosted",
+]);
 
 // Dead column support for the deferred `hosted` path. Deliberately NOT the studio's
 // `storage_provider` enum: that one is video-shaped (it carries "livepeer") and is
@@ -9421,7 +11052,10 @@ export const workshopFileKindEnum = pgEnum("workshop_file_kind", [
 
 // A log is editable while `draft` and FROZEN once `submitted` — at that point it is
 // effort evidence feeding §9, and an editable evidence record is not evidence.
-export const dailyLogStatusEnum = pgEnum("daily_log_status", ["draft", "submitted"]);
+export const dailyLogStatusEnum = pgEnum("daily_log_status", [
+  "draft",
+  "submitted",
+]);
 
 // `none` is a first-class value, not a missing one: a member with no video that day must
 // still be able to log, and §9's physical-work claims have no video by definition.
@@ -9517,7 +11151,10 @@ export const workshopBoardColumn = pgTable(
       table.position,
       table.id,
     ),
-    check("workshop_board_column_title_ck", sql`char_length(title) BETWEEN 1 AND 60`),
+    check(
+      "workshop_board_column_title_ck",
+      sql`char_length(title) BETWEEN 1 AND 60`,
+    ),
     check("workshop_board_column_position_ck", sql`position >= 0`),
   ],
 );
@@ -9550,9 +11187,12 @@ export const workshopTask = pgTable(
     description: text("description"),
     // `set null`, not restrict: a departing member must not pin every task they were
     // assigned, and an unassigned task is a real state the board already renders.
-    assigneeMemberId: text("assignee_member_id").references(() => projectMember.id, {
-      onDelete: "set null",
-    }),
+    assigneeMemberId: text("assignee_member_id").references(
+      () => projectMember.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     priority: workshopTaskPriorityEnum("priority").default("medium").notNull(),
     labels: text("labels").array().notNull().default([]),
     // Date-only, the §1 wire format. No Date object to reinterpret in a local zone, and
@@ -9572,7 +11212,10 @@ export const workshopTask = pgTable(
   },
   (table) => [
     // The board read, in render order.
-    uniqueIndex("workshop_task_columnId_rank_unq").on(table.columnId, table.rank),
+    uniqueIndex("workshop_task_columnId_rank_unq").on(
+      table.columnId,
+      table.rank,
+    ),
     index("workshop_task_projectId_idx").on(table.projectId),
     index("workshop_task_assigneeMemberId_idx").on(table.assigneeMemberId),
     check("workshop_task_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
@@ -9638,13 +11281,20 @@ export const workshopFile = pgTable(
       .notNull(),
   },
   (table) => [
-    index("workshop_file_projectId_createdAt_idx").on(table.projectId, table.createdAt, table.id),
+    index("workshop_file_projectId_createdAt_idx").on(
+      table.projectId,
+      table.createdAt,
+      table.id,
+    ),
     // The same link twice on one project is a mistake, not an intent. Partial, so a
     // removed link can be re-added.
     uniqueIndex("workshop_file_projectId_externalUrl_unq")
       .on(table.projectId, table.externalUrl)
       .where(sql`removed_at IS NULL`),
-    check("workshop_file_fileName_ck", sql`char_length(file_name) BETWEEN 1 AND 200`),
+    check(
+      "workshop_file_fileName_ck",
+      sql`char_length(file_name) BETWEEN 1 AND 200`,
+    ),
     // Makes the two shapes unrepresentable in each other's terms (CLAUDE.md Pattern 1):
     // a link has a URL and no size; a hosted object has a key. Neither can be half-set.
     check(
@@ -9659,7 +11309,10 @@ export const workshopFile = pgTable(
       sql`external_url IS NULL
           OR (char_length(external_url) <= 2048 AND external_url LIKE 'https://%')`,
     ),
-    check("workshop_file_sizeBytes_ck", sql`size_bytes IS NULL OR size_bytes >= 0`),
+    check(
+      "workshop_file_sizeBytes_ck",
+      sql`size_bytes IS NULL OR size_bytes >= 0`,
+    ),
     check(
       "workshop_file_removed_ck",
       sql`(removed_by_user_id IS NULL) OR (removed_at IS NOT NULL)`,
@@ -9711,9 +11364,19 @@ export const workshopChatMessage = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    index("workshop_chat_message_projectId_sentAt_idx").on(table.projectId, table.sentAt, table.id),
-    check("workshop_chat_message_text_ck", sql`char_length(message_text) BETWEEN 1 AND 4000`),
-    check("workshop_chat_message_edited_ck", sql`edited_at IS NULL OR edited_at >= sent_at`),
+    index("workshop_chat_message_projectId_sentAt_idx").on(
+      table.projectId,
+      table.sentAt,
+      table.id,
+    ),
+    check(
+      "workshop_chat_message_text_ck",
+      sql`char_length(message_text) BETWEEN 1 AND 4000`,
+    ),
+    check(
+      "workshop_chat_message_edited_ck",
+      sql`edited_at IS NULL OR edited_at >= sent_at`,
+    ),
   ],
 );
 
@@ -9729,9 +11392,12 @@ export const workshopChatReadState = pgTable(
       .references(() => projectMember.id, { onDelete: "restrict" }),
     // `set null`: a read cursor pointing at a message is a preference, and it must never
     // stop a message row from being cleaned up in some future retention pass.
-    throughMessageId: text("through_message_id").references(() => workshopChatMessage.id, {
-      onDelete: "set null",
-    }),
+    throughMessageId: text("through_message_id").references(
+      () => workshopChatMessage.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     readAt: timestamp("read_at", { precision: 6 }).defaultNow().notNull(),
   },
   (table) => [primaryKey({ columns: [table.projectId, table.memberId] })],
@@ -9780,7 +11446,9 @@ export const dailyLog = pgTable(
      */
     submittedAt: timestamp("submitted_at", { precision: 3 }),
     // --- Video. Server-derived in every field; a client that sends one gets a 422.
-    videoSource: dailyLogVideoSourceEnum("video_source").default("none").notNull(),
+    videoSource: dailyLogVideoSourceEnum("video_source")
+      .default("none")
+      .notNull(),
     youtubeVideoId: text("youtube_video_id"),
     // YouTube's own oEmbed thumbnail, host-allowlisted by sanitizeYoutubeThumbnailUrl
     // before it is stored — it is a third-party string a client will put in an <img src>.
@@ -9798,7 +11466,9 @@ export const dailyLog = pgTable(
     analysisFailureReason: text("analysis_failure_reason"),
     // --- §9's verdict column. WRITTEN BY NOTHING IN THIS PHASE. The frontend's
     // `isEffortVerified: boolean` is derived from it on read as `=== 'verified'`.
-    effortVerificationStatus: effortVerificationStatusEnum("effort_verification_status")
+    effortVerificationStatus: effortVerificationStatusEnum(
+      "effort_verification_status",
+    )
       .default("not_run")
       .notNull(),
     // Client-supplied, and one of the few client strings this domain accepts — it is an
@@ -9822,7 +11492,11 @@ export const dailyLog = pgTable(
     uniqueIndex("daily_log_authorMemberId_idempotencyKey_unq")
       .on(table.authorMemberId, table.submitIdempotencyKey)
       .where(sql`submit_idempotency_key IS NOT NULL`),
-    index("daily_log_projectId_logDate_idx").on(table.projectId, table.logDate, table.id),
+    index("daily_log_projectId_logDate_idx").on(
+      table.projectId,
+      table.logDate,
+      table.id,
+    ),
     // THE CROSS-PROJECT FEED INDEX (Appendix B2). `GET /daily-logs` filters on the
     // caller's memberships and orders `(logDate DESC, submittedAt DESC, id DESC)` across
     // every one of them at once, so the project-leading index above cannot serve it —
@@ -9837,10 +11511,19 @@ export const dailyLog = pgTable(
     index("daily_log_analysisStatus_idx")
       .on(table.analysisStatus, table.id)
       .where(sql`status = 'submitted'`),
-    check("daily_log_narrative_ck", sql`narrative IS NULL OR char_length(narrative) <= 10000`),
+    check(
+      "daily_log_narrative_ck",
+      sql`narrative IS NULL OR char_length(narrative) <= 10000`,
+    ),
     // A YouTube log has an id; a log without one is `none` or the deferred `hosted`.
-    check("daily_log_video_ck", sql`(video_source = 'youtube') = (youtube_video_id IS NOT NULL)`),
-    check("daily_log_submitted_ck", sql`(status = 'submitted') = (submitted_at IS NOT NULL)`),
+    check(
+      "daily_log_video_ck",
+      sql`(video_source = 'youtube') = (youtube_video_id IS NOT NULL)`,
+    ),
+    check(
+      "daily_log_submitted_ck",
+      sql`(status = 'submitted') = (submitted_at IS NOT NULL)`,
+    ),
     // A draft has asked nothing of the model; a completed analysis reached a terminal
     // state. Neither half can be half-true.
     check(
@@ -9924,8 +11607,14 @@ export const dailyLogAiSummaryChip = pgTable(
     // EXISTS, so it probes THIS table by kind and joins back on the log id. The unique
     // above is log-leading and cannot serve that direction. Filtering after the fetch
     // instead would page a feed against a predicate applied to only one page of it.
-    index("daily_log_ai_summary_chip_kind_logId_idx").on(table.kind, table.dailyLogId),
-    check("daily_log_ai_summary_chip_label_ck", sql`char_length(label) BETWEEN 1 AND 80`),
+    index("daily_log_ai_summary_chip_kind_logId_idx").on(
+      table.kind,
+      table.dailyLogId,
+    ),
+    check(
+      "daily_log_ai_summary_chip_label_ck",
+      sql`char_length(label) BETWEEN 1 AND 80`,
+    ),
     check(
       "daily_log_ai_summary_chip_confidence_ck",
       sql`confidence_bps IS NULL OR confidence_bps BETWEEN 0 AND 10000`,
@@ -10017,7 +11706,10 @@ export const dailyLogEvidenceLink = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("daily_log_evidence_link_logId_url_unq").on(table.dailyLogId, table.externalUrl),
+    uniqueIndex("daily_log_evidence_link_logId_url_unq").on(
+      table.dailyLogId,
+      table.externalUrl,
+    ),
     check(
       "daily_log_evidence_link_url_ck",
       sql`char_length(external_url) <= 2048 AND external_url LIKE 'https://%'`,
@@ -10033,17 +11725,20 @@ export const dailyLogEvidenceLink = pgTable(
 
 // --- §8 relations. Child-side only, same convention as §5, §6 and the studio domain.
 
-export const workshopBoardColumnRelations = relations(workshopBoardColumn, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [workshopBoardColumn.projectId],
-    references: [researchProject.id],
+export const workshopBoardColumnRelations = relations(
+  workshopBoardColumn,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [workshopBoardColumn.projectId],
+      references: [researchProject.id],
+    }),
+    createdBy: one(user, {
+      fields: [workshopBoardColumn.createdByUserId],
+      references: [user.id],
+    }),
+    tasks: many(workshopTask),
   }),
-  createdBy: one(user, {
-    fields: [workshopBoardColumn.createdByUserId],
-    references: [user.id],
-  }),
-  tasks: many(workshopTask),
-}));
+);
 
 export const workshopTaskRelations = relations(workshopTask, ({ one }) => ({
   project: one(researchProject, {
@@ -10071,31 +11766,37 @@ export const workshopFileRelations = relations(workshopFile, ({ one }) => ({
   }),
 }));
 
-export const workshopChatMessageRelations = relations(workshopChatMessage, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [workshopChatMessage.projectId],
-    references: [researchProject.id],
+export const workshopChatMessageRelations = relations(
+  workshopChatMessage,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [workshopChatMessage.projectId],
+      references: [researchProject.id],
+    }),
+    author: one(projectMember, {
+      fields: [workshopChatMessage.authorMemberId],
+      references: [projectMember.id],
+    }),
   }),
-  author: one(projectMember, {
-    fields: [workshopChatMessage.authorMemberId],
-    references: [projectMember.id],
-  }),
-}));
+);
 
-export const workshopChatReadStateRelations = relations(workshopChatReadState, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [workshopChatReadState.projectId],
-    references: [researchProject.id],
+export const workshopChatReadStateRelations = relations(
+  workshopChatReadState,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [workshopChatReadState.projectId],
+      references: [researchProject.id],
+    }),
+    member: one(projectMember, {
+      fields: [workshopChatReadState.memberId],
+      references: [projectMember.id],
+    }),
+    throughMessage: one(workshopChatMessage, {
+      fields: [workshopChatReadState.throughMessageId],
+      references: [workshopChatMessage.id],
+    }),
   }),
-  member: one(projectMember, {
-    fields: [workshopChatReadState.memberId],
-    references: [projectMember.id],
-  }),
-  throughMessage: one(workshopChatMessage, {
-    fields: [workshopChatReadState.throughMessageId],
-    references: [workshopChatMessage.id],
-  }),
-}));
+);
 
 export const dailyLogRelations = relations(dailyLog, ({ one, many }) => ({
   project: one(researchProject, {
@@ -10122,26 +11823,35 @@ export const dailyLogTranscriptSegmentRelations = relations(
   }),
 );
 
-export const dailyLogAiSummaryChipRelations = relations(dailyLogAiSummaryChip, ({ one }) => ({
-  dailyLog: one(dailyLog, {
-    fields: [dailyLogAiSummaryChip.dailyLogId],
-    references: [dailyLog.id],
+export const dailyLogAiSummaryChipRelations = relations(
+  dailyLogAiSummaryChip,
+  ({ one }) => ({
+    dailyLog: one(dailyLog, {
+      fields: [dailyLogAiSummaryChip.dailyLogId],
+      references: [dailyLog.id],
+    }),
   }),
-}));
+);
 
-export const dailyLogExtractedClaimRelations = relations(dailyLogExtractedClaim, ({ one }) => ({
-  dailyLog: one(dailyLog, {
-    fields: [dailyLogExtractedClaim.dailyLogId],
-    references: [dailyLog.id],
+export const dailyLogExtractedClaimRelations = relations(
+  dailyLogExtractedClaim,
+  ({ one }) => ({
+    dailyLog: one(dailyLog, {
+      fields: [dailyLogExtractedClaim.dailyLogId],
+      references: [dailyLog.id],
+    }),
   }),
-}));
+);
 
-export const dailyLogEvidenceLinkRelations = relations(dailyLogEvidenceLink, ({ one }) => ({
-  dailyLog: one(dailyLog, {
-    fields: [dailyLogEvidenceLink.dailyLogId],
-    references: [dailyLog.id],
+export const dailyLogEvidenceLinkRelations = relations(
+  dailyLogEvidenceLink,
+  ({ one }) => ({
+    dailyLog: one(dailyLog, {
+      fields: [dailyLogEvidenceLink.dailyLogId],
+      references: [dailyLog.id],
+    }),
   }),
-}));
+);
 
 // ---------------------------------------------------------------------------
 // R&D §9 — Proof of Effort: the Slicing Pie ledger and its verification pipeline.
@@ -10263,21 +11973,30 @@ export const verificationStepStatusEnum = pgEnum("verification_step_status", [
 
 // The kind of contribution a ledger entry prices. Both reduce to one denominator of
 // 3000 (§9.2), which is why there is one numerator column rather than two.
-export const sliceContributionKindEnum = pgEnum("slice_contribution_kind", ["time", "cash"]);
+export const sliceContributionKindEnum = pgEnum("slice_contribution_kind", [
+  "time",
+  "cash",
+]);
 
 // Append-only correction mechanism. A `reversal` names the entry it reverses and carries
 // a negative numerator; there is no UPDATE and no DELETE (§9.1).
-export const sliceLedgerEntryKindEnum = pgEnum("slice_ledger_entry_kind", ["award", "reversal"]);
+export const sliceLedgerEntryKindEnum = pgEnum("slice_ledger_entry_kind", [
+  "award",
+  "reversal",
+]);
 
 // The 24-hour transparency window's state machine (§9.8). `locked` and
 // `consensus_reached` are both terminal and both have written exactly one ledger entry;
 // they differ only in whether a human was involved.
-export const sliceAllocationProposalStatusEnum = pgEnum("slice_allocation_proposal_status", [
-  "open", // window running; NOTHING is in the ledger
-  "disputed", // slices frozen in escrow, reported separately from totalSlices
-  "locked", // expiry sweep settled it; terminal
-  "consensus_reached", // a dispute resolved it; terminal
-]);
+export const sliceAllocationProposalStatusEnum = pgEnum(
+  "slice_allocation_proposal_status",
+  [
+    "open", // window running; NOTHING is in the ledger
+    "disputed", // slices frozen in escrow, reported separately from totalSlices
+    "locked", // expiry sweep settled it; terminal
+    "consensus_reached", // a dispute resolved it; terminal
+  ],
+);
 
 export const disputeStatusEnum = pgEnum("dispute_status", [
   "open",
@@ -10351,12 +12070,15 @@ export const physicalReceiptKindEnum = pgEnum("physical_receipt_kind", [
 ]);
 
 // SPEC §4's hardware edge case: EXIF check, device fingerprint, reverse image search.
-export const receiptForensicsCheckKindEnum = pgEnum("receipt_forensics_check_kind", [
-  "exif_present",
-  "capture_time_consistency",
-  "device_fingerprint",
-  "reverse_image_search",
-]);
+export const receiptForensicsCheckKindEnum = pgEnum(
+  "receipt_forensics_check_kind",
+  [
+    "exif_present",
+    "capture_time_consistency",
+    "device_fingerprint",
+    "reverse_image_search",
+  ],
+);
 
 // `not_applicable` is a first-class result, not a silent pass. Reverse image search
 // ships a member's photo to a third party and therefore needs its own explicit consent
@@ -10427,11 +12149,10 @@ export const projectAuditEventKindEnum = pgEnum("project_audit_event_kind", [
   "compensation_payment_confirmed",
 ]);
 
-export const optimizationSuggestionStatusEnum = pgEnum("optimization_suggestion_status", [
-  "open",
-  "accepted",
-  "dismissed",
-]);
+export const optimizationSuggestionStatusEnum = pgEnum(
+  "optimization_suggestion_status",
+  ["open", "accepted", "dismissed"],
+);
 
 // SPEC §3.4: dynamic calculation stops at cash-flow breakeven or a priced round.
 export const pieBakeTriggerEnum = pgEnum("pie_bake_trigger", [
@@ -10483,7 +12204,9 @@ export const memberFairMarketRate = pgTable(
     // `sql\`0\`` rather than `0n`: drizzle-kit serializes its snapshot with JSON.stringify,
     // which throws outright on a BigInt default. This is the only bigint default in the
     // schema, and the SQL literal produces an identical `DEFAULT 0` column.
-    paidCashRateCentsPerHour: bigint("paid_cash_rate_cents_per_hour", { mode: "bigint" })
+    paidCashRateCentsPerHour: bigint("paid_cash_rate_cents_per_hour", {
+      mode: "bigint",
+    })
       .notNull()
       .default(sql`0`),
     // An amount is never stored or sent without its currency (§4b). Derived from the
@@ -10527,9 +12250,18 @@ export const memberFairMarketRate = pgTable(
       table.memberId,
       table.effectiveFrom,
     ),
-    check("member_fair_market_rate_rate_ck", sql`fair_market_rate_cents_per_hour >= 0`),
-    check("member_fair_market_rate_paid_ck", sql`paid_cash_rate_cents_per_hour >= 0`),
-    check("member_fair_market_rate_currency_ck", sql`currency_code ~ '^[A-Z]{3}$'`),
+    check(
+      "member_fair_market_rate_rate_ck",
+      sql`fair_market_rate_cents_per_hour >= 0`,
+    ),
+    check(
+      "member_fair_market_rate_paid_ck",
+      sql`paid_cash_rate_cents_per_hour >= 0`,
+    ),
+    check(
+      "member_fair_market_rate_currency_ck",
+      sql`currency_code ~ '^[A-Z]{3}$'`,
+    ),
     check(
       "member_fair_market_rate_rationale_ck",
       sql`char_length(rationale_note) BETWEEN 1 AND 1000`,
@@ -10576,7 +12308,9 @@ export const effortClaim = pgTable(
       .notNull()
       .references(() => projectMember.id, { onDelete: "restrict" }),
     sourceKind: effortClaimSourceKindEnum("source_kind").notNull(),
-    dailyLogId: text("daily_log_id").references(() => dailyLog.id, { onDelete: "restrict" }),
+    dailyLogId: text("daily_log_id").references(() => dailyLog.id, {
+      onDelete: "restrict",
+    }),
     // The day CLAIMED, date-only — distinct from when the claim was filed, exactly as
     // daily_log splits logDate from submittedAt.
     claimedForDate: date("claimed_for_date", { mode: "string" }).notNull(),
@@ -10590,9 +12324,12 @@ export const effortClaim = pgTable(
     // column is legitimate here in a way it never is on slice_ledger_entry.
     overriddenMinutes: integer("overridden_minutes"),
     overrideReason: text("override_reason"),
-    overriddenByUserId: text("overridden_by_user_id").references(() => user.id, {
-      onDelete: "restrict",
-    }),
+    overriddenByUserId: text("overridden_by_user_id").references(
+      () => user.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     overriddenAt: timestamp("overridden_at"),
     claimSummary: text("claim_summary").notNull(),
     // --- Pipeline state. The shared §4d enum, never a §9-local re-declaration.
@@ -10602,9 +12339,12 @@ export const effortClaim = pgTable(
     verdictReachedAt: timestamp("verdict_reached_at"),
     // The rate in force when the verdict landed, pinned so a later raise cannot re-price
     // this claim (§9.6). NULL for a cash-only claim, which needs no rate at all.
-    fairMarketRateId: text("fair_market_rate_id").references(() => memberFairMarketRate.id, {
-      onDelete: "restrict",
-    }),
+    fairMarketRateId: text("fair_market_rate_id").references(
+      () => memberFairMarketRate.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     // Client-supplied opaque dedup token — the same category as daily_log's, and one of
     // the few client strings this domain accepts. A retried submit on a flaky mobile
     // connection must not file two claims (§14).
@@ -10630,8 +12370,14 @@ export const effortClaim = pgTable(
       table.claimedForDate,
       table.id,
     ),
-    index("effort_claim_memberId_status_idx").on(table.memberId, table.verificationStatus),
-    check("effort_claim_source_ck", sql`(source_kind = 'daily_log') = (daily_log_id IS NOT NULL)`),
+    index("effort_claim_memberId_status_idx").on(
+      table.memberId,
+      table.verificationStatus,
+    ),
+    check(
+      "effort_claim_source_ck",
+      sql`(source_kind = 'daily_log') = (daily_log_id IS NOT NULL)`,
+    ),
     // A day holds 1440 minutes. A larger number is a model error or a forged payload, and
     // it must fail at the write rather than surface as a plausible slice count.
     check(
@@ -10653,7 +12399,10 @@ export const effortClaim = pgTable(
           AND (overridden_minutes IS NULL) = (overridden_by_user_id IS NULL)
           AND (overridden_minutes IS NULL) = (overridden_at IS NULL)`,
     ),
-    check("effort_claim_summary_ck", sql`char_length(claim_summary) BETWEEN 1 AND 1000`),
+    check(
+      "effort_claim_summary_ck",
+      sql`char_length(claim_summary) BETWEEN 1 AND 1000`,
+    ),
     // A verdict instant exists exactly when the status is terminal. `not_run` is absent
     // deliberately: a row in this table has, by definition, been submitted.
     check(
@@ -10711,7 +12460,10 @@ export const claimVerificationRun = pgTable(
       "claim_verification_run_verdict_ck",
       sql`verdict IS NULL OR verdict IN ('verified', 'flagged_for_review', 'unverified')`,
     ),
-    check("claim_verification_run_completed_ck", sql`(completed_at IS NULL) = (verdict IS NULL)`),
+    check(
+      "claim_verification_run_completed_ck",
+      sql`(completed_at IS NULL) = (verdict IS NULL)`,
+    ),
     check(
       "claim_verification_run_window_ck",
       sql`(scoped_window_starts_at IS NULL) = (scoped_window_ends_at IS NULL)
@@ -10761,8 +12513,14 @@ export const verificationStep = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("verification_step_runId_stepKind_unq").on(table.runId, table.stepKind),
-    uniqueIndex("verification_step_runId_stepOrder_unq").on(table.runId, table.stepOrder),
+    uniqueIndex("verification_step_runId_stepKind_unq").on(
+      table.runId,
+      table.stepKind,
+    ),
+    uniqueIndex("verification_step_runId_stepOrder_unq").on(
+      table.runId,
+      table.stepOrder,
+    ),
     check("verification_step_order_ck", sql`step_order BETWEEN 1 AND 4`),
     check(
       "verification_step_score_ck",
@@ -10819,16 +12577,21 @@ export const artifactEvidence = pgTable(
     // NULLED on consent revocation. Everything else on this row survives.
     rawPayloadJson: text("raw_payload_json"),
     evidenceRetained: boolean("evidence_retained").default(true).notNull(),
-    signatureStatus: artifactSignatureStatusEnum("signature_status").default("unknown").notNull(),
+    signatureStatus: artifactSignatureStatusEnum("signature_status")
+      .default("unknown")
+      .notNull(),
     // When the WORK happened, per the provider — not when we fetched it. Temporal
     // analysis overlaps these against the claimed window.
     artifactOccurredAt: timestamp("artifact_occurred_at").notNull(),
     // False for an artifact that was found but must not fund slices — already counted
     // against another claim, or authored by someone else.
     countsTowardSlices: boolean("counts_toward_slices").default(true).notNull(),
-    consentGrantId: text("consent_grant_id").references(() => integrationConsentGrant.id, {
-      onDelete: "set null",
-    }),
+    consentGrantId: text("consent_grant_id").references(
+      () => integrationConsentGrant.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -10839,9 +12602,15 @@ export const artifactEvidence = pgTable(
       .on(table.projectId, table.provider, table.externalId)
       .where(sql`counts_toward_slices = true`),
     index("artifact_evidence_claimId_idx").on(table.claimId, table.id),
-    index("artifact_evidence_occurredAt_idx").on(table.projectId, table.artifactOccurredAt),
+    index("artifact_evidence_occurredAt_idx").on(
+      table.projectId,
+      table.artifactOccurredAt,
+    ),
     check("artifact_evidence_sha_ck", sql`payload_sha256 ~ '^[0-9a-f]{64}$'`),
-    check("artifact_evidence_label_ck", sql`char_length(label) BETWEEN 1 AND 500`),
+    check(
+      "artifact_evidence_label_ck",
+      sql`char_length(label) BETWEEN 1 AND 500`,
+    ),
     check(
       "artifact_evidence_url_ck",
       sql`external_url IS NULL
@@ -10886,7 +12655,10 @@ export const integrationConsentGrant = pgTable(
     status: integrationGrantStatusEnum("status").default("pending").notNull(),
     // Scope narrowing is the difference between "Qatoto reads your work" and "Qatoto
     // reads your GitHub". Empty means the member consented to nothing yet.
-    allowedResourceIds: text("allowed_resource_ids").array().notNull().default([]),
+    allowedResourceIds: text("allowed_resource_ids")
+      .array()
+      .notNull()
+      .default([]),
     // Ciphertext only. The plaintext never touches a column, a log, or a response.
     encryptedAccessToken: text("encrypted_access_token"),
     encryptedRefreshToken: text("encrypted_refresh_token"),
@@ -10912,7 +12684,10 @@ export const integrationConsentGrant = pgTable(
       table.memberId,
       table.provider,
     ),
-    index("integration_consent_grant_memberId_idx").on(table.memberId, table.status),
+    index("integration_consent_grant_memberId_idx").on(
+      table.memberId,
+      table.status,
+    ),
     // An active grant has a token and an instant; a revoked one has NEITHER a token nor
     // a missing revocation record. Revocation that leaves ciphertext behind is not
     // revocation.
@@ -10924,7 +12699,10 @@ export const integrationConsentGrant = pgTable(
           AND (encrypted_access_token IS NULL) = (token_key_version IS NULL)
           AND (revoked_at IS NULL) = (revoked_by_user_id IS NULL)`,
     ),
-    check("integration_consent_grant_resources_ck", sql`cardinality(allowed_resource_ids) <= 100`),
+    check(
+      "integration_consent_grant_resources_ck",
+      sql`cardinality(allowed_resource_ids) <= 100`,
+    ),
   ],
 );
 
@@ -10955,7 +12733,9 @@ export const physicalWorkReceipt = pgTable(
       .references(() => projectMember.id, { onDelete: "restrict" }),
     // NULL until a claim cites it: a member uploads receipts first, then files one claim
     // naming several.
-    claimId: text("claim_id").references(() => effortClaim.id, { onDelete: "restrict" }),
+    claimId: text("claim_id").references(() => effortClaim.id, {
+      onDelete: "restrict",
+    }),
     receiptKind: physicalReceiptKindEnum("receipt_kind").notNull(),
     contentSha256: text("content_sha256").notNull(),
     perceptualHash: text("perceptual_hash").notNull(),
@@ -10974,7 +12754,10 @@ export const physicalWorkReceipt = pgTable(
   },
   (table) => [
     // THE SAME BYTES CANNOT FUND TWO RECEIPTS (§9.6).
-    uniqueIndex("physical_work_receipt_content_unq").on(table.projectId, table.contentSha256),
+    uniqueIndex("physical_work_receipt_content_unq").on(
+      table.projectId,
+      table.contentSha256,
+    ),
     uniqueIndex("physical_work_receipt_memberId_idempotencyKey_unq").on(
       table.memberId,
       table.idempotencyKey,
@@ -10982,8 +12765,14 @@ export const physicalWorkReceipt = pgTable(
     index("physical_work_receipt_claimId_idx").on(table.claimId, table.id),
     // Near-duplicate detection scans this; it is not unique, because a legitimate second
     // photo of the same workbench SHOULD be flagged for a human rather than rejected.
-    index("physical_work_receipt_phash_idx").on(table.projectId, table.perceptualHash),
-    check("physical_work_receipt_sha_ck", sql`content_sha256 ~ '^[0-9a-f]{64}$'`),
+    index("physical_work_receipt_phash_idx").on(
+      table.projectId,
+      table.perceptualHash,
+    ),
+    check(
+      "physical_work_receipt_sha_ck",
+      sql`content_sha256 ~ '^[0-9a-f]{64}$'`,
+    ),
     check("physical_work_receipt_size_ck", sql`size_bytes > 0`),
     check(
       "physical_work_receipt_dimensions_ck",
@@ -11012,7 +12801,10 @@ export const receiptForensicsCheck = pgTable(
     checkedAt: timestamp("checked_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("receipt_forensics_check_receiptId_kind_unq").on(table.receiptId, table.checkKind),
+    uniqueIndex("receipt_forensics_check_receiptId_kind_unq").on(
+      table.receiptId,
+      table.checkKind,
+    ),
     check(
       "receipt_forensics_check_confidence_ck",
       sql`confidence_bps IS NULL OR confidence_bps BETWEEN 0 AND 10000`,
@@ -11067,19 +12859,30 @@ export const sliceAllocationProposal = pgTable(
     // them with different premiums (2× and 4×). They are summed for display but rounded
     // SEPARATELY at settlement — §9.3 rounds once PER LEDGER ENTRY, and the sum of two
     // rounded values is not the rounding of their sum.
-    proposedTimeSliceNumerator: bigint("proposed_time_slice_numerator", { mode: "bigint" })
+    proposedTimeSliceNumerator: bigint("proposed_time_slice_numerator", {
+      mode: "bigint",
+    })
       .notNull()
       .default(sql`0`),
-    proposedCashSliceNumerator: bigint("proposed_cash_slice_numerator", { mode: "bigint" })
+    proposedCashSliceNumerator: bigint("proposed_cash_slice_numerator", {
+      mode: "bigint",
+    })
       .notNull()
       .default(sql`0`),
     proposedSlices: integer("proposed_slices").notNull(),
     /** The sum of the two above, retained for the audit payload and the transparency read. */
-    proposedSliceNumerator: bigint("proposed_slice_numerator", { mode: "bigint" }).notNull(),
-    fairMarketRateId: text("fair_market_rate_id").references(() => memberFairMarketRate.id, {
-      onDelete: "restrict",
-    }),
-    status: sliceAllocationProposalStatusEnum("status").default("open").notNull(),
+    proposedSliceNumerator: bigint("proposed_slice_numerator", {
+      mode: "bigint",
+    }).notNull(),
+    fairMarketRateId: text("fair_market_rate_id").references(
+      () => memberFairMarketRate.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    status: sliceAllocationProposalStatusEnum("status")
+      .default("open")
+      .notNull(),
     windowOpensAt: timestamp("window_opens_at").defaultNow().notNull(),
     // PRECISION 3 IS LOAD-BEARING, for the same reason daily_log.submitted_at carries it
     // (see src/lib/daily-log-cursor.ts). This column is written as `now() + interval`, so
@@ -11091,9 +12894,12 @@ export const sliceAllocationProposal = pgTable(
     // Reported SEPARATELY from totalSlices so the UI can show "frozen in escrow"
     // honestly instead of implying the slices are either awarded or gone.
     escrowedSlices: integer("escrowed_slices").default(0).notNull(),
-    activeDisputeId: text("active_dispute_id").references((): AnyPgColumn => dispute.id, {
-      onDelete: "set null",
-    }),
+    activeDisputeId: text("active_dispute_id").references(
+      (): AnyPgColumn => dispute.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     lockedAt: timestamp("locked_at"),
     consensusReachedAt: timestamp("consensus_reached_at"),
     settledLedgerEntryId: text("settled_ledger_entry_id").references(
@@ -11153,7 +12959,10 @@ export const sliceAllocationProposal = pgTable(
       sql`(status <> 'disputed')
           OR (active_dispute_id IS NOT NULL AND escrowed_slices = proposed_slices)`,
     ),
-    check("proposal_escrow_zero", sql`(status = 'disputed') OR (escrowed_slices = 0)`),
+    check(
+      "proposal_escrow_zero",
+      sql`(status = 'disputed') OR (escrowed_slices = 0)`,
+    ),
     check("proposal_window_ck", sql`window_closes_at > window_opens_at`),
     check(
       "proposal_slices_ck",
@@ -11162,7 +12971,10 @@ export const sliceAllocationProposal = pgTable(
           AND proposed_slice_numerator
               = proposed_time_slice_numerator + proposed_cash_slice_numerator`,
     ),
-    check("proposal_verdict_ck", sql`verdict IN ('verified', 'flagged_for_review', 'unverified')`),
+    check(
+      "proposal_verdict_ck",
+      sql`verdict IN ('verified', 'flagged_for_review', 'unverified')`,
+    ),
   ],
 );
 
@@ -11187,7 +12999,9 @@ export const dispute = pgTable(
       .references(() => researchProject.id, { onDelete: "restrict" }),
     proposalId: text("proposal_id")
       .notNull()
-      .references((): AnyPgColumn => sliceAllocationProposal.id, { onDelete: "restrict" }),
+      .references((): AnyPgColumn => sliceAllocationProposal.id, {
+        onDelete: "restrict",
+      }),
     // Any ACTIVE member, including the claim's own subject. Not observers.
     raisedByMemberId: text("raised_by_member_id")
       .notNull()
@@ -11207,9 +13021,12 @@ export const dispute = pgTable(
     // states a number.
     scopedWindowStartsAt: timestamp("scoped_window_starts_at"),
     scopedWindowEndsAt: timestamp("scoped_window_ends_at"),
-    reverificationRunId: text("reverification_run_id").references(() => claimVerificationRun.id, {
-      onDelete: "restrict",
-    }),
+    reverificationRunId: text("reverification_run_id").references(
+      () => claimVerificationRun.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     withdrawnAt: timestamp("withdrawn_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -11223,7 +13040,11 @@ export const dispute = pgTable(
     uniqueIndex("dispute_proposalId_open_unq")
       .on(table.proposalId)
       .where(sql`status = 'open'`),
-    index("dispute_projectId_status_idx").on(table.projectId, table.status, table.id),
+    index("dispute_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+      table.id,
+    ),
     check("dispute_note_ck", sql`char_length(dispute_note) BETWEEN 1 AND 2000`),
     check("dispute_quorum_ck", sql`quorum_member_count >= 1`),
     check(
@@ -11231,7 +13052,10 @@ export const dispute = pgTable(
       sql`(status = 'consensus_reached')
           = (resolution IS NOT NULL AND resolved_at IS NOT NULL AND resolved_by_user_id IS NOT NULL)`,
     ),
-    check("dispute_withdrawn_ck", sql`(status = 'withdrawn') = (withdrawn_at IS NOT NULL)`),
+    check(
+      "dispute_withdrawn_ck",
+      sql`(status = 'withdrawn') = (withdrawn_at IS NOT NULL)`,
+    ),
     check(
       "dispute_window_ck",
       sql`(scoped_window_starts_at IS NULL) = (scoped_window_ends_at IS NULL)
@@ -11268,7 +13092,10 @@ export const disputeVote = pgTable(
       table.disputeId,
       table.voterMemberId,
     ),
-    check("dispute_vote_note_ck", sql`note IS NULL OR char_length(note) <= 2000`),
+    check(
+      "dispute_vote_note_ck",
+      sql`note IS NULL OR char_length(note) <= 2000`,
+    ),
   ],
 );
 
@@ -11301,21 +13128,33 @@ export const sliceLedgerEntry = pgTable(
     memberId: text("member_id")
       .notNull()
       .references(() => projectMember.id, { onDelete: "restrict" }),
-    entryKind: sliceLedgerEntryKindEnum("entry_kind").default("award").notNull(),
+    entryKind: sliceLedgerEntryKindEnum("entry_kind")
+      .default("award")
+      .notNull(),
     contributionKind: sliceContributionKindEnum("contribution_kind").notNull(),
-    claimId: text("claim_id").references(() => effortClaim.id, { onDelete: "restrict" }),
-    proposalId: text("proposal_id").references((): AnyPgColumn => sliceAllocationProposal.id, {
+    claimId: text("claim_id").references(() => effortClaim.id, {
       onDelete: "restrict",
     }),
+    proposalId: text("proposal_id").references(
+      (): AnyPgColumn => sliceAllocationProposal.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     // --- The numbers. Formula-produced, both of them.
     sliceNumerator: bigint("slice_numerator", { mode: "bigint" }).notNull(),
     slicesAwarded: integer("slices_awarded").notNull(),
     // --- The inputs that produced them, denormalized so an auditor need not re-resolve
     // --- effective dating years later.
-    fairMarketRateId: text("fair_market_rate_id").references(() => memberFairMarketRate.id, {
-      onDelete: "restrict",
+    fairMarketRateId: text("fair_market_rate_id").references(
+      () => memberFairMarketRate.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    unpaidRateCentsPerHour: bigint("unpaid_rate_cents_per_hour", {
+      mode: "bigint",
     }),
-    unpaidRateCentsPerHour: bigint("unpaid_rate_cents_per_hour", { mode: "bigint" }),
     effortMinutes: integer("effort_minutes"),
     cashInCents: bigint("cash_in_cents", { mode: "bigint" }),
     reversalOfEntryId: text("reversal_of_entry_id").references(
@@ -11331,7 +13170,10 @@ export const sliceLedgerEntry = pgTable(
       table.projectId,
       table.sequenceNumber,
     ),
-    index("slice_ledger_entry_memberId_idx").on(table.memberId, table.sequenceNumber),
+    index("slice_ledger_entry_memberId_idx").on(
+      table.memberId,
+      table.sequenceNumber,
+    ),
     index("slice_ledger_entry_projectId_occurredAt_idx").on(
       table.projectId,
       table.occurredAt,
@@ -11389,8 +13231,12 @@ export const projectChainHead = pgTable(
     projectId: text("project_id")
       .primaryKey()
       .references(() => researchProject.id, { onDelete: "restrict" }),
-    lastAuditSequenceNumber: integer("last_audit_sequence_number").default(0).notNull(),
-    lastLedgerSequenceNumber: integer("last_ledger_sequence_number").default(0).notNull(),
+    lastAuditSequenceNumber: integer("last_audit_sequence_number")
+      .default(0)
+      .notNull(),
+    lastLedgerSequenceNumber: integer("last_ledger_sequence_number")
+      .default(0)
+      .notNull(),
     // --- §7's escrow journal shares THIS row, and therefore THIS lock.
     //
     // §7 specifies "SELECT … FOR UPDATE on the project's last entry" for allocating an
@@ -11399,7 +13245,9 @@ export const projectChainHead = pgTable(
     // in one transaction — which every §7 money event does — would take two locks, and
     // two locks taken in an order someone eventually gets backwards is a deadlock waiting
     // for load. Three counters, one row, one lock.
-    lastEscrowSequenceNumber: integer("last_escrow_sequence_number").default(0).notNull(),
+    lastEscrowSequenceNumber: integer("last_escrow_sequence_number")
+      .default(0)
+      .notNull(),
     escrowHeadEntryHash: text("escrow_head_entry_hash"),
     escrowHeadEntryId: text("escrow_head_entry_id"),
     // --- §7A's compensation statements share THIS row, and therefore THIS lock, for the
@@ -11486,7 +13334,9 @@ export const projectAuditEntry = pgTable(
     sequenceNumber: integer("sequence_number").notNull(),
     eventKind: projectAuditEventKindEnum("event_kind").notNull(),
     // NULL for a system actor (the expiry sweep, a nightly recompute).
-    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "restrict" }),
+    actorUserId: text("actor_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
     // PSEUDONYMOUS AT WRITE TIME (§9.10). This value is inside the hash and can never be
     // edited afterwards, so it must not be a legal name — a user row anonymizes later,
     // and a chain covering their real name would have to break for that to happen.
@@ -11564,13 +13414,18 @@ export const equitySnapshot = pgTable(
       .default("largest-remainder-v1")
       .notNull(),
     // Exactly which ledger prefix this snapshot covers — the reason it is reproducible.
-    throughLedgerSequenceNumber: integer("through_ledger_sequence_number").notNull(),
+    throughLedgerSequenceNumber: integer(
+      "through_ledger_sequence_number",
+    ).notNull(),
     isDegenerate: boolean("is_degenerate").default(false).notNull(),
     isBaked: boolean("is_baked").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("equity_snapshot_projectId_asOf_unq").on(table.projectId, table.asOf),
+    uniqueIndex("equity_snapshot_projectId_asOf_unq").on(
+      table.projectId,
+      table.asOf,
+    ),
     index("equity_snapshot_projectId_computedAt_idx").on(
       table.projectId,
       table.computedAt,
@@ -11587,7 +13442,10 @@ export const equitySnapshot = pgTable(
     ),
     // Degeneracy is exactly "no slices anywhere", and it is the ONLY case in which the
     // shares below are permitted not to sum to 10000.
-    check("equity_snapshot_degenerate_ck", sql`(is_degenerate = true) = (total_slices = 0)`),
+    check(
+      "equity_snapshot_degenerate_ck",
+      sql`(is_degenerate = true) = (total_slices = 0)`,
+    ),
   ],
 );
 
@@ -11663,8 +13521,14 @@ export const pieBakeEvent = pgTable(
   (table) => [
     // ONCE, EVER, PER PROJECT.
     uniqueIndex("pie_bake_event_project_unq").on(table.projectId),
-    check("pie_bake_event_evidence_ck", sql`char_length(trigger_evidence_note) BETWEEN 1 AND 2000`),
-    check("pie_bake_event_valuation_ck", sql`valuation_cents IS NULL OR valuation_cents > 0`),
+    check(
+      "pie_bake_event_evidence_ck",
+      sql`char_length(trigger_evidence_note) BETWEEN 1 AND 2000`,
+    ),
+    check(
+      "pie_bake_event_valuation_ck",
+      sql`valuation_cents IS NULL OR valuation_cents > 0`,
+    ),
   ],
 );
 
@@ -11684,10 +13548,14 @@ export const optimizationSuggestion = pgTable(
       .notNull()
       .references(() => researchProject.id, { onDelete: "restrict" }),
     // NULL when the suggestion is about the project rather than one person.
-    memberId: text("member_id").references(() => projectMember.id, { onDelete: "restrict" }),
+    memberId: text("member_id").references(() => projectMember.id, {
+      onDelete: "restrict",
+    }),
     title: text("title").notNull(),
     bodyText: text("body_text").notNull(),
-    status: optimizationSuggestionStatusEnum("status").default("open").notNull(),
+    status: optimizationSuggestionStatusEnum("status")
+      .default("open")
+      .notNull(),
     modelName: text("model_name").notNull(),
     modelVersion: text("model_version"),
     promptVersion: text("prompt_version").notNull(),
@@ -11746,39 +13614,45 @@ export const optimizationSuggestionEvidence = pgTable(
       table.suggestionId,
       table.sequenceNumber,
     ),
-    check("optimization_suggestion_evidence_label_ck", sql`char_length(label) BETWEEN 1 AND 500`),
+    check(
+      "optimization_suggestion_evidence_label_ck",
+      sql`char_length(label) BETWEEN 1 AND 500`,
+    ),
   ],
 );
 
 // --- §9 relations. Child-side only, same convention as §5, §6 and §8.
 
-export const memberFairMarketRateRelations = relations(memberFairMarketRate, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [memberFairMarketRate.projectId],
-    references: [researchProject.id],
+export const memberFairMarketRateRelations = relations(
+  memberFairMarketRate,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [memberFairMarketRate.projectId],
+      references: [researchProject.id],
+    }),
+    member: one(projectMember, {
+      fields: [memberFairMarketRate.memberId],
+      references: [projectMember.id],
+    }),
+    // relationName because this table has THREE relations to `user`; without it Drizzle
+    // cannot tell them apart.
+    proposedBy: one(user, {
+      fields: [memberFairMarketRate.proposedByUserId],
+      references: [user.id],
+      relationName: "fairMarketRateProposedBy",
+    }),
+    acceptedBy: one(user, {
+      fields: [memberFairMarketRate.acceptedByUserId],
+      references: [user.id],
+      relationName: "fairMarketRateAcceptedBy",
+    }),
+    lockedBy: one(user, {
+      fields: [memberFairMarketRate.lockedByUserId],
+      references: [user.id],
+      relationName: "fairMarketRateLockedBy",
+    }),
   }),
-  member: one(projectMember, {
-    fields: [memberFairMarketRate.memberId],
-    references: [projectMember.id],
-  }),
-  // relationName because this table has THREE relations to `user`; without it Drizzle
-  // cannot tell them apart.
-  proposedBy: one(user, {
-    fields: [memberFairMarketRate.proposedByUserId],
-    references: [user.id],
-    relationName: "fairMarketRateProposedBy",
-  }),
-  acceptedBy: one(user, {
-    fields: [memberFairMarketRate.acceptedByUserId],
-    references: [user.id],
-    relationName: "fairMarketRateAcceptedBy",
-  }),
-  lockedBy: one(user, {
-    fields: [memberFairMarketRate.lockedByUserId],
-    references: [user.id],
-    relationName: "fairMarketRateLockedBy",
-  }),
-}));
+);
 
 export const effortClaimRelations = relations(effortClaim, ({ one, many }) => ({
   project: one(researchProject, {
@@ -11805,43 +13679,52 @@ export const effortClaimRelations = relations(effortClaim, ({ one, many }) => ({
   evidence: many(artifactEvidence),
 }));
 
-export const claimVerificationRunRelations = relations(claimVerificationRun, ({ one, many }) => ({
-  claim: one(effortClaim, {
-    fields: [claimVerificationRun.claimId],
-    references: [effortClaim.id],
+export const claimVerificationRunRelations = relations(
+  claimVerificationRun,
+  ({ one, many }) => ({
+    claim: one(effortClaim, {
+      fields: [claimVerificationRun.claimId],
+      references: [effortClaim.id],
+    }),
+    triggeredBy: one(user, {
+      fields: [claimVerificationRun.triggeredByUserId],
+      references: [user.id],
+    }),
+    steps: many(verificationStep),
   }),
-  triggeredBy: one(user, {
-    fields: [claimVerificationRun.triggeredByUserId],
-    references: [user.id],
-  }),
-  steps: many(verificationStep),
-}));
+);
 
-export const verificationStepRelations = relations(verificationStep, ({ one }) => ({
-  run: one(claimVerificationRun, {
-    fields: [verificationStep.runId],
-    references: [claimVerificationRun.id],
+export const verificationStepRelations = relations(
+  verificationStep,
+  ({ one }) => ({
+    run: one(claimVerificationRun, {
+      fields: [verificationStep.runId],
+      references: [claimVerificationRun.id],
+    }),
+    reviewedBy: one(user, {
+      fields: [verificationStep.reviewedByUserId],
+      references: [user.id],
+    }),
   }),
-  reviewedBy: one(user, {
-    fields: [verificationStep.reviewedByUserId],
-    references: [user.id],
-  }),
-}));
+);
 
-export const artifactEvidenceRelations = relations(artifactEvidence, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [artifactEvidence.projectId],
-    references: [researchProject.id],
+export const artifactEvidenceRelations = relations(
+  artifactEvidence,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [artifactEvidence.projectId],
+      references: [researchProject.id],
+    }),
+    claim: one(effortClaim, {
+      fields: [artifactEvidence.claimId],
+      references: [effortClaim.id],
+    }),
+    consentGrant: one(integrationConsentGrant, {
+      fields: [artifactEvidence.consentGrantId],
+      references: [integrationConsentGrant.id],
+    }),
   }),
-  claim: one(effortClaim, {
-    fields: [artifactEvidence.claimId],
-    references: [effortClaim.id],
-  }),
-  consentGrant: one(integrationConsentGrant, {
-    fields: [artifactEvidence.consentGrantId],
-    references: [integrationConsentGrant.id],
-  }),
-}));
+);
 
 export const integrationConsentGrantRelations = relations(
   integrationConsentGrant,
@@ -11862,28 +13745,34 @@ export const integrationConsentGrantRelations = relations(
   }),
 );
 
-export const physicalWorkReceiptRelations = relations(physicalWorkReceipt, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [physicalWorkReceipt.projectId],
-    references: [researchProject.id],
+export const physicalWorkReceiptRelations = relations(
+  physicalWorkReceipt,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [physicalWorkReceipt.projectId],
+      references: [researchProject.id],
+    }),
+    member: one(projectMember, {
+      fields: [physicalWorkReceipt.memberId],
+      references: [projectMember.id],
+    }),
+    claim: one(effortClaim, {
+      fields: [physicalWorkReceipt.claimId],
+      references: [effortClaim.id],
+    }),
+    forensicsChecks: many(receiptForensicsCheck),
   }),
-  member: one(projectMember, {
-    fields: [physicalWorkReceipt.memberId],
-    references: [projectMember.id],
-  }),
-  claim: one(effortClaim, {
-    fields: [physicalWorkReceipt.claimId],
-    references: [effortClaim.id],
-  }),
-  forensicsChecks: many(receiptForensicsCheck),
-}));
+);
 
-export const receiptForensicsCheckRelations = relations(receiptForensicsCheck, ({ one }) => ({
-  receipt: one(physicalWorkReceipt, {
-    fields: [receiptForensicsCheck.receiptId],
-    references: [physicalWorkReceipt.id],
+export const receiptForensicsCheckRelations = relations(
+  receiptForensicsCheck,
+  ({ one }) => ({
+    receipt: one(physicalWorkReceipt, {
+      fields: [receiptForensicsCheck.receiptId],
+      references: [physicalWorkReceipt.id],
+    }),
   }),
-}));
+);
 
 export const sliceAllocationProposalRelations = relations(
   sliceAllocationProposal,
@@ -11939,61 +13828,76 @@ export const disputeVoteRelations = relations(disputeVote, ({ one }) => ({
   }),
 }));
 
-export const sliceLedgerEntryRelations = relations(sliceLedgerEntry, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [sliceLedgerEntry.projectId],
-    references: [researchProject.id],
+export const sliceLedgerEntryRelations = relations(
+  sliceLedgerEntry,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [sliceLedgerEntry.projectId],
+      references: [researchProject.id],
+    }),
+    member: one(projectMember, {
+      fields: [sliceLedgerEntry.memberId],
+      references: [projectMember.id],
+    }),
+    claim: one(effortClaim, {
+      fields: [sliceLedgerEntry.claimId],
+      references: [effortClaim.id],
+    }),
+    fairMarketRate: one(memberFairMarketRate, {
+      fields: [sliceLedgerEntry.fairMarketRateId],
+      references: [memberFairMarketRate.id],
+    }),
   }),
-  member: one(projectMember, {
-    fields: [sliceLedgerEntry.memberId],
-    references: [projectMember.id],
-  }),
-  claim: one(effortClaim, {
-    fields: [sliceLedgerEntry.claimId],
-    references: [effortClaim.id],
-  }),
-  fairMarketRate: one(memberFairMarketRate, {
-    fields: [sliceLedgerEntry.fairMarketRateId],
-    references: [memberFairMarketRate.id],
-  }),
-}));
+);
 
-export const projectChainHeadRelations = relations(projectChainHead, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [projectChainHead.projectId],
-    references: [researchProject.id],
+export const projectChainHeadRelations = relations(
+  projectChainHead,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [projectChainHead.projectId],
+      references: [researchProject.id],
+    }),
   }),
-}));
+);
 
-export const projectAuditEntryRelations = relations(projectAuditEntry, ({ one }) => ({
-  project: one(researchProject, {
-    fields: [projectAuditEntry.projectId],
-    references: [researchProject.id],
+export const projectAuditEntryRelations = relations(
+  projectAuditEntry,
+  ({ one }) => ({
+    project: one(researchProject, {
+      fields: [projectAuditEntry.projectId],
+      references: [researchProject.id],
+    }),
+    actor: one(user, {
+      fields: [projectAuditEntry.actorUserId],
+      references: [user.id],
+    }),
   }),
-  actor: one(user, {
-    fields: [projectAuditEntry.actorUserId],
-    references: [user.id],
-  }),
-}));
+);
 
-export const equitySnapshotRelations = relations(equitySnapshot, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [equitySnapshot.projectId],
-    references: [researchProject.id],
+export const equitySnapshotRelations = relations(
+  equitySnapshot,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [equitySnapshot.projectId],
+      references: [researchProject.id],
+    }),
+    shares: many(equitySnapshotShare),
   }),
-  shares: many(equitySnapshotShare),
-}));
+);
 
-export const equitySnapshotShareRelations = relations(equitySnapshotShare, ({ one }) => ({
-  snapshot: one(equitySnapshot, {
-    fields: [equitySnapshotShare.snapshotId],
-    references: [equitySnapshot.id],
+export const equitySnapshotShareRelations = relations(
+  equitySnapshotShare,
+  ({ one }) => ({
+    snapshot: one(equitySnapshot, {
+      fields: [equitySnapshotShare.snapshotId],
+      references: [equitySnapshot.id],
+    }),
+    member: one(projectMember, {
+      fields: [equitySnapshotShare.memberId],
+      references: [projectMember.id],
+    }),
   }),
-  member: one(projectMember, {
-    fields: [equitySnapshotShare.memberId],
-    references: [projectMember.id],
-  }),
-}));
+);
 
 export const pieBakeEventRelations = relations(pieBakeEvent, ({ one }) => ({
   project: one(researchProject, {
@@ -12176,12 +14080,18 @@ export const escrowEntrySettlementEnum = pgEnum("escrow_entry_settlement", [
  * `internal_adapter` is the only value written today. `stripe` exists so that switching
  * Appendix A3 on is an INSERT rather than a migration — the seam §7 promises.
  */
-export const paymentProviderEnum = pgEnum("payment_provider", ["internal_adapter", "stripe"]);
-
-export const providerTransferDirectionEnum = pgEnum("provider_transfer_direction", [
-  "inbound", // a backer's pledge
-  "outbound", // a milestone payout
+export const paymentProviderEnum = pgEnum("payment_provider", [
+  "internal_adapter",
+  "stripe",
 ]);
+
+export const providerTransferDirectionEnum = pgEnum(
+  "provider_transfer_direction",
+  [
+    "inbound", // a backer's pledge
+    "outbound", // a milestone payout
+  ],
+);
 
 export const providerTransferStatusEnum = pgEnum("provider_transfer_status", [
   "created", // row written with OUR idempotency key, BEFORE any provider call
@@ -12214,15 +14124,20 @@ export const milestoneStatusEnum = pgEnum("milestone_status", [
  * exists. The server writes the canonical unit today; the wider enum is what lets a
  * project choose a coarser granularity later without any stored number changing meaning.
  */
-export const varianceScheduleUnitKeyEnum = pgEnum("variance_schedule_unit_key", ["days", "weeks"]);
+export const varianceScheduleUnitKeyEnum = pgEnum(
+  "variance_schedule_unit_key",
+  ["days", "weeks"],
+);
 
-export const varianceEffortUnitKeyEnum = pgEnum("variance_effort_unit_key", ["minutes", "hours"]);
-
-export const reconciliationDiscrepancyStatusEnum = pgEnum("reconciliation_discrepancy_status", [
-  "open",
-  "resolved",
-  "written_off",
+export const varianceEffortUnitKeyEnum = pgEnum("variance_effort_unit_key", [
+  "minutes",
+  "hours",
 ]);
+
+export const reconciliationDiscrepancyStatusEnum = pgEnum(
+  "reconciliation_discrepancy_status",
+  ["open", "resolved", "written_off"],
+);
 
 /**
  * A funding round. `percentageFunded` IS NOT A COLUMN and not a request field (§7) — it
@@ -12247,7 +14162,9 @@ export const fundingRound = pgTable(
     // round overflows. Getting this wrong is not merely a limit problem — the hash chain
     // covers posting amounts, so widening the column later re-derives every historical
     // hash.
-    goalAmountInCents: bigint("goal_amount_in_cents", { mode: "bigint" }).notNull(),
+    goalAmountInCents: bigint("goal_amount_in_cents", {
+      mode: "bigint",
+    }).notNull(),
     // WRITTEN BY EXACTLY ONE CODE PATH: escrow-settlement.service.ts, inside the same
     // transaction that flips the journal entry to `settled`. No controller and no
     // user-facing service function touches these two. That is a grep-able invariant (§7).
@@ -12279,12 +14196,23 @@ export const fundingRound = pgTable(
       .notNull(),
   },
   (table) => [
-    index("funding_round_projectId_status_idx").on(table.projectId, table.status),
+    index("funding_round_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+    ),
     // §4c rule 4: every ORDER BY feeding pagination ends in a UNIQUE column, or a cursor
     // silently skips rows. Matches the /funding/deals feed.
-    index("funding_round_deals_idx").on(table.status, table.type, table.closesAt, table.id),
+    index("funding_round_deals_idx").on(
+      table.status,
+      table.type,
+      table.closesAt,
+      table.id,
+    ),
     check("funding_round_goal_ck", sql`goal_amount_in_cents > 0`),
-    check("funding_round_raised_ck", sql`raised_amount_in_cents >= 0 AND backers_count >= 0`),
+    check(
+      "funding_round_raised_ck",
+      sql`raised_amount_in_cents >= 0 AND backers_count >= 0`,
+    ),
     check(
       "funding_round_bounds_ck",
       sql`minimum_pledge_in_cents >= 1
@@ -12297,8 +14225,14 @@ export const fundingRound = pgTable(
     ),
     // A round cannot be open without a start instant, or "when did pledging begin" has no
     // answer on a surface whose whole argument is auditability.
-    check("funding_round_open_ck", sql`(status <> 'open') OR (opens_at IS NOT NULL)`),
-    check("funding_round_closed_at_ck", sql`(status = 'closed') = (closed_at IS NOT NULL)`),
+    check(
+      "funding_round_open_ck",
+      sql`(status <> 'open') OR (opens_at IS NOT NULL)`,
+    ),
+    check(
+      "funding_round_closed_at_ck",
+      sql`(status = 'closed') = (closed_at IS NOT NULL)`,
+    ),
     check("funding_round_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
     check("funding_round_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
   ],
@@ -12332,8 +14266,12 @@ export const fundingRoundPledge = pgTable(
       .references(() => user.id, { onDelete: "restrict" }),
     amountInCents: bigint("amount_in_cents", { mode: "bigint" }).notNull(),
     // Derived from `PLATFORM_FEE_BASIS_POINTS` through src/lib/money.ts, never sent.
-    platformFeeInCents: bigint("platform_fee_in_cents", { mode: "bigint" }).notNull(),
-    netToEscrowInCents: bigint("net_to_escrow_in_cents", { mode: "bigint" }).notNull(),
+    platformFeeInCents: bigint("platform_fee_in_cents", {
+      mode: "bigint",
+    }).notNull(),
+    netToEscrowInCents: bigint("net_to_escrow_in_cents", {
+      mode: "bigint",
+    }).notNull(),
     currency: text("currency").notNull(),
     status: pledgeStatusEnum("status").default("pending").notNull(),
     providerTransferId: text("provider_transfer_id").references(
@@ -12349,13 +14287,20 @@ export const fundingRoundPledge = pgTable(
       .notNull(),
   },
   (table) => [
-    index("funding_round_pledge_roundId_idx").on(table.roundId, table.createdAt, table.id),
+    index("funding_round_pledge_roundId_idx").on(
+      table.roundId,
+      table.createdAt,
+      table.id,
+    ),
     index("funding_round_pledge_backerUserId_idx").on(
       table.backerUserId,
       table.createdAt,
       table.id,
     ),
-    index("funding_round_pledge_projectId_status_idx").on(table.projectId, table.status),
+    index("funding_round_pledge_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+    ),
     // One pledge per transfer. A second pledge sharing a transfer would settle twice.
     uniqueIndex("funding_round_pledge_providerTransferId_unq")
       .on(table.providerTransferId)
@@ -12403,10 +14348,14 @@ export const escrowAccount = pgTable(
       .notNull()
       .default(sql`0`),
     /** Sums postings whose entry is still `pending` — §7's "money in flight". */
-    pendingBalanceInCents: bigint("pending_balance_in_cents", { mode: "bigint" })
+    pendingBalanceInCents: bigint("pending_balance_in_cents", {
+      mode: "bigint",
+    })
       .notNull()
       .default(sql`0`),
-    balanceThroughSequenceNumber: integer("balance_through_sequence_number").default(0).notNull(),
+    balanceThroughSequenceNumber: integer("balance_through_sequence_number")
+      .default(0)
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -12414,9 +14363,15 @@ export const escrowAccount = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("escrow_account_projectId_kind_unq").on(table.projectId, table.kind),
+    uniqueIndex("escrow_account_projectId_kind_unq").on(
+      table.projectId,
+      table.kind,
+    ),
     check("escrow_account_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
-    check("escrow_account_sequence_ck", sql`balance_through_sequence_number >= 0`),
+    check(
+      "escrow_account_sequence_ck",
+      sql`balance_through_sequence_number >= 0`,
+    ),
     // No non-negativity check on either balance, deliberately: `provider_clearing` is the
     // outside world and is NEGATIVE by construction, and `reconciliation_suspense` takes
     // whichever sign the discrepancy has. A blanket `>= 0` here would forbid a correct
@@ -12462,17 +14417,28 @@ export const escrowJournalEntry = pgTable(
     currency: text("currency").notNull(),
     // The BUSINESS EVENT time (provider settlement), which may lag createdAt.
     occurredAt: timestamp("occurred_at").notNull(),
-    settlement: escrowEntrySettlementEnum("settlement").default("pending").notNull(),
+    settlement: escrowEntrySettlementEnum("settlement")
+      .default("pending")
+      .notNull(),
     // `set null`, NOT cascade — deleting a milestone must never delete financial history.
-    linkedMilestoneId: text("linked_milestone_id").references((): AnyPgColumn => milestone.id, {
-      onDelete: "set null",
-    }),
-    linkedPledgeId: text("linked_pledge_id").references(() => fundingRoundPledge.id, {
-      onDelete: "set null",
-    }),
-    linkedReleaseId: text("linked_release_id").references((): AnyPgColumn => escrowRelease.id, {
-      onDelete: "set null",
-    }),
+    linkedMilestoneId: text("linked_milestone_id").references(
+      (): AnyPgColumn => milestone.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    linkedPledgeId: text("linked_pledge_id").references(
+      () => fundingRoundPledge.id,
+      {
+        onDelete: "set null",
+      },
+    ),
+    linkedReleaseId: text("linked_release_id").references(
+      (): AnyPgColumn => escrowRelease.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     // Self-FK. Non-null means this entry NEGATES an earlier one. THE ONLY CORRECTION
     // MECHANISM — nothing in this table is ever UPDATEd or DELETEd.
     //
@@ -12499,7 +14465,10 @@ export const escrowJournalEntry = pgTable(
     // NO updatedAt column, deliberately. An append-only table has nothing to update.
   },
   (table) => [
-    uniqueIndex("escrow_journal_entry_project_seq_unq").on(table.projectId, table.sequenceNumber),
+    uniqueIndex("escrow_journal_entry_project_seq_unq").on(
+      table.projectId,
+      table.sequenceNumber,
+    ),
     index("escrow_journal_entry_project_occurredAt_idx").on(
       table.projectId,
       table.occurredAt,
@@ -12519,7 +14488,10 @@ export const escrowJournalEntry = pgTable(
       sql`(kind <> 'reversal') OR (reverses_journal_entry_id IS NOT NULL)`,
     ),
     check("escrow_journal_entry_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
-    check("escrow_journal_entry_description_ck", sql`char_length(description) BETWEEN 1 AND 500`),
+    check(
+      "escrow_journal_entry_description_ck",
+      sql`char_length(description) BETWEEN 1 AND 500`,
+    ),
   ],
 );
 
@@ -12554,7 +14526,9 @@ export const escrowPosting = pgTable(
     accountKind: escrowAccountKindEnum("account_kind").notNull(),
     // `bigint` per §4b. The hash chain covers this column, so widening it later would
     // force the entire historical chain to be re-derived. Right on day one.
-    signedAmountInCents: bigint("signed_amount_in_cents", { mode: "bigint" }).notNull(),
+    signedAmountInCents: bigint("signed_amount_in_cents", {
+      mode: "bigint",
+    }).notNull(),
     // Stable position inside the entry. The hash sorts child postings by
     // (accountKind, postingIndex) before serializing (§4c), so this is what makes the
     // ordering documented and unique rather than whatever Postgres returned.
@@ -12562,9 +14536,15 @@ export const escrowPosting = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("escrow_posting_entry_index_unq").on(table.journalEntryId, table.postingIndex),
+    uniqueIndex("escrow_posting_entry_index_unq").on(
+      table.journalEntryId,
+      table.postingIndex,
+    ),
     index("escrow_posting_account_idx").on(table.accountId, table.id),
-    index("escrow_posting_projectId_kind_idx").on(table.projectId, table.accountKind),
+    index("escrow_posting_projectId_kind_idx").on(
+      table.projectId,
+      table.accountKind,
+    ),
     check("escrow_posting_index_ck", sql`posting_index >= 0`),
     // A zero-amount posting carries no information and would let an entry "balance" with
     // padding rows. Every posting moves something.
@@ -12592,7 +14572,9 @@ export const providerTransfer = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => researchProject.id, { onDelete: "restrict" }),
-    provider: paymentProviderEnum("provider").default("internal_adapter").notNull(),
+    provider: paymentProviderEnum("provider")
+      .default("internal_adapter")
+      .notNull(),
     direction: providerTransferDirectionEnum("direction").notNull(),
     status: providerTransferStatusEnum("status").default("created").notNull(),
     amountInCents: bigint("amount_in_cents", { mode: "bigint" }).notNull(),
@@ -12608,9 +14590,12 @@ export const providerTransfer = pgTable(
     settledAt: timestamp("settled_at"),
     failedAt: timestamp("failed_at"),
     /** The auditor who flipped settlement, since no card network does it here (§7). */
-    settlementDecidedByUserId: text("settlement_decided_by_user_id").references(() => user.id, {
-      onDelete: "set null",
-    }),
+    settlementDecidedByUserId: text("settlement_decided_by_user_id").references(
+      () => user.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -12618,9 +14603,18 @@ export const providerTransfer = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("provider_transfer_idempotencyKey_unq").on(table.idempotencyKey),
-    index("provider_transfer_projectId_status_idx").on(table.projectId, table.status),
-    index("provider_transfer_status_createdAt_idx").on(table.status, table.createdAt, table.id),
+    uniqueIndex("provider_transfer_idempotencyKey_unq").on(
+      table.idempotencyKey,
+    ),
+    index("provider_transfer_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+    ),
+    index("provider_transfer_status_createdAt_idx").on(
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
     check("provider_transfer_amount_ck", sql`amount_in_cents > 0`),
     check("provider_transfer_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
     // An inbound transfer has no payout destination; there is nowhere for a backer's
@@ -12629,8 +14623,14 @@ export const providerTransfer = pgTable(
       "provider_transfer_destination_ck",
       sql`(direction = 'outbound') OR (payout_destination_id IS NULL)`,
     ),
-    check("provider_transfer_submitted_at_ck", sql`(status = 'created') = (submitted_at IS NULL)`),
-    check("provider_transfer_settled_at_ck", sql`(status = 'settled') = (settled_at IS NOT NULL)`),
+    check(
+      "provider_transfer_submitted_at_ck",
+      sql`(status = 'created') = (submitted_at IS NULL)`,
+    ),
+    check(
+      "provider_transfer_settled_at_ck",
+      sql`(status = 'settled') = (settled_at IS NOT NULL)`,
+    ),
     check(
       "provider_transfer_failed_at_ck",
       sql`(status = 'failed') = (failed_at IS NOT NULL)
@@ -12656,14 +14656,21 @@ export const providerWebhookEvent = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => randomUUID()),
-    provider: paymentProviderEnum("provider").default("internal_adapter").notNull(),
+    provider: paymentProviderEnum("provider")
+      .default("internal_adapter")
+      .notNull(),
     /** The provider's event id — the dedup key, never ours. */
     providerEventId: text("provider_event_id").notNull(),
     eventType: text("event_type").notNull(),
-    projectId: text("project_id").references(() => researchProject.id, { onDelete: "restrict" }),
-    providerTransferId: text("provider_transfer_id").references(() => providerTransfer.id, {
+    projectId: text("project_id").references(() => researchProject.id, {
       onDelete: "restrict",
     }),
+    providerTransferId: text("provider_transfer_id").references(
+      () => providerTransfer.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     /** Stored verbatim, as text. Evidence of what arrived, not a parsed opinion of it. */
     payloadJson: text("payload_json").notNull(),
     receivedAt: timestamp("received_at").defaultNow().notNull(),
@@ -12678,7 +14685,10 @@ export const providerWebhookEvent = pgTable(
       table.providerEventId,
     ),
     index("provider_webhook_event_transferId_idx").on(table.providerTransferId),
-    index("provider_webhook_event_processedAt_idx").on(table.processedAt, table.receivedAt),
+    index("provider_webhook_event_processedAt_idx").on(
+      table.processedAt,
+      table.receivedAt,
+    ),
   ],
 );
 
@@ -12723,12 +14733,18 @@ export const milestone = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("milestone_projectId_orderIndex_unq").on(table.projectId, table.orderIndex),
+    uniqueIndex("milestone_projectId_orderIndex_unq").on(
+      table.projectId,
+      table.orderIndex,
+    ),
     index("milestone_projectId_status_idx").on(table.projectId, table.status),
     check("milestone_planned_payout_ck", sql`planned_payout_in_cents >= 0`),
     check("milestone_order_ck", sql`order_index >= 0`),
     check("milestone_title_ck", sql`char_length(title) BETWEEN 1 AND 200`),
-    check("milestone_completed_at_ck", sql`(status = 'done') = (completed_at IS NOT NULL)`),
+    check(
+      "milestone_completed_at_ck",
+      sql`(status = 'done') = (completed_at IS NOT NULL)`,
+    ),
     check("milestone_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
   ],
 );
@@ -12753,12 +14769,20 @@ export const milestoneVariance = pgTable(
       .references(() => researchProject.id, { onDelete: "restrict" }),
     plannedDurationDays: integer("planned_duration_days").notNull(),
     actualDurationDays: integer("actual_duration_days").notNull(),
-    plannedCostInCents: bigint("planned_cost_in_cents", { mode: "bigint" }).notNull(),
-    actualCostInCents: bigint("actual_cost_in_cents", { mode: "bigint" }).notNull(),
+    plannedCostInCents: bigint("planned_cost_in_cents", {
+      mode: "bigint",
+    }).notNull(),
+    actualCostInCents: bigint("actual_cost_in_cents", {
+      mode: "bigint",
+    }).notNull(),
     plannedEffortMinutes: integer("planned_effort_minutes").notNull(),
     actualEffortMinutes: integer("actual_effort_minutes").notNull(),
-    scheduleUnitKey: varianceScheduleUnitKeyEnum("schedule_unit_key").default("days").notNull(),
-    effortUnitKey: varianceEffortUnitKeyEnum("effort_unit_key").default("minutes").notNull(),
+    scheduleUnitKey: varianceScheduleUnitKeyEnum("schedule_unit_key")
+      .default("days")
+      .notNull(),
+    effortUnitKey: varianceEffortUnitKeyEnum("effort_unit_key")
+      .default("minutes")
+      .notNull(),
     /** Signed. Computed from the schedule pair, never asserted by a client. */
     varianceBasisPoints: integer("variance_basis_points").notNull(),
     currency: text("currency").notNull(),
@@ -12832,12 +14856,18 @@ export const escrowRelease = pgTable(
     decidedAt: timestamp("decided_at"),
     /** Canonical JSON of every gate and its evidence, recorded at the decision. */
     verificationSnapshot: text("verification_snapshot"),
-    journalEntryId: text("journal_entry_id").references(() => escrowJournalEntry.id, {
-      onDelete: "restrict",
-    }),
-    providerTransferId: text("provider_transfer_id").references(() => providerTransfer.id, {
-      onDelete: "restrict",
-    }),
+    journalEntryId: text("journal_entry_id").references(
+      () => escrowJournalEntry.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
+    providerTransferId: text("provider_transfer_id").references(
+      () => providerTransfer.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -12845,7 +14875,10 @@ export const escrowRelease = pgTable(
       .notNull(),
   },
   (table) => [
-    index("escrow_release_projectId_status_idx").on(table.projectId, table.status),
+    index("escrow_release_projectId_status_idx").on(
+      table.projectId,
+      table.status,
+    ),
     index("escrow_release_milestoneId_idx").on(table.milestoneId),
     // At most one release in flight per milestone, and at most one that ever paid. Two
     // approved releases on one milestone is the double-payout bug, expressed as a row.
@@ -12870,7 +14903,10 @@ export const escrowRelease = pgTable(
              AND verification_snapshot IS NOT NULL)`,
     ),
     // An approval that posted no journal entry moved no money while claiming to.
-    check("escrow_release_journal_ck", sql`(status = 'approved') = (journal_entry_id IS NOT NULL)`),
+    check(
+      "escrow_release_journal_ck",
+      sql`(status = 'approved') = (journal_entry_id IS NOT NULL)`,
+    ),
   ],
 );
 
@@ -12898,13 +14934,22 @@ export const reconciliationDiscrepancy = pgTable(
     accountKind: escrowAccountKindEnum("account_kind").notNull(),
     /** The job's quantized reference instant (§4c rule 3). Stored, never re-read. */
     asOf: timestamp("as_of").notNull(),
-    ledgerBalanceInCents: bigint("ledger_balance_in_cents", { mode: "bigint" }).notNull(),
-    providerBalanceInCents: bigint("provider_balance_in_cents", { mode: "bigint" }).notNull(),
+    ledgerBalanceInCents: bigint("ledger_balance_in_cents", {
+      mode: "bigint",
+    }).notNull(),
+    providerBalanceInCents: bigint("provider_balance_in_cents", {
+      mode: "bigint",
+    }).notNull(),
     deltaInCents: bigint("delta_in_cents", { mode: "bigint" }).notNull(),
-    status: reconciliationDiscrepancyStatusEnum("status").default("open").notNull(),
-    journalEntryId: text("journal_entry_id").references(() => escrowJournalEntry.id, {
-      onDelete: "restrict",
-    }),
+    status: reconciliationDiscrepancyStatusEnum("status")
+      .default("open")
+      .notNull(),
+    journalEntryId: text("journal_entry_id").references(
+      () => escrowJournalEntry.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     resolutionNote: text("resolution_note"),
     resolvedAt: timestamp("resolved_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -12926,7 +14971,10 @@ export const reconciliationDiscrepancy = pgTable(
       "reconciliation_discrepancy_delta_ck",
       sql`delta_in_cents = provider_balance_in_cents - ledger_balance_in_cents`,
     ),
-    check("reconciliation_discrepancy_resolved_ck", sql`(status = 'open') = (resolved_at IS NULL)`),
+    check(
+      "reconciliation_discrepancy_resolved_ck",
+      sql`(status = 'open') = (resolved_at IS NULL)`,
+    ),
   ],
 );
 
@@ -12955,14 +15003,21 @@ export const investorConfidenceSnapshot = pgTable(
     trend: trendDirectionEnum("trend").default("flat").notNull(),
     // --- The inputs, stored so the output is inspectable rather than asserted.
     dailyLogStreakDays: integer("daily_log_streak_days").default(0).notNull(),
-    verifiedMilestoneCount: integer("verified_milestone_count").default(0).notNull(),
+    verifiedMilestoneCount: integer("verified_milestone_count")
+      .default(0)
+      .notNull(),
     totalMilestoneCount: integer("total_milestone_count").default(0).notNull(),
     openDisputeCount: integer("open_dispute_count").default(0).notNull(),
-    resolvedDisputeCount: integer("resolved_dispute_count").default(0).notNull(),
+    resolvedDisputeCount: integer("resolved_dispute_count")
+      .default(0)
+      .notNull(),
     computedAt: timestamp("computed_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("investor_confidence_snapshot_project_asOf_unq").on(table.projectId, table.asOf),
+    uniqueIndex("investor_confidence_snapshot_project_asOf_unq").on(
+      table.projectId,
+      table.asOf,
+    ),
     index("investor_confidence_snapshot_projectId_asOf_idx").on(
       table.projectId,
       table.asOf,
@@ -12978,53 +15033,77 @@ export const investorConfidenceSnapshot = pgTable(
           AND total_milestone_count >= verified_milestone_count
           AND open_dispute_count >= 0 AND resolved_dispute_count >= 0`,
     ),
-    check("investor_confidence_snapshot_window_ck", sql`window_ends_at > window_starts_at`),
+    check(
+      "investor_confidence_snapshot_window_ck",
+      sql`window_ends_at > window_starts_at`,
+    ),
   ],
 );
 
 // --- §7 relations. Child-side only, same convention as §5, §6, §8 and §9.
 
-export const fundingRoundRelations = relations(fundingRound, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [fundingRound.projectId],
-    references: [researchProject.id],
+export const fundingRoundRelations = relations(
+  fundingRound,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [fundingRound.projectId],
+      references: [researchProject.id],
+    }),
+    createdBy: one(user, {
+      fields: [fundingRound.createdByUserId],
+      references: [user.id],
+    }),
+    pledges: many(fundingRoundPledge),
   }),
-  createdBy: one(user, { fields: [fundingRound.createdByUserId], references: [user.id] }),
-  pledges: many(fundingRoundPledge),
-}));
+);
 
-export const fundingRoundPledgeRelations = relations(fundingRoundPledge, ({ one }) => ({
-  round: one(fundingRound, {
-    fields: [fundingRoundPledge.roundId],
-    references: [fundingRound.id],
+export const fundingRoundPledgeRelations = relations(
+  fundingRoundPledge,
+  ({ one }) => ({
+    round: one(fundingRound, {
+      fields: [fundingRoundPledge.roundId],
+      references: [fundingRound.id],
+    }),
+    project: one(researchProject, {
+      fields: [fundingRoundPledge.projectId],
+      references: [researchProject.id],
+    }),
+    backer: one(user, {
+      fields: [fundingRoundPledge.backerUserId],
+      references: [user.id],
+    }),
+    transfer: one(providerTransfer, {
+      fields: [fundingRoundPledge.providerTransferId],
+      references: [providerTransfer.id],
+    }),
   }),
-  project: one(researchProject, {
-    fields: [fundingRoundPledge.projectId],
-    references: [researchProject.id],
-  }),
-  backer: one(user, { fields: [fundingRoundPledge.backerUserId], references: [user.id] }),
-  transfer: one(providerTransfer, {
-    fields: [fundingRoundPledge.providerTransferId],
-    references: [providerTransfer.id],
-  }),
-}));
+);
 
-export const escrowAccountRelations = relations(escrowAccount, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [escrowAccount.projectId],
-    references: [researchProject.id],
+export const escrowAccountRelations = relations(
+  escrowAccount,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [escrowAccount.projectId],
+      references: [researchProject.id],
+    }),
+    postings: many(escrowPosting),
   }),
-  postings: many(escrowPosting),
-}));
+);
 
-export const escrowJournalEntryRelations = relations(escrowJournalEntry, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [escrowJournalEntry.projectId],
-    references: [researchProject.id],
+export const escrowJournalEntryRelations = relations(
+  escrowJournalEntry,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [escrowJournalEntry.projectId],
+      references: [researchProject.id],
+    }),
+    createdBy: one(user, {
+      fields: [escrowJournalEntry.createdByUserId],
+      references: [user.id],
+    }),
+    postings: many(escrowPosting),
   }),
-  createdBy: one(user, { fields: [escrowJournalEntry.createdByUserId], references: [user.id] }),
-  postings: many(escrowPosting),
-}));
+);
 
 export const escrowPostingRelations = relations(escrowPosting, ({ one }) => ({
   entry: one(escrowJournalEntry, {
@@ -13037,35 +15116,44 @@ export const escrowPostingRelations = relations(escrowPosting, ({ one }) => ({
   }),
 }));
 
-export const providerTransferRelations = relations(providerTransfer, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [providerTransfer.projectId],
-    references: [researchProject.id],
+export const providerTransferRelations = relations(
+  providerTransfer,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [providerTransfer.projectId],
+      references: [researchProject.id],
+    }),
+    settlementDecidedBy: one(user, {
+      fields: [providerTransfer.settlementDecidedByUserId],
+      references: [user.id],
+    }),
+    webhookEvents: many(providerWebhookEvent),
   }),
-  settlementDecidedBy: one(user, {
-    fields: [providerTransfer.settlementDecidedByUserId],
-    references: [user.id],
-  }),
-  webhookEvents: many(providerWebhookEvent),
-}));
+);
 
-export const providerWebhookEventRelations = relations(providerWebhookEvent, ({ one }) => ({
-  transfer: one(providerTransfer, {
-    fields: [providerWebhookEvent.providerTransferId],
-    references: [providerTransfer.id],
+export const providerWebhookEventRelations = relations(
+  providerWebhookEvent,
+  ({ one }) => ({
+    transfer: one(providerTransfer, {
+      fields: [providerWebhookEvent.providerTransferId],
+      references: [providerTransfer.id],
+    }),
+    project: one(researchProject, {
+      fields: [providerWebhookEvent.projectId],
+      references: [researchProject.id],
+    }),
   }),
-  project: one(researchProject, {
-    fields: [providerWebhookEvent.projectId],
-    references: [researchProject.id],
-  }),
-}));
+);
 
 export const milestoneRelations = relations(milestone, ({ one, many }) => ({
   project: one(researchProject, {
     fields: [milestone.projectId],
     references: [researchProject.id],
   }),
-  createdBy: one(user, { fields: [milestone.createdByUserId], references: [user.id] }),
+  createdBy: one(user, {
+    fields: [milestone.createdByUserId],
+    references: [user.id],
+  }),
   variance: one(milestoneVariance, {
     fields: [milestone.id],
     references: [milestoneVariance.milestoneId],
@@ -13073,12 +15161,15 @@ export const milestoneRelations = relations(milestone, ({ one, many }) => ({
   releases: many(escrowRelease),
 }));
 
-export const milestoneVarianceRelations = relations(milestoneVariance, ({ one }) => ({
-  milestone: one(milestone, {
-    fields: [milestoneVariance.milestoneId],
-    references: [milestone.id],
+export const milestoneVarianceRelations = relations(
+  milestoneVariance,
+  ({ one }) => ({
+    milestone: one(milestone, {
+      fields: [milestoneVariance.milestoneId],
+      references: [milestone.id],
+    }),
   }),
-}));
+);
 
 export const escrowReleaseRelations = relations(escrowRelease, ({ one }) => ({
   project: one(researchProject, {
@@ -13205,11 +15296,15 @@ export const memberCashCompensationAgreement = pgTable(
     // flat monthly amount; an hourly agreement prices verified minutes. `bigint` because
     // it is money (§4b).
     monthlyAmountInCents: bigint("monthly_amount_in_cents", { mode: "bigint" }),
-    hourlyRateCentsPerHour: bigint("hourly_rate_cents_per_hour", { mode: "bigint" }),
+    hourlyRateCentsPerHour: bigint("hourly_rate_cents_per_hour", {
+      mode: "bigint",
+    }),
     // Derived from the project, never from a request body (§4b). A client-chosen currency
     // would let a $6,000 retainer be re-read as ¥6,000.
     currencyCode: text("currency_code").notNull(),
-    status: compensationAgreementStatusEnum("status").default("proposed").notNull(),
+    status: compensationAgreementStatusEnum("status")
+      .default("proposed")
+      .notNull(),
     // Absolute instants, never day counts (§4c rule 3). `effectiveUntil` NULL = in force.
     effectiveFrom: timestamp("effective_from").notNull(),
     effectiveUntil: timestamp("effective_until"),
@@ -13237,7 +15332,10 @@ export const memberCashCompensationAgreement = pgTable(
       table.effectiveFrom,
       table.id,
     ),
-    index("member_cash_comp_agreement_projectId_idx").on(table.projectId, table.id),
+    index("member_cash_comp_agreement_projectId_idx").on(
+      table.projectId,
+      table.id,
+    ),
     // One agreement per member per effective instant. Two rows claiming the same instant
     // make "what is this person paid" ambiguous in the one place ambiguity is
     // unacceptable.
@@ -13258,7 +15356,10 @@ export const memberCashCompensationAgreement = pgTable(
       sql`(monthly_amount_in_cents IS NULL OR monthly_amount_in_cents >= 0)
           AND (hourly_rate_cents_per_hour IS NULL OR hourly_rate_cents_per_hour >= 0)`,
     ),
-    check("member_cash_comp_agreement_currency_ck", sql`currency_code ~ '^[A-Z]{3}$'`),
+    check(
+      "member_cash_comp_agreement_currency_ck",
+      sql`currency_code ~ '^[A-Z]{3}$'`,
+    ),
     check(
       "member_cash_comp_agreement_rationale_ck",
       sql`char_length(rationale_note) BETWEEN 1 AND 1000`,
@@ -13326,9 +15427,12 @@ export const compensationPeriod = pgTable(
     // below makes that structural rather than conventional — a founder cannot ratify their
     // own statement.
     countersignedAt: timestamp("countersigned_at"),
-    countersignedByUserId: text("countersigned_by_user_id").references(() => user.id, {
-      onDelete: "restrict",
-    }),
+    countersignedByUserId: text("countersigned_by_user_id").references(
+      () => user.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     countersignNote: text("countersign_note"),
     // Full 64 lowercase hex, always. The 6-character form a UI shows is a RENDERING: at
     // 24 bits collisions hit 50% around 4,800 entries (§4c).
@@ -13372,7 +15476,10 @@ export const compensationPeriod = pgTable(
       table.id,
     ),
     check("compensation_period_sequence_ck", sql`sequence_number >= 1`),
-    check("compensation_period_window_ck", sql`period_end_date > period_start_date`),
+    check(
+      "compensation_period_window_ck",
+      sql`period_end_date > period_start_date`,
+    ),
     // A finalized period carries a complete, well-formed chain link; a period that is not
     // finalized carries none of it. Half a hash is worse than no hash.
     check(
@@ -13456,17 +15563,23 @@ export const compensationPeriodLine = pgTable(
       () => memberCashCompensationAgreement.id,
       { onDelete: "restrict" },
     ),
-    sourceRateId: text("source_rate_id").references(() => memberFairMarketRate.id, {
-      onDelete: "restrict",
-    }),
+    sourceRateId: text("source_rate_id").references(
+      () => memberFairMarketRate.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     // On `equity_delta` only. `Delta` is SIGNED — see the note above.
     equityBasisPointsAtStart: integer("equity_basis_points_at_start"),
     equityBasisPointsAtEnd: integer("equity_basis_points_at_end"),
     equityBasisPointsDelta: integer("equity_basis_points_delta"),
     // The snapshots the two endpoints were read from, so the subtraction is reproducible.
-    startSnapshotId: text("start_snapshot_id").references(() => equitySnapshot.id, {
-      onDelete: "restrict",
-    }),
+    startSnapshotId: text("start_snapshot_id").references(
+      () => equitySnapshot.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     endSnapshotId: text("end_snapshot_id").references(() => equitySnapshot.id, {
       onDelete: "restrict",
     }),
@@ -13486,7 +15599,10 @@ export const compensationPeriodLine = pgTable(
     ),
     // "What have I been owed across every period?" Ends in a unique column (§4c rule 4).
     index("compensation_period_line_memberId_idx").on(table.memberId, table.id),
-    index("compensation_period_line_projectId_idx").on(table.projectId, table.id),
+    index("compensation_period_line_projectId_idx").on(
+      table.projectId,
+      table.id,
+    ),
     // An equity line carries basis points and no money; a cash line carries money and no
     // basis points. Encoded here rather than in a comment.
     check(
@@ -13565,7 +15681,9 @@ export const compensationPaymentRecord = pgTable(
     // `bigint` because it is money (§4b). THE ONE NUMBER A CLIENT MAY SEND in this whole
     // domain — and it is an attestation about the outside world, not an assertion about
     // what is owed. It may differ from the line: a partial payment is a fact, not an error.
-    paidAmountInCents: bigint("paid_amount_in_cents", { mode: "bigint" }).notNull(),
+    paidAmountInCents: bigint("paid_amount_in_cents", {
+      mode: "bigint",
+    }).notNull(),
     currency: text("currency").notNull(),
     // The calendar day the payer says the money left. Day-only: a bank does not publish an
     // instant, and inventing one would be precision the record does not have.
@@ -13593,9 +15711,18 @@ export const compensationPaymentRecord = pgTable(
       table.idempotencyKey,
     ),
     index("compensation_payment_record_lineId_idx").on(table.lineId, table.id),
-    index("compensation_payment_record_projectId_idx").on(table.projectId, table.id),
-    check("compensation_payment_record_amount_ck", sql`paid_amount_in_cents > 0`),
-    check("compensation_payment_record_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    index("compensation_payment_record_projectId_idx").on(
+      table.projectId,
+      table.id,
+    ),
+    check(
+      "compensation_payment_record_amount_ck",
+      sql`paid_amount_in_cents > 0`,
+    ),
+    check(
+      "compensation_payment_record_currency_ck",
+      sql`currency ~ '^[A-Z]{3}$'`,
+    ),
     check(
       "compensation_payment_record_confirm_ck",
       sql`(confirmed_by_member_at IS NULL) = (confirmed_by_user_id IS NULL)`,
@@ -13639,23 +15766,26 @@ export const memberCashCompensationAgreementRelations = relations(
   }),
 );
 
-export const compensationPeriodRelations = relations(compensationPeriod, ({ one, many }) => ({
-  project: one(researchProject, {
-    fields: [compensationPeriod.projectId],
-    references: [researchProject.id],
+export const compensationPeriodRelations = relations(
+  compensationPeriod,
+  ({ one, many }) => ({
+    project: one(researchProject, {
+      fields: [compensationPeriod.projectId],
+      references: [researchProject.id],
+    }),
+    finalizedBy: one(user, {
+      fields: [compensationPeriod.finalizedByUserId],
+      references: [user.id],
+      relationName: "compensationPeriodFinalizedBy",
+    }),
+    countersignedBy: one(user, {
+      fields: [compensationPeriod.countersignedByUserId],
+      references: [user.id],
+      relationName: "compensationPeriodCountersignedBy",
+    }),
+    lines: many(compensationPeriodLine),
   }),
-  finalizedBy: one(user, {
-    fields: [compensationPeriod.finalizedByUserId],
-    references: [user.id],
-    relationName: "compensationPeriodFinalizedBy",
-  }),
-  countersignedBy: one(user, {
-    fields: [compensationPeriod.countersignedByUserId],
-    references: [user.id],
-    relationName: "compensationPeriodCountersignedBy",
-  }),
-  lines: many(compensationPeriodLine),
-}));
+);
 
 export const compensationPeriodLineRelations = relations(
   compensationPeriodLine,
@@ -13745,14 +15875,26 @@ export const idempotencyRecord = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("idempotency_record_userId_key_unq").on(table.userId, table.idempotencyKey),
+    uniqueIndex("idempotency_record_userId_key_unq").on(
+      table.userId,
+      table.idempotencyKey,
+    ),
     // For the retention sweep. A replay cache is not a ledger and must not grow forever.
     index("idempotency_record_createdAt_idx").on(table.createdAt),
-    check("idempotency_record_key_ck", sql`char_length(idempotency_key) BETWEEN 8 AND 200`),
-    check("idempotency_record_fingerprint_ck", sql`request_fingerprint ~ '^[0-9a-f]{64}$'`),
+    check(
+      "idempotency_record_key_ck",
+      sql`char_length(idempotency_key) BETWEEN 8 AND 200`,
+    ),
+    check(
+      "idempotency_record_fingerprint_ck",
+      sql`request_fingerprint ~ '^[0-9a-f]{64}$'`,
+    ),
     // 2xx only. Recording a failure would make a retry after a transient 500 replay the
     // 500 forever, which is the opposite of what a retry is for.
-    check("idempotency_record_status_ck", sql`response_status BETWEEN 200 AND 299`),
+    check(
+      "idempotency_record_status_ck",
+      sql`response_status BETWEEN 200 AND 299`,
+    ),
   ],
 );
 
@@ -13859,7 +16001,9 @@ export const platformChainHead = pgTable(
   "platform_chain_head",
   {
     id: text("id").primaryKey().default("global"),
-    lastAuditSequenceNumber: integer("last_audit_sequence_number").default(0).notNull(),
+    lastAuditSequenceNumber: integer("last_audit_sequence_number")
+      .default(0)
+      .notNull(),
     headEntryHash: text("head_entry_hash"),
     headEntryId: text("head_entry_id"),
     updatedAt: timestamp("updated_at")
@@ -13906,8 +16050,14 @@ export const platformAuditEntry = pgTable(
   (table) => [
     uniqueIndex("platform_audit_entry_sequence_unq").on(table.sequenceNumber),
     index("platform_audit_entry_occurredAt_idx").on(table.occurredAt, table.id),
-    index("platform_audit_entry_eventKind_idx").on(table.eventKind, table.sequenceNumber),
-    index("platform_audit_entry_actorUserId_idx").on(table.actorUserId, table.sequenceNumber),
+    index("platform_audit_entry_eventKind_idx").on(
+      table.eventKind,
+      table.sequenceNumber,
+    ),
+    index("platform_audit_entry_actorUserId_idx").on(
+      table.actorUserId,
+      table.sequenceNumber,
+    ),
     check("platform_audit_entry_sequence_ck", sql`sequence_number >= 1`),
     check("platform_audit_entry_hash_ck", sql`entry_hash ~ '^[0-9a-f]{64}$'`),
     // The genesis rule: entry 1 has no predecessor and every other entry has one.
@@ -13964,9 +16114,12 @@ export const platformRoleGrantProposal = pgTable(
     proposedAt: timestamp("proposed_at").defaultNow().notNull(),
     proposeNote: text("propose_note").default("").notNull(),
     countersignedAt: timestamp("countersigned_at"),
-    countersignedByUserId: text("countersigned_by_user_id").references(() => user.id, {
-      onDelete: "restrict",
-    }),
+    countersignedByUserId: text("countersigned_by_user_id").references(
+      () => user.id,
+      {
+        onDelete: "restrict",
+      },
+    ),
     countersignNote: text("countersign_note").default("").notNull(),
     cancelledAt: timestamp("cancelled_at"),
     cancelledByUserId: text("cancelled_by_user_id").references(() => user.id, {
@@ -13974,7 +16127,10 @@ export const platformRoleGrantProposal = pgTable(
     }),
   },
   (table) => [
-    index("platform_role_grant_proposal_subject_idx").on(table.subjectUserId, table.id),
+    index("platform_role_grant_proposal_subject_idx").on(
+      table.subjectUserId,
+      table.id,
+    ),
     /**
      * ONE LIVE PROPOSAL PER ACCOUNT. Without this, two admins can raise two proposals for
      * the same person and countersign each other's, which is two-person control on paper
@@ -14113,14 +16269,20 @@ export const notification = pgTable(
     // There is deliberately NO `programId` column. A second nullable FK would make
     // "exactly one of these is set" a CHECK to maintain forever, and the payload
     // already holds ids by contract.
-    projectId: text("project_id").references(() => researchProject.id, { onDelete: "cascade" }),
+    projectId: text("project_id").references(() => researchProject.id, {
+      onDelete: "cascade",
+    }),
     // NULL for a system actor: a verdict is reached by the pipeline, and a period is
     // opened by a nightly job. Same convention as `project_audit_entry.actorUserId`.
-    actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+    actorUserId: text("actor_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     /** Canonical JSON of IDS AND INTEGERS. No sentences, no amounts pre-formatted. */
     payloadJson: text("payload_json").default("{}").notNull(),
     readAt: timestamp("read_at"),
-    emailStatus: notificationEmailStatusEnum("email_status").default("queued").notNull(),
+    emailStatus: notificationEmailStatusEnum("email_status")
+      .default("queued")
+      .notNull(),
     emailSentAt: timestamp("email_sent_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -14140,14 +16302,20 @@ export const notification = pgTable(
       .where(sql`read_at IS NULL`),
     index("notification_projectId_idx").on(table.projectId, table.id),
     // The delivery job's own queue view.
-    index("notification_emailStatus_idx").on(table.emailStatus, table.createdAt),
+    index("notification_emailStatus_idx").on(
+      table.emailStatus,
+      table.createdAt,
+    ),
     check(
       "notification_payload_ck",
       sql`char_length(payload_json) BETWEEN 2 AND 4000 AND payload_json LIKE '{%'`,
     ),
     // A sent email has an instant; anything else does not. Without this a `failed`
     // row can carry a `sent_at` and the delivery report reads as a success.
-    check("notification_email_sent_ck", sql`(email_status = 'sent') = (email_sent_at IS NOT NULL)`),
+    check(
+      "notification_email_sent_ck",
+      sql`(email_status = 'sent') = (email_sent_at IS NOT NULL)`,
+    ),
   ],
 );
 
@@ -14251,84 +16419,78 @@ export const researchProgramStatusEnum = pgEnum("research_program_status", [
  * above. `emerging` is the default because a freshly created branch has no claims and
  * no papers yet, and the job will move it on its next run.
  */
-export const researchProgramBranchStatusEnum = pgEnum("research_program_branch_status", [
-  "active",
-  "emerging",
-  "contested",
-  "missing",
-]);
+export const researchProgramBranchStatusEnum = pgEnum(
+  "research_program_branch_status",
+  ["active", "emerging", "contested", "missing"],
+);
 
 /** The five ways to contribute to a program, mirroring the §4.2b lifecycle roles. */
-export const researchProgramParticipantRoleEnum = pgEnum("research_program_participant_role", [
-  "researcher",
-  "founder_director",
-  "venture_capitalist",
-  "supplier",
-  "supporter",
-]);
+export const researchProgramParticipantRoleEnum = pgEnum(
+  "research_program_participant_role",
+  [
+    "researcher",
+    "founder_director",
+    "venture_capitalist",
+    "supplier",
+    "supporter",
+  ],
+);
 
 /** The formal track's review verdict. `needs_changes` is a request, not a refusal. */
-export const researchPaperModerationStatusEnum = pgEnum("research_paper_moderation_status", [
-  "queued",
-  "approved",
-  "rejected",
-  "needs_changes",
-]);
+export const researchPaperModerationStatusEnum = pgEnum(
+  "research_paper_moderation_status",
+  ["queued", "approved", "rejected", "needs_changes"],
+);
 
 /**
  * The two discussion tracks. `informal_paper` is the blog-style track (titled, no
  * citations expected); `idea` is the open netizen thread. Replies inherit their
  * parent's track — see `research_program_post`.
  */
-export const researchProgramPostTrackEnum = pgEnum("research_program_post_track", [
-  "informal_paper",
-  "idea",
-]);
+export const researchProgramPostTrackEnum = pgEnum(
+  "research_program_post_track",
+  ["informal_paper", "idea"],
+);
 
 /** Why a reader flagged something. A fixed list, so reports are countable. */
-export const researchProgramReportReasonEnum = pgEnum("research_program_report_reason", [
-  "spam",
-  "plagiarism",
-  "misinformation",
-  "harassment",
-  "off_topic",
-  "other",
-]);
+export const researchProgramReportReasonEnum = pgEnum(
+  "research_program_report_reason",
+  ["spam", "plagiarism", "misinformation", "harassment", "off_topic", "other"],
+);
 
-export const researchProgramReportStatusEnum = pgEnum("research_program_report_status", [
-  "open",
-  "actioned",
-  "dismissed",
-]);
+export const researchProgramReportStatusEnum = pgEnum(
+  "research_program_report_status",
+  ["open", "actioned", "dismissed"],
+);
 
-export const researchProgramContentTargetKindEnum = pgEnum("research_program_content_target_kind", [
-  "paper",
-  "post",
-]);
+export const researchProgramContentTargetKindEnum = pgEnum(
+  "research_program_content_target_kind",
+  ["paper", "post"],
+);
 
 /** What a moderator did. Mirrors the eight §10 members of `platform_audit_event_kind`. */
-export const researchProgramModerationKindEnum = pgEnum("research_program_moderation_kind", [
-  "program_published",
-  "program_rejected",
-  "paper_approved",
-  "paper_rejected",
-  "paper_needs_changes",
-  "post_hidden",
-  "post_restored",
-  "report_dismissed",
-]);
+export const researchProgramModerationKindEnum = pgEnum(
+  "research_program_moderation_kind",
+  [
+    "program_published",
+    "program_rejected",
+    "paper_approved",
+    "paper_rejected",
+    "paper_needs_changes",
+    "post_hidden",
+    "post_restored",
+    "report_dismissed",
+  ],
+);
 
 /**
  * What a participant contributed, beyond logged time. `cash_commitment` is the only
  * member that carries an amount, and it is a COMMITMENT — see rule 3.
  */
-export const researchContributionKindEnum = pgEnum("research_contribution_kind", [
-  "cash_commitment",
-  "material",
-  "data",
-  "equipment",
-  "expertise",
-]);
+export const researchContributionKindEnum = pgEnum(
+  "research_contribution_kind",
+  ["cash_commitment", "material", "data", "equipment", "expertise"],
+);
 
 /**
  * The program itself. Project Immortal is one row, seeded `published`; every other
@@ -14375,8 +16537,15 @@ export const researchProgram = pgTable(
     uniqueIndex("research_program_slug_unq").on(table.slug),
     // The public index: published rows newest first, ending in a unique column (§4c
     // rule 4) so a page boundary neither duplicates nor skips.
-    index("research_program_status_createdAt_idx").on(table.status, table.createdAt, table.id),
-    index("research_program_createdByUserId_idx").on(table.createdByUserId, table.id),
+    index("research_program_status_createdAt_idx").on(
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
+    index("research_program_createdByUserId_idx").on(
+      table.createdByUserId,
+      table.id,
+    ),
     check(
       "research_program_slug_ck",
       sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 80`,
@@ -14439,14 +16608,23 @@ export const researchProgramStatSnapshot = pgTable(
     overlapFlagCount: integer("overlap_flag_count").notNull(),
     // bigint: a program with thousands of contributors logging hours for years passes
     // the int4 ceiling in minutes long before it passes it in anything else (§4b).
-    totalEffortMinutes: bigint("total_effort_minutes", { mode: "number" }).notNull(),
+    totalEffortMinutes: bigint("total_effort_minutes", {
+      mode: "number",
+    }).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     // Re-running the job for the same `asOf` must be a no-op, not a second row.
-    uniqueIndex("research_program_stat_snapshot_asOf_unq").on(table.programId, table.asOf),
+    uniqueIndex("research_program_stat_snapshot_asOf_unq").on(
+      table.programId,
+      table.asOf,
+    ),
     // The "latest snapshot" read.
-    index("research_program_stat_snapshot_latest_idx").on(table.programId, table.asOf, table.id),
+    index("research_program_stat_snapshot_latest_idx").on(
+      table.programId,
+      table.asOf,
+      table.id,
+    ),
     check(
       "research_program_stat_snapshot_counts_ck",
       sql`participant_count >= 0 AND paper_count >= 0 AND branch_count >= 0
@@ -14500,8 +16678,12 @@ export const researchProgramBranch = pgTable(
     siblingOrder: integer("sibling_order").default(0).notNull(),
     // DERIVED — rule 1. `recompute-branch-signals` owns both of these columns and no
     // request body may carry either.
-    status: researchProgramBranchStatusEnum("status").default("emerging").notNull(),
-    overlappingGroupCount: integer("overlapping_group_count").default(0).notNull(),
+    status: researchProgramBranchStatusEnum("status")
+      .default("emerging")
+      .notNull(),
+    overlappingGroupCount: integer("overlapping_group_count")
+      .default(0)
+      .notNull(),
     // The curator override (§10). Integer per-mille rather than a float percent, and
     // normally NULL — the client lays the tree out itself unless a human insisted.
     // Both or neither: half a coordinate places nothing.
@@ -14519,7 +16701,10 @@ export const researchProgramBranch = pgTable(
   (table) => [
     // The path identifies a node within its program, so it is also the guard against
     // two siblings materializing the same path after a re-parent.
-    uniqueIndex("research_program_branch_path_unq").on(table.programId, table.ancestorPath),
+    uniqueIndex("research_program_branch_path_unq").on(
+      table.programId,
+      table.ancestorPath,
+    ),
     index("research_program_branch_parent_idx").on(
       table.programId,
       table.parentBranchId,
@@ -14527,8 +16712,15 @@ export const researchProgramBranch = pgTable(
       table.id,
     ),
     // The gap/overlap reads the job feeds and the map filters on.
-    index("research_program_branch_status_idx").on(table.programId, table.status, table.id),
-    check("research_program_branch_no_self_parent_ck", sql`parent_branch_id IS DISTINCT FROM id`),
+    index("research_program_branch_status_idx").on(
+      table.programId,
+      table.status,
+      table.id,
+    ),
+    check(
+      "research_program_branch_no_self_parent_ck",
+      sql`parent_branch_id IS DISTINCT FROM id`,
+    ),
     check(
       "research_program_branch_text_ck",
       sql`char_length(title) BETWEEN 3 AND 120 AND char_length(summary) BETWEEN 10 AND 2000`,
@@ -14575,8 +16767,15 @@ export const researchProgramBranchClaim = pgTable(
     claimedAt: timestamp("claimed_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("research_program_branch_claim_unq").on(table.branchId, table.userId),
-    index("research_program_branch_claim_userId_idx").on(table.userId, table.claimedAt, table.id),
+    uniqueIndex("research_program_branch_claim_unq").on(
+      table.branchId,
+      table.userId,
+    ),
+    index("research_program_branch_claim_userId_idx").on(
+      table.userId,
+      table.claimedAt,
+      table.id,
+    ),
   ],
 );
 
@@ -14609,7 +16808,11 @@ export const researchPaperCategory = pgTable(
   },
   (table) => [
     uniqueIndex("research_paper_category_slug_unq").on(table.slug),
-    index("research_paper_category_status_idx").on(table.status, table.label, table.id),
+    index("research_paper_category_status_idx").on(
+      table.status,
+      table.label,
+      table.id,
+    ),
     check(
       "research_paper_category_text_ck",
       sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
@@ -14661,7 +16864,9 @@ export const researchProgramPaper = pgTable(
     /** A claim, not a verified fact — see the note above. */
     authorAffiliation: text("author_affiliation"),
     abstractText: text("abstract_text"),
-    uploaderUserId: text("uploader_user_id").references(() => user.id, { onDelete: "set null" }),
+    uploaderUserId: text("uploader_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     // --- The file. All four NULL until `POST …/papers/:id/file` succeeds, all four
     // --- set together, and every one of them SERVER-MEASURED: a client that sends a
     // --- size or a hash is rejected by `.strict()`.
@@ -14715,9 +16920,15 @@ export const researchProgramPaper = pgTable(
       table.createdAt,
       table.id,
     ),
-    index("research_program_paper_categoryId_idx").on(table.categoryId, table.id),
+    index("research_program_paper_categoryId_idx").on(
+      table.categoryId,
+      table.id,
+    ),
     index("research_program_paper_branchId_idx").on(table.branchId, table.id),
-    index("research_program_paper_uploaderUserId_idx").on(table.uploaderUserId, table.id),
+    index("research_program_paper_uploaderUserId_idx").on(
+      table.uploaderUserId,
+      table.id,
+    ),
     check(
       "research_program_paper_text_ck",
       sql`char_length(title) BETWEEN 3 AND 300
@@ -14740,7 +16951,10 @@ export const researchProgramPaper = pgTable(
       sql`(reviewed_by_user_id IS NULL) = (reviewed_at IS NULL)
           AND (moderation_status = 'queued') = (reviewed_at IS NULL)`,
     ),
-    check("research_program_paper_flags_ck", sql`cardinality(flag_reasons) <= 10`),
+    check(
+      "research_program_paper_flags_ck",
+      sql`cardinality(flag_reasons) <= 10`,
+    ),
   ],
 );
 
@@ -14770,9 +16984,12 @@ export const researchProgramPost = pgTable(
     // Cascade, unlike the branch tree's `restrict`: a reply genuinely has no meaning
     // once the thing it replies to is gone, and the depth cap bounds the cascade to
     // one level.
-    parentPostId: text("parent_post_id").references((): AnyPgColumn => researchProgramPost.id, {
-      onDelete: "cascade",
-    }),
+    parentPostId: text("parent_post_id").references(
+      (): AnyPgColumn => researchProgramPost.id,
+      {
+        onDelete: "cascade",
+      },
+    ),
     /**
      * Which branch this discussion is about. NULL for a program-wide thread.
      *
@@ -14796,13 +17013,17 @@ export const researchProgramPost = pgTable(
     /** Informal papers are titled; ideas and replies are not. Enforced below. */
     title: text("title"),
     bodyText: text("body_text").notNull(),
-    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
+    authorUserId: text("author_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     reactionCount: integer("reaction_count").default(0).notNull(),
     replyCount: integer("reply_count").default(0).notNull(),
     // Moderation. Hidden rather than deleted, so a report stays explicable and a
     // wrong call is reversible — `post_restored` is a real audit event.
     isHidden: boolean("is_hidden").default(false).notNull(),
-    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, { onDelete: "restrict" }),
+    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
     hiddenAt: timestamp("hidden_at"),
     hiddenReason: text("hidden_reason"),
     // `precision: 3` — both the track feed and a thread's replies are keyset-paginated on
@@ -14823,11 +17044,22 @@ export const researchProgramPost = pgTable(
       table.id,
     ),
     // A thread's replies, oldest first.
-    index("research_program_post_parent_idx").on(table.parentPostId, table.createdAt, table.id),
-    index("research_program_post_authorUserId_idx").on(table.authorUserId, table.id),
+    index("research_program_post_parent_idx").on(
+      table.parentPostId,
+      table.createdAt,
+      table.id,
+    ),
+    index("research_program_post_authorUserId_idx").on(
+      table.authorUserId,
+      table.id,
+    ),
     // Drives the branch map's per-node discussion count and recent-thread list. Leads with
     // `branch_id` and ends in a unique column so the "most recent N" read is an index scan.
-    index("research_program_post_branchId_idx").on(table.branchId, table.createdAt, table.id),
+    index("research_program_post_branchId_idx").on(
+      table.branchId,
+      table.createdAt,
+      table.id,
+    ),
     // Depth and parenthood are one fact stated twice, and they must agree.
     check(
       "research_program_post_depth_ck",
@@ -14844,7 +17076,10 @@ export const researchProgramPost = pgTable(
       sql`char_length(body_text) BETWEEN 1 AND 10000
           AND (hidden_reason IS NULL OR char_length(hidden_reason) BETWEEN 1 AND 2000)`,
     ),
-    check("research_program_post_counts_ck", sql`reaction_count >= 0 AND reply_count >= 0`),
+    check(
+      "research_program_post_counts_ck",
+      sql`reaction_count >= 0 AND reply_count >= 0`,
+    ),
     // A reply has no replies of its own — the cap, restated where it is cheap to check.
     check("research_program_post_leaf_ck", sql`depth = 0 OR reply_count = 0`),
     check(
@@ -14874,9 +17109,15 @@ export const researchProgramPostReaction = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("research_program_post_reaction_unq").on(table.postId, table.userId),
+    uniqueIndex("research_program_post_reaction_unq").on(
+      table.postId,
+      table.userId,
+    ),
     // "Did I react to this?" across a fetched page, in one query.
-    index("research_program_post_reaction_userId_idx").on(table.userId, table.postId),
+    index("research_program_post_reaction_userId_idx").on(
+      table.userId,
+      table.postId,
+    ),
   ],
 );
 
@@ -14972,7 +17213,9 @@ export const researchProgramParticipant = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     role: researchProgramParticipantRoleEnum("role").notNull(),
-    compensationPreference: compensationKindEnum("compensation_preference").notNull(),
+    compensationPreference: compensationKindEnum(
+      "compensation_preference",
+    ).notNull(),
     contributionSummary: text("contribution_summary"),
     /** Funding progress, for `venture_capitalist` rows. Both or neither. */
     fundingTrancheIndex: integer("funding_tranche_index"),
@@ -14984,9 +17227,16 @@ export const researchProgramParticipant = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex("research_program_participant_unq").on(table.programId, table.userId),
+    uniqueIndex("research_program_participant_unq").on(
+      table.programId,
+      table.userId,
+    ),
     // The contributors roster, filterable by role.
-    index("research_program_participant_role_idx").on(table.programId, table.role, table.id),
+    index("research_program_participant_role_idx").on(
+      table.programId,
+      table.role,
+      table.id,
+    ),
     index("research_program_participant_userId_idx").on(table.userId, table.id),
     check(
       "research_program_participant_summary_ck",
@@ -15024,7 +17274,9 @@ export const researchEffortLog = pgTable(
       .references(() => researchProgram.id, { onDelete: "restrict" }),
     participantId: text("participant_id")
       .notNull()
-      .references(() => researchProgramParticipant.id, { onDelete: "restrict" }),
+      .references(() => researchProgramParticipant.id, {
+        onDelete: "restrict",
+      }),
     branchId: text("branch_id").references(() => researchProgramBranch.id, {
       onDelete: "restrict",
     }),
@@ -15045,12 +17297,25 @@ export const researchEffortLog = pgTable(
       table.participantId,
       table.idempotencyKey,
     ),
-    index("research_effort_log_programId_idx").on(table.programId, table.loggedForDate, table.id),
-    index("research_effort_log_participantId_idx").on(table.participantId, table.loggedForDate),
+    index("research_effort_log_programId_idx").on(
+      table.programId,
+      table.loggedForDate,
+      table.id,
+    ),
+    index("research_effort_log_participantId_idx").on(
+      table.participantId,
+      table.loggedForDate,
+    ),
     index("research_effort_log_branchId_idx").on(table.branchId, table.id),
     // A day has 1440 minutes. A log claiming more is not a typo worth storing.
-    check("research_effort_log_minutes_ck", sql`minutes > 0 AND minutes <= 1440`),
-    check("research_effort_log_note_ck", sql`char_length(note) BETWEEN 1 AND 2000`),
+    check(
+      "research_effort_log_minutes_ck",
+      sql`minutes > 0 AND minutes <= 1440`,
+    ),
+    check(
+      "research_effort_log_note_ck",
+      sql`char_length(note) BETWEEN 1 AND 2000`,
+    ),
     check(
       "research_effort_log_idempotency_ck",
       sql`char_length(idempotency_key) BETWEEN 8 AND 128`,
@@ -15078,7 +17343,9 @@ export const researchContributionLedgerEntry = pgTable(
       .references(() => researchProgram.id, { onDelete: "restrict" }),
     participantId: text("participant_id")
       .notNull()
-      .references(() => researchProgramParticipant.id, { onDelete: "restrict" }),
+      .references(() => researchProgramParticipant.id, {
+        onDelete: "restrict",
+      }),
     kind: researchContributionKindEnum("kind").notNull(),
     /** bigint, and only for `cash_commitment`. See §4b on the int4 ceiling. */
     amountInCents: bigint("amount_in_cents", { mode: "number" }),
@@ -15093,8 +17360,15 @@ export const researchContributionLedgerEntry = pgTable(
       table.participantId,
       table.idempotencyKey,
     ),
-    index("research_contribution_programId_idx").on(table.programId, table.createdAt, table.id),
-    index("research_contribution_participantId_idx").on(table.participantId, table.id),
+    index("research_contribution_programId_idx").on(
+      table.programId,
+      table.createdAt,
+      table.id,
+    ),
+    index("research_contribution_participantId_idx").on(
+      table.participantId,
+      table.id,
+    ),
     // An amount belongs to a cash commitment and to nothing else, and it never
     // travels without its currency.
     check(
@@ -15103,7 +17377,10 @@ export const researchContributionLedgerEntry = pgTable(
           AND (amount_in_cents IS NULL) = (currency_code IS NULL)
           AND (amount_in_cents IS NULL OR (amount_in_cents > 0 AND currency_code ~ '^[A-Z]{3}$'))`,
     ),
-    check("research_contribution_description_ck", sql`char_length(description) BETWEEN 1 AND 1000`),
+    check(
+      "research_contribution_description_ck",
+      sql`char_length(description) BETWEEN 1 AND 1000`,
+    ),
     check(
       "research_contribution_idempotency_ck",
       sql`char_length(idempotency_key) BETWEEN 8 AND 128`,
@@ -15128,11 +17405,17 @@ export const researchProgramContentReport = pgTable(
       .notNull()
       .references(() => researchProgram.id, { onDelete: "cascade" }),
     targetKind: researchProgramContentTargetKindEnum("target_kind").notNull(),
-    paperId: text("paper_id").references(() => researchProgramPaper.id, { onDelete: "cascade" }),
-    postId: text("post_id").references(() => researchProgramPost.id, { onDelete: "cascade" }),
+    paperId: text("paper_id").references(() => researchProgramPaper.id, {
+      onDelete: "cascade",
+    }),
+    postId: text("post_id").references(() => researchProgramPost.id, {
+      onDelete: "cascade",
+    }),
     reason: researchProgramReportReasonEnum("reason").notNull(),
     detailText: text("detail_text"),
-    reporterUserId: text("reporter_user_id").references(() => user.id, { onDelete: "set null" }),
+    reporterUserId: text("reporter_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     status: researchProgramReportStatusEnum("status").default("open").notNull(),
     resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
       onDelete: "restrict",
@@ -15200,11 +17483,18 @@ export const researchProgramModerationAction = pgTable(
       .references(() => researchProgram.id, { onDelete: "restrict" }),
     actionKind: researchProgramModerationKindEnum("action_kind").notNull(),
     // `set null`: a decision stays on the record after the thing it was about is gone.
-    paperId: text("paper_id").references(() => researchProgramPaper.id, { onDelete: "set null" }),
-    postId: text("post_id").references(() => researchProgramPost.id, { onDelete: "set null" }),
-    reportId: text("report_id").references(() => researchProgramContentReport.id, {
+    paperId: text("paper_id").references(() => researchProgramPaper.id, {
       onDelete: "set null",
     }),
+    postId: text("post_id").references(() => researchProgramPost.id, {
+      onDelete: "set null",
+    }),
+    reportId: text("report_id").references(
+      () => researchProgramContentReport.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     moderatorUserId: text("moderator_user_id")
       .notNull()
       .references(() => user.id, { onDelete: "restrict" }),
@@ -15227,7 +17517,9 @@ export const researchProgramModerationAction = pgTable(
       table.moderatorUserId,
       table.createdAt,
     ),
-    uniqueIndex("research_program_moderation_action_auditEntryId_unq").on(table.auditEntryId),
+    uniqueIndex("research_program_moderation_action_auditEntryId_unq").on(
+      table.auditEntryId,
+    ),
     check(
       "research_program_moderation_action_reason_ck",
       sql`char_length(reason_note) BETWEEN 1 AND 2000
@@ -15240,18 +17532,21 @@ export const researchProgramModerationAction = pgTable(
 // --- each table declares its own `one(...)` and neither `userRelations` nor
 // --- `researchProgramRelations` is edited to add a matching `many(...)`.
 
-export const researchProgramRelations = relations(researchProgram, ({ one }) => ({
-  createdBy: one(user, {
-    fields: [researchProgram.createdByUserId],
-    references: [user.id],
-    relationName: "researchProgramCreatedBy",
+export const researchProgramRelations = relations(
+  researchProgram,
+  ({ one }) => ({
+    createdBy: one(user, {
+      fields: [researchProgram.createdByUserId],
+      references: [user.id],
+      relationName: "researchProgramCreatedBy",
+    }),
+    reviewedBy: one(user, {
+      fields: [researchProgram.reviewedByUserId],
+      references: [user.id],
+      relationName: "researchProgramReviewedBy",
+    }),
   }),
-  reviewedBy: one(user, {
-    fields: [researchProgram.reviewedByUserId],
-    references: [user.id],
-    relationName: "researchProgramReviewedBy",
-  }),
-}));
+);
 
 export const researchProgramStatSnapshotRelations = relations(
   researchProgramStatSnapshot,
@@ -15263,22 +17558,25 @@ export const researchProgramStatSnapshotRelations = relations(
   }),
 );
 
-export const researchProgramBranchRelations = relations(researchProgramBranch, ({ one }) => ({
-  program: one(researchProgram, {
-    fields: [researchProgramBranch.programId],
-    references: [researchProgram.id],
+export const researchProgramBranchRelations = relations(
+  researchProgramBranch,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchProgramBranch.programId],
+      references: [researchProgram.id],
+    }),
+    parentBranch: one(researchProgramBranch, {
+      fields: [researchProgramBranch.parentBranchId],
+      references: [researchProgramBranch.id],
+      relationName: "researchProgramBranchParent",
+    }),
+    createdBy: one(user, {
+      fields: [researchProgramBranch.createdByUserId],
+      references: [user.id],
+      relationName: "researchProgramBranchCreatedBy",
+    }),
   }),
-  parentBranch: one(researchProgramBranch, {
-    fields: [researchProgramBranch.parentBranchId],
-    references: [researchProgramBranch.id],
-    relationName: "researchProgramBranchParent",
-  }),
-  createdBy: one(user, {
-    fields: [researchProgramBranch.createdByUserId],
-    references: [user.id],
-    relationName: "researchProgramBranchCreatedBy",
-  }),
-}));
+);
 
 export const researchProgramBranchClaimRelations = relations(
   researchProgramBranchClaim,
@@ -15295,64 +17593,73 @@ export const researchProgramBranchClaimRelations = relations(
   }),
 );
 
-export const researchPaperCategoryRelations = relations(researchPaperCategory, ({ one }) => ({
-  createdBy: one(user, {
-    fields: [researchPaperCategory.createdByUserId],
-    references: [user.id],
-    relationName: "researchPaperCategoryCreatedBy",
+export const researchPaperCategoryRelations = relations(
+  researchPaperCategory,
+  ({ one }) => ({
+    createdBy: one(user, {
+      fields: [researchPaperCategory.createdByUserId],
+      references: [user.id],
+      relationName: "researchPaperCategoryCreatedBy",
+    }),
   }),
-}));
+);
 
-export const researchProgramPaperRelations = relations(researchProgramPaper, ({ one }) => ({
-  program: one(researchProgram, {
-    fields: [researchProgramPaper.programId],
-    references: [researchProgram.id],
+export const researchProgramPaperRelations = relations(
+  researchProgramPaper,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchProgramPaper.programId],
+      references: [researchProgram.id],
+    }),
+    branch: one(researchProgramBranch, {
+      fields: [researchProgramPaper.branchId],
+      references: [researchProgramBranch.id],
+    }),
+    category: one(researchPaperCategory, {
+      fields: [researchProgramPaper.categoryId],
+      references: [researchPaperCategory.id],
+    }),
+    uploader: one(user, {
+      fields: [researchProgramPaper.uploaderUserId],
+      references: [user.id],
+      relationName: "researchProgramPaperUploader",
+    }),
+    reviewedBy: one(user, {
+      fields: [researchProgramPaper.reviewedByUserId],
+      references: [user.id],
+      relationName: "researchProgramPaperReviewedBy",
+    }),
   }),
-  branch: one(researchProgramBranch, {
-    fields: [researchProgramPaper.branchId],
-    references: [researchProgramBranch.id],
-  }),
-  category: one(researchPaperCategory, {
-    fields: [researchProgramPaper.categoryId],
-    references: [researchPaperCategory.id],
-  }),
-  uploader: one(user, {
-    fields: [researchProgramPaper.uploaderUserId],
-    references: [user.id],
-    relationName: "researchProgramPaperUploader",
-  }),
-  reviewedBy: one(user, {
-    fields: [researchProgramPaper.reviewedByUserId],
-    references: [user.id],
-    relationName: "researchProgramPaperReviewedBy",
-  }),
-}));
+);
 
-export const researchProgramPostRelations = relations(researchProgramPost, ({ one }) => ({
-  program: one(researchProgram, {
-    fields: [researchProgramPost.programId],
-    references: [researchProgram.id],
+export const researchProgramPostRelations = relations(
+  researchProgramPost,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchProgramPost.programId],
+      references: [researchProgram.id],
+    }),
+    parentPost: one(researchProgramPost, {
+      fields: [researchProgramPost.parentPostId],
+      references: [researchProgramPost.id],
+      relationName: "researchProgramPostParent",
+    }),
+    branch: one(researchProgramBranch, {
+      fields: [researchProgramPost.branchId],
+      references: [researchProgramBranch.id],
+    }),
+    author: one(user, {
+      fields: [researchProgramPost.authorUserId],
+      references: [user.id],
+      relationName: "researchProgramPostAuthor",
+    }),
+    hiddenBy: one(user, {
+      fields: [researchProgramPost.hiddenByUserId],
+      references: [user.id],
+      relationName: "researchProgramPostHiddenBy",
+    }),
   }),
-  parentPost: one(researchProgramPost, {
-    fields: [researchProgramPost.parentPostId],
-    references: [researchProgramPost.id],
-    relationName: "researchProgramPostParent",
-  }),
-  branch: one(researchProgramBranch, {
-    fields: [researchProgramPost.branchId],
-    references: [researchProgramBranch.id],
-  }),
-  author: one(user, {
-    fields: [researchProgramPost.authorUserId],
-    references: [user.id],
-    relationName: "researchProgramPostAuthor",
-  }),
-  hiddenBy: one(user, {
-    fields: [researchProgramPost.hiddenByUserId],
-    references: [user.id],
-    relationName: "researchProgramPostHiddenBy",
-  }),
-}));
+);
 
 export const researchProgramPostReactionRelations = relations(
   researchProgramPostReaction,
@@ -15403,20 +17710,23 @@ export const researchProgramParticipantRelations = relations(
   }),
 );
 
-export const researchEffortLogRelations = relations(researchEffortLog, ({ one }) => ({
-  program: one(researchProgram, {
-    fields: [researchEffortLog.programId],
-    references: [researchProgram.id],
+export const researchEffortLogRelations = relations(
+  researchEffortLog,
+  ({ one }) => ({
+    program: one(researchProgram, {
+      fields: [researchEffortLog.programId],
+      references: [researchProgram.id],
+    }),
+    participant: one(researchProgramParticipant, {
+      fields: [researchEffortLog.participantId],
+      references: [researchProgramParticipant.id],
+    }),
+    branch: one(researchProgramBranch, {
+      fields: [researchEffortLog.branchId],
+      references: [researchProgramBranch.id],
+    }),
   }),
-  participant: one(researchProgramParticipant, {
-    fields: [researchEffortLog.participantId],
-    references: [researchProgramParticipant.id],
-  }),
-  branch: one(researchProgramBranch, {
-    fields: [researchEffortLog.branchId],
-    references: [researchProgramBranch.id],
-  }),
-}));
+);
 
 export const researchContributionLedgerEntryRelations = relations(
   researchContributionLedgerEntry,
@@ -15541,7 +17851,12 @@ export const videoTypeEnum = pgEnum("video_type", [
   "anime_episode",
 ]);
 
-export const videoStageEnum = pgEnum("video_stage", ["idea", "mvp", "scaling", "shipped"]);
+export const videoStageEnum = pgEnum("video_stage", [
+  "idea",
+  "mvp",
+  "scaling",
+  "shipped",
+]);
 
 // Media lifecycle — SERVER-SET, never the client. A YouTube row is born "ready".
 // "uploading"/"processing" belong to the deferred hosted path and never occur today.
@@ -15569,9 +17884,15 @@ export const contentReviewStatusEnum = pgEnum("content_review_status", [
   "rejected",
 ]);
 
-export const videoLicenseEnum = pgEnum("video_license", ["standard", "creative_commons"]);
+export const videoLicenseEnum = pgEnum("video_license", [
+  "standard",
+  "creative_commons",
+]);
 
-export const shortsRemixEnum = pgEnum("shorts_remix", ["video_and_audio", "audio_only"]);
+export const shortsRemixEnum = pgEnum("shorts_remix", [
+  "video_and_audio",
+  "audio_only",
+]);
 
 export const playlistVisibilityEnum = pgEnum("playlist_visibility", [
   "public",
@@ -15591,7 +17912,10 @@ export const playlistVideoOrderEnum = pgEnum("playlist_video_order", [
   "manual",
 ]);
 
-export const animeAudioModeEnum = pgEnum("anime_audio_mode", ["subbed", "dubbed"]);
+export const animeAudioModeEnum = pgEnum("anime_audio_mode", [
+  "subbed",
+  "dubbed",
+]);
 
 export const animeSeriesStatusEnum = pgEnum("anime_series_status", [
   "ongoing",
@@ -15607,10 +17931,10 @@ export const videoCollaboratorStatusEnum = pgEnum("video_collaborator_status", [
 
 // The audit log is the record of record for every moderation decision, so a
 // free-text verb in it is one typo away from an unqueryable log.
-export const contentReviewActionKindEnum = pgEnum("content_review_action_kind", [
-  "approve",
-  "reject",
-]);
+export const contentReviewActionKindEnum = pgEnum(
+  "content_review_action_kind",
+  ["approve", "reject"],
+);
 
 // Which provider stored the asset. EVERY ROW IS NULL TODAY (Appendix A).
 export const storageProviderEnum = pgEnum("storage_provider", [
@@ -15668,9 +17992,15 @@ export const contentCategory = pgTable(
   (table) => [
     uniqueIndex("content_category_slug_unq").on(table.slug),
     // The only read pattern: the chip row and the tile grid, both ordered.
-    index("content_category_active_order_idx").on(table.isActive, table.sortOrder),
+    index("content_category_active_order_idx").on(
+      table.isActive,
+      table.sortOrder,
+    ),
     check("content_category_slug_ck", sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
-    check("content_category_tile_image_ck", sql`is_tile = false OR image_url IS NOT NULL`),
+    check(
+      "content_category_tile_image_ck",
+      sql`is_tile = false OR image_url IS NOT NULL`,
+    ),
   ],
 );
 
@@ -15726,7 +18056,9 @@ export const video = pgTable(
     playbackId: text("playback_id"),
     playbackUrl: text("playback_url"),
 
-    uploadStatus: videoUploadStatusEnum("upload_status").default("ready").notNull(),
+    uploadStatus: videoUploadStatusEnum("upload_status")
+      .default("ready")
+      .notNull(),
     // NULL on every YouTube row: oEmbed returns no duration. That is why the chapter
     // validator's "<= durationSeconds" bound is written as a null-guard and skipped
     // here, rather than as a videoSource check (§6).
@@ -15741,7 +18073,9 @@ export const video = pgTable(
     // asset to destroy — without it, deleting a video either orphans a Cloudinary
     // asset or 503s on a box that has no Cloudinary credentials configured.
     thumbnailUrl: text("thumbnail_url"),
-    hasCustomThumbnail: boolean("has_custom_thumbnail").default(false).notNull(),
+    hasCustomThumbnail: boolean("has_custom_thumbnail")
+      .default(false)
+      .notNull(),
 
     // --- Details step ---
     title: text("title").notNull(),
@@ -15775,9 +18109,13 @@ export const video = pgTable(
     scheduledPublishAt: timestamp("scheduled_publish_at"),
 
     // --- The three orthogonal status columns (rule 3) ---
-    publishStatus: videoPublishStatusEnum("publish_status").default("draft").notNull(),
+    publishStatus: videoPublishStatusEnum("publish_status")
+      .default("draft")
+      .notNull(),
     publishedAt: timestamp("published_at"),
-    reviewStatus: contentReviewStatusEnum("review_status").default("not_required").notNull(),
+    reviewStatus: contentReviewStatusEnum("review_status")
+      .default("not_required")
+      .notNull(),
     rejectionReason: text("rejection_reason"),
 
     // --- "Show more" advanced fields ---
@@ -15786,7 +18124,9 @@ export const video = pgTable(
     videoLanguage: text("video_language"),
     isEmbeddingAllowed: boolean("is_embedding_allowed").default(true).notNull(),
     areCommentsEnabled: boolean("are_comments_enabled").default(true).notNull(),
-    shouldShowLikesCount: boolean("should_show_likes_count").default(true).notNull(),
+    shouldShowLikesCount: boolean("should_show_likes_count")
+      .default(true)
+      .notNull(),
     hasPaidPromotion: boolean("has_paid_promotion").default(false).notNull(),
     usesAlteredContent: boolean("uses_altered_content"),
 
@@ -15866,7 +18206,10 @@ export const video = pgTable(
     index("video_publishStatus_idx").on(table.publishStatus),
     // Composite, not two singles: the admin queue filters reviewStatus AND videoType
     // together and nothing filters videoType alone.
-    index("video_reviewStatus_videoType_idx").on(table.reviewStatus, table.videoType),
+    index("video_reviewStatus_videoType_idx").on(
+      table.reviewStatus,
+      table.videoType,
+    ),
     // INDEXED BUT NOT UNIQUE, on purpose. Two Qatoto rows may legitimately point at
     // one YouTube video — a creator re-listing a demo under a new pitch, or two
     // founders each linking the launch video. Abuse is bounded by the per-user rate
@@ -15910,7 +18253,10 @@ export const video = pgTable(
       ),
 
     // A youtube row with no id is a dead player; a hosted row has no id by design.
-    check("video_source_id_ck", sql`(video_source <> 'youtube') OR (youtube_video_id IS NOT NULL)`),
+    check(
+      "video_source_id_ck",
+      sql`(video_source <> 'youtube') OR (youtube_video_id IS NOT NULL)`,
+    ),
     // THIS IS A SECURITY CONSTRAINT, not tidiness. The id is interpolated into an
     // outbound oEmbed URL and into every embed URL the system emits; the charset
     // contains no ".", "/", ":", "@" or "%", which is what closes SSRF and injection
@@ -16093,7 +18439,9 @@ export const videoTeamMember = pgTable(
       .references(() => video.id, { onDelete: "cascade" }),
     memberName: text("member_name").notNull(),
     roleLabel: text("role_label"),
-    linkedUserId: text("linked_user_id").references(() => user.id, { onDelete: "set null" }),
+    linkedUserId: text("linked_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -16206,7 +18554,9 @@ export const videoViewSession = pgTable(
      * `set null` rather than cascade: deleting an account must not retroactively
      * rewrite a video's view history.
      */
-    viewerId: text("viewer_id").references(() => user.id, { onDelete: "set null" }),
+    viewerId: text("viewer_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     /**
      * sha256 hex. Derived per UTC day from BETTER_AUTH_SECRET plus either the user id
      * (signed in) or ip+user-agent (anonymous) — see src/lib/viewer-fingerprint.ts.
@@ -16233,13 +18583,19 @@ export const videoViewSession = pgTable(
     pinnedDurationSeconds: integer("pinned_duration_seconds").notNull(),
     watchedSeconds: integer("watched_seconds").default(0).notNull(),
     maxPositionSeconds: integer("max_position_seconds").default(0).notNull(),
-    completionBasisPoints: integer("completion_basis_points").default(0).notNull(),
+    completionBasisPoints: integer("completion_basis_points")
+      .default(0)
+      .notNull(),
     /** Flips ONCE. The transition is what increments `video_stats.view_count`. */
     isCountedView: boolean("is_counted_view").default(false).notNull(),
     // `precision: 3` on both: the clamp divides the gap between them by 1000 to get
     // elapsed seconds, and phase 3's 48-hour view-velocity window scans first_beacon_at.
-    firstBeaconAt: timestamp("first_beacon_at", { precision: 3 }).defaultNow().notNull(),
-    lastBeaconAt: timestamp("last_beacon_at", { precision: 3 }).defaultNow().notNull(),
+    firstBeaconAt: timestamp("first_beacon_at", { precision: 3 })
+      .defaultNow()
+      .notNull(),
+    lastBeaconAt: timestamp("last_beacon_at", { precision: 3 })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     uniqueIndex("video_view_session_unq").on(
@@ -16250,7 +18606,10 @@ export const videoViewSession = pgTable(
     // §4.4 anonymous session-scoped affinity: "what has this fingerprint watched in
     // the last 7 days?", so a logged-out feed responds after two or three watches
     // instead of staying a flat popularity list forever.
-    index("video_view_session_fingerprint_idx").on(table.viewerFingerprint, table.viewDayBucket),
+    index("video_view_session_fingerprint_idx").on(
+      table.viewerFingerprint,
+      table.viewDayBucket,
+    ),
     // §4.5's "exclude anything this viewer already watched in the last 30 days".
     // Partial, because the candidate pool only ever asks about counted views by a
     // signed-in viewer, and that is a small fraction of the table.
@@ -16258,7 +18617,10 @@ export const videoViewSession = pgTable(
       .on(table.viewerId, table.videoId, table.firstBeaconAt)
       .where(sql`viewer_id IS NOT NULL AND is_counted_view`),
     // §4.1 view velocity: counted views in the first 48 hours.
-    index("video_view_session_video_idx").on(table.videoId, table.firstBeaconAt),
+    index("video_view_session_video_idx").on(
+      table.videoId,
+      table.firstBeaconAt,
+    ),
     check(
       "video_view_session_bounds_ck",
       sql`watched_seconds >= 0
@@ -16269,7 +18631,10 @@ export const videoViewSession = pgTable(
     ),
     // The fingerprint is server-computed, so a row that is not 64 lowercase hex chars
     // means something upstream stopped hashing — fail at the storage layer, loudly.
-    check("video_view_session_fingerprint_ck", sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`),
+    check(
+      "video_view_session_fingerprint_ck",
+      sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`,
+    ),
   ],
 );
 
@@ -16314,7 +18679,11 @@ export const videoSave = pgTable(
     primaryKey({ columns: [table.videoId, table.userId] }),
     // Leads with `created_at`, unlike videoLike's reverse index, because a saved list
     // is RENDERED — newest first — where a like set is only ever probed for membership.
-    index("video_save_userId_idx").on(table.userId, table.createdAt, table.videoId),
+    index("video_save_userId_idx").on(
+      table.userId,
+      table.createdAt,
+      table.videoId,
+    ),
   ],
 );
 
@@ -16342,13 +18711,18 @@ export const videoComment = pgTable(
       .references(() => video.id, { onDelete: "cascade" }),
     // Cascade is safe ONLY because deletes are tombstones: no row is ever hard-deleted
     // by the application, and the depth cap bounds the cascade to one level anyway.
-    parentCommentId: text("parent_comment_id").references((): AnyPgColumn => videoComment.id, {
-      onDelete: "cascade",
-    }),
+    parentCommentId: text("parent_comment_id").references(
+      (): AnyPgColumn => videoComment.id,
+      {
+        onDelete: "cascade",
+      },
+    ),
     depth: integer("depth").default(0).notNull(),
     // `set null`: closing an account must not erase the thread it participated in.
     // A NULL author renders as "deleted user", which is a true statement.
-    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
+    authorUserId: text("author_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
     bodyText: text("body_text").notNull(),
     likeCount: integer("like_count").default(0).notNull(),
     replyCount: integer("reply_count").default(0).notNull(),
@@ -16371,7 +18745,11 @@ export const videoComment = pgTable(
       .on(table.videoId, table.createdAt, table.id)
       .where(sql`parent_comment_id IS NULL`),
     // A comment's replies, oldest first.
-    index("video_comment_parent_idx").on(table.parentCommentId, table.createdAt, table.id),
+    index("video_comment_parent_idx").on(
+      table.parentCommentId,
+      table.createdAt,
+      table.id,
+    ),
     index("video_comment_authorUserId_idx").on(table.authorUserId, table.id),
     // Depth and parenthood are one fact stated twice, and they must agree.
     check(
@@ -16381,7 +18759,10 @@ export const videoComment = pgTable(
     // A reply has no replies of its own — the cap, restated where it is cheap to check.
     check("video_comment_leaf_ck", sql`depth = 0 OR reply_count = 0`),
     check("video_comment_counts_ck", sql`like_count >= 0 AND reply_count >= 0`),
-    check("video_comment_deleted_ck", sql`is_deleted = (deleted_at IS NOT NULL)`),
+    check(
+      "video_comment_deleted_ck",
+      sql`is_deleted = (deleted_at IS NOT NULL)`,
+    ),
     // THE TOMBSTONE ERASES THE TEXT, and the constraint is what makes that true.
     // Without the second arm, "deleted" is a rendering convention the next reader can
     // forget to honour — and the body sits in the table forever.
@@ -16451,7 +18832,10 @@ export const videoShare = pgTable(
       table.shareDayBucket,
     ),
     index("video_share_videoId_idx").on(table.videoId, table.createdAt),
-    check("video_share_fingerprint_ck", sql`sharer_fingerprint ~ '^[0-9a-f]{64}$'`),
+    check(
+      "video_share_fingerprint_ck",
+      sql`sharer_fingerprint ~ '^[0-9a-f]{64}$'`,
+    ),
   ],
 );
 
@@ -16469,7 +18853,10 @@ export const creatorSubscription = pgTable(
   (table) => [
     primaryKey({ columns: [table.subscriberId, table.creatorId] }),
     // "Who subscribes to this creator?" — the direction the PK cannot serve.
-    index("creator_subscription_creatorId_idx").on(table.creatorId, table.subscriberId),
+    index("creator_subscription_creatorId_idx").on(
+      table.creatorId,
+      table.subscriberId,
+    ),
     // Subscribing to yourself would inflate your own public subscriber count by one
     // and put your own videos in your own feed. Refused at the storage layer.
     check("creator_subscription_self_ck", sql`subscriber_id <> creator_id`),
@@ -16505,11 +18892,20 @@ export const videoPlaybackError = pgTable(
       table.viewerFingerprint,
       table.reportDayBucket,
     ),
-    index("video_playback_error_videoId_idx").on(table.videoId, table.reportDayBucket),
+    index("video_playback_error_videoId_idx").on(
+      table.videoId,
+      table.reportDayBucket,
+    ),
     // The IFrame API's documented codes, as a CLOSED SET. An open integer column is a
     // column of client-chosen junk that the three-fingerprint rule would then count.
-    check("video_playback_error_code_ck", sql`error_code IN (2, 5, 100, 101, 150)`),
-    check("video_playback_error_fingerprint_ck", sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`),
+    check(
+      "video_playback_error_code_ck",
+      sql`error_code IN (2, 5, 100, 101, 150)`,
+    ),
+    check(
+      "video_playback_error_fingerprint_ck",
+      sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`,
+    ),
   ],
 );
 
@@ -16537,7 +18933,9 @@ export const videoStats = pgTable(
     commentCount: integer("comment_count").default(0).notNull(),
     shareCount: integer("share_count").default(0).notNull(),
     saveCount: integer("save_count").default(0).notNull(),
-    totalWatchedSeconds: bigint("total_watched_seconds", { mode: "number" }).default(0).notNull(),
+    totalWatchedSeconds: bigint("total_watched_seconds", { mode: "number" })
+      .default(0)
+      .notNull(),
     /**
      * SUM AND COUNT, NEVER A STORED AVERAGE. An average is a float, floats make a
      * ranking bug irreproducible, and §4.1 divides these two at read time with integer
@@ -16547,8 +18945,12 @@ export const videoStats = pgTable(
      * rule is what makes farming the 40-point completion component require real
      * accounts rather than a headless browser.
      */
-    completionBasisPointsSum: bigint("completion_bp_sum", { mode: "number" }).default(0).notNull(),
-    completionSampleCount: integer("completion_sample_count").default(0).notNull(),
+    completionBasisPointsSum: bigint("completion_bp_sum", { mode: "number" })
+      .default(0)
+      .notNull(),
+    completionSampleCount: integer("completion_sample_count")
+      .default(0)
+      .notNull(),
     /**
      * NULLABLE WITH NO DEFAULT, deliberately — the `project_stats` split between
      * transactional counters and job-computed ones.
@@ -16636,7 +19038,9 @@ export const creatorStats = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     subscriberCount: integer("subscriber_count").default(0).notNull(),
     publishedVideoCount: integer("published_video_count").default(0).notNull(),
-    totalViewCount: bigint("total_view_count", { mode: "number" }).default(0).notNull(),
+    totalViewCount: bigint("total_view_count", { mode: "number" })
+      .default(0)
+      .notNull(),
   },
   () => [
     check(
@@ -16685,9 +19089,13 @@ export const videoQualityScoreSnapshot = pgTable(
     asOf: timestamp("as_of").notNull(),
     qualityScorePoints: integer("quality_score_points").notNull(),
     // --- Inputs, so the score is reproducible without replaying history.
-    meanCompletionBasisPoints: integer("mean_completion_basis_points").notNull(),
+    meanCompletionBasisPoints: integer(
+      "mean_completion_basis_points",
+    ).notNull(),
     completionSampleCount: integer("completion_sample_count").notNull(),
-    engagementPerThousandViewers: integer("engagement_per_thousand_viewers").notNull(),
+    engagementPerThousandViewers: integer(
+      "engagement_per_thousand_viewers",
+    ).notNull(),
     /** NULL when the job could not establish one — Rule 5, not a fabricated zero. */
     uniqueViewerCount: integer("unique_viewer_count"),
     countedViewsFirst48Hours: integer("counted_views_first_48_hours").notNull(),
@@ -16697,14 +19105,21 @@ export const videoQualityScoreSnapshot = pgTable(
     completionComponentPoints: integer("completion_component_points").notNull(),
     engagementComponentPoints: integer("engagement_component_points").notNull(),
     velocityComponentPoints: integer("velocity_component_points").notNull(),
-    creatorTrackComponentPoints: integer("creator_track_component_points").notNull(),
+    creatorTrackComponentPoints: integer(
+      "creator_track_component_points",
+    ).notNull(),
     freshnessComponentPoints: integer("freshness_component_points").notNull(),
-    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version")
+      .default(1)
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     // No updatedAt. An append-only table has nothing to update.
   },
   (table) => [
-    uniqueIndex("video_quality_score_snapshot_unq").on(table.videoId, table.asOf),
+    uniqueIndex("video_quality_score_snapshot_unq").on(
+      table.videoId,
+      table.asOf,
+    ),
     index("video_quality_score_snapshot_asOf_idx").on(table.asOf, table.id),
     check(
       "video_quality_score_snapshot_score_ck",
@@ -16755,18 +19170,36 @@ export const userTopicAffinitySnapshot = pgTable(
     asOf: timestamp("as_of").notNull(),
     affinityPoints: integer("affinity_points").notNull(),
     countedViewCount: integer("counted_view_count").notNull(),
-    meanCompletionBasisPoints: integer("mean_completion_basis_points").notNull(),
+    meanCompletionBasisPoints: integer(
+      "mean_completion_basis_points",
+    ).notNull(),
     explicitSignalCount: integer("explicit_signal_count").notNull(),
-    watchCountComponentPoints: integer("watch_count_component_points").notNull(),
-    meanCompletionComponentPoints: integer("mean_completion_component_points").notNull(),
-    explicitSignalComponentPoints: integer("explicit_signal_component_points").notNull(),
-    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    watchCountComponentPoints: integer(
+      "watch_count_component_points",
+    ).notNull(),
+    meanCompletionComponentPoints: integer(
+      "mean_completion_component_points",
+    ).notNull(),
+    explicitSignalComponentPoints: integer(
+      "explicit_signal_component_points",
+    ).notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version")
+      .default(1)
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("user_topic_affinity_snapshot_unq").on(table.userId, table.categoryId, table.asOf),
+    uniqueIndex("user_topic_affinity_snapshot_unq").on(
+      table.userId,
+      table.categoryId,
+      table.asOf,
+    ),
     // The feed's join: every category this viewer has an opinion about, at one asOf.
-    index("user_topic_affinity_snapshot_viewer_idx").on(table.userId, table.asOf, table.categoryId),
+    index("user_topic_affinity_snapshot_viewer_idx").on(
+      table.userId,
+      table.asOf,
+      table.categoryId,
+    ),
     index("user_topic_affinity_snapshot_asOf_idx").on(table.asOf, table.id),
     check(
       "user_topic_affinity_snapshot_score_ck",
@@ -16798,16 +19231,30 @@ export const userCreatorAffinitySnapshot = pgTable(
     asOf: timestamp("as_of").notNull(),
     affinityPoints: integer("affinity_points").notNull(),
     countedViewCount: integer("counted_view_count").notNull(),
-    meanCompletionBasisPoints: integer("mean_completion_basis_points").notNull(),
+    meanCompletionBasisPoints: integer(
+      "mean_completion_basis_points",
+    ).notNull(),
     explicitSignalCount: integer("explicit_signal_count").notNull(),
-    watchCountComponentPoints: integer("watch_count_component_points").notNull(),
-    meanCompletionComponentPoints: integer("mean_completion_component_points").notNull(),
-    explicitSignalComponentPoints: integer("explicit_signal_component_points").notNull(),
-    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    watchCountComponentPoints: integer(
+      "watch_count_component_points",
+    ).notNull(),
+    meanCompletionComponentPoints: integer(
+      "mean_completion_component_points",
+    ).notNull(),
+    explicitSignalComponentPoints: integer(
+      "explicit_signal_component_points",
+    ).notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version")
+      .default(1)
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("user_creator_affinity_snapshot_unq").on(table.userId, table.creatorId, table.asOf),
+    uniqueIndex("user_creator_affinity_snapshot_unq").on(
+      table.userId,
+      table.creatorId,
+      table.asOf,
+    ),
     index("user_creator_affinity_snapshot_viewer_idx").on(
       table.userId,
       table.asOf,
@@ -16856,17 +19303,30 @@ export const trendingVideoSnapshot = pgTable(
     trendingScorePoints: integer("trending_score_points").notNull(),
     countedViewsInWindow: integer("counted_views_in_window").notNull(),
     watchedMinutesInWindow: integer("watched_minutes_in_window").notNull(),
-    engagementActionsInWindow: integer("engagement_actions_in_window").notNull(),
+    engagementActionsInWindow: integer(
+      "engagement_actions_in_window",
+    ).notNull(),
     qualityScorePoints: integer("quality_score_points"),
-    recentViewComponentPoints: integer("recent_view_component_points").notNull(),
-    recentWatchTimeComponentPoints: integer("recent_watch_time_component_points").notNull(),
-    recentEngagementComponentPoints: integer("recent_engagement_component_points").notNull(),
+    recentViewComponentPoints: integer(
+      "recent_view_component_points",
+    ).notNull(),
+    recentWatchTimeComponentPoints: integer(
+      "recent_watch_time_component_points",
+    ).notNull(),
+    recentEngagementComponentPoints: integer(
+      "recent_engagement_component_points",
+    ).notNull(),
     qualityComponentPoints: integer("quality_component_points").notNull(),
-    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version")
+      .default(1)
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("trending_video_snapshot_video_unq").on(table.asOf, table.videoId),
+    uniqueIndex("trending_video_snapshot_video_unq").on(
+      table.asOf,
+      table.videoId,
+    ),
     uniqueIndex("trending_video_snapshot_rank_unq").on(table.asOf, table.rank),
     check(
       "trending_video_snapshot_score_ck",
@@ -16906,12 +19366,20 @@ export const platformCategoryPopularitySnapshot = pgTable(
     popularityPoints: integer("popularity_points").notNull(),
     countedViewCount: integer("counted_view_count").notNull(),
     publishedVideoCount: integer("published_video_count").notNull(),
-    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version")
+      .default(1)
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("platform_category_popularity_snapshot_unq").on(table.categoryId, table.asOf),
-    index("platform_category_popularity_snapshot_asOf_idx").on(table.asOf, table.categoryId),
+    uniqueIndex("platform_category_popularity_snapshot_unq").on(
+      table.categoryId,
+      table.asOf,
+    ),
+    index("platform_category_popularity_snapshot_asOf_idx").on(
+      table.asOf,
+      table.categoryId,
+    ),
     check(
       "platform_category_popularity_snapshot_ck",
       sql`popularity_points BETWEEN 0 AND 100
@@ -16931,7 +19399,9 @@ export const playlist = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description"),
-    visibility: playlistVisibilityEnum("visibility").default("private").notNull(),
+    visibility: playlistVisibilityEnum("visibility")
+      .default("private")
+      .notNull(),
     defaultVideoOrder: playlistVideoOrderEnum("default_video_order")
       .default("date_published_newest")
       .notNull(),
@@ -17027,7 +19497,9 @@ export const animeEpisode = pgTable(
       .notNull()
       .references(() => animeSeason.id, { onDelete: "cascade" }),
     // `set null` so deleting the video leaves the catalog entry standing.
-    videoId: text("video_id").references(() => video.id, { onDelete: "set null" }),
+    videoId: text("video_id").references(() => video.id, {
+      onDelete: "set null",
+    }),
     episodeNumber: integer("episode_number").notNull(),
     episodeTitle: text("episode_title").notNull(),
     isPremium: boolean("is_premium").default(false).notNull(),
@@ -17086,7 +19558,10 @@ export const contentReviewAction = pgTable(
     index("content_review_action_createdAt_idx").on(table.createdAt),
     // A rejection with no reason is unactionable for the creator and unauditable for
     // the next moderator.
-    check("content_review_action_reason_ck", sql`(action <> 'reject') OR (reason IS NOT NULL)`),
+    check(
+      "content_review_action_reason_ck",
+      sql`(action <> 'reject') OR (reason IS NOT NULL)`,
+    ),
   ],
 );
 
@@ -17105,7 +19580,10 @@ export const videoRelations = relations(video, ({ one, many }) => ({
   playlistItems: many(playlistItem),
   reviewActions: many(contentReviewAction),
   categories: many(videoCategory),
-  stats: one(videoStats, { fields: [video.id], references: [videoStats.videoId] }),
+  stats: one(videoStats, {
+    fields: [video.id],
+    references: [videoStats.videoId],
+  }),
   viewSessions: many(videoViewSession),
   likes: many(videoLike),
   saves: many(videoSave),
@@ -17114,12 +19592,18 @@ export const videoRelations = relations(video, ({ one, many }) => ({
 }));
 
 // Child-side only, as everywhere in this section: userRelations is deliberately untouched.
-export const contentCategoryRelations = relations(contentCategory, ({ many }) => ({
-  videoLinks: many(videoCategory),
-}));
+export const contentCategoryRelations = relations(
+  contentCategory,
+  ({ many }) => ({
+    videoLinks: many(videoCategory),
+  }),
+);
 
 export const videoCategoryRelations = relations(videoCategory, ({ one }) => ({
-  video: one(video, { fields: [videoCategory.videoId], references: [video.id] }),
+  video: one(video, {
+    fields: [videoCategory.videoId],
+    references: [video.id],
+  }),
   category: one(contentCategory, {
     fields: [videoCategory.categoryId],
     references: [contentCategory.id],
@@ -17137,10 +19621,19 @@ export const creatorStatsRelations = relations(creatorStats, ({ one }) => ({
   user: one(user, { fields: [creatorStats.userId], references: [user.id] }),
 }));
 
-export const videoViewSessionRelations = relations(videoViewSession, ({ one }) => ({
-  video: one(video, { fields: [videoViewSession.videoId], references: [video.id] }),
-  viewer: one(user, { fields: [videoViewSession.viewerId], references: [user.id] }),
-}));
+export const videoViewSessionRelations = relations(
+  videoViewSession,
+  ({ one }) => ({
+    video: one(video, {
+      fields: [videoViewSession.videoId],
+      references: [video.id],
+    }),
+    viewer: one(user, {
+      fields: [videoViewSession.viewerId],
+      references: [user.id],
+    }),
+  }),
+);
 
 export const videoLikeRelations = relations(videoLike, ({ one }) => ({
   video: one(video, { fields: [videoLike.videoId], references: [video.id] }),
@@ -17152,50 +19645,77 @@ export const videoSaveRelations = relations(videoSave, ({ one }) => ({
   user: one(user, { fields: [videoSave.userId], references: [user.id] }),
 }));
 
-export const videoCommentRelations = relations(videoComment, ({ one, many }) => ({
-  video: one(video, { fields: [videoComment.videoId], references: [video.id] }),
-  author: one(user, { fields: [videoComment.authorUserId], references: [user.id] }),
-  // The self-relation carries an explicit `relationName` on BOTH sides, or drizzle
-  // cannot tell which of the two references to `videoComment` pairs with which.
-  parent: one(videoComment, {
-    fields: [videoComment.parentCommentId],
-    references: [videoComment.id],
-    relationName: "videoCommentThread",
+export const videoCommentRelations = relations(
+  videoComment,
+  ({ one, many }) => ({
+    video: one(video, {
+      fields: [videoComment.videoId],
+      references: [video.id],
+    }),
+    author: one(user, {
+      fields: [videoComment.authorUserId],
+      references: [user.id],
+    }),
+    // The self-relation carries an explicit `relationName` on BOTH sides, or drizzle
+    // cannot tell which of the two references to `videoComment` pairs with which.
+    parent: one(videoComment, {
+      fields: [videoComment.parentCommentId],
+      references: [videoComment.id],
+      relationName: "videoCommentThread",
+    }),
+    replies: many(videoComment, { relationName: "videoCommentThread" }),
+    likes: many(videoCommentLike),
   }),
-  replies: many(videoComment, { relationName: "videoCommentThread" }),
-  likes: many(videoCommentLike),
-}));
+);
 
-export const videoCommentLikeRelations = relations(videoCommentLike, ({ one }) => ({
-  comment: one(videoComment, {
-    fields: [videoCommentLike.commentId],
-    references: [videoComment.id],
+export const videoCommentLikeRelations = relations(
+  videoCommentLike,
+  ({ one }) => ({
+    comment: one(videoComment, {
+      fields: [videoCommentLike.commentId],
+      references: [videoComment.id],
+    }),
+    user: one(user, {
+      fields: [videoCommentLike.userId],
+      references: [user.id],
+    }),
   }),
-  user: one(user, { fields: [videoCommentLike.userId], references: [user.id] }),
-}));
+);
 
 export const videoShareRelations = relations(videoShare, ({ one }) => ({
   video: one(video, { fields: [videoShare.videoId], references: [video.id] }),
   user: one(user, { fields: [videoShare.userId], references: [user.id] }),
 }));
 
-export const videoPlaybackErrorRelations = relations(videoPlaybackError, ({ one }) => ({
-  video: one(video, { fields: [videoPlaybackError.videoId], references: [video.id] }),
-}));
+export const videoPlaybackErrorRelations = relations(
+  videoPlaybackError,
+  ({ one }) => ({
+    video: one(video, {
+      fields: [videoPlaybackError.videoId],
+      references: [video.id],
+    }),
+  }),
+);
 
 // --- Ranking snapshots (§4, §6). Child-side only, as everywhere in this section.
 
 export const videoQualityScoreSnapshotRelations = relations(
   videoQualityScoreSnapshot,
   ({ one }) => ({
-    video: one(video, { fields: [videoQualityScoreSnapshot.videoId], references: [video.id] }),
+    video: one(video, {
+      fields: [videoQualityScoreSnapshot.videoId],
+      references: [video.id],
+    }),
   }),
 );
 
 export const userTopicAffinitySnapshotRelations = relations(
   userTopicAffinitySnapshot,
   ({ one }) => ({
-    user: one(user, { fields: [userTopicAffinitySnapshot.userId], references: [user.id] }),
+    user: one(user, {
+      fields: [userTopicAffinitySnapshot.userId],
+      references: [user.id],
+    }),
     category: one(contentCategory, {
       fields: [userTopicAffinitySnapshot.categoryId],
       references: [contentCategory.id],
@@ -17220,9 +19740,15 @@ export const userCreatorAffinitySnapshotRelations = relations(
   }),
 );
 
-export const trendingVideoSnapshotRelations = relations(trendingVideoSnapshot, ({ one }) => ({
-  video: one(video, { fields: [trendingVideoSnapshot.videoId], references: [video.id] }),
-}));
+export const trendingVideoSnapshotRelations = relations(
+  trendingVideoSnapshot,
+  ({ one }) => ({
+    video: one(video, {
+      fields: [trendingVideoSnapshot.videoId],
+      references: [video.id],
+    }),
+  }),
+);
 
 export const platformCategoryPopularitySnapshotRelations = relations(
   platformCategoryPopularitySnapshot,
@@ -17236,49 +19762,88 @@ export const platformCategoryPopularitySnapshotRelations = relations(
 
 // Both sides point at `user`, so both need a relationName — same rule as the comment
 // thread above.
-export const creatorSubscriptionRelations = relations(creatorSubscription, ({ one }) => ({
-  subscriber: one(user, {
-    fields: [creatorSubscription.subscriberId],
-    references: [user.id],
-    relationName: "creatorSubscriptionSubscriber",
+export const creatorSubscriptionRelations = relations(
+  creatorSubscription,
+  ({ one }) => ({
+    subscriber: one(user, {
+      fields: [creatorSubscription.subscriberId],
+      references: [user.id],
+      relationName: "creatorSubscriptionSubscriber",
+    }),
+    creator: one(user, {
+      fields: [creatorSubscription.creatorId],
+      references: [user.id],
+      relationName: "creatorSubscriptionCreator",
+    }),
   }),
-  creator: one(user, {
-    fields: [creatorSubscription.creatorId],
-    references: [user.id],
-    relationName: "creatorSubscriptionCreator",
-  }),
-}));
+);
 
 export const videoChapterRelations = relations(videoChapter, ({ one }) => ({
   video: one(video, { fields: [videoChapter.videoId], references: [video.id] }),
 }));
 
-export const videoAttachedProductRelations = relations(videoAttachedProduct, ({ one }) => ({
-  video: one(video, { fields: [videoAttachedProduct.videoId], references: [video.id] }),
-  product: one(product, { fields: [videoAttachedProduct.productId], references: [product.id] }),
-}));
+export const videoAttachedProductRelations = relations(
+  videoAttachedProduct,
+  ({ one }) => ({
+    video: one(video, {
+      fields: [videoAttachedProduct.videoId],
+      references: [video.id],
+    }),
+    product: one(product, {
+      fields: [videoAttachedProduct.productId],
+      references: [product.id],
+    }),
+  }),
+);
 
 export const videoDocumentRelations = relations(videoDocument, ({ one }) => ({
-  video: one(video, { fields: [videoDocument.videoId], references: [video.id] }),
+  video: one(video, {
+    fields: [videoDocument.videoId],
+    references: [video.id],
+  }),
 }));
 
 export const videoMilestoneRelations = relations(videoMilestone, ({ one }) => ({
-  video: one(video, { fields: [videoMilestone.videoId], references: [video.id] }),
+  video: one(video, {
+    fields: [videoMilestone.videoId],
+    references: [video.id],
+  }),
 }));
 
 export const videoOpenRoleRelations = relations(videoOpenRole, ({ one }) => ({
-  video: one(video, { fields: [videoOpenRole.videoId], references: [video.id] }),
+  video: one(video, {
+    fields: [videoOpenRole.videoId],
+    references: [video.id],
+  }),
 }));
 
-export const videoTeamMemberRelations = relations(videoTeamMember, ({ one }) => ({
-  video: one(video, { fields: [videoTeamMember.videoId], references: [video.id] }),
-  linkedUser: one(user, { fields: [videoTeamMember.linkedUserId], references: [user.id] }),
-}));
+export const videoTeamMemberRelations = relations(
+  videoTeamMember,
+  ({ one }) => ({
+    video: one(video, {
+      fields: [videoTeamMember.videoId],
+      references: [video.id],
+    }),
+    linkedUser: one(user, {
+      fields: [videoTeamMember.linkedUserId],
+      references: [user.id],
+    }),
+  }),
+);
 
-export const videoCollaboratorRelations = relations(videoCollaborator, ({ one }) => ({
-  video: one(video, { fields: [videoCollaborator.videoId], references: [video.id] }),
-  invitedUser: one(user, { fields: [videoCollaborator.userId], references: [user.id] }),
-}));
+export const videoCollaboratorRelations = relations(
+  videoCollaborator,
+  ({ one }) => ({
+    video: one(video, {
+      fields: [videoCollaborator.videoId],
+      references: [video.id],
+    }),
+    invitedUser: one(user, {
+      fields: [videoCollaborator.userId],
+      references: [user.id],
+    }),
+  }),
+);
 
 export const playlistRelations = relations(playlist, ({ one, many }) => ({
   creator: one(user, { fields: [playlist.creatorId], references: [user.id] }),
@@ -17286,7 +19851,10 @@ export const playlistRelations = relations(playlist, ({ one, many }) => ({
 }));
 
 export const playlistItemRelations = relations(playlistItem, ({ one }) => ({
-  playlist: one(playlist, { fields: [playlistItem.playlistId], references: [playlist.id] }),
+  playlist: one(playlist, {
+    fields: [playlistItem.playlistId],
+    references: [playlist.id],
+  }),
   video: one(video, { fields: [playlistItem.videoId], references: [video.id] }),
 }));
 
@@ -17296,19 +19864,34 @@ export const animeSeriesRelations = relations(animeSeries, ({ one, many }) => ({
 }));
 
 export const animeSeasonRelations = relations(animeSeason, ({ one, many }) => ({
-  series: one(animeSeries, { fields: [animeSeason.seriesId], references: [animeSeries.id] }),
+  series: one(animeSeries, {
+    fields: [animeSeason.seriesId],
+    references: [animeSeries.id],
+  }),
   episodes: many(animeEpisode),
 }));
 
 export const animeEpisodeRelations = relations(animeEpisode, ({ one }) => ({
-  season: one(animeSeason, { fields: [animeEpisode.seasonId], references: [animeSeason.id] }),
+  season: one(animeSeason, {
+    fields: [animeEpisode.seasonId],
+    references: [animeSeason.id],
+  }),
   video: one(video, { fields: [animeEpisode.videoId], references: [video.id] }),
 }));
 
-export const contentReviewActionRelations = relations(contentReviewAction, ({ one }) => ({
-  video: one(video, { fields: [contentReviewAction.videoId], references: [video.id] }),
-  reviewer: one(user, { fields: [contentReviewAction.reviewerId], references: [user.id] }),
-}));
+export const contentReviewActionRelations = relations(
+  contentReviewAction,
+  ({ one }) => ({
+    video: one(video, {
+      fields: [contentReviewAction.videoId],
+      references: [video.id],
+    }),
+    reviewer: one(user, {
+      fields: [contentReviewAction.reviewerId],
+      references: [user.id],
+    }),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Promotions — the home-page promotional carousel.
@@ -17335,10 +19918,10 @@ export const contentReviewActionRelations = relations(contentReviewAction, ({ on
  * snake_case labels, sent VERBATIM in both directions (CLAUDE.md wire-casing). Never
  * "internal-path".
  */
-export const promotionalDestinationKindEnum = pgEnum("promotional_destination_kind", [
-  "internal_path",
-  "external_url",
-]);
+export const promotionalDestinationKindEnum = pgEnum(
+  "promotional_destination_kind",
+  ["internal_path", "external_url"],
+);
 
 export const promotionalSlide = pgTable(
   "promotional_slide",
@@ -17370,7 +19953,8 @@ export const promotionalSlide = pgTable(
      * nicety. Nullable would make an unlabelled slide representable.
      */
     altText: text("alt_text").notNull(),
-    destinationKind: promotionalDestinationKindEnum("destination_kind").notNull(),
+    destinationKind:
+      promotionalDestinationKindEnum("destination_kind").notNull(),
     /** The path or URL itself, already normalized by `parsePromotionalDestination`. */
     destinationValue: text("destination_value").notNull(),
     /**
@@ -17413,7 +19997,10 @@ export const promotionalSlide = pgTable(
     index("promotional_slide_position_idx").on(table.position, table.id),
 
     check("promotional_slide_position_ck", sql`position >= 0`),
-    check("promotional_slide_alt_text_ck", sql`char_length(alt_text) BETWEEN 1 AND 200`),
+    check(
+      "promotional_slide_alt_text_ck",
+      sql`char_length(alt_text) BETWEEN 1 AND 200`,
+    ),
     check(
       "promotional_slide_image_url_ck",
       sql`char_length(image_url) <= 2048 AND image_url LIKE 'https://%'`,
@@ -17453,10 +20040,19 @@ export const promotionalSlide = pgTable(
   ],
 );
 
-export const promotionalSlideRelations = relations(promotionalSlide, ({ one }) => ({
-  createdBy: one(user, { fields: [promotionalSlide.createdByUserId], references: [user.id] }),
-  updatedBy: one(user, { fields: [promotionalSlide.updatedByUserId], references: [user.id] }),
-}));
+export const promotionalSlideRelations = relations(
+  promotionalSlide,
+  ({ one }) => ({
+    createdBy: one(user, {
+      fields: [promotionalSlide.createdByUserId],
+      references: [user.id],
+    }),
+    updatedBy: one(user, {
+      fields: [promotionalSlide.updatedByUserId],
+      references: [user.id],
+    }),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Spotlight — the three-video rail on the home feed below the category tiles.
@@ -17500,14 +20096,23 @@ export const feedSpotlightSlot = pgTable(
   (table) => [
     uniqueIndex("feed_spotlight_slot_position_uidx").on(table.position),
     uniqueIndex("feed_spotlight_slot_video_uidx").on(table.videoId),
-    check("feed_spotlight_slot_position_ck", sql`position >= 0 AND position <= 2`),
+    check(
+      "feed_spotlight_slot_position_ck",
+      sql`position >= 0 AND position <= 2`,
+    ),
   ],
 );
 
-export const feedSpotlightSlotRelations = relations(feedSpotlightSlot, ({ one }) => ({
-  video: one(video, { fields: [feedSpotlightSlot.videoId], references: [video.id] }),
-  updatedBy: one(user, {
-    fields: [feedSpotlightSlot.updatedByUserId],
-    references: [user.id],
+export const feedSpotlightSlotRelations = relations(
+  feedSpotlightSlot,
+  ({ one }) => ({
+    video: one(video, {
+      fields: [feedSpotlightSlot.videoId],
+      references: [video.id],
+    }),
+    updatedBy: one(user, {
+      fields: [feedSpotlightSlot.updatedByUserId],
+      references: [user.id],
+    }),
   }),
-}));
+);
