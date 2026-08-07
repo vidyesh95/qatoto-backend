@@ -23,6 +23,14 @@ storeRouter.get("/products/:productSlug", storeController.getProduct);
  * adjacent makes the pair obvious.
  */
 storeRouter.get("/products/:productSlug/companions", storeController.getProductCompanions);
+/**
+ * A16. Indicative only, and never a promise — see the controller. The destination is a
+ * query parameter because the buyer has not chosen an address yet on a product page.
+ */
+storeRouter.get(
+  "/products/:productSlug/delivery-estimate",
+  storeController.getProductDeliveryEstimate,
+);
 storeRouter.get("/organizations/:organizationSlug", storeController.getOrganizationStorefront);
 storeRouter.get("/providers", storeController.listProviders);
 storeRouter.get("/providers/:organizationSlug", storeController.getProvider);

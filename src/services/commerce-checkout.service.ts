@@ -32,6 +32,10 @@ import {
   type CommerceCartActorContext,
   type DatabaseTransaction,
 } from "#src/services/commerce-cart.service.js";
+import {
+  estimateDeliveryForLines,
+  type DeliveryEstimateProjection,
+} from "#src/services/commerce-delivery-estimate.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -109,6 +113,20 @@ export interface CheckoutPrepareProjection {
   readonly items: readonly CheckoutPrepareLineProjection[];
   readonly currencyTotals: readonly CheckoutCurrencyTotalProjection[];
   readonly deliveryAddressSnapshot: string | null;
+  /**
+   * A16. Indicative and per seller, because each seller organization becomes its own
+   * order and ships separately. EMPTY IS A REAL ANSWER — no covering provider means
+   * "we do not know", which is not the same as "free", and the mock this replaces
+   * rendered the second one.
+   *
+   * None of this reaches `shippingInCents`. Nothing is being charged for freight.
+   */
+  readonly deliveryEstimates: readonly SellerDeliveryEstimateProjection[];
+}
+
+export interface SellerDeliveryEstimateProjection {
+  readonly sellerOrganizationId: string;
+  readonly estimates: readonly DeliveryEstimateProjection[];
 }
 
 /**
@@ -211,7 +229,13 @@ function formatDeliveryAddressSnapshot(address: {
  * address that it was not theirs — a wrong answer to the question they asked.
  */
 type OwnedDeliveryAddressOutcome =
-  | { readonly status: "resolved"; readonly id: string; readonly snapshot: string }
+  | {
+      readonly status: "resolved";
+      readonly id: string;
+      readonly snapshot: string;
+      /** A16 needs the destination country; the snapshot is prose, not a field. */
+      readonly countryCode: string;
+    }
   | { readonly status: "not_owned" }
   | { readonly status: "wrong_kind"; readonly addressKind: string };
 
@@ -250,6 +274,7 @@ async function assertOwnedDeliveryAddress(
     status: "resolved",
     id: address.id,
     snapshot: formatDeliveryAddressSnapshot(address),
+    countryCode: address.countryCode,
   };
 }
 
@@ -265,10 +290,47 @@ async function assertOrganizationActive(
   return organizationRow !== undefined && organizationRow.tradeState === "active";
 }
 
+/**
+ * One estimate group per seller organization, because each becomes its own order and
+ * ships on its own (§2.3).
+ *
+ * Returns an empty array when there is no delivery address yet — a buyer who has not
+ * chosen where the goods go has not asked a question freight can answer.
+ */
+async function estimatePrepareDelivery(
+  items: readonly PrepareProductLineRow[],
+  deliveryCountryCode: string | null,
+): Promise<readonly SellerDeliveryEstimateProjection[]> {
+  if (deliveryCountryCode === null || items.length === 0) return [];
+
+  const linesBySeller = new Map<string, { productId: string; quantity: number }[]>();
+  for (const line of items) {
+    const sellerLines = linesBySeller.get(line.sellerOrganizationId) ?? [];
+    sellerLines.push({ productId: line.productId, quantity: line.quantity });
+    linesBySeller.set(line.sellerOrganizationId, sellerLines);
+  }
+
+  const estimated = await Promise.all(
+    [...linesBySeller.entries()].map(async ([sellerOrganizationId, sellerLines]) => ({
+      sellerOrganizationId,
+      estimates: await estimateDeliveryForLines({
+        sellerOrganizationId,
+        destinationCountryCode: deliveryCountryCode,
+        lines: sellerLines,
+      }),
+    })),
+  );
+
+  return estimated.toSorted((left, right) =>
+    left.sellerOrganizationId.localeCompare(right.sellerOrganizationId),
+  );
+}
+
 function projectPrepare(
   prepare: PrepareRow,
   items: readonly PrepareProductLineRow[],
   currencyTotals: readonly PrepareCurrencyTotalRow[],
+  deliveryEstimates: readonly SellerDeliveryEstimateProjection[] = [],
 ): CheckoutPrepareProjection {
   return {
     prepareId: prepare.id,
@@ -285,6 +347,7 @@ function projectPrepare(
         currency: line.currency,
         isMadeToOrder: line.isMadeToOrder,
       })),
+    deliveryEstimates,
     currencyTotals: currencyTotals.map((total) => ({
       currency: total.currency,
       subtotalInCents: total.subtotalInCents,
@@ -437,6 +500,7 @@ export async function prepareCheckout(
 
       let deliveryAddressId: string | null = null;
       let deliveryAddressSnapshot: string | null = null;
+      let deliveryCountryCode: string | null = null;
       if (input.deliveryAddressId !== undefined) {
         const owned = await assertOwnedDeliveryAddress(
           transaction,
@@ -449,6 +513,7 @@ export async function prepareCheckout(
         }
         deliveryAddressId = owned.id;
         deliveryAddressSnapshot = owned.snapshot;
+        deliveryCountryCode = owned.countryCode;
       }
 
       const now = new Date();
@@ -579,6 +644,7 @@ export async function prepareCheckout(
         prepare,
         items: insertedLines,
         currencyTotals: insertedCurrencyTotals,
+        deliveryCountryCode,
       };
     });
 
@@ -599,11 +665,26 @@ export async function prepareCheckout(
           success: false,
           error: mapPricingErrorToCheckoutError(outcome.productId, outcome.error),
         };
-      case "created":
+      case "created": {
+        /**
+         * Estimated AFTER the transaction commits, deliberately. An estimate is
+         * display-only (A16) — nothing about it gates the prepare, so a slow or empty
+         * provider directory must not hold a row lock or fail a checkout.
+         */
+        const deliveryEstimates = await estimatePrepareDelivery(
+          outcome.items,
+          outcome.deliveryCountryCode,
+        );
         return {
           success: true,
-          value: projectPrepare(outcome.prepare, outcome.items, outcome.currencyTotals),
+          value: projectPrepare(
+            outcome.prepare,
+            outcome.items,
+            outcome.currencyTotals,
+            deliveryEstimates,
+          ),
         };
+      }
       default: {
         const exhaustiveCheck: never = outcome;
         throw new Error(`Unhandled prepareCheckout outcome: ${JSON.stringify(exhaustiveCheck)}`);

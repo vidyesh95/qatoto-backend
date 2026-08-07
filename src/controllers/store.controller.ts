@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import * as commerceDeliveryEstimateService from "#src/services/commerce-delivery-estimate.service.js";
 import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";
@@ -269,6 +270,63 @@ export async function getProduct(req: Request, res: Response): Promise<void> {
  * Grouped by `relationKind`, each companion carrying `sourceKind` so a client can
  * never render a seller's compatibility claim as a verified one (§15.3).
  */
+const DeliveryEstimateQuerySchema = z
+  .object({
+    destinationCountryCode: z
+      .string()
+      .trim()
+      .regex(/^[A-Z]{2}$/, "Use an ISO 3166-1 alpha-2 country code."),
+    quantity: z.coerce.number().int().min(1).max(1_000_000).default(1),
+  })
+  .strict();
+
+/**
+ * GET /store/products/:productSlug/delivery-estimate (A16).
+ *
+ * The destination is an explicit query parameter rather than anything server-derived,
+ * because §0 makes a browse-country preference display-only — and an estimate IS
+ * display. Nothing gated by this value is a compliance, tax or availability decision.
+ *
+ * An empty `estimates` array means no provider on the directory covers that route. It
+ * does not mean free: the mock this replaces rendered "Free Delivery" over a hardcoded
+ * date range, which is exactly the claim §14 blocks.
+ */
+export async function getProductDeliveryEstimate(req: Request, res: Response): Promise<void> {
+  const params = ProductParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const query = DeliveryEstimateQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const productResult = await storeCatalogService.getPublicProductBySlug(params.data.productSlug);
+  if (!productResult.success) {
+    res.status(404).json({
+      status: "error",
+      statusCode: 404,
+      message: "Product not found.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const estimates = await commerceDeliveryEstimateService.estimateDeliveryForLines({
+    sellerOrganizationId: productResult.value.seller.organizationId,
+    destinationCountryCode: query.data.destinationCountryCode,
+    lines: [{ productId: productResult.value.id, quantity: query.data.quantity }],
+  });
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Indicative delivery estimate.",
+    data: { estimates },
+  } satisfies ApiResponse);
+}
+
 export async function getProductCompanions(req: Request, res: Response): Promise<void> {
   const params = ProductParamsSchema.safeParse(req.params);
   if (!params.success) {

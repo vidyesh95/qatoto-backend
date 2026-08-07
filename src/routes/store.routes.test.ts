@@ -31,6 +31,13 @@ const merchandisingStubs = vi.hoisted(() => ({
 
 // Phase 9 (§15.2) moved pathways out of the merchandising service: a set of slots with
 // ranked candidates shares nothing with hero slides and rails beyond a time window.
+const deliveryEstimateStubs = vi.hoisted(() => ({
+  estimateDeliveryForLines: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  resolveShippingOriginCountryCode: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  computePackagingTotals: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  groupOfferingsIntoEstimates: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
+
 const pathwayStubs = vi.hoisted(() => ({
   listActivePathways: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getPathwaySetBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
@@ -46,6 +53,7 @@ vi.mock("#src/services/store-catalog.service.js", () => catalogStubs);
 vi.mock("#src/services/store-search.service.js", () => searchStubs);
 vi.mock("#src/services/store-merchandising.service.js", () => merchandisingStubs);
 vi.mock("#src/services/store-pathways.service.js", () => pathwayStubs);
+vi.mock("#src/services/commerce-delivery-estimate.service.js", () => deliveryEstimateStubs);
 vi.mock("#src/services/commerce-providers.service.js", () => providersStubs);
 
 describe("public store routes", () => {
@@ -291,5 +299,57 @@ describe("public store routes", () => {
     const response = await request(app).get("/store/pathways/never-published");
 
     expect(response.status).toBe(404);
+  });
+
+  it("estimates delivery for a product against an explicit destination", async () => {
+    catalogStubs.getPublicProductBySlug.mockResolvedValue({
+      success: true,
+      value: { id: "prd_1", seller: { organizationId: "commerce_org_seller" } },
+    });
+    deliveryEstimateStubs.estimateDeliveryForLines.mockResolvedValue([
+      { currency: "USD", estimatedMinInCents: 25_000, estimatedMaxInCents: 90_000 },
+    ]);
+
+    const response = await request(app)
+      .get("/store/products/solar-freezer/delivery-estimate")
+      .query({ destinationCountryCode: "DE", quantity: 50 });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.estimates).toHaveLength(1);
+    expect(deliveryEstimateStubs.estimateDeliveryForLines).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sellerOrganizationId: "commerce_org_seller",
+        destinationCountryCode: "DE",
+        lines: [{ productId: "prd_1", quantity: 50 }],
+      }),
+    );
+  });
+
+  it("refuses a destination that is not an ISO alpha-2 code", async () => {
+    const response = await request(app)
+      .get("/store/products/solar-freezer/delivery-estimate")
+      .query({ destinationCountryCode: "Germany" });
+
+    expect(response.status).toBe(422);
+    expect(deliveryEstimateStubs.estimateDeliveryForLines).not.toHaveBeenCalled();
+  });
+
+  /**
+   * An uncovered route returns an empty list, never a zero. "We do not know" and "it is
+   * free" are different answers, and only the mock claimed the second one.
+   */
+  it("returns an empty estimate list when no provider covers the route", async () => {
+    catalogStubs.getPublicProductBySlug.mockResolvedValue({
+      success: true,
+      value: { id: "prd_1", seller: { organizationId: "commerce_org_seller" } },
+    });
+    deliveryEstimateStubs.estimateDeliveryForLines.mockResolvedValue([]);
+
+    const response = await request(app)
+      .get("/store/products/solar-freezer/delivery-estimate")
+      .query({ destinationCountryCode: "AQ" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.estimates).toEqual([]);
   });
 });
