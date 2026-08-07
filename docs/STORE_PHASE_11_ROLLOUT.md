@@ -105,7 +105,28 @@ upload returns `202`, not `201`.
 ## Preconditions
 
 1. Migrations `0040`–`0058` applied and the Phase 9 verify script green.
-2. **Every buyer organization needs an address of kind `delivery`.** The `0060`
+2. **`COMMERCE_PII_ENCRYPTION_SECRET` must be set.** It is optional in
+   `src/config/index.ts`, so the server boots without it and `/ready` still reports
+   ready outside production — but every address write returns
+   `PII_ENCRYPTION_UNAVAILABLE`, which takes delivery addresses, checkout and the A15
+   reveal with it. Phase 11 is what makes it load-bearing.
+
+    Generate one and append it without printing it:
+
+    ```bash
+    echo "COMMERCE_PII_ENCRYPTION_SECRET=$(openssl rand -base64 48)" >> .env
+    ```
+
+    `-base64 48` gives 48 random bytes as 64 characters; the config floor is 32. Base64
+    output needs no quoting in a dotenv file.
+
+    **Set it before the first address is written, and then treat it as permanent.** The
+    key is derived as `sha256("qatoto:commerce-pii:v1:" + secret)` and the stored envelope
+    carries a key _version_, not the key — so changing the secret makes every address
+    encrypted under the old one permanently unreadable, with no rollback. Rotation means
+    adding a new key version and re-encrypting every envelope, not editing this line.
+
+3. **Every buyer organization needs an address of kind `delivery`.** The `0060`
    preflight `RAISE NOTICE`s the count of organizations that have addresses but none of
    that kind; their next checkout is refused with `ADDRESS_KIND_INVALID` until one
    exists. It is a NOTICE rather than an EXCEPTION because promoting a billing address

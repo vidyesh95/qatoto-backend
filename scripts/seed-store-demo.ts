@@ -201,7 +201,7 @@ async function ensureOrganizations(userIdByKey: Record<DemoUserKey, string>): Pr
 async function ensureBuyerDeliveryAddress(buyerUserId: string): Promise<void> {
   if (!isCommercePiiEncryptionConfigured()) {
     throw new Error(
-      "COMMERCE_PII_ENCRYPTION_SECRET is not set, so no address can be encrypted. Add a 32+ character secret to .env and rerun.",
+      'COMMERCE_PII_ENCRYPTION_SECRET is not set, so no address can be encrypted. Generate one with: echo "COMMERCE_PII_ENCRYPTION_SECRET=$(openssl rand -base64 48)" >> .env',
     );
   }
 
