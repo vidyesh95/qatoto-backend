@@ -28,6 +28,10 @@ import {
   type CommercePricingError,
   type PricedProductLine,
 } from "#src/lib/commerce-pricing.js";
+import {
+  derivePromisedDeliveryAt,
+  latestPromisedDeliveryAt,
+} from "#src/lib/commerce-promised-delivery.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
   getOrCreateCartForUpdate,
@@ -53,8 +57,10 @@ import {
 import type { Result } from "#src/types/index.js";
 
 type PrepareRow = typeof commerceCheckoutPrepare.$inferSelect;
-type PrepareProductLineRow = typeof commerceCheckoutPrepareProductLine.$inferSelect;
-type PrepareCurrencyTotalRow = typeof commerceCheckoutPrepareCurrencyTotal.$inferSelect;
+type PrepareProductLineRow =
+  typeof commerceCheckoutPrepareProductLine.$inferSelect;
+type PrepareCurrencyTotalRow =
+  typeof commerceCheckoutPrepareCurrencyTotal.$inferSelect;
 type OrderRow = typeof commerceOrder.$inferSelect;
 
 export type CommerceCheckoutError =
@@ -78,7 +84,11 @@ export type CommerceCheckoutError =
       customizationError: CommerceCustomizationError;
     }
   | { type: "PRODUCT_NOT_PURCHASABLE"; productId: string }
-  | { type: "BELOW_MINIMUM_ORDER_QUANTITY"; productId: string; minimumOrderQuantity: number }
+  | {
+      type: "BELOW_MINIMUM_ORDER_QUANTITY";
+      productId: string;
+      minimumOrderQuantity: number;
+    }
   | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
   /**
    * A1. Distinct from `PRODUCT_NOT_PURCHASABLE` because the product IS purchasable —
@@ -187,9 +197,14 @@ async function appendAuditOrThrow(
   transaction: DatabaseTransaction,
   input: Parameters<typeof appendCommerceOrganizationAuditEntry>[1],
 ): Promise<void> {
-  const appended = await appendCommerceOrganizationAuditEntry(transaction, input);
+  const appended = await appendCommerceOrganizationAuditEntry(
+    transaction,
+    input,
+  );
   if (!appended.success) {
-    throw new Error(`Commerce checkout audit append failed: ${appended.error.type}`);
+    throw new Error(
+      `Commerce checkout audit append failed: ${appended.error.type}`,
+    );
   }
 }
 
@@ -209,7 +224,11 @@ function mapPricingErrorToCheckoutError(
         minimumOrderQuantity: error.minimumOrderQuantity,
       };
     case "INSUFFICIENT_STOCK":
-      return { type: "INSUFFICIENT_STOCK", productId, availableQuantity: error.availableQuantity };
+      return {
+        type: "INSUFFICIENT_STOCK",
+        productId,
+        availableQuantity: error.availableQuantity,
+      };
     case "VARIANT_REQUIRED":
       return { type: "VARIANT_REQUIRED", productId };
     case "VARIANT_NOT_APPLICABLE":
@@ -222,7 +241,9 @@ function mapPricingErrorToCheckoutError(
       return { type: "SAMPLE_NOT_AVAILABLE", productId };
     default: {
       const exhaustiveCheck: never = error;
-      throw new Error(`Unhandled commerce pricing error: ${JSON.stringify(exhaustiveCheck)}`);
+      throw new Error(
+        `Unhandled commerce pricing error: ${JSON.stringify(exhaustiveCheck)}`,
+      );
     }
   }
 }
@@ -237,9 +258,11 @@ function formatDeliveryAddressSnapshot(address: {
   readonly locality: string;
   readonly postalCode: string | null;
 }): string {
-  const namedParts = [address.countryCode, address.regionCode ?? "", address.locality].filter(
-    (part) => part !== "",
-  );
+  const namedParts = [
+    address.countryCode,
+    address.regionCode ?? "",
+    address.locality,
+  ].filter((part) => part !== "");
   const base = namedParts.join(", ");
   return address.postalCode !== null ? `${base} ${address.postalCode}` : base;
 }
@@ -310,7 +333,9 @@ async function assertOrganizationActive(
     .from(commerceOrganization)
     .where(eq(commerceOrganization.id, organizationId))
     .limit(1);
-  return organizationRow !== undefined && organizationRow.tradeState === "active";
+  return (
+    organizationRow !== undefined && organizationRow.tradeState === "active"
+  );
 }
 
 /**
@@ -326,7 +351,10 @@ async function estimatePrepareDelivery(
 ): Promise<readonly SellerDeliveryEstimateProjection[]> {
   if (deliveryCountryCode === null || items.length === 0) return [];
 
-  const linesBySeller = new Map<string, { productId: string; quantity: number }[]>();
+  const linesBySeller = new Map<
+    string,
+    { productId: string; quantity: number }[]
+  >();
   for (const line of items) {
     const sellerLines = linesBySeller.get(line.sellerOrganizationId) ?? [];
     sellerLines.push({ productId: line.productId, quantity: line.quantity });
@@ -334,14 +362,16 @@ async function estimatePrepareDelivery(
   }
 
   const estimated = await Promise.all(
-    [...linesBySeller.entries()].map(async ([sellerOrganizationId, sellerLines]) => ({
-      sellerOrganizationId,
-      estimates: await estimateDeliveryForLines({
+    [...linesBySeller.entries()].map(
+      async ([sellerOrganizationId, sellerLines]) => ({
         sellerOrganizationId,
-        destinationCountryCode: deliveryCountryCode,
-        lines: sellerLines,
+        estimates: await estimateDeliveryForLines({
+          sellerOrganizationId,
+          destinationCountryCode: deliveryCountryCode,
+          lines: sellerLines,
+        }),
       }),
-    })),
+    ),
   );
 
   return estimated.toSorted((left, right) =>
@@ -384,7 +414,9 @@ function projectPrepare(
   };
 }
 
-async function loadPrepareProjection(prepareId: string): Promise<CheckoutPrepareProjection | null> {
+async function loadPrepareProjection(
+  prepareId: string,
+): Promise<CheckoutPrepareProjection | null> {
   const [prepare] = await db
     .select()
     .from(commerceCheckoutPrepare)
@@ -414,7 +446,10 @@ async function loadPrepareProjectionByIdempotencyKey(
     .where(
       and(
         eq(commerceCheckoutPrepare.buyerOrganizationId, buyerOrganizationId),
-        eq(commerceCheckoutPrepare.prepareIdempotencyKey, prepareIdempotencyKey),
+        eq(
+          commerceCheckoutPrepare.prepareIdempotencyKey,
+          prepareIdempotencyKey,
+        ),
       ),
     )
     .limit(1);
@@ -512,12 +547,18 @@ export async function prepareCheckout(
       );
       if (!organizationIsActive) return { status: "org_inactive" as const };
 
-      const cart = await getOrCreateCartForUpdate(transaction, actor.organizationId);
+      const cart = await getOrCreateCartForUpdate(
+        transaction,
+        actor.organizationId,
+      );
       const lines = await transaction
         .select()
         .from(commerceCartProductLine)
         .where(eq(commerceCartProductLine.cartId, cart.id))
-        .orderBy(asc(commerceCartProductLine.createdAt), asc(commerceCartProductLine.id))
+        .orderBy(
+          asc(commerceCartProductLine.createdAt),
+          asc(commerceCartProductLine.id),
+        )
         .for("update");
       if (lines.length === 0) return { status: "empty_cart" as const };
 
@@ -530,9 +571,13 @@ export async function prepareCheckout(
           actor.organizationId,
           input.deliveryAddressId,
         );
-        if (owned.status === "not_owned") return { status: "address_not_owned" as const };
+        if (owned.status === "not_owned")
+          return { status: "address_not_owned" as const };
         if (owned.status === "wrong_kind") {
-          return { status: "address_wrong_kind" as const, addressKind: owned.addressKind };
+          return {
+            status: "address_wrong_kind" as const,
+            addressKind: owned.addressKind,
+          };
         }
         deliveryAddressId = owned.id;
         deliveryAddressSnapshot = owned.snapshot;
@@ -543,16 +588,27 @@ export async function prepareCheckout(
       await supersedeActiveCheckoutPrepares(transaction, cart.id, now);
 
       const productIds = lines.map((line) => line.productId);
-      const heldQuantityByScope = await loadHeldQuantitiesByProduct(transaction, productIds, now);
+      const heldQuantityByScope = await loadHeldQuantitiesByProduct(
+        transaction,
+        productIds,
+        now,
+      );
 
-      const pricedLines: (PricedProductLine & { readonly siblingOrder: number })[] = [];
-      const selectionsBySiblingOrder = new Map<number, readonly ResolvedCustomizationSelection[]>();
+      const pricedLines: (PricedProductLine & {
+        readonly siblingOrder: number;
+      })[] = [];
+      const selectionsBySiblingOrder = new Map<
+        number,
+        readonly ResolvedCustomizationSelection[]
+      >();
       for (const line of lines) {
         const priced = await loadPurchasableProductForCheckout(
           transaction,
           line.productId,
           line.quantity,
-          heldQuantityByScope.get(inventoryScopeKey(line.productId, line.variantId)) ?? 0,
+          heldQuantityByScope.get(
+            inventoryScopeKey(line.productId, line.variantId),
+          ) ?? 0,
           line.variantId,
           line.isSample,
         );
@@ -602,7 +658,9 @@ export async function prepareCheckout(
         pricedLines.push({ ...priced.value, siblingOrder: pricedLines.length });
       }
 
-      const expiresAt = new Date(now.getTime() + config.COMMERCE_CHECKOUT_PREPARE_TTL_MS);
+      const expiresAt = new Date(
+        now.getTime() + config.COMMERCE_CHECKOUT_PREPARE_TTL_MS,
+      );
       const [prepare] = await transaction
         .insert(commerceCheckoutPrepare)
         .values({
@@ -641,10 +699,19 @@ export async function prepareCheckout(
             currency: pricedLine.currency,
             isMadeToOrder: pricedLine.isMadeToOrder,
             isSample: pricedLine.isSample,
+            /**
+             * A13. Snapshotted here, not re-read at confirm. `confirmCheckout` builds the
+             * order line verbatim from this row, so this is the only place the lead time
+             * the buyer was shown can be captured.
+             */
+            leadTimeMaxDaysSnapshot: pricedLine.leadTimeMaxDays,
             siblingOrder: pricedLine.siblingOrder,
           })
           .returning();
-        if (!insertedLine) throw new Error("Checkout prepare product line insert returned no row.");
+        if (!insertedLine)
+          throw new Error(
+            "Checkout prepare product line insert returned no row.",
+          );
         insertedLines.push(insertedLine);
 
         /**
@@ -652,18 +719,21 @@ export async function prepareCheckout(
          * verbatim from the prepare row and never re-reads the cart — a selection that
          * does not exist here cannot reach an order. Already validated above.
          */
-        const validatedSelections = selectionsBySiblingOrder.get(pricedLine.siblingOrder) ?? [];
+        const validatedSelections =
+          selectionsBySiblingOrder.get(pricedLine.siblingOrder) ?? [];
         if (validatedSelections.length > 0) {
-          await transaction.insert(commerceCheckoutPrepareLineCustomization).values(
-            validatedSelections.map((selection) => ({
-              prepareProductLineId: insertedLine.id,
-              customizationOptionId: selection.customizationOptionId,
-              encryptedDocumentId: selection.encryptedDocumentId,
-              choiceValue: selection.choiceValue,
-              slotKeySnapshot: selection.slotKeySnapshot,
-              labelSnapshot: selection.labelSnapshot,
-            })),
-          );
+          await transaction
+            .insert(commerceCheckoutPrepareLineCustomization)
+            .values(
+              validatedSelections.map((selection) => ({
+                prepareProductLineId: insertedLine.id,
+                customizationOptionId: selection.customizationOptionId,
+                encryptedDocumentId: selection.encryptedDocumentId,
+                choiceValue: selection.choiceValue,
+                slotKeySnapshot: selection.slotKeySnapshot,
+                labelSnapshot: selection.labelSnapshot,
+              })),
+            );
         }
 
         await transaction.insert(commerceInventoryReservation).values({
@@ -681,7 +751,8 @@ export async function prepareCheckout(
 
         subtotalByCurrency.set(
           pricedLine.currency,
-          (subtotalByCurrency.get(pricedLine.currency) ?? 0) + pricedLine.lineTotalInCents,
+          (subtotalByCurrency.get(pricedLine.currency) ?? 0) +
+            pricedLine.lineTotalInCents,
         );
       }
 
@@ -701,7 +772,9 @@ export async function prepareCheckout(
           })
           .returning();
         if (!insertedTotal) {
-          throw new Error("Checkout prepare currency total insert returned no row.");
+          throw new Error(
+            "Checkout prepare currency total insert returned no row.",
+          );
         }
         insertedCurrencyTotals.push(insertedTotal);
       }
@@ -740,7 +813,10 @@ export async function prepareCheckout(
       case "address_wrong_kind":
         return {
           success: false,
-          error: { type: "ADDRESS_KIND_INVALID", addressKind: outcome.addressKind },
+          error: {
+            type: "ADDRESS_KIND_INVALID",
+            addressKind: outcome.addressKind,
+          },
         };
       case "customization_rejected":
         return {
@@ -754,7 +830,10 @@ export async function prepareCheckout(
       case "pricing_failed":
         return {
           success: false,
-          error: mapPricingErrorToCheckoutError(outcome.productId, outcome.error),
+          error: mapPricingErrorToCheckoutError(
+            outcome.productId,
+            outcome.error,
+          ),
         };
       case "created": {
         /**
@@ -778,7 +857,9 @@ export async function prepareCheckout(
       }
       default: {
         const exhaustiveCheck: never = outcome;
-        throw new Error(`Unhandled prepareCheckout outcome: ${JSON.stringify(exhaustiveCheck)}`);
+        throw new Error(
+          `Unhandled prepareCheckout outcome: ${JSON.stringify(exhaustiveCheck)}`,
+        );
       }
     }
   } catch (error: unknown) {
@@ -862,7 +943,10 @@ export async function confirmCheckout(
       }
 
       const now = new Date();
-      if (prepare.state === "active" && prepare.expiresAt.getTime() <= now.getTime()) {
+      if (
+        prepare.state === "active" &&
+        prepare.expiresAt.getTime() <= now.getTime()
+      ) {
         await transaction
           .update(commerceCheckoutPrepare)
           .set({ state: "expired", updatedAt: now })
@@ -890,9 +974,13 @@ export async function confirmCheckout(
           actor.organizationId,
           input.deliveryAddressId,
         );
-        if (owned.status === "not_owned") return { status: "address_not_owned" as const };
+        if (owned.status === "not_owned")
+          return { status: "address_not_owned" as const };
         if (owned.status === "wrong_kind") {
-          return { status: "address_wrong_kind" as const, addressKind: owned.addressKind };
+          return {
+            status: "address_wrong_kind" as const,
+            addressKind: owned.addressKind,
+          };
         }
         deliveryAddressId = owned.id;
         deliveryAddressSnapshot = owned.snapshot;
@@ -939,7 +1027,9 @@ export async function confirmCheckout(
             error: revalidated.error,
           };
         }
-        if (revalidated.value.unitPriceInCents !== prepareLine.unitPriceInCents) {
+        if (
+          revalidated.value.unitPriceInCents !== prepareLine.unitPriceInCents
+        ) {
           return {
             status: "price_changed" as const,
             productId: prepareLine.productId,
@@ -962,7 +1052,10 @@ export async function confirmCheckout(
         ...new Set(sellerGroups.map((group) => group.sellerOrganizationId)),
       ];
       const sellerOrganizations = await transaction
-        .select({ id: commerceOrganization.id, legalName: commerceOrganization.legalName })
+        .select({
+          id: commerceOrganization.id,
+          legalName: commerceOrganization.legalName,
+        })
         .from(commerceOrganization)
         .where(inArray(commerceOrganization.id, sellerOrganizationIds));
       const sellerLegalNameById = new Map(
@@ -980,7 +1073,8 @@ export async function confirmCheckout(
           createdByMemberId: actor.memberId,
         })
         .returning();
-      if (!checkoutGroup) throw new Error("Checkout group insert returned no row.");
+      if (!checkoutGroup)
+        throw new Error("Checkout group insert returned no row.");
 
       const prepareCurrencyTotals = await transaction
         .select()
@@ -1007,7 +1101,9 @@ export async function confirmCheckout(
        */
       const discountByCurrency = new Map<string, number>();
       for (const sellerGroup of sellerGroups) {
-        const sellerLegalName = sellerLegalNameById.get(sellerGroup.sellerOrganizationId);
+        const sellerLegalName = sellerLegalNameById.get(
+          sellerGroup.sellerOrganizationId,
+        );
         if (!sellerLegalName) return { status: "not_found" as const };
 
         const subtotalInCents = sellerGroup.lines.reduce(
@@ -1033,6 +1129,24 @@ export async function confirmCheckout(
         const { consumedCredits, discountInCents } = selectConsumableCredits(
           spendableCredits,
           subtotalInCents,
+        );
+
+        /**
+         * A13. Derived here, from the lead time each prepare line snapshotted, so the
+         * order and its lines commit to the same dates in the same transaction.
+         *
+         * `now` is the confirm instant — the moment the buyer became committed — not the
+         * prepare instant. A prepare may sit unconfirmed for a while, and a seller's
+         * lead time starts when the order does.
+         */
+        const linePromisedDeliveryDates = sellerGroup.lines.map((line) =>
+          derivePromisedDeliveryAt({
+            orderedAt: now,
+            leadTimeMaxDays: line.leadTimeMaxDaysSnapshot,
+          }),
+        );
+        const orderPromisedDeliveryAt = latestPromisedDeliveryAt(
+          linePromisedDeliveryDates,
         );
 
         const [order] = await transaction
@@ -1063,6 +1177,12 @@ export async function confirmCheckout(
              * immutable commercial record.
              */
             deliveryAddressId,
+            /**
+             * A13. Null when no line on this order declared a lead time, which keeps the
+             * order out of the on-time denominator rather than scoring it against a
+             * promise nobody made.
+             */
+            promisedDeliveryAt: orderPromisedDeliveryAt,
             createdByMemberId: actor.memberId,
           })
           .returning();
@@ -1072,7 +1192,8 @@ export async function confirmCheckout(
         if (discountInCents > 0) {
           discountByCurrency.set(
             sellerGroup.currency,
-            (discountByCurrency.get(sellerGroup.currency) ?? 0) + discountInCents,
+            (discountByCurrency.get(sellerGroup.currency) ?? 0) +
+              discountInCents,
           );
         }
 
@@ -1099,10 +1220,12 @@ export async function confirmCheckout(
               quantityReserved: line.isMadeToOrder ? 0 : line.quantity,
               unitPriceInCents: line.unitPriceInCents,
               lineTotalInCents: line.lineTotalInCents,
+              promisedDeliveryAt: linePromisedDeliveryDates[index] ?? null,
               siblingOrder: index,
             })
             .returning({ id: commerceOrderProductLine.id });
-          if (!orderLine) throw new Error("Order product line insert returned no row.");
+          if (!orderLine)
+            throw new Error("Order product line insert returned no row.");
 
           /**
            * A18. The last hop of the snapshot chain. Copied verbatim from the prepare
@@ -1113,7 +1236,12 @@ export async function confirmCheckout(
           const prepareCustomizations = await transaction
             .select()
             .from(commerceCheckoutPrepareLineCustomization)
-            .where(eq(commerceCheckoutPrepareLineCustomization.prepareProductLineId, line.id));
+            .where(
+              eq(
+                commerceCheckoutPrepareLineCustomization.prepareProductLineId,
+                line.id,
+              ),
+            );
           if (prepareCustomizations.length > 0) {
             await transaction.insert(commerceOrderLineCustomization).values(
               prepareCustomizations.map((selection) => ({
@@ -1136,7 +1264,9 @@ export async function confirmCheckout(
             if (line.variantId === null) {
               await transaction
                 .update(product)
-                .set({ stockQuantity: sql`${product.stockQuantity} - ${line.quantity}` })
+                .set({
+                  stockQuantity: sql`${product.stockQuantity} - ${line.quantity}`,
+                })
                 .where(eq(product.id, line.productId));
             } else {
               await transaction
@@ -1191,7 +1321,10 @@ export async function confirmCheckout(
           })
           .where(
             and(
-              eq(commerceCheckoutGroupCurrencyTotal.checkoutGroupId, checkoutGroup.id),
+              eq(
+                commerceCheckoutGroupCurrencyTotal.checkoutGroupId,
+                checkoutGroup.id,
+              ),
               eq(commerceCheckoutGroupCurrencyTotal.currency, currency),
             ),
           );
@@ -1199,7 +1332,12 @@ export async function confirmCheckout(
 
       await transaction
         .update(commerceCheckoutPrepare)
-        .set({ state: "consumed", deliveryAddressId, deliveryAddressSnapshot, updatedAt: now })
+        .set({
+          state: "consumed",
+          deliveryAddressId,
+          deliveryAddressSnapshot,
+          updatedAt: now,
+        })
         .where(eq(commerceCheckoutPrepare.id, prepare.id));
 
       await transaction
@@ -1242,14 +1380,20 @@ export async function confirmCheckout(
       case "address_wrong_kind":
         return {
           success: false,
-          error: { type: "ADDRESS_KIND_INVALID", addressKind: outcome.addressKind },
+          error: {
+            type: "ADDRESS_KIND_INVALID",
+            addressKind: outcome.addressKind,
+          },
         };
       case "empty_cart":
         return { success: false, error: { type: "EMPTY_CART" } };
       case "pricing_failed":
         return {
           success: false,
-          error: mapPricingErrorToCheckoutError(outcome.productId, outcome.error),
+          error: mapPricingErrorToCheckoutError(
+            outcome.productId,
+            outcome.error,
+          ),
         };
       case "price_changed":
         return {
@@ -1271,7 +1415,9 @@ export async function confirmCheckout(
         };
       default: {
         const exhaustiveCheck: never = outcome;
-        throw new Error(`Unhandled confirmCheckout outcome: ${JSON.stringify(exhaustiveCheck)}`);
+        throw new Error(
+          `Unhandled confirmCheckout outcome: ${JSON.stringify(exhaustiveCheck)}`,
+        );
       }
     }
   } catch (error: unknown) {
@@ -1289,7 +1435,8 @@ export async function confirmCheckout(
         success: false,
         error: {
           type: "CONFLICT",
-          message: "Checkout confirmation conflicted with a concurrent request.",
+          message:
+            "Checkout confirmation conflicted with a concurrent request.",
         },
       };
     }
@@ -1305,7 +1452,10 @@ export async function confirmCheckout(
  */
 export async function releaseExpiredInventoryReservations(
   asOf: Date,
-): Promise<{ readonly expiredPrepareCount: number; readonly releasedReservationCount: number }> {
+): Promise<{
+  readonly expiredPrepareCount: number;
+  readonly releasedReservationCount: number;
+}> {
   return db.transaction(async (transaction) => {
     const expiredPrepares = await transaction
       .update(commerceCheckoutPrepare)

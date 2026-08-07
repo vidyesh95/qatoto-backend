@@ -38,6 +38,10 @@ import {
   warehouseEngagementDetail,
   warehouseQuoteServiceDetail,
 } from "#src/db/schema.js";
+import {
+  derivePromisedDeliveryAt,
+  latestPromisedDeliveryAt,
+} from "#src/lib/commerce-promised-delivery.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
@@ -48,10 +52,13 @@ type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type QuoteRow = typeof commerceQuote.$inferSelect;
 type RevisionRow = typeof commerceQuoteRevision.$inferSelect;
 type OrderRow = typeof commerceOrder.$inferSelect;
-type QuoteDeliverablePlanRow = typeof commerceQuoteServiceDeliverablePlan.$inferSelect;
+type QuoteDeliverablePlanRow =
+  typeof commerceQuoteServiceDeliverablePlan.$inferSelect;
 type QuoteServiceLineRow = typeof commerceQuoteServiceLine.$inferSelect;
-type ProviderKind = (typeof commerceRfqServiceLine.$inferSelect)["providerKind"];
-type FreightTransportMode = (typeof freightQuoteServiceDetail.$inferSelect.transportModes)[number];
+type ProviderKind =
+  (typeof commerceRfqServiceLine.$inferSelect)["providerKind"];
+type FreightTransportMode =
+  (typeof freightQuoteServiceDetail.$inferSelect.transportModes)[number];
 
 export type CommerceQuotesError =
   | { type: "NOT_FOUND" }
@@ -141,7 +148,10 @@ export type QuoteServiceDetailProjection =
       readonly coverageLimitInCents: number | null;
       readonly currency: string | null;
     }
-  | { readonly kind: "inspection_agency"; readonly includedStages: readonly string[] }
+  | {
+      readonly kind: "inspection_agency";
+      readonly includedStages: readonly string[];
+    }
   | {
       readonly kind: "testing_certification_lab";
       readonly standards: readonly string[];
@@ -333,7 +343,10 @@ export interface OrderProjection {
   readonly createdAt: Date;
 }
 
-const MUTABLE_QUOTE_STATUSES: readonly QuoteRow["status"][] = ["draft", "submitted"];
+const MUTABLE_QUOTE_STATUSES: readonly QuoteRow["status"][] = [
+  "draft",
+  "submitted",
+];
 const INVITATION_RESPONDABLE_STATES: readonly (typeof commerceRfqInvitation.$inferSelect.state)[] =
   ["pending", "sent", "read", "responded"];
 
@@ -341,9 +354,14 @@ async function appendAuditOrThrow(
   transaction: DatabaseTransaction,
   input: Parameters<typeof appendCommerceOrganizationAuditEntry>[1],
 ): Promise<void> {
-  const appended = await appendCommerceOrganizationAuditEntry(transaction, input);
+  const appended = await appendCommerceOrganizationAuditEntry(
+    transaction,
+    input,
+  );
   if (!appended.success) {
-    throw new Error(`Commerce quote audit append failed: ${appended.error.type}`);
+    throw new Error(
+      `Commerce quote audit append failed: ${appended.error.type}`,
+    );
   }
 }
 
@@ -386,7 +404,9 @@ function projectOrder(order: OrderRow): OrderProjection {
   };
 }
 
-function projectRevisionMoney(revision: RevisionRow): QuoteRevisionMoneyProjection {
+function projectRevisionMoney(
+  revision: RevisionRow,
+): QuoteRevisionMoneyProjection {
   return {
     revisionNumber: revision.revisionNumber,
     currency: revision.currency,
@@ -420,7 +440,10 @@ async function providerMayQuoteRfq(
     .where(
       and(
         eq(commerceRfqInvitation.rfqId, input.rfqId),
-        eq(commerceRfqInvitation.providerOrganizationId, input.providerOrganizationId),
+        eq(
+          commerceRfqInvitation.providerOrganizationId,
+          input.providerOrganizationId,
+        ),
       ),
     )
     .limit(1);
@@ -448,7 +471,10 @@ async function providerMayQuoteRfq(
     .from(commerceProviderKindLink)
     .where(
       and(
-        eq(commerceProviderKindLink.organizationId, input.providerOrganizationId),
+        eq(
+          commerceProviderKindLink.organizationId,
+          input.providerOrganizationId,
+        ),
         eq(commerceProviderKindLink.verificationState, "verified"),
         inArray(commerceProviderKindLink.providerKind, kindValues),
       ),
@@ -465,7 +491,9 @@ async function insertQuoteServiceDetail(
   detail: QuoteServiceDetailInput,
 ): Promise<Result<true, CommerceQuotesError>> {
   if (detail.kind !== providerKind) {
-    return validationFailed("serviceDetail.kind must match the RFQ service line provider kind.");
+    return validationFailed(
+      "serviceDetail.kind must match the RFQ service line provider kind.",
+    );
   }
 
   switch (detail.kind) {
@@ -526,8 +554,14 @@ async function insertQuoteServiceDetail(
       if (!/^[A-Z]{3}\/[A-Z]{3}$/.test(detail.currencyPair)) {
         return validationFailed("FX currencyPair must be XXX/YYY.");
       }
-      if (detail.rateFixedPoint <= 0 || detail.rateScale < 0 || detail.rateScale > 12) {
-        return validationFailed("FX rateFixedPoint must be > 0 and rateScale between 0 and 12.");
+      if (
+        detail.rateFixedPoint <= 0 ||
+        detail.rateScale < 0 ||
+        detail.rateScale > 12
+      ) {
+        return validationFailed(
+          "FX rateFixedPoint must be > 0 and rateScale between 0 and 12.",
+        );
       }
       await transaction.insert(foreignExchangeQuoteServiceDetail).values({
         quoteServiceLineId,
@@ -542,7 +576,9 @@ async function insertQuoteServiceDetail(
     }
     default: {
       const exhaustiveCheck: never = detail;
-      throw new Error(`Unhandled quote service detail: ${JSON.stringify(exhaustiveCheck)}`);
+      throw new Error(
+        `Unhandled quote service detail: ${JSON.stringify(exhaustiveCheck)}`,
+      );
     }
   }
 }
@@ -563,7 +599,9 @@ async function copyAcceptedQuoteDetailToEngagement(
       const [detail] = await transaction
         .select()
         .from(freightQuoteServiceDetail)
-        .where(eq(freightQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .where(
+          eq(freightQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId),
+        )
         .limit(1);
       if (!detail) return false;
       await transaction.insert(freightEngagementDetail).values({
@@ -580,7 +618,12 @@ async function copyAcceptedQuoteDetailToEngagement(
       const [detail] = await transaction
         .select()
         .from(customsBrokerageQuoteServiceDetail)
-        .where(eq(customsBrokerageQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .where(
+          eq(
+            customsBrokerageQuoteServiceDetail.quoteServiceLineId,
+            quoteServiceLineId,
+          ),
+        )
         .limit(1);
       if (!detail) return false;
       await transaction.insert(customsBrokerageEngagementDetail).values({
@@ -595,7 +638,12 @@ async function copyAcceptedQuoteDetailToEngagement(
       const [detail] = await transaction
         .select()
         .from(insuranceQuoteServiceDetail)
-        .where(eq(insuranceQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .where(
+          eq(
+            insuranceQuoteServiceDetail.quoteServiceLineId,
+            quoteServiceLineId,
+          ),
+        )
         .limit(1);
       if (!detail) return false;
       await transaction.insert(insuranceEngagementDetail).values({
@@ -603,7 +651,9 @@ async function copyAcceptedQuoteDetailToEngagement(
         sourceQuoteServiceLineId: quoteServiceLineId,
         coverageClasses: detail.coverageClasses,
         coverageLimitMinorUnits:
-          detail.coverageLimitInCents === null ? null : String(detail.coverageLimitInCents),
+          detail.coverageLimitInCents === null
+            ? null
+            : String(detail.coverageLimitInCents),
         currency: detail.currency,
       });
       return true;
@@ -612,7 +662,12 @@ async function copyAcceptedQuoteDetailToEngagement(
       const [detail] = await transaction
         .select()
         .from(inspectionQuoteServiceDetail)
-        .where(eq(inspectionQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .where(
+          eq(
+            inspectionQuoteServiceDetail.quoteServiceLineId,
+            quoteServiceLineId,
+          ),
+        )
         .limit(1);
       if (!detail) return false;
       await transaction.insert(inspectionEngagementDetail).values({
@@ -626,7 +681,12 @@ async function copyAcceptedQuoteDetailToEngagement(
       const [detail] = await transaction
         .select()
         .from(testingCertificationQuoteServiceDetail)
-        .where(eq(testingCertificationQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .where(
+          eq(
+            testingCertificationQuoteServiceDetail.quoteServiceLineId,
+            quoteServiceLineId,
+          ),
+        )
         .limit(1);
       if (!detail) return false;
       await transaction.insert(testingCertificationEngagementDetail).values({
@@ -641,7 +701,12 @@ async function copyAcceptedQuoteDetailToEngagement(
       const [detail] = await transaction
         .select()
         .from(marketingQuoteServiceDetail)
-        .where(eq(marketingQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .where(
+          eq(
+            marketingQuoteServiceDetail.quoteServiceLineId,
+            quoteServiceLineId,
+          ),
+        )
         .limit(1);
       if (!detail) return false;
       await transaction.insert(marketingEngagementDetail).values({
@@ -656,7 +721,12 @@ async function copyAcceptedQuoteDetailToEngagement(
       const [detail] = await transaction
         .select()
         .from(warehouseQuoteServiceDetail)
-        .where(eq(warehouseQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .where(
+          eq(
+            warehouseQuoteServiceDetail.quoteServiceLineId,
+            quoteServiceLineId,
+          ),
+        )
         .limit(1);
       if (!detail) return false;
       await transaction.insert(warehouseEngagementDetail).values({
@@ -672,7 +742,12 @@ async function copyAcceptedQuoteDetailToEngagement(
       const [detail] = await transaction
         .select()
         .from(foreignExchangeQuoteServiceDetail)
-        .where(eq(foreignExchangeQuoteServiceDetail.quoteServiceLineId, quoteServiceLineId))
+        .where(
+          eq(
+            foreignExchangeQuoteServiceDetail.quoteServiceLineId,
+            quoteServiceLineId,
+          ),
+        )
         .limit(1);
       if (!detail) return false;
       await transaction.insert(foreignExchangeEngagementDetail).values({
@@ -683,14 +758,18 @@ async function copyAcceptedQuoteDetailToEngagement(
         rateScale: detail.rateScale,
         settlementRail: detail.settlementRail,
         notionalAmountMinorUnits:
-          detail.notionalAmountInCents === null ? null : String(detail.notionalAmountInCents),
+          detail.notionalAmountInCents === null
+            ? null
+            : String(detail.notionalAmountInCents),
         notionalCurrency: detail.notionalCurrency,
       });
       return true;
     }
     default: {
       const exhaustiveKind: never = providerKind;
-      throw new Error(`Unhandled provider kind: ${JSON.stringify(exhaustiveKind)}`);
+      throw new Error(
+        `Unhandled provider kind: ${JSON.stringify(exhaustiveKind)}`,
+      );
     }
   }
 }
@@ -764,7 +843,10 @@ export async function createQuoteShell(
         .where(
           and(
             eq(commerceRfqInvitation.rfqId, rfq.id),
-            eq(commerceRfqInvitation.providerOrganizationId, actor.organizationId),
+            eq(
+              commerceRfqInvitation.providerOrganizationId,
+              actor.organizationId,
+            ),
             inArray(commerceRfqInvitation.state, ["pending", "sent", "read"]),
           ),
         );
@@ -780,20 +862,28 @@ export async function createQuoteShell(
       case "conflict":
         return {
           success: false,
-          error: { type: "CONFLICT", message: "A quote already exists for this RFQ." },
+          error: {
+            type: "CONFLICT",
+            message: "A quote already exists for this RFQ.",
+          },
         };
       case "created":
         return { success: true, value: projectQuoteShell(created.quote) };
       default: {
         const exhaustiveCheck: never = created;
-        throw new Error(`Unhandled createQuoteShell outcome: ${JSON.stringify(exhaustiveCheck)}`);
+        throw new Error(
+          `Unhandled createQuoteShell outcome: ${JSON.stringify(exhaustiveCheck)}`,
+        );
       }
     }
   } catch (error: unknown) {
     if (isUniqueViolation(error)) {
       return {
         success: false,
-        error: { type: "CONFLICT", message: "A quote already exists for this RFQ." },
+        error: {
+          type: "CONFLICT",
+          message: "A quote already exists for this RFQ.",
+        },
       };
     }
     throw error;
@@ -809,13 +899,18 @@ export async function appendRevision(
   quoteId: string,
   input: AppendRevisionInput,
 ): Promise<
-  Result<QuoteRevisionMoneyProjection & { readonly quoteId: string }, CommerceQuotesError>
+  Result<
+    QuoteRevisionMoneyProjection & { readonly quoteId: string },
+    CommerceQuotesError
+  >
 > {
   if (input.validityDeadlineAt.getTime() <= Date.now()) {
     return validationFailed("validityDeadlineAt must be in the future.");
   }
   if (input.productLines.length === 0 && input.serviceLines.length === 0) {
-    return validationFailed("At least one product or service line is required.");
+    return validationFailed(
+      "At least one product or service line is required.",
+    );
   }
 
   const outcome = await db.transaction(async (transaction) => {
@@ -836,13 +931,17 @@ export async function appendRevision(
       .select({ id: commerceQuoteRevision.id })
       .from(commerceQuoteRevision)
       .where(
-        and(eq(commerceQuoteRevision.quoteId, quote.id), isNull(commerceQuoteRevision.submittedAt)),
+        and(
+          eq(commerceQuoteRevision.quoteId, quote.id),
+          isNull(commerceQuoteRevision.submittedAt),
+        ),
       )
       .limit(1);
     if (openDraft) {
       return {
         status: "validation" as const,
-        message: "Submit or abandon the existing unsubmitted revision before appending another.",
+        message:
+          "Submit or abandon the existing unsubmitted revision before appending another.",
       };
     }
 
@@ -854,8 +953,12 @@ export async function appendRevision(
       .select()
       .from(commerceRfqServiceLine)
       .where(eq(commerceRfqServiceLine.rfqId, quote.rfqId));
-    const rfqProductLineById = new Map(rfqProductLines.map((line) => [line.id, line]));
-    const rfqServiceLineById = new Map(rfqServiceLines.map((line) => [line.id, line]));
+    const rfqProductLineById = new Map(
+      rfqProductLines.map((line) => [line.id, line]),
+    );
+    const rfqServiceLineById = new Map(
+      rfqServiceLines.map((line) => [line.id, line]),
+    );
 
     let productSubtotal = 0;
     for (const productLine of input.productLines) {
@@ -870,7 +973,9 @@ export async function appendRevision(
 
     let serviceSubtotal = 0;
     for (const serviceLine of input.serviceLines) {
-      const rfqServiceLine = rfqServiceLineById.get(serviceLine.rfqServiceLineId);
+      const rfqServiceLine = rfqServiceLineById.get(
+        serviceLine.rfqServiceLineId,
+      );
       if (!rfqServiceLine) {
         return {
           status: "validation" as const,
@@ -880,13 +985,15 @@ export async function appendRevision(
       if (!serviceLine.serviceDetail) {
         return {
           status: "validation" as const,
-          message: "Every service line requires exactly one typed serviceDetail.",
+          message:
+            "Every service line requires exactly one typed serviceDetail.",
         };
       }
       if (serviceLine.serviceDetail.kind !== rfqServiceLine.providerKind) {
         return {
           status: "validation" as const,
-          message: "serviceDetail.kind must match the RFQ service line provider kind.",
+          message:
+            "serviceDetail.kind must match the RFQ service line provider kind.",
         };
       }
       const deliverableSequences = serviceLine.deliverables.map(
@@ -895,26 +1002,32 @@ export async function appendRevision(
       if (new Set(deliverableSequences).size !== deliverableSequences.length) {
         return {
           status: "validation" as const,
-          message: "Deliverable sequences must be unique within each service line.",
+          message:
+            "Deliverable sequences must be unique within each service line.",
         };
       }
       if (serviceLine.serviceDetail.kind === "insurance_provider") {
-        const hasCoverageLimit = serviceLine.serviceDetail.coverageLimitInCents !== undefined;
+        const hasCoverageLimit =
+          serviceLine.serviceDetail.coverageLimitInCents !== undefined;
         const hasCurrency = serviceLine.serviceDetail.currency !== undefined;
         if (hasCoverageLimit !== hasCurrency) {
           return {
             status: "validation" as const,
-            message: "Insurance coverageLimitInCents and currency must be provided together.",
+            message:
+              "Insurance coverageLimitInCents and currency must be provided together.",
           };
         }
       }
       if (serviceLine.serviceDetail.kind === "foreign_exchange_facilitator") {
-        const hasNotionalAmount = serviceLine.serviceDetail.notionalAmountInCents !== undefined;
-        const hasNotionalCurrency = serviceLine.serviceDetail.notionalCurrency !== undefined;
+        const hasNotionalAmount =
+          serviceLine.serviceDetail.notionalAmountInCents !== undefined;
+        const hasNotionalCurrency =
+          serviceLine.serviceDetail.notionalCurrency !== undefined;
         if (hasNotionalAmount !== hasNotionalCurrency) {
           return {
             status: "validation" as const,
-            message: "FX notionalAmountInCents and notionalCurrency must be provided together.",
+            message:
+              "FX notionalAmountInCents and notionalCurrency must be provided together.",
           };
         }
       }
@@ -929,7 +1042,10 @@ export async function appendRevision(
       input.shippingInCents -
       input.discountInCents;
     if (totalInCents < 0) {
-      return { status: "validation" as const, message: "Computed total cannot be negative." };
+      return {
+        status: "validation" as const,
+        message: "Computed total cannot be negative.",
+      };
     }
 
     const revisionNumber = quote.latestRevisionNumber + 1;
@@ -958,7 +1074,8 @@ export async function appendRevision(
     }
 
     for (const productLine of input.productLines) {
-      const lineTotalInCents = productLine.quantity * productLine.unitPriceInCents;
+      const lineTotalInCents =
+        productLine.quantity * productLine.unitPriceInCents;
       await transaction.insert(commerceQuoteProductLine).values({
         revisionId: revision.id,
         rfqProductLineId: productLine.rfqProductLineId,
@@ -974,7 +1091,9 @@ export async function appendRevision(
     }
 
     for (const serviceLine of input.serviceLines) {
-      const rfqServiceLine = rfqServiceLineById.get(serviceLine.rfqServiceLineId);
+      const rfqServiceLine = rfqServiceLineById.get(
+        serviceLine.rfqServiceLineId,
+      );
       if (!rfqServiceLine) {
         return {
           status: "validation" as const,
@@ -1017,7 +1136,9 @@ export async function appendRevision(
       if (!detailResult.success) {
         const detailError = detailResult.error;
         if (detailError.type !== "VALIDATION_FAILED") {
-          throw new Error(`Unexpected service detail error: ${detailError.type}`);
+          throw new Error(
+            `Unexpected service detail error: ${detailError.type}`,
+          );
         }
         return { status: "validation" as const, message: detailError.message };
       }
@@ -1041,11 +1162,16 @@ export async function appendRevision(
     case "created":
       return {
         success: true,
-        value: { quoteId: outcome.quoteId, ...projectRevisionMoney(outcome.revision) },
+        value: {
+          quoteId: outcome.quoteId,
+          ...projectRevisionMoney(outcome.revision),
+        },
       };
     default: {
       const exhaustiveCheck: never = outcome;
-      throw new Error(`Unhandled appendRevision outcome: ${JSON.stringify(exhaustiveCheck)}`);
+      throw new Error(
+        `Unhandled appendRevision outcome: ${JSON.stringify(exhaustiveCheck)}`,
+      );
     }
   }
 }
@@ -1059,7 +1185,10 @@ export async function submitRevision(
   quoteId: string,
   revisionNumber: number,
 ): Promise<
-  Result<QuoteShellProjection & { readonly revisionNumber: number }, CommerceQuotesError>
+  Result<
+    QuoteShellProjection & { readonly revisionNumber: number },
+    CommerceQuotesError
+  >
 > {
   const outcome = await db.transaction(async (transaction) => {
     const [quote] = await transaction
@@ -1097,7 +1226,10 @@ export async function submitRevision(
 
     const now = new Date();
     if (revision.validityDeadlineAt.getTime() <= now.getTime()) {
-      return { status: "expired" as const, expiredAt: revision.validityDeadlineAt };
+      return {
+        status: "expired" as const,
+        expiredAt: revision.validityDeadlineAt,
+      };
     }
 
     await transaction
@@ -1133,7 +1265,11 @@ export async function submitRevision(
       occurredAt: now,
     });
 
-    return { status: "submitted" as const, quote: updatedQuote, revisionNumber };
+    return {
+      status: "submitted" as const,
+      quote: updatedQuote,
+      revisionNumber,
+    };
   });
 
   switch (outcome.status) {
@@ -1144,28 +1280,44 @@ export async function submitRevision(
     case "revision_changed":
       return {
         success: false,
-        error: { type: "REVISION_CHANGED", currentRevision: outcome.currentRevision },
+        error: {
+          type: "REVISION_CHANGED",
+          currentRevision: outcome.currentRevision,
+        },
       };
     case "expired":
-      return { success: false, error: { type: "QUOTE_EXPIRED", expiredAt: outcome.expiredAt } };
+      return {
+        success: false,
+        error: { type: "QUOTE_EXPIRED", expiredAt: outcome.expiredAt },
+      };
     case "submitted":
       return {
         success: true,
-        value: { ...projectQuoteShell(outcome.quote), revisionNumber: outcome.revisionNumber },
+        value: {
+          ...projectQuoteShell(outcome.quote),
+          revisionNumber: outcome.revisionNumber,
+        },
       };
     default: {
       const exhaustiveCheck: never = outcome;
-      throw new Error(`Unhandled submitRevision outcome: ${JSON.stringify(exhaustiveCheck)}`);
+      throw new Error(
+        `Unhandled submitRevision outcome: ${JSON.stringify(exhaustiveCheck)}`,
+      );
     }
   }
 }
 
-async function loadLatestSubmittedRevision(quoteId: string): Promise<RevisionRow | null> {
+async function loadLatestSubmittedRevision(
+  quoteId: string,
+): Promise<RevisionRow | null> {
   const submitted = await db
     .select()
     .from(commerceQuoteRevision)
     .where(
-      and(eq(commerceQuoteRevision.quoteId, quoteId), isNotNull(commerceQuoteRevision.submittedAt)),
+      and(
+        eq(commerceQuoteRevision.quoteId, quoteId),
+        isNotNull(commerceQuoteRevision.submittedAt),
+      ),
     );
   if (submitted.length === 0) return null;
   return submitted.reduce((latest, candidate) =>
@@ -1179,8 +1331,17 @@ async function loadLatestSubmittedRevision(quoteId: string): Promise<RevisionRow
 export async function listQuotesForRfq(
   actor: QuoteActorContext,
   rfqId: string,
-): Promise<Result<{ readonly items: readonly QuoteComparisonItem[] }, CommerceQuotesError>> {
-  const [rfq] = await db.select().from(commerceRfq).where(eq(commerceRfq.id, rfqId)).limit(1);
+): Promise<
+  Result<
+    { readonly items: readonly QuoteComparisonItem[] },
+    CommerceQuotesError
+  >
+> {
+  const [rfq] = await db
+    .select()
+    .from(commerceRfq)
+    .where(eq(commerceRfq.id, rfqId))
+    .limit(1);
   if (!rfq) {
     return { success: false, error: { type: "NOT_FOUND" } };
   }
@@ -1221,7 +1382,9 @@ export async function listQuotesForRfq(
 
   if (!isBuyer) {
     // Non-buyer who isn't the provider of returned rows (shouldn't happen) or has no access.
-    const ownsAny = quotes.some((row) => row.quote.providerOrganizationId === actor.organizationId);
+    const ownsAny = quotes.some(
+      (row) => row.quote.providerOrganizationId === actor.organizationId,
+    );
     if (!ownsAny && quotes.length > 0) {
       return { success: false, error: { type: "NOT_FOUND" } };
     }
@@ -1267,7 +1430,9 @@ export async function listQuotesForRfq(
         displayName: row.providerDisplayName,
         slug: row.providerSlug,
       },
-      latestSubmittedRevision: latestSubmitted ? projectRevisionMoney(latestSubmitted) : null,
+      latestSubmittedRevision: latestSubmitted
+        ? projectRevisionMoney(latestSubmitted)
+        : null,
       productLineSummaries,
       serviceLineSummaries,
     });
@@ -1301,7 +1466,12 @@ async function loadQuoteServiceDetailProjection(
       const [detail] = await db
         .select()
         .from(customsBrokerageQuoteServiceDetail)
-        .where(eq(customsBrokerageQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .where(
+          eq(
+            customsBrokerageQuoteServiceDetail.quoteServiceLineId,
+            serviceLine.id,
+          ),
+        )
         .limit(1);
       return detail
         ? {
@@ -1315,7 +1485,9 @@ async function loadQuoteServiceDetailProjection(
       const [detail] = await db
         .select()
         .from(insuranceQuoteServiceDetail)
-        .where(eq(insuranceQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .where(
+          eq(insuranceQuoteServiceDetail.quoteServiceLineId, serviceLine.id),
+        )
         .limit(1);
       return detail
         ? {
@@ -1330,17 +1502,27 @@ async function loadQuoteServiceDetailProjection(
       const [detail] = await db
         .select()
         .from(inspectionQuoteServiceDetail)
-        .where(eq(inspectionQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .where(
+          eq(inspectionQuoteServiceDetail.quoteServiceLineId, serviceLine.id),
+        )
         .limit(1);
       return detail
-        ? { kind: serviceLine.providerKind, includedStages: detail.includedStages }
+        ? {
+            kind: serviceLine.providerKind,
+            includedStages: detail.includedStages,
+          }
         : null;
     }
     case "testing_certification_lab": {
       const [detail] = await db
         .select()
         .from(testingCertificationQuoteServiceDetail)
-        .where(eq(testingCertificationQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .where(
+          eq(
+            testingCertificationQuoteServiceDetail.quoteServiceLineId,
+            serviceLine.id,
+          ),
+        )
         .limit(1);
       return detail
         ? {
@@ -1354,7 +1536,9 @@ async function loadQuoteServiceDetailProjection(
       const [detail] = await db
         .select()
         .from(marketingQuoteServiceDetail)
-        .where(eq(marketingQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .where(
+          eq(marketingQuoteServiceDetail.quoteServiceLineId, serviceLine.id),
+        )
         .limit(1);
       return detail
         ? {
@@ -1368,7 +1552,9 @@ async function loadQuoteServiceDetailProjection(
       const [detail] = await db
         .select()
         .from(warehouseQuoteServiceDetail)
-        .where(eq(warehouseQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .where(
+          eq(warehouseQuoteServiceDetail.quoteServiceLineId, serviceLine.id),
+        )
         .limit(1);
       return detail
         ? {
@@ -1383,7 +1569,12 @@ async function loadQuoteServiceDetailProjection(
       const [detail] = await db
         .select()
         .from(foreignExchangeQuoteServiceDetail)
-        .where(eq(foreignExchangeQuoteServiceDetail.quoteServiceLineId, serviceLine.id))
+        .where(
+          eq(
+            foreignExchangeQuoteServiceDetail.quoteServiceLineId,
+            serviceLine.id,
+          ),
+        )
         .limit(1);
       return detail
         ? {
@@ -1399,7 +1590,9 @@ async function loadQuoteServiceDetailProjection(
     }
     default: {
       const exhaustiveCheck: never = serviceLine.providerKind;
-      throw new Error(`Unhandled quote provider kind: ${String(exhaustiveCheck)}`);
+      throw new Error(
+        `Unhandled quote provider kind: ${String(exhaustiveCheck)}`,
+      );
     }
   }
 }
@@ -1437,7 +1630,10 @@ export async function getQuote(
     .where(
       and(
         eq(commerceQuoteRevision.quoteId, row.quote.id),
-        eq(commerceQuoteRevision.revisionNumber, row.quote.latestRevisionNumber),
+        eq(
+          commerceQuoteRevision.revisionNumber,
+          row.quote.latestRevisionNumber,
+        ),
       ),
     )
     .limit(1);
@@ -1468,7 +1664,10 @@ export async function getQuote(
         })),
       );
       const serviceDetailByLineId = new Map(
-        serviceDetailEntries.map((entry) => [entry.quoteServiceLineId, entry.serviceDetail]),
+        serviceDetailEntries.map((entry) => [
+          entry.quoteServiceLineId,
+          entry.serviceDetail,
+        ]),
       );
       const deliverablePlans =
         serviceLines.length === 0
@@ -1486,12 +1685,20 @@ export async function getQuote(
                 asc(commerceQuoteServiceDeliverablePlan.quoteServiceLineId),
                 asc(commerceQuoteServiceDeliverablePlan.sequence),
               );
-      const deliverablePlansByServiceLineId = new Map<string, QuoteDeliverablePlanRow[]>();
+      const deliverablePlansByServiceLineId = new Map<
+        string,
+        QuoteDeliverablePlanRow[]
+      >();
       for (const deliverablePlan of deliverablePlans) {
         const existingPlans =
-          deliverablePlansByServiceLineId.get(deliverablePlan.quoteServiceLineId) ?? [];
+          deliverablePlansByServiceLineId.get(
+            deliverablePlan.quoteServiceLineId,
+          ) ?? [];
         existingPlans.push(deliverablePlan);
-        deliverablePlansByServiceLineId.set(deliverablePlan.quoteServiceLineId, existingPlans);
+        deliverablePlansByServiceLineId.set(
+          deliverablePlan.quoteServiceLineId,
+          existingPlans,
+        );
       }
 
       latestRevisionProjection = {
@@ -1522,15 +1729,15 @@ export async function getQuote(
           exclusionsSnapshot: line.exclusionsSnapshot,
           deliverableSnapshot: line.deliverableSnapshot,
           serviceDetail: serviceDetailByLineId.get(line.id) ?? null,
-          deliverables: (deliverablePlansByServiceLineId.get(line.id) ?? []).map(
-            (deliverablePlan) => ({
-              id: deliverablePlan.id,
-              sequence: deliverablePlan.sequence,
-              title: deliverablePlan.title,
-              isRequired: deliverablePlan.isRequired,
-              dueAt: deliverablePlan.dueAt,
-            }),
-          ),
+          deliverables: (
+            deliverablePlansByServiceLineId.get(line.id) ?? []
+          ).map((deliverablePlan) => ({
+            id: deliverablePlan.id,
+            sequence: deliverablePlan.sequence,
+            title: deliverablePlan.title,
+            isRequired: deliverablePlan.isRequired,
+            dueAt: deliverablePlan.dueAt,
+          })),
           siblingOrder: line.siblingOrder,
         })),
       };
@@ -1611,7 +1818,10 @@ export async function acceptQuote(
         const [competingOrder] = await transaction
           .select({ id: commerceOrder.id })
           .from(commerceOrder)
-          .innerJoin(commerceQuote, eq(commerceQuote.id, commerceOrder.acceptedQuoteId))
+          .innerJoin(
+            commerceQuote,
+            eq(commerceQuote.id, commerceOrder.acceptedQuoteId),
+          )
           .where(eq(commerceQuote.rfqId, rfq.id))
           .limit(1);
         if (competingOrder) {
@@ -1651,7 +1861,10 @@ export async function acceptQuote(
 
       const now = new Date();
       if (revision.validityDeadlineAt.getTime() <= now.getTime()) {
-        return { status: "expired" as const, expiredAt: revision.validityDeadlineAt };
+        return {
+          status: "expired" as const,
+          expiredAt: revision.validityDeadlineAt,
+        };
       }
 
       const [providerOrg] = await transaction
@@ -1671,7 +1884,10 @@ export async function acceptQuote(
         .from(commerceQuoteProductLine)
         .innerJoin(
           commerceRfqProductLine,
-          eq(commerceRfqProductLine.id, commerceQuoteProductLine.rfqProductLineId),
+          eq(
+            commerceRfqProductLine.id,
+            commerceQuoteProductLine.rfqProductLineId,
+          ),
         )
         .where(eq(commerceQuoteProductLine.revisionId, revision.id));
 
@@ -1711,6 +1927,26 @@ export async function acceptQuote(
         );
       }
 
+      /**
+       * A13. A quote-originated order derives its promise from the lead time the PROVIDER
+       * PUT IN THE REVISION the buyer accepted — `commerce_quote_product_line.leadTimeDays`,
+       * which has existed since Phase 3 and had no reader.
+       *
+       * That is a stronger promise than the direct-checkout one: a quote lead time is a
+       * negotiated term on an immutable revision, not a catalogue advertisement. Same
+       * column on the order either way, because what the metric measures is identical —
+       * what the counterparty committed to before it knew the outcome.
+       */
+      const linePromisedDeliveryDates = productLines.map((line) =>
+        derivePromisedDeliveryAt({
+          orderedAt: now,
+          leadTimeMaxDays: line.quoteLine.leadTimeDays,
+        }),
+      );
+      const orderPromisedDeliveryAt = latestPromisedDeliveryAt(
+        linePromisedDeliveryDates,
+      );
+
       const [order] = await transaction
         .insert(commerceOrder)
         .values({
@@ -1731,6 +1967,7 @@ export async function acceptQuote(
           incotermSnapshot: revision.incoterm,
           buyerLegalNameSnapshot: buyerOrg.legalName,
           counterpartyLegalNameSnapshot: providerOrg.legalName,
+          promisedDeliveryAt: orderPromisedDeliveryAt,
           createdByMemberId: actor.memberId,
         })
         .returning();
@@ -1738,7 +1975,7 @@ export async function acceptQuote(
         throw new Error("Order insert returned no row.");
       }
 
-      for (const line of productLines) {
+      for (const [lineIndex, line] of productLines.entries()) {
         let quantityReserved = 0;
         if (line.productId !== null) {
           const [lockedProduct] = await transaction
@@ -1781,7 +2018,8 @@ export async function acceptQuote(
             await transaction
               .update(product)
               .set({
-                stockQuantity: lockedProduct.stockQuantity - line.quoteLine.quantity,
+                stockQuantity:
+                  lockedProduct.stockQuantity - line.quoteLine.quantity,
               })
               .where(eq(product.id, line.productId));
             quantityReserved = line.quoteLine.quantity;
@@ -1797,6 +2035,7 @@ export async function acceptQuote(
           quantityReserved,
           unitPriceInCents: line.quoteLine.unitPriceInCents,
           lineTotalInCents: line.quoteLine.lineTotalInCents,
+          promisedDeliveryAt: linePromisedDeliveryDates[lineIndex] ?? null,
           siblingOrder: line.quoteLine.siblingOrder,
         });
       }
@@ -1903,7 +2142,9 @@ export async function acceptQuote(
             orderId: order.id,
             orderServiceLineId: orderServiceLine.id,
             providerKind: line.providerKind,
-            executionContractState: hasTypedSnapshot ? "ready" : "legacy_missing_snapshot",
+            executionContractState: hasTypedSnapshot
+              ? "ready"
+              : "legacy_missing_snapshot",
           },
           occurredAt: now,
         });
@@ -2033,10 +2274,16 @@ export async function acceptQuote(
       case "revision_changed":
         return {
           success: false,
-          error: { type: "REVISION_CHANGED", currentRevision: outcome.currentRevision },
+          error: {
+            type: "REVISION_CHANGED",
+            currentRevision: outcome.currentRevision,
+          },
         };
       case "expired":
-        return { success: false, error: { type: "QUOTE_EXPIRED", expiredAt: outcome.expiredAt } };
+        return {
+          success: false,
+          error: { type: "QUOTE_EXPIRED", expiredAt: outcome.expiredAt },
+        };
       case "insufficient_stock":
         return {
           success: false,
@@ -2050,7 +2297,9 @@ export async function acceptQuote(
         return { success: true, value: projectOrder(outcome.order) };
       default: {
         const exhaustiveCheck: never = outcome;
-        throw new Error(`Unhandled acceptQuote outcome: ${JSON.stringify(exhaustiveCheck)}`);
+        throw new Error(
+          `Unhandled acceptQuote outcome: ${JSON.stringify(exhaustiveCheck)}`,
+        );
       }
     }
   } catch (error: unknown) {
@@ -2065,7 +2314,10 @@ export async function acceptQuote(
       }
       return {
         success: false,
-        error: { type: "CONFLICT", message: "Quote acceptance conflicted with concurrent state." },
+        error: {
+          type: "CONFLICT",
+          message: "Quote acceptance conflicted with concurrent state.",
+        },
       };
     }
     throw error;
@@ -2136,7 +2388,9 @@ export async function declineQuote(
       return { success: true, value: projectQuoteShell(outcome.quote) };
     default: {
       const exhaustiveCheck: never = outcome;
-      throw new Error(`Unhandled declineQuote outcome: ${JSON.stringify(exhaustiveCheck)}`);
+      throw new Error(
+        `Unhandled declineQuote outcome: ${JSON.stringify(exhaustiveCheck)}`,
+      );
     }
   }
 }
@@ -2201,7 +2455,9 @@ export async function withdrawQuote(
       return { success: true, value: projectQuoteShell(outcome.quote) };
     default: {
       const exhaustiveCheck: never = outcome;
-      throw new Error(`Unhandled withdrawQuote outcome: ${JSON.stringify(exhaustiveCheck)}`);
+      throw new Error(
+        `Unhandled withdrawQuote outcome: ${JSON.stringify(exhaustiveCheck)}`,
+      );
     }
   }
 }
