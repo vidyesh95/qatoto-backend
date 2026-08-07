@@ -38,6 +38,7 @@ import {
 import {
   resolveCustomizationSelections,
   type CommerceCustomizationError,
+  type ResolvedCustomizationSelection,
 } from "#src/services/commerce-customization.service.js";
 import {
   estimateDeliveryForLines,
@@ -190,14 +191,6 @@ async function appendAuditOrThrow(
   if (!appended.success) {
     throw new Error(`Commerce checkout audit append failed: ${appended.error.type}`);
   }
-}
-
-/**
- * A18. The same identity the cart's expression unique index uses, so a priced line can
- * find the cart line it came from.
- */
-function cartLineKey(productId: string, variantId: string | null, isSample: boolean): string {
-  return `${productId}\u0000${variantId ?? ""}\u0000${String(isSample)}`;
 }
 
 function mapPricingErrorToCheckoutError(
@@ -552,15 +545,8 @@ export async function prepareCheckout(
       const productIds = lines.map((line) => line.productId);
       const heldQuantityByScope = await loadHeldQuantitiesByProduct(transaction, productIds, now);
 
-      /**
-       * Priced lines lose their cart-line identity, so the customizations have to be
-       * found again by the same key the uniqueness index uses.
-       */
-      const cartLineById = new Map(
-        lines.map((line) => [cartLineKey(line.productId, line.variantId, line.isSample), line]),
-      );
-
       const pricedLines: (PricedProductLine & { readonly siblingOrder: number })[] = [];
+      const selectionsBySiblingOrder = new Map<number, readonly ResolvedCustomizationSelection[]>();
       for (const line of lines) {
         const priced = await loadPurchasableProductForCheckout(
           transaction,
@@ -577,6 +563,42 @@ export async function prepareCheckout(
             error: priced.error,
           };
         }
+        /**
+         * A18. VALIDATED HERE, BEFORE THE FIRST INSERT, for the same reason the cart path
+         * validates before its write: returning a failure status from inside
+         * `db.transaction` commits everything that ran before it — only a throw rolls
+         * back. Checked after the prepare row existed, a refused checkout left behind an
+         * active prepare holding inventory reservations.
+         *
+         * `requireRequiredOptions` is TRUE here and false in the cart: a buyer may build a
+         * cart before uploading artwork, but must not confirm an order missing a slot the
+         * seller declared required.
+         */
+        const storedSelections = await transaction
+          .select()
+          .from(commerceCartLineCustomization)
+          .where(eq(commerceCartLineCustomization.cartProductLineId, line.id));
+
+        const revalidated = await resolveCustomizationSelections(transaction, {
+          productId: line.productId,
+          buyerOrganizationId: actor.organizationId,
+          quantity: line.quantity,
+          selections: storedSelections.map((selection) => ({
+            slotKey: selection.slotKeySnapshot,
+            encryptedDocumentId: selection.encryptedDocumentId ?? undefined,
+            choiceValue: selection.choiceValue ?? undefined,
+          })),
+          requireRequiredOptions: true,
+        });
+        if (!revalidated.success) {
+          return {
+            status: "customization_rejected" as const,
+            productId: line.productId,
+            customizationError: revalidated.error,
+          };
+        }
+        selectionsBySiblingOrder.set(pricedLines.length, revalidated.value);
+
         pricedLines.push({ ...priced.value, siblingOrder: pricedLines.length });
       }
 
@@ -626,53 +648,22 @@ export async function prepareCheckout(
         insertedLines.push(insertedLine);
 
         /**
-         * A18. Copied from the cart line onto the prepare line, because `confirmCheckout`
-         * builds the order line verbatim from the prepare row and never re-reads the
-         * cart — a selection that does not exist here cannot reach an order.
-         *
-         * The seller's plan is re-checked at the same time, with required slots now
-         * MANDATORY: a buyer may build a cart without artwork, but must not confirm an
-         * order missing something the seller declared required.
+         * Copied onto the prepare line, because `confirmCheckout` builds the order line
+         * verbatim from the prepare row and never re-reads the cart — a selection that
+         * does not exist here cannot reach an order. Already validated above.
          */
-        const cartLine = cartLineById.get(
-          cartLineKey(pricedLine.productId, pricedLine.variantId, pricedLine.isSample),
-        );
-        if (cartLine !== undefined) {
-          const storedSelections = await transaction
-            .select()
-            .from(commerceCartLineCustomization)
-            .where(eq(commerceCartLineCustomization.cartProductLineId, cartLine.id));
-
-          const revalidatedSelections = await resolveCustomizationSelections(transaction, {
-            productId: pricedLine.productId,
-            buyerOrganizationId: actor.organizationId,
-            quantity: pricedLine.quantity,
-            selections: storedSelections.map((selection) => ({
-              slotKey: selection.slotKeySnapshot,
-              encryptedDocumentId: selection.encryptedDocumentId ?? undefined,
-              choiceValue: selection.choiceValue ?? undefined,
+        const validatedSelections = selectionsBySiblingOrder.get(pricedLine.siblingOrder) ?? [];
+        if (validatedSelections.length > 0) {
+          await transaction.insert(commerceCheckoutPrepareLineCustomization).values(
+            validatedSelections.map((selection) => ({
+              prepareProductLineId: insertedLine.id,
+              customizationOptionId: selection.customizationOptionId,
+              encryptedDocumentId: selection.encryptedDocumentId,
+              choiceValue: selection.choiceValue,
+              slotKeySnapshot: selection.slotKeySnapshot,
+              labelSnapshot: selection.labelSnapshot,
             })),
-            requireRequiredOptions: true,
-          });
-          if (!revalidatedSelections.success) {
-            return {
-              status: "customization_rejected" as const,
-              productId: pricedLine.productId,
-              customizationError: revalidatedSelections.error,
-            };
-          }
-          if (revalidatedSelections.value.length > 0) {
-            await transaction.insert(commerceCheckoutPrepareLineCustomization).values(
-              revalidatedSelections.value.map((selection) => ({
-                prepareProductLineId: insertedLine.id,
-                customizationOptionId: selection.customizationOptionId,
-                encryptedDocumentId: selection.encryptedDocumentId,
-                choiceValue: selection.choiceValue,
-                slotKeySnapshot: selection.slotKeySnapshot,
-                labelSnapshot: selection.labelSnapshot,
-              })),
-            );
-          }
+          );
         }
 
         await transaction.insert(commerceInventoryReservation).values({

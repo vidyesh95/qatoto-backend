@@ -22,6 +22,14 @@ import { db, pool } from "#src/db/index.js";
 import { commerceOrder, commerceOrganizationAuditEntry } from "#src/db/schema.js";
 
 const BASE_URL = `http://localhost:${String(config.PORT)}`;
+/**
+ * Better Auth refuses a state-changing request whose `Origin` is missing or null with
+ * `MISSING_OR_NULL_ORIGIN`, and Node's fetch sends a null origin where curl sends none at
+ * all — so a flow that works by hand fails from a script unless it says who it is. The
+ * frontend URL is what `trustedOrigins` is configured with, and sending it makes these
+ * requests look like what actually calls this API.
+ */
+const REQUEST_ORIGIN = config.FRONTEND_URL;
 const DEMO_PASSWORD = "store-demo-password-2026";
 
 const SELLER_ORGANIZATION_ID = "store_demo_org_seller";
@@ -66,7 +74,10 @@ async function callApi(
     readonly idempotencyPrefix?: string;
   } = {},
 ): Promise<ApiResult> {
-  const headers: Record<string, string> = { "content-type": "application/json" };
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    origin: REQUEST_ORIGIN,
+  };
   if (options.actor) headers["cookie"] = options.actor.cookie;
   if (options.idempotencyPrefix !== undefined) {
     headers["idempotency-key"] = nextIdempotencyKey(options.idempotencyPrefix);
@@ -131,7 +142,7 @@ async function waitForServer(): Promise<void> {
 async function signIn(email: string): Promise<Actor> {
   const response = await fetch(`${BASE_URL}/api/auth/sign-in/email`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", origin: REQUEST_ORIGIN },
     body: JSON.stringify({ email, password: DEMO_PASSWORD }),
   });
   if (!response.ok) {
@@ -428,10 +439,12 @@ async function smokeBuyerFlow(buyer: Actor): Promise<string> {
     body: { deliveryAddressId: "store_demo_address_delivery" },
   });
   const preparedData = dataOf(prepared);
+  const estimates = preparedData["deliveryEstimates"];
   record(
+    // 201, not 200: preparing a checkout creates a prepare resource.
     "checkout prepare carries indicative delivery estimates",
-    prepared.status === 200 && Array.isArray(preparedData["deliveryEstimates"]),
-    `status ${String(prepared.status)}`,
+    prepared.status === 201 && Array.isArray(estimates) && estimates.length > 0,
+    `status ${String(prepared.status)}, ${String(Array.isArray(estimates) ? estimates.length : 0)} estimate group(s)`,
   );
 
   const confirmed = await callApi("POST", "/commerce/checkout/confirm", {

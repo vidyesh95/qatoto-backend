@@ -23,6 +23,7 @@ import {
   resolveCustomizationSelections,
   type CommerceCustomizationError,
   type CustomizationSelectionInput,
+  type ResolvedCustomizationSelection,
 } from "#src/services/commerce-customization.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
@@ -57,6 +58,8 @@ export type CommerceCartError =
   | { type: "VALIDATION_FAILED"; message: string }
   /** A18. Passed through from the customization resolver so the client can act on it. */
   | { type: "CUSTOMIZATION_REJECTED"; customizationError: CommerceCustomizationError }
+  /** A17. The listing does not sell a sample, so a sample line can never be bought. */
+  | { type: "SAMPLE_NOT_AVAILABLE" }
   | { type: "ORGANIZATION_NOT_ACTIVE" };
 
 export interface CommerceCartActorContext {
@@ -498,6 +501,61 @@ export async function setCartItem(
     const organizationIsActive = await assertOrganizationActive(transaction, actor.organizationId);
     if (!organizationIsActive) return { status: "org_inactive" as const };
 
+    /**
+     * EVERY REJECTION HAPPENS BEFORE THE FIRST WRITE, and that ordering is the point.
+     *
+     * Returning a failure status from inside `db.transaction` COMMITS whatever ran before
+     * it — only a throw rolls back. So a validation placed after the line write turned a
+     * refused request into a partially applied one: the smoke run caught a cart line
+     * whose quantity had changed to 20 on a request that answered 422.
+     */
+    if (isSample) {
+      const [sampleRow] = await transaction
+        .select({
+          samplePolicy: product.samplePolicy,
+          samplePriceInCents: product.samplePriceInCents,
+        })
+        .from(product)
+        .where(eq(product.id, productId))
+        .limit(1);
+      if (
+        sampleRow &&
+        (sampleRow.samplePolicy === "unavailable" ||
+          sampleRow.samplePriceInCents === null ||
+          sampleRow.samplePriceInCents <= 0)
+      ) {
+        /**
+         * A17. Refused here rather than left to price later, for the reason A1 gives for
+         * VARIANT_REQUIRED: a sample of a listing that sells no sample is not a stale
+         * line, it is an unbuyable request, and it can never become buyable.
+         */
+        return { status: "sample_not_available" as const };
+      }
+    }
+
+    /**
+     * A18. `requireRequiredOptions` is FALSE here: a buyer should be able to build a cart
+     * before uploading artwork. Checkout preparation is where a missing required slot
+     * stops the order.
+     */
+    let resolvedSelections: readonly ResolvedCustomizationSelection[] = [];
+    if (customizationSelections.length > 0) {
+      const resolved = await resolveCustomizationSelections(transaction, {
+        productId,
+        buyerOrganizationId: actor.organizationId,
+        quantity,
+        selections: customizationSelections,
+        requireRequiredOptions: false,
+      });
+      if (!resolved.success) {
+        return {
+          status: "customization_rejected" as const,
+          customizationError: resolved.error,
+        };
+      }
+      resolvedSelections = resolved.value;
+    }
+
     const cart = await getOrCreateCartForUpdate(transaction, actor.organizationId);
     const now = new Date();
 
@@ -511,32 +569,15 @@ export async function setCartItem(
     });
     if (upsertOutcome.status !== "upserted") return upsertOutcome;
 
-    /**
-     * A18. Replaced wholesale with the line, so a buyer changing their artwork does not
-     * leave the previous selection attached. `requireRequiredOptions` is FALSE here: a
-     * buyer should be able to build a cart before uploading artwork. Checkout
-     * preparation is where a missing required slot stops the order.
-     */
+    // Replaced wholesale with the line, so changing artwork does not leave the previous
+    // selection attached.
     await transaction
       .delete(commerceCartLineCustomization)
       .where(eq(commerceCartLineCustomization.cartProductLineId, upsertOutcome.cartProductLineId));
 
-    if (customizationSelections.length > 0) {
-      const resolvedSelections = await resolveCustomizationSelections(transaction, {
-        productId,
-        buyerOrganizationId: actor.organizationId,
-        quantity,
-        selections: customizationSelections,
-        requireRequiredOptions: false,
-      });
-      if (!resolvedSelections.success) {
-        return {
-          status: "customization_rejected" as const,
-          customizationError: resolvedSelections.error,
-        };
-      }
+    if (resolvedSelections.length > 0) {
       await transaction.insert(commerceCartLineCustomization).values(
-        resolvedSelections.value.map((selection) => ({
+        resolvedSelections.map((selection) => ({
           cartProductLineId: upsertOutcome.cartProductLineId,
           customizationOptionId: selection.customizationOptionId,
           encryptedDocumentId: selection.encryptedDocumentId,
@@ -582,6 +623,8 @@ export async function setCartItem(
       return { success: false, error: { type: "VARIANT_NOT_FOUND" } };
     case "variant_not_purchasable":
       return { success: false, error: { type: "VARIANT_NOT_PURCHASABLE" } };
+    case "sample_not_available":
+      return { success: false, error: { type: "SAMPLE_NOT_AVAILABLE" } };
     case "customization_rejected":
       return {
         success: false,

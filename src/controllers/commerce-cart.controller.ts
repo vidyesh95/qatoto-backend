@@ -105,6 +105,13 @@ function mapCartError(res: Response, error: CommerceCartError): void {
         message: "Not found.",
       } satisfies ApiResponse);
       return;
+    case "SAMPLE_NOT_AVAILABLE":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "This listing does not offer a sample.",
+      } satisfies ApiResponse);
+      return;
     case "CUSTOMIZATION_REJECTED":
       /**
        * 422 across the board: every customization failure is "this request cannot be
