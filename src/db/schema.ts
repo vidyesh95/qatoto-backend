@@ -915,6 +915,17 @@ export const commerceProviderTransferStateEnum = pgEnum("commerce_provider_trans
   "cancelled",
 ]);
 
+/**
+ * A17. A credit is minted once by a completed refundable sample order and spent once.
+ * `expired` exists so an unbounded liability can be closed out rather than lingering
+ * against a buyer who never places the bulk order.
+ */
+export const commerceSampleCreditStateEnum = pgEnum("commerce_sample_credit_state", [
+  "available",
+  "consumed",
+  "expired",
+]);
+
 export const commerceRefundStateEnum = pgEnum("commerce_refund_state", [
   "created",
   "processing",
@@ -3307,6 +3318,12 @@ export const commerceOrderProductLine = pgTable(
     variantNameSnapshot: text("variant_name_snapshot"),
     titleSnapshot: text("title_snapshot").notNull(),
     specificationSnapshot: text("specification_snapshot").notNull(),
+    /**
+     * A17. "This was a sample" is a commercial fact about what was bought, the same
+     * way the variant name is, and a `refundable` sample cannot mint a credit unless
+     * the order line can say so.
+     */
+    isSample: boolean("is_sample").default(false).notNull(),
     quantityOrdered: integer("quantity_ordered").notNull(),
     quantityReserved: integer("quantity_reserved").default(0).notNull(),
     quantityFulfilled: integer("quantity_fulfilled").default(0).notNull(),
@@ -3504,6 +3521,14 @@ export const commerceCartProductLine = pgTable(
       onDelete: "restrict",
     }),
     quantity: integer("quantity").notNull(),
+    /**
+     * A17. A sample line prices from `product.samplePriceInCents` and bypasses the tier
+     * ladder and the minimum order quantity. It is a SEPARATE line from a bulk line of
+     * the same product — buying a sample and then a bulk quantity is the whole pattern
+     * samples exist for — which is why migration 0061 carries this column into the
+     * uniqueness index.
+     */
+    isSample: boolean("is_sample").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -3599,6 +3624,8 @@ export const commerceCheckoutPrepareProductLine = pgTable(
     lineTotalInCents: bigint("line_total_in_cents", { mode: "number" }).notNull(),
     currency: text("currency").notNull(),
     isMadeToOrder: boolean("is_made_to_order").default(false).notNull(),
+    /** A17. Snapshotted from the cart line so confirm can carry it to the order. */
+    isSample: boolean("is_sample").default(false).notNull(),
     siblingOrder: integer("sibling_order").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -3688,6 +3715,12 @@ export const commerceInventoryReservation = pgTable(
     orderId: text("order_id").references(() => commerceOrder.id, { onDelete: "restrict" }),
     quantity: integer("quantity").notNull(),
     isMadeToOrder: boolean("is_made_to_order").default(false).notNull(),
+    /**
+     * A17. A sample line holds stock of its own, so the held-uniqueness index splits on
+     * it too — otherwise a prepare carrying both a sample and a bulk line of one
+     * product could only reserve for one of them.
+     */
+    isSample: boolean("is_sample").default(false).notNull(),
     state: commerceInventoryReservationStateEnum("state").default("held").notNull(),
     expiresAt: timestamp("expires_at").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -5098,6 +5131,75 @@ export const commerceCompletion = pgTable(
     check(
       "commerce_completion_counterparty_ck",
       sql`buyer_organization_id <> counterparty_organization_id`,
+    ),
+  ],
+);
+
+/**
+ * A17. The mechanism that makes `samplePolicy = 'refundable'` mean something.
+ *
+ * Until Phase 11 the third policy value was decorative: a buyer paid for a sample and
+ * nothing returned that value against a later bulk order.
+ *
+ * WHY A CREDIT AND NOT A REFUND. A refund moves money twice and leaves a buyer who
+ * never orders in bulk with an obligation open forever. A credit is minted once when
+ * the sample order completes and spent once as a discount on a later order from the
+ * SAME SELLER in the SAME CURRENCY. It also needs no new journal kind: the discount
+ * lands before a payment intent exists, so no cross-order money movement is invented —
+ * and `commerce_journal_entry` is strictly per-order.
+ */
+export const commerceSampleCredit = pgTable(
+  "commerce_sample_credit",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    sellerOrganizationId: text("seller_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "restrict" }),
+    sourceOrderId: text("source_order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    state: commerceSampleCreditStateEnum("state").default("available").notNull(),
+    consumedByOrderId: text("consumed_by_order_id").references(() => commerceOrder.id, {
+      onDelete: "restrict",
+    }),
+    consumedAt: timestamp("consumed_at"),
+    expiresAt: timestamp("expires_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /**
+     * One credit per sample order. Completion issuance is idempotent and may run more
+     * than once for an order, so this is what stops a replay minting a second credit.
+     */
+    uniqueIndex("commerce_sample_credit_source_order_uidx").on(table.sourceOrderId),
+    index("commerce_sample_credit_spendable_idx")
+      .on(table.buyerOrganizationId, table.sellerOrganizationId, table.currency)
+      .where(sql`state = 'available'`),
+    check("commerce_sample_credit_amount_ck", sql`amount_in_cents > 0`),
+    check("commerce_sample_credit_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_sample_credit_parties_ck",
+      sql`buyer_organization_id <> seller_organization_id`,
+    ),
+    // Consumption attribution and state agree in both directions.
+    check(
+      "commerce_sample_credit_consumption_ck",
+      sql`(state = 'consumed' AND consumed_by_order_id IS NOT NULL AND consumed_at IS NOT NULL)
+          OR (state <> 'consumed' AND consumed_by_order_id IS NULL AND consumed_at IS NULL)`,
     ),
   ],
 );

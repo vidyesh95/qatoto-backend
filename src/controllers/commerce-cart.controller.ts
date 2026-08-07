@@ -20,6 +20,11 @@ export const SetCartItemSchema = z
      * stays optional in the schema and mandatory in the domain.
      */
     variantId: z.string().trim().min(1).max(200).optional(),
+    /**
+     * A17. Opt-in per line. A sample sits beside the bulk line rather than replacing
+     * it, because ordering a sample and then a bulk quantity is the point.
+     */
+    isSample: z.boolean().optional(),
   })
   .strict();
 
@@ -197,6 +202,7 @@ export async function setCartItem(req: Request, res: Response): Promise<void> {
     params.data.productId,
     body.data.quantity,
     body.data.variantId ?? null,
+    body.data.isSample ?? false,
   );
   if (!result.success) {
     mapCartError(res, result.error);

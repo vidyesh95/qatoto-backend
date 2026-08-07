@@ -37,6 +37,11 @@ import {
   type DeliveryEstimateProjection,
 } from "#src/services/commerce-delivery-estimate.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
+import {
+  consumeSampleCredits,
+  listSpendableSampleCredits,
+  selectConsumableCredits,
+} from "#src/services/commerce-sample-credit.service.js";
 import type { Result } from "#src/types/index.js";
 
 type PrepareRow = typeof commerceCheckoutPrepare.$inferSelect;
@@ -56,6 +61,8 @@ export type CommerceCheckoutError =
    * address answers a question nobody asked.
    */
   | { type: "ADDRESS_KIND_INVALID"; addressKind: string }
+  /** A17. The listing does not sell a sample, though it sells the product in bulk. */
+  | { type: "SAMPLE_NOT_AVAILABLE"; productId: string }
   | { type: "PRODUCT_NOT_PURCHASABLE"; productId: string }
   | { type: "BELOW_MINIMUM_ORDER_QUANTITY"; productId: string; minimumOrderQuantity: number }
   | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
@@ -197,6 +204,8 @@ function mapPricingErrorToCheckoutError(
       // All three mean "the variant on this line cannot be bought". Splitting them
       // on the wire would let a buyer probe which variant ids exist.
       return { type: "VARIANT_NOT_PURCHASABLE", productId };
+    case "SAMPLE_NOT_AVAILABLE":
+      return { type: "SAMPLE_NOT_AVAILABLE", productId };
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce pricing error: ${JSON.stringify(exhaustiveCheck)}`);
@@ -530,6 +539,7 @@ export async function prepareCheckout(
           line.quantity,
           heldQuantityByScope.get(inventoryScopeKey(line.productId, line.variantId)) ?? 0,
           line.variantId,
+          line.isSample,
         );
         if (!priced.success) {
           return {
@@ -579,6 +589,7 @@ export async function prepareCheckout(
             lineTotalInCents: pricedLine.lineTotalInCents,
             currency: pricedLine.currency,
             isMadeToOrder: pricedLine.isMadeToOrder,
+            isSample: pricedLine.isSample,
             siblingOrder: pricedLine.siblingOrder,
           })
           .returning();
@@ -593,6 +604,7 @@ export async function prepareCheckout(
           checkoutPrepareId: prepare.id,
           quantity: pricedLine.isMadeToOrder ? 0 : pricedLine.quantity,
           isMadeToOrder: pricedLine.isMadeToOrder,
+          isSample: pricedLine.isSample,
           state: "held",
           expiresAt,
         });
@@ -839,6 +851,7 @@ export async function confirmCheckout(
             inventoryScopeKey(prepareLine.productId, prepareLine.variantId),
           ) ?? 0,
           prepareLine.variantId,
+          prepareLine.isSample,
         );
         if (!revalidated.success) {
           return {
@@ -908,6 +921,12 @@ export async function confirmCheckout(
       }
 
       const createdOrders: OrderRow[] = [];
+      /**
+       * A17. Accumulated so the buyer-facing group totals can be reconciled after the
+       * loop. A group total that still read the pre-credit figure would tell the buyer
+       * they owe more than their orders actually charge.
+       */
+      const discountByCurrency = new Map<string, number>();
       for (const sellerGroup of sellerGroups) {
         const sellerLegalName = sellerLegalNameById.get(sellerGroup.sellerOrganizationId);
         if (!sellerLegalName) return { status: "not_found" as const };
@@ -915,6 +934,26 @@ export async function confirmCheckout(
         const subtotalInCents = sellerGroup.lines.reduce(
           (sum, line) => sum + line.lineTotalInCents,
           0,
+        );
+
+        /**
+         * A17. Credits are resolved HERE, under the row lock, not from whatever the
+         * prepare displayed — a credit consumed by another confirm in between must not
+         * be applied twice. The prepare's figure is a preview; this one is the charge.
+         *
+         * `shippingInCents` stays 0 (A16): the delivery estimate is display-only, and
+         * an order total must not contain a number nobody quoted.
+         */
+        const spendableCredits = await listSpendableSampleCredits(transaction, {
+          buyerOrganizationId: actor.organizationId,
+          sellerOrganizationId: sellerGroup.sellerOrganizationId,
+          currency: sellerGroup.currency,
+          asOf: now,
+          forUpdate: true,
+        });
+        const { consumedCredits, discountInCents } = selectConsumableCredits(
+          spendableCredits,
+          subtotalInCents,
         );
 
         const [order] = await transaction
@@ -930,8 +969,8 @@ export async function confirmCheckout(
             taxInCents: 0,
             serviceFeeInCents: 0,
             shippingInCents: 0,
-            discountInCents: 0,
-            totalInCents: subtotalInCents,
+            discountInCents,
+            totalInCents: subtotalInCents - discountInCents,
             paymentTermsSnapshot: null,
             incotermSnapshot: null,
             buyerLegalNameSnapshot: buyerOrganization.legalName,
@@ -951,6 +990,21 @@ export async function confirmCheckout(
         if (!order) throw new Error("Order insert returned no row.");
         createdOrders.push(order);
 
+        if (discountInCents > 0) {
+          discountByCurrency.set(
+            sellerGroup.currency,
+            (discountByCurrency.get(sellerGroup.currency) ?? 0) + discountInCents,
+          );
+        }
+
+        await consumeSampleCredits(transaction, {
+          creditIds: consumedCredits.map((credit) => credit.id),
+          consumedByOrderId: order.id,
+          buyerOrganizationId: actor.organizationId,
+          actorUserId: actor.actorUserId,
+          occurredAt: now,
+        });
+
         for (const [index, line] of sellerGroup.lines.entries()) {
           await transaction.insert(commerceOrderProductLine).values({
             orderId: order.id,
@@ -959,6 +1013,7 @@ export async function confirmCheckout(
             variantNameSnapshot: line.variantNameSnapshot,
             titleSnapshot: line.titleSnapshot,
             specificationSnapshot: line.specificationSnapshot,
+            isSample: line.isSample,
             quantityOrdered: line.quantity,
             quantityReserved: line.isMadeToOrder ? 0 : line.quantity,
             unitPriceInCents: line.unitPriceInCents,
@@ -1014,6 +1069,27 @@ export async function confirmCheckout(
             eq(commerceInventoryReservation.state, "held"),
           ),
         );
+
+      /**
+       * A17. Reconcile the buyer-facing aggregate with what the orders actually charge.
+       * The money CHECK on this table enforces
+       * `total = subtotal + tax + serviceFee + shipping - discount`, so both columns
+       * move together or neither does.
+       */
+      for (const [currency, discountInCents] of discountByCurrency) {
+        await transaction
+          .update(commerceCheckoutGroupCurrencyTotal)
+          .set({
+            discountInCents,
+            totalInCents: sql`${commerceCheckoutGroupCurrencyTotal.totalInCents} - ${discountInCents}`,
+          })
+          .where(
+            and(
+              eq(commerceCheckoutGroupCurrencyTotal.checkoutGroupId, checkoutGroup.id),
+              eq(commerceCheckoutGroupCurrencyTotal.currency, currency),
+            ),
+          );
+      }
 
       await transaction
         .update(commerceCheckoutPrepare)

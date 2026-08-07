@@ -108,6 +108,14 @@ function mapCheckoutError(res: Response, error: CommerceCheckoutError): void {
             : "Delivery address is not owned by the buyer organization.",
       } satisfies ApiResponse);
       return;
+    case "SAMPLE_NOT_AVAILABLE":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "This listing does not offer a sample.",
+        data: { productId: error.productId },
+      } satisfies ApiResponse);
+      return;
     case "ADDRESS_KIND_INVALID":
       // 422, and a message that names the real problem: the address is theirs, it is
       // simply not one for receiving goods (A15).

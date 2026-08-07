@@ -8,6 +8,7 @@ import {
   commerceServiceEngagement,
 } from "#src/db/schema.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
+import { mintSampleCreditsForOrder } from "#src/services/commerce-sample-credit.service.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -81,6 +82,12 @@ export async function issueCompletionsForOrder(
   if (!isOrderEligibleForCompletion(order.state)) {
     return;
   }
+
+  /**
+   * A17. A refundable sample that has completed is what mints a credit, and it rides
+   * this transaction because the same commit is what decided the order is finished.
+   */
+  await mintSampleCreditsForOrder(transaction, order.id, occurredAt, actorUserId);
 
   const eligibleProductLines = await transaction
     .select()

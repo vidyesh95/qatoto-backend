@@ -64,6 +64,8 @@ export interface CommerceCartItemProjection {
   readonly variantId: string | null;
   readonly variantName: string | null;
   readonly quantity: number;
+  /** A17. A sample line and a bulk line of one product are two entries here. */
+  readonly isSample: boolean;
   readonly title: string;
   readonly currency: string | null;
   readonly unitPriceInCents: number | null;
@@ -249,8 +251,11 @@ export async function upsertCartProductLine(
     readonly variantId: string | null;
     readonly quantity: number;
     readonly now: Date;
+    /** A17. A sample is its own line, never a quantity update on the bulk line. */
+    readonly isSample?: boolean;
   },
 ): Promise<CartProductLineUpsertOutcome> {
+  const isSample = input.isSample ?? false;
   const [productRow] = await transaction
     .select({ id: product.id })
     .from(product)
@@ -305,6 +310,7 @@ export async function upsertCartProductLine(
         input.variantId === null
           ? isNull(commerceCartProductLine.variantId)
           : eq(commerceCartProductLine.variantId, input.variantId),
+        eq(commerceCartProductLine.isSample, isSample),
       ),
     )
     .limit(1);
@@ -320,6 +326,7 @@ export async function upsertCartProductLine(
       productId: input.productId,
       variantId: input.variantId,
       quantity: input.quantity,
+      isSample,
     });
   }
 
@@ -383,6 +390,7 @@ export async function getCart(
       line.quantity,
       heldQuantityByScope.get(inventoryScopeKey(line.productId, line.variantId)) ?? 0,
       line.variantId,
+      line.isSample,
     );
 
     if (!priced.success) {
@@ -394,6 +402,7 @@ export async function getCart(
         // without pretending we could still resolve its name.
         variantName: null,
         quantity: line.quantity,
+        isSample: line.isSample,
         title: basics?.title ?? "Unknown product",
         currency: basics?.currency ?? null,
         unitPriceInCents: null,
@@ -410,6 +419,7 @@ export async function getCart(
       variantId: priced.value.variantId,
       variantName: priced.value.variantName,
       quantity: line.quantity,
+      isSample: line.isSample,
       title: priced.value.title,
       currency: priced.value.currency,
       unitPriceInCents: priced.value.unitPriceInCents,
@@ -458,6 +468,7 @@ export async function setCartItem(
   productId: string,
   quantity: number,
   requestedVariantId: string | null = null,
+  isSample = false,
 ): Promise<Result<CommerceCartProjection, CommerceCartError>> {
   if (!Number.isInteger(quantity) || quantity <= 0 || quantity > MAXIMUM_CART_LINE_QUANTITY) {
     return {
@@ -482,6 +493,7 @@ export async function setCartItem(
       variantId: requestedVariantId,
       quantity,
       now,
+      isSample,
     });
     if (upsertOutcome.status !== "upserted") return upsertOutcome;
 
@@ -499,6 +511,7 @@ export async function setCartItem(
         productId,
         variantId: requestedVariantId ?? "",
         quantity: String(quantity),
+        isSample,
       },
       occurredAt: now,
     });
