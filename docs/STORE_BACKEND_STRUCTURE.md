@@ -28,7 +28,7 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–9 shipped and hardened.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–9 and 11 shipped and hardened.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
@@ -42,10 +42,14 @@
 > relation graph, and the merchandising integrity fixes**. Phase 9 adds **guided pathway slots
 > and ranked candidates, anchored sets resolved from the relation graph, read-time per-currency
 > set totals, honest degradation, authoring and moderation, cart seeding, and the nightly
-> co-occurrence derivation job**. See `docs/STORE_PHASE_5_ROLLOUT.md`
+> co-occurrence derivation job**. Phase 11 adds **the `delivery` address kind and its
+> authorized decrypt route, indicative delivery estimates, orderable samples with
+> refundable-sample credits, and seller-declared customization options**. See
+> `docs/STORE_PHASE_5_ROLLOUT.md`
 > for the payments/journal contract, `docs/STORE_PHASE_6_ROLLOUT.md` for connector execution,
 > `docs/STORE_PHASE_7_ROLLOUT.md` for the trust MVP, `docs/STORE_PHASE_8_ROLLOUT.md` for
-> catalog depth, and `docs/STORE_PHASE_9_ROLLOUT.md` for guided pathways.
+> catalog depth, `docs/STORE_PHASE_9_ROLLOUT.md` for guided pathways, and
+> `docs/STORE_PHASE_11_ROLLOUT.md` for buyer logistics.
 > Trade-assurance language, real payment processors, external provider adapters/webhooks, Q&A,
 > content reports, ranking, and recommendations remain planned unless a section explicitly says
 > otherwise. Product organization-ownership and category columns remain in the documented
@@ -882,10 +886,17 @@ Scheduled jobs:
 ### Phase 11 — buyer logistics
 
 - A `delivery` address kind and a shippable order address (A15) — the only entry in the appendix that
-  is a correctness problem rather than a missing feature.
+  was a correctness problem rather than a missing feature.
 - Indicative delivery estimates from provider coverage (A16), sample ordering (A17), seller-declared
   customization options (A18).
-- **Not started.** A15 does not depend on the others and should not wait for them.
+- **Shipped and hardened (`0059`–`0062`).** See `docs/STORE_PHASE_11_ROLLOUT.md`. Three things
+  worth carrying forward. The reveal route is the only place this backend hands one organization
+  another's PII, and its audit entry is written to the BUYER's stream — if it cannot be written the
+  read rolls back, because an unlogged reveal defeats the reason a decrypt path was chosen over an
+  openable snapshot. The delivery estimate never reaches money: `shippingInCents` stays `0` and an
+  uncovered route returns an empty list rather than a zero. And landing on this code uncovered a
+  live bug — `createAddress`'s audit payload used the key `addressKind`, which the PII-name guard
+  matched, so address creation had been failing at runtime for every caller.
 
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
@@ -937,8 +948,8 @@ The following require legal, provider, or product decisions before implementatio
   encrypted snapshot — was not chosen: it would put ciphertext a seller can decrypt at rest
   indefinitely, with no record of when it was opened, whereas a decrypt path makes every access an
   auditable event and revocable by closing the order. The order snapshot keeps its redacted
-  plaintext columns for display; the decrypt path is the only route to the rest. **Not built** —
-  it is Phase 11 work (Appendix A15).
+  plaintext columns for display; the decrypt path is the only route to the rest. **Built in
+  Phase 11** as `GET /commerce/orders/:orderId/delivery-address` (Appendix A15).
 
 Until decided, the backend stores no fabricated guarantee and the frontend displays no claim that
 money, shipment, certification, insurance, or compliance is assured.
@@ -1456,12 +1467,12 @@ who may not yet have an organization — resolve that before widening, not after
 
 ---
 
-### A15. The buyer has no delivery address, and the order carries no deliverable one
+### A15. Delivery addresses — **SHIPPED (Phase 11)**
 
 **Needed by:** `sections/deliver-to.tsx` and `sheets/address-sheet.tsx` — select, add and edit a
 delivery address, capped at five.
 
-**What exists, and this is the most serious gap in the list:**
+**What was wrong, and it was the most serious gap in the list:**
 
 - `commerceOrganizationAddressKindEnum` is `billing | registered | warehouse | pickup | return`.
   **There is no `delivery` or `shipping` kind.**
@@ -1472,21 +1483,27 @@ delivery address, capped at five.
   **A confirmed order therefore records a city and a postcode, not an address anything can ship to.**
 - There is no user-scoped address table anywhere; addresses belong to organizations.
 
-**What to build:** a `delivery` address kind; a kind filter in the checkout ownership check; and the
-decrypt path §14 has now **decided** on — a seller organization with an active order reads the
-buyer's street lines, recipient name and phone through an authorized, rate-limited, per-read audited
-route, rather than through a seller-openable encrypted snapshot. Also a server-owned
-per-organization address cap to replace the frontend's local `MAX_SAVED_ADDRESSES = 5`.
+**What exists now:** a `delivery` address kind, a kind filter in `assertOwnedDeliveryAddress` with
+its own `ADDRESS_KIND_INVALID` tag, a durable `commerce_order.delivery_address_id`, a server-owned
+cap of ten addresses per kind, and the decrypt path §14 decided on —
+`GET /commerce/orders/:orderId/delivery-address`, gated on order membership, a
+counterparty-operating role and an order state at or past `confirmed`.
 
-**Current line references** (the earlier ones drifted): `commerceOrganizationAddressKindEnum` at
-`schema.ts:399`, `assertOwnedDeliveryAddress` at `commerce-checkout.service.ts:200`, the redacted
-snapshot builder at `:187`, and `commerce_order.buyer_address_snapshot` at `schema.ts:2971`.
+**The rule that makes it safe:** the audit entry is written to the BUYER's stream, and if it cannot
+be written the read rolls back. `delivery_address_revealed` is the first READ event in an audit
+enum whose other fifty values all record writes — which is the whole reason a decrypt path beats a
+seller-openable snapshot. The order snapshot stays redacted; this route is the only way past it.
+
+**Found on the way in:** `createAddress`'s audit payload used the key `addressKind`, which the
+guard's PII-name regex matches on `address`, so the append failed, the transaction rolled back, and
+`POST /commerce/organizations/:id/addresses` had been failing at runtime for every caller. The route
+suite mocks the service, so nothing caught it.
 
 **Frontend today:** two hardcoded addresses in `useState` that evaporate on unmount.
 
 ---
 
-### A16. Delivery cost is structurally zero
+### A16. Indicative delivery estimates — **SHIPPED (Phase 11)**
 
 **Needed by:** `sections/delivery-cost.tsx` ("Free Delivery", "Sept 23 to Sept 27") and
 `sheets/delivery-sheet.tsx` (per-leg mode picker with prices and durations, agent alternatives, a
@@ -1498,19 +1515,25 @@ as **literal `0`** — `commerce-checkout.service.ts:499` and `:788` — alongsi
 `serviceFeeInCents: 0`. The only way a non-zero value enters is a seller typing one onto a quote.
 There is no rate table, no carrier call, no distance or weight estimator, no delivery-date estimator.
 
-**What to build:** an indicative estimate assembled from the **existing** provider connector
-directory — `commerce_service_coverage` already models origin/destination, and
-`commerce_service_offering` already carries an indicative price range. That gives a real,
-attributable estimate without a carrier integration.
+**What exists now:** `commerce-delivery-estimate.service.ts`, assembling a per-currency range from
+`commerce_service_coverage` and `commerce_service_offering` against the Phase 8 package geometry —
+the columns whose schema comment already said freight rating was the whole reason they exist, and
+which nothing had read since. Surfaced on `checkout/prepare` as `deliveryEstimates` and at
+`GET /store/products/:productSlug/delivery-estimate`.
 
-**Rule:** an estimate is not a quote and must never be rendered as a promise. §14 blocks assurance
-language, and "Free Delivery" over a hardcoded date range is exactly the claim it blocks. The A2 and
-A5 prerequisites are now satisfied — Phase 8 supplies the package dimensions and gross weight you
-cannot rate freight without — so this entry is unblocked, and still unbuilt.
+**Rule, honoured:** an estimate is not a quote. No delivery DATE is returned at all, currencies are
+never converted, every estimate carries the offerings it was derived from, and a seller who never
+declared package geometry produces `hasIncompletePackageData: true` rather than a guessed weight.
+An uncovered route returns an **empty array, not a zero** — "we do not know" and "it is free" are
+different answers, and the mock rendered the second one.
+
+**`shippingInCents` is still `0`, and that is now the decision rather than the gap.** Nothing is
+charged for freight, so nothing appears in a total; billing from an advertised price range with no
+booking behind it would put an invented number into an immutable order.
 
 ---
 
-### A17. Samples are advertised but cannot be ordered
+### A17. Sample ordering — **SHIPPED (Phase 11)**
 
 **Needed by:** `sections/sample-price.tsx` — "Sample price: $1,410/set" and a "Get sample" button.
 
@@ -1518,9 +1541,18 @@ cannot rate freight without — so this entry is unblocked, and still unbuilt.
 `product.samplePriceInCents`, a CHECK binding them, a facet, and both fields on the public
 projection. It is fully modelled **as an advertisement**.
 
-**What to build:** an `isSample` flag on the cart line, order line and their snapshots; sample
-pricing bypassing the MOQ and the tier ladder; and, for `refundable`, a link from the sample order to
-the credit applied to the later bulk order — otherwise the third enum value means nothing.
+**What exists now:** `is_sample` on the cart line, prepare line, order line and inventory
+reservation, with all three uniqueness indexes rewritten to carry it — a buyer holding a sample AND
+a bulk line of one product is the entire pattern samples exist for. Sample pricing bypasses
+**exactly two things**, the tier ladder and the minimum order quantity, because both express bulk
+economics and a sample is the negation of bulk; purchasability, the variant rules and stock all
+still apply.
+
+`commerce_sample_credit` is what finally makes `refundable` mean something: minted once when a
+refundable sample order completes, spent whole against the same seller in the same currency as
+`discountInCents`, resolved under the confirm row lock rather than from what the prepare displayed.
+It needs no journal change — the discount lands before a payment intent exists, so no cross-order
+money movement is invented.
 
 **Frontend today:** a hardcoded price string and a handler-less button. Note the PDP renders the
 **real** `samplePolicy` and `samplePriceInCents` a few lines above it, so the mock row currently
@@ -1528,7 +1560,7 @@ contradicts the wire.
 
 ---
 
-### A18. Customization options
+### A18. Customization options — **SHIPPED (Phase 11)**
 
 **Needed by:** `sections/customization-options.tsx` and `sheets/customization-sheet.tsx` — four upload
 slots, each with its own accepted file types and minimum order quantity, plus a packaging-material
@@ -1537,13 +1569,21 @@ choice with its own minimums.
 **What exists:** nothing. The only "packaging" in the schema is a member of the R&D
 `supplierCapabilityKindEnum`, unrelated to `product` or `commerce_organization`.
 
-**What to build:** `commerce_product_customization_option` (seller-declared: slot key, label, accepted
-MIME types, minimum order quantity) and `commerce_order_line_customization` holding the buyer's
-uploaded asset references, snapshotted onto the order line.
+**What exists now:** `commerce_product_customization_option` (upload and choice kinds, accepted
+media types, choice values, per-slot minimum order quantity, required flag), authored at
+`PUT /products/:id/customization-options` and retired rather than deleted — an order line
+references the option it was bought under. Selections ride **three** tables, cart to prepare to
+order, because `confirmCheckout` builds an order line verbatim from the prepare row and never
+re-reads the cart.
 
-**Rule:** the minimum order quantity per slot is a **commercial term** — a logo at 50 units and
-packaging artwork at 200 change what the buyer may order. The server enforces it at cart and
-checkout; the client's copy of the number is a hint. The mock enforces nothing.
+**Rule, enforced:** the per-slot minimum order quantity is a commercial term, checked at cart and
+again at checkout preparation. Required slots are mandatory only at preparation — a buyer may build
+a cart before uploading artwork, but may not confirm an order missing what the seller declared
+required.
+
+Artwork uploads at `POST /commerce/customization-assets` as a private encrypted document with the
+verification-evidence middleware's magic-byte check, lands `pending_scan`, and **cannot be attached
+until a scanner promotes it** — upload completion is not a malware verdict.
 
 ---
 
