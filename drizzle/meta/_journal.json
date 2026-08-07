@@ -477,6 +477,13 @@
       "when": 1786037684394,
       "tag": "0067_store_phase_10_reports_moderation",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1786037689394,
+      "tag": "0068_store_phase_10_product_inquiry",
+      "breakpoints": true
     }
   ]
 }

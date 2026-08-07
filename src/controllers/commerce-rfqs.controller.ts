@@ -167,6 +167,18 @@ export const CreateDraftRfqSchema = z
     productLines: z.array(ProductLineSchema).max(100).default([]),
     serviceLines: z.array(ServiceLineSchema).max(100).default([]),
     documentIds: z.array(z.string().uuid()).max(50).optional(),
+    /**
+     * A14. Records that this RFQ grew out of a pre-sales inquiry.
+     *
+     * A POINTER, not a merge. The RFQ gets its own thread as it always has and the
+     * inquiry keeps its own — folding a one-to-one pre-sales chat into an RFQ thread
+     * would expose one seller's conversation to every competing bidder, because an RFQ
+     * thread contains every invited provider.
+     *
+     * An id belonging to another buyer simply does not match and is ignored rather
+     * than accepted, so this cannot be used to probe other organizations' inquiries.
+     */
+    sourceInquiryId: z.string().trim().min(1).max(200).optional(),
   })
   .strict()
   .refine(

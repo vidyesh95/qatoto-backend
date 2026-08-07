@@ -6085,6 +6085,81 @@ export const commerceReviewReply = pgTable(
 );
 
 /**
+ * A buyer's pre-sales inquiry about one listing (STORE Appendix A14).
+ *
+ * THIS TABLE EXISTS TO KEEP `commerce_thread_resource_uidx` CORRECT.
+ *
+ * The obvious design — add `product` to `commerce_thread_resource_kind` and point the
+ * thread at the product — collides with that unique index on
+ * `(resource_kind, resource_id)` and yields ONE THREAD PER PRODUCT ACROSS ALL BUYERS.
+ * `assertThreadParticipant` would then admit every buyer organization that ever
+ * inquired and hand each of them every other buyer's negotiation. That is a
+ * cross-tenant leak against §11, not a UX wart. With an inquiry row the index is right
+ * without modification: one thread per inquiry, one inquiry per (product, buyer).
+ *
+ * It also sidesteps a migration hazard. Keying on the product would need partial-index
+ * predicates naming a newly `ADD VALUE`'d enum literal, and an enum→text cast is not
+ * IMMUTABLE so Postgres rejects it in an index predicate — forcing two `db:migrate`
+ * runs across two releases. Here the new enum value appears only in runtime inserts.
+ *
+ * `convertedToRfqId` records that the inquiry produced an RFQ. The two threads stay
+ * SEPARATE and are never merged: an RFQ thread has every invited provider in it, so
+ * folding a one-to-one pre-sales conversation into it would expose one seller's
+ * chat to its competitors.
+ */
+export const commerceProductInquiry = pgTable(
+  "commerce_product_inquiry",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "restrict" }),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    buyerMemberId: text("buyer_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    /** Snapshotted at open time so the seller's inbox is one index scan, not a join. */
+    sellerOrganizationId: text("seller_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    convertedToRfqId: text("converted_to_rfq_id").references(() => commerceRfq.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_product_inquiry_product_buyer_uidx").on(
+      table.productId,
+      table.buyerOrganizationId,
+    ),
+    /** The seller's inquiry inbox — the read a resourceKind filter could never serve. */
+    index("commerce_product_inquiry_seller_idx").on(
+      table.sellerOrganizationId,
+      table.createdAt,
+      table.id,
+    ),
+    index("commerce_product_inquiry_buyer_idx").on(
+      table.buyerOrganizationId,
+      table.createdAt,
+      table.id,
+    ),
+    /** A seller cannot open a pre-sales inquiry on its own listing. */
+    check(
+      "commerce_product_inquiry_parties_ck",
+      sql`buyer_organization_id <> seller_organization_id`,
+    ),
+  ],
+);
+
+/**
  * A user-submitted report about commerce content (STORE Appendix A12).
  *
  * FIVE NULLABLE FOREIGN KEYS WITH AN XOR CHECK, not one polymorphic `targetId`. A bare

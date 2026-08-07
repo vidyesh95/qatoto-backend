@@ -5,6 +5,7 @@ import {
   commerceEncryptedDocument,
   commerceMessage,
   commerceMessageAttachment,
+  commerceProductInquiry,
   commerceQuote,
   commerceRfq,
   commerceRfqInvitation,
@@ -14,7 +15,18 @@ import {
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
-export type CommerceThreadResourceKind = "rfq" | "quote";
+/**
+ * The thread kinds this service serves.
+ *
+ * NARROWER THAN THE DATABASE ENUM ON PURPOSE. `commerce_thread_resource_kind` also
+ * holds `order`, `service_engagement` and `dispute`, none of which has a party
+ * resolver here — a thread of those kinds can exist in the column and must not be
+ * readable through this service. `projectThread` re-checks at read time for exactly
+ * that reason.
+ *
+ * `product_inquiry` joined the list in Phase 10 (Appendix A14).
+ */
+export type CommerceThreadResourceKind = "rfq" | "quote" | "product_inquiry";
 
 export type CommerceMessagesError =
   | { type: "NOT_FOUND" }
@@ -129,6 +141,46 @@ async function resolveQuoteParties(
   };
 }
 
+/**
+ * Parties to a pre-sales inquiry (Appendix A14): exactly two, and never more.
+ *
+ * Contrast `resolveRfqParties`, which returns EVERY invited provider. That difference
+ * is the reason an inquiry thread is never merged into an RFQ thread when the inquiry
+ * converts — folding a one-to-one pre-sales conversation into a multi-bidder thread
+ * would show one seller's chat to its competitors.
+ */
+async function resolveProductInquiryParties(
+  inquiryId: string,
+  callerOrganizationId: string,
+): Promise<Result<ResourceParties, CommerceMessagesError>> {
+  const [inquiry] = await db
+    .select({
+      buyerOrganizationId: commerceProductInquiry.buyerOrganizationId,
+      sellerOrganizationId: commerceProductInquiry.sellerOrganizationId,
+    })
+    .from(commerceProductInquiry)
+    .where(eq(commerceProductInquiry.id, inquiryId))
+    .limit(1);
+
+  // NOT_FOUND rather than FORBIDDEN for a non-party: §11's anti-enumeration rule, and
+  // the same shape the RFQ and quote resolvers use.
+  if (
+    !inquiry ||
+    (inquiry.buyerOrganizationId !== callerOrganizationId &&
+      inquiry.sellerOrganizationId !== callerOrganizationId)
+  ) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  return {
+    success: true,
+    value: {
+      buyerOrganizationId: inquiry.buyerOrganizationId,
+      providerOrganizationIds: [inquiry.sellerOrganizationId],
+    },
+  };
+}
+
 async function resolveResourceParties(input: {
   readonly resourceKind: CommerceThreadResourceKind;
   readonly resourceId: string;
@@ -139,6 +191,8 @@ async function resolveResourceParties(input: {
       return resolveRfqParties(input.resourceId, input.organizationId);
     case "quote":
       return resolveQuoteParties(input.resourceId, input.organizationId);
+    case "product_inquiry":
+      return resolveProductInquiryParties(input.resourceId, input.organizationId);
     default: {
       const exhaustiveKind: never = input.resourceKind;
       void exhaustiveKind;
@@ -169,7 +223,17 @@ async function projectThread(threadId: string): Promise<CommerceThreadProjection
     return null;
   }
 
-  if (thread.resourceKind !== "rfq" && thread.resourceKind !== "quote") {
+  /**
+   * The COLUMN admits `order`, `service_engagement` and `dispute`; this service does
+   * not. A thread of one of those kinds can legally exist in the database with no
+   * party resolver behind it, so a read that trusted the column would hand back a
+   * thread nobody had been authorized against. Re-checked here, at the boundary.
+   */
+  if (
+    thread.resourceKind !== "rfq" &&
+    thread.resourceKind !== "quote" &&
+    thread.resourceKind !== "product_inquiry"
+  ) {
     return null;
   }
 

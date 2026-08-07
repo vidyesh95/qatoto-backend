@@ -12,11 +12,16 @@ import {
   productPricingTier,
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import {
   EMPTY_PRODUCT_ENGAGEMENT,
   loadProductEngagements,
   type ProductEngagementProjection,
 } from "#src/services/commerce-product-engagement.service.js";
+import {
+  deriveContactAffordance,
+  type ProductContactAffordance,
+} from "#src/services/commerce-product-inquiry.service.js";
 import {
   loadOrganizationFulfillmentMetrics,
   loadProductReviewMetrics,
@@ -161,6 +166,19 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
    * non-null, which looks wired. `questionCount` is the real number next to it.
    */
   readonly engagement: ProductEngagementProjection;
+  /**
+   * A14. Which contact control the client should render, decided by the SERVER.
+   *
+   * `chat` requires an active buyer organization, because §4.11 derives thread
+   * participants from organization memberships. `ask_question` is the honest middle
+   * rung for a signed-in visitor without one — A9's public channel accepts them, which
+   * is why it shipped first. `sign_in` is the anonymous case.
+   *
+   * This is a fact about the CALLER, which the caller already knows, so stating it
+   * leaks nothing. The alternative is a frontend inferring eligibility from an
+   * incomplete picture and putting a button in front of a wall.
+   */
+  readonly contactAffordance: ProductContactAffordance;
 }
 
 export interface StoreCategoryFacetBucket {
@@ -950,15 +968,30 @@ function toMediaProjection(media: {
   };
 }
 
+/**
+ * Who is looking (A11, A14).
+ *
+ * Every field is nullable because a public product page must render for an anonymous
+ * visitor. `engagement.viewer` is then `null` rather than a fabricated `false`, and
+ * `contactAffordance` is `sign_in` rather than a button that leads to a wall.
+ */
+export interface StoreProductViewerContext {
+  readonly userId: string | null;
+  readonly organizationId: string | null;
+  readonly memberRole: CommerceOrganizationMemberRole | null;
+}
+
+const ANONYMOUS_VIEWER: StoreProductViewerContext = {
+  userId: null,
+  organizationId: null,
+  memberRole: null,
+};
+
 export async function getPublicProductBySlug(
   productSlug: string,
-  /**
-   * A11. The signed-in viewer, when there is one. `attachOptionalUser` makes this
-   * optional by design: a public product page must render for an anonymous visitor,
-   * and `engagement.viewer` is then `null` rather than a fabricated `false`.
-   */
-  viewerUserId: string | null = null,
+  viewer: StoreProductViewerContext = ANONYMOUS_VIEWER,
 ): Promise<Result<StoreProductDetailProjection, StoreCatalogError>> {
+  const viewerUserId = viewer.userId;
   const [row] = await db
     .select({
       ...productSelectFields,
@@ -1140,6 +1173,12 @@ export async function getPublicProductBySlug(
       specifications,
       categoryTrail,
       engagement: productEngagements.get(row.id) ?? EMPTY_PRODUCT_ENGAGEMENT,
+      contactAffordance: deriveContactAffordance({
+        viewerUserId: viewer.userId,
+        viewerOrganizationId: viewer.organizationId,
+        viewerMemberRole: viewer.memberRole,
+        sellerOrganizationId: row.organizationId,
+      }),
     },
   };
 }

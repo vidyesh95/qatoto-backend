@@ -27,6 +27,7 @@ import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
+import { linkInquiryToRfq } from "#src/services/commerce-product-inquiry.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -159,6 +160,8 @@ export interface CreateDraftRfqInput {
   readonly productLines: readonly CreateRfqProductLineInput[];
   readonly serviceLines: readonly CreateRfqServiceLineInput[];
   readonly documentIds?: readonly string[];
+  /** A14. The pre-sales inquiry this RFQ grew out of, if any. */
+  readonly sourceInquiryId?: string;
 }
 
 export interface UpdateDraftRfqInput {
@@ -1084,6 +1087,20 @@ export async function createDraftRfq(input: {
           documentIds: input.body.documentIds,
         });
         if (!documentsResult.success) abortRfqTransaction(documentsResult.error);
+      }
+
+      /**
+       * A14. Link the originating inquiry, scoped to the caller's own organization so
+       * an id from another buyer cannot be attached. A non-matching id is a no-op, not
+       * an error: the RFQ is valid either way and failing it would turn a bookkeeping
+       * detail into a lost draft.
+       */
+      if (input.body.sourceInquiryId !== undefined) {
+        await linkInquiryToRfq(transaction, {
+          inquiryId: input.body.sourceInquiryId,
+          rfqId: rfq.id,
+          buyerOrganizationId: input.buyerOrganizationId,
+        });
       }
 
       return rfq;

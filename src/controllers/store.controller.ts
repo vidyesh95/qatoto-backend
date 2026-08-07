@@ -7,6 +7,7 @@ import {
   StoreReviewListQuerySchema,
 } from "#src/schemas/store-reviews.schemas.js";
 import * as commerceDeliveryEstimateService from "#src/services/commerce-delivery-estimate.service.js";
+import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";
@@ -254,13 +255,29 @@ export async function getProduct(req: Request, res: Response): Promise<void> {
     sendZodError(res, params.error);
     return;
   }
-  // A11. `attachOptionalUser` may or may not have resolved a session; passing `null`
-  // for an anonymous visitor is what makes `engagement.viewer` null rather than a
-  // fabricated `hasSaved: false`.
-  const result = await storeCatalogService.getPublicProductBySlug(
-    params.data.productSlug,
-    req.user?.id ?? null,
-  );
+  /**
+   * A11 / A14. `attachOptionalUser` may or may not have resolved a session, and the
+   * store router carries no organization middleware — a public page must render for a
+   * visitor with no account at all.
+   *
+   * The organization is resolved HERE rather than by a guard, because on this route it
+   * is descriptive, not required: it decides whether `contactAffordance` is `chat` or
+   * `ask_question`, and whether `engagement.viewer` is state or `null`. A guard would
+   * turn a rendering detail into a 403.
+   */
+  const activeOrganization =
+    req.user && req.authSession?.activeOrganizationId
+      ? await resolveActiveCommerceOrganization({
+          userId: req.user.id,
+          activeOrganizationId: req.authSession.activeOrganizationId,
+        })
+      : null;
+
+  const result = await storeCatalogService.getPublicProductBySlug(params.data.productSlug, {
+    userId: req.user?.id ?? null,
+    organizationId: activeOrganization?.success ? activeOrganization.value.organizationId : null,
+    memberRole: activeOrganization?.success ? activeOrganization.value.memberRole : null,
+  });
   if (!result.success) {
     res.status(404).json({
       status: "error",
