@@ -567,11 +567,32 @@ export const storePresentationAccentEnum = pgEnum("store_presentation_accent", [
   "rose",
 ]);
 
+/**
+ * `pending_review` and `rejected` arrived with Phase 9 (§15.5): a seller may propose
+ * a guided pathway, and a proposal its own author can publish is not moderated.
+ * Hero slides and rails only ever use `draft | active | retired`.
+ */
 export const storeMerchandisingStateEnum = pgEnum("store_merchandising_state", [
   "draft",
   "active",
   "retired",
+  // Appended, not inserted: `ALTER TYPE ... ADD VALUE` puts new labels at the end,
+  // and this list must describe the type Postgres actually has.
+  "pending_review",
+  "rejected",
 ]);
+
+/**
+ * §15.2. `curated` is a merchandiser's choice; `derived` is a relation-graph
+ * suggestion. Only `curated` rows are stored — derived candidates are resolved from
+ * `commerce_product_relation` at read time, because a stored copy would be stale the
+ * moment a seller edits the graph — but the distinction rides the wire so no client
+ * can render a suggestion as a curatorial decision.
+ */
+export const storePathwaySlotCandidateSourceKindEnum = pgEnum(
+  "store_pathway_slot_candidate_source_kind",
+  ["curated", "derived"],
+);
 
 export const storeMerchandisingEntityKindEnum = pgEnum("store_merchandising_entity_kind", [
   "product",
@@ -1803,6 +1824,15 @@ export const storeHeroSlide = pgTable(
   ],
 );
 
+/**
+ * A guided pathway — the buy-the-set surface (§15).
+ *
+ * A rail ranks products that happen to be good and the buyer picks one; a pathway is
+ * a SET whose members relate to each other and whose buyer wants the whole thing.
+ * Two shapes share this one table, distinguished by `anchorProductId`: a CURATED set
+ * (null anchor) whose slots a merchandiser typed, and an ANCHORED set whose slots
+ * resolve their candidates from the relation graph (§15.1).
+ */
 export const storePathway = pgTable(
   "store_pathway",
   {
@@ -1814,6 +1844,31 @@ export const storePathway = pgTable(
     summary: text("summary"),
     accent: storePresentationAccentEnum("accent").default("slate").notNull(),
     state: storeMerchandisingStateEnum("state").default("draft").notNull(),
+    /** Non-null makes this an anchored set: slots resolve against this product. */
+    anchorProductId: text("anchor_product_id").references(() => product.id, {
+      onDelete: "restrict",
+    }),
+    heroImageUrl: text("hero_image_url"),
+    cardImageUrl: text("card_image_url"),
+    /**
+     * Null means platform-curated. A non-null owner is a SELLER PROPOSAL (§15.5),
+     * and the difference decides who may edit it and whether publication requires a
+     * moderator — without which a seller composes a set entirely from its own SKUs
+     * and a curated look becomes an advertisement.
+     */
+    ownerOrganizationId: text("owner_organization_id").references(
+      () => commerceOrganization.id,
+      { onDelete: "restrict" },
+    ),
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    submittedAt: timestamp("submitted_at"),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewNote: text("review_note"),
     startsAt: timestamp("starts_at"),
     endsAt: timestamp("ends_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1825,6 +1880,39 @@ export const storePathway = pgTable(
   (table) => [
     uniqueIndex("store_pathway_slug_uidx").on(table.slug),
     index("store_pathway_state_idx").on(table.state, table.id),
+    index("store_pathway_owner_idx")
+      .on(table.ownerOrganizationId, table.state, table.id)
+      .where(sql`owner_organization_id IS NOT NULL`),
+    index("store_pathway_anchor_idx")
+      .on(table.anchorProductId)
+      .where(sql`anchor_product_id IS NOT NULL`),
+    index("store_pathway_moderation_queue_idx").on(table.state, table.submittedAt, table.id),
+    check(
+      "store_pathway_images_ck",
+      sql`(hero_image_url IS NULL OR (char_length(hero_image_url) <= 2048 AND hero_image_url LIKE 'https://%'))
+          AND (card_image_url IS NULL OR (char_length(card_image_url) <= 2048 AND card_image_url LIKE 'https://%'))`,
+    ),
+    /**
+     * Review attribution is paired, only a decided state may carry it, and a seller
+     * proposal cannot reach a decided state unreviewed. A platform-curated pathway
+     * publishes without a reviewer because the merchandiser publishing it IS the
+     * decision — and because rows predating this column must not be invalidated.
+     */
+    check(
+      "store_pathway_review_ck",
+      sql`((reviewed_by_user_id IS NULL) = (reviewed_at IS NULL))
+          AND (reviewed_at IS NULL OR state IN ('active', 'rejected'))
+          AND (
+            owner_organization_id IS NULL
+            OR state NOT IN ('active', 'rejected')
+            OR reviewed_by_user_id IS NOT NULL
+          )
+          AND (state <> 'pending_review' OR submitted_at IS NOT NULL)`,
+    ),
+    check(
+      "store_pathway_review_note_ck",
+      sql`review_note IS NULL OR char_length(review_note) BETWEEN 1 AND 2000`,
+    ),
     check(
       "store_pathway_slug_ck",
       sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 100`,
@@ -1841,6 +1929,17 @@ export const storePathway = pgTable(
   ],
 );
 
+/**
+ * @deprecated Phase 9 replaced this flat list with {@link storePathwaySlot} and
+ * {@link storePathwaySlotCandidate} (§15.2). Migration `0058` backfilled its product
+ * rows into slots and nothing reads this table any more; it is retained only so a
+ * pre-Phase-9 deployment can still serve pathways during a rollback, and a later
+ * migration drops it.
+ *
+ * Why it was wrong for a set: `entityId` had no foreign key, so a member that became
+ * ineligible was dropped silently and a five-piece look rendered as three pieces with
+ * nothing saying a piece was missing. For a rail that is correct; for a set it is a lie.
+ */
 export const storePathwayItem = pgTable(
   "store_pathway_item",
   {
@@ -1875,6 +1974,114 @@ export const storePathwayItem = pgTable(
       "store_pathway_item_window_ck",
       sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
     ),
+  ],
+);
+
+/**
+ * A ROLE in a guided set — "Footwear", "Front light", "Chain bolts" (§15.2).
+ *
+ * `roleLabel` is free text, like `specificationGroup` in A3: the roles in a hotel
+ * refit and a bicycle build share nothing, so an enum would be wrong in every
+ * category it failed to anticipate.
+ *
+ * `derivedRelationKind` is what makes an anchored set anchored — the slot names an
+ * edge kind and its candidates are read from `commerce_product_relation` against the
+ * pathway's anchor, rather than being typed by a merchandiser. A database trigger
+ * (`store_pathway_slot_anchor_guard`) refuses a derived slot on an unanchored pathway.
+ */
+export const storePathwaySlot = pgTable(
+  "store_pathway_slot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    pathwayId: text("pathway_id")
+      .notNull()
+      .references(() => storePathway.id, { onDelete: "cascade" }),
+    roleLabel: text("role_label").notNull(),
+    /** A required slot with no fillable candidate makes the whole set incomplete (§15.6). */
+    isRequired: boolean("is_required").default(true).notNull(),
+    /** How many units of the chosen candidate: one saddle, twelve bolts. */
+    quantity: integer("quantity").default(1).notNull(),
+    siblingOrder: integer("sibling_order").notNull(),
+    derivedRelationKind: commerceProductRelationKindEnum("derived_relation_kind"),
+    startsAt: timestamp("starts_at"),
+    endsAt: timestamp("ends_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("store_pathway_slot_order_uidx").on(table.pathwayId, table.siblingOrder),
+    index("store_pathway_slot_pathway_idx").on(table.pathwayId, table.siblingOrder, table.id),
+    check("store_pathway_slot_role_label_ck", sql`char_length(role_label) BETWEEN 1 AND 80`),
+    check("store_pathway_slot_quantity_ck", sql`quantity BETWEEN 1 AND 1000000`),
+    check("store_pathway_slot_order_ck", sql`sibling_order >= 0`),
+    check(
+      "store_pathway_slot_window_ck",
+      sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
+    ),
+  ],
+);
+
+/**
+ * The products that can fill a slot, ranked (§15.2).
+ *
+ * Candidates rather than one product per slot are what make a swap possible ("show me
+ * a cheaper saddle") and what turn a silently shrinking set into a fall-through: when
+ * rank 0 is out of stock the slot offers rank 1 instead of disappearing. A set is only
+ * as robust as its substitutes.
+ *
+ * `variantId` is not in §15.2 and A1 requires it: a product with active variants
+ * refuses a cart line naming none, so a candidate without one would be a piece the set
+ * advertises and cannot sell. `store_pathway_slot_candidate_variant_guard` enforces
+ * both that rule and variant ownership.
+ */
+export const storePathwaySlotCandidate = pgTable(
+  "store_pathway_slot_candidate",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slotId: text("slot_id")
+      .notNull()
+      .references(() => storePathwaySlot.id, { onDelete: "cascade" }),
+    /** A REAL foreign key, unlike `storePathwayItem.entityId`. */
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "restrict" }),
+    variantId: text("variant_id").references(() => commerceProductVariant.id, {
+      onDelete: "restrict",
+    }),
+    /** 0 is the default the set shows first. */
+    rank: integer("rank").default(0).notNull(),
+    sourceKind: storePathwaySlotCandidateSourceKindEnum("source_kind")
+      .default("curated")
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /**
+     * Expression index over `coalesce(variant_id, '')`, the shape 0054/0055
+     * established: one product in two variants is two legitimate candidates for the
+     * same slot, but the same (product, variant) twice is not.
+     */
+    uniqueIndex("store_pathway_slot_candidate_uidx").on(
+      table.slotId,
+      table.productId,
+      sql`coalesce(${table.variantId}, '')`,
+    ),
+    index("store_pathway_slot_candidate_rank_idx").on(table.slotId, table.rank, table.id),
+    index("store_pathway_slot_candidate_product_idx").on(table.productId),
+    check("store_pathway_slot_candidate_rank_ck", sql`rank >= 0 AND rank <= 10000`),
+    /** Derived candidates are computed at read time; only curated rows are stored. */
+    check("store_pathway_slot_candidate_source_ck", sql`source_kind = 'curated'`),
   ],
 );
 
@@ -5167,6 +5374,44 @@ export const commerceProductRelationRelations = relations(commerceProductRelatio
     references: [commerceOrganization.id],
   }),
 }));
+
+export const storePathwayRelations = relations(storePathway, ({ one, many }) => ({
+  anchorProduct: one(product, {
+    fields: [storePathway.anchorProductId],
+    references: [product.id],
+  }),
+  ownerOrganization: one(commerceOrganization, {
+    fields: [storePathway.ownerOrganizationId],
+    references: [commerceOrganization.id],
+  }),
+  slots: many(storePathwaySlot),
+}));
+
+export const storePathwaySlotRelations = relations(storePathwaySlot, ({ one, many }) => ({
+  pathway: one(storePathway, {
+    fields: [storePathwaySlot.pathwayId],
+    references: [storePathway.id],
+  }),
+  candidates: many(storePathwaySlotCandidate),
+}));
+
+export const storePathwaySlotCandidateRelations = relations(
+  storePathwaySlotCandidate,
+  ({ one }) => ({
+    slot: one(storePathwaySlot, {
+      fields: [storePathwaySlotCandidate.slotId],
+      references: [storePathwaySlot.id],
+    }),
+    product: one(product, {
+      fields: [storePathwaySlotCandidate.productId],
+      references: [product.id],
+    }),
+    variant: one(commerceProductVariant, {
+      fields: [storePathwaySlotCandidate.variantId],
+      references: [commerceProductVariant.id],
+    }),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Research & Development domain. See docs/R_AND_D_BACKEND_STRUCTURE.md.
