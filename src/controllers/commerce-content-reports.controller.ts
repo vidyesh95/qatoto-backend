@@ -10,6 +10,7 @@ import {
 } from "#src/schemas/commerce-content-reports.schemas.js";
 import * as commerceContentReportsService from "#src/services/commerce-content-reports.service.js";
 import type { CommerceContentReportsError } from "#src/services/commerce-content-reports.service.js";
+import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 const EmptyObjectSchema = z.object({}).strict();
@@ -115,13 +116,28 @@ export async function createContentReport(req: Request, res: Response): Promise<
   }
 
   /**
-   * The reporter's organization is CONTEXT, not a requirement. Anyone signed in may
-   * report; belonging to an organization only sharpens the self-report check.
+   * The reporter's organization is CONTEXT, not a requirement — anyone signed in may
+   * report, and belonging to an organization only sharpens the self-report check.
+   *
+   * RESOLVED HERE, not read from `req.commerceOrganization`. This route deliberately
+   * carries no organization middleware, so that property is ALWAYS undefined on it and
+   * reading it made the self-report guard dead code: a seller could report its own
+   * listing and get a 201. Caught by `db:smoke-store-phase-10`, which is the only place
+   * the empty middleware chain and the guard meet.
    */
+  const activeOrganization = req.authSession?.activeOrganizationId
+    ? await resolveActiveCommerceOrganization({
+        userId: reporterUserId,
+        activeOrganizationId: req.authSession.activeOrganizationId,
+      })
+    : null;
+
   const result = await commerceContentReportsService.createContentReport(
     {
       reporterUserId,
-      reporterOrganizationId: req.commerceOrganization?.organizationId ?? null,
+      reporterOrganizationId: activeOrganization?.success
+        ? activeOrganization.value.organizationId
+        : null,
     },
     body.data,
   );

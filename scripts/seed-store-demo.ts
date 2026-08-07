@@ -25,6 +25,7 @@ import {
   commerceOrganizationAddress,
   commerceOrganizationMember,
   commerceProductCustomizationOption,
+  commerceProductStats,
   commerceProductVariant,
   commerceProviderKindLink,
   commerceProviderProfile,
@@ -330,6 +331,21 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
         unitsPerPackage: 4,
       })
       .onConflictDoNothing({ target: product.id });
+
+    /**
+     * A11. This seed writes `product` rows DIRECTLY rather than through
+     * `createProduct`, so it does not get `ensureCommerceProductStatsRow` for free —
+     * and migration `0066`'s backfill already ran, before these rows existed.
+     *
+     * Without this insert a freshly-migrated-then-seeded database fails
+     * `db:verify-store-phase-10-constraints`' "every product has an engagement stats
+     * row" check, which is exactly the condition that makes an engagement counter
+     * UPDATE affect zero rows and lose the count silently.
+     */
+    await db
+      .insert(commerceProductStats)
+      .values({ productId: demoProduct.id })
+      .onConflictDoNothing();
 
     await db
       .insert(productPricingTier)

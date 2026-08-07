@@ -43,6 +43,7 @@
     "db:seed-content-categories": "tsx --conditions=development scripts/seed-content-categories.ts",
     "db:verify-research-program-constraints": "tsx --conditions=development scripts/verify-research-program-constraints.ts",
     "db:smoke-promotional-slides": "tsx --conditions=development scripts/smoke-promotional-slides.ts",
+    "db:smoke-store-phase-10": "tsx --conditions=development scripts/smoke-store-phase-10.ts",
     "db:smoke-store-phases-9-11": "tsx --conditions=development scripts/smoke-store-phases-9-11.ts",
     "db:smoke-research-programs": "tsx --conditions=development scripts/smoke-research-programs.ts",
     "db:verify-discovery-constraints": "tsx --conditions=development scripts/verify-discovery-constraints.ts",
