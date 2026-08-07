@@ -535,6 +535,23 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "sample_credit_minted",
     "sample_credit_consumed",
     "product_customization_options_replaced",
+    /**
+     * Phase 10 (Appendix A8, A14).
+     *
+     * NOTE WHAT IS NOT HERE: a helpful vote. It carries no commercial consequence and
+     * nothing a moderator or a court would read, and at the vote route's 60/min budget
+     * it would become the largest table in the audit log. The omission is a decision.
+     *
+     * Payloads for the media kinds use mediaId / reviewId / mediaKind / position and
+     * NEVER filename, objectKey or publicId — `FORBIDDEN_PAYLOAD_KEY` matches
+     * `filename` and `object.*key` and throws, which is how `addressKind` took down
+     * address creation in Phase 11.
+     */
+    "review_media_attached",
+    "review_media_detached",
+    "review_reply_published",
+    "review_reply_withdrawn",
+    "product_inquiry_opened",
   ],
 );
 
@@ -744,12 +761,22 @@ export const commerceOrderStateEnum = pgEnum("commerce_order_state", [
   "disputed",
 ]);
 
+/**
+ * NOTE that `product` is NOT a member, and `product_inquiry` is (Appendix A14).
+ *
+ * A thread keyed on the product would collide with `commerce_thread_resource_uidx`
+ * and produce one thread per product across ALL buyers, so `assertThreadParticipant`
+ * would admit every buyer organization that ever inquired and hand each of them every
+ * other buyer's negotiation. The inquiry row is what keeps the unique index correct:
+ * one thread per inquiry, one inquiry per (product, buyer organization).
+ */
 export const commerceThreadResourceKindEnum = pgEnum("commerce_thread_resource_kind", [
   "rfq",
   "quote",
   "order",
   "service_engagement",
   "dispute",
+  "product_inquiry",
 ]);
 
 export const commerceThreadParticipantRoleEnum = pgEnum("commerce_thread_participant_role", [
@@ -865,6 +892,35 @@ export const commerceCompletionTargetKindEnum = pgEnum("commerce_completion_targ
 export const commerceReviewVisibilityEnum = pgEnum("commerce_review_visibility", [
   "visible",
   "hidden",
+]);
+
+/**
+ * Review media kind (STORE Appendix A8).
+ *
+ * `photo` bytes are uploaded, normalized by sharp and delivered from Cloudinary.
+ * `youtube_video` stores an 11-character YouTube id and never touches video bytes —
+ * the same shipped design `video.youtubeVideoId` uses, reusing `src/lib/youtube.ts`
+ * and the `verify-youtube-video` oEmbed job rather than inventing a second ingest.
+ * The two kinds therefore populate DIFFERENT columns, which is why
+ * `commerce_review_media_supply_ck` discriminates on this value rather than making
+ * every column nullable and hoping.
+ */
+export const commerceReviewMediaKindEnum = pgEnum("commerce_review_media_kind", [
+  "photo",
+  "youtube_video",
+]);
+
+/**
+ * Named review sub-scores (STORE Appendix A8) — the three bars the ratings section
+ * renders. A closed enum, not a free-text axis key: an unbounded axis makes the
+ * aggregate unbounded and forces the client to invent labels for keys it has never
+ * seen. Contrast `commerce_product_specification.specificationGroup`, which IS free
+ * text because the useful groupings for a chair and a transformer share nothing.
+ */
+export const commerceReviewScoreAxisEnum = pgEnum("commerce_review_score_axis", [
+  "service",
+  "shipping",
+  "quality",
 ]);
 
 export const commerceDisputeStateEnum = pgEnum("commerce_dispute_state", [
@@ -5436,6 +5492,25 @@ export const commerceReview = pgTable(
     rating: integer("rating").notNull(),
     body: text("body").notNull(),
     visibility: commerceReviewVisibilityEnum("visibility").default("visible").notNull(),
+    /**
+     * DENORMALIZED counters (STORE Appendix A8), moved in the same transaction as the
+     * row that caused them — `commerce_review_vote` and `commerce_review_media`.
+     *
+     * They are columns rather than `count(*)` because BOTH are ordering/filtering
+     * inputs on the public read: "most helpful" is a sort chip and a keyset cursor
+     * needs its sort key stored and indexed on the ordered table, and `media_count > 0`
+     * is sargable in a partial-index predicate where `EXISTS (...)` is not.
+     *
+     * They are NOT a `commerce_review_stats` side table the way `video_stats` is:
+     * that table exists because a video has ten counters written by async jobs on a
+     * wide row that is frequently read without them. A review has two integers and is
+     * never read without them, so a 1:1 join would cost every page and buy nothing.
+     *
+     * Drift is reconstructible — `verify-store-phase-10-constraints` asserts both
+     * against `count(*)` over their source tables.
+     */
+    helpfulCount: integer("helpful_count").default(0).notNull(),
+    mediaCount: integer("media_count").default(0).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -5451,9 +5526,206 @@ export const commerceReview = pgTable(
     index("commerce_review_product_idx")
       .on(table.productId, table.visibility)
       .where(sql`product_id IS NOT NULL`),
+    /**
+     * KEYSET indexes for the four public sorts (A8). Every one is PARTIAL on
+     * `visibility = 'visible'`, so a hidden review never enters a public scan at all
+     * rather than being filtered out after the fact, and every one ends in `id` —
+     * §7's rule that an order must end in a unique column so cursor pagination cannot
+     * skip rows with equal sort keys.
+     *
+     * The pre-existing `commerce_review_subject_idx` is unordered and cannot serve a
+     * keyset; it stays because the aggregate in `commerce-trust-metrics.service.ts`
+     * uses it.
+     */
+    index("commerce_review_product_recent_idx")
+      .on(table.productId, table.createdAt.desc(), table.id)
+      .where(sql`visibility = 'visible' AND product_id IS NOT NULL`),
+    index("commerce_review_product_helpful_idx")
+      .on(table.productId, table.helpfulCount.desc(), table.id)
+      .where(sql`visibility = 'visible' AND product_id IS NOT NULL`),
+    index("commerce_review_product_rating_idx")
+      .on(table.productId, table.rating.desc(), table.createdAt.desc(), table.id)
+      .where(sql`visibility = 'visible' AND product_id IS NOT NULL`),
+    index("commerce_review_product_media_idx")
+      .on(table.productId, table.createdAt.desc(), table.id)
+      .where(sql`visibility = 'visible' AND product_id IS NOT NULL AND media_count > 0`),
+    index("commerce_review_subject_recent_idx")
+      .on(table.subjectOrganizationId, table.createdAt.desc(), table.id)
+      .where(sql`visibility = 'visible'`),
     check("commerce_review_rating_ck", sql`rating BETWEEN 1 AND 5`),
     check("commerce_review_body_ck", sql`char_length(body) BETWEEN 1 AND 4000`),
     check("commerce_review_self_ck", sql`reviewer_organization_id <> subject_organization_id`),
+    check("commerce_review_helpful_count_ck", sql`helpful_count >= 0`),
+    /**
+     * The upper bound mirrors `commerce_review_media_position_ck`. Two constraints
+     * stating one rule is deliberate here: the cap is enforced at the counter so a
+     * seventh attach fails even if the position sequence has a gap.
+     */
+    check("commerce_review_media_count_ck", sql`media_count BETWEEN 0 AND 6`),
+  ],
+);
+
+/**
+ * Review photos and video links (STORE Appendix A8).
+ *
+ * CASCADE, and it is the only cascade in the commerce trust slice. Every other
+ * commerce foreign key is `restrict` because an order line, a journal entry or a
+ * completion references the row and a delete would erase commercial history. Review
+ * media has no downstream reference at all — it is owned wholly by its review — and
+ * `restrict` would make a review permanently undeletable. `product_image -> product`
+ * made the same call for the same reason.
+ *
+ * Photos are stored under `qatoto/reviews/`, NEVER under the product folder:
+ * `deleteAllProductImages` runs when a seller deletes a listing, and a buyer's
+ * testimony must not be destroyed by the party it is testimony about.
+ */
+export const commerceReviewMedia = pgTable(
+  "commerce_review_media",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    reviewId: text("review_id")
+      .notNull()
+      .references(() => commerceReview.id, { onDelete: "cascade" }),
+    mediaKind: commerceReviewMediaKindEnum("media_kind").default("photo").notNull(),
+    /** Cloudinary secure URL; NULL for a YouTube link. */
+    url: text("url"),
+    /** 11-character YouTube id; NULL for an uploaded photo. */
+    youtubeVideoId: text("youtube_video_id"),
+    /**
+     * Measured by sharp from the DECODED bytes, never accepted from the client —
+     * the same rule A2 applies to `product_image`. NOT NULL for photos here (unlike
+     * `product_image`, where they are nullable only because pre-A2 rows exist).
+     */
+    widthPx: integer("width_px"),
+    heightPx: integer("height_px"),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_review_media_position_uidx").on(table.reviewId, table.position),
+    check("commerce_review_media_position_ck", sql`position BETWEEN 0 AND 5`),
+    /**
+     * Kind-discriminated supply. A photo carries a URL and measured dimensions; a
+     * YouTube link carries an id and neither. Making all four columns independently
+     * nullable would admit a photo with no bytes and a video with a width.
+     */
+    check(
+      "commerce_review_media_supply_ck",
+      sql`(media_kind = 'photo') = (url IS NOT NULL AND width_px IS NOT NULL AND height_px IS NOT NULL)
+          AND (media_kind = 'youtube_video') = (youtube_video_id IS NOT NULL)`,
+    ),
+    check("commerce_review_media_url_ck", sql`url IS NULL OR (url LIKE 'https://%' AND char_length(url) <= 2048)`),
+    check(
+      "commerce_review_media_youtube_ck",
+      sql`youtube_video_id IS NULL OR youtube_video_id ~ '^[a-zA-Z0-9_-]{11}$'`,
+    ),
+    check(
+      "commerce_review_media_dimensions_ck",
+      sql`(width_px IS NULL OR width_px BETWEEN 1 AND 20000)
+          AND (height_px IS NULL OR height_px BETWEEN 1 AND 20000)`,
+    ),
+  ],
+);
+
+/**
+ * Named sub-scores (STORE Appendix A8) — Service, Shipping, Quality.
+ *
+ * Composite primary key, no surrogate id: the row IS the `(review, axis)` fact, and
+ * a surrogate plus a unique index would state one rule twice. No `createdAt` either
+ * — the row is written inside its review's transaction and never changes, so
+ * `commerce_review.created_at` is already its timestamp.
+ *
+ * `shipping` is meaningless on a `service_engagement` completion. That is a
+ * cross-table invariant, so it is enforced in `createReview` (which already holds the
+ * completion row under a lock) as `UNSUPPORTED_SCORE_AXIS`, not as a fourth trigger.
+ */
+export const commerceReviewScore = pgTable(
+  "commerce_review_score",
+  {
+    reviewId: text("review_id")
+      .notNull()
+      .references(() => commerceReview.id, { onDelete: "cascade" }),
+    axis: commerceReviewScoreAxisEnum("axis").notNull(),
+    score: integer("score").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.reviewId, table.axis] }),
+    index("commerce_review_score_axis_idx").on(table.axis, table.reviewId),
+    check("commerce_review_score_ck", sql`score BETWEEN 1 AND 5`),
+  ],
+);
+
+/**
+ * Helpful votes (STORE Appendix A8).
+ *
+ * There is NO `value` column. There is one kind of vote, and a `+1 / -1` integer
+ * would smuggle a downvote product decision in as a nullable field. Row presence IS
+ * the vote; deleting the row un-votes. This is `video_save` byte for byte.
+ *
+ * Keyed on the ORGANIZATION, not the user: it mirrors one-review-per-organization
+ * (`commerce_review_completion_reviewer_uidx`), makes the self-vote check a column
+ * comparison instead of a membership lookup, and caps farming behind the cost of
+ * standing up a verified commerce organization.
+ */
+export const commerceReviewVote = pgTable(
+  "commerce_review_vote",
+  {
+    reviewId: text("review_id")
+      .notNull()
+      .references(() => commerceReview.id, { onDelete: "cascade" }),
+    voterOrganizationId: text("voter_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    voterMemberId: text("voter_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    voterUserId: text("voter_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.reviewId, table.voterOrganizationId] }),
+    index("commerce_review_vote_organization_idx").on(table.voterOrganizationId, table.createdAt),
+  ],
+);
+
+/**
+ * The subject organization's public reply (STORE Appendix A8).
+ *
+ * `reviewId` is the PRIMARY KEY, not a surrogate id with a unique index — "one reply
+ * per review" becomes unrepresentable rather than merely rejected.
+ *
+ * No `visibility` column: a reply only ever renders beside its review, so hiding the
+ * review hides the reply. One visibility flag means one place to get it wrong.
+ */
+export const commerceReviewReply = pgTable(
+  "commerce_review_reply",
+  {
+    reviewId: text("review_id")
+      .primaryKey()
+      .references(() => commerceReview.id, { onDelete: "cascade" }),
+    responderOrganizationId: text("responder_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    responderMemberId: text("responder_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_review_reply_organization_idx").on(
+      table.responderOrganizationId,
+      table.createdAt,
+    ),
+    check("commerce_review_reply_body_ck", sql`char_length(body) BETWEEN 1 AND 2000`),
   ],
 );
 
@@ -12946,6 +13218,16 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // The home-page Spotlight rail — up to three admin-picked catalogue videos. One event
   // because the only write is a whole-set replace (never a per-slot create/update).
   "spotlight_slots_replaced",
+  // Commerce content moderation — `commerce-content-reports` (Appendix A12). Staff
+  // decisions only. An AUTOMATIC threshold hide never reaches this chain: this table's
+  // `actorUserId` is NOT NULL because every entry must name an accountable human, and
+  // a hide triggered by three reporters names nobody. Those are recorded in
+  // `commerce_moderation_action` with `actionSource = 'automatic'` instead, which is
+  // why that column exists.
+  "commerce_content_hidden",
+  "commerce_content_restored",
+  "commerce_content_report_dismissed",
+  "commerce_product_moderation_state_changed",
 ]);
 
 /**

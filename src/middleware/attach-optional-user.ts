@@ -19,6 +19,12 @@ import { auth } from "#src/lib/auth.js";
  * Identity is still server-derived (CLAUDE.md §1.1). This middleware only makes the
  * session optional, never client-assertable — there is no header or query parameter
  * that can name a user here.
+ *
+ * `req.authSession` is attached alongside `req.user`, exactly as `requireAuth` does.
+ * The public store reads need `activeOrganizationId` to answer viewer-scoped questions
+ * — "have I saved this product", "may I open a chat about it" — and the session object
+ * was already being resolved here and thrown away. A read that silently answered `false`
+ * because the field was unreachable would be worse than one that could not answer.
  */
 export async function attachOptionalUser(
   req: Request,
@@ -34,6 +40,10 @@ export async function attachOptionalUser(
       name: session.user.name,
       emailVerified: session.user.emailVerified,
       handle: session.user.handle ?? null,
+    };
+    req.authSession = {
+      id: session.session.id,
+      activeOrganizationId: session.session.activeOrganizationId ?? null,
     };
   }
 

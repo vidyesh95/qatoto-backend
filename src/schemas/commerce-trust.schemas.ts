@@ -1,13 +1,85 @@
 import { z } from "zod";
 
+/**
+ * Named sub-scores (Appendix A8) ride the review body rather than getting their own
+ * route: they are part of the same testimony as the rating, and a review is immutable
+ * once posted. Every axis is optional — a buyer may rate quality and skip shipping —
+ * but an EMPTY object is refused, because "I sent scores" and "I sent no scores" must
+ * not be the same request.
+ *
+ * `shipping` on a service-engagement completion is a cross-table fact this schema
+ * cannot see; `createReview` refuses it as UNSUPPORTED_SCORE_AXIS under the lock it
+ * already holds on the completion row.
+ */
+export const ReviewScoresSchema = z
+  .object({
+    service: z.number().int().min(1).max(5),
+    shipping: z.number().int().min(1).max(5),
+    quality: z.number().int().min(1).max(5),
+  })
+  .partial()
+  .strict()
+  .refine((scores) => Object.keys(scores).length > 0, {
+    message: "Provide at least one score axis, or omit scores entirely.",
+  });
+
 export const CreateReviewSchema = z
   .object({
     rating: z.number().int().min(1).max(5),
     body: z.string().trim().min(1).max(4000),
+    scores: ReviewScoresSchema.optional(),
   })
   .strict();
 
 export type CreateReviewInput = z.infer<typeof CreateReviewSchema>;
+
+export const ReviewIdParamsSchema = z
+  .object({
+    reviewId: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+export const ReviewMediaParamsSchema = z
+  .object({
+    reviewId: z.string().trim().min(1).max(200),
+    mediaId: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+/**
+ * Multipart text fields accompanying a review photo upload — there are none.
+ *
+ * NOTE THE ABSENCE OF `position`. Media is always APPENDED at the current count, and
+ * the gallery is re-packed to 0..n-1 on removal. A client-chosen position would
+ * collide with `commerce_review_media_position_uidx` on any concurrent attach, and an
+ * accepted-then-ignored field is worse than a rejected one: `.strict()` exists so a
+ * caller learns its request was misunderstood instead of assuming it worked.
+ */
+export const AttachReviewPhotoFieldsSchema = z.object({}).strict();
+
+export type AttachReviewPhotoFieldsInput = z.infer<typeof AttachReviewPhotoFieldsSchema>;
+
+/**
+ * A review video is a YouTube LINK, not an upload. This codebase has no first-party
+ * video ingest — `video.youtubeVideoId` plus the `verify-youtube-video` oEmbed job is
+ * the shipped design — and the id is extracted server-side by
+ * `extractYoutubeVideoId`, never accepted as a bare id from the client.
+ */
+export const AttachReviewVideoSchema = z
+  .object({
+    youtubeUrl: z.string().trim().min(1).max(2048),
+  })
+  .strict();
+
+export type AttachReviewVideoInput = z.infer<typeof AttachReviewVideoSchema>;
+
+export const UpsertReviewReplySchema = z
+  .object({
+    body: z.string().trim().min(1).max(2000),
+  })
+  .strict();
+
+export type UpsertReviewReplyInput = z.infer<typeof UpsertReviewReplySchema>;
 
 export const CreateDisputeSchema = z
   .object({

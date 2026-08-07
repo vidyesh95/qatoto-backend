@@ -258,6 +258,144 @@ export async function deleteAllProductImages(
 }
 
 /**
+ * Review photos (STORE Appendix A8). Same per-parent-folder shape as product images:
+ * `qatoto/reviews/<reviewId>/<mediaId>`, one asset per media row.
+ *
+ * A SEPARATE FOLDER FROM PRODUCTS, and that is the whole point of these three
+ * functions existing rather than reusing the product trio. `deleteAllProductImages`
+ * runs when a seller deletes a listing, and it destroys everything under
+ * `qatoto/products/<productId>/`. Filing buyer testimony there would let the party a
+ * review is about erase the photographic evidence in it by deleting the listing.
+ *
+ * Public delivery is the default and is intended: `upload_stream` with no `type`
+ * option is `type: "upload"`, the same public URL product images get. Review photos
+ * render on a public PDP — the opposite posture from A18's customization artwork,
+ * which is envelope-encrypted in object storage because it is one buyer's private
+ * commercial material. Do not "fix" this into an authenticated delivery type.
+ */
+const REVIEW_FOLDER = "qatoto/reviews";
+
+/** The stable public id for one review photo. */
+function reviewMediaPublicId(reviewId: string, mediaId: string): string {
+  return `${REVIEW_FOLDER}/${reviewId}/${mediaId}`;
+}
+
+/** The folder prefix holding all of a review's photo assets. */
+function reviewFolderPrefix(reviewId: string): string {
+  return `${REVIEW_FOLDER}/${reviewId}/`;
+}
+
+/**
+ * Upload one review photo from an already-validated/re-encoded buffer. The buffer
+ * MUST have been through `validateAndNormalizeImage` first (CLAUDE.md §1.1) — that is
+ * what proves the bytes are a raster image from their magic bytes rather than from the
+ * multipart header, and what strips EXIF. A buyer's phone photo carries GPS, so the
+ * re-encode matters more here than anywhere else in this codebase.
+ */
+export async function uploadReviewMedia(
+  reviewId: string,
+  mediaId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: reviewMediaPublicId(reviewId, mediaId),
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Delete one review photo asset. An already-absent asset is success — the desired end
+ * state is reached either way.
+ */
+export async function deleteReviewMedia(
+  reviewId: string,
+  mediaId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult = await cloudinary.uploader.destroy(
+      reviewMediaPublicId(reviewId, mediaId),
+      { resource_type: "image", invalidate: true },
+    );
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
+
+/**
+ * Destroy every asset under a review's folder. Used if a review is ever hard-deleted;
+ * `commerce_review_media` cascades, so the rows go with it and these assets would
+ * otherwise be orphaned.
+ */
+export async function deleteAllReviewMedia(
+  reviewId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    await cloudinary.api.delete_resources_by_prefix(reviewFolderPrefix(reviewId), {
+      resource_type: "image",
+      invalidate: true,
+    });
+    return { success: true, value: { deleted: true } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
+
+/**
  * R&D project covers. ONE asset per project, overwritten in place — the same shape as
  * avatars rather than product images, because a project has exactly one cover and a
  * re-upload should replace it rather than accumulate orphans.

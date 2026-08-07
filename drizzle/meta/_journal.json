@@ -449,6 +449,20 @@
       "when": 1786037664394,
       "tag": "0063_store_phase_0_contract",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1786037669394,
+      "tag": "0064_store_phase_10_enums",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1786037674394,
+      "tag": "0065_store_a8_review_depth",
+      "breakpoints": true
     }
   ]
 }

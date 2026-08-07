@@ -1147,3 +1147,35 @@ export const commerceTrustModerationLimiter = createLimiter({
   windowMs: ONE_MINUTE_MS,
   limit: 60,
 });
+
+/**
+ * Review photo upload (Appendix A8). Tighter than the review write itself because each
+ * request decodes an image with sharp and then calls Cloudinary — CPU plus an outbound
+ * call, and the per-review cap is six anyway.
+ */
+export const commerceReviewMediaUploadLimiter = createLimiter({
+  namespace: "commerceReviewMediaUpload",
+  windowMs: ONE_MINUTE_MS,
+  limit: 10,
+});
+
+/**
+ * Helpful votes (Appendix A8). Generous because the toggle is idempotent by verb and a
+ * buyer skimming a long review list legitimately votes several times in a minute; the
+ * real anti-farming control is the unique key plus the self-vote trigger, not this.
+ */
+export const commerceReviewVoteLimiter = createLimiter({
+  namespace: "commerceReviewVote",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
+ * Seller replies to reviews (Appendix A8). A reply is public copy written by the party
+ * a review is about, so it is bounded like other organization public-copy writes.
+ */
+export const commerceReviewReplyLimiter = createLimiter({
+  namespace: "commerceReviewReply",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});

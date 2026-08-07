@@ -2,6 +2,12 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import {
+  ACCEPTED_IMAGE_FORMATS_SENTENCE,
+  describeUnsupportedImageFormat,
+} from "#src/lib/image.js";
+import {
+  AttachReviewPhotoFieldsSchema,
+  AttachReviewVideoSchema,
   CompletionIdParamsSchema,
   CreateDisputeSchema,
   CreateReviewSchema,
@@ -9,10 +15,16 @@ import {
   DisputeIdParamsSchema,
   ListDisputesQuerySchema,
   OrderIdParamsSchema,
+  ReviewIdParamsSchema,
+  ReviewMediaParamsSchema,
+  UpsertReviewReplySchema,
 } from "#src/schemas/commerce-trust.schemas.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commerceTrustService from "#src/services/commerce-trust.service.js";
-import type { CommerceTrustError } from "#src/services/commerce-trust.service.js";
+import type {
+  CommerceReviewMediaError,
+  CommerceTrustError,
+} from "#src/services/commerce-trust.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 const EmptyObjectSchema = z.object({}).strict();
@@ -119,10 +131,96 @@ function mapTrustError(res: Response, error: CommerceTrustError): void {
         data: { capability: error.capability },
       } satisfies ApiResponse);
       return;
+    case "MEDIA_LIMIT_REACHED":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: `A review may carry at most ${error.limit} media items.`,
+      } satisfies ApiResponse);
+      return;
+    case "SELF_VOTE_FORBIDDEN":
+      res.status(403).json({
+        status: "error",
+        statusCode: 403,
+        message: "A party to a review cannot vote on it.",
+      } satisfies ApiResponse);
+      return;
+    case "UNSUPPORTED_SCORE_AXIS":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: `The "${error.axis}" score does not apply to this completion.`,
+      } satisfies ApiResponse);
+      return;
+    case "INVALID_YOUTUBE_URL":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Provide a YouTube video link.",
+      } satisfies ApiResponse);
+      return;
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce trust error: ${JSON.stringify(exhaustiveCheck)}`);
     }
+  }
+}
+
+/**
+ * Media upload adds two more failure families — sharp's verdict on the bytes and
+ * Cloudinary's on the network. They are handled here and everything else DELEGATES to
+ * `mapTrustError`, which TypeScript narrows to `CommerceTrustError` in the default
+ * branch. That is why the service composes three unions instead of merging them: no
+ * assertion is needed to get back to the narrower mapper.
+ */
+function mapReviewMediaError(res: Response, error: CommerceReviewMediaError): void {
+  switch (error.type) {
+    case "NOT_AN_IMAGE":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: `That file isn't an image. ${ACCEPTED_IMAGE_FORMATS_SENTENCE}`,
+      } satisfies ApiResponse);
+      return;
+    case "UNSUPPORTED_FORMAT":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: describeUnsupportedImageFormat(error.detected),
+      } satisfies ApiResponse);
+      return;
+    case "DIMENSIONS_TOO_SMALL":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: `That image is too small (${error.width}×${error.height}).`,
+      } satisfies ApiResponse);
+      return;
+    case "DIMENSIONS_TOO_LARGE":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: `That image is too large (${error.width}×${error.height}).`,
+      } satisfies ApiResponse);
+      return;
+    case "NOT_CONFIGURED":
+      res.status(503).json({
+        status: "error",
+        statusCode: 503,
+        message: "Image uploads are not available right now.",
+      } satisfies ApiResponse);
+      return;
+    case "UPLOAD_FAILED":
+    case "DELETE_FAILED":
+      res.status(502).json({
+        status: "error",
+        statusCode: 502,
+        message: "The image service did not complete the request.",
+      } satisfies ApiResponse);
+      return;
+    default:
+      mapTrustError(res, error);
+      return;
   }
 }
 
@@ -252,6 +350,219 @@ export async function decideDispute(req: Request, res: Response): Promise<void> 
     status: "success",
     statusCode: 200,
     message: "Dispute decided.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Appendix A8 — review depth handlers.
+// ---------------------------------------------------------------------------
+
+export async function attachReviewPhoto(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ReviewIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  // Multipart carries no body schema of its own, but stray text fields must still be
+  // refused rather than silently dropped.
+  const fields = AttachReviewPhotoFieldsSchema.safeParse(req.body ?? {});
+  if (!fields.success) {
+    sendZodError(res, fields.error);
+    return;
+  }
+  if (!req.file) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "Attach one image in the `image` field.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const result = await commerceTrustService.attachReviewPhoto(
+    actor,
+    params.data.reviewId,
+    req.file.buffer,
+  );
+  if (!result.success) {
+    mapReviewMediaError(res, result.error);
+    return;
+  }
+  res.status(201).json({
+    status: "success",
+    statusCode: 201,
+    message: "Review photo attached.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function attachReviewVideo(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ReviewIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = AttachReviewVideoSchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commerceTrustService.attachReviewVideo(
+    actor,
+    params.data.reviewId,
+    body.data,
+  );
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(201).json({
+    status: "success",
+    statusCode: 201,
+    message: "Review video attached.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function detachReviewMedia(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ReviewMediaParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceTrustService.detachReviewMedia(
+    actor,
+    params.data.reviewId,
+    params.data.mediaId,
+  );
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Review media removed.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function setReviewHelpfulVote(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ReviewIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceTrustService.setReviewHelpfulVote(actor, params.data.reviewId);
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Marked helpful.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function clearReviewHelpfulVote(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ReviewIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceTrustService.clearReviewHelpfulVote(actor, params.data.reviewId);
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Helpful vote withdrawn.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function upsertReviewReply(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ReviewIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = UpsertReviewReplySchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commerceTrustService.upsertReviewReply(
+    actor,
+    params.data.reviewId,
+    body.data,
+  );
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Reply saved.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function deleteReviewReply(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ReviewIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceTrustService.deleteReviewReply(actor, params.data.reviewId);
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Reply withdrawn.",
     data: result.value,
   } satisfies ApiResponse);
 }
