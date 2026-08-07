@@ -396,12 +396,19 @@ export const commerceOrganizationMemberStateEnum = pgEnum("commerce_organization
   "left",
 ]);
 
+/**
+ * `delivery` arrived with Phase 11 (Appendix A15). Until then there was no kind meaning
+ * "send the goods here", which is why `assertOwnedDeliveryAddress` filtered on id and
+ * organization only and a seller's registered office could be a buyer's delivery
+ * address. Appended, not inserted: `ALTER TYPE ... ADD VALUE` puts new labels last.
+ */
 export const commerceOrganizationAddressKindEnum = pgEnum("commerce_organization_address_kind", [
   "billing",
   "registered",
   "warehouse",
   "pickup",
   "return",
+  "delivery",
 ]);
 
 export const commerceVerificationKindEnum = pgEnum("commerce_verification_kind", [
@@ -432,6 +439,12 @@ export const commerceDocumentKindEnum = pgEnum("commerce_document_kind", [
   "address_proof",
   "bank_evidence",
   "other",
+  /**
+   * A18. Buyer-supplied artwork for a customization slot. Private and encrypted like
+   * verification evidence rather than a public Cloudinary image: it is the buyer's
+   * commercial material, and only the fulfilling seller has any reason to open it.
+   */
+  "customization_artwork",
 ]);
 
 export const commerceDocumentStateEnum = pgEnum("commerce_document_state", [
@@ -510,6 +523,18 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "pathway_submitted",
     "pathway_moderated",
     "cart_seeded_from_pathway",
+    /**
+     * Phase 11 (Appendix A15, A17).
+     *
+     * `delivery_address_revealed` is THE FIRST READ EVENT in this enum — every kind
+     * above it records a write. That is deliberate: §14 chose an authorized decrypt
+     * path over a seller-openable snapshot precisely because a decrypt can be logged,
+     * and a log nobody writes is not an argument.
+     */
+    "delivery_address_revealed",
+    "sample_credit_minted",
+    "sample_credit_consumed",
+    "product_customization_options_replaced",
   ],
 );
 
@@ -2392,6 +2417,15 @@ export const commerceServiceCoverage = pgTable(
   },
   (table) => [
     index("commerce_service_coverage_offering_idx").on(table.offeringId),
+    /**
+     * A16. The only existing reader loads every coverage row for one offering. The
+     * delivery estimator asks the opposite question — "which offerings cover IN → DE" —
+     * and nothing indexed either country column before Phase 11.
+     */
+    index("commerce_service_coverage_route_idx").on(
+      table.originCountryCode,
+      table.destinationCountryCode,
+    ),
     check(
       "commerce_service_coverage_country_ck",
       sql`(origin_country_code IS NULL OR origin_country_code ~ '^[A-Z]{2}$')
@@ -3185,8 +3219,25 @@ export const commerceOrder = pgTable(
     incotermSnapshot: text("incoterm_snapshot"),
     buyerLegalNameSnapshot: text("buyer_legal_name_snapshot").notNull(),
     counterpartyLegalNameSnapshot: text("counterparty_legal_name_snapshot").notNull(),
+    /**
+     * REDACTED BY DESIGN: country, region, locality, postal code. Street lines,
+     * recipient name and phone are encrypted on the address row and deliberately do
+     * not appear here — see `deliveryAddressId` below for how a seller reaches them.
+     */
     buyerAddressSnapshot: text("buyer_address_snapshot"),
     counterpartyAddressSnapshot: text("counterparty_address_snapshot"),
+    /**
+     * A15. The durable pointer to the encrypted address row, so an authorized seller
+     * can decrypt what the snapshot omits (§14's decision).
+     *
+     * It lives on the order rather than being walked to through the checkout group's
+     * prepare, because the decrypt route authorizes against the ORDER — and because a
+     * quote-originated order has no prepare at all, which is why this is nullable.
+     */
+    deliveryAddressId: text("delivery_address_id").references(
+      () => commerceOrganizationAddress.id,
+      { onDelete: "restrict" },
+    ),
     createdByMemberId: text("created_by_member_id")
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
@@ -3210,6 +3261,9 @@ export const commerceOrder = pgTable(
       table.id,
     ),
     index("commerce_order_checkout_group_idx").on(table.checkoutGroupId, table.id),
+    index("commerce_order_delivery_address_idx")
+      .on(table.deliveryAddressId)
+      .where(sql`delivery_address_id IS NOT NULL`),
     check("commerce_order_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
     check(
       "commerce_order_money_ck",
