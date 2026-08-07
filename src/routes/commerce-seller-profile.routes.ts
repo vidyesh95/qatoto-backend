@@ -9,7 +9,7 @@ import {
   productCatalogDepthWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
+import { uploadCommerceCertificate } from "#src/middleware/upload-commerce-certificate.js";
 import { uploadOrganizationMediaImage } from "#src/middleware/upload-organization-media.js";
 
 /**
@@ -100,9 +100,15 @@ router.delete(
 );
 
 /**
- * Certification evidence reuses the verification-evidence multipart middleware unchanged —
- * it already caps the size and the controller re-checks the decoded magic bytes. The
- * evidence limiter, not the write limiter: an upload is the expensive path.
+ * Certification evidence has its OWN multipart middleware, not the verification one.
+ *
+ * That was the plan, and the plan was wrong: `uploadCommerceVerificationEvidence` sets
+ * `fields: 2` for its own two text parts, and a certification sends six — so every
+ * submission came back a flat 422 from multer's `LIMIT_FIELD_COUNT`. The HTTP smoke caught
+ * it; nothing else could have, because the field cap lives in middleware no unit test loads.
+ * The size cap and media-type allowlist are still shared.
+ *
+ * The evidence limiter, not the write limiter: an upload is the expensive path.
  */
 router.get(
   "/organizations/:organizationId/certifications",
@@ -113,7 +119,7 @@ router.post(
   "/organizations/:organizationId/certifications",
   requireAuth,
   commerceOrganizationEvidenceLimiter,
-  uploadCommerceVerificationEvidence,
+  uploadCommerceCertificate,
   idempotency({ required: true }),
   commerceSellerProfileController.submitCertification,
 );

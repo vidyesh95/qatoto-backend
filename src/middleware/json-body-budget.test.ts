@@ -197,6 +197,9 @@ describe("per-route body caps", () => {
       // `isMultipart()` would not recognize it, the sweep would treat it as a JSON
       // body-reading route, and it would be reported as missing a declared cap.
       import("#src/middleware/upload-organization-media.js"),
+      // A13's certificate upload. Its own module because the verification-evidence parser
+      // caps multer at two text fields and a certification sends six.
+      import("#src/middleware/upload-commerce-certificate.js"),
     ]);
 
     const router: unknown = Reflect.get(app, "router");
