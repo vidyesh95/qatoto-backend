@@ -285,6 +285,52 @@ const UploadImageFieldsSchema = z.object({
 });
 
 const ReorderImagesSchema = z.object({ imageIds: z.array(z.string()).min(1) }).strict();
+/**
+ * A18. `.strict()` and a whole-plan replace, like variants and highlights: ordering and
+ * membership are properties of the plan, not of individual rows.
+ *
+ * NOTE WHAT IS ABSENT: `state`. Retirement is a consequence of a slot disappearing from
+ * the plan, decided by the server — a client that could set it could retire a slot while
+ * leaving it in the list.
+ */
+export const ReplaceProductCustomizationOptionsSchema = z
+  .object({
+    options: z
+      .array(
+        z
+          .object({
+            slotKey: z
+              .string()
+              .trim()
+              .regex(/^[a-z0-9]+(_[a-z0-9]+)*$/, "Slot key must be snake_case.")
+              .max(60),
+            label: z.string().trim().min(1).max(120),
+            customizationKind: z.enum(["file_upload", "choice"]),
+            acceptedMediaTypes: z.array(z.string().trim().min(1).max(120)).max(12).optional(),
+            choiceValues: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
+            /** A commercial term the server enforces at cart and checkout (§A18). */
+            minimumOrderQuantity: z.number().int().min(1).max(1_000_000).optional(),
+            isRequired: z.boolean().optional(),
+          })
+          .strict()
+          .refine(
+            (option) =>
+              option.customizationKind === "file_upload"
+                ? (option.acceptedMediaTypes?.length ?? 0) > 0 &&
+                  (option.choiceValues?.length ?? 0) === 0
+                : (option.choiceValues?.length ?? 0) > 0 &&
+                  (option.acceptedMediaTypes?.length ?? 0) === 0,
+            "An upload slot needs accepted media types; a choice slot needs choice values.",
+          ),
+      )
+      .max(12)
+      .refine(
+        (options) => new Set(options.map((option) => option.slotKey)).size === options.length,
+        "A slot key may appear only once.",
+      ),
+  })
+  .strict();
+
 const ProductParamsSchema = z.object({ id: z.string().trim().min(1).max(200) }).strict();
 const ProductImageParamsSchema = ProductParamsSchema.extend({
   imageId: z.string().trim().min(1).max(200),
@@ -827,4 +873,32 @@ export async function deleteProduct(req: Request, res: Response): Promise<void> 
     data: deleteResult.value,
   };
   res.status(200).json(response);
+}
+
+/** PUT /products/:id/customization-options */
+export async function replaceCustomizationOptions(req: Request, res: Response): Promise<void> {
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  const parsedBody = ReplaceProductCustomizationOptionsSchema.safeParse(req.body);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+  if (!parsedBody.success) return respondValidationFailed(res, parsedBody.error);
+
+  const result = await productsService.replaceCustomizationOptions(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+    parsedBody.data.options,
+  );
+  if (!result.success) {
+    respondProductError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Customization options updated.",
+    data: result.value,
+  } satisfies ApiResponse);
 }

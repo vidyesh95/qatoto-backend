@@ -25,6 +25,22 @@ export const SetCartItemSchema = z
      * it, because ordering a sample and then a bulk quantity is the point.
      */
     isSample: z.boolean().optional(),
+    /**
+     * A18. Slot keys, not option ids: the key is the seller's stable machine name for
+     * the slot, so a client that cached one still means the same thing after a rename.
+     */
+    customizations: z
+      .array(
+        z
+          .object({
+            slotKey: z.string().trim().min(1).max(60),
+            encryptedDocumentId: z.string().trim().min(1).max(200).optional(),
+            choiceValue: z.string().trim().min(1).max(120).optional(),
+          })
+          .strict(),
+      )
+      .max(12)
+      .optional(),
   })
   .strict();
 
@@ -87,6 +103,19 @@ function mapCartError(res: Response, error: CommerceCartError): void {
         status: "error",
         statusCode: 404,
         message: "Not found.",
+      } satisfies ApiResponse);
+      return;
+    case "CUSTOMIZATION_REJECTED":
+      /**
+       * 422 across the board: every customization failure is "this request cannot be
+       * satisfied as written", and the tagged `customizationError` tells the client
+       * which slot and why without inventing a status code per case.
+       */
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "This customization cannot be applied.",
+        data: error.customizationError,
       } satisfies ApiResponse);
       return;
     case "ORGANIZATION_NOT_ACTIVE":
@@ -203,6 +232,7 @@ export async function setCartItem(req: Request, res: Response): Promise<void> {
     body.data.quantity,
     body.data.variantId ?? null,
     body.data.isSample ?? false,
+    body.data.customizations ?? [],
   );
   if (!result.success) {
     mapCartError(res, result.error);

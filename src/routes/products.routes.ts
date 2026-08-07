@@ -88,6 +88,18 @@ router.put(
  * PUT /products/:id/highlights
  * Replace the highlight cards (Appendix A6).
  */
+/**
+ * A18. Same chain as variants and highlights. The per-slot minimum order quantity a
+ * seller declares here is a commercial term the cart and checkout enforce.
+ */
+router.put(
+  "/:id/customization-options",
+  productCatalogDepthWriteLimiter,
+  longFormBody,
+  idempotency({ scope: "active_organization" }),
+  productsController.replaceCustomizationOptions,
+);
+
 router.put(
   "/:id/highlights",
   productCatalogDepthWriteLimiter,

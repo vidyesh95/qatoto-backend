@@ -3,9 +3,16 @@ import express from "express";
 import * as commerceMerchandisingController from "#src/controllers/commerce-merchandising.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
-import { commercePathwayWriteLimiter } from "#src/middleware/rate-limit.js";
-import { attachOptionalSellerCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
+import {
+  commerceOrganizationEvidenceLimiter,
+  commercePathwayWriteLimiter,
+} from "#src/middleware/rate-limit.js";
+import {
+  attachOptionalSellerCommerceOrganization,
+  requireActiveBuyerCommerceOrganization,
+} from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
 
 /**
  * Guided pathway authoring and moderation (STORE_BACKEND_STRUCTURE.md §15.8).
@@ -103,6 +110,20 @@ router.post(
   // Scoped to the user, not an organization: a moderator acts for the platform.
   idempotency({ required: true, scope: "user" }),
   commerceMerchandisingController.moderatePathway,
+);
+
+/**
+ * A18. Buyer-uploaded customization artwork. Reuses the verification-evidence upload
+ * middleware verbatim — same size cap, same allowlist, same magic-byte check — because
+ * the threat model is identical: untrusted bytes from an authenticated stranger.
+ */
+router.post(
+  "/customization-assets",
+  requireAuth,
+  requireActiveBuyerCommerceOrganization,
+  commerceOrganizationEvidenceLimiter,
+  uploadCommerceVerificationEvidence,
+  commerceMerchandisingController.uploadCustomizationAsset,
 );
 
 export default router;

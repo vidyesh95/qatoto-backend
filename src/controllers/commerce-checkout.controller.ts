@@ -116,6 +116,14 @@ function mapCheckoutError(res: Response, error: CommerceCheckoutError): void {
         data: { productId: error.productId },
       } satisfies ApiResponse);
       return;
+    case "CUSTOMIZATION_REJECTED":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "A cart line's customization cannot be applied.",
+        data: { productId: error.productId, customizationError: error.customizationError },
+      } satisfies ApiResponse);
+      return;
     case "ADDRESS_KIND_INVALID":
       // 422, and a message that names the real problem: the address is theirs, it is
       // simply not one for receiving goods (A15).

@@ -920,6 +920,22 @@ export const commerceProviderTransferStateEnum = pgEnum("commerce_provider_trans
  * `expired` exists so an unbounded liability can be closed out rather than lingering
  * against a buyer who never places the bulk order.
  */
+/**
+ * A18. An upload slot ("your logo") and a choice slot ("packaging material") differ in
+ * what the buyer supplies, and therefore in what a selection must carry. Modelling them
+ * as one nullable-everything row would let a selection supply neither.
+ */
+export const commerceProductCustomizationKindEnum = pgEnum("commerce_product_customization_kind", [
+  "file_upload",
+  "choice",
+]);
+
+/** Retire, never delete: an order line references the option it was bought under. */
+export const commerceProductCustomizationOptionStateEnum = pgEnum(
+  "commerce_product_customization_option_state",
+  ["active", "retired"],
+);
+
 export const commerceSampleCreditStateEnum = pgEnum("commerce_sample_credit_state", [
   "available",
   "consumed",
@@ -5200,6 +5216,190 @@ export const commerceSampleCredit = pgTable(
       "commerce_sample_credit_consumption_ck",
       sql`(state = 'consumed' AND consumed_by_order_id IS NOT NULL AND consumed_at IS NOT NULL)
           OR (state <> 'consumed' AND consumed_by_order_id IS NULL AND consumed_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * A18. What a seller offers to customize, and on what commercial terms.
+ *
+ * `minimumOrderQuantity` IS A COMMERCIAL TERM, not a hint: a logo at 50 units and
+ * packaging artwork at 200 change what the buyer may order. The server enforces it at
+ * cart and again at checkout; the client's copy of the number is a display value.
+ */
+export const commerceProductCustomizationOption = pgTable(
+  "commerce_product_customization_option",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    /** Stable machine key, snake_case, so a renamed label does not orphan a selection. */
+    slotKey: text("slot_key").notNull(),
+    label: text("label").notNull(),
+    customizationKind: commerceProductCustomizationKindEnum("customization_kind").notNull(),
+    /** Upload slots only. Verified against DECODED BYTES at upload, never the declared type. */
+    acceptedMediaTypes: text("accepted_media_types").array().default([]).notNull(),
+    /** Choice slots only. */
+    choiceValues: text("choice_values").array().default([]).notNull(),
+    minimumOrderQuantity: integer("minimum_order_quantity").default(1).notNull(),
+    isRequired: boolean("is_required").default(false).notNull(),
+    position: integer("position").notNull(),
+    state: commerceProductCustomizationOptionStateEnum("state").default("active").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_product_customization_option_slot_uidx").on(
+      table.productId,
+      table.slotKey,
+    ),
+    uniqueIndex("commerce_product_customization_option_position_uidx").on(
+      table.productId,
+      table.position,
+    ),
+    index("commerce_product_customization_option_active_idx").on(
+      table.productId,
+      table.state,
+      table.position,
+    ),
+    check(
+      "commerce_product_customization_option_slot_key_ck",
+      sql`slot_key ~ '^[a-z0-9]+(_[a-z0-9]+)*$' AND char_length(slot_key) BETWEEN 1 AND 60`,
+    ),
+    check(
+      "commerce_product_customization_option_label_ck",
+      sql`char_length(label) BETWEEN 1 AND 120`,
+    ),
+    check(
+      "commerce_product_customization_option_moq_ck",
+      sql`minimum_order_quantity BETWEEN 1 AND 1000000`,
+    ),
+    check("commerce_product_customization_option_position_ck", sql`position >= 0`),
+    check(
+      "commerce_product_customization_option_kind_ck",
+      sql`(customization_kind = 'file_upload'
+             AND cardinality(accepted_media_types) > 0 AND cardinality(choice_values) = 0)
+          OR (customization_kind = 'choice'
+             AND cardinality(choice_values) > 0 AND cardinality(accepted_media_types) = 0)`,
+    ),
+  ],
+);
+
+/**
+ * A18. What the buyer supplied, carried the whole length of the snapshot chain.
+ *
+ * THREE TABLES, NOT ONE, because `confirmCheckout` builds an order line verbatim from
+ * the prepare row and never re-reads the cart. A selection that does not exist on the
+ * prepare cannot reach an order.
+ *
+ * The snapshots sit beside the option pointer because a seller may rename a slot after
+ * the sale, and what the buyer agreed to is what the order must say.
+ */
+export const commerceCartLineCustomization = pgTable(
+  "commerce_cart_line_customization",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    cartProductLineId: text("cart_product_line_id")
+      .notNull()
+      .references(() => commerceCartProductLine.id, { onDelete: "cascade" }),
+    customizationOptionId: text("customization_option_id")
+      .notNull()
+      .references(() => commerceProductCustomizationOption.id, { onDelete: "restrict" }),
+    encryptedDocumentId: text("encrypted_document_id").references(
+      () => commerceEncryptedDocument.id,
+      { onDelete: "restrict" },
+    ),
+    choiceValue: text("choice_value"),
+    slotKeySnapshot: text("slot_key_snapshot").notNull(),
+    labelSnapshot: text("label_snapshot").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_cart_line_customization_slot_uidx").on(
+      table.cartProductLineId,
+      table.slotKeySnapshot,
+    ),
+    check(
+      "commerce_cart_line_customization_supply_ck",
+      sql`(encrypted_document_id IS NOT NULL AND choice_value IS NULL)
+          OR (encrypted_document_id IS NULL AND choice_value IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const commerceCheckoutPrepareLineCustomization = pgTable(
+  "commerce_checkout_prepare_line_customization",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    prepareProductLineId: text("prepare_product_line_id")
+      .notNull()
+      .references(() => commerceCheckoutPrepareProductLine.id, { onDelete: "cascade" }),
+    customizationOptionId: text("customization_option_id")
+      .notNull()
+      .references(() => commerceProductCustomizationOption.id, { onDelete: "restrict" }),
+    encryptedDocumentId: text("encrypted_document_id").references(
+      () => commerceEncryptedDocument.id,
+      { onDelete: "restrict" },
+    ),
+    choiceValue: text("choice_value"),
+    slotKeySnapshot: text("slot_key_snapshot").notNull(),
+    labelSnapshot: text("label_snapshot").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_checkout_prepare_line_customization_slot_uidx").on(
+      table.prepareProductLineId,
+      table.slotKeySnapshot,
+    ),
+    check(
+      "commerce_checkout_prepare_line_customization_supply_ck",
+      sql`(encrypted_document_id IS NOT NULL AND choice_value IS NULL)
+          OR (encrypted_document_id IS NULL AND choice_value IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const commerceOrderLineCustomization = pgTable(
+  "commerce_order_line_customization",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderProductLineId: text("order_product_line_id")
+      .notNull()
+      .references(() => commerceOrderProductLine.id, { onDelete: "cascade" }),
+    customizationOptionId: text("customization_option_id")
+      .notNull()
+      .references(() => commerceProductCustomizationOption.id, { onDelete: "restrict" }),
+    encryptedDocumentId: text("encrypted_document_id").references(
+      () => commerceEncryptedDocument.id,
+      { onDelete: "restrict" },
+    ),
+    choiceValue: text("choice_value"),
+    slotKeySnapshot: text("slot_key_snapshot").notNull(),
+    labelSnapshot: text("label_snapshot").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_order_line_customization_slot_uidx").on(
+      table.orderProductLineId,
+      table.slotKeySnapshot,
+    ),
+    index("commerce_order_line_customization_option_idx").on(table.customizationOptionId),
+    check(
+      "commerce_order_line_customization_supply_ck",
+      sql`(encrypted_document_id IS NOT NULL AND choice_value IS NULL)
+          OR (encrypted_document_id IS NULL AND choice_value IS NOT NULL)`,
     ),
   ],
 );

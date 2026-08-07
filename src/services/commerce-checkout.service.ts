@@ -3,14 +3,17 @@ import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import {
+  commerceCartLineCustomization,
   commerceCartProductLine,
   commerceCheckoutGroup,
   commerceCheckoutGroupCurrencyTotal,
   commerceCheckoutPrepare,
   commerceCheckoutPrepareCurrencyTotal,
+  commerceCheckoutPrepareLineCustomization,
   commerceCheckoutPrepareProductLine,
   commerceInventoryReservation,
   commerceOrder,
+  commerceOrderLineCustomization,
   commerceOrderProductLine,
   commerceOrganization,
   commerceOrganizationAddress,
@@ -32,6 +35,10 @@ import {
   type CommerceCartActorContext,
   type DatabaseTransaction,
 } from "#src/services/commerce-cart.service.js";
+import {
+  resolveCustomizationSelections,
+  type CommerceCustomizationError,
+} from "#src/services/commerce-customization.service.js";
 import {
   estimateDeliveryForLines,
   type DeliveryEstimateProjection,
@@ -63,6 +70,12 @@ export type CommerceCheckoutError =
   | { type: "ADDRESS_KIND_INVALID"; addressKind: string }
   /** A17. The listing does not sell a sample, though it sells the product in bulk. */
   | { type: "SAMPLE_NOT_AVAILABLE"; productId: string }
+  /** A18. A required slot is unsupplied, or a selection no longer validates. */
+  | {
+      type: "CUSTOMIZATION_REJECTED";
+      productId: string;
+      customizationError: CommerceCustomizationError;
+    }
   | { type: "PRODUCT_NOT_PURCHASABLE"; productId: string }
   | { type: "BELOW_MINIMUM_ORDER_QUANTITY"; productId: string; minimumOrderQuantity: number }
   | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
@@ -177,6 +190,14 @@ async function appendAuditOrThrow(
   if (!appended.success) {
     throw new Error(`Commerce checkout audit append failed: ${appended.error.type}`);
   }
+}
+
+/**
+ * A18. The same identity the cart's expression unique index uses, so a priced line can
+ * find the cart line it came from.
+ */
+function cartLineKey(productId: string, variantId: string | null, isSample: boolean): string {
+  return `${productId}\u0000${variantId ?? ""}\u0000${String(isSample)}`;
 }
 
 function mapPricingErrorToCheckoutError(
@@ -531,6 +552,14 @@ export async function prepareCheckout(
       const productIds = lines.map((line) => line.productId);
       const heldQuantityByScope = await loadHeldQuantitiesByProduct(transaction, productIds, now);
 
+      /**
+       * Priced lines lose their cart-line identity, so the customizations have to be
+       * found again by the same key the uniqueness index uses.
+       */
+      const cartLineById = new Map(
+        lines.map((line) => [cartLineKey(line.productId, line.variantId, line.isSample), line]),
+      );
+
       const pricedLines: (PricedProductLine & { readonly siblingOrder: number })[] = [];
       for (const line of lines) {
         const priced = await loadPurchasableProductForCheckout(
@@ -595,6 +624,56 @@ export async function prepareCheckout(
           .returning();
         if (!insertedLine) throw new Error("Checkout prepare product line insert returned no row.");
         insertedLines.push(insertedLine);
+
+        /**
+         * A18. Copied from the cart line onto the prepare line, because `confirmCheckout`
+         * builds the order line verbatim from the prepare row and never re-reads the
+         * cart — a selection that does not exist here cannot reach an order.
+         *
+         * The seller's plan is re-checked at the same time, with required slots now
+         * MANDATORY: a buyer may build a cart without artwork, but must not confirm an
+         * order missing something the seller declared required.
+         */
+        const cartLine = cartLineById.get(
+          cartLineKey(pricedLine.productId, pricedLine.variantId, pricedLine.isSample),
+        );
+        if (cartLine !== undefined) {
+          const storedSelections = await transaction
+            .select()
+            .from(commerceCartLineCustomization)
+            .where(eq(commerceCartLineCustomization.cartProductLineId, cartLine.id));
+
+          const revalidatedSelections = await resolveCustomizationSelections(transaction, {
+            productId: pricedLine.productId,
+            buyerOrganizationId: actor.organizationId,
+            quantity: pricedLine.quantity,
+            selections: storedSelections.map((selection) => ({
+              slotKey: selection.slotKeySnapshot,
+              encryptedDocumentId: selection.encryptedDocumentId ?? undefined,
+              choiceValue: selection.choiceValue ?? undefined,
+            })),
+            requireRequiredOptions: true,
+          });
+          if (!revalidatedSelections.success) {
+            return {
+              status: "customization_rejected" as const,
+              productId: pricedLine.productId,
+              customizationError: revalidatedSelections.error,
+            };
+          }
+          if (revalidatedSelections.value.length > 0) {
+            await transaction.insert(commerceCheckoutPrepareLineCustomization).values(
+              revalidatedSelections.value.map((selection) => ({
+                prepareProductLineId: insertedLine.id,
+                customizationOptionId: selection.customizationOptionId,
+                encryptedDocumentId: selection.encryptedDocumentId,
+                choiceValue: selection.choiceValue,
+                slotKeySnapshot: selection.slotKeySnapshot,
+                labelSnapshot: selection.labelSnapshot,
+              })),
+            );
+          }
+        }
 
         await transaction.insert(commerceInventoryReservation).values({
           productId: pricedLine.productId,
@@ -671,6 +750,15 @@ export async function prepareCheckout(
         return {
           success: false,
           error: { type: "ADDRESS_KIND_INVALID", addressKind: outcome.addressKind },
+        };
+      case "customization_rejected":
+        return {
+          success: false,
+          error: {
+            type: "CUSTOMIZATION_REJECTED",
+            productId: outcome.productId,
+            customizationError: outcome.customizationError,
+          },
         };
       case "pricing_failed":
         return {
@@ -1006,20 +1094,47 @@ export async function confirmCheckout(
         });
 
         for (const [index, line] of sellerGroup.lines.entries()) {
-          await transaction.insert(commerceOrderProductLine).values({
-            orderId: order.id,
-            productId: line.productId,
-            variantId: line.variantId,
-            variantNameSnapshot: line.variantNameSnapshot,
-            titleSnapshot: line.titleSnapshot,
-            specificationSnapshot: line.specificationSnapshot,
-            isSample: line.isSample,
-            quantityOrdered: line.quantity,
-            quantityReserved: line.isMadeToOrder ? 0 : line.quantity,
-            unitPriceInCents: line.unitPriceInCents,
-            lineTotalInCents: line.lineTotalInCents,
-            siblingOrder: index,
-          });
+          const [orderLine] = await transaction
+            .insert(commerceOrderProductLine)
+            .values({
+              orderId: order.id,
+              productId: line.productId,
+              variantId: line.variantId,
+              variantNameSnapshot: line.variantNameSnapshot,
+              titleSnapshot: line.titleSnapshot,
+              specificationSnapshot: line.specificationSnapshot,
+              isSample: line.isSample,
+              quantityOrdered: line.quantity,
+              quantityReserved: line.isMadeToOrder ? 0 : line.quantity,
+              unitPriceInCents: line.unitPriceInCents,
+              lineTotalInCents: line.lineTotalInCents,
+              siblingOrder: index,
+            })
+            .returning({ id: commerceOrderProductLine.id });
+          if (!orderLine) throw new Error("Order product line insert returned no row.");
+
+          /**
+           * A18. The last hop of the snapshot chain. Copied verbatim from the prepare
+           * line — including `slotKeySnapshot` and `labelSnapshot` — because a seller
+           * renaming a slot after the sale must not change what the order says the
+           * buyer agreed to.
+           */
+          const prepareCustomizations = await transaction
+            .select()
+            .from(commerceCheckoutPrepareLineCustomization)
+            .where(eq(commerceCheckoutPrepareLineCustomization.prepareProductLineId, line.id));
+          if (prepareCustomizations.length > 0) {
+            await transaction.insert(commerceOrderLineCustomization).values(
+              prepareCustomizations.map((selection) => ({
+                orderProductLineId: orderLine.id,
+                customizationOptionId: selection.customizationOptionId,
+                encryptedDocumentId: selection.encryptedDocumentId,
+                choiceValue: selection.choiceValue,
+                slotKeySnapshot: selection.slotKeySnapshot,
+                labelSnapshot: selection.labelSnapshot,
+              })),
+            );
+          }
 
           if (!line.isMadeToOrder) {
             /**

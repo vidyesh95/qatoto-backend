@@ -9,6 +9,7 @@ import type {
 import { db } from "#src/db/index.js";
 import {
   commerceCategory,
+  commerceProductCustomizationOption,
   commerceProductHighlight,
   commerceProductSpecification,
   commerceProductVariant,
@@ -555,6 +556,81 @@ async function replaceProductHighlights(
   );
 }
 
+/**
+ * A18. Replace the customization plan, RETIRING what disappears rather than deleting it.
+ *
+ * The variant precedent, not the highlight one: an order line references the option it
+ * was bought under, so a seller withdrawing a slot must not erase what a buyer ordered.
+ * Matching is by `slotKey`, the stable machine key — a renamed label is still the same
+ * slot, which is exactly why the label is not the identity.
+ *
+ * Position parking mirrors `replaceProductVariants`: `(productId, position)` is unique,
+ * so every surviving row is moved out of range before final positions are written.
+ */
+async function replaceProductCustomizationOptions(
+  transaction: DatabaseTransaction,
+  productId: string,
+  options: readonly {
+    readonly slotKey: string;
+    readonly label: string;
+    readonly customizationKind: "file_upload" | "choice";
+    readonly acceptedMediaTypes?: readonly string[] | undefined;
+    readonly choiceValues?: readonly string[] | undefined;
+    readonly minimumOrderQuantity?: number | undefined;
+    readonly isRequired?: boolean | undefined;
+  }[],
+): Promise<void> {
+  const existing = await transaction
+    .select({
+      id: commerceProductCustomizationOption.id,
+      slotKey: commerceProductCustomizationOption.slotKey,
+    })
+    .from(commerceProductCustomizationOption)
+    .where(eq(commerceProductCustomizationOption.productId, productId));
+  const existingBySlotKey = new Map(existing.map((row) => [row.slotKey, row.id]));
+
+  const parkingOffset = existing.length + options.length + 1000;
+  if (existing.length > 0) {
+    await transaction
+      .update(commerceProductCustomizationOption)
+      .set({ position: sql`${commerceProductCustomizationOption.position} + ${parkingOffset}` })
+      .where(eq(commerceProductCustomizationOption.productId, productId));
+  }
+
+  const incomingSlotKeys = new Set(options.map((option) => option.slotKey));
+  for (const [slotKey, optionId] of existingBySlotKey) {
+    if (incomingSlotKeys.has(slotKey)) continue;
+    await transaction
+      .update(commerceProductCustomizationOption)
+      .set({ state: "retired" })
+      .where(eq(commerceProductCustomizationOption.id, optionId));
+  }
+
+  for (const [index, option] of options.entries()) {
+    const shared = {
+      label: option.label,
+      customizationKind: option.customizationKind,
+      acceptedMediaTypes: [...(option.acceptedMediaTypes ?? [])],
+      choiceValues: [...(option.choiceValues ?? [])],
+      minimumOrderQuantity: option.minimumOrderQuantity ?? 1,
+      isRequired: option.isRequired ?? false,
+      position: index,
+      state: "active" as const,
+    };
+    const existingId = existingBySlotKey.get(option.slotKey);
+    if (existingId === undefined) {
+      await transaction
+        .insert(commerceProductCustomizationOption)
+        .values({ productId, slotKey: option.slotKey, ...shared });
+    } else {
+      await transaction
+        .update(commerceProductCustomizationOption)
+        .set(shared)
+        .where(eq(commerceProductCustomizationOption.id, existingId));
+    }
+  }
+}
+
 /** Confirm the caller owns this listing; returns the id or null. */
 async function findOrganizationProductId(
   sellerOrganizationId: string,
@@ -1044,6 +1120,41 @@ export async function replaceHighlights(
     return { success: false, error: { type: "NOT_FOUND", productId } };
   }
   await enqueueProductSearchDocumentRefresh(productId);
+  return { success: true, value: reloaded };
+}
+
+export async function replaceCustomizationOptions(
+  sellerOrganizationId: string,
+  productId: string,
+  options: readonly {
+    readonly slotKey: string;
+    readonly label: string;
+    readonly customizationKind: "file_upload" | "choice";
+    readonly acceptedMediaTypes?: readonly string[] | undefined;
+    readonly choiceValues?: readonly string[] | undefined;
+    readonly minimumOrderQuantity?: number | undefined;
+    readonly isRequired?: boolean | undefined;
+  }[],
+): Promise<Result<PublicProduct, ProductError>> {
+  const owned = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({ id: product.id })
+      .from(product)
+      .where(
+        and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
+      );
+    if (!row) return false;
+    await replaceProductCustomizationOptions(tx, productId, options);
+    return true;
+  });
+  if (!owned) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  const reloaded = await loadOrganizationProduct(sellerOrganizationId, productId);
+  if (!reloaded) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
   return { success: true, value: reloaded };
 }
 

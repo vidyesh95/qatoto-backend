@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import {
   commerceCart,
+  commerceCartLineCustomization,
   commerceCartProductLine,
   commerceCheckoutPrepare,
   commerceInventoryReservation,
@@ -18,6 +19,11 @@ import {
   type PricedProductLine,
 } from "#src/lib/commerce-pricing.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import {
+  resolveCustomizationSelections,
+  type CommerceCustomizationError,
+  type CustomizationSelectionInput,
+} from "#src/services/commerce-customization.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { StoreStockState } from "#src/services/store-catalog.service.js";
@@ -49,6 +55,8 @@ export type CommerceCartError =
   | { type: "VARIANT_NOT_FOUND" }
   | { type: "VARIANT_NOT_PURCHASABLE" }
   | { type: "VALIDATION_FAILED"; message: string }
+  /** A18. Passed through from the customization resolver so the client can act on it. */
+  | { type: "CUSTOMIZATION_REJECTED"; customizationError: CommerceCustomizationError }
   | { type: "ORGANIZATION_NOT_ACTIVE" };
 
 export interface CommerceCartActorContext {
@@ -224,7 +232,7 @@ async function assertOrganizationActive(
  * priced, reserved or shipped, so it must never become a row.
  */
 export type CartProductLineUpsertOutcome =
-  | { readonly status: "upserted" }
+  | { readonly status: "upserted"; readonly cartProductLineId: string }
   | { readonly status: "not_found" }
   | { readonly status: "variant_required" }
   | { readonly status: "variant_not_applicable" }
@@ -320,17 +328,22 @@ export async function upsertCartProductLine(
       .update(commerceCartProductLine)
       .set({ quantity: input.quantity, updatedAt: input.now })
       .where(eq(commerceCartProductLine.id, existingLine.id));
-  } else {
-    await transaction.insert(commerceCartProductLine).values({
+    return { status: "upserted", cartProductLineId: existingLine.id };
+  }
+
+  const [insertedLine] = await transaction
+    .insert(commerceCartProductLine)
+    .values({
       cartId: input.cartId,
       productId: input.productId,
       variantId: input.variantId,
       quantity: input.quantity,
       isSample,
-    });
-  }
+    })
+    .returning({ id: commerceCartProductLine.id });
+  if (!insertedLine) throw new Error("Cart product line insert returned no row.");
 
-  return { status: "upserted" };
+  return { status: "upserted", cartProductLineId: insertedLine.id };
 }
 
 function stockStateFromPricedLine(pricedLine: PricedProductLine): StoreStockState {
@@ -469,6 +482,7 @@ export async function setCartItem(
   quantity: number,
   requestedVariantId: string | null = null,
   isSample = false,
+  customizationSelections: readonly CustomizationSelectionInput[] = [],
 ): Promise<Result<CommerceCartProjection, CommerceCartError>> {
   if (!Number.isInteger(quantity) || quantity <= 0 || quantity > MAXIMUM_CART_LINE_QUANTITY) {
     return {
@@ -496,6 +510,42 @@ export async function setCartItem(
       isSample,
     });
     if (upsertOutcome.status !== "upserted") return upsertOutcome;
+
+    /**
+     * A18. Replaced wholesale with the line, so a buyer changing their artwork does not
+     * leave the previous selection attached. `requireRequiredOptions` is FALSE here: a
+     * buyer should be able to build a cart before uploading artwork. Checkout
+     * preparation is where a missing required slot stops the order.
+     */
+    await transaction
+      .delete(commerceCartLineCustomization)
+      .where(eq(commerceCartLineCustomization.cartProductLineId, upsertOutcome.cartProductLineId));
+
+    if (customizationSelections.length > 0) {
+      const resolvedSelections = await resolveCustomizationSelections(transaction, {
+        productId,
+        buyerOrganizationId: actor.organizationId,
+        quantity,
+        selections: customizationSelections,
+        requireRequiredOptions: false,
+      });
+      if (!resolvedSelections.success) {
+        return {
+          status: "customization_rejected" as const,
+          customizationError: resolvedSelections.error,
+        };
+      }
+      await transaction.insert(commerceCartLineCustomization).values(
+        resolvedSelections.value.map((selection) => ({
+          cartProductLineId: upsertOutcome.cartProductLineId,
+          customizationOptionId: selection.customizationOptionId,
+          encryptedDocumentId: selection.encryptedDocumentId,
+          choiceValue: selection.choiceValue,
+          slotKeySnapshot: selection.slotKeySnapshot,
+          labelSnapshot: selection.labelSnapshot,
+        })),
+      );
+    }
 
     await supersedeActiveCheckoutPrepares(transaction, cart.id, now);
 
@@ -532,6 +582,14 @@ export async function setCartItem(
       return { success: false, error: { type: "VARIANT_NOT_FOUND" } };
     case "variant_not_purchasable":
       return { success: false, error: { type: "VARIANT_NOT_PURCHASABLE" } };
+    case "customization_rejected":
+      return {
+        success: false,
+        error: {
+          type: "CUSTOMIZATION_REJECTED",
+          customizationError: outcome.customizationError,
+        },
+      };
     case "updated":
       return getCart(actor);
     default: {

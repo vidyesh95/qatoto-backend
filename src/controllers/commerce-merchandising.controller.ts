@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
 import {
   CreatePathwaySchema,
   ModeratePathwaySchema,
@@ -12,6 +13,7 @@ import {
   SeedCartFromPathwaySchema,
   UpdatePathwaySchema,
 } from "#src/schemas/commerce-merchandising.schemas.js";
+import * as commerceCustomizationAssetService from "#src/services/commerce-customization-asset.service.js";
 import * as commercePathwaysService from "#src/services/commerce-pathways.service.js";
 import type {
   CommercePathwayActor,
@@ -498,6 +500,75 @@ export async function moderatePathway(req: Request, res: Response): Promise<void
     status: "success",
     statusCode: 200,
     message: body.data.decision === "publish" ? "Pathway published." : "Pathway rejected.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * POST /commerce/customization-assets (A18).
+ *
+ * Buyer-side. The declared media type is checked against the DECODED BYTES, never
+ * trusted — the same posture verification evidence takes, and the reason a `.png`
+ * extension on a PDF does not become artwork.
+ */
+export async function uploadCustomizationAsset(req: Request, res: Response): Promise<void> {
+  if (!req.user || !req.commerceOrganization) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+  if (!parseNoQuery(req, res)) return;
+
+  const uploadedFile = req.file;
+  if (!uploadedFile) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "Attach a file in the `evidence` field.",
+    } satisfies ApiResponse);
+    return;
+  }
+  if (!evidenceBytesMatchMediaType(uploadedFile.buffer, uploadedFile.mimetype)) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "The file's contents do not match its declared type.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const result = await commerceCustomizationAssetService.uploadCustomizationAsset({
+    userId: req.user.id,
+    buyerOrganizationId: req.commerceOrganization.organizationId,
+    assetBytes: uploadedFile.buffer,
+    mediaType: uploadedFile.mimetype,
+    originalFileName: uploadedFile.originalname,
+  });
+  if (!result.success) {
+    const statusCode = result.error.type === "MEDIA_TYPE_MISMATCH" ? 422 : 503;
+    res.status(statusCode).json({
+      status: "error",
+      statusCode,
+      message:
+        result.error.type === "MEDIA_TYPE_MISMATCH"
+          ? "The file's contents do not match its declared type."
+          : "Customization asset storage is unavailable.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  /**
+   * 202, not 201: the bytes are stored but the asset is `pending_scan` and cannot be
+   * attached to a cart line until a scanner promotes it. Saying 201 would invite a
+   * client to attach it immediately and get a confusing rejection.
+   */
+  res.status(202).json({
+    status: "success",
+    statusCode: 202,
+    message: "Customization asset uploaded and awaiting scanning.",
     data: result.value,
   } satisfies ApiResponse);
 }
