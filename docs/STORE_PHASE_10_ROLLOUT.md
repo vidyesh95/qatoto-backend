@@ -196,6 +196,29 @@ pass whether the trigger is narrowed, whole-row, or dropped and recreated wrongl
 3. Deploy the API.
 4. No worker changes. This phase adds no jobs and no queues.
 
+### Smoke
+
+```bash
+pnpm run dev                       # separate shell
+pnpm run db:seed-store-demo
+pnpm run db:smoke-store-phase-10   # 46 checks
+```
+
+Over HTTP, not in-process, because this phase is mostly guard chains — who may answer,
+who may vote, who may decide a report, which contact control a viewer is offered — and
+a service call touches none of the middleware they live in. It asserts refusals as hard
+as successes.
+
+**It has already earned its keep once.** `POST /commerce/reports` deliberately carries
+no organization middleware, so `req.commerceOrganization` is always undefined on it —
+which made the self-report guard **dead code**: a seller could report its own listing
+and get a `201`. The guard was correct and the service was correct; only the empty
+middleware chain made them fail to meet, which is a shape no unit or route test catches.
+
+The seed had a matching gap: it writes `product` rows directly rather than through
+`createProduct`, so it did not get `ensureCommerceProductStatsRow`, and `0066`'s
+backfill runs before those rows exist. Both are fixed.
+
 ---
 
 ## Rollback
