@@ -215,6 +215,117 @@ async function assertOrganizationActive(
   return organizationRow !== undefined && organizationRow.tradeState === "active";
 }
 
+/**
+ * What one line write can conclude. `upserted` is the only success; the rest are the
+ * A1 variant gate, which decides WHICH variant is being bought here rather than at
+ * prepare time — a line naming no variant for a product that has them cannot be
+ * priced, reserved or shipped, so it must never become a row.
+ */
+export type CartProductLineUpsertOutcome =
+  | { readonly status: "upserted" }
+  | { readonly status: "not_found" }
+  | { readonly status: "variant_required" }
+  | { readonly status: "variant_not_applicable" }
+  | { readonly status: "variant_not_found" }
+  | { readonly status: "variant_not_purchasable" };
+
+/**
+ * Writes one cart line inside a caller's transaction.
+ *
+ * Extracted from `setCartItem` so seeding a cart from a guided pathway (§15.4) can add
+ * every slot's line under ONE cart row lock, in one transaction. Calling `setCartItem`
+ * N times would supersede the buyer's checkout preparation N times, append N audit
+ * rows for what is one action, and leave a half-seeded cart if line 4 of 6 failed.
+ *
+ * The caller is responsible for the cart lock (`getOrCreateCartForUpdate`), for
+ * superseding prepares, and for the audit entry — all three are per-action, not
+ * per-line.
+ */
+export async function upsertCartProductLine(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly cartId: string;
+    readonly productId: string;
+    readonly variantId: string | null;
+    readonly quantity: number;
+    readonly now: Date;
+  },
+): Promise<CartProductLineUpsertOutcome> {
+  const [productRow] = await transaction
+    .select({ id: product.id })
+    .from(product)
+    .where(eq(product.id, input.productId))
+    .limit(1);
+  if (!productRow) return { status: "not_found" };
+
+  const activeVariants = await transaction
+    .select({ id: commerceProductVariant.id })
+    .from(commerceProductVariant)
+    .where(
+      and(
+        eq(commerceProductVariant.productId, input.productId),
+        eq(commerceProductVariant.state, "active"),
+      ),
+    );
+
+  if (input.variantId === null && activeVariants.length > 0) {
+    return { status: "variant_required" };
+  }
+  if (input.variantId !== null && activeVariants.length === 0) {
+    return { status: "variant_not_applicable" };
+  }
+  if (
+    input.variantId !== null &&
+    !activeVariants.some((variant) => variant.id === input.variantId)
+  ) {
+    // Retired-but-owned and belongs-to-another-product are both "not buyable";
+    // separating them would let a buyer probe another seller's variant ids.
+    const [existingVariant] = await transaction
+      .select({ productId: commerceProductVariant.productId })
+      .from(commerceProductVariant)
+      .where(eq(commerceProductVariant.id, input.variantId))
+      .limit(1);
+    return existingVariant && existingVariant.productId === input.productId
+      ? { status: "variant_not_purchasable" }
+      : { status: "variant_not_found" };
+  }
+
+  /**
+   * Select-then-write rather than ON CONFLICT: uniqueness is the expression index
+   * `(cart_id, product_id, coalesce(variant_id, ''))`, which drizzle cannot name as a
+   * conflict target. The caller's cart row lock serializes concurrent writers.
+   */
+  const [existingLine] = await transaction
+    .select({ id: commerceCartProductLine.id })
+    .from(commerceCartProductLine)
+    .where(
+      and(
+        eq(commerceCartProductLine.cartId, input.cartId),
+        eq(commerceCartProductLine.productId, input.productId),
+        input.variantId === null
+          ? isNull(commerceCartProductLine.variantId)
+          : eq(commerceCartProductLine.variantId, input.variantId),
+      ),
+    )
+    .limit(1);
+
+  if (existingLine) {
+    await transaction
+      .update(commerceCartProductLine)
+      .set({ quantity: input.quantity, updatedAt: input.now })
+      .where(eq(commerceCartProductLine.id, existingLine.id));
+  } else {
+    await transaction.insert(commerceCartProductLine).values({
+      cartId: input.cartId,
+      productId: input.productId,
+      variantId: input.variantId,
+      quantity: input.quantity,
+    });
+  }
+
+  return { status: "upserted" };
+}
+
 function stockStateFromPricedLine(pricedLine: PricedProductLine): StoreStockState {
   if (pricedLine.isMadeToOrder) return "made_to_order";
   if (pricedLine.availableQuantity <= 0) return "unavailable";
@@ -362,83 +473,17 @@ export async function setCartItem(
     const organizationIsActive = await assertOrganizationActive(transaction, actor.organizationId);
     if (!organizationIsActive) return { status: "org_inactive" as const };
 
-    const [productRow] = await transaction
-      .select({ id: product.id })
-      .from(product)
-      .where(eq(product.id, productId))
-      .limit(1);
-    if (!productRow) return { status: "not_found" as const };
-
-    /**
-     * A1. Which variant is being bought is decided here, not at prepare time: a
-     * cart line naming no variant for a product that has them cannot be priced,
-     * reserved, or shipped, so it must never become a row.
-     */
-    const activeVariants = await transaction
-      .select({ id: commerceProductVariant.id })
-      .from(commerceProductVariant)
-      .where(
-        and(
-          eq(commerceProductVariant.productId, productId),
-          eq(commerceProductVariant.state, "active"),
-        ),
-      );
-
-    if (requestedVariantId === null && activeVariants.length > 0) {
-      return { status: "variant_required" as const };
-    }
-    if (requestedVariantId !== null && activeVariants.length === 0) {
-      return { status: "variant_not_applicable" as const };
-    }
-    if (
-      requestedVariantId !== null &&
-      !activeVariants.some((variant) => variant.id === requestedVariantId)
-    ) {
-      // Retired-but-owned and belongs-to-another-product are both "not buyable";
-      // separating them would let a buyer probe another seller's variant ids.
-      const [existingVariant] = await transaction
-        .select({ productId: commerceProductVariant.productId })
-        .from(commerceProductVariant)
-        .where(eq(commerceProductVariant.id, requestedVariantId))
-        .limit(1);
-      return existingVariant && existingVariant.productId === productId
-        ? { status: "variant_not_purchasable" as const }
-        : { status: "variant_not_found" as const };
-    }
-
     const cart = await getOrCreateCartForUpdate(transaction, actor.organizationId);
     const now = new Date();
 
-    /**
-     * Select-then-write rather than ON CONFLICT: uniqueness is now the expression
-     * index `(cart_id, product_id, coalesce(variant_id, ''))`, which drizzle cannot
-     * name as a conflict target. `getOrCreateCartForUpdate` holds the cart row lock,
-     * so concurrent writers to one cart serialize here.
-     */
-    const [existingLine] = await transaction
-      .select({ id: commerceCartProductLine.id })
-      .from(commerceCartProductLine)
-      .where(
-        and(
-          eq(commerceCartProductLine.cartId, cart.id),
-          eq(commerceCartProductLine.productId, productId),
-          requestedVariantId === null
-            ? isNull(commerceCartProductLine.variantId)
-            : eq(commerceCartProductLine.variantId, requestedVariantId),
-        ),
-      )
-      .limit(1);
-
-    if (existingLine) {
-      await transaction
-        .update(commerceCartProductLine)
-        .set({ quantity, updatedAt: now })
-        .where(eq(commerceCartProductLine.id, existingLine.id));
-    } else {
-      await transaction
-        .insert(commerceCartProductLine)
-        .values({ cartId: cart.id, productId, variantId: requestedVariantId, quantity });
-    }
+    const upsertOutcome = await upsertCartProductLine(transaction, {
+      cartId: cart.id,
+      productId,
+      variantId: requestedVariantId,
+      quantity,
+      now,
+    });
+    if (upsertOutcome.status !== "upserted") return upsertOutcome;
 
     await supersedeActiveCheckoutPrepares(transaction, cart.id, now);
 

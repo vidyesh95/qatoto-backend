@@ -16,6 +16,12 @@ const ORGANIZATION_ID = "commerce_org_legacy_0123456789abcdef";
 const PRODUCT_ID = "product-one";
 
 vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
+  // Phase 9 authoring routes attach an organization optionally, because a platform
+  // merchandiser may not belong to one. Mounted through app.ts, so every suite that
+  // mocks this module must provide it.
+  attachOptionalSellerCommerceOrganization: (_req: Request, _res: Response, next: NextFunction): void => {
+    next();
+  },
   requireActiveCommerceOrganization: (req: Request, _res: Response, next: NextFunction): void => {
     req.commerceOrganization = {
       organizationId: ORGANIZATION_ID,

@@ -6,8 +6,10 @@ import {
   ModeratePathwaySchema,
   PathwayIdParamsSchema,
   PathwaySlotParamsSchema,
+  PathwaySlugParamsSchema,
   ReplacePathwaySlotCandidatesSchema,
   ReplacePathwaySlotsSchema,
+  SeedCartFromPathwaySchema,
   UpdatePathwaySchema,
 } from "#src/schemas/commerce-merchandising.schemas.js";
 import * as commercePathwaysService from "#src/services/commerce-pathways.service.js";
@@ -364,6 +366,64 @@ export async function submitPathway(req: Request, res: Response): Promise<void> 
     status: "success",
     statusCode: 200,
     message: "Pathway submitted for review.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * POST /commerce/cart/from-pathway/:pathwaySlug
+ *
+ * Buyer-scoped, unlike everything else in this controller: seeding a cart is a
+ * purchase action, not an authoring one, so it runs on the buyer organization guard.
+ */
+export async function seedCartFromPathway(req: Request, res: Response): Promise<void> {
+  if (!req.user || !req.commerceOrganization) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+  if (!parseNoQuery(req, res)) return;
+
+  const params = PathwaySlugParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = SeedCartFromPathwaySchema.safeParse(req.body ?? {});
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commercePathwaysService.seedCartFromPathway(
+    {
+      organizationId: req.commerceOrganization.organizationId,
+      memberId: req.commerceOrganization.memberId,
+      memberRole: req.commerceOrganization.memberRole,
+      actorUserId: req.user.id,
+    },
+    params.data.pathwaySlug,
+    body.data.selections ?? [],
+  );
+  if (!result.success) {
+    mapPathwayError(res, result.error);
+    return;
+  }
+
+  /**
+   * 200, not 201: the cart already existed, and some slots may be unfilled. A 201
+   * would tell the client a complete set was created when the body says otherwise.
+   */
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message:
+      result.value.unfilledSlots.length === 0
+        ? "Cart seeded from pathway."
+        : "Cart seeded from pathway with unfilled slots.",
     data: result.value,
   } satisfies ApiResponse);
 }

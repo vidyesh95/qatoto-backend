@@ -2,6 +2,7 @@ import express from "express";
 
 import * as commerceCartController from "#src/controllers/commerce-cart.controller.js";
 import * as commerceCheckoutController from "#src/controllers/commerce-checkout.controller.js";
+import * as commerceMerchandisingController from "#src/controllers/commerce-merchandising.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
@@ -37,6 +38,21 @@ router.delete(
   commerceCartWriteLimiter,
   compactBody,
   commerceCartController.removeCartItem,
+);
+
+/**
+ * §15.4. Seeds the cart from a published guided set. Lives on the CART router rather
+ * than the merchandising one because it is a buyer action on a buyer's cart — the
+ * authoring routes belong to whoever composed the set, this one to whoever is buying it.
+ */
+router.post(
+  "/cart/from-pathway/:pathwaySlug",
+  requireAuth,
+  requireActiveBuyerCommerceOrganization,
+  commerceCartWriteLimiter,
+  compactBody,
+  idempotency({ required: true, scope: "active_organization" }),
+  commerceMerchandisingController.seedCartFromPathway,
 );
 
 router.post(

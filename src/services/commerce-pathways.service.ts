@@ -13,11 +13,19 @@ import {
 import { resolveUnitPriceInCents } from "#src/lib/commerce-pricing.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import {
+  getCart,
+  getOrCreateCartForUpdate,
+  supersedeActiveCheckoutPrepares,
+  upsertCartProductLine,
+  type CommerceCartProjection,
+} from "#src/services/commerce-cart.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { CommerceProductRelationKind } from "#src/services/commerce-product-relations.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import { resolveEligibleProductCardsByIds } from "#src/services/store-catalog.service.js";
+import { getPathwaySetBySlug } from "#src/services/store-pathways.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -1145,6 +1153,204 @@ export async function listPathwayModerationQueue(
   return {
     success: true,
     value: { items, page: { nextCursor, hasMore: nextCursor !== null } },
+  };
+}
+
+/**
+ * A slot the seeded cart could not fill, and why. Reported rather than skipped: §15.4
+ * requires that seeding "reports any slot it could not fill rather than quietly adding
+ * fewer lines", because a buyer who asked for a whole kit and silently got five sixths
+ * of one has been misled about what they are buying.
+ */
+export interface UnfilledPathwaySlotProjection {
+  readonly slotId: string;
+  readonly roleLabel: string;
+  readonly reason:
+    | "NO_ELIGIBLE_CANDIDATE"
+    | "VARIANT_SELECTION_REQUIRED"
+    | "SELECTION_NOT_A_CANDIDATE"
+    | "NOT_PURCHASABLE";
+}
+
+export interface SeedCartFromPathwayResult {
+  readonly cart: CommerceCartProjection;
+  readonly filledSlotCount: number;
+  readonly unfilledSlots: readonly UnfilledPathwaySlotProjection[];
+}
+
+export interface PathwayCartSelectionInput {
+  readonly slotId: string;
+  readonly productId: string;
+  readonly variantId?: string | undefined;
+}
+
+/**
+ * Seeds a buyer's cart from a published set (§15.4).
+ *
+ * A pathway spanning several sellers is NOT a new order type: it seeds the cart, and
+ * the existing cart → prepare → confirm path then produces one order per counterparty
+ * (§2.3). Nothing about a pathway reaches an order — an order line snapshots products,
+ * quantities and prices, and a set is a browsing construct.
+ *
+ * Only REQUIRED slots are seeded. An optional slot is an invitation, not part of what
+ * the buyer asked for, and adding it would put lines in a cart nobody chose.
+ */
+export async function seedCartFromPathway(
+  actor: {
+    readonly organizationId: string;
+    readonly memberId: string;
+    readonly memberRole: CommerceOrganizationMemberRole;
+    readonly actorUserId: string;
+  },
+  pathwaySlug: string,
+  selections: readonly PathwayCartSelectionInput[],
+): Promise<Result<SeedCartFromPathwayResult, CommercePathwayError>> {
+  const setResult = await getPathwaySetBySlug({
+    pathwaySlug,
+    // Every slot, not a page: seeding a cart from page one of a kit would fill part of
+    // it and call that success.
+    limit: MAXIMUM_SLOTS_PER_PATHWAY,
+  });
+  if (!setResult.success) {
+    return {
+      success: false,
+      error:
+        setResult.error.type === "INVALID_CURSOR"
+          ? { type: "INVALID_CURSOR" }
+          : { type: "NOT_FOUND" },
+    };
+  }
+
+  const selectionBySlotId = new Map(
+    selections.map((selection) => [selection.slotId, selection] as const),
+  );
+  const unfilledSlots: UnfilledPathwaySlotProjection[] = [];
+  const linesToAdd: {
+    readonly productId: string;
+    readonly variantId: string | null;
+    readonly quantity: number;
+    readonly slotId: string;
+    readonly roleLabel: string;
+  }[] = [];
+
+  for (const slot of setResult.value.slots) {
+    if (!slot.isRequired) continue;
+
+    const selection = selectionBySlotId.get(slot.id);
+    const chosenCandidate =
+      selection === undefined
+        ? slot.candidates.find((candidate) => candidate.key === slot.chosenCandidateKey)
+        : slot.candidates.find(
+            (candidate) =>
+              candidate.productId === selection.productId &&
+              candidate.variantId === (selection.variantId ?? null),
+          );
+
+    if (chosenCandidate === undefined) {
+      unfilledSlots.push({
+        slotId: slot.id,
+        roleLabel: slot.roleLabel,
+        // A selection naming something the slot does not offer is a different failure
+        // from a slot that has nothing to offer, and the buyer should be told which.
+        reason: selection === undefined ? "NO_ELIGIBLE_CANDIDATE" : "SELECTION_NOT_A_CANDIDATE",
+      });
+      continue;
+    }
+    if (chosenCandidate.pricing.status === "variant_selection_required") {
+      unfilledSlots.push({
+        slotId: slot.id,
+        roleLabel: slot.roleLabel,
+        reason: "VARIANT_SELECTION_REQUIRED",
+      });
+      continue;
+    }
+    if (chosenCandidate.pricing.status !== "priced") {
+      unfilledSlots.push({
+        slotId: slot.id,
+        roleLabel: slot.roleLabel,
+        reason: "NOT_PURCHASABLE",
+      });
+      continue;
+    }
+
+    linesToAdd.push({
+      productId: chosenCandidate.productId,
+      variantId: chosenCandidate.variantId,
+      quantity: slot.quantity,
+      slotId: slot.id,
+      roleLabel: slot.roleLabel,
+    });
+  }
+
+  const occurredAt = new Date();
+  const failedSlots = await db.transaction(async (transaction) => {
+    // ONE transaction under ONE cart lock for the whole set: N calls to `setCartItem`
+    // would supersede the buyer's checkout preparation N times, write N audit rows for
+    // one action, and leave a half-seeded cart if a later line failed.
+    const cart = await getOrCreateCartForUpdate(transaction, actor.organizationId);
+    const writeFailures: UnfilledPathwaySlotProjection[] = [];
+
+    for (const line of linesToAdd) {
+      const upsertOutcome = await upsertCartProductLine(transaction, {
+        cartId: cart.id,
+        productId: line.productId,
+        variantId: line.variantId,
+        quantity: line.quantity,
+        now: occurredAt,
+      });
+      if (upsertOutcome.status !== "upserted") {
+        writeFailures.push({
+          slotId: line.slotId,
+          roleLabel: line.roleLabel,
+          reason:
+            upsertOutcome.status === "variant_required"
+              ? "VARIANT_SELECTION_REQUIRED"
+              : "NOT_PURCHASABLE",
+        });
+      }
+    }
+
+    await supersedeActiveCheckoutPrepares(transaction, cart.id, occurredAt);
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: actor.organizationId,
+      eventKind: "cart_seeded_from_pathway",
+      actorUserId: actor.actorUserId,
+      actorMemberRoleSnapshot: actor.memberRole,
+      targetEntityType: "store_pathway",
+      targetEntityId: setResult.value.pathway.id,
+      payload: {
+        cartId: cart.id,
+        pathwayId: setResult.value.pathway.id,
+        filledSlotCount: String(linesToAdd.length - writeFailures.length),
+        unfilledSlotCount: String(unfilledSlots.length + writeFailures.length),
+      },
+      occurredAt,
+    });
+
+    return writeFailures;
+  });
+
+  const cartResult = await getCart({
+    organizationId: actor.organizationId,
+    memberId: actor.memberId,
+    memberRole: actor.memberRole,
+    actorUserId: actor.actorUserId,
+  });
+  if (!cartResult.success) {
+    // The cart read only fails for reasons the seed already ruled out (the buyer's own
+    // organization going inactive mid-request), so treat it as the set being gone
+    // rather than inventing a new tag.
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  return {
+    success: true,
+    value: {
+      cart: cartResult.value,
+      filledSlotCount: linesToAdd.length - failedSlots.length,
+      unfilledSlots: [...unfilledSlots, ...failedSlots],
+    },
   };
 }
 
