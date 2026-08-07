@@ -1,10 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
-import {
-  ACCEPTED_IMAGE_FORMATS_SENTENCE,
-  describeUnsupportedImageFormat,
-} from "#src/lib/image.js";
+import { ACCEPTED_IMAGE_FORMATS_SENTENCE, describeUnsupportedImageFormat } from "#src/lib/image.js";
 import {
   AttachReviewPhotoFieldsSchema,
   AttachReviewVideoSchema,

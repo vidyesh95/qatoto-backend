@@ -1,12 +1,19 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import {
+  StoreOrganizationReviewParamsSchema,
+  StoreProductReviewParamsSchema,
+  StoreReviewListQuerySchema,
+} from "#src/schemas/store-reviews.schemas.js";
 import * as commerceDeliveryEstimateService from "#src/services/commerce-delivery-estimate.service.js";
 import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";
+import type { StoreCatalogError } from "#src/services/store-catalog.service.js";
 import * as storeMerchandisingService from "#src/services/store-merchandising.service.js";
 import * as storePathwaysService from "#src/services/store-pathways.service.js";
+import * as storeReviewsService from "#src/services/store-reviews.service.js";
 import * as storeSearchService from "#src/services/store-search.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
@@ -613,6 +620,90 @@ export async function getServiceOffering(req: Request, res: Response): Promise<v
     status: "success",
     statusCode: 200,
     message: "Service offering.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Appendix A8 — public review reads.
+//
+// Both handlers map `StoreCatalogError` unchanged: that union is already exactly
+// {NOT_FOUND, INVALID_CURSOR}, which is the whole failure surface of a public list.
+// ---------------------------------------------------------------------------
+
+function mapStoreReviewError(res: Response, error: StoreCatalogError, missingLabel: string): void {
+  switch (error.type) {
+    case "INVALID_CURSOR":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Invalid cursor.",
+      } satisfies ApiResponse);
+      return;
+    case "NOT_FOUND":
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: missingLabel,
+      } satisfies ApiResponse);
+      return;
+    default: {
+      const exhaustiveError: never = error;
+      void exhaustiveError;
+      throw new Error("Unhandled store review error.");
+    }
+  }
+}
+
+export async function listProductReviews(req: Request, res: Response): Promise<void> {
+  const params = StoreProductReviewParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const query = StoreReviewListQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await storeReviewsService.listProductReviews(params.data.productSlug, query.data);
+  if (!result.success) {
+    mapStoreReviewError(res, result.error, "Product not found.");
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Product reviews.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function listOrganizationReviews(req: Request, res: Response): Promise<void> {
+  const params = StoreOrganizationReviewParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const query = StoreReviewListQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await storeReviewsService.listOrganizationReviews(
+    params.data.organizationSlug,
+    query.data,
+  );
+  if (!result.success) {
+    mapStoreReviewError(res, result.error, "Organization not found.");
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Organization reviews.",
     data: result.value,
   } satisfies ApiResponse);
 }

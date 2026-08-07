@@ -5616,7 +5616,10 @@ export const commerceReviewMedia = pgTable(
       sql`(media_kind = 'photo') = (url IS NOT NULL AND width_px IS NOT NULL AND height_px IS NOT NULL)
           AND (media_kind = 'youtube_video') = (youtube_video_id IS NOT NULL)`,
     ),
-    check("commerce_review_media_url_ck", sql`url IS NULL OR (url LIKE 'https://%' AND char_length(url) <= 2048)`),
+    check(
+      "commerce_review_media_url_ck",
+      sql`url IS NULL OR (url LIKE 'https://%' AND char_length(url) <= 2048)`,
+    ),
     check(
       "commerce_review_media_youtube_ck",
       sql`youtube_video_id IS NULL OR youtube_video_id ~ '^[a-zA-Z0-9_-]{11}$'`,

@@ -201,6 +201,31 @@ const publicProductEligibility = and(
 );
 
 /**
+ * Resolves a public slug to a product id, or nothing when the listing is not publicly
+ * eligible (Appendix A8, A9, A11).
+ *
+ * Exists so the reviews, Q&A and engagement reads share ONE eligibility rule with the
+ * catalog instead of restating `publicProductEligibility` in four services — the way a
+ * draft listing's reviews start leaking is one of those copies drifting. Returns only
+ * the ids those callers need; use `getPublicProductBySlug` when you want a projection.
+ */
+export async function resolveEligibleProductRefBySlug(
+  productSlug: string,
+): Promise<{ readonly id: string; readonly sellerOrganizationId: string } | null> {
+  const [row] = await db
+    .select({
+      id: product.id,
+      sellerOrganizationId: product.sellerOrganizationId,
+    })
+    .from(product)
+    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+    .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
+    .where(and(publicProductEligibility, eq(product.publicSlug, productSlug)))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
  * Derives buyer-safe stock state from authoritative inventory and lead-time policy.
  * Zero stock with a declared lead-time window is made-to-order, not unavailable.
  */

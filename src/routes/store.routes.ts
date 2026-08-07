@@ -31,7 +31,21 @@ storeRouter.get(
   "/products/:productSlug/delivery-estimate",
   storeController.getProductDeliveryEstimate,
 );
+/**
+ * A8. Reviews were write-only until this route existed — a buyer could post one and
+ * nothing could ever display it.
+ */
+storeRouter.get("/products/:productSlug/reviews", storeController.listProductReviews);
 storeRouter.get("/organizations/:organizationSlug", storeController.getOrganizationStorefront);
+/**
+ * A8. Not redundant with the product route: `commerce_review.productId` is nullable
+ * because a service-engagement completion has no product, so reviews of a freight
+ * forwarder or a testing lab are reachable ONLY here.
+ */
+storeRouter.get(
+  "/organizations/:organizationSlug/reviews",
+  storeController.listOrganizationReviews,
+);
 storeRouter.get("/providers", storeController.listProviders);
 storeRouter.get("/providers/:organizationSlug", storeController.getProvider);
 storeRouter.get("/services/:offeringSlug", storeController.getServiceOffering);

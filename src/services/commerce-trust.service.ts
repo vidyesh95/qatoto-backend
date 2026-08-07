@@ -90,10 +90,7 @@ export type CommerceTrustError =
  * delegate its `default` branch to `mapTrustError` with TypeScript narrowing the
  * remainder — so no assertion is needed anywhere.
  */
-export type CommerceReviewMediaError =
-  | CommerceTrustError
-  | ImageValidationError
-  | CloudinaryError;
+export type CommerceReviewMediaError = CommerceTrustError | ImageValidationError | CloudinaryError;
 
 export interface CommerceTrustActorContext {
   readonly organizationId: string;
@@ -252,7 +249,7 @@ function projectReview(
     visibility: review.visibility,
     helpfulCount: review.helpfulCount,
     mediaCount: review.mediaCount,
-    scores: [...scores].sort((left, right) => left.axis.localeCompare(right.axis)),
+    scores: scores.toSorted((left, right) => left.axis.localeCompare(right.axis)),
     createdAt: review.createdAt,
   };
 }
@@ -262,15 +259,13 @@ function projectReview(
  * Sorted, so the replay comparison below can compare two arrays without caring what
  * order the client sent its keys in.
  */
-function toReviewScoreEntries(
-  scores: CreateReviewInput["scores"],
-): readonly ReviewScoreEntry[] {
+function toReviewScoreEntries(scores: CreateReviewInput["scores"]): readonly ReviewScoreEntry[] {
   if (!scores) return [];
   const entries: ReviewScoreEntry[] = [];
   if (scores.service !== undefined) entries.push({ axis: "service", score: scores.service });
   if (scores.shipping !== undefined) entries.push({ axis: "shipping", score: scores.shipping });
   if (scores.quality !== undefined) entries.push({ axis: "quality", score: scores.quality });
-  return entries.sort((left, right) => left.axis.localeCompare(right.axis));
+  return entries.toSorted((left, right) => left.axis.localeCompare(right.axis));
 }
 
 function reviewScoresMatch(
@@ -280,7 +275,9 @@ function reviewScoresMatch(
   if (storedScores.length !== requestedScores.length) return false;
   return storedScores.every((stored, index) => {
     const requested = requestedScores[index];
-    return requested !== undefined && requested.axis === stored.axis && requested.score === stored.score;
+    return (
+      requested !== undefined && requested.axis === stored.axis && requested.score === stored.score
+    );
   });
 }
 
@@ -823,9 +820,7 @@ async function repackReviewMediaPositions(
   );
 }
 
-function projectReviewMedia(
-  media: typeof commerceReviewMedia.$inferSelect,
-): ReviewMediaProjection {
+function projectReviewMedia(media: typeof commerceReviewMedia.$inferSelect): ReviewMediaProjection {
   return {
     id: media.id,
     reviewId: media.reviewId,
@@ -910,12 +905,7 @@ export async function attachReviewPhoto(
 
   try {
     const outcome = await db.transaction(async (transaction) => {
-      const review = await loadOwnVisibleReview(
-        transaction,
-        reviewId,
-        actor.organizationId,
-        true,
-      );
+      const review = await loadOwnVisibleReview(transaction, reviewId, actor.organizationId, true);
       if (!review) return { status: "not_found" as const };
       if (review.mediaCount >= MAXIMUM_REVIEW_MEDIA_COUNT) {
         return { status: "limit_reached" as const };
@@ -1089,9 +1079,7 @@ export async function detachReviewMedia(
 
     const [deleted] = await transaction
       .delete(commerceReviewMedia)
-      .where(
-        and(eq(commerceReviewMedia.id, mediaId), eq(commerceReviewMedia.reviewId, review.id)),
-      )
+      .where(and(eq(commerceReviewMedia.id, mediaId), eq(commerceReviewMedia.reviewId, review.id)))
       .returning();
     if (!deleted) return { status: "not_found" as const };
 

@@ -62,12 +62,16 @@ router.post(
   commerceTrustController.attachReviewVideo,
 );
 
+/**
+ * NO `compactBody` on this route or the three below it: none of their handlers reads
+ * `req.body`, and `json-body-budget.test.ts` fails the build for a cap that guards
+ * nothing — it documents a limit that does not exist.
+ */
 router.delete(
   "/reviews/:reviewId/media/:mediaId",
   requireAuth,
   requireActiveBuyerCommerceOrganization,
   commerceReviewWriteLimiter,
-  compactBody,
   idempotency({ required: true, scope: "active_organization" }),
   commerceTrustController.detachReviewMedia,
 );
@@ -86,7 +90,6 @@ router.put(
   requireAuth,
   requireActiveCommerceOrganization,
   commerceReviewVoteLimiter,
-  compactBody,
   commerceTrustController.setReviewHelpfulVote,
 );
 
@@ -95,7 +98,6 @@ router.delete(
   requireAuth,
   requireActiveCommerceOrganization,
   commerceReviewVoteLimiter,
-  compactBody,
   commerceTrustController.clearReviewHelpfulVote,
 );
 
@@ -119,7 +121,6 @@ router.delete(
   requireAuth,
   requireActiveCommerceOrganization,
   commerceReviewReplyLimiter,
-  compactBody,
   idempotency({ required: true, scope: "active_organization" }),
   commerceTrustController.deleteReviewReply,
 );
