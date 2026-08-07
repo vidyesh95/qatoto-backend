@@ -35,7 +35,19 @@ const MemberRoleSchema = z.enum([
   "support",
   "viewer",
 ]);
-const AddressKindSchema = z.enum(["billing", "registered", "warehouse", "pickup", "return"]);
+/**
+ * A hand-written mirror of `commerceOrganizationAddressKindEnum`. It must be widened
+ * with the pgEnum or a newly added kind is rejected at the boundary and nobody can
+ * create one — which is exactly how `delivery` would have gone unusable in Phase 11.
+ */
+const AddressKindSchema = z.enum([
+  "billing",
+  "registered",
+  "warehouse",
+  "pickup",
+  "return",
+  "delivery",
+]);
 const nullableHttpsUrl = z
   .url()
   .refine((url) => url.startsWith("https://"))
@@ -189,6 +201,14 @@ function respondCommerceError(res: Response, error: CommerceOrganizationsError):
         status: "error",
         statusCode: 409,
         message: error.message,
+      } satisfies ApiResponse);
+      return;
+    case "ADDRESS_LIMIT_REACHED":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: `You can save at most ${String(error.limit)} ${error.addressKind} addresses.`,
+        data: { addressKind: error.addressKind, limit: error.limit },
       } satisfies ApiResponse);
       return;
     case "PII_ENCRYPTION_UNAVAILABLE":

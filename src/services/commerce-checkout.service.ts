@@ -46,6 +46,12 @@ export type CommerceCheckoutError =
   | { type: "ORGANIZATION_NOT_ACTIVE" }
   | { type: "EMPTY_CART" }
   | { type: "ADDRESS_NOT_OWNED" }
+  /**
+   * A15. The address is the buyer's own, but it is not for receiving goods. Distinct
+   * from ADDRESS_NOT_OWNED because telling a buyer they do not own their own billing
+   * address answers a question nobody asked.
+   */
+  | { type: "ADDRESS_KIND_INVALID"; addressKind: string }
   | { type: "PRODUCT_NOT_PURCHASABLE"; productId: string }
   | { type: "BELOW_MINIMUM_ORDER_QUANTITY"; productId: string; minimumOrderQuantity: number }
   | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
@@ -197,14 +203,32 @@ function formatDeliveryAddressSnapshot(address: {
   return address.postalCode !== null ? `${base} ${address.postalCode}` : base;
 }
 
+/**
+ * Why the outcome is a union rather than `| null` (A15).
+ *
+ * "You do not own that address" and "that address is not for receiving goods" are
+ * different facts, and collapsing them told a buyer who picked their own billing
+ * address that it was not theirs — a wrong answer to the question they asked.
+ */
+type OwnedDeliveryAddressOutcome =
+  | { readonly status: "resolved"; readonly id: string; readonly snapshot: string }
+  | { readonly status: "not_owned" }
+  | { readonly status: "wrong_kind"; readonly addressKind: string };
+
+/**
+ * A15's central fix. Until Phase 11 this filtered on id and organization and **not on
+ * `addressKind` at all**, because there was no `delivery` kind to filter on — so a
+ * registered office or a return address could silently become a shipping destination.
+ */
 async function assertOwnedDeliveryAddress(
   transaction: DatabaseTransaction,
   buyerOrganizationId: string,
   deliveryAddressId: string,
-): Promise<{ readonly id: string; readonly snapshot: string } | null> {
+): Promise<OwnedDeliveryAddressOutcome> {
   const [address] = await transaction
     .select({
       id: commerceOrganizationAddress.id,
+      addressKind: commerceOrganizationAddress.addressKind,
       countryCode: commerceOrganizationAddress.countryCode,
       regionCode: commerceOrganizationAddress.regionCode,
       locality: commerceOrganizationAddress.locality,
@@ -218,8 +242,15 @@ async function assertOwnedDeliveryAddress(
       ),
     )
     .limit(1);
-  if (!address) return null;
-  return { id: address.id, snapshot: formatDeliveryAddressSnapshot(address) };
+  if (!address) return { status: "not_owned" };
+  if (address.addressKind !== "delivery") {
+    return { status: "wrong_kind", addressKind: address.addressKind };
+  }
+  return {
+    status: "resolved",
+    id: address.id,
+    snapshot: formatDeliveryAddressSnapshot(address),
+  };
 }
 
 async function assertOrganizationActive(
@@ -412,7 +443,10 @@ export async function prepareCheckout(
           actor.organizationId,
           input.deliveryAddressId,
         );
-        if (!owned) return { status: "address_not_owned" as const };
+        if (owned.status === "not_owned") return { status: "address_not_owned" as const };
+        if (owned.status === "wrong_kind") {
+          return { status: "address_wrong_kind" as const, addressKind: owned.addressKind };
+        }
         deliveryAddressId = owned.id;
         deliveryAddressSnapshot = owned.snapshot;
       }
@@ -555,6 +589,11 @@ export async function prepareCheckout(
         return { success: false, error: { type: "EMPTY_CART" } };
       case "address_not_owned":
         return { success: false, error: { type: "ADDRESS_NOT_OWNED" } };
+      case "address_wrong_kind":
+        return {
+          success: false,
+          error: { type: "ADDRESS_KIND_INVALID", addressKind: outcome.addressKind },
+        };
       case "pricing_failed":
         return {
           success: false,
@@ -679,7 +718,10 @@ export async function confirmCheckout(
           actor.organizationId,
           input.deliveryAddressId,
         );
-        if (!owned) return { status: "address_not_owned" as const };
+        if (owned.status === "not_owned") return { status: "address_not_owned" as const };
+        if (owned.status === "wrong_kind") {
+          return { status: "address_wrong_kind" as const, addressKind: owned.addressKind };
+        }
         deliveryAddressId = owned.id;
         deliveryAddressSnapshot = owned.snapshot;
       }
@@ -815,6 +857,13 @@ export async function confirmCheckout(
             counterpartyLegalNameSnapshot: sellerLegalName,
             buyerAddressSnapshot: deliveryAddressSnapshot,
             counterpartyAddressSnapshot: null,
+            /**
+             * A15. The snapshot above is redacted by design; this is the durable
+             * pointer an authorized seller decrypts the rest through. Written here,
+             * at confirm, because this is the moment the address becomes part of an
+             * immutable commercial record.
+             */
+            deliveryAddressId,
             createdByMemberId: actor.memberId,
           })
           .returning();
@@ -927,6 +976,11 @@ export async function confirmCheckout(
         return { success: false, error: { type: "PREPARE_NOT_ACTIVE" } };
       case "address_not_owned":
         return { success: false, error: { type: "ADDRESS_NOT_OWNED" } };
+      case "address_wrong_kind":
+        return {
+          success: false,
+          error: { type: "ADDRESS_KIND_INVALID", addressKind: outcome.addressKind },
+        };
       case "empty_cart":
         return { success: false, error: { type: "EMPTY_CART" } };
       case "pricing_failed":

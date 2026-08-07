@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, ne } from "drizzle-orm";
+import { and, asc, eq, ne, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -59,6 +59,12 @@ export type CommerceOrganizationsError =
       originalFailure: "CONFLICT" | "DATABASE_FAILURE";
     }
   | { type: "PLATFORM_CAPABILITY_REQUIRED" }
+  /**
+   * A15. Its own tag rather than a `CONFLICT` message, because a client needs to
+   * branch on it — "you have reached the limit for this kind" is an actionable state,
+   * and a message string is not something a UI can switch on.
+   */
+  | { type: "ADDRESS_LIMIT_REACHED"; addressKind: string; limit: number }
   | { type: "SELF_REVIEW_FORBIDDEN" };
 
 type TradeState = Organization["tradeState"];
@@ -145,6 +151,16 @@ const ORGANIZATION_MANAGERS: readonly MemberRole[] = ["owner", "administrator"];
 const ADDRESS_MANAGERS: readonly MemberRole[] = ["owner", "administrator", "finance"];
 const VERIFICATION_MANAGERS: readonly MemberRole[] = ["owner", "administrator"];
 const VERIFICATION_READERS: readonly MemberRole[] = ["owner", "administrator", "finance"];
+
+/**
+ * A15. A server-owned bound, replacing the frontend's local `MAX_SAVED_ADDRESSES = 5`.
+ *
+ * The client's five is now a display choice; this is the rule. Ten rather than five
+ * because a bound exists to stop unbounded growth, not to second-guess a company that
+ * legitimately ships to eight warehouses — and a limit a real user hits is a support
+ * ticket, while a limit nobody hits still stops the abuse it was written for.
+ */
+const MAXIMUM_ADDRESSES_PER_KIND = 10;
 
 const LEGAL_MEMBER_STATE_TRANSITIONS: Readonly<Record<MemberState, readonly MemberState[]>> = {
   invited: ["active"],
@@ -719,8 +735,26 @@ export async function createAddress(
     throw new Error("A new commerce address must contain address line one.");
   }
 
-  const address = await db.transaction(async (transaction) => {
+  const outcome = await db.transaction(async (transaction) => {
     const occurredAt = new Date();
+
+    /**
+     * Counted inside the transaction, not before it: two concurrent creates that both
+     * read nine would both pass an outside check and land an eleventh row.
+     */
+    const [existingOfKind] = await transaction
+      .select({ addressCount: sql<number>`count(*)::int`.mapWith(Number) })
+      .from(commerceOrganizationAddress)
+      .where(
+        and(
+          eq(commerceOrganizationAddress.organizationId, organizationId),
+          eq(commerceOrganizationAddress.addressKind, input.addressKind),
+        ),
+      );
+    if ((existingOfKind?.addressCount ?? 0) >= MAXIMUM_ADDRESSES_PER_KIND) {
+      return { status: "limit_reached" as const };
+    }
+
     if (input.isDefault) await clearDefaultAddress(transaction, organizationId, input.addressKind);
     const [createdAddress] = await transaction
       .insert(commerceOrganizationAddress)
@@ -762,9 +796,20 @@ export async function createAddress(
       payload: { action: "created", kind: input.addressKind, isDefault: input.isDefault },
       occurredAt,
     });
-    return createdAddress;
+    return { status: "created" as const, address: createdAddress };
   });
-  return { success: true, value: readableAddress(address) };
+
+  if (outcome.status === "limit_reached") {
+    return {
+      success: false,
+      error: {
+        type: "ADDRESS_LIMIT_REACHED",
+        addressKind: input.addressKind,
+        limit: MAXIMUM_ADDRESSES_PER_KIND,
+      },
+    };
+  }
+  return { success: true, value: readableAddress(outcome.address) };
 }
 
 export async function updateAddress(
