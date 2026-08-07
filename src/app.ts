@@ -15,6 +15,7 @@ import authRouter from "#src/routes/auth.routes.js";
 import commerceCartRouter from "#src/routes/commerce-cart.routes.js";
 import commerceCatalogRouter from "#src/routes/commerce-catalog.routes.js";
 import commerceFulfillmentRouter from "#src/routes/commerce-fulfillment.routes.js";
+import commerceMerchandisingRouter from "#src/routes/commerce-merchandising.routes.js";
 import commerceMessagesRouter from "#src/routes/commerce-messages.routes.js";
 import commerceOrdersRouter from "#src/routes/commerce-orders.routes.js";
 import commerceOrganizationsRouter from "#src/routes/commerce-organizations.routes.js";
@@ -155,6 +156,7 @@ app.use("/commerce", commercePaymentsRouter);
 app.use("/commerce", commerceFulfillmentRouter);
 app.use("/commerce", commerceTrustRouter);
 app.use("/commerce", commerceCatalogRouter);
+app.use("/commerce", commerceMerchandisingRouter);
 app.use("/store", storeRouter);
 app.use("/products", productsRouter);
 // The home-page carousel. GET /promotions/slides is public; every /promotions/admin/*

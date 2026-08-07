@@ -207,6 +207,17 @@ export const commerceProductRelationWriteLimiter = createLimiter({
   limit: 30,
 });
 
+/**
+ * Guided pathway authoring and moderation (§15.8). A slot or candidate replacement
+ * rewrites a whole plan in one call, so the useful rate is low: a merchandiser edits
+ * a set a handful of times, and anything faster is a script.
+ */
+export const commercePathwayWriteLimiter = createLimiter({
+  namespace: "commercePathwayWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
 // ---------------------------------------------------------------------------
 // Research & Development (R_AND_D_BACKEND_STRUCTURE.md §4a).
 //

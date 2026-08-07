@@ -80,6 +80,44 @@ export async function requireActiveSellerCommerceOrganization(
   next();
 }
 
+/**
+ * Attaches a seller organization when the caller has one, and continues when they do
+ * not.
+ *
+ * Guided pathway authoring (§15.5) has two legitimate authors: a SELLER proposing a
+ * set of its own goods, and a PLATFORM MERCHANDISER curating one. A merchandiser acts
+ * for the platform and may not belong to any commerce organization at all, so the
+ * hard seller guard would lock them out of the surface the specification gives them.
+ *
+ * This does not weaken anything: a caller with no organization is not authorized by
+ * this middleware, it is merely passed on to a service that demands the
+ * `moderate_commerce` platform capability instead. Neither path is anonymous.
+ */
+export async function attachOptionalSellerCommerceOrganization(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (!req.user || !req.authSession) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const accessResult = await resolveActiveSellerCommerceOrganization({
+    userId: req.user.id,
+    sessionId: req.authSession.id,
+    activeOrganizationId: req.authSession.activeOrganizationId,
+  });
+  if (accessResult.success) {
+    req.commerceOrganization = accessResult.value;
+  }
+  next();
+}
+
 /** RFQ buyer guard: active trade plus buyer/owner/administrator membership. */
 export async function requireActiveBuyerCommerceOrganization(
   req: Request,

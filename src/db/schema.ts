@@ -497,6 +497,19 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
      */
     "product_relations_declared",
     "product_relation_verified",
+    /**
+     * Phase 9 (§15.5, §15.8). A set is merchandising a buyer acts on, so who composed
+     * it, who submitted it and who decided it are all auditable. Platform-curated sets
+     * have no owning organization and therefore no entry here — their reviewer
+     * attribution on the row itself is the record.
+     */
+    "pathway_created",
+    "pathway_updated",
+    "pathway_slots_replaced",
+    "pathway_candidates_replaced",
+    "pathway_submitted",
+    "pathway_moderated",
+    "cart_seeded_from_pathway",
   ],
 );
 
@@ -1856,10 +1869,9 @@ export const storePathway = pgTable(
      * moderator — without which a seller composes a set entirely from its own SKUs
      * and a curated look becomes an advertisement.
      */
-    ownerOrganizationId: text("owner_organization_id").references(
-      () => commerceOrganization.id,
-      { onDelete: "restrict" },
-    ),
+    ownerOrganizationId: text("owner_organization_id").references(() => commerceOrganization.id, {
+      onDelete: "restrict",
+    }),
     createdByUserId: text("created_by_user_id").references(() => user.id, {
       onDelete: "restrict",
     }),
@@ -2057,9 +2069,7 @@ export const storePathwaySlotCandidate = pgTable(
     }),
     /** 0 is the default the set shows first. */
     rank: integer("rank").default(0).notNull(),
-    sourceKind: storePathwaySlotCandidateSourceKindEnum("source_kind")
-      .default("curated")
-      .notNull(),
+    sourceKind: storePathwaySlotCandidateSourceKindEnum("source_kind").default("curated").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
