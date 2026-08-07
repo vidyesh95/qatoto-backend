@@ -5,6 +5,7 @@ import * as commerceProductRelationsService from "#src/services/commerce-product
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";
 import * as storeMerchandisingService from "#src/services/store-merchandising.service.js";
+import * as storePathwaysService from "#src/services/store-pathways.service.js";
 import * as storeSearchService from "#src/services/store-search.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
@@ -340,31 +341,85 @@ export async function getOrganizationStorefront(req: Request, res: Response): Pr
   } satisfies ApiResponse);
 }
 
-export async function listPathways(_req: Request, res: Response): Promise<void> {
-  const result = await storeMerchandisingService.listPathways();
+/**
+ * Both pathway reads map their errors exhaustively (§7). Before Phase 9 this handler
+ * collapsed every failure to 404, which would have rendered a tampered cursor as
+ * "Pathway not found" — a wrong answer to a different question.
+ */
+function mapPathwayError(res: Response, error: storePathwaysService.StorePathwayError): void {
+  switch (error.type) {
+    case "NOT_FOUND":
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "Pathway not found.",
+      } satisfies ApiResponse);
+      return;
+    case "INVALID_CURSOR":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Invalid cursor.",
+      } satisfies ApiResponse);
+      return;
+    default: {
+      const exhaustiveError: never = error;
+      throw new Error(`Unhandled pathway error: ${JSON.stringify(exhaustiveError)}`);
+    }
+  }
+}
+
+export async function listPathways(req: Request, res: Response): Promise<void> {
+  const page = CursorPageQuerySchema.safeParse(req.query);
+  if (!page.success) {
+    sendZodError(res, page.error);
+    return;
+  }
+
+  const result = await storePathwaysService.listActivePathways({
+    limit: page.data.limit,
+    cursor: page.data.cursor,
+  });
+  if (!result.success) {
+    mapPathwayError(res, result.error);
+    return;
+  }
+
   res.status(200).json({
     status: "success",
     statusCode: 200,
     message: "Pathways.",
-    data: result,
+    data: result.value,
   } satisfies ApiResponse);
 }
 
+/**
+ * The set read (§15.7). `slots` replaces the Phase 1 flat `items` array: a slot the
+ * set cannot fill is still returned, marked `unavailable`, because an absent slot and
+ * a slot with nothing in it are different facts and only the second one is true.
+ */
 export async function getPathway(req: Request, res: Response): Promise<void> {
   const params = PathwayParamsSchema.safeParse(req.params);
   if (!params.success) {
     sendZodError(res, params.error);
     return;
   }
-  const result = await storeMerchandisingService.getPathwayBySlug(params.data.pathwaySlug);
-  if (!result.success) {
-    res.status(404).json({
-      status: "error",
-      statusCode: 404,
-      message: "Pathway not found.",
-    } satisfies ApiResponse);
+  const page = CursorPageQuerySchema.safeParse(req.query);
+  if (!page.success) {
+    sendZodError(res, page.error);
     return;
   }
+
+  const result = await storePathwaysService.getPathwaySetBySlug({
+    pathwaySlug: params.data.pathwaySlug,
+    limit: page.data.limit,
+    cursor: page.data.cursor,
+  });
+  if (!result.success) {
+    mapPathwayError(res, result.error);
+    return;
+  }
+
   res.status(200).json({
     status: "success",
     statusCode: 200,

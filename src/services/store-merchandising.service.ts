@@ -1,14 +1,9 @@
 import { and, asc, eq, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import {
-  storeHeroSlide,
-  storePathway,
-  storePathwayItem,
-  storeRail,
-  storeRailPlacement,
-} from "#src/db/schema.js";
+import { storeHeroSlide, storePathway, storeRail, storeRailPlacement } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { merchandisingWindowOpen } from "#src/lib/store-merchandising-window.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";
 import * as storeSearchService from "#src/services/store-search.service.js";
@@ -46,13 +41,6 @@ export type MerchandisingItemProjection =
       readonly entityId: string;
       readonly organization: storeCatalogService.StoreSellerProjection;
     };
-
-function merchandisingWindowOpen(table: { readonly startsAt: unknown; readonly endsAt: unknown }) {
-  return sql`(
-    (${table.startsAt} IS NULL OR ${table.startsAt} <= now())
-    AND (${table.endsAt} IS NULL OR ${table.endsAt} > now())
-  )`;
-}
 
 async function resolveEligibleMerchandisingItems(
   placements: readonly {
@@ -162,6 +150,13 @@ export async function getStoreHome(): Promise<
         readonly title: string;
         readonly summary: string | null;
         readonly accent: string;
+        /**
+         * §15.2. `store_pathway` had no image column at all, which is why the
+         * frontend rendered a local placeholder banner. The card image is now a real
+         * server-owned value.
+         */
+        readonly cardImageUrl: string | null;
+        readonly isAnchored: boolean;
       }[];
       readonly providerShortcuts: readonly commerceProvidersService.PublicProviderCard[];
       readonly rails: readonly {
@@ -197,6 +192,8 @@ export async function getStoreHome(): Promise<
         title: storePathway.title,
         summary: storePathway.summary,
         accent: storePathway.accent,
+        cardImageUrl: storePathway.cardImageUrl,
+        anchorProductId: storePathway.anchorProductId,
       })
       .from(storePathway)
       .where(and(eq(storePathway.state, "active"), merchandisingWindowOpen(storePathway)))
@@ -241,7 +238,12 @@ export async function getStoreHome(): Promise<
     value: {
       heroSlides,
       categories: categoriesResult.items,
-      pathways,
+      // `anchorProductId` itself stays server-side: whether a set is anchored changes
+      // how it reads, but which product anchors it is not a home-page fact.
+      pathways: pathways.map(({ anchorProductId, ...pathwayCard }) => ({
+        ...pathwayCard,
+        isAnchored: anchorProductId !== null,
+      })),
       providerShortcuts: providersResult.value.items,
       rails: railProjections,
     },
@@ -362,83 +364,12 @@ async function resolveRailItemsPage(input: {
   }
 }
 
-export async function listPathways(): Promise<{
-  readonly items: readonly {
-    readonly id: string;
-    readonly slug: string;
-    readonly title: string;
-    readonly summary: string | null;
-    readonly accent: string;
-  }[];
-}> {
-  const items = await db
-    .select({
-      id: storePathway.id,
-      slug: storePathway.slug,
-      title: storePathway.title,
-      summary: storePathway.summary,
-      accent: storePathway.accent,
-    })
-    .from(storePathway)
-    .where(and(eq(storePathway.state, "active"), merchandisingWindowOpen(storePathway)))
-    .orderBy(asc(storePathway.title), asc(storePathway.id));
-  return { items };
-}
-
-export async function getPathwayBySlug(pathwaySlug: string): Promise<
-  Result<
-    {
-      readonly pathway: {
-        readonly id: string;
-        readonly slug: string;
-        readonly title: string;
-        readonly summary: string | null;
-        readonly accent: string;
-      };
-      readonly items: readonly MerchandisingItemProjection[];
-    },
-    StoreMerchandisingError
-  >
-> {
-  const [pathway] = await db
-    .select({
-      id: storePathway.id,
-      slug: storePathway.slug,
-      title: storePathway.title,
-      summary: storePathway.summary,
-      accent: storePathway.accent,
-    })
-    .from(storePathway)
-    .where(
-      and(
-        eq(storePathway.slug, pathwaySlug),
-        eq(storePathway.state, "active"),
-        merchandisingWindowOpen(storePathway),
-      ),
-    )
-    .limit(1);
-
-  if (!pathway) {
-    return { success: false, error: { type: "NOT_FOUND" } };
-  }
-
-  const placements = await db
-    .select({
-      entityKind: storePathwayItem.entityKind,
-      entityId: storePathwayItem.entityId,
-      position: storePathwayItem.position,
-    })
-    .from(storePathwayItem)
-    // A19: pathway items now carry the same scheduling window rail placements have
-    // had since Phase 1, so a seasonal member can be scheduled in and out.
-    .where(
-      and(eq(storePathwayItem.pathwayId, pathway.id), merchandisingWindowOpen(storePathwayItem)),
-    )
-    .orderBy(asc(storePathwayItem.position), asc(storePathwayItem.id));
-
-  const items = await resolveEligibleMerchandisingItems(placements);
-  return { success: true, value: { pathway, items } };
-}
+/*
+ * Pathway reads moved to `store-pathways.service.ts` in Phase 9. A pathway stopped
+ * being a flat list of merchandising items and became a set of slots with ranked
+ * candidates, per-currency totals and completeness (§15.2), which shares nothing with
+ * hero slides and rails beyond the scheduling window.
+ */
 
 export async function getRailBySlug(input: {
   readonly railSlug: string;
