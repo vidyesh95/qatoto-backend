@@ -24,7 +24,8 @@ interface Check {
 
 async function scalar(query: ReturnType<typeof sql>): Promise<number> {
   const result = await db.execute<{ value: number }>(query);
-  return Number(result.rows[0]?.value ?? 0);
+  // `count(*)::int` arrives as a number; no conversion needed.
+  return result.rows[0]?.value ?? 0;
 }
 
 const CHECKS: readonly Check[] = [
@@ -144,7 +145,7 @@ const CHECKS: readonly Check[] = [
           const result = await transaction.execute<{ value: number }>(sql`
             SELECT count(*)::int AS value FROM store_search_document
              WHERE discovery_score_points = 42`);
-          moved = Number(result.rows[0]?.value ?? 0);
+          moved = result.rows[0]?.value ?? 0;
           // Always roll back: this probe must not leave a trace even when it passes.
           throw new Error("verify-probe-rollback");
         })

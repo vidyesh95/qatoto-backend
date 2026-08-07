@@ -174,6 +174,24 @@ const envSchema = z.object({
     .optional()
     .transform((rawValue) => rawValue === "true"),
   /**
+   * Whether the STORE Phase 13 ranking circuit breaker may actually suppress a product.
+   *
+   * DEFAULTS TO FALSE, and the default is load-bearing. The breaker ships observe-only: it
+   * evaluates every candidate and records what it WOULD have done, so the false-positive
+   * rate is countable BEFORE anything is suppressed. A breaker enabled on a designer's
+   * confidence rather than an observed rate is how a marketplace suppresses honest sellers.
+   *
+   * The precondition for setting this to `true` is written down rather than assumed: read
+   * `commerce_ranking_enforcement_event` grouped by `action` over a representative window,
+   * confirm the would-fire population is one you are willing to act on, and confirm the
+   * fourth kill-switch clause has a real input — at launch `fraud_risk_score` does not, so
+   * the breaker cannot fire regardless of this flag.
+   */
+  COMMERCE_RANKING_ENFORCEMENT_ENABLED: z
+    .string()
+    .optional()
+    .transform((rawValue) => rawValue === "true"),
+  /**
    * Whether `prune-engagement-data` actually deletes (HOME_BACKEND_STRUCTURE.md §6, §8.1).
    *
    * DEFAULTS TO FALSE, and the default is the point. This is the first scheduled job in

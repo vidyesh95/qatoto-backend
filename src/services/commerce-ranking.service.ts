@@ -5,9 +5,11 @@ import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import {
   commerceCategoryDemandSnapshot,
+  commerceProductRankingEnforcement,
   commerceProductRankingState,
   commerceProductTrendingSnapshot,
   commerceRankingEnforcementEvent,
+  product,
 } from "#src/db/schema.js";
 import {
   resolveCategoryPrior,
@@ -34,6 +36,7 @@ import {
 } from "#src/lib/commerce-trending-score.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { utcDayStringOf } from "#src/lib/utc-day.js";
+import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -1006,4 +1009,174 @@ export async function listRankedProductIds(input: {
       },
     },
   };
+}
+
+/* ------------------------------------------------------------------------- *
+ * Enforcement and appeals (stage 5)
+ * ------------------------------------------------------------------------- */
+
+export type RankingStatusError = { type: "NOT_FOUND" } | { type: "NOT_AUTHORIZED" };
+
+export interface ProductRankingStatus {
+  readonly productId: string;
+  /** `null` when the product is not currently ranked — a normal state, not an error. */
+  readonly trendingRankInCategory: number | null;
+  readonly finalScorePoints: number | null;
+  readonly rankingMode: "percentile" | "sparse_exploration" | null;
+  readonly computedAt: Date | null;
+  /**
+   * Present only when this product is under an enforcement action. A seller under
+   * suppression is entitled to know WHICH signal fired — "your score was multiplied by 0.4"
+   * is not a reviewable statement, and an unappealable suppression is how a marketplace
+   * loses honest sellers.
+   */
+  readonly enforcement: {
+    readonly action: RankingEnforcementAction;
+    readonly actionSource: "moderator" | "automatic";
+    readonly penaltyKinds: readonly string[];
+    readonly reason: string;
+    readonly since: Date;
+  } | null;
+}
+
+/**
+ * What the seller of a product may be told about its ranking.
+ *
+ * DELIBERATELY NOT THE WHOLE SNAPSHOT. The component breakdown, the raw inputs and the
+ * category's own statistics stay internal: publishing them would hand anyone willing to
+ * register a seller account a precise specification of what to forge. What a seller gets is
+ * their position, whether they are suppressed, and why — which is what an appeal needs and
+ * nothing more.
+ */
+export async function getProductRankingStatus(input: {
+  readonly productId: string;
+  readonly callerOrganizationId: string;
+}): Promise<Result<ProductRankingStatus, RankingStatusError>> {
+  const [owned] = await db
+    .select({ sellerOrganizationId: product.sellerOrganizationId })
+    .from(product)
+    .where(eq(product.id, input.productId))
+    .limit(1);
+
+  // 404 rather than 403 for a product that exists but belongs to someone else: §11's
+  // anti-enumeration rule, unchanged here.
+  if (!owned || owned.sellerOrganizationId !== input.callerOrganizationId) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  const [state] = await db
+    .select()
+    .from(commerceProductRankingState)
+    .where(eq(commerceProductRankingState.productId, input.productId))
+    .limit(1);
+
+  const [enforcement] = await db
+    .select()
+    .from(commerceProductRankingEnforcement)
+    .where(eq(commerceProductRankingEnforcement.productId, input.productId))
+    .limit(1);
+
+  return {
+    success: true,
+    value: {
+      productId: input.productId,
+      trendingRankInCategory: state?.trendingRankInCategory ?? null,
+      finalScorePoints: state?.finalScorePoints ?? null,
+      rankingMode: state?.rankingMode ?? null,
+      computedAt: state?.computedAt ?? null,
+      enforcement:
+        enforcement === undefined || enforcement.action === "none"
+          ? null
+          : {
+              action: enforcement.action,
+              actionSource: enforcement.actionSource,
+              penaltyKinds: enforcement.penaltyKinds,
+              reason: enforcement.reason,
+              since: enforcement.updatedAt,
+            },
+    },
+  };
+}
+
+export type ModerateRankingError =
+  { type: "NOT_FOUND" } | { type: "PLATFORM_CAPABILITY_REQUIRED"; capability: "moderate_commerce" };
+
+/**
+ * A moderator's decision on a product's ranking enforcement (stage 5).
+ *
+ * THIS IS THE APPEAL PATH. It is a moderator action and therefore names a person — the
+ * `commerce_product_ranking_enforcement_source_ck` constraint binds `moderator` to a
+ * non-null `decidedByUserId` in both directions, so a decision cannot be recorded
+ * anonymously and an automatic one cannot borrow a name.
+ *
+ * A moderator's row OUTLIVES the hourly run: the scorer truncates and rewrites
+ * `commerce_product_ranking_state` every hour, and if enforcement lived there a human's
+ * ruling would last until the next tick.
+ */
+export async function moderateProductRanking(input: {
+  readonly productId: string;
+  readonly moderatorUserId: string;
+  readonly action: RankingEnforcementAction;
+  readonly reason: string;
+}): Promise<Result<{ readonly productId: string }, ModerateRankingError>> {
+  /*
+   * The capability is checked HERE and not in the route chain, matching
+   * `commerce-catalog.routes.ts` and `commerce-trust.routes.ts`: a capability visible in the
+   * route table is a capability an attacker can probe for.
+   */
+  const capability = await requirePlatformCapability(input.moderatorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return {
+      success: false,
+      error: { type: "PLATFORM_CAPABILITY_REQUIRED", capability: "moderate_commerce" },
+    };
+  }
+
+  const [target] = await db
+    .select({ id: product.id })
+    .from(product)
+    .where(eq(product.id, input.productId))
+    .limit(1);
+  if (!target) return { success: false, error: { type: "NOT_FOUND" } };
+
+  const decidedAt = new Date();
+
+  await db.transaction(async (transaction) => {
+    await transaction
+      .insert(commerceProductRankingEnforcement)
+      .values({
+        productId: input.productId,
+        action: input.action,
+        actionSource: "moderator",
+        penaltyKinds: [],
+        reason: input.reason,
+        decidedByUserId: input.moderatorUserId,
+      })
+      .onConflictDoUpdate({
+        target: commerceProductRankingEnforcement.productId,
+        set: {
+          action: input.action,
+          actionSource: "moderator",
+          reason: input.reason,
+          decidedByUserId: input.moderatorUserId,
+          updatedAt: decidedAt,
+        },
+      });
+
+    // The event log keeps the history a single mutable row cannot: an appeal that was
+    // granted and later re-imposed is two facts, not one.
+    await transaction.insert(commerceRankingEnforcementEvent).values({
+      productId: input.productId,
+      asOf: decidedAt,
+      action: input.action,
+      actionSource: "moderator",
+      penaltyKinds: [],
+      satisfiedClauses: [],
+      unevaluatedClauses: [],
+      decidedByUserId: input.moderatorUserId,
+      note: input.reason,
+    });
+  });
+
+  return { success: true, value: { productId: input.productId } };
 }
