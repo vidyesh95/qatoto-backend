@@ -4,15 +4,14 @@ import { db } from "#src/db/index.js";
 import { storeHeroSlide, storePathway, storeRail, storeRailPlacement } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { merchandisingWindowOpen } from "#src/lib/store-merchandising-window.js";
+import * as storeRankingService from "#src/services/commerce-ranking.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";
 import * as storeSearchService from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type StoreMerchandisingError =
-  | { type: "NOT_FOUND" }
-  | { type: "INVALID_CURSOR" }
-  | { type: "PROVIDER_DIRECTORY_FAILED" };
+  { type: "NOT_FOUND" } | { type: "INVALID_CURSOR" } | { type: "PROVIDER_DIRECTORY_FAILED" };
 
 export type MerchandisingItemProjection =
   | {
@@ -354,18 +353,50 @@ async function resolveRailItemsPage(input: {
         page: { nextCursor: null, hasMore: false },
       };
     case "trending":
-    case "recommended":
-      // STORE Phase 13, stage 1. The enum values exist from migration 0073 so that the
-      // ranking engine's surfaces can land without a second irreversible ALTER TYPE, but
-      // NO RAIL CARRIES EITHER VALUE YET — nothing in 0073-0078 flips a `store_rail` row,
-      // and only a merchandiser can. So this arm is unreachable in practice today, and
-      // returning an empty page is the same honest answer `trending_placeholder` gives.
-      //
-      // Stage 4 replaces both arms with reads against `commerce_product_ranking_state`.
+    case "recommended": {
+      /*
+       * STORE Phase 13. Both strategies read `commerce_product_ranking_state`, which the
+       * hourly job clears and re-sets — so a product that fell out of its category's head
+       * disappears from the rail rather than keeping last hour's place forever.
+       *
+       * `trending` and `recommended` share this arm today because they answer the same
+       * question from the same table: what is rising. They are separate enum values because
+       * they will diverge — `recommended` is where per-viewer affinity belongs once there is
+       * any — and adding the value later would have meant a second irreversible ALTER TYPE.
+       *
+       * ALGORITHM VERSION 0 IS REFUSED. A run before fourteen days of confirmation history
+       * exists writes its rows at version 0, because W2 measured a period that did not
+       * happen. Filtering here rather than at write time means an operator can still see
+       * what the engine produced while the rail stays honestly empty.
+       */
+      const rankedRows = await storeRankingService.listRankedProductIds({
+        limit: input.limit,
+        cursor: input.cursor,
+      });
+      if (!rankedRows.success) {
+        return {
+          items: [],
+          page: { nextCursor: null, hasMore: false },
+          error: { type: "INVALID_CURSOR" },
+        };
+      }
+
+      // Resolved through the SAME public-eligibility path every other rail uses. A ranking
+      // score is not an entitlement: a product suspended since the last run must vanish
+      // from the rail even though its rank row still exists.
+      const products = await storeCatalogService.resolveEligibleProductCardsByIds(
+        rankedRows.value.items.map((row) => row.productId),
+      );
+
       return {
-        items: [],
-        page: { nextCursor: null, hasMore: false },
+        items: products.map((product) => ({
+          entityKind: "product" as const,
+          entityId: product.id,
+          product,
+        })),
+        page: rankedRows.value.page,
       };
+    }
     default: {
       const exhaustiveStrategy: never = input.strategy;
       void exhaustiveStrategy;

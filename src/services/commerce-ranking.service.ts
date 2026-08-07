@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -32,7 +32,9 @@ import {
   explorationOrderKey,
   scoreCommerceTrendingCandidate,
 } from "#src/lib/commerce-trending-score.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { utcDayStringOf } from "#src/lib/utc-day.js";
+import type { Result } from "#src/types/index.js";
 
 /**
  * The ranking engine's data assembly (STORE Phase 13).
@@ -293,7 +295,12 @@ interface TrendingCandidateRow extends Record<string, unknown> {
   readonly qualified_orders_w1: number;
   readonly qualified_orders_w2: number;
   readonly distinct_qualified_buyers_w1: number;
-  readonly average_order_value_w2: number | null;
+  /**
+   * A STRING from the driver, not a number: node-postgres returns `bigint` as text to
+   * avoid silent precision loss, and `avg(...)::bigint` is a bigint. Typing this honestly
+   * is what keeps the conversion below from looking redundant to a linter — it is not.
+   */
+  readonly average_order_value_w2: string | null;
   /** A STRING from the driver, despite the column being a timestamp. See the insert. */
   readonly last_qualified_order_at: string | null;
   readonly counted_views_w1: number;
@@ -560,6 +567,15 @@ export async function recomputeProductTrending(
     byCategory.set(key, bucket);
   }
 
+  /**
+   * The PRE-ENFORCEMENT base score per product, for the search-document copy.
+   *
+   * Search sorts on the base and not the final score, because an enforcement penalty must
+   * never make a product unfindable by its own exact title — see the update at the end of
+   * the transaction below.
+   */
+  const scoredBaseByProduct = new Map<string, number>();
+
   const snapshotRows: (typeof commerceProductTrendingSnapshot.$inferInsert)[] = [];
   const stateRows: (typeof commerceProductRankingState.$inferInsert)[] = [];
   const enforcementEvents: (typeof commerceRankingEnforcementEvent.$inferInsert)[] = [];
@@ -660,6 +676,8 @@ export async function recomputeProductTrending(
         scoreAlgorithmVersion: algorithmVersion,
       });
 
+      scoredBaseByProduct.set(candidate.row.product_id, breakdown.totalPoints);
+
       if (rank <= MAXIMUM_RANKED_PRODUCTS_PER_CATEGORY) {
         stateRows.push({
           productId: candidate.row.product_id,
@@ -713,6 +731,47 @@ export async function recomputeProductTrending(
         await transaction.insert(commerceRankingEnforcementEvent).values(chunk);
       }
     }
+
+    /*
+     * The denormalized copy search sorts on.
+     *
+     * `SET LOCAL qatoto.ranking_writer` is what gets past
+     * `store_search_document_preserve_discovery_score`. Every other writer of this table —
+     * `refreshProductSearchDocument`, and anything a future contributor adds — has its
+     * change to these two columns silently reverted, which is what stops an ordinary
+     * product edit from erasing an hour of scoring.
+     *
+     * UPDATE ONLY. Never insert, never delete: eligibility is not this job's business, and
+     * when `refreshProductSearchDocument` deletes a de-listed product's document the score
+     * goes with it, which is correct.
+     *
+     * The score written is the PRE-ENFORCEMENT base. An enforcement penalty may lower a
+     * product's position in a discovery rail; it may never lower its position in a query
+     * the buyer typed by name. Exact-match findability is a floor.
+     */
+    await transaction.execute(sql`SET LOCAL qatoto.ranking_writer = 'on'`);
+
+    await transaction.execute(sql`
+      UPDATE store_search_document AS d
+         SET discovery_score_points = NULL, discovery_score_computed_at = NULL
+       WHERE d.document_kind = 'product' AND d.discovery_score_points IS NOT NULL
+    `);
+
+    if (stateRows.length > 0) {
+      const scoreTuples = sql.join(
+        stateRows.map(
+          (row) => sql`(${row.productId}, ${scoredBaseByProduct.get(row.productId) ?? 0}::int)`,
+        ),
+        sql`, `,
+      );
+      await transaction.execute(sql`
+        UPDATE store_search_document AS d
+           SET discovery_score_points = incoming.points,
+               discovery_score_computed_at = ${asOf}
+          FROM (VALUES ${scoreTuples}) AS incoming(entity_id, points)
+         WHERE d.document_kind = 'product' AND d.entity_id = incoming.entity_id
+      `);
+    }
   });
 
   return { scored: scored.length, ranked: stateRows.length, gated };
@@ -739,7 +798,7 @@ function buildMultipliers(input: {
   });
 
   const orderValueMultiplierBasisPoints = computeOrderValueMultiplier({
-    averageQualifiedOrderValueInCents: input.row.average_order_value_w2 ?? 0,
+    averageQualifiedOrderValueInCents: Number(input.row.average_order_value_w2 ?? 0),
     categoryMedianOrderValueInCents: input.demand?.medianOrderValueInCents ?? null,
   });
 
@@ -859,4 +918,92 @@ function chunked<T>(values: readonly T[], size: number): T[][] {
     chunks.push(values.slice(index, index + size));
   }
   return chunks;
+}
+
+/* ------------------------------------------------------------------------- *
+ * Reads
+ * ------------------------------------------------------------------------- */
+
+export interface RankedProductRow {
+  readonly productId: string;
+  readonly rank: number;
+  readonly categoryId: string | null;
+}
+
+export interface RankedProductPage {
+  readonly items: readonly RankedProductRow[];
+  readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+}
+
+/**
+ * The ranked head of every category, for a trending or recommended rail.
+ *
+ * ORDERED BY (score DESC, productId) AND NOT BY RANK. `trending_rank_in_category` is
+ * per-category, so ordering by it would interleave every category's rank 1, then every rank
+ * 2 — a rail that reads as a round-robin rather than a ranking. The score is comparable
+ * across categories; the rank is not.
+ *
+ * Rows written at `scoreAlgorithmVersion = 0` are refused: those are pre-gate runs, where
+ * W2 measured a period that did not exist.
+ */
+export async function listRankedProductIds(input: {
+  readonly limit: number;
+  readonly cursor?: string | undefined;
+}): Promise<Result<RankedProductPage, { type: "INVALID_CURSOR" }>> {
+  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
+  const cursorPredicate =
+    decodedCursor === null
+      ? sql`TRUE`
+      : sql`(${commerceProductRankingState.finalScorePoints}, ${commerceProductRankingState.productId})
+            < (${Number(decodedCursor.sortKey)}, ${decodedCursor.id})`;
+
+  const rows = await db
+    .select({
+      productId: commerceProductRankingState.productId,
+      rank: commerceProductRankingState.trendingRankInCategory,
+      categoryId: commerceProductRankingState.categoryId,
+      finalScorePoints: commerceProductRankingState.finalScorePoints,
+    })
+    .from(commerceProductRankingState)
+    .where(
+      and(
+        isNotNull(commerceProductRankingState.trendingRankInCategory),
+        eq(commerceProductRankingState.scoreAlgorithmVersion, COMMERCE_TRENDING_ALGORITHM_VERSION),
+        cursorPredicate,
+      ),
+    )
+    .orderBy(
+      desc(commerceProductRankingState.finalScorePoints),
+      desc(commerceProductRankingState.productId),
+    )
+    .limit(input.limit + 1);
+
+  const hasMore = rows.length > input.limit;
+  const pageRows = rows.slice(0, input.limit);
+  const lastRow = pageRows[pageRows.length - 1];
+
+  return {
+    success: true,
+    value: {
+      items: pageRows.map((row) => ({
+        productId: row.productId,
+        rank: row.rank ?? 0,
+        categoryId: row.categoryId,
+      })),
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({
+                sortKey: String(lastRow.finalScorePoints),
+                id: lastRow.productId,
+              })
+            : null,
+        hasMore,
+      },
+    },
+  };
 }

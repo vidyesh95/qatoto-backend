@@ -3909,6 +3909,22 @@ export const storeSearchDocument = pgTable(
           setweight(to_tsvector('english', coalesce(summary, '') || ' ' || coalesce(search_text, '')), 'C')`,
     ),
     isEligible: boolean("is_eligible").default(true).notNull(),
+    /**
+     * The Phase 13 ranking score, denormalized here ONLY because search cannot afford the
+     * join — a `sort=discovery` LEFT JOIN to `commerce_product_ranking_state` cannot use an
+     * index for its ORDER BY.
+     *
+     * MACHINE-OWNED, IN A HUMAN-OWNED ROW. `refreshProductSearchDocument` upserts this table
+     * on every product edit, and its `set` block survives these columns by style rather than
+     * by guarantee. `store_search_document_preserve_discovery_score` makes that a guarantee:
+     * a writer that has not set `qatoto.ranking_writer` has its change to these two columns
+     * silently reverted.
+     *
+     * NULL means "not scored", which is most of the catalog most of the time. No default,
+     * for the reason `uniqueViewerCount` has none: a 0 would be a claim.
+     */
+    discoveryScorePoints: integer("discovery_score_points"),
+    discoveryScoreComputedAt: timestamp("discovery_score_computed_at"),
     publishedAt: timestamp("published_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -3925,6 +3941,14 @@ export const storeSearchDocument = pgTable(
     index("store_search_document_category_idx").on(table.categoryId, table.id),
     index("store_search_document_provider_kind_idx").on(table.providerKind, table.id),
     index("store_search_document_fts_idx").using("gin", table.searchDocument),
+    index("store_search_document_discovery_idx")
+      .on(table.isEligible, table.discoveryScorePoints.desc().nullsLast(), table.id)
+      .where(sql`is_eligible`),
+    check(
+      "store_search_document_discovery_score_ck",
+      sql`(discovery_score_points IS NULL) = (discovery_score_computed_at IS NULL)
+          AND (discovery_score_points IS NULL OR discovery_score_points BETWEEN 0 AND 100)`,
+    ),
     check(
       "store_search_document_slug_ck",
       sql`public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'

@@ -146,7 +146,13 @@ export async function searchStoreDocuments(input: {
   readonly providerKind?: StoreProviderKind | undefined;
   readonly documentKind?: StoreSearchDocumentKind | undefined;
   readonly minOrderQuantityMax?: number | undefined;
-  readonly sort?: "relevance" | undefined;
+  /**
+   * `discovery` is STORE Phase 13's ranked sort. IT NEVER TOUCHES `ts_rank_cd`, and
+   * `relevance` never touches the discovery score — see `commerce-trending-score.ts` for
+   * why the two must not blend. A combined sort would be a THIRD, explicitly named option
+   * or it is not offered.
+   */
+  readonly sort?: "relevance" | "discovery" | undefined;
   readonly limit: number;
   readonly cursor?: string | undefined;
 }): Promise<
@@ -165,7 +171,9 @@ export async function searchStoreDocuments(input: {
 
   const trimmedQuery = input.query?.trim() ?? "";
   const hasQuery = trimmedQuery.length > 0;
-  const useRelevance = hasQuery && (input.sort === undefined || input.sort === "relevance");
+  const useDiscovery = input.sort === "discovery";
+  const useRelevance =
+    !useDiscovery && hasQuery && (input.sort === undefined || input.sort === "relevance");
 
   const categorySlugs =
     input.categorySlug === undefined
@@ -200,6 +208,101 @@ export async function searchStoreDocuments(input: {
       : sql`(${storeSearchDocument.minimumOrderQuantity} IS NULL
             OR ${storeSearchDocument.minimumOrderQuantity} <= ${input.minOrderQuantityMax})`,
   ];
+
+  if (useDiscovery) {
+    /*
+     * The ranked sort. Keyset over `(discovery_score_points DESC NULLS LAST, id)`, which is
+     * exactly the index `0081` created, so this is the one non-relevance sort in this file
+     * that does not fall back to a sequential scan.
+     *
+     * A TEXT FILTER STILL APPLIES when the caller sent one: "sorted by discovery" does not
+     * mean "ignore what I typed". What it does not do is let the score influence the
+     * MATCHING — a product either matches the words or it does not, and the score only
+     * decides the order among those that do.
+     */
+    const decodedScore = decodedCursor === null ? null : Number.parseInt(decodedCursor.sortKey, 10);
+    if (decodedCursor !== null && !Number.isSafeInteger(decodedScore)) {
+      return { success: false, error: { type: "INVALID_CURSOR" } };
+    }
+
+    const cursorPredicate =
+      decodedCursor === null || decodedScore === null
+        ? undefined
+        : sql`(coalesce(${storeSearchDocument.discoveryScorePoints}, -1), ${storeSearchDocument.id})
+              < (${decodedScore}, ${decodedCursor.id})`;
+
+    const rows = await db
+      .select({
+        id: storeSearchDocument.id,
+        documentKind: storeSearchDocument.documentKind,
+        entityId: storeSearchDocument.entityId,
+        publicSlug: storeSearchDocument.publicSlug,
+        title: storeSearchDocument.title,
+        summary: storeSearchDocument.summary,
+        organizationSlug: storeSearchDocument.organizationSlug,
+        organizationDisplayName: storeSearchDocument.organizationDisplayName,
+        organizationCountryCode: storeSearchDocument.organizationCountryCode,
+        categorySlug: storeSearchDocument.categorySlug,
+        providerKind: storeSearchDocument.providerKind,
+        priceInCents: storeSearchDocument.priceInCents,
+        currency: storeSearchDocument.currency,
+        minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
+        discoveryScorePoints: storeSearchDocument.discoveryScorePoints,
+      })
+      .from(storeSearchDocument)
+      .where(
+        and(
+          ...baseFilters,
+          hasQuery
+            ? sql`${storeSearchDocument.searchText} ILIKE ${`%${trimmedQuery}%`}`
+            : undefined,
+          cursorPredicate,
+        ),
+      )
+      .orderBy(
+        sql`coalesce(${storeSearchDocument.discoveryScorePoints}, -1) DESC`,
+        desc(storeSearchDocument.id),
+      )
+      .limit(input.limit + 1);
+
+    const hasMore = rows.length > input.limit;
+    const pageRows = rows.slice(0, input.limit);
+    const lastRow = pageRows[pageRows.length - 1];
+
+    return {
+      success: true,
+      value: {
+        items: pageRows.map((row) => ({
+          documentKind: row.documentKind,
+          entityId: row.entityId,
+          publicSlug: row.publicSlug,
+          title: row.title,
+          summary: row.summary,
+          organizationSlug: row.organizationSlug,
+          organizationDisplayName: row.organizationDisplayName,
+          organizationCountryCode: row.organizationCountryCode,
+          categorySlug: row.categorySlug,
+          providerKind: row.providerKind,
+          priceInCents: row.priceInCents,
+          currency: row.currency,
+          minimumOrderQuantity: row.minimumOrderQuantity,
+          // NULL, not the discovery score. `relevanceScore` means "how well did this match
+          // the words you typed", and this sort did not ask that question.
+          relevanceScore: null,
+        })),
+        page: {
+          nextCursor:
+            hasMore && lastRow
+              ? encodeStoreCursor({
+                  sortKey: String(lastRow.discoveryScorePoints ?? -1),
+                  id: lastRow.id,
+                })
+              : null,
+          hasMore,
+        },
+      },
+    };
+  }
 
   if (!useRelevance) {
     const cursorPredicate =

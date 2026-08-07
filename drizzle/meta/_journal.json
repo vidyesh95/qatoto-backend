@@ -568,6 +568,13 @@
       "when": 1786105749394,
       "tag": "0080_store_phase_13_ranking_snapshot",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1786105754394,
+      "tag": "0081_store_phase_13_search_score",
+      "breakpoints": true
     }
   ]
 }

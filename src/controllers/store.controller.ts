@@ -64,7 +64,9 @@ const SearchQuerySchema = z
       .optional(),
     documentKind: z.enum(["product", "provider_offering"]).optional(),
     minOrderQuantityMax: z.coerce.number().int().min(0).max(1_000_000).optional(),
-    sort: z.enum(["relevance"]).optional(),
+    // `discovery` is Phase 13's ranked sort. Deliberately a SEPARATE value rather than a
+    // blend: relevance never reads the ranking score and discovery never reads ts_rank_cd.
+    sort: z.enum(["relevance", "discovery"]).optional(),
     limit: z.coerce.number().int().min(1).max(48).default(24),
     cursor: z.string().trim().min(1).max(500).optional(),
   })
