@@ -1149,6 +1149,28 @@ export const commerceTrustModerationLimiter = createLimiter({
 });
 
 /**
+ * Product saves and bookmarks (Appendix A11). Mirrors `videoLikeLimiter`'s budget: the
+ * gesture is a single tap that a buyer legitimately repeats while skimming a grid, and
+ * the composite primary key already makes a double-tap harmless.
+ */
+export const commerceProductEngagementLimiter = createLimiter({
+  namespace: "commerceProductEngagement",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
+ * Product shares (Appendix A11). Tighter, and on a longer window, because this route
+ * accepts an ANONYMOUS caller and every call appends a row — unlike `video_share`
+ * there is no fingerprint/day-bucket unique index to absorb a flood.
+ */
+export const commerceProductShareLimiter = createLimiter({
+  namespace: "commerceProductShare",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
+/**
  * Review photo upload (Appendix A8). Tighter than the review write itself because each
  * request decodes an image with sharp and then calls Cloudinary — CPU plus an outbound
  * call, and the per-review cap is six anyway.

@@ -254,7 +254,13 @@ export async function getProduct(req: Request, res: Response): Promise<void> {
     sendZodError(res, params.error);
     return;
   }
-  const result = await storeCatalogService.getPublicProductBySlug(params.data.productSlug);
+  // A11. `attachOptionalUser` may or may not have resolved a session; passing `null`
+  // for an anonymous visitor is what makes `engagement.viewer` null rather than a
+  // fabricated `hasSaved: false`.
+  const result = await storeCatalogService.getPublicProductBySlug(
+    params.data.productSlug,
+    req.user?.id ?? null,
+  );
   if (!result.success) {
     res.status(404).json({
       status: "error",

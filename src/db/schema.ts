@@ -609,6 +609,51 @@ export const commerceProductRelationKindEnum = pgEnum("commerce_product_relation
  * This rides the wire on every companion so no client can render a claim as a
  * check mark; only `moderator_curated` earns confirmatory language.
  */
+/**
+ * Buyer engagement with a listing (STORE Appendix A11).
+ *
+ * USER-scoped, not organization-scoped, and the reason is `commerce_organization`'s
+ * own lifecycle: `tradeState` starts `pending` and only a staff `verification_decided`
+ * action makes it `active`, so an organization-keyed bookmark would put a single tap
+ * behind human verification. It would also flicker for a user who belongs to several
+ * organizations, and let any `viewer`-role colleague silently empty the team's list.
+ *
+ * The genuine B2B need — a shared sourcing shortlist — is a NAMED, owned, permissioned
+ * object with its own audit trail. Delivering it accidentally, as an unnamed org-wide
+ * bag anyone can empty, would be worse than not delivering it.
+ */
+export const commerceProductEngagementKindEnum = pgEnum("commerce_product_engagement_kind", [
+  "saved",
+  "bookmarked",
+]);
+
+/**
+ * Visibility of user-generated commerce content (STORE Appendix A9, A12).
+ *
+ * FOUR values, not a reuse of `commerce_review_visibility`'s two, because these are
+ * four different facts. An author retracting is not a moderation event, and an
+ * automatic threshold hide is not a human decision — flattening them would make the
+ * moderation queue lie about who acted.
+ */
+export const commerceUgcVisibilityStateEnum = pgEnum("commerce_ugc_visibility_state", [
+  "visible",
+  "hidden_pending_review",
+  "hidden_by_moderator",
+  "removed_by_author",
+]);
+
+/**
+ * Who wrote an answer (STORE Appendix A9).
+ *
+ * DERIVED by the service from the caller's standing, never sent in a request body:
+ * a badge asserted by the frontend is the most direct §0 violation available.
+ * Moderators moderate; they do not answer, so there is no `moderator` member.
+ */
+export const commerceProductAnswerAuthorKindEnum = pgEnum("commerce_product_answer_author_kind", [
+  "seller",
+  "verified_buyer",
+]);
+
 export const commerceProductRelationSourceKindEnum = pgEnum(
   "commerce_product_relation_source_kind",
   ["seller_declared", "moderator_curated", "derived_cooccurrence"],
@@ -1899,6 +1944,249 @@ export const commerceProductRelation = pgTable(
              AND verified_by_user_id IS NOT NULL AND verified_at IS NOT NULL)
           OR (source_kind <> 'moderator_curated'
              AND verified_by_user_id IS NULL AND verified_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Per-user saves and bookmarks (STORE Appendix A11).
+ *
+ * ONE table for both kinds, unlike the video domain's separate `video_like` and
+ * `video_save`. Those are split because their index shapes genuinely differ — a like
+ * set is only probed for membership, a save list is rendered newest-first. Here BOTH
+ * kinds are rendered lists, so one index shape serves both and one table means one
+ * toggle code path instead of two near-identical copies of the same race-safe insert.
+ *
+ * CASCADE on both sides: neither a deleted user nor a deleted product leaves a
+ * meaningful bookmark behind, and nothing downstream references these rows.
+ */
+export const commerceProductEngagement = pgTable(
+  "commerce_product_engagement",
+  {
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    engagementKind: commerceProductEngagementKindEnum("engagement_kind").notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.productId, table.userId, table.engagementKind] }),
+    /** "My saved products", newest first — the list this table exists to render. */
+    index("commerce_product_engagement_user_idx").on(
+      table.userId,
+      table.engagementKind,
+      table.createdAt,
+      table.productId,
+    ),
+    /** Counter reconciliation in the phase verifier. */
+    index("commerce_product_engagement_product_idx").on(table.productId, table.engagementKind),
+  ],
+);
+
+/**
+ * Share events (STORE Appendix A11).
+ *
+ * `userId` is nullable and SET NULL: a share may come from a signed-out visitor, and
+ * a deleted account should not erase the fact that a product was shared. Unlike
+ * `video_share` this carries no fingerprint dedupe — a product share has no channel
+ * enum and no day bucket yet, so there is nothing honest to deduplicate on. If share
+ * spam becomes real, that is the shape to copy.
+ */
+export const commerceProductShare = pgTable(
+  "commerce_product_share",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_product_share_product_idx").on(table.productId, table.createdAt, table.id),
+  ],
+);
+
+/**
+ * Derived engagement counters for a product (STORE Appendix A11, A9).
+ *
+ * A SEPARATE TABLE, not columns on `product`. That row is wide, hot and seller-owned:
+ * a buyer's favourite tap would take a row lock the seller's price edit needs, and it
+ * would mix seller-DECLARED truth with platform-DERIVED counters in one place, which
+ * is precisely the distinction A13 says must stay visible.
+ *
+ * Not `count(*)` at read time either: a COUNT per product-detail page is survivable,
+ * but a COUNT per card across a 24-card grid is the query that gets slow silently.
+ *
+ * Every counter moves in the SAME TRANSACTION as the row that caused it, and only
+ * when that row actually appeared or disappeared — see `setProductEngagement`.
+ */
+export const commerceProductStats = pgTable(
+  "commerce_product_stats",
+  {
+    productId: text("product_id")
+      .primaryKey()
+      .references(() => product.id, { onDelete: "cascade" }),
+    savedCount: integer("saved_count").default(0).notNull(),
+    bookmarkedCount: integer("bookmarked_count").default(0).notNull(),
+    shareCount: integer("share_count").default(0).notNull(),
+    /** Visible questions (A9). */
+    questionCount: integer("question_count").default(0).notNull(),
+    /** Visible questions carrying at least one visible answer (A9). */
+    answeredQuestionCount: integer("answered_question_count").default(0).notNull(),
+    lastEngagementAt: timestamp("last_engagement_at", { precision: 3 }),
+  },
+  (table) => [
+    check(
+      "commerce_product_stats_counters_non_negative_ck",
+      sql`saved_count >= 0 AND bookmarked_count >= 0 AND share_count >= 0
+          AND question_count >= 0 AND answered_question_count >= 0
+          AND answered_question_count <= question_count`,
+    ),
+    index("commerce_product_stats_saved_idx").on(table.savedCount, table.productId),
+  ],
+);
+
+/**
+ * A public question about a listing (STORE Appendix A9).
+ *
+ * NO ORGANIZATION COLUMN, deliberately. A question is asked by a PERSON, and
+ * snapshotting the asker's employer would publish it on a public surface — a
+ * disclosure decision of the kind §14 governs, which Q&A does not need to make.
+ * Organizations appear only on ANSWERS, where the badge is the substance.
+ *
+ * This is also the channel that keeps A14's organization gate honest: a buyer with no
+ * commerce organization cannot open a pre-sales thread, but can always ask here, and
+ * "do you ship to Kenya?" is better answered publicly once than privately a hundred
+ * times.
+ */
+export const commerceProductQuestion = pgTable(
+  "commerce_product_question",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "restrict" }),
+    /** `restrict`: deleting an account is an anonymization problem, not a cascade. */
+    askedByUserId: text("asked_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    bodyText: text("body_text").notNull(),
+    visibilityState: commerceUgcVisibilityStateEnum("visibility_state")
+      .default("visible")
+      .notNull(),
+    answerCount: integer("answer_count").default(0).notNull(),
+    /** Drives the "answered by the seller" badge without a join on the list read. */
+    hasSellerAnswer: boolean("has_seller_answer").default(false).notNull(),
+    hiddenAt: timestamp("hidden_at", { precision: 3 }),
+    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_product_question_public_idx").on(
+      table.productId,
+      table.visibilityState,
+      table.createdAt,
+      table.id,
+    ),
+    index("commerce_product_question_author_idx").on(
+      table.askedByUserId,
+      table.createdAt,
+      table.id,
+    ),
+    check("commerce_product_question_body_ck", sql`char_length(body_text) BETWEEN 1 AND 1000`),
+    check("commerce_product_question_answer_count_ck", sql`answer_count >= 0`),
+    /**
+     * A hidden row records WHEN and, for a moderator hide, BY WHOM. An author
+     * retraction has no moderator, which is why `hidden_by_user_id` is not bound to
+     * `hidden_at` the way the two moderation columns are bound to each other.
+     */
+    check(
+      "commerce_product_question_hidden_ck",
+      sql`(visibility_state = 'visible') = (hidden_at IS NULL)
+          AND (hidden_by_user_id IS NULL OR visibility_state = 'hidden_by_moderator')`,
+    ),
+  ],
+);
+
+/**
+ * An answer to a product question (STORE Appendix A9).
+ *
+ * `verifiedCompletionId` IS THE DESIGN. The verified-buyer badge is earned
+ * structurally — exactly as A8 demands of reviews — because an answer cannot claim it
+ * without pointing at a `commerce_completion` row. It is not a boolean a service sets,
+ * and it is not derivable from the request.
+ */
+export const commerceProductAnswer = pgTable(
+  "commerce_product_answer",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    questionId: text("question_id")
+      .notNull()
+      .references(() => commerceProductQuestion.id, { onDelete: "cascade" }),
+    authorUserId: text("author_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    authorKind: commerceProductAnswerAuthorKindEnum("author_kind").notNull(),
+    authorOrganizationId: text("author_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    authorMemberId: text("author_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    verifiedCompletionId: text("verified_completion_id").references(() => commerceCompletion.id, {
+      onDelete: "restrict",
+    }),
+    bodyText: text("body_text").notNull(),
+    visibilityState: commerceUgcVisibilityStateEnum("visibility_state")
+      .default("visible")
+      .notNull(),
+    hiddenAt: timestamp("hidden_at", { precision: 3 }),
+    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /**
+     * One answer per organization per question. A seller that could post five answers
+     * would own the whole thread; a buyer that could would be a review section with
+     * no completion requirement.
+     */
+    uniqueIndex("commerce_product_answer_question_org_uidx").on(
+      table.questionId,
+      table.authorOrganizationId,
+    ),
+    index("commerce_product_answer_question_idx").on(table.questionId, table.createdAt, table.id),
+    index("commerce_product_answer_organization_idx").on(
+      table.authorOrganizationId,
+      table.createdAt,
+    ),
+    check("commerce_product_answer_body_ck", sql`char_length(body_text) BETWEEN 1 AND 4000`),
+    /** The badge and its proof travel together, in both directions. */
+    check(
+      "commerce_product_answer_verified_ck",
+      sql`(author_kind = 'verified_buyer') = (verified_completion_id IS NOT NULL)`,
+    ),
+    check(
+      "commerce_product_answer_hidden_ck",
+      sql`(visibility_state = 'visible') = (hidden_at IS NULL)
+          AND (hidden_by_user_id IS NULL OR visibility_state = 'hidden_by_moderator')`,
     ),
   ],
 );

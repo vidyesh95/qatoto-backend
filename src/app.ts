@@ -20,6 +20,7 @@ import commerceMessagesRouter from "#src/routes/commerce-messages.routes.js";
 import commerceOrdersRouter from "#src/routes/commerce-orders.routes.js";
 import commerceOrganizationsRouter from "#src/routes/commerce-organizations.routes.js";
 import commercePaymentsRouter from "#src/routes/commerce-payments.routes.js";
+import commerceProductEngagementRouter from "#src/routes/commerce-product-engagement.routes.js";
 import commerceProvidersRouter from "#src/routes/commerce-providers.routes.js";
 import commerceQuotesRouter from "#src/routes/commerce-quotes.routes.js";
 import commerceRfqsRouter from "#src/routes/commerce-rfqs.routes.js";
@@ -158,6 +159,13 @@ app.use("/commerce", commerceTrustRouter);
 app.use("/commerce", commerceCatalogRouter);
 app.use("/commerce", commerceMerchandisingRouter);
 app.use("/store", storeRouter);
+/**
+ * A11. Buyer engagement WRITES share the `/store` prefix but not `store.routes.ts`'s
+ * middleware: that router applies `attachOptionalUser, storeReadLimiter` to everything
+ * it owns, which is right for reads and wrong for writes. Declared after the read
+ * router; the paths do not overlap (PUT/DELETE/POST vs GET).
+ */
+app.use("/store", commerceProductEngagementRouter);
 app.use("/products", productsRouter);
 // The home-page carousel. GET /promotions/slides is public; every /promotions/admin/*
 // route is gated by `manage_promotions` inside the service.

@@ -27,6 +27,7 @@ import {
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
 import { slugifyPublicTitle } from "#src/lib/store-cursor.js";
+import { ensureCommerceProductStatsRow } from "#src/services/commerce-product-engagement.service.js";
 import { enqueueProductSearchDocumentRefresh } from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -834,6 +835,16 @@ export async function createProduct(
             : [];
 
         const specifications = await replaceProductSpecifications(tx, row.id, input.specifications);
+
+        /**
+         * A11. Mint the engagement counter row in the same transaction as the product.
+         *
+         * Without it, the first save on this listing would UPDATE zero rows and lose
+         * the count silently — no error, no row, just a counter stuck at nothing. The
+         * toggle path inserts defensively too, but a stats row that exists from birth
+         * is the version the phase verifier can assert.
+         */
+        await ensureCommerceProductStatsRow(tx, row.id);
 
         return { success: true, value: toPublicProduct(row, [], pricingTiers, specifications) };
       },

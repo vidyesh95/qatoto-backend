@@ -50,13 +50,22 @@ const productRow = {
 };
 
 const returningMock = vi.fn<(columns: unknown) => Promise<(typeof productRow)[]>>(() => Promise.resolve([productRow]));
+/**
+ * `createProduct` inserts into several tables in one transaction — the product, its
+ * pricing tiers, its specifications, and (A11) its `commerce_product_stats` row. Only
+ * the FIRST of those is the product, so the payload is captured once; recording every
+ * call would leave `insertedProduct` holding whichever table happened to be written
+ * last and make the assertion below silently test the wrong row.
+ */
+const onConflictDoNothingMock = vi.fn<() => Promise<void>>(async () => undefined);
 const valuesMock = vi.fn<
   (insertedProduct: Record<string, unknown>) => {
     returning: typeof returningMock;
+    onConflictDoNothing: typeof onConflictDoNothingMock;
   }
 >((insertedProduct) => {
-  databaseState.insertedProduct = insertedProduct;
-  return { returning: returningMock };
+  databaseState.insertedProduct ??= insertedProduct;
+  return { returning: returningMock, onConflictDoNothing: onConflictDoNothingMock };
 });
 const insertMock = vi.fn<(table: unknown) => { values: typeof valuesMock }>(() => ({
   values: valuesMock,

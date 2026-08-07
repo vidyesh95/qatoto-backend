@@ -13,6 +13,11 @@ import {
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import {
+  EMPTY_PRODUCT_ENGAGEMENT,
+  loadProductEngagements,
+  type ProductEngagementProjection,
+} from "#src/services/commerce-product-engagement.service.js";
+import {
   loadOrganizationFulfillmentMetrics,
   loadProductReviewMetrics,
 } from "#src/services/commerce-trust-metrics.service.js";
@@ -147,6 +152,15 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
     readonly position: number;
   }[];
   readonly categoryTrail: readonly StoreCategoryProjection[];
+  /**
+   * A11. Integer counts plus per-viewer state.
+   *
+   * `commentCount` is deliberately NOT here. The mock engagement bar renders one, but
+   * A10 (product comments) is out of scope and has no table, and projecting a zero
+   * would be exactly the A13 failure — a field the frontend renders that can never be
+   * non-null, which looks wired. `questionCount` is the real number next to it.
+   */
+  readonly engagement: ProductEngagementProjection;
 }
 
 export interface StoreCategoryFacetBucket {
@@ -914,6 +928,12 @@ function toMediaProjection(media: {
 
 export async function getPublicProductBySlug(
   productSlug: string,
+  /**
+   * A11. The signed-in viewer, when there is one. `attachOptionalUser` makes this
+   * optional by design: a public product page must render for an anonymous visitor,
+   * and `engagement.viewer` is then `null` rather than a fabricated `false`.
+   */
+  viewerUserId: string | null = null,
 ): Promise<Result<StoreProductDetailProjection, StoreCatalogError>> {
   const [row] = await db
     .select({
@@ -951,6 +971,7 @@ export async function getPublicProductBySlug(
     productReviewMetrics,
     organizationFulfillmentMetrics,
     variantAggregates,
+    productEngagements,
   ] = await Promise.all([
     db
       .select({
@@ -1021,6 +1042,7 @@ export async function getPublicProductBySlug(
     loadProductReviewMetrics([row.id]),
     loadOrganizationFulfillmentMetrics([row.organizationId]),
     loadVariantAggregates([row.id]),
+    loadProductEngagements([row.id], viewerUserId),
   ]);
 
   const sharedImages = allImages.filter((media) => media.variantId === null).map(toMediaProjection);
@@ -1093,6 +1115,7 @@ export async function getPublicProductBySlug(
       highlights,
       specifications,
       categoryTrail,
+      engagement: productEngagements.get(row.id) ?? EMPTY_PRODUCT_ENGAGEMENT,
     },
   };
 }
