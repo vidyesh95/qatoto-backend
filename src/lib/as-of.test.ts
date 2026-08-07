@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { truncateToUtcDayStart, truncateToUtcHourStart, wholeDaysBetweenUtcDayStarts } from "#src/lib/as-of.js";
+import {
+  truncateToUtcDayStart,
+  truncateToUtcHourStart,
+  wholeDaysBetweenUtcDayStarts,
+} from "#src/lib/as-of.js";
 
 const MILLISECONDS_PER_UTC_DAY = 86_400_000;
 
@@ -35,14 +39,22 @@ describe("truncateToUtcDayStart", () => {
       expected: "2025-06-15T00:00:00.000Z",
       why: "first millisecond after midnight",
     },
-    { input: "1970-01-01T00:00:00.000Z", expected: "1970-01-01T00:00:00.000Z", why: "the epoch itself" },
+    {
+      input: "1970-01-01T00:00:00.000Z",
+      expected: "1970-01-01T00:00:00.000Z",
+      why: "the epoch itself",
+    },
     {
       input: "1969-12-31T18:30:00.000Z",
       expected: "1969-12-31T00:00:00.000Z",
       why: "negative epoch must truncate DOWN, not toward zero",
     },
     { input: "2024-02-29T11:00:00.000Z", expected: "2024-02-29T00:00:00.000Z", why: "leap day" },
-    { input: "2025-12-31T23:00:00.000Z", expected: "2025-12-31T00:00:00.000Z", why: "year boundary" },
+    {
+      input: "2025-12-31T23:00:00.000Z",
+      expected: "2025-12-31T00:00:00.000Z",
+      why: "year boundary",
+    },
   ];
 
   for (const { input, expected, why } of cases) {
@@ -80,7 +92,9 @@ describe("truncateToUtcDayStart", () => {
 
     expect(leapDayOfYearZero.toISOString()).toBe("0000-02-29T13:47:23.512Z"); // input really exists
     expect(truncateToUtcDayStart(leapDayOfYearZero).toISOString()).toBe("0000-02-29T00:00:00.000Z");
-    expect(truncateToUtcHourStart(leapDayOfYearZero).toISOString()).toBe("0000-02-29T13:00:00.000Z");
+    expect(truncateToUtcHourStart(leapDayOfYearZero).toISOString()).toBe(
+      "0000-02-29T13:00:00.000Z",
+    );
   });
 
   it("preserves the calendar day for EVERY date in the 0-99 remap window", () => {
@@ -101,11 +115,11 @@ describe("truncateToUtcDayStart", () => {
           if (!isRealCalendarDate) continue;
 
           const dayStart = truncateToUtcDayStart(instant);
-          expect([dayStart.getUTCFullYear(), dayStart.getUTCMonth(), dayStart.getUTCDate()]).toEqual([
-            year,
-            monthIndex,
-            dayOfMonth,
-          ]);
+          expect([
+            dayStart.getUTCFullYear(),
+            dayStart.getUTCMonth(),
+            dayStart.getUTCDate(),
+          ]).toEqual([year, monthIndex, dayOfMonth]);
           expect([
             dayStart.getUTCHours(),
             dayStart.getUTCMinutes(),
@@ -126,7 +140,9 @@ describe("truncateToUtcDayStart", () => {
   });
 
   it("throws on an Invalid Date rather than propagating NaN", () => {
-    expect(() => truncateToUtcDayStart(new Date("not-a-timestamp"))).toThrow(/must be a valid Date/);
+    expect(() => truncateToUtcDayStart(new Date("not-a-timestamp"))).toThrow(
+      /must be a valid Date/,
+    );
   });
 });
 
@@ -142,10 +158,26 @@ describe("truncateToUtcHourStart", () => {
       expected: "2025-06-15T13:00:00.000Z",
       why: "already an hour start is a fixed point",
     },
-    { input: "2025-06-15T13:59:59.999Z", expected: "2025-06-15T13:00:00.000Z", why: "last millisecond of the hour" },
-    { input: "2025-06-15T00:00:00.000Z", expected: "2025-06-15T00:00:00.000Z", why: "midnight is also an hour start" },
-    { input: "2025-06-15T23:30:00.000Z", expected: "2025-06-15T23:00:00.000Z", why: "final hour of the day" },
-    { input: "1969-12-31T18:30:00.000Z", expected: "1969-12-31T18:00:00.000Z", why: "negative epoch truncates DOWN" },
+    {
+      input: "2025-06-15T13:59:59.999Z",
+      expected: "2025-06-15T13:00:00.000Z",
+      why: "last millisecond of the hour",
+    },
+    {
+      input: "2025-06-15T00:00:00.000Z",
+      expected: "2025-06-15T00:00:00.000Z",
+      why: "midnight is also an hour start",
+    },
+    {
+      input: "2025-06-15T23:30:00.000Z",
+      expected: "2025-06-15T23:00:00.000Z",
+      why: "final hour of the day",
+    },
+    {
+      input: "1969-12-31T18:30:00.000Z",
+      expected: "1969-12-31T18:00:00.000Z",
+      why: "negative epoch truncates DOWN",
+    },
   ];
 
   for (const { input, expected, why } of cases) {
@@ -179,7 +211,9 @@ describe("truncateToUtcHourStart", () => {
   });
 
   it("throws on an Invalid Date rather than propagating NaN", () => {
-    expect(() => truncateToUtcHourStart(new Date("not-a-timestamp"))).toThrow(/must be a valid Date/);
+    expect(() => truncateToUtcHourStart(new Date("not-a-timestamp"))).toThrow(
+      /must be a valid Date/,
+    );
   });
 });
 
@@ -188,7 +222,12 @@ describe("truncation is zone-independent", () => {
   // zone-independent by definition, so these assertions hold today for free — their job is
   // to FAIL the moment someone "simplifies" the implementation to getFullYear / getHours,
   // which would make every worker's asOf depend on its host's TZ.
-  const zonesToProbe: readonly string[] = ["UTC", "America/New_York", "Asia/Kolkata", "Pacific/Kiritimati"];
+  const zonesToProbe: readonly string[] = [
+    "UTC",
+    "America/New_York",
+    "Asia/Kolkata",
+    "Pacific/Kiritimati",
+  ];
 
   // 04:30Z on the US spring-forward date: America/New_York is on the previous CALENDAR DAY
   // at this instant, so a local-zone implementation returns a different day entirely.
@@ -248,22 +287,34 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
   });
 
   it("counts one day across a single midnight", () => {
-    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(2025, 5, 15), utcDayStartOf(2025, 5, 16))).toBe(1);
+    expect(
+      wholeDaysBetweenUtcDayStarts(utcDayStartOf(2025, 5, 15), utcDayStartOf(2025, 5, 16)),
+    ).toBe(1);
   });
 
   it("counts a leap-year February correctly", () => {
     // 2024 is a leap year: Feb has 29 days.
-    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(2024, 1, 1), utcDayStartOf(2024, 2, 1))).toBe(29);
-    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(2025, 1, 1), utcDayStartOf(2025, 2, 1))).toBe(28);
+    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(2024, 1, 1), utcDayStartOf(2024, 2, 1))).toBe(
+      29,
+    );
+    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(2025, 1, 1), utcDayStartOf(2025, 2, 1))).toBe(
+      28,
+    );
   });
 
   it("counts 366 days across a leap year and 365 across a common year", () => {
-    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(2024, 0, 1), utcDayStartOf(2025, 0, 1))).toBe(366);
-    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(2025, 0, 1), utcDayStartOf(2026, 0, 1))).toBe(365);
+    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(2024, 0, 1), utcDayStartOf(2025, 0, 1))).toBe(
+      366,
+    );
+    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(2025, 0, 1), utcDayStartOf(2026, 0, 1))).toBe(
+      365,
+    );
   });
 
   it("spans the epoch, where the two operands have opposite signs", () => {
-    expect(wholeDaysBetweenUtcDayStarts(utcDayStartOf(1969, 11, 31), utcDayStartOf(1970, 0, 2))).toBe(2);
+    expect(
+      wholeDaysBetweenUtcDayStarts(utcDayStartOf(1969, 11, 31), utcDayStartOf(1970, 0, 2)),
+    ).toBe(2);
   });
 
   // --- Negative results -----------------------------------------------------------
@@ -274,7 +325,12 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
     readonly expected: number;
     readonly why: string;
   }> = [
-    { earlier: utcDayStartOf(2025, 5, 16), later: utcDayStartOf(2025, 5, 15), expected: -1, why: "one day backwards" },
+    {
+      earlier: utcDayStartOf(2025, 5, 16),
+      later: utcDayStartOf(2025, 5, 15),
+      expected: -1,
+      why: "one day backwards",
+    },
     {
       earlier: utcDayStartOf(2025, 0, 1),
       later: utcDayStartOf(2024, 0, 1),
@@ -312,7 +368,9 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
     const firstDay = utcDayStartOf(2025, 0, 1);
     const secondDay = utcDayStartOf(2025, 8, 30);
 
-    expect(wholeDaysBetweenUtcDayStarts(secondDay, firstDay)).toBe(-wholeDaysBetweenUtcDayStarts(firstDay, secondDay));
+    expect(wholeDaysBetweenUtcDayStarts(secondDay, firstDay)).toBe(
+      -wholeDaysBetweenUtcDayStarts(firstDay, secondDay),
+    );
   });
 
   // --- The boundary guard ---------------------------------------------------------
@@ -322,7 +380,10 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
     { instant: new Date("2025-06-15T00:00:00.001Z"), why: "one millisecond past midnight" },
     { instant: new Date("2025-06-14T23:59:59.999Z"), why: "one millisecond before midnight" },
     { instant: new Date("2025-06-15T00:00:01.000Z"), why: "one second past midnight" },
-    { instant: new Date("1969-12-31T23:59:59.999Z"), why: "negative epoch, one millisecond before the epoch" },
+    {
+      instant: new Date("1969-12-31T23:59:59.999Z"),
+      why: "negative epoch, one millisecond before the epoch",
+    },
   ];
 
   for (const { instant, why } of nonBoundaryInstants) {
@@ -343,8 +404,12 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
     const invalidInstant = new Date("not-a-timestamp");
     const validDayStart = utcDayStartOf(2025, 5, 15);
 
-    expect(() => wholeDaysBetweenUtcDayStarts(invalidInstant, validDayStart)).toThrow(/earlier must be a valid Date/);
-    expect(() => wholeDaysBetweenUtcDayStarts(validDayStart, invalidInstant)).toThrow(/later must be a valid Date/);
+    expect(() => wholeDaysBetweenUtcDayStarts(invalidInstant, validDayStart)).toThrow(
+      /earlier must be a valid Date/,
+    );
+    expect(() => wholeDaysBetweenUtcDayStarts(validDayStart, invalidInstant)).toThrow(
+      /later must be a valid Date/,
+    );
   });
 
   it("accepts anything truncateToUtcDayStart produced — the two functions agree on 'boundary'", () => {
@@ -354,11 +419,21 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
 
     for (let dayOffset = 0; dayOffset < 365; dayOffset += 1) {
       const arbitraryTimeOfDay = new Date(
-        Date.UTC(2025, 0, 1, dayOffset % 24, (dayOffset * 7) % 60, (dayOffset * 13) % 60, dayOffset % 1000) +
+        Date.UTC(
+          2025,
+          0,
+          1,
+          dayOffset % 24,
+          (dayOffset * 7) % 60,
+          (dayOffset * 13) % 60,
+          dayOffset % 1000,
+        ) +
           dayOffset * MILLISECONDS_PER_UTC_DAY,
       );
 
-      expect(() => wholeDaysBetweenUtcDayStarts(referenceDay, truncateToUtcDayStart(arbitraryTimeOfDay))).not.toThrow();
+      expect(() =>
+        wholeDaysBetweenUtcDayStarts(referenceDay, truncateToUtcDayStart(arbitraryTimeOfDay)),
+      ).not.toThrow();
     }
   });
 
@@ -381,7 +456,9 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
       // `dayOffset === 0 ? 0 : -dayOffset`, not `-dayOffset`: at offset 0 the literal
       // `-0` is a DIFFERENT value under Object.is, and the function is specified to
       // return +0. See the dedicated negative-zero test below.
-      expect(wholeDaysBetweenUtcDayStarts(dayStart, yearStart)).toBe(dayOffset === 0 ? 0 : -dayOffset);
+      expect(wholeDaysBetweenUtcDayStarts(dayStart, yearStart)).toBe(
+        dayOffset === 0 ? 0 : -dayOffset,
+      );
 
       // Each generated day start is itself a fixed point of the truncator.
       expect(truncateToUtcDayStart(dayStart).getTime()).toBe(dayStart.getTime());
@@ -408,9 +485,10 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
     for (let splitOffset = 0; splitOffset <= 365; splitOffset += 1) {
       const splitDay = new Date(yearStart.getTime() + splitOffset * MILLISECONDS_PER_UTC_DAY);
 
-      expect(wholeDaysBetweenUtcDayStarts(yearStart, splitDay) + wholeDaysBetweenUtcDayStarts(splitDay, yearEnd)).toBe(
-        wholeDaysBetweenUtcDayStarts(yearStart, yearEnd),
-      );
+      expect(
+        wholeDaysBetweenUtcDayStarts(yearStart, splitDay) +
+          wholeDaysBetweenUtcDayStarts(splitDay, yearEnd),
+      ).toBe(wholeDaysBetweenUtcDayStarts(yearStart, yearEnd));
     }
   });
 
@@ -420,8 +498,12 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
     const earliestRepresentableDay = new Date(-8_640_000_000_000_000);
     const latestRepresentableDay = new Date(8_640_000_000_000_000);
 
-    expect(wholeDaysBetweenUtcDayStarts(earliestRepresentableDay, latestRepresentableDay)).toBe(200_000_000);
-    expect(wholeDaysBetweenUtcDayStarts(latestRepresentableDay, earliestRepresentableDay)).toBe(-200_000_000);
+    expect(wholeDaysBetweenUtcDayStarts(earliestRepresentableDay, latestRepresentableDay)).toBe(
+      200_000_000,
+    );
+    expect(wholeDaysBetweenUtcDayStarts(latestRepresentableDay, earliestRepresentableDay)).toBe(
+      -200_000_000,
+    );
   });
 
   // --- Determinism ------------------------------------------------------------------
@@ -429,7 +511,12 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
   it("is a pure function of its arguments — 500 varied spans give identical results on re-run", () => {
     // §4c rule 3: a job re-run must reproduce its result exactly. Variation is derived from
     // the loop index, never Math.random(), so any failure here is reproducible verbatim.
-    const zonesToProbe: readonly string[] = ["UTC", "America/New_York", "Asia/Kolkata", "Australia/Lord_Howe"];
+    const zonesToProbe: readonly string[] = [
+      "UTC",
+      "America/New_York",
+      "Asia/Kolkata",
+      "Australia/Lord_Howe",
+    ];
     const epochDay = utcDayStartOf(1970, 0, 1);
 
     for (let iteration = 0; iteration < 500; iteration += 1) {
@@ -449,7 +536,12 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
   });
 
   it("truncation is a pure function too — 500 varied instants truncate identically in every zone", () => {
-    const zonesToProbe: readonly string[] = ["UTC", "America/New_York", "Asia/Kolkata", "Australia/Lord_Howe"];
+    const zonesToProbe: readonly string[] = [
+      "UTC",
+      "America/New_York",
+      "Asia/Kolkata",
+      "Australia/Lord_Howe",
+    ];
     const epochDay = utcDayStartOf(1970, 0, 1);
 
     for (let iteration = 0; iteration < 500; iteration += 1) {
@@ -472,7 +564,9 @@ describe("wholeDaysBetweenUtcDayStarts", () => {
       expect(new Set(hourStarts).size).toBe(1);
 
       // And the day start is always a legal input to the day-count guard.
-      expect(() => wholeDaysBetweenUtcDayStarts(epochDay, truncateToUtcDayStart(instant))).not.toThrow();
+      expect(() =>
+        wholeDaysBetweenUtcDayStarts(epochDay, truncateToUtcDayStart(instant)),
+      ).not.toThrow();
     }
   });
 });

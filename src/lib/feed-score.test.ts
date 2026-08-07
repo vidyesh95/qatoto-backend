@@ -48,8 +48,12 @@ describe("the budgets", () => {
     // recency are untouched — escaping the bubble must not mean worse or staler videos.
     expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.exploration).toBe(40);
     expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.creatorAffinity).toBe(0);
-    expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.topicAffinity).toBeLessThan(FEED_RANK_COMPONENT_BUDGETS.topicAffinity);
-    expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.videoQuality).toBe(FEED_RANK_COMPONENT_BUDGETS.videoQuality);
+    expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.topicAffinity).toBeLessThan(
+      FEED_RANK_COMPONENT_BUDGETS.topicAffinity,
+    );
+    expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.videoQuality).toBe(
+      FEED_RANK_COMPONENT_BUDGETS.videoQuality,
+    );
     expect(NEW_TO_YOU_RANK_COMPONENT_BUDGETS.recency).toBe(FEED_RANK_COMPONENT_BUDGETS.recency);
   });
 });
@@ -76,7 +80,9 @@ describe("computeVideoQualityPoints", () => {
         completionBasisPointsSum: COMPLETION_RAMP_FULL_WEIGHT_SAMPLES * 7_500,
       }),
     );
-    expect(breakdown.completionComponentPoints).toBe(VIDEO_QUALITY_COMPONENT_BUDGETS.completionRate);
+    expect(breakdown.completionComponentPoints).toBe(
+      VIDEO_QUALITY_COMPONENT_BUDGETS.completionRate,
+    );
   });
 
   it("scores a video with ZERO completion samples above zero", () => {
@@ -149,21 +155,26 @@ describe("computeVideoQualityPoints", () => {
 
   it("awards the freshness floor only inside the window", () => {
     expect(
-      computeVideoQualityPoints(establishedVideo({ hoursSincePublished: 71 })).freshnessComponentPoints,
+      computeVideoQualityPoints(establishedVideo({ hoursSincePublished: 71 }))
+        .freshnessComponentPoints,
     ).toBeGreaterThan(0);
-    expect(computeVideoQualityPoints(establishedVideo({ hoursSincePublished: 72 })).freshnessComponentPoints).toBe(0);
+    expect(
+      computeVideoQualityPoints(establishedVideo({ hoursSincePublished: 72 }))
+        .freshnessComponentPoints,
+    ).toBe(0);
   });
 
   it("scores creator track 0 when the creator has no scored videos yet", () => {
     expect(
-      computeVideoQualityPoints(establishedVideo({ creatorMedianQualityPoints: null })).creatorTrackComponentPoints,
+      computeVideoQualityPoints(establishedVideo({ creatorMedianQualityPoints: null }))
+        .creatorTrackComponentPoints,
     ).toBe(0);
   });
 
   it("throws on an input that could not have come from a COUNT", () => {
-    expect(() => computeVideoQualityPoints(establishedVideo({ completionSampleCount: -1 }))).toThrow(
-      /completionSampleCount/,
-    );
+    expect(() =>
+      computeVideoQualityPoints(establishedVideo({ completionSampleCount: -1 })),
+    ).toThrow(/completionSampleCount/);
   });
 });
 
@@ -196,8 +207,12 @@ describe("applyDiversityCaps", () => {
 
   it("keeps a single creator to two rows on the first page", () => {
     const ranked = [
-      ...Array.from({ length: 6 }, (_unused, index) => row(`h${String(index)}`, "hoggingCreator", [])),
-      ...Array.from({ length: 6 }, (_unused, index) => row(`o${String(index)}`, `other${String(index)}`, [])),
+      ...Array.from({ length: 6 }, (_unused, index) =>
+        row(`h${String(index)}`, "hoggingCreator", []),
+      ),
+      ...Array.from({ length: 6 }, (_unused, index) =>
+        row(`o${String(index)}`, `other${String(index)}`, []),
+      ),
     ];
 
     const firstPage = applyDiversityCaps(ranked, {
@@ -247,7 +262,13 @@ describe("applyDiversityCaps", () => {
   });
 
   it("preserves rank order among promoted rows and among demoted rows", () => {
-    const ranked = [row("a", "c1", []), row("b", "c1", []), row("c", "c1", []), row("d", "c2", []), row("e", "c1", [])];
+    const ranked = [
+      row("a", "c1", []),
+      row("b", "c1", []),
+      row("c", "c1", []),
+      row("d", "c2", []),
+      row("e", "c1", []),
+    ];
     const permuted = applyDiversityCaps(ranked, {
       pageSize: 5,
       maxRowsPerCreator: 2,
@@ -258,7 +279,9 @@ describe("applyDiversityCaps", () => {
   });
 
   it("resets the caps every page, so a creator is not limited to two in the whole feed", () => {
-    const ranked = Array.from({ length: 8 }, (_unused, index) => row(`v${String(index)}`, "soleCreator", []));
+    const ranked = Array.from({ length: 8 }, (_unused, index) =>
+      row(`v${String(index)}`, "soleCreator", []),
+    );
     const permuted = applyDiversityCaps(ranked, {
       pageSize: 2,
       maxRowsPerCreator: 2,

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { calendarDateIn, daysBetween, streakAfterLog, streakAsOf } from "#src/lib/daily-log-streak.js";
+import {
+  calendarDateIn,
+  daysBetween,
+  streakAfterLog,
+  streakAsOf,
+} from "#src/lib/daily-log-streak.js";
 
 describe("daysBetween", () => {
   it("counts whole days in both directions", () => {
@@ -46,14 +51,18 @@ describe("calendarDateIn", () => {
 
 describe("streakAfterLog", () => {
   it("starts a streak at one, not zero", () => {
-    expect(streakAfterLog({ lastDailyLogDate: null, dailyLogStreakDays: 0 }, "2026-07-24")).toStrictEqual({
+    expect(
+      streakAfterLog({ lastDailyLogDate: null, dailyLogStreakDays: 0 }, "2026-07-24"),
+    ).toStrictEqual({
       lastDailyLogDate: "2026-07-24",
       dailyLogStreakDays: 1,
     });
   });
 
   it("extends a streak on the next calendar day", () => {
-    expect(streakAfterLog({ lastDailyLogDate: "2026-07-24", dailyLogStreakDays: 4 }, "2026-07-25")).toStrictEqual({
+    expect(
+      streakAfterLog({ lastDailyLogDate: "2026-07-24", dailyLogStreakDays: 4 }, "2026-07-25"),
+    ).toStrictEqual({
       lastDailyLogDate: "2026-07-25",
       dailyLogStreakDays: 5,
     });
@@ -61,7 +70,9 @@ describe("streakAfterLog", () => {
 
   it("restarts at one after a gap, never at zero", () => {
     // The member DID log today; a zero would say they did not.
-    expect(streakAfterLog({ lastDailyLogDate: "2026-07-20", dailyLogStreakDays: 9 }, "2026-07-25")).toStrictEqual({
+    expect(
+      streakAfterLog({ lastDailyLogDate: "2026-07-20", dailyLogStreakDays: 9 }, "2026-07-25"),
+    ).toStrictEqual({
       lastDailyLogDate: "2026-07-25",
       dailyLogStreakDays: 1,
     });
@@ -82,7 +93,9 @@ describe("streakAfterLog", () => {
   });
 
   it("survives a month boundary", () => {
-    expect(streakAfterLog({ lastDailyLogDate: "2026-07-31", dailyLogStreakDays: 12 }, "2026-08-01")).toStrictEqual({
+    expect(
+      streakAfterLog({ lastDailyLogDate: "2026-07-31", dailyLogStreakDays: 12 }, "2026-08-01"),
+    ).toStrictEqual({
       lastDailyLogDate: "2026-08-01",
       dailyLogStreakDays: 13,
     });
@@ -102,7 +115,9 @@ describe("streakAsOf", () => {
   });
 
   it("breaks a streak after two clear days", () => {
-    expect(streakAsOf({ lastDailyLogDate: "2026-07-24", dailyLogStreakDays: 6 }, "2026-07-26")).toStrictEqual({
+    expect(
+      streakAsOf({ lastDailyLogDate: "2026-07-24", dailyLogStreakDays: 6 }, "2026-07-26"),
+    ).toStrictEqual({
       lastDailyLogDate: "2026-07-24",
       dailyLogStreakDays: 0,
     });
@@ -111,7 +126,10 @@ describe("streakAsOf", () => {
   it("keeps lastDailyLogDate when it breaks a streak", () => {
     // Clearing it would make tomorrow's run unable to reproduce today's answer, which is
     // exactly the replayability §4c rule 3 requires of a job.
-    const broken = streakAsOf({ lastDailyLogDate: "2026-07-24", dailyLogStreakDays: 6 }, "2026-07-30");
+    const broken = streakAsOf(
+      { lastDailyLogDate: "2026-07-24", dailyLogStreakDays: 6 },
+      "2026-07-30",
+    );
     expect(broken.lastDailyLogDate).toBe("2026-07-24");
   });
 
@@ -123,7 +141,9 @@ describe("streakAsOf", () => {
   });
 
   it("reports zero for a project that has never logged", () => {
-    expect(streakAsOf({ lastDailyLogDate: null, dailyLogStreakDays: 0 }, "2026-07-24")).toStrictEqual({
+    expect(
+      streakAsOf({ lastDailyLogDate: null, dailyLogStreakDays: 0 }, "2026-07-24"),
+    ).toStrictEqual({
       lastDailyLogDate: null,
       dailyLogStreakDays: 0,
     });

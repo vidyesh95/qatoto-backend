@@ -37,7 +37,10 @@ describe("computeViewerFingerprint", () => {
     // watch time is credited to the other — into the component carrying 40 of 100
     // ranking points.
     const firstColleague = computeViewerFingerprint({ ...anonymousViewer, viewerUserId: "user_a" });
-    const secondColleague = computeViewerFingerprint({ ...anonymousViewer, viewerUserId: "user_b" });
+    const secondColleague = computeViewerFingerprint({
+      ...anonymousViewer,
+      viewerUserId: "user_b",
+    });
 
     expect(firstColleague).not.toBe(secondColleague);
   });

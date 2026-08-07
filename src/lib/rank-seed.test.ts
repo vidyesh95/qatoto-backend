@@ -4,7 +4,8 @@ import { stubServerEnvironment } from "#src/test-support/server-env.js";
 
 stubServerEnvironment();
 
-const { mintRankSeed, isWellFormedRankSeed, RANK_SEED_LENGTH } = await import("#src/lib/rank-seed.js");
+const { mintRankSeed, isWellFormedRankSeed, RANK_SEED_LENGTH } =
+  await import("#src/lib/rank-seed.js");
 
 describe("mintRankSeed", () => {
   const viewer = { viewerKey: "user_alice", asOfDayString: "2026-08-02" } as const;

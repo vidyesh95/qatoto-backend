@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { extractExternalId, parseExternalLink, type ParsedExternalLink } from "#src/lib/external-link.js";
+import {
+  extractExternalId,
+  parseExternalLink,
+  type ParsedExternalLink,
+} from "#src/lib/external-link.js";
 
 /**
  * A linked file has no bytes to scan and no size to measure, so the HOST is the entire
@@ -19,8 +23,12 @@ function expectAllowed(rawUrl: string): ParsedExternalLink {
 
 describe("parseExternalLink", () => {
   it("accepts the allowlisted hosts and reports their provider", () => {
-    expect(expectAllowed("https://drive.google.com/file/d/abc123/view").provider).toBe("google_docs");
-    expect(expectAllowed("https://github.com/qatoto/backend/commit/abc1234").provider).toBe("github");
+    expect(expectAllowed("https://drive.google.com/file/d/abc123/view").provider).toBe(
+      "google_docs",
+    );
+    expect(expectAllowed("https://github.com/qatoto/backend/commit/abc1234").provider).toBe(
+      "github",
+    );
     expect(expectAllowed("https://www.figma.com/file/KEY123/Board").provider).toBe("figma");
     expect(expectAllowed("https://www.dropbox.com/s/xyz/spec.pdf").provider).toBe("other");
     expect(expectAllowed("https://gitlab.com/group/repo/-/commit/abc").provider).toBe("gitlab");
@@ -117,12 +125,18 @@ describe("extractExternalId", () => {
   });
 
   it("reads a Figma file key from both /file/ and /design/", () => {
-    expect(extractExternalId(expectAllowed("https://www.figma.com/file/KEY123/Board"))).toBe("KEY123");
-    expect(extractExternalId(expectAllowed("https://www.figma.com/design/KEY456/Board"))).toBe("KEY456");
+    expect(extractExternalId(expectAllowed("https://www.figma.com/file/KEY123/Board"))).toBe(
+      "KEY123",
+    );
+    expect(extractExternalId(expectAllowed("https://www.figma.com/design/KEY456/Board"))).toBe(
+      "KEY456",
+    );
   });
 
   it("reads a Google document id", () => {
-    expect(extractExternalId(expectAllowed("https://docs.google.com/document/d/DOC789/edit"))).toBe("DOC789");
+    expect(extractExternalId(expectAllowed("https://docs.google.com/document/d/DOC789/edit"))).toBe(
+      "DOC789",
+    );
   });
 
   it("returns null rather than guessing when no id is present", () => {

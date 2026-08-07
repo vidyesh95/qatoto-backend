@@ -38,7 +38,11 @@ describe("normalizeToTokenSet", () => {
     // The comma has no space after it. Deleting it would produce the single junk token
     // "potholestreetlight".
     expect(normalizeToTokenSet("pothole,streetlight")).toEqual(["pothole", "streetlight"]);
-    expect(normalizeToTokenSet("drainage — blocked! (again)")).toEqual(["again", "blocked", "drainage"]);
+    expect(normalizeToTokenSet("drainage — blocked! (again)")).toEqual([
+      "again",
+      "blocked",
+      "drainage",
+    ]);
   });
 
   it("deletes apostrophes instead of splitting on them", () => {
@@ -47,7 +51,11 @@ describe("normalizeToTokenSet", () => {
   });
 
   it("splits on zero-width and control characters", () => {
-    expect(normalizeToTokenSet("pothole\u200Bstreetlight\u0000drain")).toEqual(["drain", "pothole", "streetlight"]);
+    expect(normalizeToTokenSet("pothole\u200Bstreetlight\u0000drain")).toEqual([
+      "drain",
+      "pothole",
+      "streetlight",
+    ]);
   });
 
   it("drops stopwords", () => {
@@ -96,7 +104,9 @@ describe("normalizeToTokenSet", () => {
 
     expect(normalizeToTokenSet(`${astralToken} ${bmpToken}`)).toEqual([bmpToken, astralToken]);
 
-    const naiveUtf16Order = [bmpToken, astralToken].toSorted((left, right) => (left < right ? -1 : 1));
+    const naiveUtf16Order = [bmpToken, astralToken].toSorted((left, right) =>
+      left < right ? -1 : 1,
+    );
     expect(naiveUtf16Order).toEqual([astralToken, bmpToken]);
   });
 
@@ -163,7 +173,9 @@ describe("jaccardBasisPoints", () => {
     // content-free user report must not become a 500.
     expect(() => jaccardBasisPoints([], [])).not.toThrow();
     expect(jaccardBasisPoints([], [])).toBe(0);
-    expect(jaccardBasisPoints(normalizeToTokenSet("the and it"), normalizeToTokenSet("!!!"))).toBe(0);
+    expect(jaccardBasisPoints(normalizeToTokenSet("the and it"), normalizeToTokenSet("!!!"))).toBe(
+      0,
+    );
   });
 
   it("returns 0 when exactly one side is empty", () => {
@@ -185,20 +197,37 @@ describe("jaccardBasisPoints", () => {
 
     for (let pairIndex = 0; pairIndex < 300; pairIndex += 1) {
       const leftTokens = alphabet.filter((_unused, index) => ((pairIndex >> index) & 1) === 1);
-      const rightTokens = alphabet.filter((_unused, index) => (((pairIndex * 7 + 3) >> index) & 1) === 1);
+      const rightTokens = alphabet.filter(
+        (_unused, index) => (((pairIndex * 7 + 3) >> index) & 1) === 1,
+      );
 
-      expect(jaccardBasisPoints(leftTokens, rightTokens)).toBe(jaccardBasisPoints(rightTokens, leftTokens));
+      expect(jaccardBasisPoints(leftTokens, rightTokens)).toBe(
+        jaccardBasisPoints(rightTokens, leftTokens),
+      );
     }
   });
 
   it("collapses duplicates, because Jaccard is defined on sets", () => {
     // A raw (non-deduplicated) list must score the same as its deduplicated form.
-    expect(jaccardBasisPoints(["pothole", "pothole", "drain"], ["pothole", "drain"])).toBe(BASIS_POINTS_TOTAL);
+    expect(jaccardBasisPoints(["pothole", "pothole", "drain"], ["pothole", "drain"])).toBe(
+      BASIS_POINTS_TOTAL,
+    );
     expect(jaccardBasisPoints(["a", "a", "a"], ["a", "b"])).toBe(5_000);
   });
 
   it("stays within 0..10000 over many deterministic inputs", () => {
-    const alphabet = ["pothole", "drain", "streetlight", "water", "bridge", "﨎", "\u{10428}", "水", "café", "sewer"];
+    const alphabet = [
+      "pothole",
+      "drain",
+      "streetlight",
+      "water",
+      "bridge",
+      "﨎",
+      "\u{10428}",
+      "水",
+      "café",
+      "sewer",
+    ];
 
     for (let pairIndex = 0; pairIndex < 1_000; pairIndex += 1) {
       // Both sides derived from the loop index — no Math.random, so a failure replays.
@@ -228,9 +257,14 @@ describe("jaccardBasisPoints", () => {
     const leftText = "Overflowing sewer near the Café on 5th — smells awful!";
     const rightText = "sewer OVERFLOWING near café, 5th street";
 
-    const firstScore = jaccardBasisPoints(normalizeToTokenSet(leftText), normalizeToTokenSet(rightText));
+    const firstScore = jaccardBasisPoints(
+      normalizeToTokenSet(leftText),
+      normalizeToTokenSet(rightText),
+    );
     for (let runIndex = 0; runIndex < 100; runIndex += 1) {
-      expect(jaccardBasisPoints(normalizeToTokenSet(leftText), normalizeToTokenSet(rightText))).toBe(firstScore);
+      expect(
+        jaccardBasisPoints(normalizeToTokenSet(leftText), normalizeToTokenSet(rightText)),
+      ).toBe(firstScore);
     }
   });
 });

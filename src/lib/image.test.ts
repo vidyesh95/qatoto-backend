@@ -1,7 +1,11 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
-import { describeUnsupportedImageFormat, validateAndNormalizeImage, type DetectedImageFormat } from "#src/lib/image.js";
+import {
+  describeUnsupportedImageFormat,
+  validateAndNormalizeImage,
+  type DetectedImageFormat,
+} from "#src/lib/image.js";
 
 /**
  * The upload gate had no test at all, which is how ONE wrong allowlist reached seven call
@@ -166,7 +170,10 @@ describe("validateAndNormalizeImage — refusals", () => {
 
   /** Never throws on hostile input — a refusal is a value, so the route answers 422 not 500. */
   it("returns NOT_AN_IMAGE for bytes that are not an image at all", async () => {
-    const result = await validateAndNormalizeImage(Buffer.from("this is definitely not an image"), OUTPUT_OPTIONS);
+    const result = await validateAndNormalizeImage(
+      Buffer.from("this is definitely not an image"),
+      OUTPUT_OPTIONS,
+    );
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toEqual({ type: "NOT_AN_IMAGE" });
@@ -197,7 +204,9 @@ describe("describeUnsupportedImageFormat", () => {
   });
 
   it("says to upload a still frame for animated input", () => {
-    expect(describeUnsupportedImageFormat({ kind: "animated", format: "webp" })).toContain("still frame");
+    expect(describeUnsupportedImageFormat({ kind: "animated", format: "webp" })).toContain(
+      "still frame",
+    );
   });
 
   /** Every variant renders; none falls through to the exhaustiveness throw. */

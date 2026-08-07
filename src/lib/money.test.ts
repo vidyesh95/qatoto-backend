@@ -65,7 +65,11 @@ describe("apportionLargestRemainder", () => {
   it("breaks exact ties on the tie-break key, ascending", () => {
     // Identical weights and identical remainders: only the key can decide, and the
     // extra basis point must go to "aaa".
-    const parts = apportionLargestRemainder([1n, 1n, 1n], BASIS_POINTS_TOTAL, ["ccc", "aaa", "bbb"]);
+    const parts = apportionLargestRemainder([1n, 1n, 1n], BASIS_POINTS_TOTAL, [
+      "ccc",
+      "aaa",
+      "bbb",
+    ]);
     expect(parts[1]).toBe(3334);
     expect(parts[0]).toBe(3333);
     expect(parts[2]).toBe(3333);
@@ -77,7 +81,9 @@ describe("apportionLargestRemainder", () => {
   });
 
   it("handles the single-member project", () => {
-    expect(apportionLargestRemainder([42n], BASIS_POINTS_TOTAL, ["solo"])).toEqual([BASIS_POINTS_TOTAL]);
+    expect(apportionLargestRemainder([42n], BASIS_POINTS_TOTAL, ["solo"])).toEqual([
+      BASIS_POINTS_TOTAL,
+    ]);
   });
 
   it("returns [] for no members", () => {
@@ -164,7 +170,11 @@ describe("apportionLargestRemainder", () => {
 
       const shuffledWeights = order.map((index) => weights[index] ?? 0n);
       const shuffledKeys = order.map((index) => keys[index] ?? "");
-      const shuffledParts = apportionLargestRemainder(shuffledWeights, BASIS_POINTS_TOTAL, shuffledKeys);
+      const shuffledParts = apportionLargestRemainder(
+        shuffledWeights,
+        BASIS_POINTS_TOTAL,
+        shuffledKeys,
+      );
 
       for (const [position, key] of shuffledKeys.entries()) {
         expect(shuffledParts[position]).toBe(expectedByKey.get(key));

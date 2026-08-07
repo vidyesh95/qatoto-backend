@@ -52,9 +52,14 @@ function jsonResponse(payload: unknown, status = 200): Response {
   });
 }
 
-function candidateResponse(analysisJson: unknown, modelVersion = "gemini-3.5-flash-lite-07-2026"): Response {
+function candidateResponse(
+  analysisJson: unknown,
+  modelVersion = "gemini-3.5-flash-lite-07-2026",
+): Response {
   return jsonResponse({
-    candidates: [{ content: { parts: [{ text: JSON.stringify(analysisJson) }] }, finishReason: "STOP" }],
+    candidates: [
+      { content: { parts: [{ text: JSON.stringify(analysisJson) }] }, finishReason: "STOP" },
+    ],
     modelVersion,
   });
 }
@@ -75,18 +80,20 @@ function stubFetch(respond: (callIndex: number) => Response): {
   readonly requests: RecordedRequest[];
 } {
   const requests: RecordedRequest[] = [];
-  const fetchImplementation: FetchImplementation = vi.fn<FetchImplementation>(async (input, init) => {
-    const headers: Record<string, string> = {};
-    new Headers(init?.headers).forEach((value, name) => {
-      headers[name] = value;
-    });
-    requests.push({
-      url: input instanceof Request ? input.url : String(input),
-      headers,
-      body: typeof init?.body === "string" ? init.body : "",
-    });
-    return respond(requests.length - 1);
-  });
+  const fetchImplementation: FetchImplementation = vi.fn<FetchImplementation>(
+    async (input, init) => {
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers).forEach((value, name) => {
+        headers[name] = value;
+      });
+      requests.push({
+        url: input instanceof Request ? input.url : String(input),
+        headers,
+        body: typeof init?.body === "string" ? init.body : "",
+      });
+      return respond(requests.length - 1);
+    },
+  );
   return { fetchImplementation, requests };
 }
 
@@ -207,7 +214,9 @@ describe("analyzeDailyLog", () => {
   });
 
   it("treats a safety block as permanent", async () => {
-    const { fetchImplementation } = stubFetch(() => jsonResponse({ promptFeedback: { blockReason: "SAFETY" } }));
+    const { fetchImplementation } = stubFetch(() =>
+      jsonResponse({ promptFeedback: { blockReason: "SAFETY" } }),
+    );
 
     const result = await analyzeDailyLog(INPUT, { ...baseOptions, fetchImplementation });
 
@@ -261,7 +270,9 @@ describe("analyzeDailyLog", () => {
   });
 
   it("gives up after ONE repair, permanently", async () => {
-    const { fetchImplementation, requests } = stubFetch(() => candidateResponse({ transcriptSegments: "no" }));
+    const { fetchImplementation, requests } = stubFetch(() =>
+      candidateResponse({ transcriptSegments: "no" }),
+    );
 
     const result = await analyzeDailyLog(INPUT, { ...baseOptions, fetchImplementation });
 
@@ -303,7 +314,9 @@ describe("analyzeDailyLog", () => {
   });
 
   it("treats a response with no text part as retryable", async () => {
-    const { fetchImplementation } = stubFetch(() => jsonResponse({ candidates: [{ content: { parts: [] } }] }));
+    const { fetchImplementation } = stubFetch(() =>
+      jsonResponse({ candidates: [{ content: { parts: [] } }] }),
+    );
 
     const result = await analyzeDailyLog(INPUT, { ...baseOptions, fetchImplementation });
 

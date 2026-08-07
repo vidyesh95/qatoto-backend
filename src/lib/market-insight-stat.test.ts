@@ -86,7 +86,13 @@ describe("market_insight_stat_unit_pairing_ck", () => {
 
 describe("market_insight_stat_range_ck", () => {
   it("lets ONLY percent_change go negative", () => {
-    expect(findStatViolations({ ...validPercentChange, statValueMilli: -22_000, trendDirection: "down" })).toEqual([]);
+    expect(
+      findStatViolations({
+        ...validPercentChange,
+        statValueMilli: -22_000,
+        trendDirection: "down",
+      }),
+    ).toEqual([]);
 
     expect(
       findStatViolations({
@@ -147,25 +153,29 @@ describe("market_insight_stat_range_ck", () => {
 
   /** The column is `bigint`; a fractional milli-unit is a unit error upstream. */
   it("refuses a non-integer, which the column type would reject anyway", () => {
-    expect(findStatViolations({ ...validPercentChange, statValueMilli: 34_000.5 })).toContain("value_range");
+    expect(findStatViolations({ ...validPercentChange, statValueMilli: 34_000.5 })).toContain(
+      "value_range",
+    );
   });
 });
 
 describe("market_insight_trend_agreement_ck", () => {
   it("refuses an arrow that contradicts the sign — the mock's actual bug", () => {
-    expect(findStatViolations({ ...validPercentChange, statValueMilli: -22_000, trendDirection: "up" })).toContain(
-      "trend_agreement",
-    );
-    expect(findStatViolations({ ...validPercentChange, statValueMilli: 34_000, trendDirection: "down" })).toContain(
-      "trend_agreement",
-    );
-    expect(findStatViolations({ ...validPercentChange, statValueMilli: 34_000, trendDirection: "flat" })).toContain(
-      "trend_agreement",
-    );
+    expect(
+      findStatViolations({ ...validPercentChange, statValueMilli: -22_000, trendDirection: "up" }),
+    ).toContain("trend_agreement");
+    expect(
+      findStatViolations({ ...validPercentChange, statValueMilli: 34_000, trendDirection: "down" }),
+    ).toContain("trend_agreement");
+    expect(
+      findStatViolations({ ...validPercentChange, statValueMilli: 34_000, trendDirection: "flat" }),
+    ).toContain("trend_agreement");
   });
 
   it("requires exactly zero for flat", () => {
-    expect(findStatViolations({ ...validPercentChange, statValueMilli: 0, trendDirection: "flat" })).toEqual([]);
+    expect(
+      findStatViolations({ ...validPercentChange, statValueMilli: 0, trendDirection: "flat" }),
+    ).toEqual([]);
   });
 
   /**

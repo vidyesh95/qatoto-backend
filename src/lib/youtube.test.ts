@@ -29,7 +29,10 @@ describe("extractYoutubeVideoId — accepted shapes", () => {
     { label: "watch?v= with no www", input: `https://youtube.com/watch?v=${VALID_VIDEO_ID}` },
     { label: "m. subdomain", input: `https://m.youtube.com/watch?v=${VALID_VIDEO_ID}` },
     { label: "music. subdomain", input: `https://music.youtube.com/watch?v=${VALID_VIDEO_ID}` },
-    { label: "youtube-nocookie", input: `https://www.youtube-nocookie.com/embed/${VALID_VIDEO_ID}` },
+    {
+      label: "youtube-nocookie",
+      input: `https://www.youtube-nocookie.com/embed/${VALID_VIDEO_ID}`,
+    },
     { label: "/embed/ path", input: `https://www.youtube.com/embed/${VALID_VIDEO_ID}` },
     { label: "/shorts/ path", input: `https://www.youtube.com/shorts/${VALID_VIDEO_ID}` },
     { label: "/live/ path", input: `https://www.youtube.com/live/${VALID_VIDEO_ID}` },
@@ -101,9 +104,9 @@ describe("extractYoutubeVideoId — rejected shapes", () => {
 
 describe("sanitizeYoutubeThumbnailUrl", () => {
   it("accepts YouTube's own https thumbnail hosts", () => {
-    expect(sanitizeYoutubeThumbnailUrl(`https://i.ytimg.com/vi/${VALID_VIDEO_ID}/hqdefault.jpg`)).toBe(
-      `https://i.ytimg.com/vi/${VALID_VIDEO_ID}/hqdefault.jpg`,
-    );
+    expect(
+      sanitizeYoutubeThumbnailUrl(`https://i.ytimg.com/vi/${VALID_VIDEO_ID}/hqdefault.jpg`),
+    ).toBe(`https://i.ytimg.com/vi/${VALID_VIDEO_ID}/hqdefault.jpg`);
     expect(sanitizeYoutubeThumbnailUrl(`https://img.youtube.com/vi/${VALID_VIDEO_ID}/0.jpg`)).toBe(
       `https://img.youtube.com/vi/${VALID_VIDEO_ID}/0.jpg`,
     );
@@ -147,7 +150,10 @@ describe("verifyYoutubeVideo", () => {
 
   it("builds the oEmbed request from the parsed id, never a raw string", async () => {
     const { fetchImplementation, calls } = stubFetch(() =>
-      jsonResponse({ title: "A demo", thumbnail_url: `https://i.ytimg.com/vi/${VALID_VIDEO_ID}/0.jpg` }),
+      jsonResponse({
+        title: "A demo",
+        thumbnail_url: `https://i.ytimg.com/vi/${VALID_VIDEO_ID}/0.jpg`,
+      }),
     );
 
     await verifyYoutubeVideo(VALID_VIDEO_ID, { fetchImplementation });
@@ -157,7 +163,9 @@ describe("verifyYoutubeVideo", () => {
     expect(requestedUrl.origin).toBe("https://www.youtube.com");
     expect(requestedUrl.pathname).toBe("/oembed");
     expect(requestedUrl.searchParams.get("format")).toBe("json");
-    expect(requestedUrl.searchParams.get("url")).toBe(`https://www.youtube.com/watch?v=${VALID_VIDEO_ID}`);
+    expect(requestedUrl.searchParams.get("url")).toBe(
+      `https://www.youtube.com/watch?v=${VALID_VIDEO_ID}`,
+    );
   });
 
   it("returns the title and thumbnail on 200", async () => {
@@ -180,7 +188,9 @@ describe("verifyYoutubeVideo", () => {
   });
 
   it("drops a thumbnail URL that is not an allowlisted https host", async () => {
-    const { fetchImplementation } = stubFetch(() => jsonResponse({ title: "x", thumbnail_url: "javascript:alert(1)" }));
+    const { fetchImplementation } = stubFetch(() =>
+      jsonResponse({ title: "x", thumbnail_url: "javascript:alert(1)" }),
+    );
 
     const result = await verifyYoutubeVideo(VALID_VIDEO_ID, { fetchImplementation });
 
@@ -218,7 +228,9 @@ describe("verifyYoutubeVideo", () => {
   });
 
   it("maps a 200 with an unparseable body to YOUTUBE_VERIFY_FAILED", async () => {
-    const { fetchImplementation } = stubFetch(() => new Response("<html>not json</html>", { status: 200 }));
+    const { fetchImplementation } = stubFetch(
+      () => new Response("<html>not json</html>", { status: 200 }),
+    );
 
     const result = await verifyYoutubeVideo(VALID_VIDEO_ID, { fetchImplementation });
 
@@ -245,15 +257,23 @@ describe("verifyYoutubeVideo", () => {
 
   it("caches an unavailable outcome, but never a transient failure", async () => {
     const unavailable = stubFetch(() => new Response("", { status: 404 }));
-    await verifyYoutubeVideo(VALID_VIDEO_ID, { fetchImplementation: unavailable.fetchImplementation });
-    await verifyYoutubeVideo(VALID_VIDEO_ID, { fetchImplementation: unavailable.fetchImplementation });
+    await verifyYoutubeVideo(VALID_VIDEO_ID, {
+      fetchImplementation: unavailable.fetchImplementation,
+    });
+    await verifyYoutubeVideo(VALID_VIDEO_ID, {
+      fetchImplementation: unavailable.fetchImplementation,
+    });
     expect(unavailable.calls).toHaveLength(1);
 
     clearYoutubeVerificationCache();
 
     const transient = stubFetch(() => new Response("", { status: 503 }));
-    await verifyYoutubeVideo(VALID_VIDEO_ID, { fetchImplementation: transient.fetchImplementation });
-    await verifyYoutubeVideo(VALID_VIDEO_ID, { fetchImplementation: transient.fetchImplementation });
+    await verifyYoutubeVideo(VALID_VIDEO_ID, {
+      fetchImplementation: transient.fetchImplementation,
+    });
+    await verifyYoutubeVideo(VALID_VIDEO_ID, {
+      fetchImplementation: transient.fetchImplementation,
+    });
     expect(transient.calls).toHaveLength(2);
   });
 });

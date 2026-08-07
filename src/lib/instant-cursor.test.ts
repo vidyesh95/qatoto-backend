@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeInstantCursor, encodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
+import {
+  decodeInstantCursor,
+  encodeInstantCursor,
+  type InstantCursor,
+} from "#src/lib/instant-cursor.js";
 
 describe("instant cursor", () => {
   const cursor: InstantCursor = {
