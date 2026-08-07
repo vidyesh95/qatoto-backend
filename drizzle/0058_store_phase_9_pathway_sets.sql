@@ -96,15 +96,24 @@ ALTER TABLE "store_pathway" ADD CONSTRAINT "store_pathway_images_ck" CHECK (
 -- pathway (owner_organization_id IS NULL) may publish without one, because the
 -- merchandiser publishing it IS the decision — and because legacy rows predate this
 -- column entirely and must not be invalidated by it.
+--
+-- `state::text` RATHER THAN THE BARE ENUM, and this is not a style choice. Postgres
+-- refuses "unsafe use of new value" when a statement names an enum label added by an
+-- ALTER TYPE in the SAME TRANSACTION, and `pending_review`/`rejected` arrive in 0057.
+-- Separate FILES are not separate transactions: drizzle-kit applies every pending
+-- migration in one transaction, so on a database where 0057 and 0058 are both pending
+-- — which is every fresh environment — the bare form fails and takes the whole run with
+-- it. Casting to text compares strings rather than enum labels, is immutable, and so is
+-- legal in a CHECK while meaning exactly the same thing.
 ALTER TABLE "store_pathway" ADD CONSTRAINT "store_pathway_review_ck" CHECK (
   ((reviewed_by_user_id IS NULL) = (reviewed_at IS NULL))
-  AND (reviewed_at IS NULL OR state IN ('active', 'rejected'))
+  AND (reviewed_at IS NULL OR state::text IN ('active', 'rejected'))
   AND (
     owner_organization_id IS NULL
-    OR state NOT IN ('active', 'rejected')
+    OR state::text NOT IN ('active', 'rejected')
     OR reviewed_by_user_id IS NOT NULL
   )
-  AND (state <> 'pending_review' OR submitted_at IS NOT NULL)
+  AND (state::text <> 'pending_review' OR submitted_at IS NOT NULL)
 );--> statement-breakpoint
 
 ALTER TABLE "store_pathway" ADD CONSTRAINT "store_pathway_review_note_ck" CHECK (

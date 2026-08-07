@@ -33,7 +33,10 @@ BEGIN
     SELECT "organization_id"
     FROM "commerce_organization_address"
     GROUP BY "organization_id"
-    HAVING count(*) FILTER (WHERE "address_kind" = 'delivery') = 0
+    -- `::text` for the same reason 0058 casts: `delivery` is added by 0059, and
+    -- drizzle-kit runs every pending migration in ONE transaction, so naming the enum
+    -- label here fails with "unsafe use of new value" on any fresh database.
+    HAVING count(*) FILTER (WHERE "address_kind"::text = 'delivery') = 0
   ) AS lacking;
 
   IF organizations_without_delivery_address > 0 THEN
