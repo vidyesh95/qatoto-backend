@@ -750,7 +750,16 @@ export async function createAddress(
       actorMemberRoleSnapshot: access.value.role,
       targetEntityType: "commerce_organization_address",
       targetEntityId: createdAddress.id,
-      payload: { action: "created", addressKind: input.addressKind, isDefault: input.isDefault },
+      /**
+       * The key is `kind`, NOT `addressKind`.
+       *
+       * `findUnsafePayloadPath` tests payload KEYS against a PII-name regex that
+       * includes `address`, so `addressKind` was rejected as `UNSAFE_PAYLOAD` — which
+       * made `appendAuditOrThrow` throw and rolled the whole transaction back. Address
+       * creation failed at runtime for every caller, and no type or route test could
+       * see it because the route suite mocks this service.
+       */
+      payload: { action: "created", kind: input.addressKind, isDefault: input.isDefault },
       occurredAt,
     });
     return createdAddress;
