@@ -1,6 +1,8 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import * as commerceDeliveryAddressService from "#src/services/commerce-delivery-address.service.js";
+import type { CommerceDeliveryAddressError } from "#src/services/commerce-delivery-address.service.js";
 import * as commerceOrdersService from "#src/services/commerce-orders.service.js";
 import type { CommerceOrdersError } from "#src/services/commerce-orders.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
@@ -192,6 +194,84 @@ export async function cancelOrder(req: Request, res: Response): Promise<void> {
     status: "success",
     statusCode: 200,
     message: "Order cancelled.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+function mapDeliveryAddressError(res: Response, error: CommerceDeliveryAddressError): void {
+  switch (error.type) {
+    case "NOT_FOUND":
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "Order not found.",
+      } satisfies ApiResponse);
+      return;
+    case "FORBIDDEN":
+      res.status(403).json({
+        status: "error",
+        statusCode: 403,
+        message: "Your role cannot read delivery details for this order.",
+      } satisfies ApiResponse);
+      return;
+    case "INVALID_STATE":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "This order is not at a stage where delivery details are released.",
+        data: { orderState: error.orderState },
+      } satisfies ApiResponse);
+      return;
+    case "ADDRESS_UNAVAILABLE":
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "This order carries no buyer-chosen delivery address.",
+      } satisfies ApiResponse);
+      return;
+    default: {
+      const exhaustiveError: never = error;
+      throw new Error(`Unhandled delivery address error: ${JSON.stringify(exhaustiveError)}`);
+    }
+  }
+}
+
+/**
+ * GET /commerce/orders/:orderId/delivery-address
+ *
+ * A15. The order snapshot records a city and a postcode by design; this is how a seller
+ * with an active order reaches the street lines, recipient name and phone that the
+ * snapshot deliberately omits. Every counterparty read is audited on the buyer's stream.
+ */
+export async function getOrderDeliveryAddress(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = OrderIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceDeliveryAddressService.revealOrderDeliveryAddress(
+    actor,
+    params.data.orderId,
+  );
+  if (!result.success) {
+    mapDeliveryAddressError(res, result.error);
+    return;
+  }
+
+  /**
+   * `no-store`: this response is decrypted PII. It must not sit in a shared cache, a
+   * proxy, or a browser's disk cache after the tab closes.
+   */
+  res.setHeader("Cache-Control", "no-store");
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Delivery address.",
     data: result.value,
   } satisfies ApiResponse);
 }

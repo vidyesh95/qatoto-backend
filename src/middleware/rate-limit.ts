@@ -1079,6 +1079,18 @@ export const subscribeLimiter = createLimiter({
  * most a handful of times; the state-predicate update already makes a retried POST
  * harmless, so this bounds a scripted cancel loop rather than honest use.
  */
+/**
+ * A15's reveal route. Modelled on `commerceOrganizationEvidenceLimiter` rather than the
+ * ordinary order limiters: this is the one endpoint that hands one organization
+ * another's decrypted PII, so the useful rate is "a few per shipment", and anything
+ * faster is someone walking their order list to harvest addresses.
+ */
+export const commerceAddressRevealLimiter = createLimiter({
+  namespace: "commerceAddressReveal",
+  windowMs: ONE_MINUTE_MS,
+  limit: 10,
+});
+
 export const commerceOrderWriteLimiter = createLimiter({
   namespace: "commerceOrderWrite",
   windowMs: ONE_MINUTE_MS,

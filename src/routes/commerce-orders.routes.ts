@@ -3,7 +3,10 @@ import express from "express";
 import * as commerceOrdersController from "#src/controllers/commerce-orders.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
-import { commerceOrderWriteLimiter } from "#src/middleware/rate-limit.js";
+import {
+  commerceAddressRevealLimiter,
+  commerceOrderWriteLimiter,
+} from "#src/middleware/rate-limit.js";
 import {
   requireActiveBuyerCommerceOrganization,
   requireActiveCommerceOrganization,
@@ -31,6 +34,19 @@ router.get(
   requireAuth,
   requireActiveCommerceOrganization,
   commerceOrdersController.getOrder,
+);
+
+/**
+ * A15. Declared before `/orders/:orderId/cancel` only for readability — Express matches
+ * the longer path on its own. Rate-limited harder than any other order read because it
+ * is the one endpoint that returns another organization's decrypted PII.
+ */
+router.get(
+  "/orders/:orderId/delivery-address",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceAddressRevealLimiter,
+  commerceOrdersController.getOrderDeliveryAddress,
 );
 
 router.post(

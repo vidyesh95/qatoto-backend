@@ -661,7 +661,13 @@ function encryptAddress(
   };
 }
 
-function readableAddress(address: Address) {
+/**
+ * Exported for the A15 reveal path (`commerce-delivery-address.service.ts`), which is
+ * the only caller outside this module and the only one that hands the result to a
+ * DIFFERENT organization. The decryption rules belong here; the authorization rules
+ * belong there.
+ */
+export function readableAddress(address: Address) {
   return {
     id: address.id,
     organizationId: address.organizationId,
