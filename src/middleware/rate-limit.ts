@@ -1149,6 +1149,29 @@ export const commerceTrustModerationLimiter = createLimiter({
 });
 
 /**
+ * Asking a product question (Appendix A9). A fifteen-minute window rather than a
+ * minute, and a small budget: this is the one Phase 10 write reachable by ANY
+ * identified user with no organization and no completion behind them, so it is the
+ * cheapest surface to flood with public text.
+ */
+export const commerceProductQuestionLimiter = createLimiter({
+  namespace: "commerceProductQuestion",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/**
+ * Answering (Appendix A9). Slightly more generous than asking: an answerer has already
+ * cleared a much higher bar — they own the product or hold a completion for it — and a
+ * seller working through a backlog of questions is the behaviour we want.
+ */
+export const commerceProductAnswerLimiter = createLimiter({
+  namespace: "commerceProductAnswer",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});
+
+/**
  * Product saves and bookmarks (Appendix A11). Mirrors `videoLikeLimiter`'s budget: the
  * gesture is a single tap that a buyer legitimately repeats while skimming a grid, and
  * the composite primary key already makes a double-tap harmless.

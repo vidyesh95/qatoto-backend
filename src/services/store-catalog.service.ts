@@ -240,6 +240,30 @@ export async function resolveEligibleProductRefBySlug(
 }
 
 /**
+ * The by-id counterpart of {@link resolveEligibleProductRefBySlug}, for authenticated
+ * writes that already hold an id (Appendix A9's ask route, A14's inquiry route).
+ *
+ * Both run the SAME `publicProductEligibility` predicate. Without this, an authoring
+ * route would confirm that a draft or suspended product id exists — a quieter version
+ * of the enumeration §11 forbids.
+ */
+export async function resolveEligibleProductRefById(
+  productId: string,
+): Promise<{ readonly id: string; readonly sellerOrganizationId: string } | null> {
+  const [row] = await db
+    .select({
+      id: product.id,
+      sellerOrganizationId: product.sellerOrganizationId,
+    })
+    .from(product)
+    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+    .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
+    .where(and(publicProductEligibility, eq(product.id, productId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
  * Derives buyer-safe stock state from authoritative inventory and lead-time policy.
  * Zero stock with a declared lead-time window is made-to-order, not unavailable.
  */

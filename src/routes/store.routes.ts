@@ -1,5 +1,6 @@
 import express from "express";
 
+import * as commerceProductQaController from "#src/controllers/commerce-product-qa.controller.js";
 import * as storeController from "#src/controllers/store.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { storeReadLimiter } from "#src/middleware/rate-limit.js";
@@ -36,6 +37,19 @@ storeRouter.get(
  * nothing could ever display it.
  */
 storeRouter.get("/products/:productSlug/reviews", storeController.listProductReviews);
+/**
+ * A9. The question list embeds at most ONE answer per question, seller's first; the
+ * full answer list is its own paginated route, because a cursor over a computed
+ * preference rank is how pagination starts skipping rows.
+ */
+storeRouter.get(
+  "/products/:productSlug/questions",
+  commerceProductQaController.listProductQuestions,
+);
+storeRouter.get(
+  "/products/:productSlug/questions/:questionId/answers",
+  commerceProductQaController.listProductQuestionAnswers,
+);
 storeRouter.get("/organizations/:organizationSlug", storeController.getOrganizationStorefront);
 /**
  * A8. Not redundant with the product route: `commerce_review.productId` is nullable
