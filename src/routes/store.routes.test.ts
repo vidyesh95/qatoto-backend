@@ -26,9 +26,14 @@ const searchStubs = vi.hoisted(() => ({
 
 const merchandisingStubs = vi.hoisted(() => ({
   getStoreHome: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
-  listPathways: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
-  getPathwayBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getRailBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
+
+// Phase 9 (§15.2) moved pathways out of the merchandising service: a set of slots with
+// ranked candidates shares nothing with hero slides and rails beyond a time window.
+const pathwayStubs = vi.hoisted(() => ({
+  listActivePathways: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  getPathwaySetBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
 const providersStubs = vi.hoisted(() => ({
@@ -40,6 +45,7 @@ const providersStubs = vi.hoisted(() => ({
 vi.mock("#src/services/store-catalog.service.js", () => catalogStubs);
 vi.mock("#src/services/store-search.service.js", () => searchStubs);
 vi.mock("#src/services/store-merchandising.service.js", () => merchandisingStubs);
+vi.mock("#src/services/store-pathways.service.js", () => pathwayStubs);
 vi.mock("#src/services/commerce-providers.service.js", () => providersStubs);
 
 describe("public store routes", () => {
@@ -212,5 +218,78 @@ describe("public store routes", () => {
         limit: 12,
       }),
     );
+  });
+  it("paginates the pathway index", async () => {
+    pathwayStubs.listActivePathways.mockResolvedValue({
+      success: true,
+      value: {
+        items: [{ id: "pathway_1", slug: "autumn-hotel-room-refit", slotCount: 5 }],
+        page: { nextCursor: "Autumn_pathway_1", hasMore: true },
+      },
+    });
+
+    const response = await request(app).get("/store/pathways").query({ limit: 1 });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.page.hasMore).toBe(true);
+    expect(pathwayStubs.listActivePathways).toHaveBeenCalledWith(expect.objectContaining({ limit: 1 }));
+  });
+
+  it("returns a tampered pathway cursor as 422, not a 404", async () => {
+    // Before Phase 9 this handler collapsed every error to 404, which answered a
+    // different question than the one the client asked.
+    pathwayStubs.getPathwaySetBySlug.mockResolvedValue({
+      success: false,
+      error: { type: "INVALID_CURSOR" },
+    });
+
+    const response = await request(app).get("/store/pathways/autumn-hotel-room-refit").query({ cursor: "tampered" });
+
+    expect(response.status).toBe(422);
+  });
+
+  it("keeps an unfillable required slot in the set response", async () => {
+    pathwayStubs.getPathwaySetBySlug.mockResolvedValue({
+      success: true,
+      value: {
+        pathway: { id: "pathway_1", slug: "autumn-hotel-room-refit" },
+        slots: [
+          { id: "slot_1", state: "available", chosenCandidateKey: "candidate_a", candidates: [] },
+          {
+            id: "slot_2",
+            state: "unavailable",
+            chosenCandidateKey: null,
+            unavailableReason: { type: "NO_ELIGIBLE_CANDIDATE" },
+            candidates: [],
+          },
+        ],
+        currencyTotals: [{ currency: "USD", subtotalInCents: 2500, slotCount: 1 }],
+        completeness: {
+          slotCount: 2,
+          requiredSlotCount: 2,
+          filledRequiredSlotCount: 1,
+          isComplete: false,
+        },
+        page: { nextCursor: null, hasMore: false },
+      },
+    });
+
+    const response = await request(app).get("/store/pathways/autumn-hotel-room-refit");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.slots).toHaveLength(2);
+    expect(response.body.data.completeness.isComplete).toBe(false);
+    expect(response.body.data.currencyTotals).toHaveLength(1);
+  });
+
+  it("returns a missing pathway as 404", async () => {
+    pathwayStubs.getPathwaySetBySlug.mockResolvedValue({
+      success: false,
+      error: { type: "NOT_FOUND" },
+    });
+
+    const response = await request(app).get("/store/pathways/never-published");
+
+    expect(response.status).toBe(404);
   });
 });
