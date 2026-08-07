@@ -2936,6 +2936,377 @@ export const commerceOrganizationRankingExclusion = pgTable(
 );
 
 /**
+ * Who performed a ranking enforcement action (Phase 13).
+ *
+ * `automatic` exists because `platform_audit_entry.actorUserId` is NOT NULL and an
+ * automatic suppression names nobody. Rather than weaken that hash chain, an automatic
+ * action is recorded with no moderator — the call Phase 10 made for
+ * `commerce_moderation_action.actionSource`.
+ */
+export const commerceRankingActionSourceEnum = pgEnum("commerce_ranking_action_source", [
+  "moderator",
+  "automatic",
+]);
+
+/**
+ * Per-category demand statistics (Phase 13): the priors, the floor, and the medians.
+ *
+ * KEYED BY CURRENCY, and that is not a detail. `commerceOrder.currency` varies per order
+ * and this backend has no FX quote anywhere — §15.7 refuses to invent one even for a
+ * pathway's set total — so a single cross-currency median would be a fabricated
+ * conversion. A product whose currency has no median gets NO value penalty rather than a
+ * guessed one.
+ *
+ * `priorLevel` records WHICH RUNG of the category → parent → global → floor ladder
+ * answered. A bare number cannot distinguish "this category's own 400 orders say 3.1%"
+ * from "we had nothing and used the platform mean".
+ */
+export const commerceCategoryDemandSnapshot = pgTable(
+  "commerce_category_demand_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => commerceCategory.id, { onDelete: "cascade" }),
+    currency: text("currency").notNull(),
+    /** Quantized to a UTC day by the tick that enqueued the run. */
+    asOf: timestamp("as_of").notNull(),
+    qualifiedOrderCount30d: integer("qualified_order_count_30d").notNull(),
+    activeProductCount: integer("active_product_count").notNull(),
+    /**
+     * All four NULLABLE WITH NO DEFAULT. A category with no qualified orders has no median
+     * and no rate, and a 0 would read as "orders here are worthless" and "nothing is ever
+     * refunded" — claims this table has no basis for.
+     */
+    medianOrderValueInCents: bigint("median_order_value_in_cents", { mode: "number" }),
+    p90RefundRateBasisPoints: integer("p90_refund_rate_bp"),
+    p90CancellationRateBasisPoints: integer("p90_cancellation_rate_bp"),
+    priorConversionRateBasisPoints: integer("prior_conversion_rate_bp"),
+    /** How many observations stand behind the prior. A rate without one is a coincidence. */
+    priorSampleSize: integer("prior_sample_size").notNull(),
+    priorLevel: commerceCategoryPriorLevelEnum("prior_level").notNull(),
+    rankingMode: commerceRankingModeEnum("ranking_mode").notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_category_demand_snapshot_unq").on(
+      table.categoryId,
+      table.currency,
+      table.asOf,
+    ),
+    index("commerce_category_demand_snapshot_lookup_idx").on(
+      table.categoryId,
+      table.currency,
+      table.asOf.desc(),
+    ),
+    check("commerce_category_demand_snapshot_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_category_demand_snapshot_bounds_ck",
+      sql`qualified_order_count_30d >= 0
+          AND active_product_count >= 0
+          AND prior_sample_size >= 0
+          AND (median_order_value_in_cents IS NULL OR median_order_value_in_cents >= 0)
+          AND (p90_refund_rate_bp IS NULL OR p90_refund_rate_bp BETWEEN 0 AND 10000)
+          AND (p90_cancellation_rate_bp IS NULL OR p90_cancellation_rate_bp BETWEEN 0 AND 10000)
+          AND (prior_conversion_rate_bp IS NULL OR prior_conversion_rate_bp BETWEEN 0 AND 10000)`,
+    ),
+    /** Stops the ladder quietly labelling a global fallback as local knowledge. */
+    check(
+      "commerce_category_demand_snapshot_prior_ck",
+      sql`(prior_level = 'default_floor' AND prior_sample_size = 0)
+          OR (prior_level <> 'default_floor')`,
+    ),
+  ],
+);
+
+/**
+ * The append-only ranking audit history (Phase 13).
+ *
+ * Every raw input AND every component is stored beside the total, and a CHECK asserts the
+ * components sum to it — the `trending_video_snapshot` pattern, for the same reason: a
+ * ranking must be auditable from ONE ROW, not by re-running the job against data that has
+ * since moved, and a scorer bug should be a write failure rather than a silently wrong
+ * ranking.
+ */
+export const commerceProductTrendingSnapshot = pgTable(
+  "commerce_product_trending_snapshot",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    asOf: timestamp("as_of").notNull(),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    categoryId: text("category_id").references(() => commerceCategory.id, {
+      onDelete: "set null",
+    }),
+    currency: text("currency").notNull(),
+    /** 1-indexed WITHIN ITS CATEGORY — a global rank across unrelated categories is not a
+     * fact anyone consumes. */
+    rank: integer("rank").notNull(),
+    qualifiedVelocityPoints: integer("qualified_velocity_points").notNull(),
+    demandFreshnessPoints: integer("demand_freshness_points").notNull(),
+    conversionQualityPoints: integer("conversion_quality_points").notNull(),
+    sellerTrustPoints: integer("seller_trust_points").notNull(),
+    buyerEngagementPoints: integer("buyer_engagement_points").notNull(),
+    trendingScorePoints: integer("trending_score_points").notNull(),
+    /** Basis points, applied after the components sum. Separate columns rather than one
+     * product, so an appeal can be told which signal fired. */
+    subnetMultiplierBasisPoints: integer("subnet_multiplier_bp").default(10_000).notNull(),
+    orderValueMultiplierBasisPoints: integer("order_value_multiplier_bp")
+      .default(10_000)
+      .notNull(),
+    refundPenaltyBasisPoints: integer("refund_penalty_bp").default(10_000).notNull(),
+    cancellationPenaltyBasisPoints: integer("cancellation_penalty_bp").default(10_000).notNull(),
+    enforcementMultiplierBasisPoints: integer("enforcement_multiplier_bp")
+      .default(10_000)
+      .notNull(),
+    finalScorePoints: integer("final_score_points").notNull(),
+    qualifiedOrdersW1: integer("qualified_orders_w1").notNull(),
+    qualifiedOrdersW2: integer("qualified_orders_w2").notNull(),
+    distinctQualifiedBuyersW1: integer("distinct_qualified_buyers_w1").notNull(),
+    countedViewsW1: integer("counted_views_w1").notNull(),
+    savesW1: integer("saves_w1").notNull(),
+    lastQualifiedOrderAt: timestamp("last_qualified_order_at"),
+    demandAgeDays: integer("demand_age_days"),
+    /**
+     * EVERY MEASURED RATE IS NULLABLE AND SHIPS ITS SAMPLE SIZE — Phase 12's rule applied
+     * to a snapshot instead of a wire. "Scored 0 because unmeasurable" and "scored 0
+     * because it is genuinely 0%" must stay distinguishable in the stored row forever, or
+     * nobody can audit why a product ranked where it did.
+     */
+    conversionRateBasisPoints: integer("conversion_rate_bp"),
+    conversionSampleSize: integer("conversion_sample_size"),
+    sellerOnTimeRateBasisPoints: integer("seller_on_time_rate_bp"),
+    sellerOnTimeSampleSize: integer("seller_on_time_sample_size"),
+    subnetConcentrationBasisPoints: integer("subnet_concentration_bp"),
+    subnetSampleSize: integer("subnet_sample_size"),
+    rankingMode: commerceRankingModeEnum("ranking_mode").notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_product_trending_snapshot_product_unq").on(table.asOf, table.productId),
+    /**
+     * LOAD-BEARING. It makes a tie an INSERT FAILURE rather than "whichever order the
+     * planner produced", which is what forces the scorer to carry a total order all the way
+     * down to a deterministic tiebreak.
+     */
+    uniqueIndex("commerce_product_trending_snapshot_rank_unq").on(
+      table.asOf,
+      table.categoryId,
+      table.rank,
+    ),
+    index("commerce_product_trending_snapshot_product_idx").on(table.productId, table.asOf.desc()),
+    check(
+      "commerce_product_trending_snapshot_score_ck",
+      sql`rank >= 1
+          AND trending_score_points BETWEEN 0 AND 100
+          AND qualified_velocity_points >= 0 AND demand_freshness_points >= 0
+          AND conversion_quality_points >= 0 AND seller_trust_points >= 0
+          AND buyer_engagement_points >= 0
+          AND qualified_velocity_points + demand_freshness_points + conversion_quality_points
+              + seller_trust_points + buyer_engagement_points = trending_score_points`,
+    ),
+    /** A PENALTY CAN NEVER PROMOTE, as a database fact rather than a code convention. */
+    check(
+      "commerce_product_trending_snapshot_penalty_ck",
+      sql`subnet_multiplier_bp BETWEEN 0 AND 10000
+          AND order_value_multiplier_bp BETWEEN 0 AND 10000
+          AND refund_penalty_bp BETWEEN 0 AND 10000
+          AND cancellation_penalty_bp BETWEEN 0 AND 10000
+          AND enforcement_multiplier_bp BETWEEN 0 AND 10000
+          AND final_score_points BETWEEN 0 AND trending_score_points`,
+    ),
+    /** Rate and sample size are bound in BOTH directions. */
+    check(
+      "commerce_product_trending_snapshot_sample_ck",
+      sql`(conversion_rate_bp IS NULL) = (conversion_sample_size IS NULL)
+          AND (seller_on_time_rate_bp IS NULL) = (seller_on_time_sample_size IS NULL)
+          AND (subnet_concentration_bp IS NULL) = (subnet_sample_size IS NULL)
+          AND (conversion_rate_bp IS NULL OR conversion_rate_bp BETWEEN 0 AND 10000)
+          AND (seller_on_time_rate_bp IS NULL OR seller_on_time_rate_bp BETWEEN 0 AND 10000)
+          AND (subnet_concentration_bp IS NULL OR subnet_concentration_bp BETWEEN 0 AND 10000)
+          AND (conversion_sample_size IS NULL OR conversion_sample_size >= 0)
+          AND (seller_on_time_sample_size IS NULL OR seller_on_time_sample_size >= 0)
+          AND (subnet_sample_size IS NULL OR subnet_sample_size >= 0)`,
+    ),
+    check(
+      "commerce_product_trending_snapshot_inputs_ck",
+      sql`qualified_orders_w1 >= 0 AND qualified_orders_w2 >= 0
+          AND distinct_qualified_buyers_w1 >= 0 AND counted_views_w1 >= 0 AND saves_w1 >= 0
+          AND (demand_age_days IS NULL OR demand_age_days >= 0)
+          AND currency ~ '^[A-Z]{3}$'`,
+    ),
+  ],
+);
+
+/**
+ * The live row a rail reads (Phase 13).
+ *
+ * Cleared and re-set wholesale each run. WITHOUT THE CLEAR, a product that fell out of its
+ * category's top N would keep last hour's rank forever — the failure
+ * `recompute-trending-videos` documents for `videoStats.trendingRank`.
+ */
+export const commerceProductRankingState = pgTable(
+  "commerce_product_ranking_state",
+  {
+    productId: text("product_id")
+      .primaryKey()
+      .references(() => product.id, { onDelete: "cascade" }),
+    categoryId: text("category_id").references(() => commerceCategory.id, {
+      onDelete: "set null",
+    }),
+    /** NULL means "not ranked right now" — a normal state, not an error. */
+    trendingRankInCategory: integer("trending_rank_in_category"),
+    finalScorePoints: integer("final_score_points").notNull(),
+    rankingMode: commerceRankingModeEnum("ranking_mode").notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    computedAt: timestamp("computed_at").notNull(),
+  },
+  (table) => [
+    index("commerce_product_ranking_state_category_rank_idx")
+      .on(table.categoryId, table.trendingRankInCategory)
+      .where(sql`trending_rank_in_category IS NOT NULL`),
+    check(
+      "commerce_product_ranking_state_bounds_ck",
+      sql`final_score_points BETWEEN 0 AND 100
+          AND (trending_rank_in_category IS NULL OR trending_rank_in_category >= 1)`,
+    ),
+  ],
+);
+
+/**
+ * Current suppression, which OUTLIVES the hourly run (Phase 13).
+ *
+ * A separate table from the snapshot precisely so a moderator's decision survives the
+ * scorer truncating and rewriting its own output every hour. On a job-owned row, a human's
+ * ruling would last until the next tick.
+ */
+export const commerceProductRankingEnforcement = pgTable(
+  "commerce_product_ranking_enforcement",
+  {
+    productId: text("product_id")
+      .primaryKey()
+      .references(() => product.id, { onDelete: "cascade" }),
+    action: commerceRankingEnforcementActionEnum("action").notNull(),
+    actionSource: commerceRankingActionSourceEnum("action_source").notNull(),
+    penaltyKinds: commerceRankingPenaltyKindEnum("penalty_kinds").array().default([]).notNull(),
+    /** In words a seller could be shown. An unappealable suppression is how a marketplace
+     * loses honest sellers. */
+    reason: text("reason").notNull(),
+    decidedByUserId: text("decided_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  () => [
+    check(
+      "commerce_product_ranking_enforcement_source_ck",
+      sql`(action_source = 'automatic' AND decided_by_user_id IS NULL)
+          OR (action_source = 'moderator' AND decided_by_user_id IS NOT NULL)`,
+    ),
+    check(
+      "commerce_product_ranking_enforcement_reason_ck",
+      sql`length(btrim(reason)) BETWEEN 3 AND 1000`,
+    ),
+  ],
+);
+
+/**
+ * Every evaluation the breaker made, including the ones that did nothing (Phase 13).
+ *
+ * `action = 'none'` rows are the POINT of this table for its first weeks: the breaker ships
+ * observe-only, and the rate at which it WOULD have fired is what justifies letting it
+ * fire.
+ */
+export const commerceRankingEnforcementEvent = pgTable(
+  "commerce_ranking_enforcement_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    asOf: timestamp("as_of").notNull(),
+    action: commerceRankingEnforcementActionEnum("action").notNull(),
+    actionSource: commerceRankingActionSourceEnum("action_source").notNull(),
+    penaltyKinds: commerceRankingPenaltyKindEnum("penalty_kinds").array().default([]).notNull(),
+    /**
+     * Which clauses were satisfied, and which could not be evaluated at all. The second
+     * list is why this ships honest: at launch `fraudRiskScore` has no definable input, so
+     * it appears as unevaluated rather than silently passing.
+     */
+    satisfiedClauses: text("satisfied_clauses").array().default([]).notNull(),
+    unevaluatedClauses: text("unevaluated_clauses").array().default([]).notNull(),
+    decidedByUserId: text("decided_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    note: text("note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_ranking_enforcement_event_product_idx").on(table.productId, table.asOf.desc()),
+    /** "How often would the breaker have fired last week?" — the query that decides whether
+     * enforcement may be enabled at all. */
+    index("commerce_ranking_enforcement_event_action_idx").on(table.asOf.desc(), table.action),
+    check(
+      "commerce_ranking_enforcement_event_source_ck",
+      sql`(action_source = 'automatic' AND decided_by_user_id IS NULL)
+          OR (action_source = 'moderator' AND decided_by_user_id IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The per-product daily series (Phase 13).
+ *
+ * EASY TO OMIT AND THE WHOLE SPIKE DETECTOR DEPENDS ON IT. Refinement 6's MAD baseline
+ * needs a per-product HISTORY; if the only history were the trending snapshot, and that
+ * snapshot were pruned on the schedule its video sibling uses, the baseline could never be
+ * computed and the dynamic trigger would be permanently dead — shipped, wired, and silently
+ * returning nothing. Five integers a day per product is the cheapest thing in this phase.
+ */
+export const commerceProductDailySignal = pgTable(
+  "commerce_product_daily_signal",
+  {
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    signalDate: date("signal_date", { mode: "string" }).notNull(),
+    countedViews: integer("counted_views").default(0).notNull(),
+    saves: integer("saves").default(0).notNull(),
+    shares: integer("shares").default(0).notNull(),
+    qualifiedOrders: integer("qualified_orders").default(0).notNull(),
+    qualifiedOrderValueInCents: bigint("qualified_order_value_in_cents", { mode: "number" })
+      .default(0)
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "commerce_product_daily_signal_pk",
+      columns: [table.productId, table.signalDate],
+    }),
+    index("commerce_product_daily_signal_recent_idx").on(table.productId, table.signalDate.desc()),
+    check(
+      "commerce_product_daily_signal_bounds_ck",
+      sql`counted_views >= 0 AND saves >= 0 AND shares >= 0
+          AND qualified_orders >= 0 AND qualified_order_value_in_cents >= 0`,
+    ),
+  ],
+);
+
+/**
  * Derived engagement counters for a product (STORE Appendix A11, A9).
  *
  * A SEPARATE TABLE, not columns on `product`. That row is wide, hot and seller-owned:

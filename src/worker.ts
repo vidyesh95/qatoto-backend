@@ -9,6 +9,9 @@ import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
 import { handleDeliverNotification } from "#src/jobs/deliver-notification.js";
 import { handleDeriveProductRelations } from "#src/jobs/derive-product-relations.js";
+import { handleRecomputeCommerceCategoryDemand } from "#src/jobs/recompute-commerce-category-demand.js";
+import { handleRecomputeCommerceProductTrending } from "#src/jobs/recompute-commerce-product-trending.js";
+import { handleRollupCommerceProductDailySignal } from "#src/jobs/rollup-commerce-product-daily-signal.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
 import { handleExpireCommerceQuotes } from "#src/jobs/expire-commerce-quotes.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
@@ -53,6 +56,9 @@ import {
   handleExpireCommerceQuotesTick,
   handleReleaseExpiredInventoryReservationsTick,
   handleDeriveProductRelationsTick,
+  handleRecomputeCommerceCategoryDemandTick,
+  handleRecomputeCommerceProductTrendingTick,
+  handleRollupCommerceProductDailySignalTick,
   handleReconcileCommercePaymentsTick,
 } from "#src/jobs/scheduled-ticks.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
@@ -489,6 +495,45 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.deriveProductRelations,
     workOptions,
     runJob(JOB_NAMES.deriveProductRelations, handleDeriveProductRelations),
+  );
+
+  // --- STORE Phase 13 ranking. The ORDER THEY RUN IN is set by their cron slots, not by
+  // --- this list: 02:50 rollup, 03:00 category demand, and the hourly scoring run at :12.
+  await boss.work(
+    JOB_NAMES.rollupCommerceProductDailySignalTick,
+    workOptions,
+    runJob(
+      JOB_NAMES.rollupCommerceProductDailySignalTick,
+      handleRollupCommerceProductDailySignalTick,
+    ),
+  );
+  await boss.work(
+    JOB_NAMES.rollupCommerceProductDailySignal,
+    workOptions,
+    runJob(JOB_NAMES.rollupCommerceProductDailySignal, handleRollupCommerceProductDailySignal),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeCommerceCategoryDemandTick,
+    workOptions,
+    runJob(JOB_NAMES.recomputeCommerceCategoryDemandTick, handleRecomputeCommerceCategoryDemandTick),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeCommerceCategoryDemand,
+    workOptions,
+    runJob(JOB_NAMES.recomputeCommerceCategoryDemand, handleRecomputeCommerceCategoryDemand),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeCommerceProductTrendingTick,
+    workOptions,
+    runJob(
+      JOB_NAMES.recomputeCommerceProductTrendingTick,
+      handleRecomputeCommerceProductTrendingTick,
+    ),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeCommerceProductTrending,
+    workOptions,
+    runJob(JOB_NAMES.recomputeCommerceProductTrending, handleRecomputeCommerceProductTrending),
   );
 
   // §7 — funding.

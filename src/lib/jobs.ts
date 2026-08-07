@@ -135,6 +135,14 @@ export const JOB_NAMES = {
   // STORE Phase 9 (§15.9) — nightly co-occurrence mining into the relation graph.
   deriveProductRelationsTick: "derive-product-relations-tick",
   deriveProductRelations: "derive-product-relations",
+  // STORE Phase 13 — the ranking engine. Three pairs: a nightly per-product signal rollup,
+  // a nightly per-category demand recompute, and the hourly scoring run that reads both.
+  rollupCommerceProductDailySignalTick: "rollup-commerce-product-daily-signal-tick",
+  rollupCommerceProductDailySignal: "rollup-commerce-product-daily-signal",
+  recomputeCommerceCategoryDemandTick: "recompute-commerce-category-demand-tick",
+  recomputeCommerceCategoryDemand: "recompute-commerce-category-demand",
+  recomputeCommerceProductTrendingTick: "recompute-commerce-product-trending-tick",
+  recomputeCommerceProductTrending: "recompute-commerce-product-trending",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -1006,6 +1014,79 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.deriveProductRelations),
     },
   },
+  [JOB_NAMES.rollupCommerceProductDailySignalTick]: {
+    name: JOB_NAMES.rollupCommerceProductDailySignalTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.rollupCommerceProductDailySignalTick),
+    },
+  },
+  [JOB_NAMES.rollupCommerceProductDailySignal]: {
+    name: JOB_NAMES.rollupCommerceProductDailySignal,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // One day's signals, aggregated per product. Small, and the series it builds is what
+      // the MAD spike baseline is measured against.
+      expireInSeconds: 1800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.rollupCommerceProductDailySignal),
+    },
+  },
+  [JOB_NAMES.recomputeCommerceCategoryDemandTick]: {
+    name: JOB_NAMES.recomputeCommerceCategoryDemandTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeCommerceCategoryDemandTick),
+    },
+  },
+  [JOB_NAMES.recomputeCommerceCategoryDemand]: {
+    name: JOB_NAMES.recomputeCommerceCategoryDemand,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // Percentiles over a 30-day qualified sample, per category per currency.
+      expireInSeconds: 1800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeCommerceCategoryDemand),
+    },
+  },
+  [JOB_NAMES.recomputeCommerceProductTrendingTick]: {
+    name: JOB_NAMES.recomputeCommerceProductTrendingTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeCommerceProductTrendingTick),
+    },
+  },
+  [JOB_NAMES.recomputeCommerceProductTrending]: {
+    name: JOB_NAMES.recomputeCommerceProductTrending,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // MUST finish inside its own hour, or the next tick queues behind it forever.
+      expireInSeconds: 1800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeCommerceProductTrending),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -1130,6 +1211,15 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // recompute chain and well before the 04:55 prune, so a night's completed orders are
   // settled before their co-occurrence is mined.
   [JOB_NAMES.deriveProductRelationsTick]: "40 2 * * *",
+  // STORE Phase 13 — nightly signal rollup at 02:50, after relation derivation at 02:40 and
+  // before the category demand recompute that reads nothing from it but shares its window.
+  [JOB_NAMES.rollupCommerceProductDailySignalTick]: "50 2 * * *",
+  // STORE Phase 13 — nightly category demand at 03:00, clear of the 03:20-03:45 chain.
+  [JOB_NAMES.recomputeCommerceCategoryDemandTick]: "0 3 * * *",
+  // STORE Phase 13 — hourly scoring. Minute :12 is unoccupied at EVERY hour: :05, :18, :20,
+  // :35 and :50 already carry hourly ticks, and an hourly job must not meet a nightly one
+  // 365 times a year.
+  [JOB_NAMES.recomputeCommerceProductTrendingTick]: "12 * * * *",
 };
 
 export type JobEnqueueError =
@@ -1391,6 +1481,12 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.reconcileCommercePayments]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.deriveProductRelationsTick]: TickPayloadSchema,
   [JOB_NAMES.deriveProductRelations]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.rollupCommerceProductDailySignalTick]: TickPayloadSchema,
+  [JOB_NAMES.rollupCommerceProductDailySignal]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.recomputeCommerceCategoryDemandTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeCommerceCategoryDemand]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.recomputeCommerceProductTrendingTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeCommerceProductTrending]: AsOfOnlyPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -1523,4 +1619,10 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.reconcileCommercePayments}:${asOfIso}`,
   deriveProductRelations: (asOfIso: string): string =>
     `${JOB_NAMES.deriveProductRelations}:${asOfIso}`,
+  rollupCommerceProductDailySignal: (asOfIso: string): string =>
+    `${JOB_NAMES.rollupCommerceProductDailySignal}:${asOfIso}`,
+  recomputeCommerceCategoryDemand: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputeCommerceCategoryDemand}:${asOfIso}`,
+  recomputeCommerceProductTrending: (asOfIso: string): string =>
+    `${JOB_NAMES.recomputeCommerceProductTrending}:${asOfIso}`,
 } as const;

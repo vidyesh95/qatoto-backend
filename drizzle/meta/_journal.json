@@ -554,6 +554,20 @@
       "when": 1786105739394,
       "tag": "0078_store_phase_13_qualification",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1786105744394,
+      "tag": "0079_store_phase_13_category_demand",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1786105749394,
+      "tag": "0080_store_phase_13_ranking_snapshot",
+      "breakpoints": true
     }
   ]
 }

@@ -25,7 +25,8 @@ describe("commerce PII encryption", () => {
   });
 
   it("round-trips UTF-8 PII in a versioned authenticated envelope", () => {
-    encryptionConfiguration.COMMERCE_PII_ENCRYPTION_SECRET = "test-commerce-secret-with-at-least-thirty-two-characters";
+    encryptionConfiguration.COMMERCE_PII_ENCRYPTION_SECRET =
+      "test-commerce-secret-with-at-least-thirty-two-characters";
 
     const encrypted = encryptCommercePii("पुणे — tax identifier 123");
     expect(encrypted.success).toBe(true);
@@ -39,7 +40,8 @@ describe("commerce PII encryption", () => {
   });
 
   it("rejects tampering without exposing which bytes failed authentication", () => {
-    encryptionConfiguration.COMMERCE_PII_ENCRYPTION_SECRET = "test-commerce-secret-with-at-least-thirty-two-characters";
+    encryptionConfiguration.COMMERCE_PII_ENCRYPTION_SECRET =
+      "test-commerce-secret-with-at-least-thirty-two-characters";
     const encrypted = encryptCommercePii("registration-123");
     if (!encrypted.success) return;
 
@@ -52,7 +54,8 @@ describe("commerce PII encryption", () => {
   });
 
   it("refuses unknown key versions explicitly", () => {
-    encryptionConfiguration.COMMERCE_PII_ENCRYPTION_SECRET = "test-commerce-secret-with-at-least-thirty-two-characters";
+    encryptionConfiguration.COMMERCE_PII_ENCRYPTION_SECRET =
+      "test-commerce-secret-with-at-least-thirty-two-characters";
     expect(decryptCommercePii("v2.abc.def.ghi")).toEqual({
       success: false,
       error: { type: "UNSUPPORTED_KEY_VERSION", keyVersion: 2 },

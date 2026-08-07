@@ -582,6 +582,72 @@ export async function handleDeriveProductRelationsTick(
 }
 
 /**
+ * STORE Phase 13 — nightly. Quantized to the UTC DAY: it aggregates yesterday, so two fires
+ * in one day would recompute the same answer twice for nothing.
+ */
+export async function handleRollupCommerceProductDailySignalTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.rollupCommerceProductDailySignal,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.rollupCommerceProductDailySignal(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `rollup-commerce-product-daily-signal-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/** STORE Phase 13 — nightly. Percentiles over a 30-day window move slowly. */
+export async function handleRecomputeCommerceCategoryDemandTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeCommerceCategoryDemand,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeCommerceCategoryDemand(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-commerce-category-demand-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/**
+ * STORE Phase 13 — hourly. The HOUR, not the day: a surface claiming to show what is rising
+ * now cannot be built on a boundary that moves once a day.
+ */
+export async function handleRecomputeCommerceProductTrendingTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcHourStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeCommerceProductTrending,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.recomputeCommerceProductTrending(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-commerce-product-trending-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/**
  * The hourly commerce payment reconciliation tick (STORE Phase 5).
  *
  * Quantized to the HOUR so a double cron fire collapses to one real job. Re-enqueues
