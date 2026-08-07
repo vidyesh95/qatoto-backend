@@ -28,7 +28,7 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–11 shipped and hardened.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–12 shipped and hardened.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
@@ -50,9 +50,14 @@
 > `docs/STORE_PHASE_7_ROLLOUT.md` for the trust MVP, `docs/STORE_PHASE_8_ROLLOUT.md` for
 > catalog depth, `docs/STORE_PHASE_9_ROLLOUT.md` for guided pathways, and
 > `docs/STORE_PHASE_11_ROLLOUT.md` for buyer logistics, and
-> `docs/STORE_PHASE_10_ROLLOUT.md` for the public voice. Phase 10 adds **review reads with media,
+> `docs/STORE_PHASE_10_ROLLOUT.md` for the public voice, and
+> `docs/STORE_PHASE_12_ROLLOUT.md` for seller profile depth. Phase 10 adds **review reads with media,
 > sub-scores, helpful votes and seller replies; product Q&A; user-scoped engagement counters;
-> content reports with a commerce moderation queue; and pre-sales product inquiries**.
+> content reports with a commerce moderation queue; and pre-sales product inquiries**. Phase 12 adds
+> **seller-declared company depth, moderated certifications, and the promised-delivery timestamp
+> that makes `onTimeShipmentRate`, reorder rate and measured response time real** — projected as a
+> `declaredProfile` object separate from `measuredMetrics`, because a seller's assertion and a
+> platform measurement must not be renderable through one code path.
 > Trade-assurance language, real payment processors, external provider adapters/webhooks, ranking,
 > and recommendations remain planned unless a section explicitly says otherwise. **A10 (public
 > product comments) stays deliberately unbuilt** pending the product decision the appendix asks
@@ -65,14 +70,16 @@
 > **What is NOT built, and what the frontend is standing in for meanwhile:**
 > [Appendix A](#appendix-a--what-the-frontend-needs-and-this-backend-does-not-have)
 > is the register of every remaining store feature the frontend renders as mock UI, with the tables,
-> columns and routes each one needs. One entry there still describes a field that reaches the wire and
-> can never carry a real value: `onTimeShipmentRate` is hardcoded `null`. The
+> columns and routes each one needs. **No entry there now describes a field that reaches the wire and
+> can never carry a real value** — `onTimeShipmentRate` was the last one, and Phase 12 supplied the
+> promised-delivery timestamp it needed (A13). It is `null` only below its sample threshold, and
+> `onTimeSampleSize` rides alongside so "not enough data" is distinguishable from "not wired". The
 > `trending_placeholder` rail strategy still returns an empty list unconditionally — Phase 9 shipped
 > the co-occurrence job §15.9 called its honest replacement, but trending is _ranking_, which §12
 > defers, so the strategy remains unbuilt rather than broken. Checkout
 > `shippingInCents` is still written literal `0` (`commerce-checkout.service.ts:515-517` and
 > `:807-809`) — Phase 8 supplies the weight and dimensions A16 needs to rate freight, but not the
-> estimate itself.
+> estimate itself, and A16 records that as the decision rather than the gap.
 
 ---
 
@@ -343,15 +350,15 @@ organization trade state, and category state must all be eligible.
 `commerce_provider_kind`
 
 - seeded values:
-    - `freight_forwarder`
-    - `logistics_operator`
-    - `customs_broker`
-    - `insurance_provider`
-    - `inspection_agency`
-    - `testing_certification_lab`
-    - `marketing_agency`
-    - `warehouse_provider`
-    - `foreign_exchange_facilitator`
+  - `freight_forwarder`
+  - `logistics_operator`
+  - `customs_broker`
+  - `insurance_provider`
+  - `inspection_agency`
+  - `testing_certification_lab`
+  - `marketing_agency`
+  - `warehouse_provider`
+  - `foreign_exchange_facilitator`
 
 `commerce_provider_kind_link` is many-to-many because one verified organization may operate, for
 example, freight forwarding and warehousing. Verification is recorded per kind, not globally.
@@ -686,16 +693,16 @@ Responses use canonical projections and stable tagged errors:
 
 ```ts
 type CommerceResult<TValue, TError> =
-    { success: true; value: TValue } | { success: false; error: TError };
+  { success: true; value: TValue } | { success: false; error: TError };
 
 type QuoteAcceptanceError =
-    | { type: "NOT_FOUND" }
-    | { type: "NOT_AUTHORIZED" }
-    | { type: "QUOTE_EXPIRED"; expiredAt: Date }
-    | { type: "REVISION_CHANGED"; currentRevision: number }
-    | { type: "RFQ_NOT_OPEN" }
-    | { type: "ORGANIZATION_NOT_ACTIVE" }
-    | { type: "CONFLICTING_ACCEPTANCE"; orderId: string };
+  | { type: "NOT_FOUND" }
+  | { type: "NOT_AUTHORIZED" }
+  | { type: "QUOTE_EXPIRED"; expiredAt: Date }
+  | { type: "REVISION_CHANGED"; currentRevision: number }
+  | { type: "RFQ_NOT_OPEN" }
+  | { type: "ORGANIZATION_NOT_ACTIVE" }
+  | { type: "CONFLICTING_ACCEPTANCE"; orderId: string };
 ```
 
 HTTP mapping:
@@ -921,6 +928,29 @@ Scheduled jobs:
   uncovered route returns an empty list rather than a zero. And landing on this code uncovered a
   live bug — `createAddress`'s audit payload used the key `addressKind`, which the PII-name guard
   matched, so address creation had been failing at runtime for every caller.
+
+### Phase 12 — seller profile depth
+
+- `commerce_seller_profile`, organization media, site access, stakeholders and capabilities
+  (A13 items 2–5).
+- `commerce_organization_certification` with a moderated review lifecycle (A13 item 6) —
+  **not** a `certification` kind on `commerce_organization_verification`, whose pending
+  unique index allows one pending row per kind and which has no name, issuer or expiry
+  column.
+- The promised-delivery chain and the three derived metrics (A13 items 1 and 7), closing the
+  last entry in Appendix A that reached the wire and could never carry a value.
+- **Shipped and hardened (`0069`–`0072`).** See `docs/STORE_PHASE_12_ROLLOUT.md`. Four things
+  worth carrying forward. **The promise must be fixed where the order is created** — a
+  seller-typed date at ship time would let the metric grade itself, and re-reading the
+  product at confirm would hold a seller to a lead time the buyer never saw; it therefore
+  rides product → prepare line → order line, because `confirmCheckout` builds an order line
+  verbatim from the prepare row. **Expiry is not a state**: lapsing is a `current_date`
+  comparison at read time, where a stored `expired` value would need a job to flip it and
+  would be wrong between ticks. **Every rate is `null` below its sample threshold and ships
+  its sample size**, and the thresholds stay off the wire. And **reusing the
+  verification-evidence upload middleware was wrong** — it caps multer at two text fields and
+  a certification sends six, so every submission returned a flat 422 until it got its own
+  parser. Only the HTTP smoke could have found that.
 
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
@@ -1478,48 +1508,70 @@ entry, bound by a check in both directions.
 
 ---
 
-### A13. There is no seller profile table
+### A13. There is no seller profile table — **SHIPPED (Phase 12)**
 
 **Needed by:** `sections/company-details-section.tsx` (six stats, rating, main categories, four
 capabilities), `sheets/company-details-sheet.tsx` (founded, location, business type, four factory
 photos, four freight-access rows, visit policy, two stakeholders) and
 `sheets/verified-capabilities-sheet.tsx` (four capabilities, five certifications).
 
-**What exists:** `commerce_organization` — **16 columns**, none of them profile depth.
+**What existed:** `commerce_organization` — **16 columns**, none of them profile depth.
 `commerce_provider_profile` exists but is keyed to _service providers_; a manufacturer selling
-products has no profile row at all. Of the six mock stats:
+products had no profile row at all. Of the six mock stats:
 
-| Stat                                   | Reality                                                                                                                                                           |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| On-time delivery rate                  | **projected but always `null`** — `commerce-trust-metrics.service.ts:98` says it "stays null until promised-delivery timestamps exist", and no such column exists |
-| Completed orders                       | real, derived                                                                                                                                                     |
-| Response time                          | exists for **providers only**, and is a manually-entered integer, not measured                                                                                    |
-| Year founded · Collaborating factories | do not exist                                                                                                                                                      |
-| Online revenue                         | does not exist — and see §14                                                                                                                                      |
-| Reorder rate                           | does not exist                                                                                                                                                    |
+| Stat                                   | Before Phase 12                                                                                                                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| On-time delivery rate                  | **projected but always `null`** — `commerce-trust-metrics.service.ts:98` said it "stays null until promised-delivery timestamps exist", and no such column existed |
+| Completed orders                       | real, derived                                                                                                                                                      |
+| Response time                          | existed for **providers only**, and was a manually-entered integer, not measured                                                                                   |
+| Year founded · Collaborating factories | did not exist                                                                                                                                                      |
+| Online revenue                         | does not exist — and see §14                                                                                                                                       |
+| Reorder rate                           | did not exist                                                                                                                                                      |
 
-**What to build:**
+**What exists now:** all of it except online revenue, which stays §14's decision.
+`commerce_seller_profile`, `commerce_organization_media`, `commerce_organization_site_access`,
+`commerce_organization_stakeholder`, `commerce_organization_capability` and
+`commerce_organization_certification`, authored through ten routes on
+`commerce-seller-profile.routes.ts`; plus `promised_delivery_at` on the order and its product lines,
+`lead_time_max_days_snapshot` on the prepare line, and `reorderRate` /
+`measuredResponseTimeHours` derived in `commerce-trust-metrics.service.ts`.
 
-1. **A promised-delivery timestamp** on the shipment or order line. Until it exists,
-   `onTimeShipmentRate` is a field the frontend renders that can never be non-null — the worst kind
-   of gap, because it looks wired.
-2. `commerce_seller_profile` mirroring the provider one, holding seller-declared `yearFounded`,
-   `factoryCount`, `businessType`, and a visit policy.
-3. `commerce_organization_media` for factory photos, and `commerce_organization_site_access` for the
-   road/sea/air/rail rows with distance detail.
-4. `commerce_organization_stakeholder` for ownership.
-5. `commerce_organization_capability` for OEM / customization / inspection / R&D.
-6. **Certifications**: `commerceDocumentKindEnum` has no certificate kind and
-   `commerceVerificationKindEnum` covers only identity, registration, tax, address and bank. Add a
-   `certification` kind plus a public projection of _approved_ certificates.
-7. Derive **reorder rate** and **response time** from order and message data rather than declaring
-   them.
+**Item 6's plan was wrong, and the correction shipped with it.** Certifications cannot ride
+`commerce_organization_verification`: `commerce_organization_verification_pending_uidx` is unique on
+`(organizationId, verificationKind)` where pending, so an organization could hold exactly ONE pending
+certificate, and a supplier has ISO 9001 and CE and RoHS and BSCI. It has no name, issuer, standard
+or expiry column either, so an approved row could not say what it certifies or when it lapses — and
+the platform would publish lapsed certificates indefinitely. A parallel table ships instead, the same
+call `commerce_content_report` made in Phase 10.
 
-**Rule, and it is the whole point of splitting this list:** a derived stat and a declared stat must
-be visibly different on the wire. "98.6% on-time, measured across 412 completed orders" and "founded
-2009, per the seller" are different kinds of claim, and a projection that flattens them into one
-`stats: {label, value}[]` array — which is exactly the mock's shape — teaches the UI to present a
-seller's assertion as a platform measurement.
+**Item 1 understated the chain.** "A promised-delivery timestamp on the shipment or order line" needs
+THREE tables, because `confirmCheckout` builds each order line verbatim from the prepare row — the
+constraint A18 had to route around. The seller's advertised lead time is snapshotted at preparation
+and the promise derived at confirm, because a seller typing a date at ship time would set the bar
+after knowing the outcome, and re-reading the product at confirm would hold it to a lead time the
+buyer never saw.
+
+**Expiry is deliberately not a certification state.** Lapsing is `validUntil < current_date` at read
+time; a stored `expired` value would need a nightly job and would be wrong between ticks, which is
+the exact failure this entry exists to prevent.
+
+**Rule, and it is the whole point of splitting this list — now enforced structurally:** a derived
+stat and a declared stat must be visibly different on the wire. "98.6% on-time, measured across 412
+completed orders" and "founded 2009, per the seller" are different kinds of claim, and a projection
+that flattens them into one `stats: {label, value}[]` array — which is exactly the mock's shape —
+teaches the UI to present a seller's assertion as a platform measurement. The storefront and provider
+reads therefore carry **two objects**, `declaredProfile` and `measuredMetrics`, and the flattening is
+unavailable rather than merely discouraged.
+
+**Found on the way in:** `PublicProviderCard` had been shipping `averageResponseTimeHours` — an
+integer a provider types about itself — as a flat sibling of the platform-derived
+`fulfillmentMetrics.onTimeShipmentRate` since Phase 2. That is this entry's own rule being violated
+by live code. It is now `declaredResponseTimeHours`, and the measured median lives under
+`measuredMetrics`.
+
+**Every rate is `null` below its sample threshold and ships its sample size.** "100% on-time across
+three orders" is not a performance claim, and a bare `1.0` is indistinguishable from an earned one.
+The thresholds themselves stay off the wire.
 
 ---
 
