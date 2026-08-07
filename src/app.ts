@@ -27,13 +27,21 @@ import commerceProductQaRouter from "#src/routes/commerce-product-qa.routes.js";
 import commerceProvidersRouter from "#src/routes/commerce-providers.routes.js";
 import commerceQuotesRouter from "#src/routes/commerce-quotes.routes.js";
 import commerceRfqsRouter from "#src/routes/commerce-rfqs.routes.js";
+import commerceSellerProfileRouter from "#src/routes/commerce-seller-profile.routes.js";
 import commerceTrustRouter from "#src/routes/commerce-trust.routes.js";
-import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
+import compensationRouter, {
+  governanceRouter,
+} from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
-import engagementRouter, { commentRouter, creatorRouter } from "#src/routes/engagement.routes.js";
+import engagementRouter, {
+  commentRouter,
+  creatorRouter,
+} from "#src/routes/engagement.routes.js";
 import feedRouter from "#src/routes/feed.routes.js";
-import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
+import fundingRouter, {
+  projectFundingRouter,
+} from "#src/routes/funding.routes.js";
 import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
 import notificationsRouter from "#src/routes/notifications.routes.js";
@@ -55,10 +63,14 @@ import researchProjectsRouter, {
 import seriesRouter from "#src/routes/series.routes.js";
 import spotlightRouter from "#src/routes/spotlight.routes.js";
 import storeRouter from "#src/routes/store.routes.js";
-import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
+import supplierRouter, {
+  projectGoToMarketRouter,
+} from "#src/routes/suppliers.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
 import videosRouter from "#src/routes/videos.routes.js";
-import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.js";
+import workshopRouter, {
+  dailyLogFeedRouter,
+} from "#src/routes/workshop.routes.js";
 
 const app = express();
 
@@ -150,6 +162,13 @@ app.use("/", authRouter);
 app.use("/users", usersRouter);
 app.use("/handles", handlesRouter);
 app.use("/commerce", commerceOrganizationsRouter);
+/**
+ * A13. Declared AFTER the organizations router even though every path is under
+ * `/organizations/:organizationId`. Express matches in declaration order and the paths do
+ * not collide — `seller-profile`, `site-access`, `stakeholders`, `capabilities`, `media` and
+ * `certifications` are all segments that router does not claim.
+ */
+app.use("/commerce", commerceSellerProfileRouter);
 app.use("/commerce", commerceProvidersRouter);
 app.use("/commerce", commerceRfqsRouter);
 app.use("/commerce", commerceQuotesRouter);

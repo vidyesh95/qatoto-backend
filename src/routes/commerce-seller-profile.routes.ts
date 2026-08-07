@@ -1,0 +1,130 @@
+import express from "express";
+
+import * as commerceSellerProfileController from "#src/controllers/commerce-seller-profile.controller.js";
+import { idempotency } from "#src/middleware/idempotency.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
+import {
+  commerceOrganizationEvidenceLimiter,
+  commerceOrganizationWriteLimiter,
+  productCatalogDepthWriteLimiter,
+} from "#src/middleware/rate-limit.js";
+import { requireAuth } from "#src/middleware/require-auth.js";
+import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
+import { uploadOrganizationMediaImage } from "#src/middleware/upload-organization-media.js";
+
+/**
+ * Seller profile depth (Appendix A13, Phase 12).
+ *
+ * WHY A SEPARATE ROUTER from commerce-organizations.routes.ts, when every path here is
+ * under `/organizations/:organizationId`: that file owns identity, membership, addresses and
+ * verification — the things that decide whether an organization may trade at all. This file
+ * owns the company's public FACE. They authorize differently (`PROFILE_MANAGERS` is narrower
+ * than the address managers), they rate-limit differently, and mixing them would put
+ * marketing copy in the same module as the trade-state gate.
+ *
+ * `/admin/certifications/:certificationId/decision` carries NO capability middleware, and
+ * that is the posture commerce-content-reports.routes.ts established: `moderate_commerce` is
+ * demanded by the SERVICE, inside the transaction that writes the decision, so the check and
+ * the write cannot drift apart.
+ */
+const router = express.Router();
+
+router.patch(
+  "/organizations/:organizationId/seller-profile",
+  requireAuth,
+  commerceOrganizationWriteLimiter,
+  compactBody,
+  idempotency({ required: true }),
+  commerceSellerProfileController.upsertSellerProfile,
+);
+
+/**
+ * The three PUT-replace surfaces. `longFormBody` because a twelve-row site-access list with
+ * notes exceeds the compact cap, matching what `PUT /products/:id/variants` needed.
+ */
+router.put(
+  "/organizations/:organizationId/site-access",
+  requireAuth,
+  commerceOrganizationWriteLimiter,
+  longFormBody,
+  idempotency({ required: true }),
+  commerceSellerProfileController.replaceSiteAccess,
+);
+router.put(
+  "/organizations/:organizationId/stakeholders",
+  requireAuth,
+  commerceOrganizationWriteLimiter,
+  longFormBody,
+  idempotency({ required: true }),
+  commerceSellerProfileController.replaceStakeholders,
+);
+router.put(
+  "/organizations/:organizationId/capabilities",
+  requireAuth,
+  commerceOrganizationWriteLimiter,
+  longFormBody,
+  idempotency({ required: true }),
+  commerceSellerProfileController.replaceCapabilities,
+);
+
+/**
+ * `media/reorder` is declared BEFORE `media/:mediaId` so "reorder" is never read as a media
+ * id — the same ordering `/:id/images/reorder` needs in products.routes.ts.
+ */
+router.patch(
+  "/organizations/:organizationId/media/reorder",
+  requireAuth,
+  productCatalogDepthWriteLimiter,
+  compactBody,
+  idempotency({ required: true }),
+  commerceSellerProfileController.reorderOrganizationMedia,
+);
+router.post(
+  "/organizations/:organizationId/media",
+  requireAuth,
+  productCatalogDepthWriteLimiter,
+  uploadOrganizationMediaImage,
+  idempotency({ required: true }),
+  commerceSellerProfileController.addOrganizationMedia,
+);
+/**
+ * No `compactBody`: this controller reads params only. `json-body-budget.test.ts` treats a
+ * declared cap on a route that never reads a body as a documented lie and fails the build.
+ */
+router.delete(
+  "/organizations/:organizationId/media/:mediaId",
+  requireAuth,
+  productCatalogDepthWriteLimiter,
+  idempotency({ required: true }),
+  commerceSellerProfileController.deleteOrganizationMedia,
+);
+
+/**
+ * Certification evidence reuses the verification-evidence multipart middleware unchanged —
+ * it already caps the size and the controller re-checks the decoded magic bytes. The
+ * evidence limiter, not the write limiter: an upload is the expensive path.
+ */
+router.get(
+  "/organizations/:organizationId/certifications",
+  requireAuth,
+  commerceSellerProfileController.listCertifications,
+);
+router.post(
+  "/organizations/:organizationId/certifications",
+  requireAuth,
+  commerceOrganizationEvidenceLimiter,
+  uploadCommerceVerificationEvidence,
+  idempotency({ required: true }),
+  commerceSellerProfileController.submitCertification,
+);
+
+router.post(
+  "/admin/certifications/:certificationId/decision",
+  requireAuth,
+  commerceOrganizationWriteLimiter,
+  compactBody,
+  idempotency({ required: true }),
+  commerceSellerProfileController.decideCertification,
+);
+
+export default router;

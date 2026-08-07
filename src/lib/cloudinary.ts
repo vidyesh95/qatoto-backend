@@ -95,7 +95,10 @@ export async function uploadUserAvatar(
       success: false,
       error: {
         type: "UPLOAD_FAILED",
-        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        cause:
+          uploadError instanceof Error
+            ? uploadError.message
+            : String(uploadError),
       },
     };
   }
@@ -113,10 +116,13 @@ export async function deleteUserAvatar(
   }
 
   try {
-    const destroyResult = await cloudinary.uploader.destroy(avatarPublicId(userId), {
-      resource_type: "image",
-      invalidate: true,
-    });
+    const destroyResult = await cloudinary.uploader.destroy(
+      avatarPublicId(userId),
+      {
+        resource_type: "image",
+        invalidate: true,
+      },
+    );
     // Cloudinary returns { result: "ok" } on delete, "not found" if it never existed.
     return { success: true, value: { deleted: destroyResult.result === "ok" } };
   } catch (deleteError) {
@@ -124,7 +130,10 @@ export async function deleteUserAvatar(
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }
@@ -193,7 +202,10 @@ export async function uploadProductImage(
       success: false,
       error: {
         type: "UPLOAD_FAILED",
-        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        cause:
+          uploadError instanceof Error
+            ? uploadError.message
+            : String(uploadError),
       },
     };
   }
@@ -222,7 +234,10 @@ export async function deleteProductImage(
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }
@@ -241,17 +256,23 @@ export async function deleteAllProductImages(
   }
 
   try {
-    await cloudinary.api.delete_resources_by_prefix(productFolderPrefix(productId), {
-      resource_type: "image",
-      invalidate: true,
-    });
+    await cloudinary.api.delete_resources_by_prefix(
+      productFolderPrefix(productId),
+      {
+        resource_type: "image",
+        invalidate: true,
+      },
+    );
     return { success: true, value: { deleted: true } };
   } catch (deleteError) {
     return {
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }
@@ -331,7 +352,10 @@ export async function uploadReviewMedia(
       success: false,
       error: {
         type: "UPLOAD_FAILED",
-        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        cause:
+          uploadError instanceof Error
+            ? uploadError.message
+            : String(uploadError),
       },
     };
   }
@@ -360,7 +384,155 @@ export async function deleteReviewMedia(
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
+      },
+    };
+  }
+}
+
+/**
+ * Company media — factory, office, warehouse and production-line photography (A13).
+ *
+ * Public delivery, like review photos and product images: these render on a public
+ * storefront. The re-encode through `validateAndNormalizeImage` matters MORE here than
+ * anywhere else in this codebase, including review photos. A factory photograph is taken
+ * on site by staff, on a phone, and its EXIF names the seller's coordinates. That is
+ * exactly the disclosure a seller does not realise it is making, which is why A13's media
+ * is uploaded rather than hotlinked the way `commerce_product_highlight.imageUrl` is.
+ */
+const ORGANIZATION_MEDIA_FOLDER = "qatoto/commerce-organizations";
+
+function organizationMediaPublicId(
+  organizationId: string,
+  mediaId: string,
+): string {
+  return `${ORGANIZATION_MEDIA_FOLDER}/${organizationId}/${mediaId}`;
+}
+
+function organizationMediaFolderPrefix(organizationId: string): string {
+  return `${ORGANIZATION_MEDIA_FOLDER}/${organizationId}/`;
+}
+
+/**
+ * Upload one company photo from an already-validated/re-encoded buffer.
+ *
+ * The buffer MUST have been through `validateAndNormalizeImage` first — that is what
+ * proves the bytes are a raster image from their magic bytes rather than from the
+ * multipart header, and what strips the EXIF described above.
+ *
+ * Returns the public id alongside the URL because `commerce_organization_media` stores it
+ * so a later delete can destroy the remote asset. It is never projected publicly and never
+ * named in an audit payload.
+ */
+export async function uploadOrganizationMedia(
+  organizationId: string,
+  mediaId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string; publicId: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  const publicId = organizationMediaPublicId(organizationId, mediaId);
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: publicId,
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl, publicId } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause:
+          uploadError instanceof Error
+            ? uploadError.message
+            : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Destroy one company photo asset by its stored public id.
+ *
+ * Takes the id rather than rebuilding it from (organizationId, mediaId) so a row written
+ * under a different naming scheme still deletes correctly. An already-absent asset is
+ * success — the desired end state is reached either way.
+ */
+export async function deleteOrganizationMedia(
+  publicId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult = await cloudinary.uploader.destroy(publicId, {
+      resource_type: "image",
+      invalidate: true,
+    });
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
+      },
+    };
+  }
+}
+
+/** Destroy every company photo under an organization's folder. */
+export async function deleteAllOrganizationMedia(
+  organizationId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    await cloudinary.api.delete_resources_by_prefix(
+      organizationMediaFolderPrefix(organizationId),
+      { resource_type: "image", invalidate: true },
+    );
+    return { success: true, value: { deleted: true } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }
@@ -379,17 +551,23 @@ export async function deleteAllReviewMedia(
   }
 
   try {
-    await cloudinary.api.delete_resources_by_prefix(reviewFolderPrefix(reviewId), {
-      resource_type: "image",
-      invalidate: true,
-    });
+    await cloudinary.api.delete_resources_by_prefix(
+      reviewFolderPrefix(reviewId),
+      {
+        resource_type: "image",
+        invalidate: true,
+      },
+    );
     return { success: true, value: { deleted: true } };
   } catch (deleteError) {
     return {
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }
@@ -453,7 +631,10 @@ export async function uploadProjectCover(
       success: false,
       error: {
         type: "UPLOAD_FAILED",
-        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        cause:
+          uploadError instanceof Error
+            ? uploadError.message
+            : String(uploadError),
       },
     };
   }
@@ -471,10 +652,10 @@ export async function deleteProjectCover(
   }
 
   try {
-    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
-      projectCoverPublicId(projectId),
-      { invalidate: true },
-    );
+    const destroyResult: { result?: string } =
+      await cloudinary.uploader.destroy(projectCoverPublicId(projectId), {
+        invalidate: true,
+      });
     const outcome = destroyResult.result;
     return { success: true, value: { deleted: outcome === "ok" } };
   } catch (deleteError) {
@@ -482,7 +663,10 @@ export async function deleteProjectCover(
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }
@@ -552,7 +736,10 @@ export async function uploadVideoThumbnail(
       success: false,
       error: {
         type: "UPLOAD_FAILED",
-        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        cause:
+          uploadError instanceof Error
+            ? uploadError.message
+            : String(uploadError),
       },
     };
   }
@@ -570,17 +757,20 @@ export async function deleteVideoThumbnail(
   }
 
   try {
-    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
-      videoThumbnailPublicId(videoId),
-      { invalidate: true },
-    );
+    const destroyResult: { result?: string } =
+      await cloudinary.uploader.destroy(videoThumbnailPublicId(videoId), {
+        invalidate: true,
+      });
     return { success: true, value: { deleted: destroyResult.result === "ok" } };
   } catch (deleteError) {
     return {
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }
@@ -600,7 +790,10 @@ export async function deleteVideoThumbnail(
 const PHYSICAL_RECEIPT_FOLDER = "qatoto/proof-of-effort/receipts";
 
 /** The stable public id a receipt's bytes always live at, within its project. */
-export function physicalReceiptPublicId(projectId: string, contentSha256: string): string {
+export function physicalReceiptPublicId(
+  projectId: string,
+  contentSha256: string,
+): string {
   return `${PHYSICAL_RECEIPT_FOLDER}/${projectId}/${contentSha256}`;
 }
 
@@ -621,16 +814,20 @@ export async function deletePhysicalReceipt(
   }
 
   try {
-    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(publicId, {
-      invalidate: true,
-    });
+    const destroyResult: { result?: string } =
+      await cloudinary.uploader.destroy(publicId, {
+        invalidate: true,
+      });
     return { success: true, value: { deleted: destroyResult.result === "ok" } };
   } catch (deleteError) {
     return {
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }
@@ -658,7 +855,12 @@ export async function uploadPhysicalReceipt(
   try {
     const secureUrl = await new Promise<string>((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
-        { public_id: publicId, resource_type: "image", overwrite: true, invalidate: true },
+        {
+          public_id: publicId,
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
         (error, uploadResult) => {
           if (error) {
             reject(new Error(error.message));
@@ -680,7 +882,10 @@ export async function uploadPhysicalReceipt(
       success: false,
       error: {
         type: "UPLOAD_FAILED",
-        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        cause:
+          uploadError instanceof Error
+            ? uploadError.message
+            : String(uploadError),
       },
     };
   }
@@ -751,7 +956,10 @@ export async function uploadPromotionalSlideImage(
       success: false,
       error: {
         type: "UPLOAD_FAILED",
-        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        cause:
+          uploadError instanceof Error
+            ? uploadError.message
+            : String(uploadError),
       },
     };
   }
@@ -769,17 +977,21 @@ export async function deletePromotionalSlideImage(
   }
 
   try {
-    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
-      promotionalSlideImagePublicId(slideId),
-      { invalidate: true },
-    );
+    const destroyResult: { result?: string } =
+      await cloudinary.uploader.destroy(
+        promotionalSlideImagePublicId(slideId),
+        { invalidate: true },
+      );
     return { success: true, value: { deleted: destroyResult.result === "ok" } };
   } catch (deleteError) {
     return {
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }
@@ -849,7 +1061,10 @@ export async function uploadContentCategoryImage(
       success: false,
       error: {
         type: "UPLOAD_FAILED",
-        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        cause:
+          uploadError instanceof Error
+            ? uploadError.message
+            : String(uploadError),
       },
     };
   }
@@ -867,17 +1082,21 @@ export async function deleteContentCategoryImage(
   }
 
   try {
-    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
-      contentCategoryImagePublicId(categoryId),
-      { invalidate: true },
-    );
+    const destroyResult: { result?: string } =
+      await cloudinary.uploader.destroy(
+        contentCategoryImagePublicId(categoryId),
+        { invalidate: true },
+      );
     return { success: true, value: { deleted: destroyResult.result === "ok" } };
   } catch (deleteError) {
     return {
       success: false,
       error: {
         type: "DELETE_FAILED",
-        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        cause:
+          deleteError instanceof Error
+            ? deleteError.message
+            : String(deleteError),
       },
     };
   }

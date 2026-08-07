@@ -1854,8 +1854,14 @@ export const commerceOrganizationCertification = pgTable(
     issuerName: text("issuer_name").notNull(),
     certificateNumber: text("certificate_number").notNull(),
     scopeSummary: text("scope_summary"),
-    validFrom: date("valid_from").notNull(),
-    validUntil: date("valid_until").notNull(),
+    /**
+     * CALENDAR DATES, not instants — `mode: "string"` like `dueDate` and
+     * `lastDailyLogDate`. A certificate is valid "until 2027-03-31" everywhere on earth;
+     * mapping that to a `Date` would attach a midnight and a zone to a fact that has
+     * neither, and the read-time expiry comparison is against `current_date` in Postgres.
+     */
+    validFrom: date("valid_from", { mode: "string" }).notNull(),
+    validUntil: date("valid_until", { mode: "string" }).notNull(),
     evidenceDocumentId: text("evidence_document_id")
       .notNull()
       .references(() => commerceEncryptedDocument.id, { onDelete: "restrict" }),
