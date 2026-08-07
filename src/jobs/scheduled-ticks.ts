@@ -559,6 +559,29 @@ export async function handleReleaseExpiredInventoryReservationsTick(
 }
 
 /**
+ * The nightly product-relation derivation tick (STORE Phase 9, §15.9).
+ *
+ * Quantized to the UTC DAY, not the hour: the job mines a full history of completed
+ * orders, so two fires on one day would recompute the same graph twice for nothing.
+ */
+export async function handleDeriveProductRelationsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.deriveProductRelations,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.deriveProductRelations(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`derive-product-relations-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/**
  * The hourly commerce payment reconciliation tick (STORE Phase 5).
  *
  * Quantized to the HOUR so a double cron fire collapses to one real job. Re-enqueues

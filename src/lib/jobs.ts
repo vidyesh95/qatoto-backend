@@ -132,6 +132,9 @@ export const JOB_NAMES = {
   dispatchCommerceWebhookEvent: "dispatch-commerce-webhook-event",
   reconcileCommercePaymentsTick: "reconcile-commerce-payments-tick",
   reconcileCommercePayments: "reconcile-commerce-payments",
+  // STORE Phase 9 (§15.9) — nightly co-occurrence mining into the relation graph.
+  deriveProductRelationsTick: "derive-product-relations-tick",
+  deriveProductRelations: "derive-product-relations",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -979,6 +982,30 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.reconcileCommercePayments),
     },
   },
+  [JOB_NAMES.deriveProductRelationsTick]: {
+    name: JOB_NAMES.deriveProductRelationsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.deriveProductRelationsTick),
+    },
+  },
+  [JOB_NAMES.deriveProductRelations]: {
+    name: JOB_NAMES.deriveProductRelations,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // A full scan of completed order lines; generous, and still bounded.
+      expireInSeconds: 1800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.deriveProductRelations),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -1099,6 +1126,10 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   [JOB_NAMES.releaseExpiredInventoryReservationsTick]: "35 * * * *",
   // STORE Phase 5 — hourly payment reconciliation. Minute :50 avoids inventory/quote ticks.
   [JOB_NAMES.reconcileCommercePaymentsTick]: "50 * * * *",
+  // STORE Phase 9 — nightly relation derivation. 02:40 UTC sits after the 01:xx
+  // recompute chain and well before the 04:55 prune, so a night's completed orders are
+  // settled before their co-occurrence is mined.
+  [JOB_NAMES.deriveProductRelationsTick]: "40 2 * * *",
 };
 
 export type JobEnqueueError =
@@ -1358,6 +1389,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.dispatchCommerceWebhookEvent]: DispatchCommerceWebhookEventPayloadSchema,
   [JOB_NAMES.reconcileCommercePaymentsTick]: TickPayloadSchema,
   [JOB_NAMES.reconcileCommercePayments]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.deriveProductRelationsTick]: TickPayloadSchema,
+  [JOB_NAMES.deriveProductRelations]: AsOfOnlyPayloadSchema,
 } as const satisfies Record<JobName, z.ZodType>;
 
 /**
@@ -1488,4 +1521,6 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.dispatchCommerceWebhookEvent}:${outboxId}`,
   reconcileCommercePayments: (asOfIso: string): string =>
     `${JOB_NAMES.reconcileCommercePayments}:${asOfIso}`,
+  deriveProductRelations: (asOfIso: string): string =>
+    `${JOB_NAMES.deriveProductRelations}:${asOfIso}`,
 } as const;

@@ -8,6 +8,7 @@ import { jobFailure } from "#src/db/schema.js";
 import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
 import { handleDeliverNotification } from "#src/jobs/deliver-notification.js";
+import { handleDeriveProductRelations } from "#src/jobs/derive-product-relations.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
 import { handleExpireCommerceQuotes } from "#src/jobs/expire-commerce-quotes.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
@@ -51,6 +52,7 @@ import {
   handleRevalidateYoutubeEmbedsTick,
   handleExpireCommerceQuotesTick,
   handleReleaseExpiredInventoryReservationsTick,
+  handleDeriveProductRelationsTick,
   handleReconcileCommercePaymentsTick,
 } from "#src/jobs/scheduled-ticks.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
@@ -474,6 +476,19 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.reconcileCommercePayments,
     workOptions,
     runJob(JOB_NAMES.reconcileCommercePayments, handleReconcileCommercePayments),
+  );
+
+  // STORE Phase 9 (§15.9) — nightly co-occurrence mining into the relation graph.
+  // Never overwrites a seller-declared or moderator-curated edge; see the job.
+  await boss.work(
+    JOB_NAMES.deriveProductRelationsTick,
+    workOptions,
+    runJob(JOB_NAMES.deriveProductRelationsTick, handleDeriveProductRelationsTick),
+  );
+  await boss.work(
+    JOB_NAMES.deriveProductRelations,
+    workOptions,
+    runJob(JOB_NAMES.deriveProductRelations, handleDeriveProductRelations),
   );
 
   // §7 — funding.
