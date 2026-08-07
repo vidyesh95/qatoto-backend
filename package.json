@@ -40,6 +40,7 @@
     "db:seed-research-programs": "tsx --conditions=development scripts/seed-research-programs.ts",
     "db:seed-promotional-slides": "tsx --conditions=development scripts/seed-promotional-slides.ts",
     "db:seed-store-demo": "tsx --conditions=development scripts/seed-store-demo.ts",
+    "db:seed-store-ranking-dev": "tsx --conditions=development scripts/seed-store-ranking-dev.ts",
     "db:seed-content-categories": "tsx --conditions=development scripts/seed-content-categories.ts",
     "db:verify-research-program-constraints": "tsx --conditions=development scripts/verify-research-program-constraints.ts",
     "db:smoke-promotional-slides": "tsx --conditions=development scripts/smoke-promotional-slides.ts",
