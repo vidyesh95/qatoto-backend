@@ -74,9 +74,23 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
   });
 
   const triggerCount = await countQuery(
+    /**
+     * `pg_trigger`, NOT `information_schema.triggers`.
+     *
+     * The information-schema view emits ONE ROW PER TRIGGERING EVENT, so an append-only
+     * trigger declared `BEFORE UPDATE OR DELETE` counted twice and this check reported
+     * 6/3. It fails in the other direction too: three triggers that each fired on only
+     * one event would also total three and pass while doing half the job.
+     */
     `SELECT count(*) AS row_count
-       FROM information_schema.triggers
-      WHERE trigger_schema = 'public' AND trigger_name = ANY($1)`,
+       FROM pg_trigger AS trigger_definition
+       INNER JOIN pg_class AS target_table
+         ON target_table.oid = trigger_definition.tgrelid
+       INNER JOIN pg_namespace AS target_schema
+         ON target_schema.oid = target_table.relnamespace
+      WHERE NOT trigger_definition.tgisinternal
+        AND target_schema.nspname = 'public'
+        AND trigger_definition.tgname = ANY($1)`,
     [EXPECTED_TRIGGERS],
   );
   outcomes.push({
