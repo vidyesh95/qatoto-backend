@@ -868,11 +868,154 @@ export const storeMerchandisingEntityKindEnum = pgEnum("store_merchandising_enti
   "provider_offering",
 ]);
 
+/**
+ * How a rail chooses what it shows.
+ *
+ * `trending_placeholder` PREDATES Phase 13 and is deliberately still here. It returns an
+ * empty list unconditionally and always will. Postgres cannot drop an enum value, but
+ * that is not why it survives: while it exists, backing this phase out is a per-rail data
+ * edit a merchandiser performs in seconds rather than a deploy. A rail only begins
+ * claiming to show what is rising when a human moves it to `trending`.
+ */
 export const storeRailStrategyEnum = pgEnum("store_rail_strategy", [
   "curated",
   "newest",
   "trending_placeholder",
+  "trending",
+  "recommended",
 ]);
+
+/**
+ * Where a product view came from (Phase 13).
+ *
+ * A CLIENT-SUPPLIED LABEL, and accepting it is safe only because nothing gates on it. It
+ * selects no rate, no weight and no eligibility; it exists so an operator triaging a
+ * fraud review can ask whether a spike arrived through search or through one rail.
+ * `unknown` is what a caller gets for sending nothing — a view with an unattributed
+ * source is still a view.
+ */
+export const commerceProductViewSourceEnum = pgEnum("commerce_product_view_source", [
+  "product_detail",
+  "search",
+  "rail",
+  "pathway",
+  "companion",
+  "unknown",
+]);
+
+/**
+ * Whether an order's buyer cleared the trusted-buyer bar AT THE MOMENT IT CONFIRMED.
+ *
+ * `unevaluated` is load-bearing and is NOT a synonym for `unqualified`. Every order
+ * confirmed before Phase 13 carries it, and such a row is absent from BOTH the numerator
+ * and the denominator of every velocity computation — the posture `promisedDeliveryAt`
+ * established for orders predating it. Collapsing the two would state that a buyer failed
+ * a test never administered, and make all history evidence against its seller.
+ *
+ * Stamped once at confirm and immutable. Recomputed at read time, a buyer registering a
+ * tax identifier today would retroactively qualify every order it ever placed.
+ */
+export const commerceBuyerQualificationStateEnum = pgEnum("commerce_buyer_qualification_state", [
+  "qualified",
+  "unqualified",
+  "unevaluated",
+]);
+
+/**
+ * Why the qualification verdict went the way it did.
+ *
+ * An ARRAY of these rides on the order. A single reason column would force a precedence
+ * between "old enough" and "has a tax id on file" that does not exist: the bar is one age
+ * test AND one of three credentials, and a reviewer needs to see which credential
+ * answered.
+ */
+export const commerceBuyerQualificationReasonEnum = pgEnum("commerce_buyer_qualification_reason", [
+  "account_age_met",
+  "prior_order_history",
+  "verified_business_email_domain",
+  "business_registration_on_file",
+  "tax_identifier_on_file",
+  "account_too_new",
+  "no_qualifying_credential",
+  "anonymous_account",
+  "organization_not_active",
+  "organization_ranking_excluded",
+  "sample_order",
+  "below_value_floor",
+]);
+
+/**
+ * Which ranking regime produced a row (Phase 13).
+ *
+ * `sparse_exploration` is not a degraded mode to be embarrassed about — on a young B2B
+ * catalog it is the COMMON case, since a category needs 30 qualified orders in 30 days
+ * before a percentile means anything. Storing it on every snapshot row is what lets the
+ * verifier assert that no product with zero qualified W2 orders ever claims `percentile`,
+ * which is the specific regression that turns this engine back into a popularity contest.
+ */
+export const commerceRankingModeEnum = pgEnum("commerce_ranking_mode", [
+  "percentile",
+  "sparse_exploration",
+]);
+
+/**
+ * WHICH RUNG OF THE PRIOR LADDER ANSWERED.
+ *
+ * The point of hierarchical smoothing is that a category prior and a global prior are
+ * different claims, and a bare number cannot say which it is. `default_floor` appearing in
+ * a row means the taxonomy above it was empty — a signal, not a normal outcome.
+ */
+export const commerceCategoryPriorLevelEnum = pgEnum("commerce_category_prior_level", [
+  "category",
+  "parent_category",
+  "global",
+  "default_floor",
+]);
+
+/**
+ * What reduced a score, recorded per application (Phase 13).
+ *
+ * Enumerated rather than summed into one opaque multiplier so a seller appealing a
+ * suppression can be told WHICH signal fired. "Your score was multiplied by 0.4" is not a
+ * reviewable statement; "38 of your 40 saves came from one network block" is.
+ */
+export const commerceRankingPenaltyKindEnum = pgEnum("commerce_ranking_penalty_kind", [
+  "subnet_concentration",
+  "refund_rate",
+  "cancellation_rate",
+  "low_order_value",
+  "conversion_kill_switch",
+]);
+
+/**
+ * What the circuit breaker DID (Phase 13).
+ *
+ * `none` is written on purpose and is most of this table's early life: the breaker ships
+ * observe-only, so the rate at which it WOULD have fired is countable before it is allowed
+ * to. A breaker enabled on a designer's confidence rather than an observed false-positive
+ * rate is how a marketplace suppresses honest sellers.
+ *
+ * Nothing here delists. That is a commercial action requiring a human — the same call
+ * Phase 10 made when it refused to let an automatic report hide a product.
+ */
+export const commerceRankingEnforcementActionEnum = pgEnum(
+  "commerce_ranking_enforcement_action",
+  ["none", "weight_reduced", "capped", "quarantined", "review_queued"],
+);
+
+/**
+ * What we know about the email domain an order's buyer used (Phase 13).
+ *
+ * ABSENCE FROM `commerce_business_email_domain` MEANS `unknown`, NEVER
+ * `verified_business`. A denylist of free-mail and disposable providers is obtainable; an
+ * allowlist of every legitimate company domain on earth is not. So this can DENY a
+ * qualification credential and can almost never GRANT one — the same asymmetry that keeps
+ * the subnet guard's corporate-NAT exemption unbuildable.
+ */
+export const commerceEmailDomainClassificationEnum = pgEnum(
+  "commerce_email_domain_classification",
+  ["verified_business", "free_mail", "disposable", "unknown"],
+);
 
 export const storeSearchDocumentKindEnum = pgEnum("store_search_document_kind", [
   "product",
@@ -2506,6 +2649,19 @@ export const commerceProductEngagement = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     engagementKind: commerceProductEngagementKindEnum("engagement_kind").notNull(),
+    /**
+     * Salted /24 (IPv4) or /56 (IPv6) hash of the saver's network block (Phase 13).
+     *
+     * NULLABLE AND NEVER BACKFILLABLE — no address was recorded on any commerce row before
+     * Phase 13, and the ones behind existing saves are gone. The subnet concentration
+     * guard is therefore INERT until rows accumulate.
+     *
+     * The rule the scorer must honour: a null is not evidence of low concentration.
+     * "0 of 40 saves carry a subnet" means UNMEASURED, and the guard is skipped below a
+     * minimum hashed sample. Treating null as concentration 0 would clear every product
+     * for months and then start penalising as coverage grew.
+     */
+    subnetHash: text("subnet_hash"),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
   },
   (table) => [
@@ -2519,6 +2675,14 @@ export const commerceProductEngagement = pgTable(
     ),
     /** Counter reconciliation in the phase verifier. */
     index("commerce_product_engagement_product_idx").on(table.productId, table.engagementKind),
+    /** "For THIS product, how are saves distributed across network blocks?" */
+    index("commerce_product_engagement_subnet_idx")
+      .on(table.productId, table.subnetHash)
+      .where(sql`subnet_hash IS NOT NULL`),
+    check(
+      "commerce_product_engagement_subnet_ck",
+      sql`subnet_hash IS NULL OR subnet_hash ~ '^[0-9a-f]{64}$'`,
+    ),
   ],
 );
 
@@ -2526,10 +2690,17 @@ export const commerceProductEngagement = pgTable(
  * Share events (STORE Appendix A11).
  *
  * `userId` is nullable and SET NULL: a share may come from a signed-out visitor, and
- * a deleted account should not erase the fact that a product was shared. Unlike
- * `video_share` this carries no fingerprint dedupe — a product share has no channel
- * enum and no day bucket yet, so there is nothing honest to deduplicate on. If share
- * spam becomes real, that is the shape to copy.
+ * a deleted account should not erase the fact that a product was shared.
+ *
+ * PHASE 13 ADDED THE DEDUPE THIS COMMENT USED TO SAY WAS MISSING. Until then every call
+ * inserted a row and incremented `shareCount`, including an anonymous one — a ranking
+ * input a stranger could push, braked only by a rate limiter. The video domain settled
+ * this in the opposite direction long ago (`POST /videos/:videoId/share` moves its counter
+ * only for a signed-in sharer, specifically so an anonymous caller cannot push a ranking
+ * input); commerce never inherited the rule because nothing read the counter.
+ *
+ * Anonymous rows are still WRITTEN — they are real events and deleting them destroys
+ * evidence — they are simply never `counted`.
  */
 export const commerceProductShare = pgTable(
   "commerce_product_share",
@@ -2541,10 +2712,226 @@ export const commerceProductShare = pgTable(
       .notNull()
       .references(() => product.id, { onDelete: "cascade" }),
     userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    /** The UTC day this share belongs to — the dedupe bucket. */
+    shareDayBucket: date("share_day_bucket", { mode: "string" }).notNull(),
+    /** Salted /24 or /56 hash. See `commerceProductEngagement.subnetHash`. */
+    subnetHash: text("subnet_hash"),
+    /**
+     * Whether this row moved `commerce_product_stats.shareCount`.
+     *
+     * The `isCountedView` idiom: it is what lets the phase verifier reconcile the counter
+     * against this table forever, rather than trusting that every future writer remembered
+     * the signed-in rule.
+     */
+    counted: boolean("counted").default(false).notNull(),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
   },
   (table) => [
     index("commerce_product_share_product_idx").on(table.productId, table.createdAt, table.id),
+    /**
+     * Partial: an anonymous row has no user to deduplicate on. Two anonymous shares of one
+     * product on one day remain two rows; they are simply never counted.
+     */
+    uniqueIndex("commerce_product_share_daily_unq")
+      .on(table.productId, table.userId, table.shareDayBucket)
+      .where(sql`user_id IS NOT NULL`),
+    index("commerce_product_share_subnet_idx")
+      .on(table.subnetHash, table.productId, table.shareDayBucket)
+      .where(sql`subnet_hash IS NOT NULL`),
+    check(
+      "commerce_product_share_subnet_ck",
+      sql`subnet_hash IS NULL OR subnet_hash ~ '^[0-9a-f]{64}$'`,
+    ),
+    /** Enforced in the service and again here — a ranking input's guard does not depend on
+     * one call site remembering it. */
+    check("commerce_product_share_counted_ck", sql`NOT counted OR user_id IS NOT NULL`),
+  ],
+);
+
+/**
+ * One row per viewer, per product, per UTC day (Phase 13).
+ *
+ * THE STORE OBSERVED NO VIEW AT ALL BEFORE THIS TABLE. `commerce_product_stats` counted
+ * saves, bookmarks, shares and questions; there was no view counter, no impression row and
+ * no beacon. That absence is why a conversion rate had no denominator, and why the spec's
+ * MAD spike triggers and conversion kill-switch had no input.
+ *
+ * A direct port of `video_view_session`, down to the anti-replay index and the fingerprint
+ * check. Deliberately a port and not a shared table: a product and a video share no
+ * foreign key, no eligibility rule and no retention policy, and one polymorphic view table
+ * with two nullable entity columns is the shape §2.1 rejects for listings.
+ */
+export const commerceProductViewSession = pgTable(
+  "commerce_product_view_session",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    /**
+     * NULL means anonymous, AND THIS COLUMN IS THE GATE.
+     *
+     * Anonymous dwell counts toward `viewCount` — it is real traffic and excluding it would
+     * understate every denominator — but it never reaches the conversion NUMERATOR, because
+     * an order has a buyer organization and an anonymous session has nobody to match to.
+     * Farming conversion therefore requires real accounts placing real orders.
+     *
+     * `set null` and not cascade: deleting an account must not retroactively rewrite a
+     * product's view history.
+     */
+    viewerId: text("viewer_id").references(() => user.id, { onDelete: "set null" }),
+    /**
+     * sha256 hex, per UTC day, from BETTER_AUTH_SECRET plus either the user id (signed in)
+     * or ip + user agent (anonymous). THE RAW IP IS NEVER WRITTEN HERE. Its domain
+     * separator is `:commerceview:`, not video's `:videoview:` — a shared separator would
+     * make one person's product and video fingerprints collide, and two unique indexes
+     * would key off the same value for unrelated purposes.
+     */
+    viewerFingerprint: text("viewer_fingerprint").notNull(),
+    /**
+     * The UTC day, as the SAME string that went into the hash. Stored and deliberately not
+     * generated from `firstBeaconAt`: a generated column is a second derivation of the same
+     * fact, and the two disagree for any beacon crossing midnight between them.
+     */
+    viewDayBucket: date("view_day_bucket", { mode: "string" }).notNull(),
+    viewSource: commerceProductViewSourceEnum("view_source").default("unknown").notNull(),
+    /** Salted /24 or /56 hash. Nullable; a stripped address has no honest value here. */
+    subnetHash: text("subnet_hash"),
+    /** Clamped server-side against elapsed wall time. The client proposes; it does not
+     * establish. */
+    dwellSeconds: integer("dwell_seconds").default(0).notNull(),
+    /** Flips ONCE, and the transition is what increments `commerceProductStats.viewCount`.
+     * A row that never clears the dwell threshold is a bounce, not a view. */
+    isCountedView: boolean("is_counted_view").default(false).notNull(),
+    firstBeaconAt: timestamp("first_beacon_at", { precision: 3 }).defaultNow().notNull(),
+    lastBeaconAt: timestamp("last_beacon_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    /**
+     * THE ANTI-REPLAY BOUNDARY. Without it a headless loop opens a fresh session per
+     * request and every clamp becomes decorative, because a clamp bounds what ONE session
+     * may claim, not how many sessions exist.
+     */
+    uniqueIndex("commerce_product_view_session_unq").on(
+      table.productId,
+      table.viewerFingerprint,
+      table.viewDayBucket,
+    ),
+    /** Counted views for a product inside W1/W2. */
+    index("commerce_product_view_session_product_idx").on(table.productId, table.firstBeaconAt),
+    /** Daily rollup, and the per-fingerprint breadth check. */
+    index("commerce_product_view_session_fingerprint_idx").on(
+      table.viewerFingerprint,
+      table.viewDayBucket,
+    ),
+    index("commerce_product_view_session_subnet_idx")
+      .on(table.subnetHash, table.productId, table.viewDayBucket)
+      .where(sql`subnet_hash IS NOT NULL`),
+    /** The conversion numerator's join: did this signed-in viewer go on to order? */
+    index("commerce_product_view_session_viewer_idx")
+      .on(table.viewerId, table.productId, table.firstBeaconAt)
+      .where(sql`viewer_id IS NOT NULL AND is_counted_view`),
+    check(
+      "commerce_product_view_session_bounds_ck",
+      sql`dwell_seconds >= 0
+          AND dwell_seconds <= 3600
+          AND last_beacon_at >= first_beacon_at`,
+    ),
+    /** Both hashes are server-computed, so a non-hex row means something upstream stopped
+     * hashing. Fail at the storage layer, loudly. */
+    check(
+      "commerce_product_view_session_fingerprint_ck",
+      sql`viewer_fingerprint ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "commerce_product_view_session_subnet_ck",
+      sql`subnet_hash IS NULL OR subnet_hash ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
+/**
+ * What we know about an email domain (Phase 13, refinement 2).
+ *
+ * ABSENCE MEANS `unknown`, NEVER `verified_business`, and the asymmetry is worth being
+ * blunt about: a denylist of free-mail and disposable providers is obtainable and finite,
+ * while an ALLOWLIST of every legitimate company domain on earth is not. In practice this
+ * table can DENY a buyer one of its three qualification credentials and can almost never
+ * GRANT one.
+ *
+ * The consequence reaches past qualification. The spec wants the subnet guard to exempt
+ * "verified corporate domains" so one procurement team behind one office NAT is not
+ * mistaken for a click farm. That exemption cannot be built on a corpus that does not
+ * exist — which is why the subnet penalty ships with a floor rather than the specified
+ * `max(0, 1 - concentration)` that can zero a product outright.
+ *
+ * `citext` because domains are case-insensitive and `user.email` is already citext.
+ */
+export const commerceBusinessEmailDomain = pgTable(
+  "commerce_business_email_domain",
+  {
+    domain: citext("domain").primaryKey(),
+    classification: commerceEmailDomainClassificationEnum("classification").notNull(),
+    /** Where the judgement came from. Free text, not an enum: the sources are operational
+     * and will change faster than a migration cadence. */
+    sourceNote: text("source_note").notNull(),
+    /** NULL for a bulk import; a person for a hand-classified domain. */
+    decidedByUserId: text("decided_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_business_email_domain_classification_idx").on(
+      table.classification,
+      table.domain,
+    ),
+    /** A bare domain: no scheme, no path, no `@`. Rejects `@acme.com` and
+     * `https://acme.com`, both of which would silently never match anything. */
+    check(
+      "commerce_business_email_domain_shape_ck",
+      sql`domain ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'`,
+    ),
+  ],
+);
+
+/**
+ * Organizations whose activity never counts toward ranking (Phase 13).
+ *
+ * THIS TABLE SHIPS EMPTY, and that is a scope statement rather than an oversight. The spec
+ * asks for internal, test and blocked orders to be excluded from velocity. This database
+ * has no `isTest`, no `isInternal` and no blocked flag on `user` or `commerceOrganization`
+ * — the nearest thing is `tradeState`, which already gates trading and is checked
+ * separately — and no operational process that would keep such a flag current.
+ *
+ * The one population that IS in it immediately is the development seed: every organization
+ * `seed-store-ranking-dev.ts` writes is registered here, so that if the seed is ever
+ * pointed at a real database by accident, its orders are structurally excluded from
+ * ranking rather than merely embarrassing.
+ */
+export const commerceOrganizationRankingExclusion = pgTable(
+  "commerce_organization_ranking_exclusion",
+  {
+    organizationId: text("organization_id")
+      .primaryKey()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    /** Required: an unexplained exclusion is indistinguishable from a mistake six months
+     * later, and this list silently removes a seller from every discovery surface. */
+    reason: text("reason").notNull(),
+    addedByUserId: text("added_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  () => [
+    check(
+      "commerce_organization_ranking_exclusion_reason_ck",
+      sql`length(btrim(reason)) BETWEEN 3 AND 500`,
+    ),
   ],
 );
 
@@ -2575,6 +2962,16 @@ export const commerceProductStats = pgTable(
     questionCount: integer("question_count").default(0).notNull(),
     /** Visible questions carrying at least one visible answer (A9). */
     answeredQuestionCount: integer("answered_question_count").default(0).notNull(),
+    /** Moves once per session, on the `isCountedView` transition (Phase 13). */
+    viewCount: integer("view_count").default(0).notNull(),
+    /**
+     * NULLABLE WITH NO DEFAULT, and that is the point. No transaction can maintain a
+     * DISTINCT count incrementally, so this is written by the nightly rollup or not at
+     * all — and a default of 0 would state a false denominator to every conversion
+     * computation that ran before the first rollup. `videoStats.uniqueViewerCount` is
+     * nullable for the identical reason.
+     */
+    uniqueViewerCount: integer("unique_viewer_count"),
     lastEngagementAt: timestamp("last_engagement_at", { precision: 3 }),
   },
   (table) => [
@@ -2582,7 +2979,9 @@ export const commerceProductStats = pgTable(
       "commerce_product_stats_counters_non_negative_ck",
       sql`saved_count >= 0 AND bookmarked_count >= 0 AND share_count >= 0
           AND question_count >= 0 AND answered_question_count >= 0
-          AND answered_question_count <= question_count`,
+          AND answered_question_count <= question_count
+          AND view_count >= 0
+          AND (unique_viewer_count IS NULL OR (unique_viewer_count >= 0 AND unique_viewer_count <= view_count))`,
     ),
     index("commerce_product_stats_saved_idx").on(table.savedCount, table.productId),
   ],
@@ -4172,6 +4571,48 @@ export const commerceOrder = pgTable(
      * existed would fabricate the very measurement this fixes.
      */
     promisedDeliveryAt: timestamp("promised_delivery_at"),
+    /**
+     * THE VELOCITY CLOCK (Phase 13). The moment this order became a real commitment:
+     * payment settled, or a quote acceptance created it already confirmed.
+     *
+     * `createdAt` could not serve. It is immutable and true, but it means `pending_payment`
+     * — an order that may never be paid for. `updatedAt` could not either: any later write
+     * moves it, so an order confirmed on the 2nd and cancelled on the 9th would count as
+     * demand in the wrong week and then move again.
+     *
+     * NULL for every order predating Phase 13. Nothing backfills it — the only candidate
+     * source was mutable `updatedAt`, and stamping it would fabricate a confirmation
+     * instant and feed fiction to a fraud engine.
+     */
+    confirmedAt: timestamp("confirmed_at"),
+    /**
+     * Every line either fulfilled or cancelled. Distinct from
+     * `commerceCompletion.completedAt`, which is per LINE and is the trust metrics' clock;
+     * this is the order-level roll-up the refund and reorder denominators window on.
+     */
+    completedAt: timestamp("completed_at"),
+    /** Set by `cancelOrder`. Until Phase 13 the only durable record that a cancellation
+     * happened at a particular time was an audit row. */
+    cancelledAt: timestamp("cancelled_at"),
+    /**
+     * Whether the buyer cleared the trusted-buyer bar AT CONFIRM (Phase 13).
+     *
+     * ON THE ORDER AND NOT IN A NIGHTLY SNAPSHOT, because qualification must be frozen as
+     * of the moment it was assessed. Recomputed at read time, a buyer registering a tax
+     * identifier today would retroactively qualify every order it ever placed — turning a
+     * fraud filter into a one-click amplifier for the party it constrains.
+     */
+    buyerQualificationState: commerceBuyerQualificationStateEnum("buyer_qualification_state")
+      .default("unevaluated")
+      .notNull(),
+    /** Which clauses answered. An array because the bar is one age test AND one of three
+     * credentials, so a single column would force a precedence that does not exist. */
+    buyerQualificationReasons: commerceBuyerQualificationReasonEnum(
+      "buyer_qualification_reasons",
+    )
+      .array()
+      .default([])
+      .notNull(),
     createdByMemberId: text("created_by_member_id")
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
@@ -4182,6 +4623,18 @@ export const commerceOrder = pgTable(
       .notNull(),
   },
   (table) => [
+    /**
+     * Phase 13. Both pre-existing indexes lead with an organization id, so a
+     * platform-wide "confirmed orders in the last 30 days" — the category floor, run once
+     * per category per hour — had no usable index at all.
+     */
+    index("commerce_order_state_created_idx").on(table.state, table.createdAt, table.id),
+    index("commerce_order_confirmed_at_idx")
+      .on(table.confirmedAt, table.counterpartyOrganizationId)
+      .where(sql`confirmed_at IS NOT NULL`),
+    index("commerce_order_qualified_velocity_idx")
+      .on(table.buyerQualificationState, table.confirmedAt, table.counterpartyOrganizationId)
+      .where(sql`confirmed_at IS NOT NULL AND buyer_qualification_state = 'qualified'`),
     /**
      * The on-time metric's driving index: a counterparty's orders that carry a promise.
      * Partial, because most historical rows never will.
@@ -4219,6 +4672,30 @@ export const commerceOrder = pgTable(
               AND accepted_quote_revision_id IS NOT NULL AND checkout_group_id IS NULL)
           OR (source = 'direct_checkout' AND accepted_quote_id IS NULL
               AND accepted_quote_revision_id IS NULL AND checkout_group_id IS NOT NULL)`,
+    ),
+    /**
+     * ORDERING ONLY, deliberately. `state = 'cancelled' => cancelled_at IS NOT NULL` is
+     * false for every row that predates Phase 13, so it could not be added without either
+     * a fabricated backfill or a NOT VALID constraint nobody would ever validate. This one
+     * is true of every row that has ever existed.
+     */
+    check(
+      "commerce_order_lifecycle_order_ck",
+      sql`(completed_at IS NULL OR confirmed_at IS NULL OR completed_at >= confirmed_at)
+          AND (cancelled_at IS NULL OR confirmed_at IS NULL OR cancelled_at >= confirmed_at)`,
+    ),
+    check(
+      "commerce_order_terminal_exclusive_ck",
+      sql`completed_at IS NULL OR cancelled_at IS NULL`,
+    ),
+    /**
+     * A verdict without a reason is unreviewable, and an `unevaluated` row must not carry
+     * one — otherwise a historical order would look assessed and found wanting.
+     */
+    check(
+      "commerce_order_qualification_reasons_ck",
+      sql`(buyer_qualification_state = 'unevaluated' AND cardinality(buyer_qualification_reasons) = 0)
+          OR (buyer_qualification_state <> 'unevaluated' AND cardinality(buyer_qualification_reasons) > 0)`,
     ),
   ],
 );

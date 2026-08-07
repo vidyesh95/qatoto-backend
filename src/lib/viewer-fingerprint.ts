@@ -71,7 +71,7 @@ export interface ViewerFingerprintInput {
  * `"1.2.3.4:Mozilla/5.0"` would hash identically to an anonymous viewer at that
  * address, which is a way to write to someone else's session row.
  */
-export function computeViewerFingerprint(input: ViewerFingerprintInput): string {
+function computeFingerprintForDomain(domain: string, input: ViewerFingerprintInput): string {
   const identityComponent =
     input.viewerUserId !== null
       ? `u:${input.viewerUserId}`
@@ -79,20 +79,38 @@ export function computeViewerFingerprint(input: ViewerFingerprintInput): string 
 
   return createHash("sha256")
     .update(
-      `${config.BETTER_AUTH_SECRET}:videoview:${input.utcDayString}:${identityComponent}`,
+      `${config.BETTER_AUTH_SECRET}:${domain}:${input.utcDayString}:${identityComponent}`,
       "utf8",
     )
     .digest("hex");
+}
+
+/** The video feed's per-day viewer key — `video_view_session.viewer_fingerprint`. */
+export function computeViewerFingerprint(input: ViewerFingerprintInput): string {
+  return computeFingerprintForDomain("videoview", input);
+}
+
+/**
+ * The store's per-day viewer key — `commerce_product_view_session.viewer_fingerprint`
+ * (STORE Phase 13).
+ *
+ * A SEPARATE DOMAIN SEPARATOR, and the separation is the whole reason this function
+ * exists rather than callers passing a string. Sharing `videoview` would give one person
+ * the same fingerprint in both tables, so two unique indexes built for unrelated purposes
+ * would key off one value — and anyone who learned a fingerprint from one surface could
+ * address the other surface's row for that viewer.
+ */
+export function computeCommerceViewerFingerprint(input: ViewerFingerprintInput): string {
+  return computeFingerprintForDomain("commerceview", input);
 }
 
 /**
  * The UTC day, as the string that goes into both the hash above and the row's
  * day-bucket column.
  *
- * `toISOString()` is always UTC regardless of the process time zone, so this cannot
- * drift the way a `toLocaleDateString` would. The caller passes `now` in; this module
- * reads no clock of its own.
+ * MOVED TO `utc-day.ts` and re-exported here. This module reads `config` at module scope,
+ * so anything importing the day helper from here transitively required a fully populated
+ * environment — harmless in a running process, fatal in a unit test that only wanted to
+ * name a day. Existing imports are unaffected.
  */
-export function utcDayStringOf(instant: Date): string {
-  return instant.toISOString().slice(0, 10);
-}
+export { utcDayStringOf } from "#src/lib/utc-day.js";

@@ -12,6 +12,8 @@ import {
 import { db } from "#src/db/index.js";
 import {
   commerceOrder,
+  commerceOrderProductLine,
+  commerceOrganizationMember,
   commercePaymentIntent,
   commercePaymentOutbox,
   commercePaymentWebhookEvent,
@@ -19,6 +21,10 @@ import {
   commerceRefund,
 } from "#src/db/schema.js";
 import { sendJob, JOB_NAMES, idempotencyKeyFor } from "#src/lib/jobs.js";
+import {
+  evaluateBuyerQualification,
+  type BuyerQualificationVerdict,
+} from "#src/services/commerce-buyer-qualification.service.js";
 import { appendCommerceJournalEntry } from "#src/services/commerce-journal.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
@@ -759,9 +765,31 @@ async function applyPaymentSettlement(
     })
     .where(eq(commercePaymentIntent.id, intent.id));
 
+  /*
+   * STORE Phase 13. Confirmation is where the ranking engine's clock starts and where the
+   * trusted-buyer verdict is frozen, and both must commit in the SAME statement as the
+   * state transition.
+   *
+   * `confirmedAt` uses `coalesce` so a replayed settlement — the whole reason the webhook
+   * inbox exists — cannot rewrite an instant that already happened. The state predicate
+   * below already makes the transition happen once; the coalesce makes it idempotent even
+   * if that predicate is ever loosened.
+   */
+  const qualificationVerdict = await evaluateOrderBuyerQualification(
+    transaction,
+    order,
+    occurredAt,
+  );
+
   await transaction
     .update(commerceOrder)
-    .set({ state: "confirmed", updatedAt: occurredAt })
+    .set({
+      state: "confirmed",
+      confirmedAt: sql`coalesce(${commerceOrder.confirmedAt}, ${occurredAt})`,
+      buyerQualificationState: qualificationVerdict.state,
+      buyerQualificationReasons: [...qualificationVerdict.reasons],
+      updatedAt: occurredAt,
+    })
     .where(
       and(
         eq(commerceOrder.id, order.id),
@@ -782,6 +810,49 @@ async function applyPaymentSettlement(
       currency: intent.currency,
       providerPaymentRef,
     },
+    occurredAt,
+  });
+}
+
+/**
+ * Resolves the two facts `evaluateBuyerQualification` needs that live outside the order
+ * row, then evaluates the bar (STORE Phase 13).
+ *
+ * A DEFENSIVE FALLBACK RATHER THAN A THROW. If the acting member cannot be resolved — a
+ * membership deleted between order creation and settlement, which `restrict` should
+ * prevent but which is not this function's problem to police — the order is stamped
+ * `unqualified` rather than aborting a payment that has already moved money at the
+ * provider. Losing a ranking signal is recoverable; failing a settled payment is not.
+ */
+async function evaluateOrderBuyerQualification(
+  transaction: DatabaseTransaction,
+  order: OrderRow,
+  occurredAt: Date,
+): Promise<BuyerQualificationVerdict> {
+  const [actingMember] = await transaction
+    .select({ userId: commerceOrganizationMember.userId })
+    .from(commerceOrganizationMember)
+    .where(eq(commerceOrganizationMember.id, order.createdByMemberId))
+    .limit(1);
+
+  if (!actingMember) {
+    return { state: "unqualified", reasons: ["no_qualifying_credential"] };
+  }
+
+  const productLines = await transaction
+    .select({ isSample: commerceOrderProductLine.isSample })
+    .from(commerceOrderProductLine)
+    .where(eq(commerceOrderProductLine.orderId, order.id));
+
+  // A service-only order has no product lines at all. `every` on an empty array is true,
+  // so guard it: an order with nothing to sample is not a sample order.
+  const isSampleOnlyOrder = productLines.length > 0 && productLines.every((line) => line.isSample);
+
+  return evaluateBuyerQualification(transaction, {
+    buyerOrganizationId: order.buyerOrganizationId,
+    actingUserId: actingMember.userId,
+    orderId: order.id,
+    isSampleOnlyOrder,
     occurredAt,
   });
 }

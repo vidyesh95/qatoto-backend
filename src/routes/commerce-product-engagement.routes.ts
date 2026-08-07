@@ -2,9 +2,11 @@ import express from "express";
 
 import * as commerceProductEngagementController from "#src/controllers/commerce-product-engagement.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
+import { compactBody } from "#src/middleware/json-body.js";
 import {
   commerceProductEngagementLimiter,
   commerceProductShareLimiter,
+  commerceProductViewBeaconLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
@@ -69,6 +71,35 @@ commerceProductEngagementRouter.post(
   attachOptionalUser,
   commerceProductShareLimiter,
   commerceProductEngagementController.recordProductShare,
+);
+
+/**
+ * The product view beacon (STORE Phase 13).
+ *
+ * THE SECOND UNAUTHENTICATED WRITE ON THIS PLATFORM, and it is worth being explicit about
+ * why that is acceptable here. It accepts an anonymous caller because most product views
+ * are anonymous, and a view denominator counting only signed-in readers would understate
+ * every conversion rate the ranking engine computes.
+ *
+ * What keeps it from being a free ranking lever is not the limiter below — it is the
+ * unique index pinning a caller to one session row per product per UTC day, the
+ * server-side dwell clamp bounding that row by wall time, and the fact that an anonymous
+ * session can never reach the conversion numerator. The limiter only stops the write path
+ * being a cheap denial of service.
+ *
+ * POST rather than PUT despite being idempotent: the row it lands on is chosen by a
+ * server-derived fingerprint, not by anything in the URL, so there is no resource the
+ * caller could name to make PUT meaningful.
+ */
+commerceProductEngagementRouter.post(
+  "/products/:productSlug/view-beacon",
+  attachOptionalUser,
+  commerceProductViewBeaconLimiter,
+  // Two scalars — a bounded integer and a six-member enum. `compactBody` is already far
+  // more than this body can legitimately be; there is no smaller declared cap, and picking
+  // a bespoke number by eye is what `json-body-budget.ts` exists to stop.
+  compactBody,
+  commerceProductEngagementController.recordProductViewBeacon,
 );
 
 export default commerceProductEngagementRouter;

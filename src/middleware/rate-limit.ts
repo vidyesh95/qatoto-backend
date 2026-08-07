@@ -1200,13 +1200,39 @@ export const commerceProductEngagementLimiter = createLimiter({
 
 /**
  * Product shares (Appendix A11). Tighter, and on a longer window, because this route
- * accepts an ANONYMOUS caller and every call appends a row — unlike `video_share`
- * there is no fingerprint/day-bucket unique index to absorb a flood.
+ * accepts an ANONYMOUS caller.
+ *
+ * Phase 13 gave the table a per-user-per-day unique index and stopped anonymous shares
+ * moving the counter, so a flood is now absorbed rather than merely slowed — but the
+ * budget stays where it is. An anonymous flood still appends rows, and rows still cost
+ * storage even when they never count.
  */
 export const commerceProductShareLimiter = createLimiter({
   namespace: "commerceProductShare",
   windowMs: FIFTEEN_MINUTES_MS,
   limit: 60,
+});
+
+/**
+ * The product view beacon (STORE Phase 13).
+ *
+ * GENEROUS ON PURPOSE, and the reason is worth stating: this is a heartbeat, not an
+ * event. One reader on one product detail page sends several beacons as their dwell
+ * accumulates, and a budget tuned like the share limiter's would silently truncate honest
+ * sessions — producing exactly the under-counted denominator that makes a conversion rate
+ * look like a spike.
+ *
+ * What actually bounds abuse here is not this limiter. It is
+ * `commerce_product_view_session_unq`, which pins a caller to one row per product per
+ * day, and `clampViewDwellSeconds`, which bounds that row by wall time. A thousand
+ * beacons from one fingerprint produce one session that cannot claim more attention than
+ * has physically elapsed. The limiter's job is only to keep the write path from being a
+ * free denial-of-service.
+ */
+export const commerceProductViewBeaconLimiter = createLimiter({
+  namespace: "commerceProductViewBeacon",
+  windowMs: ONE_MINUTE_MS,
+  limit: 240,
 });
 
 /**

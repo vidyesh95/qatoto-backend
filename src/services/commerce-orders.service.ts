@@ -367,7 +367,14 @@ export async function cancelOrder(
 
     const [cancelledOrder] = await transaction
       .update(commerceOrder)
-      .set({ state: "cancelled", updatedAt: now })
+      // STORE Phase 13. `cancelledAt` is the cancellation-rate clock. Until it existed the
+      // only durable record that a cancellation happened at a particular time was an audit
+      // row, and `updatedAt` moved again on the next write to the order.
+      .set({
+        state: "cancelled",
+        cancelledAt: sql`coalesce(${commerceOrder.cancelledAt}, ${now})`,
+        updatedAt: now,
+      })
       .where(
         and(eq(commerceOrder.id, order.id), inArray(commerceOrder.state, CANCELLABLE_ORDER_STATES)),
       )

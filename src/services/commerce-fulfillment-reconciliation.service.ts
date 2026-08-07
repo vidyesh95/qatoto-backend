@@ -124,7 +124,23 @@ export async function reconcileOrderAggregateState(
   if (nextOrderState !== order.state) {
     await transaction
       .update(commerceOrder)
-      .set({ state: nextOrderState, updatedAt: occurredAt })
+      .set({
+        state: nextOrderState,
+        /*
+         * STORE Phase 13. `completedAt` is the roll-up clock the refund and reorder rates
+         * window on — distinct from `commerce_completion.completedAt`, which is per LINE.
+         *
+         * `coalesce` because this reconciliation is re-entrant by design: an order can
+         * leave `completed` for `disputed` and return, and the moment it FIRST completed
+         * is the fact those rates are measured against. Rewriting it on the second arrival
+         * would let a dispute-and-resolve cycle silently refresh a stale product's
+         * demand freshness.
+         */
+        ...(nextOrderState === "completed"
+          ? { completedAt: sql`coalesce(${commerceOrder.completedAt}, ${occurredAt})` }
+          : {}),
+        updatedAt: occurredAt,
+      })
       .where(eq(commerceOrder.id, order.id));
   }
 }

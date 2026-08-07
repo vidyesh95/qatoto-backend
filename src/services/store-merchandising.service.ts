@@ -353,6 +353,19 @@ async function resolveRailItemsPage(input: {
         items: [],
         page: { nextCursor: null, hasMore: false },
       };
+    case "trending":
+    case "recommended":
+      // STORE Phase 13, stage 1. The enum values exist from migration 0073 so that the
+      // ranking engine's surfaces can land without a second irreversible ALTER TYPE, but
+      // NO RAIL CARRIES EITHER VALUE YET — nothing in 0073-0078 flips a `store_rail` row,
+      // and only a merchandiser can. So this arm is unreachable in practice today, and
+      // returning an empty page is the same honest answer `trending_placeholder` gives.
+      //
+      // Stage 4 replaces both arms with reads against `commerce_product_ranking_state`.
+      return {
+        items: [],
+        page: { nextCursor: null, hasMore: false },
+      };
     default: {
       const exhaustiveStrategy: never = input.strategy;
       void exhaustiveStrategy;

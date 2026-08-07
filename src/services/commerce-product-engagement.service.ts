@@ -6,6 +6,10 @@ import {
   commerceProductShare,
   commerceProductStats,
 } from "#src/db/schema.js";
+// From `utc-day.js` and NOT `viewer-fingerprint.js`, which reads `config` at module scope:
+// this service is imported by the product read path, and a unit test of that path must not
+// need a populated environment to name a UTC day.
+import { utcDayStringOf } from "#src/lib/utc-day.js";
 /**
  * THIS MODULE TAKES PRODUCT IDS, NOT SLUGS, and deliberately does not import
  * `store-catalog.service`.
@@ -24,6 +28,23 @@ export type ProductEngagementKind =
   (typeof commerceProductEngagement.$inferSelect)["engagementKind"];
 
 /**
+ * Request-derived facts an engagement write may record (STORE Phase 13).
+ *
+ * `subnetHash` is a salted, truncated network key — see `client-subnet.ts`. It is
+ * OPTIONAL AND NULLABLE ON PURPOSE at every layer: a request whose address cannot be
+ * derived has no honest value here, and substituting a placeholder would make every such
+ * request look like one enormous colluding network. The subnet guard skips a product
+ * whose hashed sample is too small rather than reading a null as low concentration.
+ *
+ * `occurredAt` is injected so the seed and the tests can write backdated rows without
+ * this module reading a clock they cannot control.
+ */
+export interface EngagementRequestContext {
+  readonly subnetHash?: string | null;
+  readonly occurredAt?: Date;
+}
+
+/**
  * The only way a public engagement write fails: the product is not publicly eligible,
  * which is indistinguishable from "does not exist" on purpose (§11 anti-enumeration).
  */
@@ -40,6 +61,16 @@ export interface ProductEngagementProjection {
   readonly shareCount: number;
   readonly questionCount: number;
   readonly answeredQuestionCount: number;
+  /** Counted views — sessions that cleared the dwell threshold (STORE Phase 13). */
+  readonly viewCount: number;
+  /**
+   * Distinct viewers, or `null` when the nightly rollup has not written one yet.
+   *
+   * NULL IS NOT ZERO. No transaction can maintain a DISTINCT count incrementally, so this
+   * is computed by the rollup or not at all, and a zero would state a false denominator to
+   * any client trying to reason about reach. Same rule as `viewer` below.
+   */
+  readonly uniqueViewerCount: number | null;
   /**
    * `null` for an anonymous caller, NOT `{hasSaved: false}`.
    *
@@ -57,6 +88,8 @@ export const EMPTY_PRODUCT_ENGAGEMENT: ProductEngagementProjection = {
   shareCount: 0,
   questionCount: 0,
   answeredQuestionCount: 0,
+  viewCount: 0,
+  uniqueViewerCount: null,
   viewer: null,
 };
 
@@ -114,13 +147,22 @@ export async function setProductEngagement(
   viewerUserId: string,
   productId: string,
   engagementKind: ProductEngagementKind,
+  options: EngagementRequestContext = {},
 ): Promise<ProductEngagementProjection> {
+  const occurredAt = options.occurredAt ?? new Date();
+
   await db.transaction(async (transaction) => {
     await ensureCommerceProductStatsRow(transaction, productId);
 
     const inserted = await transaction
       .insert(commerceProductEngagement)
-      .values({ productId: productId, userId: viewerUserId, engagementKind })
+      .values({
+        productId: productId,
+        userId: viewerUserId,
+        engagementKind,
+        subnetHash: options.subnetHash ?? null,
+        createdAt: occurredAt,
+      })
       .onConflictDoNothing()
       .returning();
 
@@ -130,7 +172,7 @@ export async function setProductEngagement(
       .update(commerceProductStats)
       .set({
         ...buildEngagementCounterDelta(engagementKind, "increment"),
-        lastEngagementAt: new Date(),
+        lastEngagementAt: occurredAt,
       })
       .where(eq(commerceProductStats.productId, productId));
   });
@@ -170,25 +212,63 @@ export async function clearProductEngagement(
 }
 
 /**
- * Record a share (Appendix A11).
+ * Record a share (Appendix A11, hardened in STORE Phase 13).
  *
- * Accepts an anonymous sharer, because most shares are. Every call is a new row: this
- * table has no channel and no day bucket, so unlike `video_share` there is nothing
- * honest to deduplicate on, and inventing a fingerprint would just make the count
- * wrong in a different direction.
+ * WHAT CHANGED AND WHY. Until Phase 13 every call inserted a row and incremented
+ * `shareCount` — including an anonymous one, repeatedly, braked only by a
+ * 60-per-15-minutes limiter. That was harmless exactly as long as nothing read the
+ * counter. Phase 13 makes the ranking engine read it, so an anonymous stranger would have
+ * been able to push a ranking input for free.
+ *
+ * The video domain settled this long ago in the opposite direction: `recordVideoShare`
+ * moves its counter only for a signed-in sharer, specifically so an anonymous caller
+ * cannot push a ranking input. Commerce now inherits the rule, plus a per-user-per-day
+ * bucket — the shape this table's own schema comment already prescribed.
+ *
+ * ANONYMOUS ROWS ARE STILL WRITTEN. A share by a signed-out visitor is a real event and
+ * dropping it would destroy evidence an operator may want; it simply never sets `counted`
+ * and never moves the counter.
+ *
+ * The counter moves only when a row actually appeared — `onConflictDoNothing().returning()`
+ * and a length check, the same no-double-count shape `setProductEngagement` uses. A second
+ * share of one product by one user on one day is therefore a no-op rather than an error.
  */
 export async function recordProductShare(
   viewerUserId: string | null,
   productId: string,
+  options: EngagementRequestContext = {},
 ): Promise<ProductEngagementProjection> {
+  const occurredAt = options.occurredAt ?? new Date();
+  const shareDayBucket = utcDayStringOf(occurredAt);
+  const isCountable = viewerUserId !== null;
+
   await db.transaction(async (transaction) => {
     await ensureCommerceProductStatsRow(transaction, productId);
-    await transaction.insert(commerceProductShare).values({ productId, userId: viewerUserId });
+
+    const inserted = await transaction
+      .insert(commerceProductShare)
+      .values({
+        productId,
+        userId: viewerUserId,
+        shareDayBucket,
+        subnetHash: options.subnetHash ?? null,
+        counted: isCountable,
+        createdAt: occurredAt,
+      })
+      .onConflictDoNothing()
+      .returning({ id: commerceProductShare.id });
+
+    if (inserted.length === 0) return;
+
+    // An anonymous row exists but never counts, so nothing downstream moves for it —
+    // including `lastEngagementAt`, which feeds staleness reads.
+    if (!isCountable) return;
+
     await transaction
       .update(commerceProductStats)
       .set({
         shareCount: sql`${commerceProductStats.shareCount} + 1`,
-        lastEngagementAt: new Date(),
+        lastEngagementAt: occurredAt,
       })
       .where(eq(commerceProductStats.productId, productId));
   });
@@ -260,6 +340,8 @@ export async function loadProductEngagements(
       shareCount: stats?.shareCount ?? 0,
       questionCount: stats?.questionCount ?? 0,
       answeredQuestionCount: stats?.answeredQuestionCount ?? 0,
+      viewCount: stats?.viewCount ?? 0,
+      uniqueViewerCount: stats?.uniqueViewerCount ?? null,
       viewer:
         viewerUserId === null
           ? null

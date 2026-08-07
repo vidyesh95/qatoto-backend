@@ -1,12 +1,36 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { computeClientSubnetHash } from "#src/lib/client-subnet.js";
+import { MAXIMUM_VIEW_DWELL_SECONDS } from "#src/lib/commerce-view-clamp.js";
 import * as commerceProductEngagementService from "#src/services/commerce-product-engagement.service.js";
 import type { ProductEngagementKind } from "#src/services/commerce-product-engagement.service.js";
+import * as commerceProductViewService from "#src/services/commerce-product-view.service.js";
 import { resolveEligibleProductRefBySlug } from "#src/services/store-catalog.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 const EmptyObjectSchema = z.object({}).strict();
+
+/**
+ * The view beacon's body (STORE Phase 13).
+ *
+ * `dwellSeconds` is a CLAIM and is treated as one — `clampViewDwellSeconds` bounds it by
+ * wall time before it reaches a column. The ceiling here is only a parse-level sanity
+ * bound so an absurd number is a 422 rather than something the clamp has to reason about.
+ *
+ * `viewSource` is also client-supplied and is safe to accept only because nothing gates on
+ * it: it selects no rate, no weight and no eligibility, and exists so an operator triaging
+ * a spike can ask which surface it arrived through. Omitting it yields `unknown`, which is
+ * an honest answer rather than an error.
+ */
+const ProductViewBeaconBodySchema = z
+  .object({
+    dwellSeconds: z.number().int().min(0).max(MAXIMUM_VIEW_DWELL_SECONDS),
+    viewSource: z
+      .enum(["product_detail", "search", "rail", "pathway", "companion", "unknown"])
+      .default("unknown"),
+  })
+  .strict();
 
 const ProductSlugParamsSchema = z
   .object({
@@ -86,6 +110,10 @@ function buildToggleHandler(
             viewerUserId,
             productId,
             engagementKind,
+            // Only the SET direction carries a subnet: the row being deleted already has
+            // whichever block created it, and rewriting that on the way out would let an
+            // attacker relocate its own history by un-saving from somewhere else.
+            { subnetHash: computeClientSubnetHash(req.ip) },
           )
         : await commerceProductEngagementService.clearProductEngagement(
             viewerUserId,
@@ -110,6 +138,10 @@ export const clearProductBookmarked = buildToggleHandler("bookmarked", "clear");
 /**
  * A share may come from a signed-out visitor, so this handler does not require a
  * session — `attachOptionalUser` attributes it when there is one.
+ *
+ * Since Phase 13 an anonymous share still writes a row but never moves the counter, so a
+ * signed-out caller receives the unchanged count back. That is deliberate and is not an
+ * error the client should surface: the share happened, it simply is not a ranking input.
  */
 export async function recordProductShare(req: Request, res: Response): Promise<void> {
   const productId = await resolveEngagementTarget(req, res);
@@ -118,11 +150,50 @@ export async function recordProductShare(req: Request, res: Response): Promise<v
   const engagement = await commerceProductEngagementService.recordProductShare(
     req.user?.id ?? null,
     productId,
+    { subnetHash: computeClientSubnetHash(req.ip) },
   );
   res.status(200).json({
     status: "success",
     statusCode: 200,
     message: "Share recorded.",
     data: engagement,
+  } satisfies ApiResponse);
+}
+
+/**
+ * `POST /store/products/:productSlug/view-beacon` (STORE Phase 13).
+ *
+ * Accepts an anonymous caller, because most product views are anonymous and a view
+ * denominator that counted only signed-in readers would understate every conversion rate
+ * on the platform. What an anonymous session cannot do is reach the conversion NUMERATOR —
+ * that gate lives on `viewerId` in the session row, not here.
+ *
+ * Returns what the server RECORDED rather than what was asked for, so a client can
+ * reconcile its own timer against the clamp instead of assuming its claim was accepted.
+ */
+export async function recordProductViewBeacon(req: Request, res: Response): Promise<void> {
+  const body = ProductViewBeaconBodySchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const productId = await resolveEngagementTarget(req, res);
+  if (productId === null) return;
+
+  const beacon = await commerceProductViewService.recordProductViewBeacon({
+    productId,
+    viewerUserId: req.user?.id ?? null,
+    clientIp: req.ip,
+    userAgent: req.get("user-agent") ?? "",
+    viewSource: body.data.viewSource,
+    claimedDwellSeconds: body.data.dwellSeconds,
+  });
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "View recorded.",
+    data: beacon,
   } satisfies ApiResponse);
 }
