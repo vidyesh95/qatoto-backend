@@ -1149,6 +1149,22 @@ export const commerceTrustModerationLimiter = createLimiter({
 });
 
 /**
+ * Filing a commerce content report (Appendix A12).
+ *
+ * Its OWN namespace rather than sharing `contentReportLimiter` with R&D, deliberately:
+ * a shared budget means abuse of one product's report surface silently exhausts the
+ * other's, and the two have entirely different reporter populations.
+ *
+ * Tight, because the report threshold is what auto-hides content — this is the cheapest
+ * lever on the takedown path and the one worth bounding hardest.
+ */
+export const commerceContentReportLimiter = createLimiter({
+  namespace: "commerceContentReport",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/**
  * Asking a product question (Appendix A9). A fifteen-minute window rather than a
  * minute, and a small budget: this is the one Phase 10 write reachable by ANY
  * identified user with no organization and no completion behind them, so it is the

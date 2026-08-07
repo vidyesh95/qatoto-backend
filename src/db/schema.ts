@@ -654,6 +654,70 @@ export const commerceProductAnswerAuthorKindEnum = pgEnum("commerce_product_answ
   "verified_buyer",
 ]);
 
+/**
+ * What a commerce content report can point at (STORE Appendix A12).
+ *
+ * `review_reply` and `message` are deliberately absent. A reply has no public read of
+ * its own, so a report target for it would be a button with nothing behind it; and a
+ * message report means a moderator reads a private, attachment-bearing commercial
+ * negotiation, which is a §14 disclosure decision rather than an aggregation one. The
+ * existing escalation path for harm inside a thread is a dispute.
+ */
+export const commerceContentTargetKindEnum = pgEnum("commerce_content_target_kind", [
+  "product",
+  "review",
+  "question",
+  "answer",
+  "organization",
+]);
+
+/**
+ * Why something was reported (STORE Appendix A12).
+ *
+ * A commerce-specific set rather than a reuse of `research_program_report_reason`:
+ * this is mostly about GOODS, `plagiarism` and `misinformation` are R&D words, and
+ * sharing one type would mean adding `counterfeit` puts it on the R&D report form.
+ */
+export const commerceContentReportReasonEnum = pgEnum("commerce_content_report_reason", [
+  "spam",
+  "counterfeit",
+  "prohibited_item",
+  "misleading_claim",
+  "intellectual_property",
+  "harassment",
+  "off_topic",
+  "other",
+]);
+
+export const commerceContentReportStatusEnum = pgEnum("commerce_content_report_status", [
+  "open",
+  "actioned",
+  "dismissed",
+]);
+
+export const commerceModerationActionKindEnum = pgEnum("commerce_moderation_action_kind", [
+  "content_hidden",
+  "content_restored",
+  "report_dismissed",
+  "product_moderation_state_changed",
+]);
+
+/**
+ * Who took a moderation action (STORE Appendix A12) — and the reason this column
+ * exists at all.
+ *
+ * `platform_audit_entry.actorUserId` is NOT NULL because the hash chain's premise is
+ * that every entry names an accountable human. An AUTOMATIC hide, triggered by the
+ * report threshold, names nobody and therefore cannot enter that chain. Rather than
+ * weaken the chain's invariant, such an action is recorded here with no moderator and
+ * no audit entry, and `commerce_moderation_action_source_ck` binds those three columns
+ * to this value in both directions.
+ */
+export const commerceModerationActionSourceEnum = pgEnum("commerce_moderation_action_source", [
+  "moderator",
+  "automatic",
+]);
+
 export const commerceProductRelationSourceKindEnum = pgEnum(
   "commerce_product_relation_source_kind",
   ["seller_declared", "moderator_curated", "derived_cooccurrence"],
@@ -6017,6 +6081,195 @@ export const commerceReviewReply = pgTable(
       table.createdAt,
     ),
     check("commerce_review_reply_body_ck", sql`char_length(body) BETWEEN 1 AND 2000`),
+  ],
+);
+
+/**
+ * A user-submitted report about commerce content (STORE Appendix A12).
+ *
+ * FIVE NULLABLE FOREIGN KEYS WITH AN XOR CHECK, not one polymorphic `targetId`. A bare
+ * text id carries no referential integrity, so a report could point at a row that
+ * never existed, and the moderation queue could not join to show a reviewer WHAT was
+ * reported. `research_program_content_report` made the same call for the same reason.
+ * The WIRE takes a single `targetId` for transport convenience; storage is XOR.
+ *
+ * Note the doc correction this table embodies: A12 says commerce reports feed the
+ * existing `content_review_action` queue. They cannot — that table's `video_id` is NOT
+ * NULL with a cascade to `video`. Hence `commerce_moderation_action` below.
+ */
+export const commerceContentReport = pgTable(
+  "commerce_content_report",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    targetKind: commerceContentTargetKindEnum("target_kind").notNull(),
+    productId: text("product_id").references(() => product.id, { onDelete: "cascade" }),
+    reviewId: text("review_id").references(() => commerceReview.id, { onDelete: "cascade" }),
+    questionId: text("question_id").references(() => commerceProductQuestion.id, {
+      onDelete: "cascade",
+    }),
+    answerId: text("answer_id").references(() => commerceProductAnswer.id, {
+      onDelete: "cascade",
+    }),
+    organizationId: text("organization_id").references(() => commerceOrganization.id, {
+      onDelete: "cascade",
+    }),
+    reason: commerceContentReportReasonEnum("reason").notNull(),
+    detailText: text("detail_text"),
+    /** SET NULL: a deleted account must not erase the report it filed. */
+    reporterUserId: text("reporter_user_id").references(() => user.id, { onDelete: "set null" }),
+    /** Optional context. A reporter need not act for an organization. */
+    reporterOrganizationId: text("reporter_organization_id").references(
+      () => commerceOrganization.id,
+      { onDelete: "set null" },
+    ),
+    status: commerceContentReportStatusEnum("status").default("open").notNull(),
+    resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    resolvedAt: timestamp("resolved_at", { precision: 3 }),
+    resolutionNote: text("resolution_note"),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    /**
+     * One report per user per target, per kind. Partial because the target column is
+     * null for four of the five kinds on any given row.
+     */
+    uniqueIndex("commerce_content_report_product_reporter_uidx")
+      .on(table.productId, table.reporterUserId)
+      .where(sql`product_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    uniqueIndex("commerce_content_report_review_reporter_uidx")
+      .on(table.reviewId, table.reporterUserId)
+      .where(sql`review_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    uniqueIndex("commerce_content_report_question_reporter_uidx")
+      .on(table.questionId, table.reporterUserId)
+      .where(sql`question_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    uniqueIndex("commerce_content_report_answer_reporter_uidx")
+      .on(table.answerId, table.reporterUserId)
+      .where(sql`answer_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    uniqueIndex("commerce_content_report_organization_reporter_uidx")
+      .on(table.organizationId, table.reporterUserId)
+      .where(sql`organization_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    /** The queue, oldest first. */
+    index("commerce_content_report_queue_idx").on(table.status, table.createdAt, table.id),
+    index("commerce_content_report_target_idx").on(
+      table.targetKind,
+      table.status,
+      table.createdAt,
+      table.id,
+    ),
+    check(
+      "commerce_content_report_target_ck",
+      sql`num_nonnulls(product_id, review_id, question_id, answer_id, organization_id) = 1
+          AND (target_kind = 'product') = (product_id IS NOT NULL)
+          AND (target_kind = 'review') = (review_id IS NOT NULL)
+          AND (target_kind = 'question') = (question_id IS NOT NULL)
+          AND (target_kind = 'answer') = (answer_id IS NOT NULL)
+          AND (target_kind = 'organization') = (organization_id IS NOT NULL)`,
+    ),
+    check(
+      "commerce_content_report_detail_ck",
+      sql`detail_text IS NULL OR char_length(detail_text) BETWEEN 1 AND 2000`,
+    ),
+    check(
+      "commerce_content_report_resolution_ck",
+      sql`(resolved_by_user_id IS NULL) = (resolved_at IS NULL)
+          AND (status = 'open') = (resolved_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * A moderation decision about commerce content (STORE Appendix A12).
+ *
+ * Modelled on `research_program_moderation_action`, which exists for exactly this
+ * reason: `content_review_action` is video-scoped by construction, and generalizing it
+ * would merge two queues gated by DIFFERENT capabilities (`moderate_content` versus
+ * `moderate_commerce`) into one table — the coupling capabilities exist to prevent.
+ *
+ * Target columns are SET NULL rather than cascade: a decision stays on the record
+ * after the thing it was about is gone. That is the opposite choice from the report
+ * table above, and deliberately so — a report about a deleted product is noise, but a
+ * record that staff hid something is exactly what an audit needs to still find.
+ */
+export const commerceModerationAction = pgTable(
+  "commerce_moderation_action",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    actionKind: commerceModerationActionKindEnum("action_kind").notNull(),
+    targetKind: commerceContentTargetKindEnum("target_kind").notNull(),
+    productId: text("product_id").references(() => product.id, { onDelete: "set null" }),
+    reviewId: text("review_id").references(() => commerceReview.id, { onDelete: "set null" }),
+    questionId: text("question_id").references(() => commerceProductQuestion.id, {
+      onDelete: "set null",
+    }),
+    answerId: text("answer_id").references(() => commerceProductAnswer.id, {
+      onDelete: "set null",
+    }),
+    organizationId: text("organization_id").references(() => commerceOrganization.id, {
+      onDelete: "set null",
+    }),
+    reportId: text("report_id").references(() => commerceContentReport.id, {
+      onDelete: "set null",
+    }),
+    actionSource: commerceModerationActionSourceEnum("action_source").notNull(),
+    moderatorUserId: text("moderator_user_id").references(() => user.id, { onDelete: "restrict" }),
+    moderatorRoleSnapshot: text("moderator_role_snapshot"),
+    reasonNote: text("reason_note").notNull(),
+    /** The hash-chain entry, for staff actions only. An automatic hide has none. */
+    auditEntryId: text("audit_entry_id").references(() => platformAuditEntry.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_moderation_action_audit_uidx")
+      .on(table.auditEntryId)
+      .where(sql`audit_entry_id IS NOT NULL`),
+    index("commerce_moderation_action_timeline_idx").on(table.createdAt, table.id),
+    index("commerce_moderation_action_moderator_idx")
+      .on(table.moderatorUserId, table.createdAt)
+      .where(sql`moderator_user_id IS NOT NULL`),
+    index("commerce_moderation_action_report_idx")
+      .on(table.reportId)
+      .where(sql`report_id IS NOT NULL`),
+    /**
+     * AT MOST one target, and whichever one is set must agree with `targetKind`.
+     *
+     * "At most" rather than "exactly" — unlike the report table — because these
+     * columns are SET NULL. When the reviewed thing is deleted the row is left with no
+     * target at all, and that is the intended end state: the decision survives its
+     * subject. `targetKind` still records what KIND of thing it was.
+     */
+    check(
+      "commerce_moderation_action_target_ck",
+      sql`num_nonnulls(product_id, review_id, question_id, answer_id, organization_id) <= 1
+          AND (product_id IS NULL OR target_kind = 'product')
+          AND (review_id IS NULL OR target_kind = 'review')
+          AND (question_id IS NULL OR target_kind = 'question')
+          AND (answer_id IS NULL OR target_kind = 'answer')
+          AND (organization_id IS NULL OR target_kind = 'organization')`,
+    ),
+    /**
+     * The three staff columns travel together, in BOTH directions. An `automatic` row
+     * with a moderator would be a lie; a `moderator` row without an audit entry would
+     * be an unlogged staff action, which is the thing the chain exists to prevent.
+     */
+    check(
+      "commerce_moderation_action_source_ck",
+      sql`(action_source = 'moderator') = (moderator_user_id IS NOT NULL)
+          AND (action_source = 'moderator') = (moderator_role_snapshot IS NOT NULL)
+          AND (action_source = 'moderator') = (audit_entry_id IS NOT NULL)`,
+    ),
+    check("commerce_moderation_action_reason_ck", sql`char_length(reason_note) BETWEEN 1 AND 2000`),
+    check(
+      "commerce_moderation_action_role_ck",
+      sql`moderator_role_snapshot IS NULL OR char_length(moderator_role_snapshot) BETWEEN 1 AND 40`,
+    ),
   ],
 );
 

@@ -14,6 +14,7 @@ import { requestLog } from "#src/middleware/request-log.js";
 import authRouter from "#src/routes/auth.routes.js";
 import commerceCartRouter from "#src/routes/commerce-cart.routes.js";
 import commerceCatalogRouter from "#src/routes/commerce-catalog.routes.js";
+import commerceContentReportsRouter from "#src/routes/commerce-content-reports.routes.js";
 import commerceFulfillmentRouter from "#src/routes/commerce-fulfillment.routes.js";
 import commerceMerchandisingRouter from "#src/routes/commerce-merchandising.routes.js";
 import commerceMessagesRouter from "#src/routes/commerce-messages.routes.js";
@@ -160,6 +161,7 @@ app.use("/commerce", commerceTrustRouter);
 app.use("/commerce", commerceCatalogRouter);
 app.use("/commerce", commerceMerchandisingRouter);
 app.use("/commerce", commerceProductQaRouter);
+app.use("/commerce", commerceContentReportsRouter);
 app.use("/store", storeRouter);
 /**
  * A11. Buyer engagement WRITES share the `/store` prefix but not `store.routes.ts`'s
