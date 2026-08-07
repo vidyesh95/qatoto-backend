@@ -1,33 +1,40 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 
 stubServerEnvironment();
-vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
+/**
+ * The audit append only ever inserts, so a two-call chain is the whole surface it
+ * touches. Stubbing it on the db module rather than hand-rolling an executor keeps the
+ * call site honestly typed — `db` carries its real declared type here, so the test
+ * exercises the same signature production does.
+ */
+const insertedRowsRef = vi.hoisted(() => ({ rows: [] as unknown[] }));
+
+const transactionStub = vi.hoisted(() => ({
+  insert: () => ({
+    values: (row: unknown) => {
+      insertedRowsRef.rows.push(row);
+      return { returning: () => Promise.resolve([{ id: "audit_1" }]) };
+    },
+  }),
+}));
+
+vi.mock("#src/db/index.js", () => ({
+  db: {
+    // Handing the stub to the callback is what lets the test call the service with a
+    // correctly typed transaction and no type assertion anywhere.
+    transaction: (run: (transaction: unknown) => Promise<unknown>) => run(transactionStub),
+  },
+  pool: {},
+}));
+
+const { db } = await import("#src/db/index.js");
 const { appendCommerceOrganizationAuditEntry } = await import("#src/services/commerce-organization-audit.service.js");
 
 type AuditAppendInput = Parameters<typeof appendCommerceOrganizationAuditEntry>[1];
-type AuditExecutor = Parameters<typeof appendCommerceOrganizationAuditEntry>[0];
-
-/**
- * The audit append only ever inserts, so a two-call chain is the whole surface this
- * service touches. Building it by hand keeps the test honest about what it exercises:
- * the payload guard, not Drizzle.
- */
-function buildInsertingExecutor(): { executor: AuditExecutor; insertedValues: unknown[] } {
-  const insertedValues: unknown[] = [];
-  const executor = {
-    insert: () => ({
-      values: (row: unknown) => {
-        insertedValues.push(row);
-        return { returning: () => Promise.resolve([{ id: "audit_1" }]) };
-      },
-    }),
-  };
-  return { executor: executor as unknown as AuditExecutor, insertedValues };
-}
 
 function buildAppendInput(payload: AuditAppendInput["payload"]): AuditAppendInput {
   return {
@@ -43,6 +50,10 @@ function buildAppendInput(payload: AuditAppendInput["payload"]): AuditAppendInpu
 }
 
 describe("commerce organization audit payload guard", () => {
+  beforeEach(() => {
+    insertedRowsRef.rows.length = 0;
+  });
+
   /**
    * REGRESSION. `createAddress` used to pass `addressKind` as a payload key. The guard
    * tests keys against a PII-name regex that includes `address`, so the append failed,
@@ -52,44 +63,44 @@ describe("commerce organization audit payload guard", () => {
    * The route suite mocks this service, so nothing caught it. This test does.
    */
   it("accepts the address-creation payload shape", async () => {
-    const { executor, insertedValues } = buildInsertingExecutor();
-
-    const appended = await appendCommerceOrganizationAuditEntry(
-      executor,
-      buildAppendInput({ action: "created", kind: "delivery", isDefault: true }),
+    const appended = await db.transaction(async (transaction) =>
+      appendCommerceOrganizationAuditEntry(
+        transaction,
+        buildAppendInput({ action: "created", kind: "delivery", isDefault: true }),
+      ),
     );
 
-    expect(appended.success).toBe(true);
-    expect(insertedValues).toHaveLength(1);
+    expect(appended).toEqual({ success: true, value: { auditEntryId: "audit_1" } });
+    expect(insertedRowsRef.rows).toHaveLength(1);
   });
 
   it("still refuses a payload key that names PII", async () => {
-    const { executor, insertedValues } = buildInsertingExecutor();
-
-    const appended = await appendCommerceOrganizationAuditEntry(
-      executor,
-      buildAppendInput({ action: "created", addressKind: "delivery" }),
+    const appended = await db.transaction(async (transaction) =>
+      appendCommerceOrganizationAuditEntry(
+        transaction,
+        buildAppendInput({ action: "created", addressKind: "delivery" }),
+      ),
     );
 
-    expect(appended.success).toBe(false);
-    if (!appended.success) {
-      expect(appended.error).toEqual({ type: "UNSAFE_PAYLOAD", fieldPath: "$.addressKind" });
-    }
+    expect(appended).toEqual({
+      success: false,
+      error: { type: "UNSAFE_PAYLOAD", fieldPath: "$.addressKind" },
+    });
     // Nothing reached the database — the guard runs before any write.
-    expect(insertedValues).toHaveLength(0);
+    expect(insertedRowsRef.rows).toHaveLength(0);
   });
 
   it("refuses a PII key nested inside the payload", async () => {
-    const { executor } = buildInsertingExecutor();
-
-    const appended = await appendCommerceOrganizationAuditEntry(
-      executor,
-      buildAppendInput({ action: "created", contact: { phone: "+91 99999 99999" } }),
+    const appended = await db.transaction(async (transaction) =>
+      appendCommerceOrganizationAuditEntry(
+        transaction,
+        buildAppendInput({ action: "created", contact: { phone: "+91 99999 99999" } }),
+      ),
     );
 
-    expect(appended.success).toBe(false);
-    if (!appended.success) {
-      expect(appended.error).toEqual({ type: "UNSAFE_PAYLOAD", fieldPath: "$.contact.phone" });
-    }
+    expect(appended).toEqual({
+      success: false,
+      error: { type: "UNSAFE_PAYLOAD", fieldPath: "$.contact.phone" },
+    });
   });
 });
