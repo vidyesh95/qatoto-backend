@@ -109,6 +109,19 @@ export interface OrganizationFulfillmentMetrics {
   /** Orders that had BOTH a promise and a delivery, so could be scored either way. */
   readonly onTimeSampleSize: number;
   readonly completedOrderCount: number;
+}
+
+/**
+ * The fulfillment metrics PLUS the two that only a company page renders (A13 item 7).
+ *
+ * SEPARATE FROM THE CARD SHAPE ON PURPOSE, for exactly the reason the review summaries
+ * below are separate from `loadProductReviewMetrics`: reorder rate and measured response
+ * time cost a per-buyer aggregate over a year of orders and a window function over ninety
+ * days of messages. A category page asks for 48 organizations at once and renders neither.
+ * Folding all six into the card loader would put that scan on every browse request to buy a
+ * number nobody displays there.
+ */
+export interface OrganizationMeasuredMetrics extends OrganizationFulfillmentMetrics {
   /** Share of this seller's buyers who bought again. Null below the buyer threshold. */
   readonly reorderRate: number | null;
   /** Distinct buyer organizations with at least one completed order in the window. */
@@ -143,6 +156,10 @@ export const EMPTY_FULFILLMENT_METRICS: OrganizationFulfillmentMetrics = {
   onTimeShipmentRate: null,
   onTimeSampleSize: 0,
   completedOrderCount: 0,
+};
+
+export const EMPTY_MEASURED_METRICS: OrganizationMeasuredMetrics = {
+  ...EMPTY_FULFILLMENT_METRICS,
   reorderRate: null,
   reorderSampleSize: 0,
   measuredResponseTimeHours: null,
@@ -244,29 +261,62 @@ export async function loadOrganizationReviewMetrics(
 }
 
 /**
- * The four platform-measured seller/provider facts (Appendix A13 items 1 and 7).
+ * THE CARD PATH: completed volume and on-time rate (Appendix A13 item 1).
  *
- * Four independent aggregates rather than one query, because they group over different
- * tables and different windows — completions, orders joined to delivery events, orders by
- * buyer, and messages. Each is a single `= any($1)` + GROUP BY, so the whole function is
- * four round trips regardless of how many organizations are asked for, matching this
- * module's N+1-free contract. They run concurrently.
+ * Two aggregates, each a single `= any($1)` + GROUP BY, so this is two round trips whether
+ * the caller asks for one organization or forty-eight. `onTimeShipmentRate` was hardcoded
+ * `null` here until Phase 12 supplied `commerce_order.promisedDeliveryAt`.
+ *
+ * Reorder rate and measured response time are deliberately NOT here — see
+ * {@link loadOrganizationMeasuredMetrics}.
  */
 export async function loadOrganizationFulfillmentMetrics(
   organizationIds: readonly string[],
-  asOf: Date = new Date(),
 ): Promise<ReadonlyMap<string, OrganizationFulfillmentMetrics>> {
   const metrics = new Map<string, OrganizationFulfillmentMetrics>();
   if (organizationIds.length === 0) return metrics;
 
   const requestedIds = [...organizationIds];
 
-  /**
-   * An order counts as delivered at its LAST shipment's delivered event, matching
-   * `latestPromisedDeliveryAt`: the order is done when its slowest part arrived. Scoring
-   * against the first delivery would pass a split shipment whose remainder never came.
-   */
-  const deliveredOrders = db
+  const [completionRows, onTimeRows] = await Promise.all([
+    completedOrderCountQuery(requestedIds),
+    onTimeQuery(requestedIds),
+  ]);
+
+  for (const organizationId of requestedIds) {
+    metrics.set(organizationId, EMPTY_FULFILLMENT_METRICS);
+  }
+  for (const row of completionRows) {
+    const current =
+      metrics.get(row.counterpartyOrganizationId) ?? EMPTY_FULFILLMENT_METRICS;
+    metrics.set(row.counterpartyOrganizationId, {
+      ...current,
+      completedOrderCount: row.completedOrderCount,
+    });
+  }
+  for (const row of onTimeRows) {
+    const current =
+      metrics.get(row.counterpartyOrganizationId) ?? EMPTY_FULFILLMENT_METRICS;
+    metrics.set(row.counterpartyOrganizationId, {
+      ...current,
+      onTimeSampleSize: row.onTimeSampleSize,
+      onTimeShipmentRate: deriveRate(
+        row.onTimeCount,
+        row.onTimeSampleSize,
+        ON_TIME_MINIMUM_SAMPLE,
+      ),
+    });
+  }
+  return metrics;
+}
+
+/**
+ * An order counts as delivered at its LAST shipment's delivered event, matching
+ * `latestPromisedDeliveryAt`: the order is done when its slowest part arrived. Scoring
+ * against the first delivery would pass a split shipment whose remainder never came.
+ */
+function deliveredOrdersSubquery() {
+  return db
     .select({
       orderId: commerceShipment.orderId,
       deliveredAt: sql<Date>`max(${commerceShipmentEvent.occurredAt})`.as(
@@ -283,6 +333,70 @@ export async function loadOrganizationFulfillmentMetrics(
     )
     .groupBy(commerceShipment.orderId)
     .as("delivered_orders");
+}
+
+function completedOrderCountQuery(requestedIds: readonly string[]) {
+  return db
+    .select({
+      counterpartyOrganizationId: commerceCompletion.counterpartyOrganizationId,
+      completedOrderCount: sql<number>`count(distinct ${commerceCompletion.orderId})::int`,
+    })
+    .from(commerceCompletion)
+    .innerJoin(commerceOrder, eq(commerceOrder.id, commerceCompletion.orderId))
+    .where(
+      and(
+        inArray(commerceCompletion.counterpartyOrganizationId, [
+          ...requestedIds,
+        ]),
+        eq(commerceCompletion.targetKind, "product_order_line"),
+        eq(commerceOrder.state, "completed"),
+      ),
+    )
+    .groupBy(commerceCompletion.counterpartyOrganizationId);
+}
+
+function onTimeQuery(requestedIds: readonly string[]) {
+  const deliveredOrders = deliveredOrdersSubquery();
+  return db
+    .select({
+      counterpartyOrganizationId: commerceOrder.counterpartyOrganizationId,
+      onTimeSampleSize: sql<number>`count(*)::int`,
+      onTimeCount: sql<number>`count(*) filter (where ${deliveredOrders.deliveredAt} <= ${commerceOrder.promisedDeliveryAt})::int`,
+    })
+    .from(commerceOrder)
+    .innerJoin(deliveredOrders, eq(deliveredOrders.orderId, commerceOrder.id))
+    .where(
+      and(
+        inArray(commerceOrder.counterpartyOrganizationId, [...requestedIds]),
+        // No promise, no score. Absent from the denominator, never counted as met.
+        isNotNull(commerceOrder.promisedDeliveryAt),
+        // A cancelled order's delivery date is moot even if a shipment moved.
+        ne(commerceOrder.state, "cancelled"),
+      ),
+    )
+    .groupBy(commerceOrder.counterpartyOrganizationId);
+}
+
+/**
+ * THE COMPANY-PAGE PATH: all six measured facts (Appendix A13 items 1 and 7).
+ *
+ * Four independent aggregates, because they group over different tables and different
+ * windows — completions, orders joined to delivery events, orders by buyer, and messages.
+ * Each is a single `= any($1)` + GROUP BY, so this is four round trips regardless of how
+ * many organizations are asked for. They run concurrently.
+ *
+ * Called only by the storefront and provider DETAIL reads. A category page's 48 cards go
+ * through {@link loadOrganizationFulfillmentMetrics} instead, which skips the per-buyer
+ * year of orders and the ninety-day message window they do not render.
+ */
+export async function loadOrganizationMeasuredMetrics(
+  organizationIds: readonly string[],
+  asOf: Date = new Date(),
+): Promise<ReadonlyMap<string, OrganizationMeasuredMetrics>> {
+  const metrics = new Map<string, OrganizationMeasuredMetrics>();
+  if (organizationIds.length === 0) return metrics;
+
+  const requestedIds = [...organizationIds];
 
   /**
    * Repeat buyers per seller. `state = 'completed'` on both sides of the fraction: a
@@ -353,50 +467,8 @@ export async function loadOrganizationFulfillmentMetrics(
 
   const [completionRows, onTimeRows, reorderRows, responseRows] =
     await Promise.all([
-      db
-        .select({
-          counterpartyOrganizationId:
-            commerceCompletion.counterpartyOrganizationId,
-          completedOrderCount: sql<number>`count(distinct ${commerceCompletion.orderId})::int`,
-        })
-        .from(commerceCompletion)
-        .innerJoin(
-          commerceOrder,
-          eq(commerceOrder.id, commerceCompletion.orderId),
-        )
-        .where(
-          and(
-            inArray(
-              commerceCompletion.counterpartyOrganizationId,
-              requestedIds,
-            ),
-            eq(commerceCompletion.targetKind, "product_order_line"),
-            eq(commerceOrder.state, "completed"),
-          ),
-        )
-        .groupBy(commerceCompletion.counterpartyOrganizationId),
-
-      db
-        .select({
-          counterpartyOrganizationId: commerceOrder.counterpartyOrganizationId,
-          onTimeSampleSize: sql<number>`count(*)::int`,
-          onTimeCount: sql<number>`count(*) filter (where ${deliveredOrders.deliveredAt} <= ${commerceOrder.promisedDeliveryAt})::int`,
-        })
-        .from(commerceOrder)
-        .innerJoin(
-          deliveredOrders,
-          eq(deliveredOrders.orderId, commerceOrder.id),
-        )
-        .where(
-          and(
-            inArray(commerceOrder.counterpartyOrganizationId, requestedIds),
-            // No promise, no score. Absent from the denominator, never counted as met.
-            isNotNull(commerceOrder.promisedDeliveryAt),
-            // A cancelled order's delivery date is moot even if a shipment moved.
-            ne(commerceOrder.state, "cancelled"),
-          ),
-        )
-        .groupBy(commerceOrder.counterpartyOrganizationId),
+      completedOrderCountQuery(requestedIds),
+      onTimeQuery(requestedIds),
 
       db
         .select({
@@ -437,14 +509,14 @@ export async function loadOrganizationFulfillmentMetrics(
     ]);
 
   for (const organizationId of requestedIds) {
-    metrics.set(organizationId, EMPTY_FULFILLMENT_METRICS);
+    metrics.set(organizationId, EMPTY_MEASURED_METRICS);
   }
 
   function mergeInto(
     organizationId: string,
-    patch: Partial<OrganizationFulfillmentMetrics>,
+    patch: Partial<OrganizationMeasuredMetrics>,
   ): void {
-    const current = metrics.get(organizationId) ?? EMPTY_FULFILLMENT_METRICS;
+    const current = metrics.get(organizationId) ?? EMPTY_MEASURED_METRICS;
     metrics.set(organizationId, { ...current, ...patch });
   }
 

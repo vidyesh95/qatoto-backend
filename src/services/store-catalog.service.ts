@@ -1,4 +1,14 @@
-import { and, asc, desc, eq, gt, inArray, isNotNull, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  or,
+  sql,
+} from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -23,12 +33,22 @@ import {
   type ProductContactAffordance,
 } from "#src/services/commerce-product-inquiry.service.js";
 import {
+  loadSellerDeclaredProfiles,
+  type SellerDeclaredProfileProjection,
+} from "#src/services/commerce-seller-profile.service.js";
+import {
+  EMPTY_FULFILLMENT_METRICS as EMPTY_CARD_FULFILLMENT_METRICS,
+  EMPTY_MEASURED_METRICS,
   loadOrganizationFulfillmentMetrics,
+  loadOrganizationMeasuredMetrics,
   loadProductReviewMetrics,
+  type OrganizationFulfillmentMetrics,
+  type OrganizationMeasuredMetrics,
 } from "#src/services/commerce-trust-metrics.service.js";
 import type { Result } from "#src/types/index.js";
 
-export type StoreStockState = "in_stock" | "low_stock" | "made_to_order" | "unavailable";
+export type StoreStockState =
+  "in_stock" | "low_stock" | "made_to_order" | "unavailable";
 
 export interface StoreCategoryProjection {
   readonly id: string;
@@ -54,10 +74,13 @@ export interface StoreReviewMetrics {
   readonly reviewCount: number;
 }
 
-export interface StoreFulfillmentMetrics {
-  readonly onTimeShipmentRate: number | null;
-  readonly completedOrderCount: number;
-}
+/**
+ * A13. Aliases of the trust-metrics shapes rather than re-declared copies. This interface
+ * used to be a hand-written duplicate, which is how `onTimeShipmentRate` could stay
+ * hardcoded `null` in one file while the other claimed to measure it.
+ */
+export type StoreFulfillmentMetrics = OrganizationFulfillmentMetrics;
+export type StoreMeasuredMetrics = OrganizationMeasuredMetrics;
 
 export interface StoreProductCardProjection {
   readonly id: string;
@@ -83,7 +106,11 @@ export interface StoreProductCardProjection {
   readonly leadTimeMaxDays: number | null;
   readonly mainImageUrl: string | null;
   readonly seller: StoreSellerProjection;
-  readonly category: { readonly id: string; readonly slug: string; readonly name: string };
+  readonly category: {
+    readonly id: string;
+    readonly slug: string;
+    readonly name: string;
+  };
   readonly reviewMetrics: StoreReviewMetrics;
   readonly fulfillmentMetrics: StoreFulfillmentMetrics;
 }
@@ -205,23 +232,54 @@ export interface StoreOrganizationStorefront {
   readonly countryCode: string;
   readonly logoUrl: string | null;
   readonly websiteUrl: string | null;
+  /**
+   * A13. WHAT THE SELLER SAYS ABOUT ITSELF — founding year, factory count, business type,
+   * factory photos, freight access, officers, capabilities, approved certifications.
+   *
+   * `null` when this organization has never described itself, NOT an empty object. "We have
+   * no profile for this seller" and "this seller filled in the form and left it blank" are
+   * different facts, and only one of them is worth rendering as an empty state. Same call
+   * A11 made with `engagement.viewer`.
+   */
+  readonly declaredProfile: SellerDeclaredProfileProjection | null;
+  /**
+   * A13. WHAT THE PLATFORM MEASURED — on-time rate, completed orders, reorder rate, median
+   * response time, each with its sample size.
+   *
+   * A SEPARATE OBJECT FROM `declaredProfile`, and that separation is the point of the whole
+   * appendix entry. The mock rendered one flat `stats: {label, value}[]` array mixing
+   * "98.6% on-time" with "founded 2009", which teaches a client to present a seller's
+   * assertion as a platform measurement. Two objects make that mistake unavailable rather
+   * than merely discouraged.
+   *
+   * Never `null`: an organization with no orders has measured metrics, and they are zeros
+   * and nulls with honest sample sizes.
+   */
+  readonly measuredMetrics: StoreMeasuredMetrics;
   readonly products: {
     readonly items: readonly StoreProductCardProjection[];
-    readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    readonly page: {
+      readonly nextCursor: string | null;
+      readonly hasMore: boolean;
+    };
   };
 }
 
-export type StoreCatalogError = { type: "NOT_FOUND" } | { type: "INVALID_CURSOR" };
+export type StoreCatalogError =
+  { type: "NOT_FOUND" } | { type: "INVALID_CURSOR" };
 
 const EMPTY_REVIEW_METRICS: StoreReviewMetrics = {
   averageRating: null,
   reviewCount: 0,
 };
 
-const EMPTY_FULFILLMENT_METRICS: StoreFulfillmentMetrics = {
-  onTimeShipmentRate: null,
-  completedOrderCount: 0,
-};
+/**
+ * A13. Re-exported from the metrics module rather than re-declared. The local copy that used
+ * to sit here is the reason `onTimeShipmentRate` could be documented as measured in one file
+ * and hardcoded `null` in another: two literals, one of which nobody updated.
+ */
+const EMPTY_FULFILLMENT_METRICS: StoreFulfillmentMetrics =
+  EMPTY_CARD_FULFILLMENT_METRICS;
 
 const publicProductEligibility = and(
   eq(product.status, "active"),
@@ -243,14 +301,20 @@ const publicProductEligibility = and(
  */
 export async function resolveEligibleProductRefBySlug(
   productSlug: string,
-): Promise<{ readonly id: string; readonly sellerOrganizationId: string } | null> {
+): Promise<{
+  readonly id: string;
+  readonly sellerOrganizationId: string;
+} | null> {
   const [row] = await db
     .select({
       id: product.id,
       sellerOrganizationId: product.sellerOrganizationId,
     })
     .from(product)
-    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, product.sellerOrganizationId),
+    )
     .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
     .where(and(publicProductEligibility, eq(product.publicSlug, productSlug)))
     .limit(1);
@@ -267,14 +331,20 @@ export async function resolveEligibleProductRefBySlug(
  */
 export async function resolveEligibleProductRefById(
   productId: string,
-): Promise<{ readonly id: string; readonly sellerOrganizationId: string } | null> {
+): Promise<{
+  readonly id: string;
+  readonly sellerOrganizationId: string;
+} | null> {
   const [row] = await db
     .select({
       id: product.id,
       sellerOrganizationId: product.sellerOrganizationId,
     })
     .from(product)
-    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, product.sellerOrganizationId),
+    )
     .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
     .where(and(publicProductEligibility, eq(product.id, productId)))
     .limit(1);
@@ -320,7 +390,9 @@ function toSellerProjection(row: {
   };
 }
 
-async function loadMainImageUrls(productIds: readonly string[]): Promise<Map<string, string>> {
+async function loadMainImageUrls(
+  productIds: readonly string[],
+): Promise<Map<string, string>> {
   if (productIds.length === 0) {
     return new Map();
   }
@@ -361,9 +433,10 @@ async function loadMinimumOrderQuantities(
   const rows = await db
     .select({
       productId: productPricingTier.productId,
-      minimumOrderQuantity: sql<number>`min(${productPricingTier.minimumOrderQuantity})`.mapWith(
-        Number,
-      ),
+      minimumOrderQuantity:
+        sql<number>`min(${productPricingTier.minimumOrderQuantity})`.mapWith(
+          Number,
+        ),
     })
     .from(productPricingTier)
     .where(inArray(productPricingTier.productId, [...productIds]))
@@ -394,8 +467,14 @@ async function loadVariantAggregates(
     .select({
       productId: commerceProductVariant.productId,
       activeVariantCount: sql<number>`count(*)`.mapWith(Number),
-      lowestPriceInCents: sql<number>`min(${commerceProductVariant.priceInCents})`.mapWith(Number),
-      totalStockQuantity: sql<number>`sum(${commerceProductVariant.stockQuantity})`.mapWith(Number),
+      lowestPriceInCents:
+        sql<number>`min(${commerceProductVariant.priceInCents})`.mapWith(
+          Number,
+        ),
+      totalStockQuantity:
+        sql<number>`sum(${commerceProductVariant.stockQuantity})`.mapWith(
+          Number,
+        ),
     })
     .from(commerceProductVariant)
     .where(
@@ -463,14 +542,21 @@ export async function getCategoryBySlug(categorySlug: string): Promise<
       imageUrl: commerceCategory.imageUrl,
     })
     .from(commerceCategory)
-    .where(and(eq(commerceCategory.slug, categorySlug), eq(commerceCategory.state, "active")))
+    .where(
+      and(
+        eq(commerceCategory.slug, categorySlug),
+        eq(commerceCategory.state, "active"),
+      ),
+    )
     .limit(1);
 
   if (!categoryRow) {
     return { success: false, error: { type: "NOT_FOUND" } };
   }
 
-  const childrenResult = await listActiveCategories({ parentCategoryId: categoryRow.id });
+  const childrenResult = await listActiveCategories({
+    parentCategoryId: categoryRow.id,
+  });
   return {
     success: true,
     value: {
@@ -480,7 +566,9 @@ export async function getCategoryBySlug(categorySlug: string): Promise<
   };
 }
 
-export async function getCategoryFacets(categoryId: string): Promise<StoreCategoryFacets> {
+export async function getCategoryFacets(
+  categoryId: string,
+): Promise<StoreCategoryFacets> {
   const subtreeIds = await listActiveCategorySubtreeIds(categoryId);
   if (subtreeIds.length === 0) {
     return {
@@ -499,7 +587,10 @@ export async function getCategoryFacets(categoryId: string): Promise<StoreCatego
         count: sql<number>`count(*)::int`.mapWith(Number),
       })
       .from(product)
-      .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+      .innerJoin(
+        commerceOrganization,
+        eq(commerceOrganization.id, product.sellerOrganizationId),
+      )
       .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
       .where(and(publicProductEligibility, categoryPredicate))
       .groupBy(commerceOrganization.countryCode)
@@ -539,19 +630,29 @@ export async function getCategoryFacets(categoryId: string): Promise<StoreCatego
         count: sql<number>`count(*)::int`.mapWith(Number),
       })
       .from(product)
-      .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+      .innerJoin(
+        commerceOrganization,
+        eq(commerceOrganization.id, product.sellerOrganizationId),
+      )
       .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
       .where(and(publicProductEligibility, categoryPredicate))
       .groupBy(product.samplePolicy)
       .orderBy(desc(sql`count(*)`), asc(product.samplePolicy)),
     db
       .select({
-        minInCents: sql<number | null>`min(${product.priceInCents})`.mapWith(Number),
-        maxInCents: sql<number | null>`max(${product.priceInCents})`.mapWith(Number),
+        minInCents: sql<number | null>`min(${product.priceInCents})`.mapWith(
+          Number,
+        ),
+        maxInCents: sql<number | null>`max(${product.priceInCents})`.mapWith(
+          Number,
+        ),
         count: sql<number>`count(*)::int`.mapWith(Number),
       })
       .from(product)
-      .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+      .innerJoin(
+        commerceOrganization,
+        eq(commerceOrganization.id, product.sellerOrganizationId),
+      )
       .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
       .where(and(publicProductEligibility, categoryPredicate)),
   ]);
@@ -571,14 +672,20 @@ export async function getCategoryFacets(categoryId: string): Promise<StoreCatego
       count: row.count,
     })),
     priceRangesInCents: {
-      minInCents: priceSummary?.count ? (priceSummary.minInCents ?? null) : null,
-      maxInCents: priceSummary?.count ? (priceSummary.maxInCents ?? null) : null,
+      minInCents: priceSummary?.count
+        ? (priceSummary.minInCents ?? null)
+        : null,
+      maxInCents: priceSummary?.count
+        ? (priceSummary.maxInCents ?? null)
+        : null,
       count: priceSummary?.count ?? 0,
     },
   };
 }
 
-async function buildCategoryTrail(categoryId: string): Promise<readonly StoreCategoryProjection[]> {
+async function buildCategoryTrail(
+  categoryId: string,
+): Promise<readonly StoreCategoryProjection[]> {
   const trail: StoreCategoryProjection[] = [];
   let currentId: string | null = categoryId;
   for (let depth = 0; depth < 16 && currentId !== null; depth += 1) {
@@ -763,12 +870,16 @@ export async function listEligibleProducts(input: {
   Result<
     {
       readonly items: readonly StoreProductCardProjection[];
-      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+      readonly page: {
+        readonly nextCursor: string | null;
+        readonly hasMore: boolean;
+      };
     },
     StoreCatalogError
   >
 > {
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -777,7 +888,10 @@ export async function listEligibleProducts(input: {
     input.categoryId === undefined
       ? undefined
       : await listActiveCategorySubtreeIds(input.categoryId);
-  if (input.categoryId !== undefined && (categoryIds === undefined || categoryIds.length === 0)) {
+  if (
+    input.categoryId !== undefined &&
+    (categoryIds === undefined || categoryIds.length === 0)
+  ) {
     return {
       success: true,
       value: { items: [], page: { nextCursor: null, hasMore: false } },
@@ -798,25 +912,37 @@ export async function listEligibleProducts(input: {
   const rows = await db
     .select(productSelectFields)
     .from(product)
-    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, product.sellerOrganizationId),
+    )
     .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
     .where(
       and(
         publicProductEligibility,
-        categoryIds === undefined ? undefined : inArray(product.categoryId, [...categoryIds]),
+        categoryIds === undefined
+          ? undefined
+          : inArray(product.categoryId, [...categoryIds]),
         input.sellerOrganizationId === undefined
           ? undefined
           : eq(product.sellerOrganizationId, input.sellerOrganizationId),
-        input.productIds === undefined ? undefined : inArray(product.id, [...input.productIds]),
+        input.productIds === undefined
+          ? undefined
+          : inArray(product.id, [...input.productIds]),
         cursorPredicate,
       ),
     )
-    .orderBy(desc(sql`coalesce(${product.publishedAt}, ${product.createdAt})`), asc(product.id))
+    .orderBy(
+      desc(sql`coalesce(${product.publishedAt}, ${product.createdAt})`),
+      asc(product.id),
+    )
     .limit(input.limit + 1);
 
   const pageRows = rows.slice(0, input.limit);
   const productIds = pageRows.map((row) => row.id);
-  const organizationIds = [...new Set(pageRows.map((row) => row.organizationId))];
+  const organizationIds = [
+    ...new Set(pageRows.map((row) => row.organizationId)),
+  ];
   const [
     imageMap,
     moqMap,
@@ -836,7 +962,8 @@ export async function listEligibleProducts(input: {
       imageMap.get(row.id) ?? null,
       moqMap.get(row.id) ?? null,
       productReviewMetrics.get(row.id) ?? EMPTY_REVIEW_METRICS,
-      organizationFulfillmentMetrics.get(row.organizationId) ?? EMPTY_FULFILLMENT_METRICS,
+      organizationFulfillmentMetrics.get(row.organizationId) ??
+        EMPTY_FULFILLMENT_METRICS,
       variantAggregates.get(row.id) ?? null,
     ),
   );
@@ -884,7 +1011,10 @@ export async function resolveEligibleCategoriesByIds(
     })
     .from(commerceCategory)
     .where(
-      and(inArray(commerceCategory.id, [...categoryIds]), eq(commerceCategory.state, "active")),
+      and(
+        inArray(commerceCategory.id, [...categoryIds]),
+        eq(commerceCategory.state, "active"),
+      ),
     );
 
   const byId = new Map(rows.map((row) => [row.id, row]));
@@ -919,7 +1049,9 @@ export async function resolveEligibleOrganizationCardsByIds(
       ),
     );
 
-  const byId = new Map(rows.map((row) => [row.organizationId, toSellerProjection(row)]));
+  const byId = new Map(
+    rows.map((row) => [row.organizationId, toSellerProjection(row)]),
+  );
   return organizationIds.flatMap((organizationId) => {
     const card = byId.get(organizationId);
     return card === undefined ? [] : [card];
@@ -1008,7 +1140,10 @@ export async function getPublicProductBySlug(
       unitsPerPackage: product.unitsPerPackage,
     })
     .from(product)
-    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, product.sellerOrganizationId),
+    )
     .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
     .where(and(publicProductEligibility, eq(product.publicSlug, productSlug)))
     .limit(1);
@@ -1102,7 +1237,9 @@ export async function getPublicProductBySlug(
     loadProductEngagements([row.id], viewerUserId),
   ]);
 
-  const sharedImages = allImages.filter((media) => media.variantId === null).map(toMediaProjection);
+  const sharedImages = allImages
+    .filter((media) => media.variantId === null)
+    .map(toMediaProjection);
   const sharedPricingTiers = allPricingTiers
     .filter((tier) => tier.variantId === null)
     .map(({ unitPriceInCents, minimumOrderQuantity, position }) => ({
@@ -1111,42 +1248,50 @@ export async function getPublicProductBySlug(
       position,
     }));
 
-  const variants: StoreProductVariantProjection[] = variantRows.map((variantRow) => {
-    const variantTiers = allPricingTiers
-      .filter((tier) => tier.variantId === variantRow.id)
-      .map(({ unitPriceInCents, minimumOrderQuantity, position }) => ({
-        unitPriceInCents,
-        minimumOrderQuantity,
-        position,
-      }));
-    return {
-      id: variantRow.id,
-      publicSlug: variantRow.publicSlug,
-      name: variantRow.name,
-      priceInCents: variantRow.priceInCents,
-      minimumOrderQuantity: variantRow.minimumOrderQuantity,
-      stockState: deriveStockState({
-        stockQuantity: variantRow.stockQuantity,
-        leadTimeMinDays: row.leadTimeMinDays,
-        leadTimeMaxDays: row.leadTimeMaxDays,
-      }),
-      position: variantRow.position,
-      images: allImages.filter((media) => media.variantId === variantRow.id).map(toMediaProjection),
-      // A variant with no ladder of its own inherits the product's, matching how
-      // `loadPurchasableProductForCheckout` prices it.
-      pricingTiers: variantTiers.length > 0 ? variantTiers : sharedPricingTiers,
-    };
-  });
+  const variants: StoreProductVariantProjection[] = variantRows.map(
+    (variantRow) => {
+      const variantTiers = allPricingTiers
+        .filter((tier) => tier.variantId === variantRow.id)
+        .map(({ unitPriceInCents, minimumOrderQuantity, position }) => ({
+          unitPriceInCents,
+          minimumOrderQuantity,
+          position,
+        }));
+      return {
+        id: variantRow.id,
+        publicSlug: variantRow.publicSlug,
+        name: variantRow.name,
+        priceInCents: variantRow.priceInCents,
+        minimumOrderQuantity: variantRow.minimumOrderQuantity,
+        stockState: deriveStockState({
+          stockQuantity: variantRow.stockQuantity,
+          leadTimeMinDays: row.leadTimeMinDays,
+          leadTimeMaxDays: row.leadTimeMaxDays,
+        }),
+        position: variantRow.position,
+        images: allImages
+          .filter((media) => media.variantId === variantRow.id)
+          .map(toMediaProjection),
+        // A variant with no ladder of its own inherits the product's, matching how
+        // `loadPurchasableProductForCheckout` prices it.
+        pricingTiers:
+          variantTiers.length > 0 ? variantTiers : sharedPricingTiers,
+      };
+    },
+  );
 
   const card = mapProductCard(
     row,
     sharedImages[0]?.url ?? variants[0]?.images[0]?.url ?? null,
     moqMap.get(row.id) ??
       (sharedPricingTiers.length > 0
-        ? Math.min(...sharedPricingTiers.map((tier) => tier.minimumOrderQuantity))
+        ? Math.min(
+            ...sharedPricingTiers.map((tier) => tier.minimumOrderQuantity),
+          )
         : null),
     productReviewMetrics.get(row.id) ?? EMPTY_REVIEW_METRICS,
-    organizationFulfillmentMetrics.get(row.organizationId) ?? EMPTY_FULFILLMENT_METRICS,
+    organizationFulfillmentMetrics.get(row.organizationId) ??
+      EMPTY_FULFILLMENT_METRICS,
     variantAggregates.get(row.id) ?? null,
   );
   return {
@@ -1212,11 +1357,17 @@ export async function getPublicOrganizationStorefront(input: {
     return { success: false, error: { type: "NOT_FOUND" } };
   }
 
-  const productsResult = await listEligibleProducts({
-    sellerOrganizationId: organizationRow.organizationId,
-    limit: input.limit,
-    cursor: input.cursor,
-  });
+  const [productsResult, declaredProfiles, measuredMetrics] = await Promise.all(
+    [
+      listEligibleProducts({
+        sellerOrganizationId: organizationRow.organizationId,
+        limit: input.limit,
+        cursor: input.cursor,
+      }),
+      loadSellerDeclaredProfiles([organizationRow.organizationId]),
+      loadOrganizationMeasuredMetrics([organizationRow.organizationId]),
+    ],
+  );
   if (!productsResult.success) {
     return productsResult;
   }
@@ -1225,6 +1376,11 @@ export async function getPublicOrganizationStorefront(input: {
     success: true,
     value: {
       ...organizationRow,
+      declaredProfile:
+        declaredProfiles.get(organizationRow.organizationId) ?? null,
+      measuredMetrics:
+        measuredMetrics.get(organizationRow.organizationId) ??
+        EMPTY_MEASURED_METRICS,
       products: productsResult.value,
     },
   };
