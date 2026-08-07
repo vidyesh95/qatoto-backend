@@ -52,8 +52,11 @@
 > `docs/STORE_PHASE_11_ROLLOUT.md` for buyer logistics.
 > Trade-assurance language, real payment processors, external provider adapters/webhooks, Q&A,
 > content reports, ranking, and recommendations remain planned unless a section explicitly says
-> otherwise. Product organization-ownership and category columns remain in the documented
-> expand/dual-write contract phase until non-null enforcement is separately released.
+> otherwise. **Product organization-ownership and category columns are now NOT NULL** —
+> migration `0063` closed Phase 0's contract phase, dropping the expand-phase fill trigger
+> and making `seller_organization_id`, `created_by_user_id` and `category_id` mandatory.
+> The legacy `seller_id` and `category` enum survive: both still have readers, and
+> `docs/STORE_PHASE_0_ROLLOUT.md` requires a separate release to remove them.
 >
 > **What is NOT built, and what the frontend is standing in for meanwhile:**
 > [Appendix A](#appendix-a--what-the-frontend-needs-and-this-backend-does-not-have)

@@ -94,7 +94,25 @@ The final query must return zero. Product count must not change. On a database w
 pre-existing commerce organizations, generated organization and owner-membership counts equal
 the distinct legacy seller count.
 
-## Contract phase
+## Contract phase — **SHIPPED (migration `0063_store_phase_0_contract.sql`)**
+
+> The rest of this section is the specification the contract migration was written
+> against, kept as written. What it actually did:
+>
+> - preflight — refuse if any `product` row still carries a `NULL` transition key;
+> - `DROP TRIGGER commerce_product_fill_legacy_transition_keys` and its function;
+> - `SET NOT NULL` on `seller_organization_id`, `created_by_user_id` and `category_id`,
+>   in that order, because the doc requires the trigger to go immediately before the
+>   columns become mandatory.
+>
+> `seller_id` and the legacy `category` enum are **untouched** — both still have readers,
+> and the paragraph below requires a separate release for them.
+>
+> Code that moved with it: the three columns are `.notNull()` in `src/db/schema.ts`, the
+> `categoryId === null` guards in `products.service.ts` are gone because the case can no
+> longer be represented, and the foundation verifier's live trigger probe is replaced by
+> an `information_schema.columns.is_nullable` assertion — with the trigger dropped, that
+> probe's insert would fail with `23502`.
 
 Do not make transition columns non-null or remove legacy fields in this migration.
 

@@ -142,7 +142,19 @@ write a pathway item.
     pnpm run jobs:install
     ```
 
-4. Smoke (a seller org, a buyer org, and a `moderate_commerce` staff user):
+4. Seed the actors and data these flows assume, then drive them:
+
+    ```bash
+    pnpm run db:seed-store-demo                  # once; idempotent
+    pnpm run dev                                 # separate shell
+    pnpm run db:smoke-store-phases-9-11
+    ```
+
+    The script signs in over HTTP, activates each organization, and asserts every step
+    below including the refusals. The manual list is kept as the specification of what it
+    checks — run it by hand when changing one flow, and by script otherwise.
+
+5. Smoke (a seller org, a buyer org, and a `moderate_commerce` staff user):
 
     - Seller `POST /commerce/pathways` with an `anchorProductId` it owns → `draft`;
       anchoring on someone else's product → `422 ANCHOR_NOT_OWNED`

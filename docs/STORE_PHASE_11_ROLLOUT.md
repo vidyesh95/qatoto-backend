@@ -160,7 +160,19 @@ upload returns `202`, not `201`.
 
 3. Deploy the API.
 
-4. Smoke (a buyer org, a seller org, a provider org with freight coverage):
+4. Seed the actors and data these flows assume, then drive them:
+
+    ```bash
+    pnpm run db:seed-store-demo                  # once; idempotent
+    pnpm run dev                                 # separate shell
+    pnpm run db:smoke-store-phases-9-11
+    ```
+
+    The script signs in over HTTP, activates each organization, and asserts every step
+    below including the refusals. The manual list is kept as the specification of what it
+    checks — run it by hand when changing one flow, and by script otherwise.
+
+5. Smoke (a buyer org, a seller org, a provider org with freight coverage):
 
     - `POST /commerce/organizations/:id/addresses` succeeds — the regression above. An
       eleventh address of one kind → `409 ADDRESS_LIMIT_REACHED`

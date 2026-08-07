@@ -83,7 +83,8 @@ ranking, or anything blocked by §14.
 
 3. Deploy API.
 
-4. Smoke (authorized seller org / buyer org / `moderate_commerce` staff):
+4. Smoke (authorized seller org / buyer org / `moderate_commerce` staff).
+   `pnpm run db:seed-store-demo` creates all three and the listings they act on:
 
     - Seller `PUT /products/:id/variants` with two variants → public detail returns
       both with their own price and stock; the card price becomes the variant floor
