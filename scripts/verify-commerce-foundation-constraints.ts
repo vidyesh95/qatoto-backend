@@ -6,7 +6,7 @@
  *
  *   npm run db:verify-commerce-foundation-constraints
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import "dotenv/config";
 import type { PoolClient } from "pg";
@@ -52,7 +52,12 @@ const EXPECTED_TRIGGERS: readonly string[] = [
   "commerce_organization_audit_entry_append_only",
   "commerce_organization_audit_entry_no_truncate",
   "commerce_organization_member_enforce_transition",
-  "commerce_product_fill_legacy_transition_keys",
+  /**
+   * `commerce_product_fill_legacy_transition_keys` is deliberately ABSENT. Migration
+   * 0063 dropped it: it existed so an application predating organization ownership
+   * could still write a product mid-deploy, and the columns it derived are now NOT NULL.
+   * Its replacement assertion is the nullability check below.
+   */
 ];
 
 function sqlStateOf(error: unknown): string | undefined {
@@ -244,10 +249,8 @@ async function verifyRuntimeConstraints(): Promise<readonly CheckOutcome[]> {
   const childCategoryId = `verify-commerce-category-child-${fixtureSuffix}`;
   const auditEntryId = `verify-commerce-audit-${fixtureSuffix}`;
   const invitedMemberId = `verify-commerce-member-${fixtureSuffix}`;
-  const legacyProductId = `verify-commerce-product-${fixtureSuffix}`;
-  const expectedLegacyOrganizationId = `commerce_org_legacy_${createHash("md5")
-    .update(fixtureUserId)
-    .digest("hex")}`;
+  // The legacy product probe and its derived organization id went with the fill trigger
+  // in 0063; nothing inserts a product here any more.
 
   try {
     await transactionClient.query("BEGIN");
@@ -309,29 +312,30 @@ async function verifyRuntimeConstraints(): Promise<readonly CheckOutcome[]> {
         ),
     );
 
-    await transactionClient.query(
-      `INSERT INTO product
-         (id, seller_id, title, category, condition, price_in_cents, stock_quantity, key_features)
-       VALUES ($1, $2, 'Legacy compatibility probe', 'electronics', 'new', 100, 0, '{}')`,
-      [legacyProductId, fixtureUserId],
-    );
-    const legacyMappingResult = await transactionClient.query<{
-      readonly seller_organization_id: string | null;
-      readonly created_by_user_id: string | null;
-      readonly category_id: string | null;
+    /**
+     * CONTRACT PHASE (0063). This used to insert a product carrying only `seller_id` and
+     * `category` and assert the fill trigger derived the rest. With the trigger dropped
+     * and the columns NOT NULL, that insert now fails with `23502` — so the probe is
+     * replaced by the assertion that supersedes it: the columns are mandatory, which is
+     * a stronger guarantee than a trigger that could repair them after the fact.
+     */
+    const transitionNullabilityResult = await transactionClient.query<{
+      readonly column_name: string;
+      readonly is_nullable: string;
     }>(
-      `SELECT seller_organization_id, created_by_user_id, category_id
-         FROM product WHERE id = $1`,
-      [legacyProductId],
+      `SELECT column_name, is_nullable
+         FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'product'
+          AND column_name = ANY($1)`,
+      [["seller_organization_id", "created_by_user_id", "category_id"]],
     );
-    const legacyMapping = legacyMappingResult.rows[0];
+    const mandatoryColumns = transitionNullabilityResult.rows.filter(
+      (column) => column.is_nullable === "NO",
+    );
     outcomes.push({
-      label: "legacy product writes receive deterministic transition keys",
-      passed:
-        legacyMapping?.seller_organization_id === expectedLegacyOrganizationId &&
-        legacyMapping.created_by_user_id === fixtureUserId &&
-        legacyMapping.category_id === "commerce_category_electronics",
-      detail: legacyMapping ? "compatibility trigger populated all keys" : "probe row missing",
+      label: "product ownership and category transition columns are NOT NULL",
+      passed: mandatoryColumns.length === 3,
+      detail: `${String(mandatoryColumns.length)}/3 mandatory`,
     });
     await transactionClient.query(
       `INSERT INTO commerce_encrypted_document

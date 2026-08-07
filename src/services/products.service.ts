@@ -289,9 +289,8 @@ function toPublicProduct(
   variants: readonly ProductVariantView[] = [],
   highlights: readonly ProductHighlightView[] = [],
 ): PublicProduct {
-  if (row.categoryId === null) {
-    throw new Error(`Product ${row.id} is missing its canonical commerce category.`);
-  }
+  // The defensive `categoryId === null` throw that stood here is gone: migration 0063
+  // made the column NOT NULL, so the case it guarded can no longer be represented.
   return {
     id: row.id,
     title: row.title,
@@ -1409,12 +1408,8 @@ export async function publishProduct(
         )
         .for("update");
       if (!row) return { status: "not_found" };
-      if (row.categoryId === null) {
-        return {
-          status: "category_error",
-          error: { type: "CATEGORY_NOT_FOUND", categoryId: "" },
-        };
-      }
+      // No `categoryId === null` branch since 0063 made the column NOT NULL. It carried
+      // a `categoryId: ""` sentinel that existed only to satisfy the error shape.
 
       const categoryResult = await resolveProductCategory(transaction, {
         categoryId: row.categoryId,

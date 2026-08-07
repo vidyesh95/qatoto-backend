@@ -1355,15 +1355,21 @@ export const product = pgTable(
     sellerId: text("seller_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    // Nullable only for the expand phase. Migration 0040 backfills every row.
-    // Authorization must re-check an active seller membership, never trust a body value.
-    sellerOrganizationId: text("seller_organization_id").references(() => commerceOrganization.id, {
-      onDelete: "restrict",
-    }),
-    // Immutable creator attribution retained after legacy sellerId is retired.
-    createdByUserId: text("created_by_user_id").references(() => user.id, {
-      onDelete: "restrict",
-    }),
+    /**
+     * NOT NULL since the Phase 0 contract migration (0063). It was nullable for the
+     * expand phase only, and organization ownership is now a structural fact rather
+     * than a convention the application happens to honour.
+     *
+     * Authorization must still re-check an active seller membership on every request —
+     * a non-null column says the product HAS an owner, not that the caller is it.
+     */
+    sellerOrganizationId: text("seller_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    /** Immutable creator attribution, retained after legacy `sellerId` is retired. */
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
     /**
      * THE R&D → STORE HANDOFF (R_AND_D_BACKEND_STRUCTURE.md §11i, Appendix B4).
      *
@@ -1391,10 +1397,14 @@ export const product = pgTable(
     title: text("title").notNull(),
     brand: text("brand"),
     category: productCategoryEnum("category").notNull(),
-    // Hierarchical category transition column. Legacy category remains for dual-write.
-    categoryId: text("category_id").references(() => commerceCategory.id, {
-      onDelete: "restrict",
-    }),
+    /**
+     * NOT NULL since 0063. The legacy `category` enum above remains for dual-write and
+     * is still on the public `/products/*` wire; removing it needs its own release
+     * (STORE_PHASE_0_ROLLOUT.md §Contract phase).
+     */
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => commerceCategory.id, { onDelete: "restrict" }),
     condition: productConditionEnum("condition").default("new").notNull(),
     description: text("description"),
     // Money in integer cents. Server-authoritative; the client sends cents,

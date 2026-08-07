@@ -442,6 +442,13 @@
       "when": 1786037659394,
       "tag": "0062_store_phase_11_customization",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1786037664394,
+      "tag": "0063_store_phase_0_contract",
+      "breakpoints": true
     }
   ]
 }
