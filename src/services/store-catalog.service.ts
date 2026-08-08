@@ -489,8 +489,15 @@ async function loadVariantAggregates(
 
 export async function listActiveCategories(input: {
   readonly parentCategoryId: string | null;
+  /**
+   * How many to return, in `siblingOrder`. The store home rail asks for eight; the
+   * category index asks for all of them. Bounding it SERVER-SIDE is what keeps the rail
+   * from fetching the whole taxonomy and slicing it in the browser, which would make the
+   * admin's arrangement a suggestion rather than the order.
+   */
+  readonly limit?: number;
 }): Promise<{ items: readonly StoreCategoryProjection[] }> {
-  const rows = await db
+  const query = db
     .select({
       id: commerceCategory.id,
       slug: commerceCategory.slug,
@@ -509,6 +516,8 @@ export async function listActiveCategories(input: {
       ),
     )
     .orderBy(asc(commerceCategory.siblingOrder), asc(commerceCategory.id));
+
+  const rows = input.limit === undefined ? await query : await query.limit(input.limit);
 
   return { items: rows };
 }
@@ -1270,7 +1279,7 @@ export async function getPublicProductBySlug(
         minimumOrderQuantity,
         leadTimeDays,
         position,
-    }));
+      }));
     return {
       id: variantRow.id,
       publicSlug: variantRow.publicSlug,

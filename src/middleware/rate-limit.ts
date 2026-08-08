@@ -128,6 +128,10 @@ export const signupCompleteIpLimiter = createLimiter({
 });
 
 const ONE_MINUTE_MS = 60 * 1000;
+// Hoisted here from the home-feed section below, which is where it used to live: the
+// commerce-category request limiter needs it several hundred lines earlier, and a
+// duration constant is not a section's private property.
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
 /**
  * Authenticated-user key for per-account buckets. `requireAuth` runs before this limiter
@@ -820,6 +824,47 @@ export const promotionalSlideImageUploadLimiter = createLimiter({
 });
 
 /**
+ * The commerce-category admin writes — create, update, reorder, retire, the admin list, and
+ * the request queue and its verdicts.
+ *
+ * ONE BUCKET, same reasoning as the promotional-slide write bucket: low-frequency staff
+ * actions against a small, staff-authored table. A reorder sends the whole permutation in
+ * one request, so even dragging a tile across the rail is a single call.
+ */
+export const commerceCategoryWriteLimiter = createLimiter({
+  namespace: "commerceCategoryWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/**
+ * The two multipart category routes — create and image replace.
+ *
+ * The expensive path: a 5 MB buffer, a sharp decode and re-encode, and a Cloudinary round
+ * trip, per request. As with promotional slides, a route carrying this limiter carries ONLY
+ * this one — stacking two limiters double-counts every request against the stricter.
+ */
+export const commerceCategoryImageUploadLimiter = createLimiter({
+  namespace: "commerceCategoryImageUpload",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});
+
+/**
+ * A SELLER asking for a category that does not exist yet.
+ *
+ * The only limiter in this group on a route the public can reach, so it is the only one
+ * sized against abuse rather than against staff pace. A category request is a moderator's
+ * inbox item: five an hour is more than any honest seller needs while listing a catalogue,
+ * and it makes flooding the queue pointless.
+ */
+export const commerceCategoryRequestLimiter = createLimiter({
+  namespace: "commerceCategoryRequest",
+  windowMs: ONE_HOUR_MS,
+  limit: 5,
+});
+
+/**
  * Spotlight admin reads and the whole-set replace write.
  *
  * Same shape as the promotional-slide write bucket: low-frequency staff actions against a
@@ -844,8 +889,6 @@ export const spotlightWriteLimiter = createLimiter({
 // CONSEQUENCE FOR ROUTE ORDER: `attachOptionalUser` MUST precede these limiters, or a
 // signed-in viewer is keyed by IP anyway.
 // ---------------------------------------------------------------------------
-
-const ONE_HOUR_MS = 60 * 60 * 1000;
 
 /**
  * GET /feed/watch/:videoId and GET /videos/:videoId/comments.

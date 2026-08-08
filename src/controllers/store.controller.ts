@@ -28,6 +28,12 @@ const CursorPageQuerySchema = z
 const CategoriesQuerySchema = z
   .object({
     parentCategoryId: z.string().trim().min(1).max(200).optional(),
+    /**
+     * The store home rail's eight. Bounded so a client cannot turn a public read into a
+     * full-table scan, and applied in SQL so the admin's `siblingOrder` decides which
+     * eight rather than whichever eight the browser kept.
+     */
+    limit: z.coerce.number().int().min(1).max(200).optional(),
   })
   .strict();
 
@@ -163,6 +169,7 @@ export async function listCategories(req: Request, res: Response): Promise<void>
   }
   const result = await storeCatalogService.listActiveCategories({
     parentCategoryId: parsed.data.parentCategoryId ?? null,
+    limit: parsed.data.limit,
   });
   res.status(200).json({
     status: "success",

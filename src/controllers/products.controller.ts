@@ -50,6 +50,12 @@ const productFieldShapes = {
     ])
     .optional(),
   categoryId: z.string().trim().min(1).max(200).optional(),
+  /**
+   * The seller's pending request for a category that does not exist yet. Mutually
+   * exclusive with the two above — the listing parks in `misc` and is rehomed when the
+   * request is decided. Create only; a PATCH picks a real category.
+   */
+  categoryRequestId: z.string().trim().min(1).max(200).optional(),
   condition: z.enum(["new", "refurbished", "used"]),
   description: z.string().trim().max(5000).optional(),
   keyFeatures: z.array(z.string().trim().min(1).max(200)).max(20),
@@ -247,9 +253,24 @@ function leadTimeRangeValid(data: { leadTimeMinDays?: number; leadTimeMaxDays?: 
 }
 
 export const CreateProductSchema = ProductFieldsSchema.refine(
-  (productInput) => productInput.category !== undefined || productInput.categoryId !== undefined,
-  { error: "Either categoryId or category is required.", path: ["categoryId"] },
+  (productInput) =>
+    productInput.category !== undefined ||
+    productInput.categoryId !== undefined ||
+    productInput.categoryRequestId !== undefined,
+  { error: "One of categoryId, categoryRequestId or category is required.", path: ["categoryId"] },
 )
+  // Exclusive, not merely preferred. Accepting both would leave the server choosing which
+  // one the seller meant, and the two answers differ: one publishes into a category, the
+  // other parks the listing in `misc` pending a verdict.
+  .refine(
+    (productInput) =>
+      productInput.categoryRequestId === undefined ||
+      (productInput.categoryId === undefined && productInput.category === undefined),
+    {
+      error: "categoryRequestId cannot be combined with categoryId or category.",
+      path: ["categoryRequestId"],
+    },
+  )
   .refine(compareAtPriceExceedsPrice, compareAtRefinement)
   .refine(samplePolicyHasPrice, {
     error: "Paid or refundable samples require samplePriceInCents.",
@@ -274,6 +295,10 @@ export const CreateProductSchema = ProductFieldsSchema.refine(
  */
 export const UpdateProductSchema = z
   .object(productFieldShapes)
+  // CREATE ONLY. A PATCH names a category that exists; there is no "move this listing
+  // back into the waiting room" transition. Leaving it in would make `.strict()` accept a
+  // field the update path silently ignores, which is worse than rejecting it.
+  .omit({ categoryRequestId: true })
   .partial()
   .strict()
   .refine(compareAtPriceExceedsPrice, compareAtRefinement)
@@ -426,6 +451,18 @@ function mapProductErrorToResponse(error: productsService.ProductError): {
       return {
         statusCode: 422,
         message: "The legacy category does not match the selected commerce category.",
+      };
+    // 404, not 403: whether a category request id exists is not a stranger's business,
+    // so "someone else's" and "no such request" are deliberately indistinguishable.
+    case "CATEGORY_REQUEST_NOT_FOUND":
+      return { statusCode: 404, message: "That category request does not exist." };
+    case "CATEGORY_REQUEST_NOT_PENDING":
+      return {
+        statusCode: 409,
+        message:
+          error.state === "approved"
+            ? "That category request was approved. List the product under the new category instead."
+            : "That category request was rejected. Choose an existing category instead.",
       };
     case "TOO_MANY_IMAGES":
       return {

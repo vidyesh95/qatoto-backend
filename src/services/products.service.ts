@@ -9,6 +9,7 @@ import type {
 import { db } from "#src/db/index.js";
 import {
   commerceCategory,
+  commerceCategoryRequest,
   commerceProductCustomizationOption,
   commerceProductHighlight,
   commerceProductSpecification,
@@ -51,6 +52,12 @@ export type ProductError =
   | { type: "CATEGORY_NOT_FOUND"; categoryId: string }
   | { type: "CATEGORY_NOT_ACTIVE_LEAF"; categoryId: string }
   | { type: "CATEGORY_MISMATCH"; categoryId: string }
+  | { type: "CATEGORY_REQUEST_NOT_FOUND"; categoryRequestId: string }
+  | {
+      type: "CATEGORY_REQUEST_NOT_PENDING";
+      categoryRequestId: string;
+      state: "approved" | "rejected";
+    }
   | { type: "TOO_MANY_IMAGES"; limit: number }
   | { type: "INCOMPLETE_FOR_PUBLISH"; missing: readonly string[] }
   | { type: "IMAGE_ORDER_MISMATCH" }
@@ -154,8 +161,17 @@ export interface PublicProduct {
   readonly id: string;
   readonly title: string;
   readonly brand: string | null;
-  readonly category: string;
+  /**
+   * The legacy enum value, NULL for every listing created after 0098. Kept on the wire so
+   * clients written against it still parse; `categoryId` is the authoritative field.
+   */
+  readonly category: string | null;
   readonly categoryId: string;
+  /**
+   * Set while this listing sits in `misc` awaiting a verdict on a requested category.
+   * A client should say so plainly rather than presenting `misc` as a chosen category.
+   */
+  readonly pendingCategoryRequestId: string | null;
   readonly condition: "new" | "refurbished" | "used";
   readonly description: string | null;
   readonly priceInCents: number;
@@ -215,6 +231,7 @@ const PRODUCT_SCALAR_COLUMNS = {
   brand: product.brand,
   category: product.category,
   categoryId: product.categoryId,
+  pendingCategoryRequestId: product.pendingCategoryRequestId,
   condition: product.condition,
   description: product.description,
   priceInCents: product.priceInCents,
@@ -338,6 +355,7 @@ function toPublicProduct(
     brand: row.brand,
     category: row.category,
     categoryId: row.categoryId,
+    pendingCategoryRequestId: row.pendingCategoryRequestId,
     condition: row.condition,
     description: row.description,
     priceInCents: row.priceInCents,
@@ -786,6 +804,13 @@ function legacyCategoryId(category: LegacyProductCategory): string {
   }
 }
 
+/**
+ * Where a listing waits while the category it asked for is being reviewed.
+ *
+ * Seeded by migration 0098 with a fixed id, so this is a constant rather than a lookup.
+ */
+const MISC_CATEGORY_ID = "commerce_category_misc";
+
 function legacyCategoryForRootId(rootCategoryId: string): LegacyProductCategory | null {
   switch (rootCategoryId) {
     case "commerce_category_electronics":
@@ -809,19 +834,98 @@ function legacyCategoryForRootId(rootCategoryId: string): LegacyProductCategory 
   }
 }
 
+interface ResolvedProductCategory {
+  readonly categoryId: string;
+  /**
+   * The legacy enum value, or NULL when the resolved root has none — which is every
+   * root seeded after 0098. Null is written to the column, not substituted.
+   */
+  readonly category: LegacyProductCategory | null;
+  /** Non-null only while the listing is parked in `misc` awaiting a verdict. */
+  readonly pendingCategoryRequestId: string | null;
+}
+
+/**
+ * Turn whatever category signal the caller sent into the pair of columns the row needs.
+ *
+ * THREE ACCEPTED INPUTS, in precedence order:
+ *
+ *   `categoryRequestId` — the seller asked for a category that does not exist yet. The
+ *   listing parks in `misc` and carries the request id, so approving that request rehomes
+ *   exactly this listing and no other. Checked for ownership: a caller cannot attach its
+ *   product to a stranger's request and ride their approval.
+ *
+ *   `categoryId` — the normal path. Must name an ACTIVE LEAF.
+ *
+ *   `category` — the legacy enum. Its eight values name roots that 0098 RETIRED, so this
+ *   now resolves to a retired row and answers `CATEGORY_NOT_ACTIVE_LEAF`. That is the
+ *   honest reply: the category really is gone. Silently filing such a listing under
+ *   `misc` would tell the client it succeeded at something it did not.
+ */
 async function resolveProductCategory(
   transaction: DatabaseTransaction,
+  // `userId` is optional because the update and publish paths only ever resolve a
+  // concrete `categoryId` and have no user in scope. The request branch below is
+  // unreachable without one, and refuses rather than matching a null author.
+  actor: { readonly userId?: string; readonly organizationId: string },
   input: {
     readonly category?: LegacyProductCategory;
     readonly categoryId?: string;
+    readonly categoryRequestId?: string;
   },
-): Promise<
-  Result<{ readonly categoryId: string; readonly category: LegacyProductCategory }, ProductError>
-> {
+): Promise<Result<ResolvedProductCategory, ProductError>> {
+  if (input.categoryRequestId !== undefined) {
+    const [categoryRequest] = await transaction
+      .select({
+        id: commerceCategoryRequest.id,
+        state: commerceCategoryRequest.state,
+        requestedByUserId: commerceCategoryRequest.requestedByUserId,
+        requestedOrganizationId: commerceCategoryRequest.requestedOrganizationId,
+      })
+      .from(commerceCategoryRequest)
+      .where(eq(commerceCategoryRequest.id, input.categoryRequestId))
+      .for("share");
+
+    // A request belonging to someone else is reported as NOT FOUND, not as a permission
+    // failure: whether a given request id exists is not a stranger's business.
+    const isOwnRequest =
+      categoryRequest !== undefined &&
+      ((actor.userId !== undefined && categoryRequest.requestedByUserId === actor.userId) ||
+        (categoryRequest.requestedOrganizationId !== null &&
+          categoryRequest.requestedOrganizationId === actor.organizationId));
+    if (!isOwnRequest) {
+      return {
+        success: false,
+        error: { type: "CATEGORY_REQUEST_NOT_FOUND", categoryRequestId: input.categoryRequestId },
+      };
+    }
+    if (categoryRequest.state !== "pending") {
+      return {
+        success: false,
+        error: {
+          type: "CATEGORY_REQUEST_NOT_PENDING",
+          categoryRequestId: input.categoryRequestId,
+          state: categoryRequest.state,
+        },
+      };
+    }
+
+    return {
+      success: true,
+      value: {
+        categoryId: MISC_CATEGORY_ID,
+        category: null,
+        pendingCategoryRequestId: categoryRequest.id,
+      },
+    };
+  }
+
   const requestedCategoryId =
     input.categoryId ?? (input.category === undefined ? null : legacyCategoryId(input.category));
   if (requestedCategoryId === null) {
-    throw new Error("Create/update category resolution requires category or categoryId.");
+    throw new Error(
+      "Create/update category resolution requires category, categoryId or categoryRequestId.",
+    );
   }
 
   const [selectedCategory] = await transaction
@@ -870,10 +974,16 @@ async function resolveProductCategory(
     parentCategoryId = parentCategory.parentCategoryId;
   }
 
+  // NULL IS NOW A LEGITIMATE ANSWER. Before 0098 every root mapped to a legacy enum
+  // value, so a null here meant the tree was inconsistent and `CATEGORY_MISMATCH` was
+  // right. Since 0098 the entire live root set is post-enum, so null just means "this
+  // category predates nothing" — the mismatch check only has something to compare when
+  // the caller actually sent a legacy value AND the root still has one.
   const resolvedLegacyCategory = legacyCategoryForRootId(rootCategoryId);
   if (
-    resolvedLegacyCategory === null ||
-    (input.category !== undefined && input.category !== resolvedLegacyCategory)
+    input.category !== undefined &&
+    resolvedLegacyCategory !== null &&
+    input.category !== resolvedLegacyCategory
   ) {
     return {
       success: false,
@@ -883,7 +993,11 @@ async function resolveProductCategory(
 
   return {
     success: true,
-    value: { categoryId: requestedCategoryId, category: resolvedLegacyCategory },
+    value: {
+      categoryId: requestedCategoryId,
+      category: resolvedLegacyCategory,
+      pendingCategoryRequestId: null,
+    },
   };
 }
 
@@ -901,7 +1015,7 @@ export async function createProduct(
   try {
     return await db.transaction(
       async (tx) => {
-        const categoryResult = await resolveProductCategory(tx, input);
+        const categoryResult = await resolveProductCategory(tx, commerceContext, input);
         if (!categoryResult.success) return categoryResult;
         const [row] = await tx
           .insert(product)
@@ -912,6 +1026,7 @@ export async function createProduct(
             brand: input.brand ?? null,
             category: categoryResult.value.category,
             categoryId: categoryResult.value.categoryId,
+            pendingCategoryRequestId: categoryResult.value.pendingCategoryRequestId,
             condition: input.condition,
             description: input.description ?? null,
             priceInCents: input.priceInCents,
@@ -1073,12 +1188,20 @@ export async function updateProduct(
         }
 
         if (patch.category !== undefined || patch.categoryId !== undefined) {
-          const categoryResult = await resolveProductCategory(tx, patch);
+          const categoryResult = await resolveProductCategory(
+            tx,
+            { organizationId: sellerOrganizationId },
+            patch,
+          );
           if (!categoryResult.success) {
             return { status: "category_error", error: categoryResult.error };
           }
           scalarUpdates.category = categoryResult.value.category;
           scalarUpdates.categoryId = categoryResult.value.categoryId;
+          // Picking a real category ends the wait, whatever the request goes on to
+          // decide. Leaving the link would let a later approval yank the listing back
+          // out of the category its owner deliberately chose.
+          scalarUpdates.pendingCategoryRequestId = null;
         }
 
         if (Object.keys(scalarUpdates).length > 0) {
@@ -1637,9 +1760,11 @@ export async function publishProduct(
       // No `categoryId === null` branch since 0063 made the column NOT NULL. It carried
       // a `categoryId: ""` sentinel that existed only to satisfy the error shape.
 
-      const categoryResult = await resolveProductCategory(transaction, {
-        categoryId: row.categoryId,
-      });
+      const categoryResult = await resolveProductCategory(
+        transaction,
+        { organizationId: sellerOrganizationId },
+        { categoryId: row.categoryId },
+      );
       if (!categoryResult.success) {
         return { status: "category_error", error: categoryResult.error };
       }

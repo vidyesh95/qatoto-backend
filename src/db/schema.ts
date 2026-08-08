@@ -336,9 +336,15 @@ export const passkeyRelations = relations(passkey, ({ one }) => ({
 // ids to stay consistent with the rest of the schema.
 // ---------------------------------------------------------------------------
 
-// The listing's product category. Stored as slugs; the wizard maps its display
-// labels ("Home & Kitchen") to these (home_kitchen). Enum so Postgres rejects
-// any value the app doesn't know about.
+// LEGACY, AND NO LONGER THE TAXONOMY. These eight values were the original root
+// categories; migration 0098 retired all eight `commerce_category` rows behind them
+// and made `product.category` nullable, because the root set the store actually
+// browses (clothes, furniture, accessories, …) has no member here and an enum
+// cannot grow a value from an admin screen.
+//
+// Kept only so rows written before 0098 still read back, and so an old client
+// sending `category` is answered rather than 500'd. `commerce_category.id` is the
+// taxonomy; see STORE_BACKEND_STRUCTURE.md §4.3 step 5 for the removal release.
 export const productCategoryEnum = pgEnum("product_category", [
   "electronics",
   "fashion",
@@ -432,6 +438,25 @@ export const commerceCategoryStateEnum = pgEnum("commerce_category_state", [
   "retired",
 ]);
 
+/**
+ * The lifecycle of a SELLER'S REQUEST for a category that does not exist yet.
+ *
+ * A SEPARATE ENUM ON A SEPARATE TABLE, deliberately — this is not a fourth
+ * `commerce_category_state`. A proposal is not a category: it has a requester, a
+ * justification and a reviewer, it carries no `siblingOrder` (which is NOT NULL and
+ * unique per parent, so a proposal would need a fabricated one), and above all it must
+ * never be reachable by the browse tree. Sellers can write here; nobody can write
+ * `commerce_category` without `moderate_commerce`.
+ *
+ * Terminal on both arms. Deciding an already-decided request is a 409 naming the state
+ * it holds — another moderator got there first, which is a finding and not a retry.
+ */
+export const commerceCategoryRequestStateEnum = pgEnum("commerce_category_request_state", [
+  "pending",
+  "approved",
+  "rejected",
+]);
+
 export const commerceDocumentKindEnum = pgEnum("commerce_document_kind", [
   "business_registration",
   "tax_registration",
@@ -463,7 +488,6 @@ export const commerceDocumentKindEnum = pgEnum("commerce_document_kind", [
    */
   "trade_attachment",
 ]);
-
 
 export const commerceDocumentStateEnum = pgEnum("commerce_document_state", [
   "pending_scan",
@@ -600,7 +624,6 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "certification_decided",
   ],
 );
-
 
 // --- Seller profile depth (Appendix A13, Phase 12).
 //
@@ -1026,10 +1049,13 @@ export const commerceRankingPenaltyKindEnum = pgEnum("commerce_ranking_penalty_k
  * Nothing here delists. That is a commercial action requiring a human — the same call
  * Phase 10 made when it refused to let an automatic report hide a product.
  */
-export const commerceRankingEnforcementActionEnum = pgEnum(
-  "commerce_ranking_enforcement_action",
-  ["none", "weight_reduced", "capped", "quarantined", "review_queued"],
-);
+export const commerceRankingEnforcementActionEnum = pgEnum("commerce_ranking_enforcement_action", [
+  "none",
+  "weight_reduced",
+  "capped",
+  "quarantined",
+  "review_queued",
+]);
 
 /**
  * What we know about the email domain an order's buyer used (Phase 13).
@@ -1556,10 +1582,15 @@ export const commerceExternalProviderStateEnum = pgEnum("commerce_external_provi
  * already uses — because it is the same kind of object. A counter-proposal is a NEW
  * revision; the previous row goes `superseded`. Nothing is ever edited in place.
  */
-export const commerceSettlementAgreementStateEnum = pgEnum(
-  "commerce_settlement_agreement_state",
-  ["proposed", "accepted", "declined", "withdrawn", "superseded", "expired", "consumed"],
-);
+export const commerceSettlementAgreementStateEnum = pgEnum("commerce_settlement_agreement_state", [
+  "proposed",
+  "accepted",
+  "declined",
+  "withdrawn",
+  "superseded",
+  "expired",
+  "consumed",
+]);
 
 /** Who bears the escrow provider's own fee. Negotiated, never defaulted silently. */
 export const commerceEscrowFeeBearerEnum = pgEnum("commerce_escrow_fee_bearer", [
@@ -1606,10 +1637,12 @@ export const commerceEscrowMilestoneStateEnum = pgEnum("commerce_escrow_mileston
  * What proved a milestone. Every source is a record this schema ALREADY keeps, because
  * a verification invented for escrow would be a second source of truth about fulfillment.
  */
-export const commerceEscrowVerificationSourceEnum = pgEnum(
-  "commerce_escrow_verification_source",
-  ["order_confirmed", "shipment_leg_event", "inspection_engagement", "order_completion"],
-);
+export const commerceEscrowVerificationSourceEnum = pgEnum("commerce_escrow_verification_source", [
+  "order_confirmed",
+  "shipment_leg_event",
+  "inspection_engagement",
+  "order_completion",
+]);
 
 /**
  * The `direct_offline` rail posts NO settlement entries, because Qatoto cannot observe a
@@ -2351,6 +2384,106 @@ export const commerceCategory = pgTable(
 );
 
 /**
+ * A seller's request for a category the taxonomy does not have yet.
+ *
+ * WHY THIS IS ITS OWN TABLE and not a `pending` state on `commerce_category`: a
+ * request is a different thing from a category. It has an author, a justification and a
+ * verdict; it has no place in the tree, no `siblingOrder`, no children and no products.
+ * Putting proposals in `commerce_category` would mean either excluding a state from every
+ * browse query forever — one forgotten `WHERE` and unapproved user text is on the
+ * storefront — or minting a fake `siblingOrder` to satisfy an index that exists to order
+ * things users can see.
+ *
+ * THE LISTING IS NOT BLOCKED. A seller with a pending request publishes immediately; the
+ * product parks in `misc` and carries `product.pendingCategoryRequestId` pointing back
+ * here. That column is the ONLY link, and it is what makes approval surgical: the verdict
+ * moves the products belonging to THIS request and leaves genuine misc listings alone.
+ * Repointing by `WHERE category_id = misc` would sweep up unrelated sellers' products,
+ * which is why no code path may do that.
+ *
+ * `resultingCategoryId` is the answer to "what did this become". Null on a rejection and
+ * null while pending — never a placeholder row.
+ */
+export const commerceCategoryRequest = pgTable(
+  "commerce_category_request",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /**
+     * `set null` rather than `restrict`: a deleted account must not pin a decided
+     * request, and the verdict remains a fact about the taxonomy after its author is
+     * gone. The same choice `promotional_slide.createdByUserId` makes.
+     */
+    requestedByUserId: text("requested_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    /** Which seller org asked, when the requester was acting for one. */
+    requestedOrganizationId: text("requested_organization_id").references(
+      () => commerceOrganization.id,
+      { onDelete: "set null" },
+    ),
+    /**
+     * What the seller typed. NOT a slug — the slug is derived by the moderator on
+     * approval, after any edit, so a requester cannot choose a public URL identity.
+     */
+    proposedName: text("proposed_name").notNull(),
+    /** Where the seller thinks it belongs. Null means "a new root". */
+    proposedParentCategoryId: text("proposed_parent_category_id").references(
+      () => commerceCategory.id,
+      { onDelete: "set null" },
+    ),
+    justification: text("justification"),
+    state: commerceCategoryRequestStateEnum("state").default("pending").notNull(),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewNote: text("review_note"),
+    /** The category this request became. Set on approval only. */
+    resultingCategoryId: text("resulting_category_id").references(() => commerceCategory.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /** The moderation queue's own lookup, same shape as `store_pathway_moderation_queue_idx`. */
+    index("commerce_category_request_queue_idx").on(table.state, table.createdAt, table.id),
+    index("commerce_category_request_requestedByUserId_idx").on(table.requestedByUserId),
+    /**
+     * Review attribution is paired, and only a decided request may carry it. Unlike
+     * `store_pathway_review_ck` there is no unreviewed-publish arm: every row here is a
+     * user proposal, so a decided request without a reviewer is always a bug.
+     *
+     * `reviewedByUserId` may still be null on a decided row once the reviewer's account is
+     * deleted, hence the check pairs `reviewedAt` with the STATE rather than with the
+     * user id — the timestamp is the thing that cannot go missing.
+     */
+    check(
+      "commerce_category_request_review_ck",
+      sql`(reviewed_at IS NULL) = (state = 'pending')
+          AND (state = 'approved' OR resulting_category_id IS NULL)
+          AND (state <> 'rejected' OR review_note IS NOT NULL)`,
+    ),
+    check(
+      "commerce_category_request_text_ck",
+      sql`char_length(proposed_name) BETWEEN 1 AND 120
+          AND (justification IS NULL OR char_length(justification) BETWEEN 1 AND 2000)
+          AND (review_note IS NULL OR char_length(review_note) BETWEEN 1 AND 2000)`,
+    ),
+    /** A request cannot be its own parent's answer, and cannot nest under nothing twice. */
+    check(
+      "commerce_category_request_parent_ck",
+      sql`resulting_category_id IS NULL OR resulting_category_id IS DISTINCT FROM proposed_parent_category_id`,
+    ),
+  ],
+);
+
+/**
  * Immutable organization-scoped security history. A migration-installed trigger
  * rejects UPDATE, DELETE and TRUNCATE; payloadJson contains a redacted canonical
  * snapshot and must never contain ciphertext or object-storage keys.
@@ -2443,15 +2576,38 @@ export const product = pgTable(
     ),
     title: text("title").notNull(),
     brand: text("brand"),
-    category: productCategoryEnum("category").notNull(),
     /**
-     * NOT NULL since 0063. The legacy `category` enum above remains for dual-write and
-     * is still on the public `/products/*` wire; removing it needs its own release
-     * (STORE_PHASE_0_ROLLOUT.md §Contract phase).
+     * NULLABLE SINCE 0098, and no longer written for new listings.
+     *
+     * The enum's eight values name the root set that 0098 retired. A listing in
+     * `clothes` or `machinery` has no value it could hold, so requiring one would mean
+     * either refusing the taxonomy the store actually browses or stamping a lie. Rows
+     * written before 0098 keep theirs; nothing reads it to decide anything.
+     */
+    category: productCategoryEnum("category"),
+    /**
+     * The taxonomy. NOT NULL since 0063 and the only category signal that is authoritative
+     * — `category` above is legacy residue kept for old clients (see 0098).
      */
     categoryId: text("category_id")
       .notNull()
       .references(() => commerceCategory.id, { onDelete: "restrict" }),
+    /**
+     * Set while this listing is waiting on a category that does not exist yet. The product
+     * sits in `misc` and this points at the request that will rehome it.
+     *
+     * THIS COLUMN IS THE WHOLE REASON APPROVAL IS SAFE. Deciding a request moves the
+     * products matching `pending_category_request_id = :requestId` and nothing else —
+     * never `WHERE category_id = misc`, which would drag along every seller who
+     * legitimately listed something miscellaneous. Cleared when the request is decided.
+     *
+     * `set null` so deleting a request cannot strand a listing; the product simply stays
+     * where it is, in `misc`, which is a true statement about it.
+     */
+    pendingCategoryRequestId: text("pending_category_request_id").references(
+      () => commerceCategoryRequest.id,
+      { onDelete: "set null" },
+    ),
     condition: productConditionEnum("condition").default("new").notNull(),
     description: text("description"),
     // Money in integer cents. Server-authoritative; the client sends cents,
@@ -2501,6 +2657,13 @@ export const product = pgTable(
     index("product_sellerOrganizationId_idx").on(table.sellerOrganizationId),
     index("product_createdByUserId_idx").on(table.createdByUserId),
     index("product_categoryId_idx").on(table.categoryId),
+    /**
+     * The approval-time lookup: "which listings does this request rehome?". Partial,
+     * because all but a handful of listings are waiting on nothing.
+     */
+    index("product_pendingCategoryRequestId_idx")
+      .on(table.pendingCategoryRequestId)
+      .where(sql`pending_category_request_id IS NOT NULL`),
     index("product_status_idx").on(table.status),
     index("product_moderationState_idx").on(table.moderationState, table.id),
     uniqueIndex("product_publicSlug_uidx")
@@ -3357,9 +3520,7 @@ export const commerceProductTrendingSnapshot = pgTable(
     /** Basis points, applied after the components sum. Separate columns rather than one
      * product, so an appeal can be told which signal fired. */
     subnetMultiplierBasisPoints: integer("subnet_multiplier_bp").default(10_000).notNull(),
-    orderValueMultiplierBasisPoints: integer("order_value_multiplier_bp")
-      .default(10_000)
-      .notNull(),
+    orderValueMultiplierBasisPoints: integer("order_value_multiplier_bp").default(10_000).notNull(),
     refundPenaltyBasisPoints: integer("refund_penalty_bp").default(10_000).notNull(),
     cancellationPenaltyBasisPoints: integer("cancellation_penalty_bp").default(10_000).notNull(),
     enforcementMultiplierBasisPoints: integer("enforcement_multiplier_bp")
@@ -5333,9 +5494,7 @@ export const commerceOrder = pgTable(
       .notNull(),
     /** Which clauses answered. An array because the bar is one age test AND one of three
      * credentials, so a single column would force a precedence that does not exist. */
-    buyerQualificationReasons: commerceBuyerQualificationReasonEnum(
-      "buyer_qualification_reasons",
-    )
+    buyerQualificationReasons: commerceBuyerQualificationReasonEnum("buyer_qualification_reasons")
       .array()
       .default([])
       .notNull(),
@@ -8992,6 +9151,33 @@ export const commerceCategoryRelations = relations(commerceCategory, ({ one, man
   }),
   childCategories: many(commerceCategory, { relationName: "commerceCategoryHierarchy" }),
   products: many(product),
+}));
+
+export const commerceCategoryRequestRelations = relations(commerceCategoryRequest, ({ one }) => ({
+  requestedByUser: one(user, {
+    fields: [commerceCategoryRequest.requestedByUserId],
+    references: [user.id],
+    relationName: "commerceCategoryRequestAuthor",
+  }),
+  reviewedByUser: one(user, {
+    fields: [commerceCategoryRequest.reviewedByUserId],
+    references: [user.id],
+    relationName: "commerceCategoryRequestReviewer",
+  }),
+  requestedOrganization: one(commerceOrganization, {
+    fields: [commerceCategoryRequest.requestedOrganizationId],
+    references: [commerceOrganization.id],
+  }),
+  proposedParentCategory: one(commerceCategory, {
+    fields: [commerceCategoryRequest.proposedParentCategoryId],
+    references: [commerceCategory.id],
+    relationName: "commerceCategoryRequestProposedParent",
+  }),
+  resultingCategory: one(commerceCategory, {
+    fields: [commerceCategoryRequest.resultingCategoryId],
+    references: [commerceCategory.id],
+    relationName: "commerceCategoryRequestResult",
+  }),
 }));
 
 export const commerceOrganizationAuditEntryRelations = relations(
@@ -16267,6 +16453,21 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "commerce_content_restored",
   "commerce_content_report_dismissed",
   "commerce_product_moderation_state_changed",
+  // The browse taxonomy — `commerce-categories` (migration 0098). Every mutation is
+  // named, not just the destructive ones, for the same reason the promotional carousel
+  // is: a category is a front-of-store surface, and renaming or reordering one changes
+  // what every visitor sees. `retired` rather than `deleted` because a category with
+  // listings cannot be removed.
+  "commerce_category_created",
+  "commerce_category_updated",
+  "commerce_category_reordered",
+  "commerce_category_image_replaced",
+  "commerce_category_retired",
+  // A seller's request for a category that does not exist yet. The VERDICTS are here;
+  // submitting one is an ordinary member action with no staff behind it, and recording
+  // those would drown the entries that name an accountable human.
+  "commerce_category_request_approved",
+  "commerce_category_request_rejected",
 ]);
 
 /**

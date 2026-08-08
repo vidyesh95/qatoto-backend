@@ -14,6 +14,7 @@ import { requestLog } from "#src/middleware/request-log.js";
 import authRouter from "#src/routes/auth.routes.js";
 import commerceCartRouter from "#src/routes/commerce-cart.routes.js";
 import commerceCatalogRouter from "#src/routes/commerce-catalog.routes.js";
+import commerceCategoriesRouter from "#src/routes/commerce-categories.routes.js";
 import commerceContentReportsRouter from "#src/routes/commerce-content-reports.routes.js";
 import commerceDocumentsRouter from "#src/routes/commerce-documents.routes.js";
 import commerceFulfillmentRouter from "#src/routes/commerce-fulfillment.routes.js";
@@ -25,9 +26,9 @@ import commercePaymentsRouter from "#src/routes/commerce-payments.routes.js";
 import commerceProductEngagementRouter from "#src/routes/commerce-product-engagement.routes.js";
 import commerceProductInquiryRouter from "#src/routes/commerce-product-inquiry.routes.js";
 import commerceProductQaRouter from "#src/routes/commerce-product-qa.routes.js";
-import commerceRankingRouter from "#src/routes/commerce-ranking.routes.js";
 import commerceProvidersRouter from "#src/routes/commerce-providers.routes.js";
 import commerceQuotesRouter from "#src/routes/commerce-quotes.routes.js";
+import commerceRankingRouter from "#src/routes/commerce-ranking.routes.js";
 import commerceRfqsRouter from "#src/routes/commerce-rfqs.routes.js";
 import commerceSellerProfileRouter from "#src/routes/commerce-seller-profile.routes.js";
 import commerceSettlementRouter from "#src/routes/commerce-settlement.routes.js";
@@ -189,6 +190,9 @@ app.use("/commerce", commercePaymentsRouter);
 app.use("/commerce", commerceFulfillmentRouter);
 app.use("/commerce", commerceTrustRouter);
 app.use("/commerce", commerceCatalogRouter);
+// The browse taxonomy's ADMIN surface and the seller request queue. The public category
+// reads stay on `/store` (store.routes.ts) where the rest of the storefront lives.
+app.use("/commerce", commerceCategoriesRouter);
 app.use("/commerce", commerceMerchandisingRouter);
 app.use("/commerce", commerceProductQaRouter);
 app.use("/commerce", commerceContentReportsRouter);

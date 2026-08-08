@@ -42,6 +42,7 @@
     "db:seed-store-demo": "tsx --conditions=development scripts/seed-store-demo.ts",
     "db:seed-store-ranking-dev": "tsx --conditions=development scripts/seed-store-ranking-dev.ts",
     "db:seed-content-categories": "tsx --conditions=development scripts/seed-content-categories.ts",
+    "db:seed-commerce-categories": "tsx --conditions=development scripts/seed-commerce-categories.ts",
     "db:verify-research-program-constraints": "tsx --conditions=development scripts/verify-research-program-constraints.ts",
     "db:smoke-promotional-slides": "tsx --conditions=development scripts/smoke-promotional-slides.ts",
     "db:smoke-store-phase-10": "tsx --conditions=development scripts/smoke-store-phase-10.ts",

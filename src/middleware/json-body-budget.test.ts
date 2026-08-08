@@ -197,6 +197,12 @@ describe("per-route body caps", () => {
       // A13's certificate upload. Its own module because the verification-evidence parser
       // caps multer at two text fields and a certification sends six.
       import("#src/middleware/upload-commerce-certificate.js"),
+      // The store-category create/replace routes (0098). Create carries TEXT PARTS
+      // (`name`, `slug`, `parentCategoryId`, `searchSynonyms`, `state`) alongside an
+      // OPTIONAL file, so without this import `isMultipart()` would not recognize it, the
+      // sweep would treat it as a JSON body-reading route, and it would be reported as
+      // missing a declared cap.
+      import("#src/middleware/upload-commerce-category-image.js"),
     ]);
 
     const router: unknown = Reflect.get(app, "router");
@@ -218,10 +224,7 @@ describe("per-route body caps", () => {
 
   it("gives every body-reading route a declared cap", () => {
     const undeclared = routes
-      .filter(
-        (route) =>
-          READS_BODY.test(sourceOf(route)) && !isMultipart(route) && !isRawBody(route),
-      )
+      .filter((route) => READS_BODY.test(sourceOf(route)) && !isMultipart(route) && !isRawBody(route))
       .filter((route) => declaredCap(route) === undefined)
       .map((route) => `${route.method.toUpperCase()} ${route.path}`);
 

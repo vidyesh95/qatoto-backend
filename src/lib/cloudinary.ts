@@ -1140,10 +1140,7 @@ export function organizationLogoPublicId(organizationId: string): string {
   return `${ORGANIZATION_LOGO_FOLDER}/${organizationId}`;
 }
 
-export function storePathwayImagePublicId(
-  pathwayId: string,
-  imageSlot: "hero" | "card",
-): string {
+export function storePathwayImagePublicId(pathwayId: string, imageSlot: "hero" | "card"): string {
   return `${STORE_PATHWAY_FOLDER}/${pathwayId}/${imageSlot}`;
 }
 
@@ -1220,4 +1217,50 @@ export async function deleteStorePathwayImage(
   publicId: string,
 ): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
   return destroyHostedImageAsset(publicId);
+}
+
+/* ------------------------------------------------------------------------------------
+ * Commerce category art (migration `0098`).
+ *
+ * The browse taxonomy's tile images. Admin-authored, not seller-authored: the only writers
+ * are `moderate_commerce` holders through the category admin surface, plus
+ * `pnpm db:seed-commerce-categories` for the eight roots that ship with the product.
+ *
+ * DETERMINISTIC PUBLIC ID, derived from the category id, so replacing a tile overwrites in
+ * place and cannot orphan the previous asset — which is also why `commerce_category` has no
+ * `cloudinaryPublicId` column to drift out of sync. The `secure_url` this returns carries a
+ * fresh `/v<timestamp>/` segment and MUST be written back to `commerce_category.image_url`;
+ * that segment is the cache bust, and reusing the stored URL after a replace serves the old
+ * tile forever.
+ *
+ * `misc` has no art and holds `image_url NULL` by design, so it never reaches here.
+ * ---------------------------------------------------------------------------------- */
+const COMMERCE_CATEGORY_FOLDER = "qatoto/commerce-categories";
+
+/** The stable public id a category's tile image always lives at. */
+export function commerceCategoryImagePublicId(categoryId: string): string {
+  return `${COMMERCE_CATEGORY_FOLDER}/${categoryId}`;
+}
+
+/**
+ * Upload (or overwrite) a category tile from an already-validated, already-re-encoded
+ * buffer. The caller MUST have run `validateAndNormalizeImage` first — that is what proves
+ * the bytes are a raster image from their magic bytes rather than from an untrusted
+ * multipart header, and what strips EXIF.
+ */
+export async function uploadCommerceCategoryImage(
+  categoryId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string; publicId: string }, CloudinaryError>> {
+  return uploadHostedImageAsset(commerceCategoryImagePublicId(categoryId), imageBuffer);
+}
+
+/**
+ * Drop a category's tile. Already-absent counts as success — the desired end state is
+ * reached either way.
+ */
+export async function deleteCommerceCategoryImage(
+  categoryId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  return destroyHostedImageAsset(commerceCategoryImagePublicId(categoryId));
 }

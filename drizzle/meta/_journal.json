@@ -687,6 +687,13 @@
       "when": 1786105834394,
       "tag": "0097_store_phase_15_trade_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1786105839394,
+      "tag": "0098_commerce_category_admin_taxonomy",
+      "breakpoints": true
     }
   ]
 }
