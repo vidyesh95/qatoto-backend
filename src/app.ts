@@ -23,13 +23,15 @@ import commerceOrganizationsRouter from "#src/routes/commerce-organizations.rout
 import commercePaymentsRouter from "#src/routes/commerce-payments.routes.js";
 import commerceProductEngagementRouter from "#src/routes/commerce-product-engagement.routes.js";
 import commerceProductInquiryRouter from "#src/routes/commerce-product-inquiry.routes.js";
-import commerceRankingRouter from "#src/routes/commerce-ranking.routes.js";
 import commerceProductQaRouter from "#src/routes/commerce-product-qa.routes.js";
+import commerceRankingRouter from "#src/routes/commerce-ranking.routes.js";
 import commerceProvidersRouter from "#src/routes/commerce-providers.routes.js";
 import commerceQuotesRouter from "#src/routes/commerce-quotes.routes.js";
 import commerceRfqsRouter from "#src/routes/commerce-rfqs.routes.js";
 import commerceSellerProfileRouter from "#src/routes/commerce-seller-profile.routes.js";
+import commerceSettlementRouter from "#src/routes/commerce-settlement.routes.js";
 import commerceTrustRouter from "#src/routes/commerce-trust.routes.js";
+import commerceWebhooksRouter from "#src/routes/commerce-webhooks.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
@@ -138,6 +140,23 @@ app.all("/api/auth/*splat", (req, res) => {
 // THE TRADE: a 100 kb body aimed at a 16 kb route is now buffered before being rejected,
 // where a root-mounted route previously stopped at 10 kb. The ceiling is small, and the six
 // routers behind the old prefix mounts already buffered this much.
+
+// STORE Phase 14 — INBOUND CONNECTOR WEBHOOKS NEED THE RAW BYTES, AND THIS LINE IS WHY IT
+// WORKS. Their authentication is an HMAC computed over exactly what the provider sent, and
+// `JSON.stringify(req.body)` reorders keys and drops whitespace, so a body that has been
+// through the JSON parser can never reproduce the sender's digest. Verifying a
+// re-serialized body would mean accepting bodies nobody signed.
+//
+// It sits ABOVE `parseJsonBodyOnce` for the reason that block documents: body-parser sets
+// `req._body` on the first successful parse and every later parser short-circuits, so the
+// first parse wins. Moving this line below it silently disables signature checking on every
+// webhook — the controller therefore refuses any request whose body is not a Buffer rather
+// than trusting that this ordering held.
+//
+// SCOPED TO `/webhooks`, never global: raw-parsing the whole application would break every
+// JSON route in it.
+app.use("/webhooks", express.raw({ type: "*/*", limit: "512kb" }));
+
 app.use(parseJsonBodyOnce);
 // Kept for completeness and deliberately unchanged: no route in this application reads a
 // urlencoded body. Every non-JSON body is multipart, handled by multer off the raw stream.
@@ -175,6 +194,20 @@ app.use("/commerce", commerceContentReportsRouter);
 app.use("/commerce", commerceProductInquiryRouter);
 // STORE Phase 13 — ranking transparency and the appeal path.
 app.use("/commerce", commerceRankingRouter);
+// STORE Phase 14 — negotiated settlement agreements. Mounted after the other commerce
+// routers; its segments (`/settlement`, `/settlement-agreements`, and a sub-path under
+// `/threads`) collide with none of them.
+app.use("/commerce", commerceSettlementRouter);
+/**
+ * STORE Phase 14. Inbound connector webhooks, mounted at `/webhooks` and NOT under
+ * `/commerce`, because everything under that prefix requires a session and an active
+ * organization and these routes have neither — their caller is an external system
+ * authenticated by an HMAC over the raw body.
+ *
+ * The prefix must match the `express.raw` mount above, which is what keeps the body
+ * unparsed. The two are a pair: change one and signature verification stops working.
+ */
+app.use("/webhooks", commerceWebhooksRouter);
 app.use("/store", storeRouter);
 /**
  * A11. Buyer engagement WRITES share the `/store` prefix but not `store.routes.ts`'s

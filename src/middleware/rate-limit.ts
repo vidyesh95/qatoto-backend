@@ -1266,3 +1266,33 @@ export const commerceReviewReplyLimiter = createLimiter({
   windowMs: ONE_MINUTE_MS,
   limit: 20,
 });
+
+/**
+ * Settlement proposals and responses (Store Phase 14). A negotiation between two named
+ * organizations, so it is bounded like other organization writes rather than like a public
+ * surface; the real control is that only two organizations can act on an agreement at all.
+ */
+export const commerceSettlementWriteLimiter = createLimiter({
+  namespace: "commerceSettlementWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/**
+ * Inbound connector webhooks (Store Phase 14).
+ *
+ * KEYED BY IP, NOT BY USER, because there is no user — this is the one route in the
+ * backend whose caller is unauthenticated until its signature verifies. The limit sits
+ * well above any real provider's delivery rate: a genuine burst of redeliveries after an
+ * outage must get through, and the cheap defence against a flood of forged bodies is that
+ * verification fails before anything touches the database.
+ *
+ * This is a blast-radius cap, not an authentication control. The signature is the
+ * authentication and the inbox's unique index is the replay defence.
+ */
+export const commerceConnectorWebhookLimiter = createLimiter({
+  namespace: "commerceConnectorWebhook",
+  windowMs: ONE_MINUTE_MS,
+  limit: 300,
+  keyGenerator: "ip",
+});

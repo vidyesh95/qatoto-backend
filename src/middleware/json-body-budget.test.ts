@@ -144,6 +144,25 @@ function isMultipart(route: MountedRoute): boolean {
   return route.handlers.some((handler) => multerHandlers.includes(handler));
 }
 
+/**
+ * Routes whose body never reaches the JSON parser at all (STORE Phase 14).
+ *
+ * `app.ts` mounts `express.raw({ type: "*\/*", limit: "512kb" })` on `/webhooks` ABOVE
+ * `parseJsonBodyOnce`, so these handlers receive a Buffer and body-parser's `req._body`
+ * short-circuit keeps the JSON parser away from them entirely. `compactBody` would be
+ * meaningless there — it checks a byte length the JSON parser recorded, and no JSON parse
+ * happened.
+ *
+ * THE CAP IS NOT MISSING, IT IS ELSEWHERE: `express.raw`'s own `limit`. Listed by exact
+ * path rather than by prefix so a second webhook route has to be added here deliberately,
+ * which is the same posture the multipart imports above take.
+ */
+const RAW_BODY_ROUTES: ReadonlySet<string> = new Set(["POST /escrow/:providerId"]);
+
+function isRawBody(route: MountedRoute): boolean {
+  return RAW_BODY_ROUTES.has(`${route.method.toUpperCase()} ${route.path}`);
+}
+
 describe("per-route body caps", () => {
   beforeAll(async () => {
     const app: Express = (await import("#src/app.js")).default;
@@ -199,7 +218,10 @@ describe("per-route body caps", () => {
 
   it("gives every body-reading route a declared cap", () => {
     const undeclared = routes
-      .filter((route) => READS_BODY.test(sourceOf(route)) && !isMultipart(route))
+      .filter(
+        (route) =>
+          READS_BODY.test(sourceOf(route)) && !isMultipart(route) && !isRawBody(route),
+      )
       .filter((route) => declaredCap(route) === undefined)
       .map((route) => `${route.method.toUpperCase()} ${route.path}`);
 

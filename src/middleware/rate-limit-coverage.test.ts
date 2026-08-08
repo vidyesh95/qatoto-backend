@@ -83,6 +83,11 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/commerce", specifier: "#src/routes/commerce-product-inquiry.routes.js", exportName: "default" },
   { mountPath: "/store", specifier: "#src/routes/commerce-product-engagement.routes.js", exportName: "default" },
   { mountPath: "/store", specifier: "#src/routes/store.routes.js", exportName: "default" },
+  // Phase 14. The webhook router is the only mounted router whose writes carry no session,
+  // so its limiter is IP-keyed; it is listed here precisely because "no session" must not
+  // become an excuse for "no bound".
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-settlement.routes.js", exportName: "default" },
+  { mountPath: "/webhooks", specifier: "#src/routes/commerce-webhooks.routes.js", exportName: "default" },
 ];
 
 /** A write. GETs are excluded — §7's bounds are about writes and expensive reads. */
