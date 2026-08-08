@@ -48,12 +48,20 @@ import {
   estimateDeliveryForLines,
   type DeliveryEstimateProjection,
 } from "#src/services/commerce-delivery-estimate.service.js";
+import {
+  createEscrowSessionForOrder,
+  scheduleEscrowCommands,
+} from "#src/services/commerce-escrow.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import {
   consumeSampleCredits,
   listSpendableSampleCredits,
   selectConsumableCredits,
 } from "#src/services/commerce-sample-credit.service.js";
+import {
+  consumeSettlementAgreement,
+  resolveSettlementRail,
+} from "#src/services/commerce-settlement.service.js";
 import type { Result } from "#src/types/index.js";
 
 type PrepareRow = typeof commerceCheckoutPrepare.$inferSelect;
@@ -81,6 +89,17 @@ export type CommerceCheckoutError =
       productId: string;
       customizationError: CommerceCustomizationError;
     }
+  /**
+   * STORE Phase 14. A settlement agreement the buyer named cannot be used — expired, its
+   * provider suspended, or the order total no longer matches what the parties agreed.
+   *
+   * A REFUSAL, NEVER A SILENT DOWNGRADE. Settling this order without escrow would leave the
+   * buyer believing a licensed third party holds their money when nobody does, which is
+   * strictly worse than telling them the terms lapsed.
+   */
+  | { type: "SETTLEMENT_UNAVAILABLE"; sellerOrganizationId: string; reason: string }
+  /** The agreement was usable but the escrow session could not be opened locally. */
+  | { type: "ESCROW_SESSION_FAILED"; sellerOrganizationId: string; reason: string }
   | { type: "PRODUCT_NOT_PURCHASABLE"; productId: string }
   | { type: "BELOW_MINIMUM_ORDER_QUANTITY"; productId: string; minimumOrderQuantity: number }
   | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
@@ -109,6 +128,21 @@ export interface PrepareCheckoutInput {
 export interface ConfirmCheckoutInput {
   readonly prepareId: string;
   readonly deliveryAddressId?: string;
+  /**
+   * STORE Phase 14. Which accepted settlement agreement applies to which seller.
+   *
+   * PER SELLER, not per checkout, because §2.3 already produces one order per counterparty
+   * and escrow is negotiated with one counterparty at a time. A cart spanning three sellers
+   * may legitimately be escrowed with one of them and settled directly with the other two.
+   *
+   * Absent, or absent for a given seller, means that seller's order settles WITHOUT escrow.
+   * That is the default and it is not an error. What is an error is naming an agreement that
+   * has become unusable — see `resolveSettlementRail`, which refuses rather than downgrades.
+   */
+  readonly settlementAgreements?: readonly {
+    readonly sellerOrganizationId: string;
+    readonly agreementId: string;
+  }[];
 }
 
 export interface CheckoutPrepareLineProjection {
@@ -1009,7 +1043,24 @@ export async function confirmCheckout(
         });
       }
 
+      /**
+       * STORE Phase 14. The buyer's claimed agreements, indexed by seller. A body may NAME
+       * an agreement; `resolveSettlementRail` decides whether it establishes anything (§0).
+       */
+      const agreementBySeller = new Map<string, string>(
+        (input.settlementAgreements ?? []).map((entry) => [
+          entry.sellerOrganizationId,
+          entry.agreementId,
+        ]),
+      );
+
       const createdOrders: OrderRow[] = [];
+      /**
+       * STORE Phase 14. Connector commands enqueued in this transaction, dispatched after
+       * it commits. Enqueueing the job inside would let a worker claim the row before it
+       * is visible and conclude it does not exist.
+       */
+      const escrowOutboxIds: string[] = [];
       /**
        * A17. Accumulated so the buyer-facing group totals can be reconciled after the
        * loop. A group total that still read the pre-credit figure would tell the buyer
@@ -1061,9 +1112,40 @@ export async function confirmCheckout(
         );
         const orderPromisedDeliveryAt = latestPromisedDeliveryAt(linePromisedDeliveryDates);
 
+        /**
+         * STORE Phase 14. THE RAIL IS RESOLVED BEFORE THE INSERT, and it has to be:
+         * `settlement_rail` is part of the immutable commercial snapshot that
+         * `commerce_prevent_order_snapshot_mutation` guards, so an UPDATE after the fact
+         * is refused by the database. It is also the honest place for it — how an order
+         * settles is decided when the order is created, not afterwards.
+         */
+        const orderTotalInCents = subtotalInCents - discountInCents;
+        const railResolution = await resolveSettlementRail(transaction, {
+          buyerOrganizationId: actor.organizationId,
+          sellerOrganizationId: sellerGroup.sellerOrganizationId,
+          currency: sellerGroup.currency,
+          totalInCents: orderTotalInCents,
+          /**
+           * Direct-checkout orders take a payment intent, so the processor rail is the
+           * right non-escrow default here. `direct_offline` belongs to quote-originated
+           * orders settled by wire, which do not come through this path.
+           */
+          hasProcessorPayment: true,
+          requestedAgreementId:
+            agreementBySeller.get(sellerGroup.sellerOrganizationId) ?? null,
+        });
+        if (!railResolution.success) {
+          return {
+            status: "settlement_unavailable" as const,
+            sellerOrganizationId: sellerGroup.sellerOrganizationId,
+            error: railResolution.error,
+          };
+        }
+
         const [order] = await transaction
           .insert(commerceOrder)
           .values({
+            settlementRail: railResolution.value.rail,
             buyerOrganizationId: actor.organizationId,
             counterpartyOrganizationId: sellerGroup.sellerOrganizationId,
             checkoutGroupId: checkoutGroup.id,
@@ -1100,6 +1182,47 @@ export async function confirmCheckout(
           .returning();
         if (!order) throw new Error("Order insert returned no row.");
         createdOrders.push(order);
+
+        /**
+         * STORE Phase 14. Spend the agreement and open the escrow session inside the same
+         * transaction as the order, so a session can never exist without its order and an
+         * agreement can never be spent by an order that failed to commit.
+         *
+         * The provider is NOT called here. `createEscrowSessionForOrder` enqueues an outbox
+         * command; the call happens in a worker after commit, which is what stops a slow
+         * escrow API from holding inventory row locks open.
+         */
+        if (railResolution.value.rail === "external_escrow") {
+          const consumed = await consumeSettlementAgreement(
+            transaction,
+            railResolution.value.agreementId,
+            order.id,
+          );
+          if (!consumed.success) {
+            return {
+              status: "settlement_unavailable" as const,
+              sellerOrganizationId: sellerGroup.sellerOrganizationId,
+              error: consumed.error,
+            };
+          }
+
+          const session = await createEscrowSessionForOrder(transaction, {
+            orderId: order.id,
+            agreementId: railResolution.value.agreementId,
+            providerId: railResolution.value.providerId,
+            currency: railResolution.value.currency,
+            totalInCents: railResolution.value.totalInCents,
+          });
+          if (!session.success) {
+            return {
+              status: "escrow_session_failed" as const,
+              sellerOrganizationId: sellerGroup.sellerOrganizationId,
+              reason:
+                "reason" in session.error ? session.error.reason : session.error.type,
+            };
+          }
+          escrowOutboxIds.push(session.value.outboxId);
+        }
 
         if (discountInCents > 0) {
           discountByCurrency.set(
@@ -1258,6 +1381,7 @@ export async function confirmCheckout(
         status: "confirmed" as const,
         checkoutGroupId: checkoutGroup.id,
         orders: createdOrders,
+        escrowOutboxIds,
       };
     });
 
@@ -1294,7 +1418,31 @@ export async function confirmCheckout(
             currentUnitPriceInCents: outcome.currentUnitPriceInCents,
           },
         };
+      case "settlement_unavailable":
+        return {
+          success: false,
+          error: {
+            type: "SETTLEMENT_UNAVAILABLE",
+            sellerOrganizationId: outcome.sellerOrganizationId,
+            reason: outcome.error.reason,
+          },
+        };
+      case "escrow_session_failed":
+        return {
+          success: false,
+          error: {
+            type: "ESCROW_SESSION_FAILED",
+            sellerOrganizationId: outcome.sellerOrganizationId,
+            reason: outcome.reason,
+          },
+        };
       case "confirmed":
+        /**
+         * Dispatch AFTER commit. The outbox rows are durable, so a failed enqueue costs
+         * latency rather than the command — the hourly reconciler re-enqueues anything
+         * still pending.
+         */
+        await scheduleEscrowCommands(outcome.escrowOutboxIds);
         return {
           success: true,
           value: {

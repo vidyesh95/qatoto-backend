@@ -18,6 +18,28 @@ export const ConfirmCheckoutSchema = z
   .object({
     prepareId: z.string().trim().min(1).max(200),
     deliveryAddressId: z.string().trim().min(1).max(200).optional(),
+    /**
+     * STORE Phase 14. Which agreed escrow terms apply to which seller.
+     *
+     * OMITTING IT IS THE DEFAULT AND NOT AN ERROR — the order settles without escrow, and
+     * the buyer carries the counterparty risk. Naming an agreement here does not establish
+     * one: the service revalidates it against the accepted, unconsumed set under a row lock
+     * and refuses the confirm outright if it has lapsed (§0).
+     *
+     * Capped at twenty because a checkout produces one order per counterparty and a cart
+     * spanning more sellers than that is not a negotiation anyone conducted.
+     */
+    settlementAgreements: z
+      .array(
+        z
+          .object({
+            sellerOrganizationId: z.string().trim().min(1).max(200),
+            agreementId: z.string().trim().min(1).max(200),
+          })
+          .strict(),
+      )
+      .max(20)
+      .optional(),
   })
   .strict();
 
@@ -212,6 +234,29 @@ function mapCheckoutError(res: Response, error: CommerceCheckoutError): void {
         status: "error",
         statusCode: 409,
         message: error.message,
+      } satisfies ApiResponse);
+      return;
+    /**
+     * STORE Phase 14. 409, not 422: the request was well-formed and was true when the
+     * buyer made it — the agreed terms lapsed underneath it. The reason is on the wire
+     * because the buyer's next action differs by cause: re-agree expired terms, pick a
+     * different provider, or re-prepare a cart whose total moved.
+     */
+    case "SETTLEMENT_UNAVAILABLE":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message:
+          "The agreed escrow terms are no longer usable, so this order was not placed. Nothing was charged.",
+        data: { sellerOrganizationId: error.sellerOrganizationId, reason: error.reason },
+      } satisfies ApiResponse);
+      return;
+    case "ESCROW_SESSION_FAILED":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "The escrow session could not be opened, so this order was not placed.",
+        data: { sellerOrganizationId: error.sellerOrganizationId, reason: error.reason },
       } satisfies ApiResponse);
       return;
     default: {
