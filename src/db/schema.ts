@@ -6783,6 +6783,21 @@ export const commercePaymentIntent = pgTable(
     settledAt: timestamp("settled_at"),
     failedAt: timestamp("failed_at"),
     cancelledAt: timestamp("cancelled_at"),
+    /**
+     * THE `direct_processor` RAIL (Phase 14). The SELLER's account at the processor —
+     * the destination funds settle to, because Qatoto is not the merchant of record and
+     * does not take custody. An opaque provider-side reference, never a bank detail.
+     *
+     * Null on every other rail. `internal_custody` predates the whole idea, and
+     * `direct_offline` and `external_escrow` never create a payment intent at all.
+     */
+    settlementAccountRef: text("settlement_account_ref"),
+    /**
+     * Qatoto's commission, deducted by the processor at settlement. Requires a
+     * settlement account: a fee without a destination would be a deduction from money
+     * this backend is not routing.
+     */
+    applicationFeeInCents: bigint("application_fee_in_cents", { mode: "number" }),
     createdByMemberId: text("created_by_member_id")
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
@@ -6812,6 +6827,13 @@ export const commercePaymentIntent = pgTable(
     check(
       "commerce_payment_intent_failure_ck",
       sql`failure_reason IS NULL OR char_length(failure_reason) BETWEEN 1 AND 1000`,
+    ),
+    check(
+      "commerce_payment_intent_settlement_account_ck",
+      sql`(settlement_account_ref IS NULL OR char_length(settlement_account_ref) BETWEEN 1 AND 200)
+          AND (application_fee_in_cents IS NULL
+               OR (application_fee_in_cents >= 0 AND application_fee_in_cents <= amount_in_cents))
+          AND (application_fee_in_cents IS NULL OR settlement_account_ref IS NOT NULL)`,
     ),
   ],
 );
@@ -6947,10 +6969,17 @@ export const commerceJournalAccount = pgTable(
   (table) => [
     uniqueIndex("commerce_journal_account_order_kind_uidx").on(table.orderId, table.kind),
     check("commerce_journal_account_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    /**
+     * COMPARED ON `::text`, DELIBERATELY. `db:migrate` runs every pending migration in
+     * ONE transaction, and a value added by `ALTER TYPE ... ADD VALUE` cannot be used as
+     * an enum literal until that transaction commits. Casting to text sidesteps the
+     * coercion entirely, so this constraint can ship in the same release that adds the
+     * four memo kinds instead of waiting a deploy.
+     */
     check(
       "commerce_journal_account_memorandum_ck",
-      sql`is_memorandum = (kind IN ('settlement_funding_memo', 'settlement_custody_memo',
-                                    'settlement_released_memo', 'settlement_refunded_memo'))`,
+      sql`is_memorandum = (kind::text IN ('settlement_funding_memo', 'settlement_custody_memo',
+                                          'settlement_released_memo', 'settlement_refunded_memo'))`,
     ),
   ],
 );
@@ -8195,8 +8224,14 @@ export const commerceConnectorOutbox = pgTable(
     kind: commerceConnectorOutboxKindEnum("kind").notNull(),
     state: commerceConnectorOutboxStateEnum("state").default("pending").notNull(),
     orderId: text("order_id").references(() => commerceOrder.id, { onDelete: "restrict" }),
-    escrowSessionId: text("escrow_session_id"),
-    escrowMilestoneId: text("escrow_milestone_id"),
+    escrowSessionId: text("escrow_session_id").references(
+      (): AnyPgColumn => commerceExternalEscrowSession.id,
+      { onDelete: "restrict" },
+    ),
+    escrowMilestoneId: text("escrow_milestone_id").references(
+      (): AnyPgColumn => commerceEscrowMilestone.id,
+      { onDelete: "restrict" },
+    ),
     /** Ours, minted before the call, so a retried worker never looks like a second command. */
     idempotencyKey: text("idempotency_key").notNull(),
     requestPayloadJson: text("request_payload_json").notNull(),
@@ -8241,7 +8276,10 @@ export const commerceConnectorWebhookEvent = pgTable(
     providerEventId: text("provider_event_id").notNull(),
     eventType: text("event_type").notNull(),
     orderId: text("order_id").references(() => commerceOrder.id, { onDelete: "set null" }),
-    escrowSessionId: text("escrow_session_id"),
+    escrowSessionId: text("escrow_session_id").references(
+      (): AnyPgColumn => commerceExternalEscrowSession.id,
+      { onDelete: "set null" },
+    ),
     payloadJson: text("payload_json").notNull(),
     receivedAt: timestamp("received_at").defaultNow().notNull(),
     processedAt: timestamp("processed_at"),
