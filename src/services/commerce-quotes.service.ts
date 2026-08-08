@@ -46,6 +46,14 @@ import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import { deriveStockState } from "#src/services/store-catalog.service.js";
+import {
+  createEscrowSessionForOrder,
+  scheduleEscrowCommands,
+} from "#src/services/commerce-escrow.service.js";
+import {
+  consumeSettlementAgreement,
+  resolveSettlementRail,
+} from "#src/services/commerce-settlement.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -67,6 +75,15 @@ export type CommerceQuotesError =
   | { type: "CONFLICTING_ACCEPTANCE"; orderId: string }
   | { type: "INVALID_STATE" }
   | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
+  /**
+   * STORE Phase 14. The buyer named settlement terms that can no longer be used.
+   *
+   * The acceptance is REFUSED rather than completed on a different rail. Accepting a
+   * quote is the moment an order becomes an immutable commercial record, and creating
+   * that record with weaker protection than the buyer asked for is the silent downgrade
+   * §0 exists to prevent.
+   */
+  | { type: "SETTLEMENT_UNAVAILABLE"; reason: string }
   | { type: "VALIDATION_FAILED"; message: string }
   | { type: "CONFLICT"; message: string };
 
@@ -1569,6 +1586,15 @@ export async function acceptQuote(
   actor: QuoteActorContext,
   quoteId: string,
   expectedRevision: number,
+  /**
+   * STORE Phase 14. The accepted settlement agreement the buyer says applies, if any.
+   *
+   * OMITTING IT IS THE DEFAULT: the order settles `direct_offline` and the parties carry
+   * the counterparty risk between them, which is how most negotiated B2B trade at this
+   * size actually settles. Naming one does not establish it — `resolveSettlementRail`
+   * revalidates it under a row lock and refuses the acceptance if it has lapsed.
+   */
+  settlementAgreementId: string | null = null,
 ): Promise<Result<OrderProjection, CommerceQuotesError>> {
   try {
     const outcome = await db.transaction(async (transaction) => {
@@ -1733,12 +1759,41 @@ export async function acceptQuote(
       );
       const orderPromisedDeliveryAt = latestPromisedDeliveryAt(linePromisedDeliveryDates);
 
+      /**
+       * STORE Phase 14. Resolved BEFORE the insert, because `settlement_rail` belongs to
+       * the immutable commercial snapshot and the database refuses to change it after.
+       *
+       * `hasProcessorPayment: false`, and that is the substantive difference from direct
+       * checkout. A quote-originated order takes no payment intent at creation; a
+       * negotiated B2B order of this size is usually settled by wire or letter of credit,
+       * which this backend never observes. So its non-escrow rail is `direct_offline`,
+       * which posts no settlement entries at all and records party attestations instead.
+       */
+      /** Connector commands enqueued here, dispatched after this transaction commits. */
+      const escrowOutboxIds: string[] = [];
+
+      const railResolution = await resolveSettlementRail(transaction, {
+        buyerOrganizationId: rfq.buyerOrganizationId,
+        sellerOrganizationId: quote.providerOrganizationId,
+        currency: revision.currency,
+        totalInCents: revision.totalInCents,
+        hasProcessorPayment: false,
+        requestedAgreementId: settlementAgreementId,
+      });
+      if (!railResolution.success) {
+        return {
+          status: "settlement_unavailable" as const,
+          reason: railResolution.error.reason,
+        };
+      }
+
       const [order] = await transaction
         .insert(commerceOrder)
         .values({
           buyerOrganizationId: rfq.buyerOrganizationId,
           counterpartyOrganizationId: quote.providerOrganizationId,
           source: "accepted_quote",
+          settlementRail: railResolution.value.rail,
           state: "pending_payment",
           acceptedQuoteId: quote.id,
           acceptedQuoteRevisionId: revision.id,
@@ -1759,6 +1814,37 @@ export async function acceptQuote(
         .returning();
       if (!order) {
         throw new Error("Order insert returned no row.");
+      }
+
+      /**
+       * Spend the agreement and open the session in the same transaction as the order.
+       * The provider is called later, by a worker, so a slow escrow API cannot hold the
+       * quote and RFQ row locks this transaction is already holding.
+       */
+      if (railResolution.value.rail === "external_escrow") {
+        const consumed = await consumeSettlementAgreement(
+          transaction,
+          railResolution.value.agreementId,
+          order.id,
+        );
+        if (!consumed.success) {
+          return { status: "settlement_unavailable" as const, reason: consumed.error.reason };
+        }
+
+        const session = await createEscrowSessionForOrder(transaction, {
+          orderId: order.id,
+          agreementId: railResolution.value.agreementId,
+          providerId: railResolution.value.providerId,
+          currency: railResolution.value.currency,
+          totalInCents: railResolution.value.totalInCents,
+        });
+        if (!session.success) {
+          return {
+            status: "settlement_unavailable" as const,
+            reason: "reason" in session.error ? session.error.reason : session.error.type,
+          };
+        }
+        escrowOutboxIds.push(session.value.outboxId);
       }
 
       for (const [lineIndex, line] of productLines.entries()) {
@@ -2035,7 +2121,7 @@ export async function acceptQuote(
         occurredAt: now,
       });
 
-      return { status: "accepted" as const, order };
+      return { status: "accepted" as const, order, escrowOutboxIds };
     });
 
     switch (outcome.status) {
@@ -2070,7 +2156,14 @@ export async function acceptQuote(
             availableQuantity: outcome.availableQuantity,
           },
         };
+      case "settlement_unavailable":
+        return {
+          success: false,
+          error: { type: "SETTLEMENT_UNAVAILABLE", reason: outcome.reason },
+        };
       case "accepted":
+        // Dispatch after commit; the outbox rows are durable and the reconciler re-enqueues.
+        await scheduleEscrowCommands(outcome.escrowOutboxIds);
         return { success: true, value: projectOrder(outcome.order) };
       default: {
         const exhaustiveCheck: never = outcome;

@@ -241,6 +241,15 @@ export const AppendQuoteRevisionSchema = z
 export const AcceptQuoteSchema = z
   .object({
     expectedRevision: z.number().int().positive(),
+    /**
+     * STORE Phase 14. The agreed escrow terms this acceptance settles under.
+     *
+     * OMITTING IT IS THE DEFAULT AND NOT AN ERROR: the order settles `direct_offline`,
+     * the parties arrange payment between themselves, and Qatoto holds nothing and
+     * observes nothing. Naming one does not establish it — the service revalidates it
+     * under a row lock and refuses the acceptance outright if it has lapsed.
+     */
+    settlementAgreementId: z.string().trim().min(1).max(200).nullable().optional(),
   })
   .strict();
 
@@ -365,6 +374,20 @@ function mapQuotesError(res: Response, error: CommerceQuotesError): void {
         status: "error",
         statusCode: 409,
         message: error.message,
+      } satisfies ApiResponse);
+      return;
+    /**
+     * STORE Phase 14. 409 rather than 422: the request was well-formed and was true when
+     * the buyer made it — the agreed escrow terms lapsed underneath it. Nothing was
+     * accepted, so the quote is still there to accept once the terms are re-agreed.
+     */
+    case "SETTLEMENT_UNAVAILABLE":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message:
+          "The agreed escrow terms are no longer usable, so the quote was not accepted and no order exists.",
+        data: { reason: error.reason },
       } satisfies ApiResponse);
       return;
     default: {
@@ -533,6 +556,7 @@ export async function acceptQuote(req: Request, res: Response): Promise<void> {
     actor,
     params.data.quoteId,
     body.data.expectedRevision,
+    body.data.settlementAgreementId ?? null,
   );
   if (!result.success) {
     mapQuotesError(res, result.error);

@@ -374,6 +374,14 @@ describe("commerce quote routes", () => {
       expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
       "quote-1",
       2,
+      /**
+       * STORE Phase 14. An acceptance that names no settlement agreement passes `null`
+       * explicitly rather than omitting the argument. Asserted rather than loosened,
+       * because the default it selects is the UNPROTECTED rail — if a future change
+       * started passing something else here, buyers who agreed to nothing would silently
+       * acquire escrow terms, or worse, the reverse.
+       */
+      null,
     );
   });
 
