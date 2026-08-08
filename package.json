@@ -68,6 +68,7 @@
     "db:verify-store-phase-10-constraints": "tsx --conditions=development scripts/verify-store-phase-10-constraints.ts",
     "db:verify-store-phase-11-constraints": "tsx --conditions=development scripts/verify-store-phase-11-constraints.ts",
     "db:verify-store-phase-13-constraints": "tsx --conditions=development scripts/verify-store-phase-13-constraints.ts",
+    "db:verify-store-phase-14-constraints": "tsx --conditions=development scripts/verify-store-phase-14-constraints.ts",
     "db:verify-store-phase-12-constraints": "tsx --conditions=development scripts/verify-store-phase-12-constraints.ts",
     "db:backfill-store-search-documents": "tsx --conditions=development scripts/verify-store-phase-1-2-constraints.ts --backfill",
     "db:smoke-discovery": "tsx --conditions=development scripts/smoke-discovery-pipeline.ts",
