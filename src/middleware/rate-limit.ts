@@ -1091,6 +1091,21 @@ export const commerceAddressRevealLimiter = createLimiter({
   limit: 10,
 });
 
+/**
+ * A30's trade-attachment download. Sits between the address reveal and an ordinary read
+ * for the reason its subject sits between them: a drawing is another organization's
+ * commercial material, but a buyer legitimately opens every attachment on an RFQ in one
+ * sitting, which the reveal's ten-per-minute would refuse.
+ *
+ * It also bounds the cost, which the reveal does not have to: every call decrypts and
+ * streams up to 8 MB out of object storage.
+ */
+export const commerceDocumentDownloadLimiter = createLimiter({
+  namespace: "commerceDocumentDownload",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
 export const commerceOrderWriteLimiter = createLimiter({
   namespace: "commerceOrderWrite",
   windowMs: ONE_MINUTE_MS,

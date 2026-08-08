@@ -15,6 +15,7 @@ import authRouter from "#src/routes/auth.routes.js";
 import commerceCartRouter from "#src/routes/commerce-cart.routes.js";
 import commerceCatalogRouter from "#src/routes/commerce-catalog.routes.js";
 import commerceContentReportsRouter from "#src/routes/commerce-content-reports.routes.js";
+import commerceDocumentsRouter from "#src/routes/commerce-documents.routes.js";
 import commerceFulfillmentRouter from "#src/routes/commerce-fulfillment.routes.js";
 import commerceMerchandisingRouter from "#src/routes/commerce-merchandising.routes.js";
 import commerceMessagesRouter from "#src/routes/commerce-messages.routes.js";
@@ -194,6 +195,11 @@ app.use("/commerce", commerceContentReportsRouter);
 app.use("/commerce", commerceProductInquiryRouter);
 // STORE Phase 13 — ranking transparency and the appeal path.
 app.use("/commerce", commerceRankingRouter);
+// STORE Phase 15 — trade attachments (A30). `/documents` collides with no other
+// commerce segment; the verification-evidence upload lives under
+// `/providers/:organizationId/evidence` and its download under
+// `/organizations/:organizationId/verifications/...`.
+app.use("/commerce", commerceDocumentsRouter);
 // STORE Phase 14 — negotiated settlement agreements. Mounted after the other commerce
 // routers; its segments (`/settlement`, `/settlement-agreements`, and a sub-path under
 // `/threads`) collide with none of them.

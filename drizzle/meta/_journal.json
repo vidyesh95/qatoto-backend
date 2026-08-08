@@ -680,6 +680,13 @@
       "when": 1786105829394,
       "tag": "0096_store_phase_15_queue_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1786105834394,
+      "tag": "0097_store_phase_15_trade_attachments",
+      "breakpoints": true
     }
   ]
 }

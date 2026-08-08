@@ -452,6 +452,16 @@ export const commerceDocumentKindEnum = pgEnum("commerce_document_kind", [
    * metadata only and never references this document.
    */
   "certification_evidence",
+  /**
+   * A30/A27. A drawing, specification or photo a trading party attaches to an RFQ or to
+   * a thread message.
+   *
+   * ONE kind rather than an rfq/message pair: which resource it hangs off is a fact the
+   * LINK tables record (`commerce_rfq_document`, `commerce_message_attachment`), and the
+   * same drawing legitimately rides both — a buyer attaches it to the sourcing request
+   * and then sends it again in the negotiation thread.
+   */
+  "trade_attachment",
 ]);
 
 
@@ -475,6 +485,13 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "address_changed",
     "document_uploaded",
     "document_state_changed",
+    /**
+     * A30. A30's download route decrypts and streams bytes belonging to another
+     * organization, and A15 settled that every such read is an auditable event rather
+     * than a silent one. The owner reading its own document is NOT audited — that is
+     * the same line `revealOrderDeliveryAddress` draws.
+     */
+    "document_downloaded",
     "verification_decided",
     "rfq_opened",
     "rfq_closed",

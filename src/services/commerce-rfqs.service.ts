@@ -354,6 +354,19 @@ async function assertOwnedAddress(
   return { success: true, value: true };
 }
 
+/**
+ * Every attached document must be owned by the buyer AND scanned clean.
+ *
+ * THE `state` CHECK IS A30's DOING. Ownership alone was enough while nothing could
+ * create a buyer document — the ids were unfillable, so the predicate guarded a set that
+ * was always empty. `POST /commerce/documents` changes that: a document lands
+ * `pending_scan` and is promoted asynchronously, so without this an RFQ could carry a
+ * file that had not been checked for malware, or one that had already FAILED the check,
+ * and then broadcast it to every invited provider.
+ *
+ * `appendMessage` has always checked both. This brings the two paths into line rather
+ * than leaving the stricter one looking like the exception.
+ */
 async function assertOwnedDocuments(
   transaction: DatabaseTransaction,
   buyerOrganizationId: string,
@@ -368,6 +381,7 @@ async function assertOwnedDocuments(
       and(
         inArray(commerceEncryptedDocument.id, uniqueDocumentIds),
         eq(commerceEncryptedDocument.organizationId, buyerOrganizationId),
+        eq(commerceEncryptedDocument.state, "available"),
       ),
     );
   if (ownedDocuments.length !== uniqueDocumentIds.length) {

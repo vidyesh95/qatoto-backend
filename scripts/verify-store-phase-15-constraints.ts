@@ -420,6 +420,77 @@ const CHECKS: readonly Check[] = [
       };
     },
   },
+
+  // -------------------------------------------------------------------------
+  // 0097 — A30 trade attachments.
+  // -------------------------------------------------------------------------
+  {
+    name: "0097 · the trade_attachment and document_downloaded enum members exist",
+    why: "Both are added by ALTER TYPE, which no drizzle snapshot records; without them the routes cannot write a row.",
+    async run() {
+      const kind = await enumHasValue("commerce_document_kind", "trade_attachment");
+      const audit = await enumHasValue(
+        "commerce_organization_audit_event_kind",
+        "document_downloaded",
+      );
+      return {
+        ok: kind && audit,
+        detail: `trade_attachment=${String(kind)} document_downloaded=${String(audit)}`,
+      };
+    },
+  },
+  {
+    name: "0097 · no RFQ carries an unscanned or quarantined attachment",
+    why: "assertOwnedDocuments checked ownership but not state; an RFQ broadcast to invited providers must not ship an unscanned file.",
+    async run() {
+      /*
+       * The invariant `assertOwnedDocuments` now enforces at the write. Asserting it
+       * over stored rows too, because the write-side check is only as old as this phase
+       * — anything already attached predates it.
+       */
+      const unsafe = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM commerce_rfq_document AS link
+          JOIN commerce_encrypted_document AS document
+            ON document.id = link.encrypted_document_id
+         WHERE document.state <> 'available'`);
+      return {
+        ok: unsafe === 0,
+        detail: `${String(unsafe)} RFQ attachment(s) not in state 'available'`,
+      };
+    },
+  },
+  {
+    name: "0097 · no message carries an unscanned or quarantined attachment",
+    why: "The same rule on the other link table; appendMessage has always checked it, so a violation means a path that bypassed it.",
+    async run() {
+      const unsafe = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM commerce_message_attachment AS link
+          JOIN commerce_encrypted_document AS document
+            ON document.id = link.encrypted_document_id
+         WHERE document.state <> 'available'`);
+      return {
+        ok: unsafe === 0,
+        detail: `${String(unsafe)} message attachment(s) not in state 'available'`,
+      };
+    },
+  },
+  {
+    name: "0097 · every trade attachment names a real storage object",
+    why: "The upload's compensating delete runs on a failed insert; an orphan row would be a document nothing can open.",
+    async run() {
+      const orphaned = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM commerce_encrypted_document
+         WHERE document_kind = 'trade_attachment'
+           AND (object_storage_key IS NULL OR object_storage_key = '')`);
+      return {
+        ok: orphaned === 0,
+        detail: `${String(orphaned)} trade attachment(s) with no storage key`,
+      };
+    },
+  },
 ];
 
 async function main(): Promise<void> {
