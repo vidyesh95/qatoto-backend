@@ -7,6 +7,7 @@ import {
   commerceReviewMedia,
   commerceReviewReply,
   commerceReviewScore,
+  commerceReviewVote,
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { StoreReviewListQuery } from "#src/schemas/store-reviews.schemas.js";
@@ -65,6 +66,22 @@ export interface StoreReviewReplyProjection {
   } | null;
 }
 
+/** A24. What the CALLER has done to this review, absent when there is no caller. */
+export interface StoreReviewViewerState {
+  readonly hasVotedHelpful: boolean;
+}
+
+/**
+ * Who is reading. Resolved by the controller from the optional session — descriptively,
+ * never by a guard, because on a public read a missing organization is a rendering
+ * detail rather than a refusal.
+ */
+export interface StoreReviewViewerContext {
+  readonly organizationId: string | null;
+}
+
+export const ANONYMOUS_REVIEW_VIEWER: StoreReviewViewerContext = { organizationId: null };
+
 export interface StoreReviewProjection {
   readonly id: string;
   readonly rating: number;
@@ -86,6 +103,18 @@ export interface StoreReviewProjection {
   readonly scores: StoreReviewScoresProjection;
   readonly media: readonly StoreReviewMediaProjection[];
   readonly helpfulCount: number;
+  /**
+   * A24, following A11's `engagement.viewer`: `null` for a caller with no active
+   * commerce organization, NOT `{hasVotedHelpful: false}`. A toggle whose own state
+   * needs a second authenticated call renders wrong on first paint and then corrects
+   * itself, which reads as a bug and teaches a buyer that the count is not to be
+   * trusted — so a fact about the CALLER belongs on the read the caller already made.
+   *
+   * Keyed on the ORGANIZATION, because `commerce_review_vote` is. A signed-in visitor
+   * with no active organization cannot vote at all, so `null` is also the honest answer
+   * about what they may do.
+   */
+  readonly viewer: StoreReviewViewerState | null;
   readonly reply: StoreReviewReplyProjection | null;
 }
 
@@ -404,6 +433,7 @@ async function assembleReviewPage(
   scopePredicate: SQL,
   query: StoreReviewListQuery,
   summary: StoreReviewSummaryProjection,
+  viewer: StoreReviewViewerContext,
 ): Promise<Result<StoreReviewListPage, StoreCatalogError>> {
   const filters: SQL[] = [scopePredicate, eq(commerceReview.visibility, "visible")];
   if (query.rating !== undefined) {
@@ -448,7 +478,24 @@ async function assembleReviewPage(
   const lastRow = pageRows.at(-1);
 
   const reviewIds = pageRows.map((row) => row.id);
-  const { mediaByReview, scoresByReview, replyByReview } = await loadReviewChildren(reviewIds);
+  const viewerOrganizationId = viewer.organizationId;
+  // One extra query per page, and only when there is an organization to ask about. It
+  // is a prefix scan of `commerce_review_vote`'s primary key, so it needs no index.
+  const [{ mediaByReview, scoresByReview, replyByReview }, viewerVoteRows] = await Promise.all([
+    loadReviewChildren(reviewIds),
+    viewerOrganizationId === null || reviewIds.length === 0
+      ? Promise.resolve([])
+      : db
+          .select({ reviewId: commerceReviewVote.reviewId })
+          .from(commerceReviewVote)
+          .where(
+            and(
+              inArray(commerceReviewVote.reviewId, reviewIds),
+              eq(commerceReviewVote.voterOrganizationId, viewerOrganizationId),
+            ),
+          ),
+  ]);
+  const votedReviewIds = new Set(viewerVoteRows.map((row) => row.reviewId));
 
   const organizationIds = [
     ...new Set([
@@ -481,6 +528,8 @@ async function assembleReviewPage(
       scores: scoresByReview.get(row.id) ?? { service: null, shipping: null, quality: null },
       media: mediaByReview.get(row.id) ?? [],
       helpfulCount: row.helpfulCount,
+      viewer:
+        viewerOrganizationId === null ? null : { hasVotedHelpful: votedReviewIds.has(row.id) },
       reply: reply
         ? {
             body: reply.body,
@@ -521,6 +570,7 @@ async function assembleReviewPage(
 export async function listProductReviews(
   productSlug: string,
   query: StoreReviewListQuery,
+  viewer: StoreReviewViewerContext = ANONYMOUS_REVIEW_VIEWER,
 ): Promise<Result<StoreReviewListPage, StoreCatalogError>> {
   const productRef = await resolveEligibleProductRefBySlug(productSlug);
   if (!productRef) {
@@ -532,10 +582,15 @@ export async function listProductReviews(
     loadProductReviewScoreAverages([productRef.id]),
   ]);
 
-  return assembleReviewPage(eq(commerceReview.productId, productRef.id), query, {
-    ...(summaries.get(productRef.id) ?? EMPTY_REVIEW_SUMMARY),
-    scoreAverages: scoreAverages.get(productRef.id) ?? EMPTY_REVIEW_SCORE_AVERAGES,
-  });
+  return assembleReviewPage(
+    eq(commerceReview.productId, productRef.id),
+    query,
+    {
+      ...(summaries.get(productRef.id) ?? EMPTY_REVIEW_SUMMARY),
+      scoreAverages: scoreAverages.get(productRef.id) ?? EMPTY_REVIEW_SCORE_AVERAGES,
+    },
+    viewer,
+  );
 }
 
 /**
@@ -548,6 +603,7 @@ export async function listProductReviews(
 export async function listOrganizationReviews(
   organizationSlug: string,
   query: StoreReviewListQuery,
+  viewer: StoreReviewViewerContext = ANONYMOUS_REVIEW_VIEWER,
 ): Promise<Result<StoreReviewListPage, StoreCatalogError>> {
   const [organization] = await db
     .select({ id: commerceOrganization.id })
@@ -570,8 +626,13 @@ export async function listOrganizationReviews(
     loadOrganizationReviewScoreAverages([organization.id]),
   ]);
 
-  return assembleReviewPage(eq(commerceReview.subjectOrganizationId, organization.id), query, {
-    ...(summaries.get(organization.id) ?? EMPTY_REVIEW_SUMMARY),
-    scoreAverages: scoreAverages.get(organization.id) ?? EMPTY_REVIEW_SCORE_AVERAGES,
-  });
+  return assembleReviewPage(
+    eq(commerceReview.subjectOrganizationId, organization.id),
+    query,
+    {
+      ...(summaries.get(organization.id) ?? EMPTY_REVIEW_SUMMARY),
+      scoreAverages: scoreAverages.get(organization.id) ?? EMPTY_REVIEW_SCORE_AVERAGES,
+    },
+    viewer,
+  );
 }

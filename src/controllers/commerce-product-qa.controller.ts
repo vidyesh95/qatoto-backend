@@ -13,6 +13,7 @@ import {
 } from "#src/schemas/commerce-product-qa.schemas.js";
 import * as commerceProductQaService from "#src/services/commerce-product-qa.service.js";
 import type { CommerceProductQaError } from "#src/services/commerce-product-qa.service.js";
+import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import {
   resolveEligibleProductRefById,
   resolveEligibleProductRefBySlug,
@@ -74,6 +75,13 @@ function mapQaError(res: Response, error: CommerceProductQaError): void {
         message: "Your organization has already answered this question.",
       } satisfies ApiResponse);
       return;
+    case "SELF_VOTE_FORBIDDEN":
+      res.status(403).json({
+        status: "error",
+        statusCode: 403,
+        message: "An answer's author cannot endorse it.",
+      } satisfies ApiResponse);
+      return;
     case "INVALID_CURSOR":
       res.status(422).json({
         status: "error",
@@ -96,6 +104,58 @@ function mapQaError(res: Response, error: CommerceProductQaError): void {
  * id it is acting on. Both paths run the SAME eligibility rule — a question may not be
  * asked about, or read from, a listing the public cannot see.
  */
+/**
+ * A24. Who is reading, for `viewer.hasVotedHelpful`.
+ *
+ * Resolved here rather than by a guard, for the reason `store.controller.getProduct`
+ * states: on a public read the organization is descriptive, not required. A visitor with
+ * no account, and a signed-in visitor with no active commerce organization, both get
+ * `null` — neither can vote, so neither is told anything about a vote.
+ */
+async function resolveQaViewer(req: Request): Promise<commerceProductQaService.ProductQaViewerContext> {
+  if (!req.user || !req.authSession?.activeOrganizationId) {
+    return commerceProductQaService.ANONYMOUS_QA_VIEWER;
+  }
+  const activeOrganization = await resolveActiveCommerceOrganization({
+    userId: req.user.id,
+    activeOrganizationId: req.authSession.activeOrganizationId,
+  });
+  return {
+    organizationId: activeOrganization.success ? activeOrganization.value.organizationId : null,
+  };
+}
+
+/**
+ * A24. The vote routes carry `requireActiveCommerceOrganization`, so the membership is
+ * already resolved onto the request — this only narrows it for the service.
+ */
+function requireQaActor(
+  req: Request,
+  res: Response,
+): commerceProductQaService.CommerceProductQaActorContext | null {
+  if (!req.user) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return null;
+  }
+  if (!req.commerceOrganization) {
+    res.status(403).json({
+      status: "error",
+      statusCode: 403,
+      message: "An active commerce organization membership is required.",
+    } satisfies ApiResponse);
+    return null;
+  }
+  return {
+    organizationId: req.commerceOrganization.organizationId,
+    memberId: req.commerceOrganization.memberId,
+    actorUserId: req.user.id,
+  };
+}
+
 async function resolveEligibleProductIdBySlug(
   req: Request,
   res: Response,
@@ -270,7 +330,11 @@ export async function listProductQuestions(req: Request, res: Response): Promise
   const productId = await resolveEligibleProductIdBySlug(req, res, params.data.productSlug);
   if (productId === null) return;
 
-  const result = await commerceProductQaService.listProductQuestions(productId, query.data);
+  const result = await commerceProductQaService.listProductQuestions(
+    productId,
+    query.data,
+    await resolveQaViewer(req),
+  );
   if (!result.success) {
     mapQaError(res, result.error);
     return;
@@ -301,6 +365,7 @@ export async function listProductQuestionAnswers(req: Request, res: Response): P
   const result = await commerceProductQaService.listProductQuestionAnswers(
     { productId, questionId: params.data.questionId },
     query.data,
+    await resolveQaViewer(req),
   );
   if (!result.success) {
     mapQaError(res, result.error);
@@ -310,6 +375,52 @@ export async function listProductQuestionAnswers(req: Request, res: Response): P
     status: "success",
     statusCode: 200,
     message: "Question answers.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function setAnswerHelpfulVote(req: Request, res: Response): Promise<void> {
+  const params = ProductAnswerIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  if (!parseNoQuery(req, res)) return;
+  const actor = requireQaActor(req, res);
+  if (!actor) return;
+
+  const result = await commerceProductQaService.setAnswerHelpfulVote(actor, params.data.answerId);
+  if (!result.success) {
+    mapQaError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Answer marked helpful.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function clearAnswerHelpfulVote(req: Request, res: Response): Promise<void> {
+  const params = ProductAnswerIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  if (!parseNoQuery(req, res)) return;
+  const actor = requireQaActor(req, res);
+  if (!actor) return;
+
+  const result = await commerceProductQaService.clearAnswerHelpfulVote(actor, params.data.answerId);
+  if (!result.success) {
+    mapQaError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Helpful vote withdrawn.",
     data: result.value,
   } satisfies ApiResponse);
 }

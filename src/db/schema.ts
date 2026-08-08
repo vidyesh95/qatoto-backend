@@ -3706,6 +3706,12 @@ export const commerceProductAnswer = pgTable(
     visibilityState: commerceUgcVisibilityStateEnum("visibility_state")
       .default("visible")
       .notNull(),
+    /**
+     * A24. Denormalized for the same reason `commerce_review.helpfulCount` is: the
+     * seller-first preview breaks its tie on this, and a correlated count in an
+     * ORDER BY cannot use an index. `0` is a measurement, not an absence of one.
+     */
+    helpfulCount: integer("helpful_count").default(0).notNull(),
     hiddenAt: timestamp("hidden_at", { precision: 3 }),
     hiddenByUserId: text("hidden_by_user_id").references(() => user.id, { onDelete: "restrict" }),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
@@ -3725,11 +3731,15 @@ export const commerceProductAnswer = pgTable(
       table.authorOrganizationId,
     ),
     index("commerce_product_answer_question_idx").on(table.questionId, table.createdAt, table.id),
+    index("commerce_product_answer_question_helpful_idx")
+      .on(table.questionId, table.helpfulCount.desc(), table.id)
+      .where(sql`visibility_state = 'visible'`),
     index("commerce_product_answer_organization_idx").on(
       table.authorOrganizationId,
       table.createdAt,
     ),
     check("commerce_product_answer_body_ck", sql`char_length(body_text) BETWEEN 1 AND 4000`),
+    check("commerce_product_answer_helpful_count_ck", sql`helpful_count >= 0`),
     /** The badge and its proof travel together, in both directions. */
     check(
       "commerce_product_answer_verified_ck",
@@ -7771,6 +7781,44 @@ export const commerceReviewVote = pgTable(
   (table) => [
     primaryKey({ columns: [table.reviewId, table.voterOrganizationId] }),
     index("commerce_review_vote_organization_idx").on(table.voterOrganizationId, table.createdAt),
+  ],
+);
+
+/**
+ * A helpful vote on a product answer (STORE Appendix A24).
+ *
+ * `commerceReviewVote` above, byte for byte, and for its reasons: row presence is the
+ * vote, so there is no `id` and no `value`; the key is the ORGANIZATION, so one
+ * procurement team does not get five votes because it has five logins.
+ *
+ * `commerce_product_answer_vote_relationship_guard` refuses a vote from the answer's
+ * own author organization and a `voterMemberId` belonging to a different organization.
+ * The service refuses the first case too — that produces a useful 403; the trigger is
+ * what makes the rule true.
+ */
+export const commerceProductAnswerVote = pgTable(
+  "commerce_product_answer_vote",
+  {
+    answerId: text("answer_id")
+      .notNull()
+      .references(() => commerceProductAnswer.id, { onDelete: "cascade" }),
+    voterOrganizationId: text("voter_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    voterMemberId: text("voter_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    voterUserId: text("voter_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.answerId, table.voterOrganizationId] }),
+    index("commerce_product_answer_vote_organization_idx").on(
+      table.voterOrganizationId,
+      table.createdAt,
+    ),
   ],
 );
 

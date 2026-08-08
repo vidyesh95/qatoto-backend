@@ -680,6 +680,29 @@ function mapStoreReviewError(res: Response, error: StoreCatalogError, missingLab
   }
 }
 
+/**
+ * A24. Who is reading, for `viewer.hasVotedHelpful` on each review card.
+ *
+ * The same descriptive resolution `getProduct` performs above, and for the same reason:
+ * the review list is a public page, so a missing organization decides what to render
+ * rather than whether to answer. `commerce_review_vote` is keyed on the organization,
+ * so a signed-in visitor without one gets `null` — they cannot vote either.
+ */
+async function resolveReviewViewer(
+  req: Request,
+): Promise<storeReviewsService.StoreReviewViewerContext> {
+  if (!req.user || !req.authSession?.activeOrganizationId) {
+    return storeReviewsService.ANONYMOUS_REVIEW_VIEWER;
+  }
+  const activeOrganization = await resolveActiveCommerceOrganization({
+    userId: req.user.id,
+    activeOrganizationId: req.authSession.activeOrganizationId,
+  });
+  return {
+    organizationId: activeOrganization.success ? activeOrganization.value.organizationId : null,
+  };
+}
+
 export async function listProductReviews(req: Request, res: Response): Promise<void> {
   const params = StoreProductReviewParamsSchema.safeParse(req.params);
   if (!params.success) {
@@ -692,7 +715,11 @@ export async function listProductReviews(req: Request, res: Response): Promise<v
     return;
   }
 
-  const result = await storeReviewsService.listProductReviews(params.data.productSlug, query.data);
+  const result = await storeReviewsService.listProductReviews(
+    params.data.productSlug,
+    query.data,
+    await resolveReviewViewer(req),
+  );
   if (!result.success) {
     mapStoreReviewError(res, result.error, "Product not found.");
     return;
@@ -720,6 +747,7 @@ export async function listOrganizationReviews(req: Request, res: Response): Prom
   const result = await storeReviewsService.listOrganizationReviews(
     params.data.organizationSlug,
     query.data,
+    await resolveReviewViewer(req),
   );
   if (!result.success) {
     mapStoreReviewError(res, result.error, "Organization not found.");
