@@ -24,6 +24,7 @@ import {
 } from "#src/lib/object-storage.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
+import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -994,6 +995,14 @@ export async function submitVerificationEvidence(input: {
       });
       return createdVerification;
     });
+
+    /**
+     * STORE Phase 14b. Enqueued after commit and never allowed to fail this call. Unlike
+     * artwork and certificates, verification evidence already had a manual promoter — this
+     * only means a moderator now opens bytes a scanner has already looked at.
+     */
+    await scheduleDocumentScan(documentId);
+
     return { success: true, value: verification };
   } catch (submissionError: unknown) {
     const uniqueConflict = isUniqueViolation(submissionError);

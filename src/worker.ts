@@ -32,6 +32,8 @@ import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-duratio
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
 import { handleReconcileCommercePayments } from "#src/jobs/reconcile-commerce-payments.js";
 import { handleReconcileConnectorState } from "#src/jobs/reconcile-connector-state.js";
+import { handleScanEncryptedDocument } from "#src/jobs/scan-encrypted-document.js";
+import { handleSweepPendingDocumentScans } from "#src/jobs/sweep-pending-document-scans.js";
 import { handleRefreshStoreSearchDocument } from "#src/jobs/refresh-store-search-document.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import { handleReleaseExpiredInventoryReservations } from "#src/jobs/release-expired-inventory-reservations.js";
@@ -63,6 +65,7 @@ import {
   handleRollupCommerceProductDailySignalTick,
   handleReconcileCommercePaymentsTick,
   handleReconcileConnectorStateTick,
+  handleSweepPendingDocumentScansTick,
 } from "#src/jobs/scheduled-ticks.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
 import {
@@ -504,6 +507,24 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.reconcileConnectorState,
     workOptions,
     runJob(JOB_NAMES.reconcileConnectorState, handleReconcileConnectorState),
+  );
+
+  // STORE Phase 14b — malware scanning. Uploads enqueue the per-document job; the sweep
+  // catches an enqueue that was lost, which is allowed to happen so an upload never 500s.
+  await boss.work(
+    JOB_NAMES.scanEncryptedDocument,
+    workOptions,
+    runJob(JOB_NAMES.scanEncryptedDocument, handleScanEncryptedDocument),
+  );
+  await boss.work(
+    JOB_NAMES.sweepPendingDocumentScansTick,
+    workOptions,
+    runJob(JOB_NAMES.sweepPendingDocumentScansTick, handleSweepPendingDocumentScansTick),
+  );
+  await boss.work(
+    JOB_NAMES.sweepPendingDocumentScans,
+    workOptions,
+    runJob(JOB_NAMES.sweepPendingDocumentScans, handleSweepPendingDocumentScans),
   );
 
   // STORE Phase 9 (§15.9) — nightly co-occurrence mining into the relation graph.

@@ -27,6 +27,7 @@ import {
 } from "#src/lib/object-storage.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
+import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -1080,7 +1081,8 @@ export async function submitCertification(input: {
           id: documentId,
           organizationId: input.organizationId,
           documentKind: "certification_evidence",
-          // Upload completion is not a malware verdict — a scanner promotes this.
+          // Upload completion is not a malware verdict. Phase 14b finally supplies the
+          // scanner that promotes this; before it, a certificate stayed pending forever.
           state: "pending_scan",
           storageProvider: "backblaze_b2",
           objectStorageKey: uploaded.value.objectKey,
@@ -1140,6 +1142,14 @@ export async function submitCertification(input: {
       });
       return row;
     });
+
+    /**
+     * STORE Phase 14b. A certificate could not previously leave `pending_scan` at all —
+     * `recordDocumentScannerVerdict` demands a pending verification row that a certification
+     * never has. Enqueued after commit and never allowed to fail this call.
+     */
+    await scheduleDocumentScan(documentId);
+
     return { success: true, value: projectOwnedCertification(certification) };
   } catch (submissionError: unknown) {
     return handleCertificationSubmissionFailure(submissionError, uploaded.value.objectKey);

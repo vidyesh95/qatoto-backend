@@ -304,6 +304,17 @@ const envSchema = z.object({
    * here before that is decided would start accruing a receivable nobody has agreed to owe.
    */
   COMMERCE_PLATFORM_COMMISSION_BASIS_POINTS: z.coerce.number().int().min(0).max(10_000).default(0),
+
+  /**
+   * Malware scanner for private commerce documents (Store Phase 14b).
+   *
+   * `fake` detects only the EICAR test signature. It is permitted in production, unlike the
+   * payment and escrow fakes, because refusing to resolve a scanner means refusing to scan —
+   * and an unscanned document stays `pending_scan` forever, which re-breaks the A18 upload
+   * path this exists to fix. A weak scanner that is deliberately configured is a better
+   * failure than an absent one that silently blocks every customization order.
+   */
+  COMMERCE_DOCUMENT_SCANNER: z.enum(["fake", "clamav"]).default("fake"),
   // The GitHub App that grounds code artifacts. All three are required together, and
   // without them `POST …/integrations` answers 503 INTEGRATION_UNCONFIGURED and grounding
   // falls back to the evidence links §8 already stored.

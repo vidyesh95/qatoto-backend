@@ -150,6 +150,11 @@ export const JOB_NAMES = {
   dispatchConnectorCommand: "dispatch-connector-command",
   reconcileConnectorStateTick: "reconcile-connector-state-tick",
   reconcileConnectorState: "reconcile-connector-state",
+  // STORE Phase 14b — malware scanning for private commerce documents. Uploads enqueue the
+  // per-document job directly; the sweep exists only to catch an enqueue that was lost.
+  scanEncryptedDocument: "scan-encrypted-document",
+  sweepPendingDocumentScansTick: "sweep-pending-document-scans-tick",
+  sweepPendingDocumentScans: "sweep-pending-document-scans",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -309,6 +314,13 @@ const DispatchCommerceWebhookEventPayloadSchema = z
 const DispatchConnectorCommandPayloadSchema = z
   .object({
     outboxId: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+/** STORE Phase 14b. The document id only; its state is re-read inside the handler. */
+const ScanEncryptedDocumentPayloadSchema = z
+  .object({
+    documentId: z.string().trim().min(1).max(200),
   })
   .strict();
 
@@ -1047,6 +1059,43 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.reconcileConnectorState),
     },
   },
+  /**
+   * STORE Phase 14b. `standard`, because several buyers upload artwork at once and the
+   * per-document guard is the `pending_scan` predicate on the UPDATE, not queue serialization.
+   */
+  [JOB_NAMES.scanEncryptedDocument]: {
+    name: JOB_NAMES.scanEncryptedDocument,
+    payloadSchema: ScanEncryptedDocumentPayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      expireInSeconds: 300,
+      deadLetter: deadLetterNameFor(JOB_NAMES.scanEncryptedDocument),
+    },
+  },
+  [JOB_NAMES.sweepPendingDocumentScansTick]: {
+    name: JOB_NAMES.sweepPendingDocumentScansTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepPendingDocumentScansTick),
+    },
+  },
+  [JOB_NAMES.sweepPendingDocumentScans]: {
+    name: JOB_NAMES.sweepPendingDocumentScans,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepPendingDocumentScans),
+    },
+  },
   [JOB_NAMES.deriveProductRelationsTick]: {
     name: JOB_NAMES.deriveProductRelationsTick,
     payloadSchema: TickPayloadSchema,
@@ -1268,6 +1317,9 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // :20/:35/:50 commerce ticks, and puts it a comfortable distance after the top-of-hour
   // trending run at :12 rather than contending with it.
   [JOB_NAMES.reconcileConnectorStateTick]: "5 * * * *",
+  // STORE Phase 14b — the lost-enqueue sweep. Every fifteen minutes rather than hourly:
+  // a buyer waiting on artwork to become attachable is blocked until it runs.
+  [JOB_NAMES.sweepPendingDocumentScansTick]: "*/15 * * * *",
   // STORE Phase 9 — nightly relation derivation. 02:40 UTC sits after the 01:xx
   // recompute chain and well before the 04:55 prune, so a night's completed orders are
   // settled before their co-occurrence is mined.
@@ -1541,6 +1593,9 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.dispatchConnectorCommand]: DispatchConnectorCommandPayloadSchema,
   [JOB_NAMES.reconcileConnectorStateTick]: TickPayloadSchema,
   [JOB_NAMES.reconcileConnectorState]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.scanEncryptedDocument]: ScanEncryptedDocumentPayloadSchema,
+  [JOB_NAMES.sweepPendingDocumentScansTick]: TickPayloadSchema,
+  [JOB_NAMES.sweepPendingDocumentScans]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.reconcileCommercePaymentsTick]: TickPayloadSchema,
   [JOB_NAMES.reconcileCommercePayments]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.deriveProductRelationsTick]: TickPayloadSchema,
@@ -1685,6 +1740,11 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.dispatchConnectorCommand}:${outboxId}`,
   reconcileConnectorState: (asOfIso: string): string =>
     `${JOB_NAMES.reconcileConnectorState}:${asOfIso}`,
+  // Keyed on the document, so an upload enqueue and a sweep re-enqueue collapse into one.
+  scanEncryptedDocument: (documentId: string): string =>
+    `${JOB_NAMES.scanEncryptedDocument}:${documentId}`,
+  sweepPendingDocumentScans: (asOfIso: string): string =>
+    `${JOB_NAMES.sweepPendingDocumentScans}:${asOfIso}`,
   reconcileCommercePayments: (asOfIso: string): string =>
     `${JOB_NAMES.reconcileCommercePayments}:${asOfIso}`,
   deriveProductRelations: (asOfIso: string): string =>

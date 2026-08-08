@@ -673,6 +673,39 @@ export async function handleReconcileCommercePaymentsTick(
 }
 
 /**
+ * The quarter-hourly document-scan sweep tick (STORE Phase 14b).
+ *
+ * Quantized to the QUARTER HOUR rather than the hour, because a buyer whose artwork is not
+ * yet attachable is blocked until this runs.
+ */
+export async function handleSweepPendingDocumentScansTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  /**
+   * Quantized inline rather than through the as-of helpers, which only offer a day and an
+   * hour — both far too coarse for a job that runs four times an hour and would dedup three
+   * of every four firings into nothing. Same reasoning, and the same shape, as the
+   * per-minute dispute-window tick above.
+   */
+  const QUARTER_HOUR_MS = 15 * 60 * 1000;
+  const now = readClock();
+  const asOfIso = new Date(Math.floor(now.getTime() / QUARTER_HOUR_MS) * QUARTER_HOUR_MS).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.sweepPendingDocumentScans,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.sweepPendingDocumentScans(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `sweep-pending-document-scans-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/**
  * The hourly external-connector reconciliation tick (STORE Phase 14).
  *
  * Quantized to the HOUR like its siblings, so a double cron fire collapses to one real job.

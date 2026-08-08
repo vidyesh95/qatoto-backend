@@ -8,6 +8,7 @@ import {
   deletePrivateCommerceDocument,
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
+import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -98,6 +99,13 @@ export async function uploadCustomizationAsset(input: {
       })
       .returning();
     if (!document) throw new Error("Customization asset insert returned no row.");
+
+    /**
+     * STORE Phase 14b. Enqueued after the row is durable, and never allowed to fail this
+     * call: the upload succeeded, and turning a queue hiccup into a 500 would tell the
+     * buyer to retry an upload that already worked. The quarter-hourly sweep re-enqueues.
+     */
+    await scheduleDocumentScan(document.id);
 
     return {
       success: true,
