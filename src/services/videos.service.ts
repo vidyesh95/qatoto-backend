@@ -844,7 +844,19 @@ async function parseAndVerifyYoutubeUrlForCreate(
   return { success: false, error: verified.error };
 }
 
-/** Product ids the caller does NOT own, deduplicated and order-preserved. */
+/**
+ * Product ids the caller does NOT own, deduplicated and order-preserved.
+ *
+ * Keyed on `createdByUserId` since migration 0088 dropped the legacy `sellerId` column.
+ * BEHAVIOUR IS UNCHANGED for every existing row: Phase 0 backfilled `createdByUserId` from
+ * `sellerId`, and `createProduct` has always written the session user to both.
+ *
+ * Worth knowing for later: the strictly correct check for "may this creator attach this
+ * product" is organization membership, not creator identity, and the two diverge the moment
+ * one member of a selling organization lists a product another member wants to feature.
+ * Left as-is deliberately — widening authorization is a behaviour change and belongs in a
+ * commit that is about authorization, not in a column removal.
+ */
 async function findUnownedProductIds(
   sellerId: string,
   productIds: readonly string[],
@@ -853,7 +865,7 @@ async function findUnownedProductIds(
   const ownedRows = await db
     .select({ id: product.id })
     .from(product)
-    .where(and(eq(product.sellerId, sellerId), inArray(product.id, [...productIds])));
+    .where(and(eq(product.createdByUserId, sellerId), inArray(product.id, [...productIds])));
   const ownedIds = new Set(ownedRows.map((row) => row.id));
   return productIds.filter((productId) => !ownedIds.has(productId));
 }

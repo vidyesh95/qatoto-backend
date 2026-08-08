@@ -138,13 +138,15 @@ describe("product category resolution", () => {
     expect(result.success).toBe(true);
     expect(databaseState.insertedProduct).toEqual(
       expect.objectContaining({
-        sellerId: "user-one",
+        // `sellerId` is gone with migration 0088. Ownership is the organization and
+        // `createdByUserId` is the attribution that survives it.
         sellerOrganizationId: "organization-one",
         createdByUserId: "user-one",
         category: "electronics",
         categoryId: "commerce_category_electronics",
       }),
     );
+    expect(databaseState.insertedProduct).not.toHaveProperty("sellerId");
   });
 
   it("rejects inactive categories before creating a listing", async () => {

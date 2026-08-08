@@ -1,0 +1,18 @@
+-- Store Phase 14d — remove the duplicate SKU index that 0088 left behind.
+--
+-- 0088 rescoped the legacy user-scoped `product_seller_sku_unq` onto
+-- `(seller_organization_id, sku)` in order to preserve SKU protection while dropping
+-- `product.seller_id`. That was a mistake of one look: migration 0041 had ALREADY created
+-- `product_sellerOrganization_sku_unq` over exactly those columns, so the rescope produced a
+-- second identical unique index rather than a replacement for the one it removed.
+--
+-- Two identical unique indexes are not a correctness problem — the constraint they express
+-- holds either way — but every INSERT maintains both, and a future reader finding two would
+-- reasonably assume they differ and go looking for the difference.
+--
+-- 0088 IS LEFT EXACTLY AS APPLIED rather than edited. drizzle records a hash per migration,
+-- so rewriting a file that has already run invites a re-application on the next deploy. The
+-- correction goes forward, which is what a migration history is for.
+--
+-- Idempotent, and safe on a database that never had the duplicate.
+DROP INDEX IF EXISTS "product_seller_sku_unq";

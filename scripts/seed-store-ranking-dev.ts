@@ -725,7 +725,6 @@ async function seedProducts(
       .insert(product)
       .values({
         id: productId,
-        sellerId: seller.userId,
         sellerOrganizationId: seller.organizationId,
         createdByUserId: seller.userId,
         title: seedProduct.title,

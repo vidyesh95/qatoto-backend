@@ -268,7 +268,7 @@ type ProductScalarRow = {
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
- * A Postgres unique-constraint violation (SQLSTATE 23505). The UNIQUE(sellerId,
+ * A Postgres unique-constraint violation (SQLSTATE 23505). The UNIQUE(sellerOrganizationId,
  * sku) index is the race-safe authority for SKU uniqueness — we let the insert
  * try and translate this one code into a domain SKU_TAKEN Result (an expected
  * operational failure, not a banned catch-all: any other error re-throws).
@@ -360,9 +360,9 @@ async function replaceProductSpecifications(
 }
 
 /**
- * Load a full {@link PublicProduct} the caller owns, or null. Ownership is
- * enforced IN the query (`sellerId = caller`) — an empty result means either the
- * row is missing or belongs to someone else; the caller can't tell which.
+ * Load a full {@link PublicProduct} the caller owns, or null. Ownership is enforced IN the
+ * query (`sellerOrganizationId = caller's organization`) — an empty result means either the
+ * row is missing or belongs to someone else, and the caller cannot tell which.
  */
 async function loadOrganizationProduct(
   sellerOrganizationId: string,
@@ -774,8 +774,10 @@ async function resolveProductCategory(
 
 /**
  * Create a draft listing (identity + description + pricing + optional tiers).
- * `sellerId` MUST come from the server-derived session (CLAUDE.md §1.1), never
- * the body. The product row and its tiers are inserted in one transaction.
+ *
+ * OWNERSHIP MUST COME FROM THE SERVER-DERIVED SESSION (CLAUDE.md §1.1), never the body.
+ * `sellerOrganizationId` is the owner and `createdByUserId` the attribution; the legacy
+ * `sellerId` column that used to carry both was dropped in migration 0088.
  */
 export async function createProduct(
   commerceContext: { readonly userId: string; readonly organizationId: string },
@@ -789,7 +791,6 @@ export async function createProduct(
         const [row] = await tx
           .insert(product)
           .values({
-            sellerId: commerceContext.userId,
             sellerOrganizationId: commerceContext.organizationId,
             createdByUserId: commerceContext.userId,
             title: input.title,
@@ -860,7 +861,7 @@ export async function createProduct(
 
 /**
  * The caller's own listings, newest-touched first, paginated. Pure read — always
- * succeeds. `sellerId` from the session, so a caller only ever lists their own.
+ * succeeds. The organization comes from the session, so a caller only ever lists its own.
  */
 export async function listMyProducts(
   sellerOrganizationId: string,

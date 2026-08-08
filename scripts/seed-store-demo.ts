@@ -304,7 +304,6 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
       .insert(product)
       .values({
         id: demoProduct.id,
-        sellerId: sellerUserId,
         sellerOrganizationId: SELLER_ORGANIZATION_ID,
         createdByUserId: sellerUserId,
         title: demoProduct.title,

@@ -617,6 +617,20 @@
       "when": 1786105784394,
       "tag": "0087_store_phase_14_rail_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1786105789394,
+      "tag": "0088_store_phase_14_legacy_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1786105794394,
+      "tag": "0089_store_phase_14_drop_duplicate_sku_index",
+      "breakpoints": true
     }
   ]
 }

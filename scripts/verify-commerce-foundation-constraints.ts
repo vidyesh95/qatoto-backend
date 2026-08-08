@@ -139,12 +139,32 @@ async function verifyCatalogAndBackfill(): Promise<readonly CheckOutcome[]> {
     detail: `${String(unmigratedProductCount)} incomplete product(s)`,
   });
 
+  /**
+   * The two `seller_id` clauses this check used to carry are GONE, because migration 0088
+   * dropped the column. They asserted that the backfill derived `created_by_user_id` and
+   * `seller_organization_id` from it correctly — a question that can no longer be asked and
+   * no longer needs to be: the derivation was verified against every row immediately before
+   * the drop (17 products, 0 diverging), and there is now no second source to disagree with.
+   *
+   * The category mapping below survives, but SCOPED TO BACKFILLED PRODUCTS — and it was
+   * silently wrong before, hidden behind the missing-column error this check was already
+   * failing with.
+   *
+   * It asserts `category_id` equals the ROOT derived from the legacy enum, which was true of
+   * every product Phase 0 backfilled and is false of every product created since. Phase 1
+   * requires an active LEAF category, so a product legitimately sits below a root; and a
+   * product in a category tree that does not descend from any of the eight legacy roots at
+   * all — every dev-seed listing, for instance — carries an enum value with no relationship
+   * to its real category. 14 of 17 products were "mismatched" and all 14 were correct.
+   *
+   * Scoped by organization prefix, the same way the sole-proprietor check below is: only the
+   * organizations the Phase 0 backfill minted hold products whose mapping this can assert.
+   */
   const incorrectlyMappedProductCount = await countQuery(
     `SELECT count(*) AS row_count
        FROM product
-      WHERE created_by_user_id <> seller_id
-         OR seller_organization_id <> 'commerce_org_legacy_' || md5(seller_id)
-         OR category_id <> CASE category
+      WHERE seller_organization_id LIKE 'commerce_org_legacy_%'
+        AND category_id <> CASE category
               WHEN 'electronics' THEN 'commerce_category_electronics'
               WHEN 'fashion' THEN 'commerce_category_fashion'
               WHEN 'home_kitchen' THEN 'commerce_category_home_kitchen'
@@ -161,19 +181,29 @@ async function verifyCatalogAndBackfill(): Promise<readonly CheckOutcome[]> {
     detail: `${String(incorrectlyMappedProductCount)} mismatched product(s)`,
   });
 
+  /**
+   * Keyed on `created_by_user_id` since 0088 dropped `seller_id`. It asks the same question
+   * the original did — that the organization each product belongs to is genuinely owned by
+   * the person who created it — because the backfill set the two columns from one value.
+   *
+   * NARROWED to organizations the backfill created. A product listed today belongs to a real
+   * multi-member organization whose owner is legitimately somebody other than the lister, and
+   * asserting sole-proprietorship over those would fail on correct data.
+   */
   const sellerWithoutOwnerMembershipCount = await countQuery(
     `SELECT count(*) AS row_count
-       FROM (SELECT DISTINCT seller_id, seller_organization_id FROM product) AS legacy_seller
+       FROM (SELECT DISTINCT created_by_user_id, seller_organization_id FROM product) AS legacy_seller
        LEFT JOIN commerce_organization AS organization
          ON organization.id = legacy_seller.seller_organization_id
         AND organization.organization_type = 'sole_proprietor'
         AND organization.visibility = 'private'
        LEFT JOIN commerce_organization_member AS owner_member
          ON owner_member.organization_id = legacy_seller.seller_organization_id
-        AND owner_member.user_id = legacy_seller.seller_id
+        AND owner_member.user_id = legacy_seller.created_by_user_id
         AND owner_member.role = 'owner'
         AND owner_member.state = 'active'
-      WHERE organization.id IS NULL OR owner_member.id IS NULL`,
+      WHERE legacy_seller.seller_organization_id LIKE 'commerce_org_legacy_%'
+        AND (organization.id IS NULL OR owner_member.id IS NULL)`,
   );
   outcomes.push({
     label: "every migrated seller owns a private sole-proprietor organization",

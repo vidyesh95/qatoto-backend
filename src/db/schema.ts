@@ -2323,9 +2323,6 @@ export const product = pgTable(
       .$defaultFn(() => randomUUID()),
     // Owner. Stamped from req.user.id at create — NEVER from the body
     // (CLAUDE.md §1.1). Cascade so deleting a user removes their listings.
-    sellerId: text("seller_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
     /**
      * NOT NULL since the Phase 0 contract migration (0063). It was nullable for the
      * expand phase only, and organization ownership is now a structural fact rather
@@ -2422,7 +2419,6 @@ export const product = pgTable(
       .notNull(),
   },
   (table) => [
-    index("product_sellerId_idx").on(table.sellerId),
     index("product_sellerOrganizationId_idx").on(table.sellerOrganizationId),
     index("product_createdByUserId_idx").on(table.createdByUserId),
     index("product_categoryId_idx").on(table.categoryId),
@@ -2436,13 +2432,16 @@ export const product = pgTable(
     index("product_researchProjectId_idx")
       .on(table.researchProjectId)
       .where(sql`research_project_id IS NOT NULL`),
-    // Keep the legacy user-scoped uniqueness throughout the expand/backfill rollout:
-    // an old application instance can still write seller_id while the new one writes
-    // seller_organization_id. The organization index becomes canonical only after every
-    // writer has moved and the contract migration retires seller_id.
-    uniqueIndex("product_seller_sku_unq").on(table.sellerId, table.sku),
     // An organization can't reuse one SKU across its listings. Postgres UNIQUE
     // permits many NULLs, so SKU stays optional.
+    //
+    // THE ONLY SKU INDEX SINCE MIGRATION 0089. The user-scoped `product_seller_sku_unq`
+    // that stood beside it existed for the expand/backfill window, when an old application
+    // instance could still write `seller_id` while a new one wrote `seller_organization_id`.
+    // Dropping it lost nothing: Phase 0 gave every legacy seller its own private
+    // organization, so the two indexes partitioned the catalogue identically — which is
+    // exactly why 0088 rescoping the legacy one produced a duplicate of this rather than a
+    // replacement for it, and why 0089 removes it outright.
     uniqueIndex("product_sellerOrganization_sku_unq").on(table.sellerOrganizationId, table.sku),
     check(
       "product_public_slug_ck",
@@ -8654,7 +8653,8 @@ export const commerceEscrowVerification = pgTable(
 );
 
 export const productRelations = relations(product, ({ one, many }) => ({
-  seller: one(user, { fields: [product.sellerId], references: [user.id] }),
+  // `seller: one(user, …)` is gone with the legacy `sellerId` column (migration 0088).
+  // `createdByUser` below is the surviving link to a person; ownership is the organization.
   sellerOrganization: one(commerceOrganization, {
     fields: [product.sellerOrganizationId],
     references: [commerceOrganization.id],
@@ -11181,7 +11181,7 @@ export const jobFailure = pgTable(
 );
 
 // --- Relations. Declared CHILD-SIDE ONLY, matching the store domain's precedent:
-// product declares `seller: one(user, …)` and userRelations was deliberately left
+// product declares `createdByUser: one(user, …)` and userRelations was deliberately left
 // untouched. Amending userRelations here is what would force six relationName pairs,
 // a construct that appears nowhere in the existing blocks, for something db.query.*
 // never reads. relationName is used only where one child has TWO relations to `user`.
