@@ -4,6 +4,7 @@ import { db } from "#src/db/index.js";
 import {
   commerceCategory,
   commerceOrganization,
+  commerceProductCustomizationOption,
   commerceProductHighlight,
   commerceProductSpecification,
   commerceProductVariant,
@@ -148,6 +149,29 @@ export interface StoreProductHighlightProjection {
   readonly position: number;
 }
 
+/**
+ * A18/A23. A commercial term the buyer is held to, so the buyer must be able to read it.
+ *
+ * `checkout/prepare` refuses an order that omits a required slot
+ * (`REQUIRED_OPTION_MISSING`), and until this projection existed the buyer was never told
+ * the slot was there — enforcement without disclosure, which is a trap rather than a term.
+ *
+ * `state` is deliberately absent from the wire: the read carries active options only, and a
+ * retired option is not a thing a buyer can choose. It keeps being referenced by the order
+ * lines bought under it.
+ */
+export interface StoreProductCustomizationOptionProjection {
+  readonly id: string;
+  readonly slotKey: string;
+  readonly label: string;
+  readonly customizationKind: (typeof commerceProductCustomizationOption.$inferSelect)["customizationKind"];
+  readonly acceptedMediaTypes: readonly string[];
+  readonly choiceValues: readonly string[];
+  readonly minimumOrderQuantity: number;
+  readonly isRequired: boolean;
+  readonly position: number;
+}
+
 export interface StoreProductDetailProjection extends StoreProductCardProjection {
   readonly description: string | null;
   readonly keyFeatures: readonly string[];
@@ -161,6 +185,7 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
   readonly pricingTiers: readonly StoreProductPricingTierProjection[];
   readonly variants: readonly StoreProductVariantProjection[];
   readonly highlights: readonly StoreProductHighlightProjection[];
+  readonly customizationOptions: readonly StoreProductCustomizationOptionProjection[];
   readonly specifications: readonly {
     readonly key: string;
     readonly value: string;
@@ -1060,6 +1085,7 @@ export async function getPublicProductBySlug(
     allPricingTiers,
     specifications,
     highlights,
+    customizationOptions,
     variantRows,
     categoryTrail,
     moqMap,
@@ -1113,6 +1139,27 @@ export async function getPublicProductBySlug(
       .from(commerceProductHighlight)
       .where(eq(commerceProductHighlight.productId, row.id))
       .orderBy(asc(commerceProductHighlight.position)),
+    db
+      .select({
+        id: commerceProductCustomizationOption.id,
+        slotKey: commerceProductCustomizationOption.slotKey,
+        label: commerceProductCustomizationOption.label,
+        customizationKind: commerceProductCustomizationOption.customizationKind,
+        acceptedMediaTypes: commerceProductCustomizationOption.acceptedMediaTypes,
+        choiceValues: commerceProductCustomizationOption.choiceValues,
+        minimumOrderQuantity: commerceProductCustomizationOption.minimumOrderQuantity,
+        isRequired: commerceProductCustomizationOption.isRequired,
+        position: commerceProductCustomizationOption.position,
+      })
+      .from(commerceProductCustomizationOption)
+      .where(
+        and(
+          eq(commerceProductCustomizationOption.productId, row.id),
+          // Retired options stay on the order lines bought under them but leave the storefront.
+          eq(commerceProductCustomizationOption.state, "active"),
+        ),
+      )
+      .orderBy(asc(commerceProductCustomizationOption.position)),
     db
       .select({
         id: commerceProductVariant.id,
@@ -1208,6 +1255,7 @@ export async function getPublicProductBySlug(
       pricingTiers: sharedPricingTiers,
       variants,
       highlights,
+      customizationOptions,
       specifications,
       categoryTrail,
       engagement: productEngagements.get(row.id) ?? EMPTY_PRODUCT_ENGAGEMENT,

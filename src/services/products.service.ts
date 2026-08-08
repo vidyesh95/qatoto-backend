@@ -125,6 +125,26 @@ export interface ProductHighlightView {
 }
 
 /**
+ * A18/A23. One customization slot, as read back to its owning seller.
+ *
+ * Unlike the buyer's projection this carries `state`, because a retired slot is still the
+ * seller's — it is referenced by every order line bought under it, and hiding it here would
+ * make `PUT /products/:id/customization-options` look like it had deleted something.
+ */
+export interface ProductCustomizationOptionView {
+  readonly id: string;
+  readonly slotKey: string;
+  readonly label: string;
+  readonly customizationKind: "file_upload" | "choice";
+  readonly acceptedMediaTypes: readonly string[];
+  readonly choiceValues: readonly string[];
+  readonly minimumOrderQuantity: number;
+  readonly isRequired: boolean;
+  readonly position: number;
+  readonly state: "active" | "retired";
+}
+
+/**
  * Full listing for the create/edit/detail flows. One canonical projection so the
  * shape can't drift between mutations (mirrors PublicUser / PUBLIC_USER_COLUMNS).
  */
@@ -163,6 +183,7 @@ export interface PublicProduct {
   readonly specifications: readonly ProductSpecificationView[];
   readonly variants: readonly ProductVariantView[];
   readonly highlights: readonly ProductHighlightView[];
+  readonly customizationOptions: readonly ProductCustomizationOptionView[];
 }
 
 /** Compact row for the My Products list (maps 1:1 to products-page.tsx). */
@@ -264,6 +285,19 @@ const PRODUCT_HIGHLIGHT_VIEW_COLUMNS = {
   position: commerceProductHighlight.position,
 } as const;
 
+const PRODUCT_CUSTOMIZATION_OPTION_VIEW_COLUMNS = {
+  id: commerceProductCustomizationOption.id,
+  slotKey: commerceProductCustomizationOption.slotKey,
+  label: commerceProductCustomizationOption.label,
+  customizationKind: commerceProductCustomizationOption.customizationKind,
+  acceptedMediaTypes: commerceProductCustomizationOption.acceptedMediaTypes,
+  choiceValues: commerceProductCustomizationOption.choiceValues,
+  minimumOrderQuantity: commerceProductCustomizationOption.minimumOrderQuantity,
+  isRequired: commerceProductCustomizationOption.isRequired,
+  position: commerceProductCustomizationOption.position,
+  state: commerceProductCustomizationOption.state,
+} as const;
+
 type ProductScalarRow = {
   readonly [ColumnKey in keyof typeof PRODUCT_SCALAR_COLUMNS]: (typeof product.$inferSelect)[ColumnKey];
 };
@@ -291,6 +325,7 @@ function toPublicProduct(
   specifications: readonly ProductSpecificationView[],
   variants: readonly ProductVariantView[] = [],
   highlights: readonly ProductHighlightView[] = [],
+  customizationOptions: readonly ProductCustomizationOptionView[] = [],
 ): PublicProduct {
   // The defensive `categoryId === null` throw that stood here is gone: migration 0063
   // made the column NOT NULL, so the case it guarded can no longer be represented.
@@ -329,6 +364,7 @@ function toPublicProduct(
     specifications,
     variants,
     highlights,
+    customizationOptions,
   };
 }
 
@@ -409,6 +445,14 @@ async function loadOrganizationProduct(
     .where(eq(commerceProductHighlight.productId, productId))
     .orderBy(asc(commerceProductHighlight.position));
 
+  // Retired slots are included: the seller wrote them, and the order lines bought under
+  // them still name them. The buyer's projection filters to active.
+  const customizationOptions = await db
+    .select(PRODUCT_CUSTOMIZATION_OPTION_VIEW_COLUMNS)
+    .from(commerceProductCustomizationOption)
+    .where(eq(commerceProductCustomizationOption.productId, productId))
+    .orderBy(asc(commerceProductCustomizationOption.position));
+
   const variants: ProductVariantView[] = variantRows.map((variantRow) => ({
     ...variantRow,
     pricingTiers: pricingTiers.filter((tier) => tier.variantId === variantRow.id),
@@ -422,6 +466,7 @@ async function loadOrganizationProduct(
     specifications,
     variants,
     highlights,
+    customizationOptions,
   );
 }
 
