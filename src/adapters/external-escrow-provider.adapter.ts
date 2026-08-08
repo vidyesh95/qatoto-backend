@@ -1,8 +1,9 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
 import { config } from "#src/config/index.js";
+import { verifyWebhookSignature } from "#src/lib/webhook-signature.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -480,76 +481,71 @@ export class FakeExternalEscrowProviderAdapter implements ExternalEscrowProvider
     headers: Readonly<Record<string, string | undefined>>,
     signingSecret: string,
   ): Result<ParsedEscrowWebhook, EscrowProviderError> {
-    const signatureHeader = headers["x-qatoto-escrow-signature"];
-    const timestampHeader = headers["x-qatoto-escrow-timestamp"];
-    if (signatureHeader === undefined || timestampHeader === undefined) {
-      return {
-        success: false,
-        error: { type: "SIGNATURE_INVALID", reason: "missing_signature_headers" },
-      };
-    }
-
     const verification = verifyEscrowWebhookSignature({
       rawBody,
-      signatureHeader,
-      timestampHeader,
+      signatureHeader: headers["x-qatoto-escrow-signature"],
+      timestampHeader: headers["x-qatoto-escrow-timestamp"],
       signingSecret,
     });
     if (!verification.success) return verification;
 
-    const decoded = decodeEscrowWebhookBody(rawBody);
-    if (!decoded.success) return decoded;
-    return decoded;
+    // Decode only after the signature holds. Parsing an unverified body would run the
+    // schema against bytes from an unauthenticated source for no benefit.
+    return decodeEscrowWebhookBody(rawBody);
   }
 }
 
 interface EscrowSignatureInput {
   readonly rawBody: Buffer;
-  readonly signatureHeader: string;
-  readonly timestampHeader: string;
+  readonly signatureHeader: string | undefined;
+  readonly timestampHeader: string | undefined;
   readonly signingSecret: string;
 }
 
-/** Five minutes. Long enough for a slow redelivery, short enough that a captured request dies. */
-const ESCROW_WEBHOOK_TOLERANCE_SECONDS = 300;
-
 /**
- * `t=<unix seconds>.<hex hmac>` over `${timestamp}.${rawBody}`.
+ * Adapts the shared verifier's tagged errors into this adapter's own error union.
  *
- * THE TIMESTAMP IS INSIDE THE SIGNED PAYLOAD. Signing the body alone would let an
- * attacker replay a valid capture forever with a fresh timestamp header, because the
- * header would not be covered by the signature it is checked against.
+ * The comparison itself lives in `src/lib/webhook-signature.ts` so that five connectors
+ * cannot end up with five subtly different implementations of the one check that decides
+ * whether an unauthenticated request is believed.
  */
 export function verifyEscrowWebhookSignature(
   input: EscrowSignatureInput,
 ): Result<true, EscrowProviderError> {
-  const timestampSeconds = Number.parseInt(input.timestampHeader, 10);
-  if (!Number.isFinite(timestampSeconds)) {
-    return { success: false, error: { type: "SIGNATURE_INVALID", reason: "malformed_timestamp" } };
-  }
+  const verified = verifyWebhookSignature({
+    rawBody: input.rawBody,
+    signatureHeader: input.signatureHeader,
+    timestampHeader: input.timestampHeader,
+    signingSecret: input.signingSecret,
+  });
+  if (verified.success) return { success: true, value: true };
 
-  const skewSeconds = Math.abs(Math.floor(Date.now() / 1000) - timestampSeconds);
-  if (skewSeconds > ESCROW_WEBHOOK_TOLERANCE_SECONDS) {
-    return { success: false, error: { type: "SIGNATURE_INVALID", reason: "timestamp_outside_tolerance" } };
+  switch (verified.error.type) {
+    case "SIGNATURE_HEADERS_MISSING":
+      return {
+        success: false,
+        error: { type: "SIGNATURE_INVALID", reason: "missing_signature_headers" },
+      };
+    case "TIMESTAMP_MALFORMED":
+      return {
+        success: false,
+        error: { type: "SIGNATURE_INVALID", reason: "malformed_timestamp" },
+      };
+    case "TIMESTAMP_OUTSIDE_TOLERANCE":
+      return {
+        success: false,
+        error: { type: "SIGNATURE_INVALID", reason: "timestamp_outside_tolerance" },
+      };
+    case "SIGNATURE_MISMATCH":
+      return {
+        success: false,
+        error: { type: "SIGNATURE_INVALID", reason: "signature_mismatch" },
+      };
+    default: {
+      const exhaustiveError: never = verified.error;
+      throw new Error(`Unhandled webhook signature error: ${JSON.stringify(exhaustiveError)}`);
+    }
   }
-
-  const expectedDigest = createHmac("sha256", input.signingSecret)
-    .update(`${input.timestampHeader}.`)
-    .update(input.rawBody)
-    .digest("hex");
-
-  const expectedBuffer = Buffer.from(expectedDigest, "utf8");
-  const presentedBuffer = Buffer.from(input.signatureHeader, "utf8");
-  // `timingSafeEqual` throws on a length mismatch, so the cheap length check comes first.
-  // A differing length is already a mismatch and leaks nothing a rejection would not.
-  if (expectedBuffer.length !== presentedBuffer.length) {
-    return { success: false, error: { type: "SIGNATURE_INVALID", reason: "signature_mismatch" } };
-  }
-  if (!timingSafeEqual(expectedBuffer, presentedBuffer)) {
-    return { success: false, error: { type: "SIGNATURE_INVALID", reason: "signature_mismatch" } };
-  }
-
-  return { success: true, value: true };
 }
 
 /**
