@@ -101,6 +101,8 @@ const serviceStubs = vi.hoisted(() => ({
   openDispute: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   listDisputesForModerator: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   decideDispute: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  getDisputeForParticipant: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  listDisputesForParticipant: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
 vi.mock("#src/services/commerce-trust.service.js", () => serviceStubs);
@@ -451,5 +453,114 @@ describe("commerce trust routes", () => {
 
     expect(response.status).toBe(403);
     expect(response.body.message).toContain("dispute party");
+  });
+
+  /**
+   * A28. Before these routes a buyer could file a dispute and had nothing that answered
+   * "what is happening with it" — the only readers were platform staff.
+   */
+  describe("participant dispute reads", () => {
+    it("returns a dispute the caller's organization is a party to, with its timeline", async () => {
+      serviceStubs.getDisputeForParticipant.mockResolvedValue({
+        success: true,
+        value: {
+          id: "dispute_1",
+          orderId: "order_1",
+          state: "closed",
+          reasonCode: "goods_not_as_described",
+          summary: "Freezer arrived with a damaged compressor.",
+          priorOrderState: "completed",
+          buyerOrganizationId: BUYER_ORGANIZATION_ID,
+          counterpartyOrganizationId: "org_seller",
+          openedByOrganizationId: BUYER_ORGANIZATION_ID,
+          createdAt: new Date("2026-02-01T00:00:00.000Z"),
+          decidedAt: new Date("2026-02-09T00:00:00.000Z"),
+          decisionNote: "Replacement shipped.",
+          timeline: [
+            {
+              sequence: 0,
+              eventKind: "opened",
+              note: null,
+              occurredAt: new Date("2026-02-01T00:00:00.000Z"),
+            },
+            {
+              sequence: 1,
+              eventKind: "closed",
+              note: "Replacement shipped.",
+              occurredAt: new Date("2026-02-09T00:00:00.000Z"),
+            },
+          ],
+        },
+      });
+
+      const response = await request(app).get("/commerce/disputes/dispute_1");
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.id).toBe("dispute_1");
+      expect(response.body.data.decisionNote).toBe("Replacement shipped.");
+      expect(response.body.data.timeline).toHaveLength(2);
+      expect(serviceStubs.getDisputeForParticipant).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
+        "dispute_1",
+      );
+    });
+
+    /**
+     * 404, never 403. Both refusals must be indistinguishable or the route becomes an
+     * oracle for which dispute ids exist, and a dispute id names two organizations and a
+     * commercial disagreement between them.
+     */
+    it("answers 404 to a caller who is not a party, exactly as it does for a missing row", async () => {
+      serviceStubs.getDisputeForParticipant.mockResolvedValue({
+        success: false,
+        error: { type: "NOT_FOUND" },
+      });
+
+      const response = await request(app).get("/commerce/disputes/someone-elses-dispute");
+
+      expect(response.status).toBe(404);
+    });
+
+    it("lists the caller's disputes and passes the state filter through", async () => {
+      serviceStubs.listDisputesForParticipant.mockResolvedValue({
+        success: true,
+        value: { items: [], page: { nextCursor: null, hasMore: false } },
+      });
+
+      const response = await request(app).get("/commerce/disputes?state=open&limit=5");
+
+      expect(response.status).toBe(200);
+      expect(serviceStubs.listDisputesForParticipant).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
+        expect.objectContaining({ state: "open", limit: 5 }),
+      );
+    });
+
+    it("rejects an unknown query key rather than ignoring it", async () => {
+      const response = await request(app).get("/commerce/disputes?stat=open");
+
+      expect(response.status).toBe(422);
+      expect(serviceStubs.listDisputesForParticipant).not.toHaveBeenCalled();
+    });
+
+    it("maps an unusable cursor to 422", async () => {
+      serviceStubs.listDisputesForParticipant.mockResolvedValue({
+        success: false,
+        error: { type: "INVALID_CURSOR" },
+      });
+
+      const response = await request(app).get("/commerce/disputes?cursor=nonsense");
+
+      expect(response.status).toBe(422);
+    });
+
+    it("requires a session", async () => {
+      signOut();
+
+      const response = await request(app).get("/commerce/disputes/dispute_1");
+
+      expect(response.status).toBe(401);
+      expect(serviceStubs.getDisputeForParticipant).not.toHaveBeenCalled();
+    });
   });
 });

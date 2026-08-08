@@ -227,6 +227,137 @@ describe("public store routes", () => {
       }),
     );
   });
+
+  /**
+   * A25. Every facet `getCategoryFacets` publishes is now something the search can
+   * filter on. A count the caller cannot act on is an invitation to filter the fetched
+   * page, which §2.4 forbids.
+   */
+  it("forwards every A25 facet filter to search, coerced", async () => {
+    searchStubs.searchStoreDocuments.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+
+    const response = await request(app).get("/store/search").query({
+      priceMinInCents: "1000",
+      priceMaxInCents: "50000",
+      stockState: "in_stock",
+      samplePolicy: "refundable",
+      condition: "new",
+      verificationState: "verified",
+      leadTimeMaxDays: "30",
+    });
+
+    expect(response.status).toBe(200);
+    expect(searchStubs.searchStoreDocuments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        priceMinInCents: 1000,
+        priceMaxInCents: 50_000,
+        stockState: "in_stock",
+        samplePolicy: "refundable",
+        condition: "new",
+        verificationState: "verified",
+        leadTimeMaxDays: 30,
+      }),
+    );
+  });
+
+  /** A25. The supplier directory — a buyer could reach one storefront and browse none. */
+  it("accepts documentKind=organization", async () => {
+    searchStubs.searchStoreDocuments.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+
+    const response = await request(app)
+      .get("/store/search")
+      .query({ documentKind: "organization" });
+
+    expect(response.status).toBe(200);
+    expect(searchStubs.searchStoreDocuments).toHaveBeenCalledWith(
+      expect.objectContaining({ documentKind: "organization" }),
+    );
+  });
+
+  it("refuses a stock state that is not one deriveStockState produces", async () => {
+    const response = await request(app).get("/store/search").query({ stockState: "backordered" });
+
+    expect(response.status).toBe(422);
+    expect(searchStubs.searchStoreDocuments).not.toHaveBeenCalled();
+  });
+
+  /** A25. Without this a breadcrumb over a nested category costs one request per level. */
+  it("carries the category ancestor trail on the category read", async () => {
+    catalogStubs.getCategoryBySlug.mockResolvedValue({
+      success: true,
+      value: {
+        category: { id: "cat-3", slug: "chest-freezers", name: "Chest freezers" },
+        children: [],
+        ancestors: [
+          { id: "cat-1", slug: "industrial", name: "Industrial" },
+          { id: "cat-2", slug: "industrial-cooling", name: "Industrial cooling" },
+        ],
+      },
+    });
+    catalogStubs.getCategoryFacets.mockResolvedValue({
+      sellerCountryCodes: [],
+      stockStates: [],
+      samplePolicies: [],
+      priceRangesInCents: { minInCents: null, maxInCents: null, count: 0 },
+    });
+    catalogStubs.listEligibleProducts.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+
+    const response = await request(app).get("/store/categories/chest-freezers");
+
+    expect(response.status).toBe(200);
+    // Root first, and the category itself is not in its own trail.
+    expect(response.body.data.ancestors.map((entry: { slug: string }) => entry.slug)).toEqual([
+      "industrial",
+      "industrial-cooling",
+    ]);
+  });
+
+  /**
+   * A23. The read that makes a required customization slot checkoutable at all: it was
+   * enforced at `checkout/prepare` and projected on no buyer read, so a product carrying
+   * one could not be bought by anybody.
+   */
+  it("projects customization options on the public product detail", async () => {
+    catalogStubs.getPublicProductBySlug.mockResolvedValue({
+      success: true,
+      value: {
+        id: "prd_1",
+        publicSlug: "solar-freezer",
+        seller: { organizationId: "commerce_org_seller" },
+        customizationOptions: [
+          {
+            id: "opt_1",
+            slotKey: "logo",
+            label: "Logo",
+            customizationKind: "file_upload",
+            acceptedMediaTypes: ["image/png"],
+            choiceValues: [],
+            minimumOrderQuantity: 50,
+            isRequired: true,
+            position: 0,
+          },
+        ],
+      },
+    });
+
+    const response = await request(app).get("/store/products/solar-freezer");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.customizationOptions[0].slotKey).toBe("logo");
+    expect(response.body.data.customizationOptions[0].isRequired).toBe(true);
+    expect(response.body.data.customizationOptions[0].minimumOrderQuantity).toBe(50);
+    // `state` stays off the public wire; the read carries active options only.
+    expect(response.body.data.customizationOptions[0].state).toBeUndefined();
+  });
   it("paginates the pathway index", async () => {
     pathwayStubs.listActivePathways.mockResolvedValue({
       success: true,

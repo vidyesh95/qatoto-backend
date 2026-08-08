@@ -101,6 +101,7 @@ const serviceStubs = vi.hoisted(() => ({
   appendShipmentEvent: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   listServiceEngagements: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   transitionServiceEngagement: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  listCounterpartyShipments: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
 const phase6ServiceStubs = vi.hoisted(() => ({
@@ -421,5 +422,142 @@ describe("commerce fulfillment routes", () => {
 
     expect(legEvents.status).toBe(200);
     expect(engagementEvents.status).toBe(200);
+  });
+
+  /**
+   * A29. The cross-order logistics queue. Every other shipment route is scoped to an id
+   * the caller already holds, so a forwarder carrying forty shipments across thirty-one
+   * orders had no route that listed them.
+   */
+  describe("GET /commerce/provider/shipments", () => {
+    it("returns the queue with the leg-derived arrival estimate", async () => {
+      serviceStubs.listCounterpartyShipments.mockResolvedValue({
+        success: true,
+        value: {
+          items: [
+            {
+              id: "shp_1",
+              orderId: "order_1",
+              buyerOrganizationId: "org_buyer",
+              state: "in_transit",
+              originCountryCode: "IN",
+              originLocality: "Pune",
+              destinationCountryCode: "DE",
+              destinationLocality: "Hamburg",
+              packageCount: 12,
+              totalWeightGrams: 480_000,
+              estimatedArrivalAt: new Date("2026-03-14T00:00:00.000Z"),
+              createdAt: new Date("2026-02-01T00:00:00.000Z"),
+            },
+          ],
+          page: { nextCursor: null, hasMore: false },
+        },
+      });
+
+      const response = await request(app).get("/commerce/provider/shipments");
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.items[0].id).toBe("shp_1");
+      expect(response.body.data.items[0].estimatedArrivalAt).toBe("2026-03-14T00:00:00.000Z");
+      expect(response.body.data.page).toEqual({ nextCursor: null, hasMore: false });
+    });
+
+    /** `null`, never a fabricated date, when no leg carries an estimate. */
+    it("carries a null arrival estimate rather than inventing one", async () => {
+      serviceStubs.listCounterpartyShipments.mockResolvedValue({
+        success: true,
+        value: {
+          items: [
+            {
+              id: "shp_2",
+              orderId: "order_2",
+              buyerOrganizationId: "org_buyer",
+              state: "planned",
+              originCountryCode: null,
+              originLocality: null,
+              destinationCountryCode: null,
+              destinationLocality: null,
+              packageCount: 1,
+              totalWeightGrams: null,
+              estimatedArrivalAt: null,
+              createdAt: new Date("2026-02-02T00:00:00.000Z"),
+            },
+          ],
+          page: { nextCursor: null, hasMore: false },
+        },
+      });
+
+      const response = await request(app).get("/commerce/provider/shipments");
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.items[0].estimatedArrivalAt).toBeNull();
+    });
+
+    it("passes the state and arrival-window filters through as parsed values", async () => {
+      serviceStubs.listCounterpartyShipments.mockResolvedValue({
+        success: true,
+        value: { items: [], page: { nextCursor: null, hasMore: false } },
+      });
+
+      const response = await request(app).get(
+        "/commerce/provider/shipments?state=in_transit" +
+          "&estimatedArrivalFrom=2026-03-01T00:00:00.000Z" +
+          "&estimatedArrivalTo=2026-03-31T00:00:00.000Z&limit=10",
+      );
+
+      expect(response.status).toBe(200);
+      expect(serviceStubs.listCounterpartyShipments).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          state: "in_transit",
+          estimatedArrivalFrom: new Date("2026-03-01T00:00:00.000Z"),
+          estimatedArrivalTo: new Date("2026-03-31T00:00:00.000Z"),
+          limit: 10,
+        }),
+      );
+    });
+
+    it("refuses a shipment state that is not one of the four", async () => {
+      const response = await request(app).get("/commerce/provider/shipments?state=lost");
+
+      expect(response.status).toBe(422);
+      expect(serviceStubs.listCounterpartyShipments).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown query key rather than ignoring it", async () => {
+      const response = await request(app).get("/commerce/provider/shipments?carrier=dhl");
+
+      expect(response.status).toBe(422);
+      expect(serviceStubs.listCounterpartyShipments).not.toHaveBeenCalled();
+    });
+
+    it("maps an unusable cursor to 422", async () => {
+      serviceStubs.listCounterpartyShipments.mockResolvedValue({
+        success: false,
+        error: { type: "INVALID_CURSOR" },
+      });
+
+      const response = await request(app).get("/commerce/provider/shipments?cursor=nonsense");
+
+      expect(response.status).toBe(422);
+    });
+
+    /**
+     * The literal segment must win over `/shipments/:shipmentId`. If the parameter route
+     * were matched first, the queue would silently become a detail lookup for a shipment
+     * whose id is the string "provider".
+     */
+    it("is not swallowed by the shipment-detail parameter route", async () => {
+      serviceStubs.listCounterpartyShipments.mockResolvedValue({
+        success: true,
+        value: { items: [], page: { nextCursor: null, hasMore: false } },
+      });
+
+      const response = await request(app).get("/commerce/provider/shipments");
+
+      expect(response.status).toBe(200);
+      expect(phase6ServiceStubs.getShipmentDetail).not.toHaveBeenCalled();
+      expect(serviceStubs.listCounterpartyShipments).toHaveBeenCalled();
+    });
   });
 });
