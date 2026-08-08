@@ -10,6 +10,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireActiveSellerCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { uploadProductHighlightImageFile } from "#src/middleware/upload-product-highlight-image.js";
 import { uploadProductImage } from "#src/middleware/upload-product-image.js";
 
 const router = express.Router();
@@ -106,6 +107,22 @@ router.put(
   longFormBody,
   idempotency({ scope: "active_organization" }),
   productsController.replaceHighlights,
+);
+
+/**
+ * POST /products/:id/highlights/:highlightId/image  (multipart/form-data, field `image`)
+ *
+ * Migration `0091`. The highlight plan above is authored first; this attaches the bytes.
+ * No `longFormBody` — multer owns this body, as on the gallery upload below. Uses the
+ * image upload limiter rather than the catalog-depth one because this is the expensive
+ * path.
+ */
+router.post(
+  "/:id/highlights/:highlightId/image",
+  productImageUploadLimiter,
+  uploadProductHighlightImageFile,
+  idempotency({ scope: "active_organization" }),
+  productsController.replaceHighlightImage,
 );
 
 /**

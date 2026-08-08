@@ -129,3 +129,21 @@ export const ListDisputesQuerySchema = z
     state: z.enum(["open", "closed", "dismissed"]).optional(),
   })
   .strict();
+
+/**
+ * `GET /commerce/completions` — the read that makes reviewing reachable.
+ *
+ * `reviewable` is a filter, not a mode: absent returns the buyer's whole completion
+ * history, `true` narrows to what they can still review. Bounds match
+ * `ListDisputesQuerySchema` so every commerce list page behaves the same.
+ */
+export const ListBuyerCompletionsQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+    cursor: z.string().trim().min(1).max(500).optional(),
+    reviewable: z
+      .enum(["true", "false"])
+      .transform((value) => value === "true")
+      .optional(),
+  })
+  .strict();

@@ -1015,3 +1015,209 @@ export async function deleteContentCategoryImage(
     };
   }
 }
+
+/* ------------------------------------------------------------------------------------
+ * Platform-hosted seller imagery (migration `0091`).
+ *
+ * Four image classes a SELLER writes and the public store renders: product highlights,
+ * company stakeholders, the organization logo, and guided-pathway hero/card art. All
+ * four used to be bare https strings the seller supplied, which meant the platform
+ * rendered bytes it did not hold — EXIF unstripped, the seller's origin watching every
+ * store visitor, and, worst, a moderator approving a URL whose contents could be swapped
+ * afterwards (see `0091` and the `store_pathway` schema comment).
+ *
+ * The two helpers below carry the Cloudinary stream mechanics that nine call sites above
+ * repeat verbatim. They are deliberately NOT the parameterised-middleware mistake
+ * `upload-organization-media.ts` warns about: that warning is about route contracts —
+ * field name, size cap, error copy — which stay per-route. A public id and an upload
+ * stream are not a contract.
+ * ---------------------------------------------------------------------------------- */
+
+/**
+ * Upload one already-validated, already-re-encoded image buffer under a caller-chosen
+ * public id.
+ *
+ * The buffer MUST have been through `validateAndNormalizeImage` first. That is what
+ * proves the bytes are a raster image from their magic bytes rather than from an
+ * untrusted multipart header, and what strips the EXIF this whole section exists for.
+ */
+async function uploadHostedImageAsset(
+  publicId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string; publicId: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: publicId,
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl, publicId } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Destroy one hosted asset by its STORED public id, not by rebuilding it from its parts,
+ * so a row written under an earlier naming scheme still deletes correctly. An
+ * already-absent asset is success — the desired end state is reached either way.
+ */
+async function destroyHostedImageAsset(
+  publicId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(publicId, {
+      resource_type: "image",
+      invalidate: true,
+    });
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
+
+/**
+ * Each family gets its OWN top-level folder rather than nesting under
+ * `qatoto/commerce-organizations/<id>/`, because `deleteAllOrganizationMedia` clears that
+ * prefix wholesale. Sharing it would make "delete the factory photos" silently take the
+ * logo and every stakeholder portrait with it.
+ */
+const PRODUCT_HIGHLIGHT_FOLDER = "qatoto/commerce-product-highlights";
+const ORGANIZATION_STAKEHOLDER_FOLDER = "qatoto/commerce-stakeholders";
+const ORGANIZATION_LOGO_FOLDER = "qatoto/commerce-organization-logos";
+const STORE_PATHWAY_FOLDER = "qatoto/store-pathways";
+
+export function productHighlightImagePublicId(productId: string, highlightId: string): string {
+  return `${PRODUCT_HIGHLIGHT_FOLDER}/${productId}/${highlightId}`;
+}
+
+export function organizationStakeholderPhotoPublicId(
+  organizationId: string,
+  stakeholderId: string,
+): string {
+  return `${ORGANIZATION_STAKEHOLDER_FOLDER}/${organizationId}/${stakeholderId}`;
+}
+
+export function organizationLogoPublicId(organizationId: string): string {
+  return `${ORGANIZATION_LOGO_FOLDER}/${organizationId}`;
+}
+
+export function storePathwayImagePublicId(
+  pathwayId: string,
+  imageSlot: "hero" | "card",
+): string {
+  return `${STORE_PATHWAY_FOLDER}/${pathwayId}/${imageSlot}`;
+}
+
+/** A PDP marketing card image (A6). */
+export async function uploadProductHighlightImage(
+  productId: string,
+  highlightId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string; publicId: string }, CloudinaryError>> {
+  return uploadHostedImageAsset(productHighlightImagePublicId(productId, highlightId), imageBuffer);
+}
+
+export async function deleteProductHighlightImage(
+  publicId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  return destroyHostedImageAsset(publicId);
+}
+
+/**
+ * A portrait of a named company officer (A13 item 4).
+ *
+ * The strongest EXIF case in this codebase, stronger than the factory photo
+ * `uploadOrganizationMedia` was written for: the coordinates in a portrait's EXIF belong
+ * to the person, and `commerce_organization_stakeholder` is a table whose whole design
+ * note is about not converting a public projection into a personal disclosure.
+ */
+export async function uploadOrganizationStakeholderPhoto(
+  organizationId: string,
+  stakeholderId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string; publicId: string }, CloudinaryError>> {
+  return uploadHostedImageAsset(
+    organizationStakeholderPhotoPublicId(organizationId, stakeholderId),
+    imageBuffer,
+  );
+}
+
+export async function deleteOrganizationStakeholderPhoto(
+  publicId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  return destroyHostedImageAsset(publicId);
+}
+
+/** The company mark on the public storefront. One per organization, so no asset id. */
+export async function uploadOrganizationLogo(
+  organizationId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string; publicId: string }, CloudinaryError>> {
+  return uploadHostedImageAsset(organizationLogoPublicId(organizationId), imageBuffer);
+}
+
+export async function deleteOrganizationLogo(
+  publicId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  return destroyHostedImageAsset(publicId);
+}
+
+/**
+ * Guided-pathway hero and card art (§15.2).
+ *
+ * The moderation case. A seller proposes a set, a moderator publishes it, and the row
+ * freezes — so the store treats this image as reviewed. Hosting the bytes is what makes
+ * that true instead of merely displayed.
+ */
+export async function uploadStorePathwayImage(
+  pathwayId: string,
+  imageSlot: "hero" | "card",
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string; publicId: string }, CloudinaryError>> {
+  return uploadHostedImageAsset(storePathwayImagePublicId(pathwayId, imageSlot), imageBuffer);
+}
+
+export async function deleteStorePathwayImage(
+  publicId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  return destroyHostedImageAsset(publicId);
+}

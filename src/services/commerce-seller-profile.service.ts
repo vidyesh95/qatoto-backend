@@ -15,7 +15,9 @@ import {
 } from "#src/db/schema.js";
 import {
   deleteOrganizationMedia,
+  deleteOrganizationStakeholderPhoto,
   uploadOrganizationMedia,
+  uploadOrganizationStakeholderPhoto,
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { encryptCommerceDocument } from "#src/lib/commerce-document-encryption.js";
@@ -79,6 +81,8 @@ const MAXIMUM_MEDIA_PER_ORGANIZATION = 12;
 const MAXIMUM_SITE_ACCESS_ROWS = 12;
 const MAXIMUM_STAKEHOLDERS = 12;
 const MEDIA_OUTPUT_MAX_DIMENSION_PX = 2400;
+/** A headshot rendered in a profile card; it does not need the gallery's ceiling. */
+const STAKEHOLDER_PHOTO_OUTPUT_MAX_DIMENSION_PX = 800;
 
 // ---------------------------------------------------------------------------
 // Projections
@@ -563,9 +567,14 @@ export interface SiteAccessInput {
 }
 
 export interface StakeholderInput {
+  /**
+   * `0091`. Echo back the id of a stakeholder you are keeping so their uploaded portrait
+   * survives an edit to the list. A HINT, NEVER A GRANT — honoured only when the id
+   * already belongs to this organization.
+   */
+  readonly id?: string | undefined;
   readonly fullName: string;
   readonly roleTitle: string;
-  readonly photoUrl?: string | null;
 }
 
 export interface CapabilityInput {
@@ -658,27 +667,81 @@ export async function replaceStakeholders(input: {
 
   const replaced = await db.transaction(async (transaction) => {
     const occurredAt = new Date();
+
+    /**
+     * IDENTITY-PRESERVING SINCE `0091`, no longer delete-then-insert.
+     *
+     * A stakeholder row gained a platform-hosted portrait, and the id is what the
+     * portrait hangs on — so wiping the list to rename one officer would orphan every
+     * photo. This is the shape `replaceProductVariants` uses, with positions parked
+     * beyond the incoming range first because `(organizationId, position)` is unique and
+     * writing final positions directly collides with a row still sitting on one.
+     */
+    const existingRows = await transaction
+      .select({
+        id: commerceOrganizationStakeholder.id,
+        photoCloudinaryPublicId: commerceOrganizationStakeholder.photoCloudinaryPublicId,
+      })
+      .from(commerceOrganizationStakeholder)
+      .where(eq(commerceOrganizationStakeholder.organizationId, input.organizationId));
+    const existingIds = new Set(existingRows.map((row) => row.id));
+
+    const positionParkingOffset = existingRows.length + input.rows.length + 1000;
     await transaction
-      .delete(commerceOrganizationStakeholder)
+      .update(commerceOrganizationStakeholder)
+      .set({
+        position: sql`${commerceOrganizationStakeholder.position} + ${positionParkingOffset}`,
+      })
       .where(eq(commerceOrganizationStakeholder.organizationId, input.organizationId));
 
-    const inserted =
-      input.rows.length === 0
-        ? []
-        : await transaction
-            .insert(commerceOrganizationStakeholder)
-            .values(
-              input.rows.map((row, index) => ({
-                organizationId: input.organizationId,
-                fullName: row.fullName,
-                roleTitle: row.roleTitle,
-                photoUrl: row.photoUrl ?? null,
-                position: index,
-                createdAt: occurredAt,
-                updatedAt: occurredAt,
-              })),
-            )
-            .returning();
+    const keptIds = new Set<string>();
+    for (const [index, row] of input.rows.entries()) {
+      const existingId = row.id !== undefined && existingIds.has(row.id) ? row.id : undefined;
+      if (existingId === undefined) {
+        const [insertedRow] = await transaction
+          .insert(commerceOrganizationStakeholder)
+          .values({
+            organizationId: input.organizationId,
+            fullName: row.fullName,
+            roleTitle: row.roleTitle,
+            position: index,
+            createdAt: occurredAt,
+            updatedAt: occurredAt,
+          })
+          .returning({ id: commerceOrganizationStakeholder.id });
+        if (!insertedRow) throw new Error("Stakeholder insert returned no row.");
+        keptIds.add(insertedRow.id);
+        continue;
+      }
+
+      // Photo columns untouched: they are owned by the upload route.
+      await transaction
+        .update(commerceOrganizationStakeholder)
+        .set({
+          fullName: row.fullName,
+          roleTitle: row.roleTitle,
+          position: index,
+          updatedAt: occurredAt,
+        })
+        .where(eq(commerceOrganizationStakeholder.id, existingId));
+      keptIds.add(existingId);
+    }
+
+    const droppedRows = existingRows.filter((row) => !keptIds.has(row.id));
+    if (droppedRows.length > 0) {
+      await transaction.delete(commerceOrganizationStakeholder).where(
+        inArray(
+          commerceOrganizationStakeholder.id,
+          droppedRows.map((row) => row.id),
+        ),
+      );
+    }
+
+    const inserted = await transaction
+      .select()
+      .from(commerceOrganizationStakeholder)
+      .where(eq(commerceOrganizationStakeholder.organizationId, input.organizationId))
+      .orderBy(asc(commerceOrganizationStakeholder.position));
 
     /**
      * `rowCount` ONLY — never the names. These rows are publishable, but an audit entry is
@@ -696,10 +759,132 @@ export async function replaceStakeholders(input: {
       payload: { rowCount: String(inserted.length) },
       occurredAt,
     });
-    return inserted;
+    return {
+      rows: inserted,
+      droppedPublicIds: droppedRows
+        .map((row) => row.photoCloudinaryPublicId)
+        .filter((publicId): publicId is string => publicId !== null),
+    };
   });
 
-  return { success: true, value: replaced.map(projectStakeholder) };
+  /**
+   * AFTER commit, never inside it: a remote delete in a transaction that later rolls back
+   * would leave a surviving row pointing at an asset that is gone. Best-effort — a
+   * failure here leaks an orphan rather than breaking the profile.
+   */
+  for (const publicId of replaced.droppedPublicIds) {
+    await deleteOrganizationStakeholderPhoto(publicId);
+  }
+
+  return { success: true, value: replaced.rows.map(projectStakeholder) };
+}
+
+/**
+ * Attach a platform-hosted portrait to one stakeholder (A13 item 4, migration `0091`).
+ *
+ * `photoUrl` used to be a client-supplied https string on the stakeholder list. A portrait
+ * is the strongest EXIF case in this schema — the coordinates belong to the named person,
+ * not the premises — and this is a table whose own design note is about not turning a
+ * public projection into a personal disclosure. Hotlinking it did exactly that, and left
+ * the image swappable by the seller after the profile was reviewed.
+ */
+export async function replaceStakeholderPhoto(input: {
+  readonly userId: string;
+  readonly organizationId: string;
+  readonly stakeholderId: string;
+  readonly imageBytes: Buffer;
+}): Promise<Result<OrganizationStakeholderProjection, CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
+  if (!access.success) return access;
+
+  const [existing] = await db
+    .select({
+      id: commerceOrganizationStakeholder.id,
+      previousPublicId: commerceOrganizationStakeholder.photoCloudinaryPublicId,
+    })
+    .from(commerceOrganizationStakeholder)
+    .where(
+      and(
+        eq(commerceOrganizationStakeholder.id, input.stakeholderId),
+        eq(commerceOrganizationStakeholder.organizationId, input.organizationId),
+      ),
+    )
+    .limit(1);
+  if (!existing) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  /**
+   * Re-encode BEFORE Cloudinary: proves the bytes are a raster image from their magic
+   * bytes rather than the untrusted multipart header, and strips the EXIF above.
+   * Dimensions come from the normalized buffer, never the client (A2).
+   */
+  const normalized = await validateAndNormalizeImage(input.imageBytes, {
+    outputMaxDimensionPx: STAKEHOLDER_PHOTO_OUTPUT_MAX_DIMENSION_PX,
+    outputFormat: "avif",
+  });
+  if (!normalized.success) {
+    return { success: false, error: { type: "IMAGE_REJECTED", imageError: normalized.error } };
+  }
+
+  const uploaded = await uploadOrganizationStakeholderPhoto(
+    input.organizationId,
+    input.stakeholderId,
+    normalized.value.buffer,
+  );
+  if (!uploaded.success) {
+    return { success: false, error: { type: "IMAGE_STORAGE_FAILED", storageError: uploaded.error } };
+  }
+
+  let updatedRow: StakeholderRow | null;
+  try {
+    updatedRow = await db.transaction(async (transaction) => {
+      const occurredAt = new Date();
+      const [row] = await transaction
+        .update(commerceOrganizationStakeholder)
+        .set({
+          photoUrl: uploaded.value.secureUrl,
+          photoCloudinaryPublicId: uploaded.value.publicId,
+          photoWidthPx: normalized.value.width,
+          photoHeightPx: normalized.value.height,
+          updatedAt: occurredAt,
+        })
+        .where(eq(commerceOrganizationStakeholder.id, input.stakeholderId))
+        .returning();
+      if (!row) return null;
+
+      /** Dimensions only — never the public id, and never the person's name. */
+      await appendAuditOrThrow(transaction, {
+        organizationId: input.organizationId,
+        eventKind: "stakeholders_changed",
+        actorUserId: input.userId,
+        actorMemberRoleSnapshot: access.value.role,
+        targetEntityType: "commerce_organization_stakeholder",
+        targetEntityId: row.id,
+        payload: {
+          rowCount: "1",
+          widthPx: String(normalized.value.width),
+          heightPx: String(normalized.value.height),
+        },
+        occurredAt,
+      });
+      return row;
+    });
+  } catch (updateError: unknown) {
+    await deleteOrganizationStakeholderPhoto(uploaded.value.publicId);
+    throw updateError;
+  }
+
+  if (!updatedRow) {
+    await deleteOrganizationStakeholderPhoto(uploaded.value.publicId);
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  if (existing.previousPublicId !== null && existing.previousPublicId !== uploaded.value.publicId) {
+    await deleteOrganizationStakeholderPhoto(existing.previousPublicId);
+  }
+
+  return { success: true, value: projectStakeholder(updatedRow) };
 }
 
 export async function replaceCapabilities(input: {

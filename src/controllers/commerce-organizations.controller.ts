@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
 import * as commerceOrganizationsService from "#src/services/commerce-organizations.service.js";
 import type { CommerceOrganizationsError } from "#src/services/commerce-organizations.service.js";
@@ -79,7 +80,13 @@ export const UpdateCommerceOrganizationSchema = z
     displayName: z.string().trim().min(1).max(200).optional(),
     summary: z.string().trim().max(4000).nullable().optional(),
     websiteUrl: nullableHttpsUrl.optional(),
-    logoUrl: nullableHttpsUrl.optional(),
+    /**
+     * `logoUrl` was here and migration `0091` removed it. The logo is now uploaded to
+     * POST /commerce/organizations/:organizationId/logo so the platform holds the bytes
+     * it renders; a seller-supplied URL meant EXIF was never stripped and the image
+     * behind an approved storefront could be swapped at will. `.strict()` turns a client
+     * still sending it into a loud 422 rather than a silently ignored field.
+     */
     visibility: z.enum(["private", "public"]).optional(),
   })
   .strict()
@@ -211,6 +218,20 @@ function respondCommerceError(res: Response, error: CommerceOrganizationsError):
         data: { addressKind: error.addressKind, limit: error.limit },
       } satisfies ApiResponse);
       return;
+    case "IMAGE_REJECTED":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: describeLogoRejection(error.imageError),
+      } satisfies ApiResponse);
+      return;
+    case "IMAGE_STORAGE_FAILED":
+      res.status(502).json({
+        status: "error",
+        statusCode: 502,
+        message: "Organization logo storage failed.",
+      } satisfies ApiResponse);
+      return;
     case "PII_ENCRYPTION_UNAVAILABLE":
     case "STORAGE_NOT_CONFIGURED":
       res.status(503).json({
@@ -230,6 +251,25 @@ function respondCommerceError(res: Response, error: CommerceOrganizationsError):
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce organization error: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+function describeLogoRejection(
+  imageError: Extract<CommerceOrganizationsError, { type: "IMAGE_REJECTED" }>["imageError"],
+): string {
+  switch (imageError.type) {
+    case "NOT_AN_IMAGE":
+      return "The uploaded file is not a readable image.";
+    case "UNSUPPORTED_FORMAT":
+      return describeUnsupportedImageFormat(imageError.detected);
+    case "DIMENSIONS_TOO_SMALL":
+      return "The logo is too small to display on a storefront.";
+    case "DIMENSIONS_TOO_LARGE":
+      return "The logo exceeds the maximum supported dimensions.";
+    default: {
+      const exhaustiveCheck: never = imageError;
+      throw new Error(`Unhandled logo image error: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }
@@ -337,6 +377,42 @@ export async function updateOrganization(req: Request, res: Response): Promise<v
     statusCode: 200,
     message: "Commerce organization updated.",
     data: updated.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * Replace the organization logo with platform-hosted bytes (migration `0091`).
+ *
+ * Multipart, because the platform now holds the image rather than pointing at the
+ * seller's. There is no JSON counterpart on purpose: `logoUrl` came off the update patch
+ * in the same migration, so this is the only way a logo enters.
+ */
+export async function replaceOrganizationLogo(req: Request, res: Response): Promise<void> {
+  const authContext = authenticatedRequest(req, res);
+  if (!authContext) return;
+  if (!parseNoQuery(req, res)) return;
+  const params = OrganizationIdSchema.safeParse(req.params);
+  if (!params.success) return validationError(res, params.error);
+  if (!req.file) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "An image file is required in the `logo` field.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const replaced = await commerceOrganizationsService.replaceOrganizationLogo({
+    userId: authContext.userId,
+    organizationId: params.data.organizationId,
+    imageBytes: req.file.buffer,
+  });
+  if (!replaced.success) return respondCommerceError(res, replaced.error);
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Organization logo updated.",
+    data: replaced.value,
   } satisfies ApiResponse);
 }
 

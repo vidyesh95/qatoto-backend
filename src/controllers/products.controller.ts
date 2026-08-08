@@ -140,9 +140,20 @@ export const ReplaceProductHighlightsSchema = z
       .array(
         z
           .object({
+            /**
+             * Echo back the id of a highlight you are keeping, so its uploaded image
+             * survives an edit to its own title. A HINT, NOT A GRANT: the service honours
+             * it only when it already belongs to this product, and otherwise inserts a
+             * new row with a server-generated id.
+             */
+            id: z.string().trim().min(1).max(200).optional(),
             title: z.string().trim().min(1).max(120),
             bodyText: z.string().trim().min(1).max(2000),
-            imageUrl: z.string().trim().url().max(2048).startsWith("https://").optional(),
+            /**
+             * `imageUrl` was here and migration `0091` removed it. Upload to
+             * POST /products/:productId/highlights/:highlightId/image instead, so the
+             * platform holds the bytes the PDP renders.
+             */
           })
           .strict(),
       )
@@ -280,7 +291,10 @@ export const UpdateProductSchema = z
  */
 const UploadImageFieldsSchema = z.object({
   variantId: z.string().trim().min(1).max(200).optional(),
-  mediaKind: z.enum(["photo", "video", "spin_360"]).optional(),
+  // `video` was removed by migration `0090`: every upload is re-encoded to AVIF, so the
+  // label could never describe its own bytes. A caller still sending it now gets a loud
+  // 422 rather than a row that quietly lies about what it holds.
+  mediaKind: z.enum(["photo", "spin_360"]).optional(),
   altText: z.string().trim().min(1).max(300).optional(),
 });
 
@@ -334,6 +348,9 @@ export const ReplaceProductCustomizationOptionsSchema = z
 const ProductParamsSchema = z.object({ id: z.string().trim().min(1).max(200) }).strict();
 const ProductImageParamsSchema = ProductParamsSchema.extend({
   imageId: z.string().trim().min(1).max(200),
+}).strict();
+const HighlightParamsSchema = ProductParamsSchema.extend({
+  highlightId: z.string().trim().min(1).max(200),
 }).strict();
 const EmptyQuerySchema = z.object({}).strict();
 const EmptyBodySchema = z.union([z.undefined(), z.object({}).strict()]);
@@ -702,6 +719,51 @@ export async function replaceHighlights(req: Request, res: Response): Promise<vo
     status: "success",
     statusCode: 200,
     message: "Highlights updated successfully",
+    data: result.value,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * POST /products/:id/highlights/:highlightId/image
+ * Attach platform-hosted bytes to one highlight card (A6, migration `0091`).
+ *
+ * Multipart, and the only way an image reaches a highlight — `imageUrl` came off the
+ * highlight plan in the same migration, so a client still sending it gets a `.strict()`
+ * 422 rather than having it silently dropped.
+ */
+export async function replaceHighlightImage(req: Request, res: Response): Promise<void> {
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = HighlightParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+  if (!req.file) {
+    const response: ApiResponse = {
+      status: "error",
+      statusCode: 422,
+      message: "An image file is required in the `image` field.",
+    };
+    res.status(422).json(response);
+    return;
+  }
+
+  const result = await productsService.replaceHighlightImage(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+    parsedParams.data.highlightId,
+    req.file.buffer,
+  );
+  if (!result.success) {
+    respondProductError(res, result.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Highlight image updated successfully",
     data: result.value,
   };
   res.status(200).json(response);

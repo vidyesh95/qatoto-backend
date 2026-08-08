@@ -980,8 +980,19 @@ export async function attachReviewPhoto(
  *
  * No bytes move. The id is EXTRACTED from the submitted URL server-side rather than
  * accepted as an id, so a caller cannot smuggle in something that is not a YouTube
- * video reference. Whether the video actually exists is a separate question answered
- * asynchronously by the shipped `verify-youtube-video` oEmbed job.
+ * video reference.
+ *
+ * WHETHER THE VIDEO EXISTS IS NOT CHECKED, and this comment used to claim otherwise —
+ * it credited "the shipped `verify-youtube-video` oEmbed job", which operates on the
+ * `video` table alone (`src/jobs/verify-youtube-video.ts`) and has never read
+ * `commerce_review_media`. A well-formed id pointing at a deleted or private video is
+ * therefore stored and rendered indefinitely. A false comment about a verification is
+ * worse than a missing one, so it says the true thing now.
+ *
+ * The decided design for when it is built: a dead video HIDES ITS MEDIA ROW and leaves
+ * the review standing. A buyer's testimony must not be deleted because a third-party
+ * host removed a file, which rules out dropping the row and recomputing `mediaCount`.
+ * That needs a state column on `commerce_review_media`; it is not built yet.
  */
 export async function attachReviewVideo(
   actor: CommerceTrustActorContext,

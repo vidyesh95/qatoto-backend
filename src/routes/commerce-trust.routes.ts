@@ -20,6 +20,19 @@ import { uploadProductImage } from "#src/middleware/upload-product-image.js";
 
 const router = express.Router();
 
+/**
+ * Declared BEFORE the parameterized write below so the two read as one surface: this list
+ * is where a buyer LEARNS a `completionId`, and without it the write under it is
+ * unreachable. A read, so no rate limiter, no `compactBody`, no idempotency — matching
+ * `GET /commerce/orders`.
+ */
+router.get(
+  "/completions",
+  requireAuth,
+  requireActiveBuyerCommerceOrganization,
+  commerceTrustController.listBuyerCompletions,
+);
+
 router.post(
   "/completions/:completionId/reviews",
   requireAuth,

@@ -68,8 +68,18 @@
 > for. **Product organization-ownership and category columns are now NOT NULL** —
 > migration `0063` closed Phase 0's contract phase, dropping the expand-phase fill trigger
 > and making `seller_organization_id`, `created_by_user_id` and `category_id` mandatory.
-> The legacy `seller_id` and `category` enum survive: both still have readers, and
-> `docs/STORE_PHASE_0_ROLLOUT.md` requires a separate release to remove them.
+> `product.seller_id` is gone — migration `0088` dropped it in Phase 14d. The legacy
+> `category` column and its `product_category` enum survive and still have eight readers
+> under `/products/*`; removing them needs the frontend decision `docs/STORE_PHASE_14_ROLLOUT.md`
+> records under "Still open".
+>
+> **Migrations `0090`–`0091` close two integrity gaps found by auditing this document against
+> the code rather than from the frontend side:** `product_image.media_kind` no longer offers a
+> `video` value it could never store, and the five seller-writable image columns are
+> platform-hosted rather than hotlinked — which is what makes moderating a pathway image mean
+> anything (Appendix A21). Three verifier scripts that still asserted against the
+> `store_pathway_item` table `0088` dropped were also repaired; the Phase 9 one had been
+> throwing `42P01` and losing all twelve of its checks.
 >
 > **What is NOT built, and what the frontend is standing in for meanwhile:**
 > [Appendix A](#appendix-a--what-the-frontend-needs-and-this-backend-does-not-have)
@@ -685,6 +695,7 @@ started, not that payment, booking, testing, or settlement succeeded.
 | POST   | `/commerce/admin/content/restore`                         | Un-hide content — A12                                    |
 | POST   | `/commerce/products/:productId/inquiries`                 | Open or return a pre-sales inquiry — A14                 |
 | GET    | `/commerce/inquiries`                                     | Buyer/seller inquiry inbox — A14                         |
+| GET    | `/commerce/completions`                                   | Buyer completions + `hasReview` — A22                    |
 
 ---
 
@@ -1826,3 +1837,110 @@ belong in §14:
 - **Supplier revenue disclosure.** "Online revenue US $2.4M+" is a seller's commercial secret. Even
   once derivable from order data, publishing it needs explicit seller consent and a policy — see the
   new §14 entry.
+
+---
+
+### A21. Seller-supplied image URLs — **SHIPPED (`0090`–`0091`)**
+
+**Not found from the frontend side.** This entry came from auditing §11 against the code: "Normalize
+and allowlist external URLs before storage" was a rule nothing implemented.
+
+**What was wrong.** Five columns took a bare client-supplied https string, validated only by
+`startsWith('https://')` and a 2048 cap — `commerce_product_highlight.image_url`,
+`commerce_organization_stakeholder.photo_url`, `commerce_organization.logo_url`, and
+`store_pathway.hero_image_url` / `card_image_url`. The store rendered all five on public surfaces.
+
+Three consequences, and the third is the one that decided it:
+
+1. **EXIF is never stripped.** `commerce_organization_media` had already departed from this
+   precedent for exactly that reason — and its schema comment names two of these columns as the
+   precedent it was departing FROM. A stakeholder portrait is the stronger case than the factory
+   photo that argument was written for: the coordinates belong to the person.
+2. **The seller's origin sees every store visitor's IP and user agent** — a tracking channel the
+   platform grants without knowing it.
+3. **The bytes stay mutable after moderation.** §15.5 lets a seller PROPOSE a pathway; a moderator
+   publishes it; `EDITABLE_PATHWAY_STATES` then freezes the row, so the store presents the art as
+   reviewed. It reviewed a URL. Approving a pointer is not approving a picture.
+
+**What exists now.** Each image carries the triple `commerce_organization_media` established — a
+Cloudinary public id, plus width and height measured from the decoded bytes — behind four multipart
+routes: `POST /products/:id/highlights/:highlightId/image`,
+`POST /commerce/organizations/:id/stakeholders/:stakeholderId/photo`,
+`POST /commerce/organizations/:id/logo`, and `POST /commerce/pathways/:id/images/:imageSlot`. Every
+URL input was removed from its JSON body, so `.strict()` turns a client still sending one into a
+loud 422 rather than a silently ignored field.
+
+**Two things the plan for this did not anticipate.** **Highlights and stakeholders were wholesale
+replace-lists** — delete-all-then-insert — so an image attached to a child id would have been
+orphaned by the next edit to its own title. Both are now identity-preserving in the shape
+`replaceProductVariants` already used, with positions parked beyond the incoming range because
+`(parent, position)` is unique. A client-supplied id is a **hint, never a grant**: it is honoured
+only when it already belongs to that parent, so naming another seller's row cannot move or read it.
+And **legacy hotlinks are left in place**, rendering, with a NULL public id — nulling them would
+blank live storefronts, and re-fetching them inside a DDL transaction would make the migration
+itself an SSRF surface. The CHECKs keep the two shapes distinguishable rather than merged.
+
+**Found on the way in, unrelated to images:** `product_image.media_kind` offered `video`, but
+`addProductImage` re-encodes every upload to AVIF and the table has no video URL column, so a
+`video` row was a still wearing a label it could not honour. Migration `0090` narrowed the enum to
+`photo | spin_360`. Product video, if ever wanted, follows A8's shape — an external YouTube id under
+a supply CHECK — because this codebase has no first-party video ingest.
+
+**Still hotlinked, deliberately:** `store_hero_slide.image_url` and `commerce_category.image_url`
+are staff-authored, so the platform chooses the host. `commerce_organization.website_url` is a link
+a buyer chooses to follow, not bytes the store renders on the seller's behalf.
+
+---
+
+### A22. Reviews were unreachable — **SHIPPED (`0092`)**
+
+**Not a missing feature — a missing door.** Everything A8 specified shipped in Phase 10: a 1–5
+rating under `commerce_review_rating_ck`, sub-scores, Cloudinary review photos, YouTube review
+video, helpful votes, seller replies, and a public read with a summary histogram.
+
+**None of it could be reached.** `POST /commerce/completions/:completionId/reviews` is keyed on a
+`completionId`, and `completionId` was projected on **no** read in this backend.
+`commerce_completion` was queried only by `commerce-product-qa.service.ts` (a `LIMIT 1`
+verified-buyer probe) and `commerce-trust-metrics.service.ts` (aggregates). No route listed
+completions for any actor. A buyer could obtain the id only by guessing a UUID, so the entire
+review surface was live, constrained, rate-limited — and dead.
+
+**What exists now:** `GET /commerce/completions`, buyer-scoped and cursor-paginated, each row
+carrying `hasReview`; plus `completionId` on every order product line and `completionIds` on the
+order detail, so a buyer arriving from an order does not have to page a second endpoint.
+
+Three things worth carrying forward.
+
+**`hasReview` is a fact about the CALLER, not the completion.** It is derived from
+`commerce_review_completion_reviewer_uidx` scoped to the caller's organization — another
+organization's review must never make a completion look spent. That index carries no partial
+predicate, so a `visibility = 'hidden'` review still blocks a second one, and `hasReview` counts
+hidden reviews for exactly that reason: reporting `false` would offer the client a write
+`createReview` refuses.
+
+**`reviewable=true` filters in SQL, not over the fetched page.** A post-filter would return short
+pages and compute the next cursor from rows it had just dropped, so the following page would start
+past rows the caller never saw — a pagination bug that presents as missing data rather than as an
+error. It is a correlated `NOT EXISTS` in the same `WHERE`.
+
+**The order read is NOT scoped to the reader.** `getOrder` admits both the buyer and the
+counterparty, and filtering completion ids by the reader would hand the seller an order whose lines
+claim no completion exists. A completion id is not a capability — `evaluateReviewRelationship`
+refuses anyone but the buyer — so both parties see the same honest projection.
+
+Migration `0092` adds `(buyer_organization_id, completed_at DESC, id)`;
+`commerce_completion_buyer_idx` stops at `completed_at` and cannot serve §7's tie-break. Correctness
+never depended on it — that lives in the keyset predicate — and the old index is kept for the range
+reads `commerce-trust-metrics` does.
+
+**Corrected while here:** `attachReviewVideo`'s docblock credited "the shipped
+`verify-youtube-video` oEmbed job" with checking whether a review's video exists. That job reads the
+`video` table alone and has never touched `commerce_review_media`, so a well-formed id pointing at a
+deleted or private video is stored and rendered indefinitely. The comment now says so. The decided
+design for when it is built: **a dead video hides its media row and leaves the review standing**,
+because a buyer's testimony must not be deleted when a third-party host removes a file — which needs
+a state column on `commerce_review_media` and is not built.
+
+**Still absent, and recorded rather than silently missing:** `viewerHasVoted` on the public review
+read (a client cannot render the helpful toggle's state without a second call), and any author
+edit/delete of a review — `deleteAllReviewMedia` having no caller is the trace of that absence.

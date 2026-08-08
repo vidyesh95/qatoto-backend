@@ -631,6 +631,27 @@
       "when": 1786105794394,
       "tag": "0089_store_phase_14_drop_duplicate_sku_index",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1786105799394,
+      "tag": "0090_product_media_kind_drop_video",
+      "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "7",
+      "when": 1786105804394,
+      "tag": "0091_platform_hosted_seller_images",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1786105809394,
+      "tag": "0092_commerce_completion_buyer_keyset",
+      "breakpoints": true
     }
   ]
 }

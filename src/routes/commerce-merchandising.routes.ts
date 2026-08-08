@@ -13,6 +13,7 @@ import {
 } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
+import { uploadPathwayImageFile } from "#src/middleware/upload-pathway-image.js";
 
 /**
  * Guided pathway authoring and moderation (STORE_BACKEND_STRUCTURE.md §15.8).
@@ -58,6 +59,20 @@ router.patch(
   compactBody,
   idempotency({ required: true, scope: "user" }),
   commerceMerchandisingController.updatePathway,
+);
+
+/**
+ * Migration `0091`. Multipart, so no `compactBody` — multer owns this body. Registered
+ * BEFORE `/pathways/:pathwayId/slots` for readability only; the paths are disjoint.
+ */
+router.post(
+  "/pathways/:pathwayId/images/:imageSlot",
+  requireAuth,
+  attachOptionalSellerCommerceOrganization,
+  commerceOrganizationEvidenceLimiter,
+  uploadPathwayImageFile,
+  idempotency({ required: true, scope: "user" }),
+  commerceMerchandisingController.replacePathwayImage,
 );
 
 router.put(

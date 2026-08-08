@@ -9,6 +9,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
+import { uploadOrganizationLogoFile } from "#src/middleware/upload-organization-logo.js";
 
 const router = express.Router();
 
@@ -86,6 +87,20 @@ router.post(
   uploadCommerceVerificationEvidence,
   idempotency({ required: true }),
   commerceOrganizationsController.submitVerificationEvidence,
+);
+/**
+ * Migration `0091`. Multipart, so `compactBody` is deliberately absent — the multer
+ * parser owns this body, exactly as the verification-evidence route above does.
+ * `commerceOrganizationEvidenceLimiter` rather than the write limiter because this is an
+ * upload, and §11 asks for upload-appropriate keys.
+ */
+router.post(
+  "/organizations/:organizationId/logo",
+  requireAuth,
+  commerceOrganizationEvidenceLimiter,
+  uploadOrganizationLogoFile,
+  idempotency({ required: true }),
+  commerceOrganizationsController.replaceOrganizationLogo,
 );
 router.get(
   "/organizations/:organizationId/verifications/:verificationId/evidence",

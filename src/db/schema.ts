@@ -675,11 +675,22 @@ export const productModerationStateEnum = pgEnum("product_moderation_state", [
 /**
  * Phase 8 catalog depth (STORE_BACKEND_STRUCTURE.md Appendix A2).
  *
- * `product_image` was photo-only and carried no discriminator, so a 360 spin or a
- * video had nowhere to live. The column defaults to `photo`, which is what every
- * pre-Phase-8 row is.
+ * `product_image` was photo-only and carried no discriminator, so a 360 spin had
+ * nowhere to live. The column defaults to `photo`, which is what every pre-Phase-8
+ * row is.
+ *
+ * `video` was here and migration `0090` removed it. Every upload is re-encoded to AVIF
+ * by `validateAndNormalizeImage` before it reaches Cloudinary and there is no video URL
+ * column on this table, so a `video` row was an AVIF still carrying a label it could not
+ * honour — a wire value that could never describe its own bytes, which is the failure
+ * Appendix A is written to catch. When product video is wanted it follows A8's shape: an
+ * external YouTube id under a supply CHECK, because this codebase has no first-party
+ * video ingest.
+ *
+ * `spin_360` is genuinely representable — a spin is an ordered run of stills within one
+ * (product, variant) gallery, which the Phase 8 position index already orders.
  */
-export const productMediaKindEnum = pgEnum("product_media_kind", ["photo", "video", "spin_360"]);
+export const productMediaKindEnum = pgEnum("product_media_kind", ["photo", "spin_360"]);
 
 /**
  * A variant is retired, never deleted: an order line snapshot references the
@@ -1622,6 +1633,14 @@ export const commerceOrganization = pgTable(
     registrationNumberEncrypted: text("registration_number_encrypted"),
     taxIdentifierEncrypted: text("tax_identifier_encrypted"),
     logoUrl: text("logo_url"),
+    /**
+     * Platform-hosted since `0091`. NULL means a legacy hotlink. `websiteUrl` beside it
+     * is deliberately NOT hosted — it is a link the buyer chooses to follow, not bytes
+     * the store renders on the seller's behalf.
+     */
+    logoCloudinaryPublicId: text("logo_cloudinary_public_id"),
+    logoWidthPx: integer("logo_width_px"),
+    logoHeightPx: integer("logo_height_px"),
     websiteUrl: text("website_url"),
     createdByUserId: text("created_by_user_id")
       .notNull()
@@ -1655,6 +1674,12 @@ export const commerceOrganization = pgTable(
       "commerce_organization_url_ck",
       sql`(logo_url IS NULL OR (char_length(logo_url) <= 2048 AND logo_url LIKE 'https://%'))
           AND (website_url IS NULL OR (char_length(website_url) <= 2048 AND website_url LIKE 'https://%'))`,
+    ),
+    check(
+      "commerce_organization_hosted_logo_ck",
+      sql`(logo_cloudinary_public_id IS NULL AND logo_width_px IS NULL AND logo_height_px IS NULL)
+          OR (logo_url IS NOT NULL AND logo_cloudinary_public_id IS NOT NULL
+              AND logo_width_px > 0 AND logo_height_px > 0)`,
     ),
   ],
 );
@@ -2053,6 +2078,15 @@ export const commerceOrganizationStakeholder = pgTable(
     fullName: text("full_name").notNull(),
     roleTitle: text("role_title").notNull(),
     photoUrl: text("photo_url"),
+    /**
+     * Platform-hosted since `0091`. A portrait of a named individual is the strongest
+     * EXIF case in this schema — stronger than the factory photo
+     * `commerce_organization_media` was built for — because the coordinates belong to
+     * the person, not the premises. NULL means a legacy hotlink.
+     */
+    photoCloudinaryPublicId: text("photo_cloudinary_public_id"),
+    photoWidthPx: integer("photo_width_px"),
+    photoHeightPx: integer("photo_height_px"),
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -2071,6 +2105,12 @@ export const commerceOrganizationStakeholder = pgTable(
       sql`char_length(full_name) BETWEEN 1 AND 200
           AND char_length(role_title) BETWEEN 1 AND 200
           AND (photo_url IS NULL OR (char_length(photo_url) <= 2048 AND photo_url LIKE 'https://%'))`,
+    ),
+    check(
+      "commerce_organization_stakeholder_hosted_photo_ck",
+      sql`(photo_cloudinary_public_id IS NULL AND photo_width_px IS NULL AND photo_height_px IS NULL)
+          OR (photo_url IS NOT NULL AND photo_cloudinary_public_id IS NOT NULL
+              AND photo_width_px > 0 AND photo_height_px > 0)`,
     ),
   ],
 );
@@ -2577,6 +2617,16 @@ export const commerceProductHighlight = pgTable(
     title: text("title").notNull(),
     bodyText: text("body_text").notNull(),
     imageUrl: text("image_url"),
+    /**
+     * Platform-hosted since `0091`. Retained so a later delete can destroy the remote
+     * asset; never projected publicly and never named in an audit payload. NULL means a
+     * legacy hotlink from before `0091` — see the migration for why those were left in
+     * place rather than nulled or re-fetched.
+     */
+    imageCloudinaryPublicId: text("image_cloudinary_public_id"),
+    /** Measured from the DECODED BYTES, never accepted from the client (A2's rule). */
+    imageWidthPx: integer("image_width_px"),
+    imageHeightPx: integer("image_height_px"),
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
@@ -2586,6 +2636,12 @@ export const commerceProductHighlight = pgTable(
   },
   (table) => [
     uniqueIndex("commerce_product_highlight_position_uidx").on(table.productId, table.position),
+    check(
+      "commerce_product_highlight_hosted_image_ck",
+      sql`(image_cloudinary_public_id IS NULL AND image_width_px IS NULL AND image_height_px IS NULL)
+          OR (image_url IS NOT NULL AND image_cloudinary_public_id IS NOT NULL
+              AND image_width_px > 0 AND image_height_px > 0)`,
+    ),
     check("commerce_product_highlight_title_ck", sql`char_length(title) BETWEEN 1 AND 120`),
     check("commerce_product_highlight_body_ck", sql`char_length(body_text) BETWEEN 1 AND 2000`),
     check("commerce_product_highlight_position_ck", sql`position >= 0`),
@@ -3764,7 +3820,20 @@ export const storePathway = pgTable(
       onDelete: "restrict",
     }),
     heroImageUrl: text("hero_image_url"),
+    /**
+     * Platform-hosted since `0091`, and this is the table where it mattered most. A
+     * seller may PROPOSE a pathway (§15.5) and a moderator publishes it, after which
+     * `EDITABLE_PATHWAY_STATES` freezes the row — so the store presents the image as
+     * reviewed. Under a hotlink the moderator reviewed a URL, and the seller could swap
+     * the bytes behind it afterwards. NULL means a legacy hotlink from before `0091`.
+     */
+    heroImageCloudinaryPublicId: text("hero_image_cloudinary_public_id"),
+    heroImageWidthPx: integer("hero_image_width_px"),
+    heroImageHeightPx: integer("hero_image_height_px"),
     cardImageUrl: text("card_image_url"),
+    cardImageCloudinaryPublicId: text("card_image_cloudinary_public_id"),
+    cardImageWidthPx: integer("card_image_width_px"),
+    cardImageHeightPx: integer("card_image_height_px"),
     /**
      * Null means platform-curated. A non-null owner is a SELLER PROPOSAL (§15.5),
      * and the difference decides who may edit it and whether publication requires a
@@ -3840,56 +3909,37 @@ export const storePathway = pgTable(
       "store_pathway_window_ck",
       sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
     ),
+    check(
+      "store_pathway_hosted_hero_image_ck",
+      sql`(hero_image_cloudinary_public_id IS NULL AND hero_image_width_px IS NULL
+           AND hero_image_height_px IS NULL)
+          OR (hero_image_url IS NOT NULL AND hero_image_cloudinary_public_id IS NOT NULL
+              AND hero_image_width_px > 0 AND hero_image_height_px > 0)`,
+    ),
+    check(
+      "store_pathway_hosted_card_image_ck",
+      sql`(card_image_cloudinary_public_id IS NULL AND card_image_width_px IS NULL
+           AND card_image_height_px IS NULL)
+          OR (card_image_url IS NOT NULL AND card_image_cloudinary_public_id IS NOT NULL
+              AND card_image_width_px > 0 AND card_image_height_px > 0)`,
+    ),
   ],
 );
 
-/**
- * @deprecated Phase 9 replaced this flat list with {@link storePathwaySlot} and
- * {@link storePathwaySlotCandidate} (§15.2). Migration `0058` backfilled its product
- * rows into slots and nothing reads this table any more; it is retained only so a
- * pre-Phase-9 deployment can still serve pathways during a rollback, and a later
- * migration drops it.
+/*
+ * `store_pathway_item` was here. Phase 9 replaced that flat list with
+ * {@link storePathwaySlot} and {@link storePathwaySlotCandidate} (§15.2), migration
+ * `0058` backfilled its product rows into slots, and migration `0088` dropped the
+ * table. The Drizzle declaration outlived the table by one phase, which is why the
+ * Phase 1/2, 8 and 9 verifiers all still asserted against it and all three failed
+ * against an `0089` database — the Phase 9 one by throwing `42P01` and losing every
+ * other check it makes.
  *
- * Why it was wrong for a set: `entityId` had no foreign key, so a member that became
- * ineligible was dropped silently and a five-piece look rendered as three pieces with
- * nothing saying a piece was missing. For a rail that is correct; for a set it is a lie.
+ * Why it was wrong for a set, kept because the reasoning still governs the slot model:
+ * `entityId` had no foreign key, so a member that became ineligible was dropped
+ * silently and a five-piece look rendered as three pieces with nothing saying a piece
+ * was missing. For a rail that is correct; for a set it is a lie.
  */
-export const storePathwayItem = pgTable(
-  "store_pathway_item",
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => randomUUID()),
-    pathwayId: text("pathway_id")
-      .notNull()
-      .references(() => storePathway.id, { onDelete: "cascade" }),
-    entityKind: storeMerchandisingEntityKindEnum("entity_kind").notNull(),
-    entityId: text("entity_id").notNull(),
-    position: integer("position").notNull(),
-    /**
-     * A19. Pathway items were the only merchandising rows with no time window, while
-     * `store_rail_placement` has carried one since Phase 1 — so a seasonal member
-     * could not be scheduled in or out. (§15.2 replaces items with typed slots in
-     * Phase 9; the window is correct in both models.)
-     */
-    startsAt: timestamp("starts_at"),
-    endsAt: timestamp("ends_at"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [
-    index("store_pathway_item_pathway_idx").on(table.pathwayId, table.position),
-    uniqueIndex("store_pathway_item_unique_uidx").on(
-      table.pathwayId,
-      table.entityKind,
-      table.entityId,
-    ),
-    check("store_pathway_item_position_ck", sql`position >= 0`),
-    check(
-      "store_pathway_item_window_ck",
-      sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
-    ),
-  ],
-);
 
 /**
  * A ROLE in a guided set — "Footwear", "Front light", "Chain bolts" (§15.2).
@@ -3962,7 +4012,7 @@ export const storePathwaySlotCandidate = pgTable(
     slotId: text("slot_id")
       .notNull()
       .references(() => storePathwaySlot.id, { onDelete: "cascade" }),
-    /** A REAL foreign key, unlike `storePathwayItem.entityId`. */
+    /** A REAL foreign key, unlike the dropped `store_pathway_item.entity_id`. */
     productId: text("product_id")
       .notNull()
       .references(() => product.id, { onDelete: "restrict" }),
@@ -7209,6 +7259,18 @@ export const commerceCompletion = pgTable(
       .on(table.serviceEngagementId)
       .where(sql`service_engagement_id IS NOT NULL`),
     index("commerce_completion_buyer_idx").on(table.buyerOrganizationId, table.completedAt),
+    /**
+     * `0092`. The buyer-facing list (`GET /commerce/completions`) pages with §7's tie-break,
+     * so it orders `completed_at DESC, id` and the index above — which stops at
+     * `completed_at` — cannot serve the last leg. Same shape, and same reason, as the
+     * review keyset indexes below. The older index is kept: it still serves the range
+     * reads `commerce-trust-metrics` does.
+     */
+    index("commerce_completion_buyer_keyset_idx").on(
+      table.buyerOrganizationId,
+      table.completedAt.desc(),
+      table.id,
+    ),
     index("commerce_completion_counterparty_idx").on(
       table.counterpartyOrganizationId,
       table.completedAt,

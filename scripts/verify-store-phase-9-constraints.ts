@@ -252,28 +252,15 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
     detail: `${String(inconsistentReviewAttribution)} inconsistent pathway review(s)`,
   });
 
-  /**
-   * The backfill's own receipt. A product item that never became a slot is a member of
-   * a published set that silently stopped existing — the exact failure §15.2 replaced
-   * the item table to prevent.
+  /*
+   * The backfill's own receipt — "every product pathway item became a slot" — used to
+   * be asserted here against `store_pathway_item`. Migration `0088` dropped that table,
+   * so the receipt is no longer computable and this script threw `42P01` against an
+   * `0089` database, losing every check above it rather than just this one. The receipt
+   * was verified while the source existed and `0058` is the record of it; a check that
+   * cannot be evaluated is worse than an absent one, because it takes its neighbours
+   * down with it.
    */
-  const unbackfilledPathwayItems = await countQuery(
-    `SELECT count(*) AS row_count
-       FROM store_pathway_item AS item
-      WHERE item.entity_kind = 'product'
-        AND NOT EXISTS (
-          SELECT 1
-            FROM store_pathway_slot AS slot
-            INNER JOIN store_pathway_slot_candidate AS candidate ON candidate.slot_id = slot.id
-           WHERE slot.pathway_id = item.pathway_id
-             AND candidate.product_id = item.entity_id
-        )`,
-  );
-  outcomes.push({
-    label: "every product pathway item was backfilled into a slot",
-    passed: unbackfilledPathwayItems === 0,
-    detail: `${String(unbackfilledPathwayItems)} unbackfilled pathway item(s)`,
-  });
 
   return outcomes;
 }

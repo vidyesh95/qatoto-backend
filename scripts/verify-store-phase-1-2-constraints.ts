@@ -31,7 +31,6 @@ const EXPECTED_TABLES: readonly string[] = [
   "store_search_document",
   "store_hero_slide",
   "store_pathway",
-  "store_pathway_item",
   "store_rail",
   "store_rail_placement",
   "commerce_product_specification",

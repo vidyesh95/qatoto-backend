@@ -1,11 +1,13 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
 import {
   CreatePathwaySchema,
   ModeratePathwaySchema,
   PathwayIdParamsSchema,
+  PathwayImageParamsSchema,
   PathwaySlotParamsSchema,
   PathwaySlugParamsSchema,
   ReplacePathwaySlotCandidatesSchema,
@@ -172,6 +174,20 @@ function mapPathwayError(res: Response, error: CommercePathwayError): void {
         message: "You cannot decide a proposal from your own organization.",
       } satisfies ApiResponse);
       return;
+    case "IMAGE_REJECTED":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: describePathwayImageRejection(error.imageError),
+      } satisfies ApiResponse);
+      return;
+    case "IMAGE_STORAGE_FAILED":
+      res.status(502).json({
+        status: "error",
+        statusCode: 502,
+        message: "Pathway image storage failed.",
+      } satisfies ApiResponse);
+      return;
     case "PLATFORM_CAPABILITY_REQUIRED":
       // 403 for a non-probeable staff capability, per §7's HTTP mapping.
       res.status(403).json({
@@ -183,6 +199,25 @@ function mapPathwayError(res: Response, error: CommercePathwayError): void {
     default: {
       const exhaustiveError: never = error;
       throw new Error(`Unhandled pathway error: ${JSON.stringify(exhaustiveError)}`);
+    }
+  }
+}
+
+function describePathwayImageRejection(
+  imageError: Extract<CommercePathwayError, { type: "IMAGE_REJECTED" }>["imageError"],
+): string {
+  switch (imageError.type) {
+    case "NOT_AN_IMAGE":
+      return "The uploaded file is not a readable image.";
+    case "UNSUPPORTED_FORMAT":
+      return describeUnsupportedImageFormat(imageError.detected);
+    case "DIMENSIONS_TOO_SMALL":
+      return "The image is too small to display as pathway art.";
+    case "DIMENSIONS_TOO_LARGE":
+      return "The image exceeds the maximum supported dimensions.";
+    default: {
+      const exhaustiveCheck: never = imageError;
+      throw new Error(`Unhandled pathway image error: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }
@@ -269,6 +304,50 @@ export async function updatePathway(req: Request, res: Response): Promise<void> 
     status: "success",
     statusCode: 200,
     message: "Pathway updated.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * POST /commerce/pathways/:pathwayId/images/:imageSlot (migration `0091`)
+ *
+ * Multipart, and the only way art enters a pathway — `heroImageUrl`/`cardImageUrl` came
+ * off the create and update bodies in the same migration, so a client sending either now
+ * gets a `.strict()` 422 rather than having it silently ignored.
+ */
+export async function replacePathwayImage(req: Request, res: Response): Promise<void> {
+  const actor = resolvePathwayActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = PathwayImageParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  if (!req.file) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "An image file is required in the `image` field.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const result = await commercePathwaysService.replacePathwayImage(
+    actor,
+    params.data.pathwayId,
+    params.data.imageSlot,
+    req.file.buffer,
+  );
+  if (!result.success) {
+    mapPathwayError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Pathway image updated.",
     data: result.value,
   } satisfies ApiResponse);
 }

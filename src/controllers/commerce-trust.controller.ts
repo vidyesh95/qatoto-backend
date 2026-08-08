@@ -10,12 +10,14 @@ import {
   CreateReviewSchema,
   DecideDisputeSchema,
   DisputeIdParamsSchema,
+  ListBuyerCompletionsQuerySchema,
   ListDisputesQuerySchema,
   OrderIdParamsSchema,
   ReviewIdParamsSchema,
   ReviewMediaParamsSchema,
   UpsertReviewReplySchema,
 } from "#src/schemas/commerce-trust.schemas.js";
+import * as commerceCompletionService from "#src/services/commerce-completion.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commerceTrustService from "#src/services/commerce-trust.service.js";
 import type {
@@ -219,6 +221,45 @@ function mapReviewMediaError(res: Response, error: CommerceReviewMediaError): vo
       mapTrustError(res, error);
       return;
   }
+}
+
+/**
+ * GET /commerce/completions
+ *
+ * The buyer's completions, and whether they have already reviewed each one. This exists
+ * because `POST /commerce/completions/:completionId/reviews` is keyed on an id that was
+ * projected nowhere — ratings, review photos and review videos were all reachable only by
+ * guessing a UUID.
+ *
+ * The organization comes from `requireActiveBuyerCommerceOrganization`, never from the
+ * query string (§0).
+ */
+export async function listBuyerCompletions(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+
+  const query = ListBuyerCompletionsQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await commerceCompletionService.listBuyerCompletions({
+    buyerOrganizationId: actor.organizationId,
+    reviewable: query.data.reviewable,
+    limit: query.data.limit,
+    cursor: query.data.cursor,
+  });
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Completions retrieved.",
+    data: result.value,
+  } satisfies ApiResponse);
 }
 
 export async function createReview(req: Request, res: Response): Promise<void> {

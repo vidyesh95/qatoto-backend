@@ -2,7 +2,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { signInAs } from "#src/test-support/auth-mock.js";
+import { signInAs, signOut } from "#src/test-support/auth-mock.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -105,6 +105,23 @@ const serviceStubs = vi.hoisted(() => ({
 
 vi.mock("#src/services/commerce-trust.service.js", () => serviceStubs);
 
+/**
+ * `GET /commerce/completions` is served by the completion service, not the trust one.
+ * Only the two reads are stubbed; the rest of the module stays real so the routers that
+ * `buildTestApp` mounts keep working.
+ */
+const completionStubs = vi.hoisted(() => ({
+  listBuyerCompletions: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  loadOrderCompletionIndex: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
+
+vi.mock("#src/services/commerce-completion.service.js", async () => ({
+  ...(await vi.importActual<Record<string, unknown>>(
+    "#src/services/commerce-completion.service.js",
+  )),
+  ...completionStubs,
+}));
+
 describe("commerce trust routes", () => {
   let app: Express;
 
@@ -118,6 +135,101 @@ describe("commerce trust routes", () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     signInAs();
+  });
+
+  /**
+   * The read that makes every review route below it reachable. Before it existed,
+   * `completionId` was projected nowhere and a buyer could only reach
+   * `POST /completions/:completionId/reviews` by guessing a UUID.
+   */
+  describe("GET /commerce/completions", () => {
+    it("returns the buyer's completions with the caller's review state", async () => {
+      completionStubs.listBuyerCompletions.mockResolvedValue({
+        success: true,
+        value: {
+          items: [
+            {
+              completionId: "cmpl_1",
+              targetKind: "product_order_line",
+              orderId: "order_1",
+              productId: "prd_1",
+              counterpartyOrganization: {
+                organizationId: "org_seller",
+                slug: "acme-cooling",
+                displayName: "Acme Cooling",
+              },
+              completedAt: new Date("2026-01-01T00:00:00.000Z"),
+              hasReview: false,
+            },
+          ],
+          page: { nextCursor: null, hasMore: false },
+        },
+      });
+
+      const response = await request(app).get("/commerce/completions");
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.items[0].completionId).toBe("cmpl_1");
+      expect(response.body.data.items[0].hasReview).toBe(false);
+      expect(response.body.data.page).toEqual({ nextCursor: null, hasMore: false });
+    });
+
+    /**
+     * The organization must come from the session-derived middleware, never the query
+     * string — §0. `.strict()` is what enforces it, so an attempt to name one is a 422
+     * rather than a silently ignored parameter.
+     */
+    it("rejects an unknown query key with 422", async () => {
+      const response = await request(app).get(
+        "/commerce/completions?buyerOrganizationId=someone-else",
+      );
+
+      expect(response.status).toBe(422);
+      expect(completionStubs.listBuyerCompletions).not.toHaveBeenCalled();
+    });
+
+    it("passes the session organization, never a client-supplied one", async () => {
+      completionStubs.listBuyerCompletions.mockResolvedValue({
+        success: true,
+        value: { items: [], page: { nextCursor: null, hasMore: false } },
+      });
+
+      await request(app).get("/commerce/completions?reviewable=true&limit=5");
+
+      expect(completionStubs.listBuyerCompletions).toHaveBeenCalledWith({
+        buyerOrganizationId: BUYER_ORGANIZATION_ID,
+        reviewable: true,
+        limit: 5,
+        cursor: undefined,
+      });
+    });
+
+    it("rejects a limit above the page cap with 422", async () => {
+      const response = await request(app).get("/commerce/completions?limit=500");
+
+      expect(response.status).toBe(422);
+      expect(completionStubs.listBuyerCompletions).not.toHaveBeenCalled();
+    });
+
+    it("maps INVALID_CURSOR to 422", async () => {
+      completionStubs.listBuyerCompletions.mockResolvedValue({
+        success: false,
+        error: { type: "INVALID_CURSOR" },
+      });
+
+      const response = await request(app).get("/commerce/completions?cursor=not-a-cursor");
+
+      expect(response.status).toBe(422);
+    });
+
+    it("requires a signed-in caller", async () => {
+      signOut();
+
+      const response = await request(app).get("/commerce/completions");
+
+      expect(response.status).toBe(401);
+      expect(completionStubs.listBuyerCompletions).not.toHaveBeenCalled();
+    });
   });
 
   it("requires Idempotency-Key on review creation", async () => {

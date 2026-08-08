@@ -22,11 +22,18 @@ const PathwaySlugSchema = z
 
 const PathwayAccentSchema = z.enum(["amber", "slate", "emerald", "sky", "rose"]);
 
-const HttpsImageUrlSchema = z
-  .string()
-  .trim()
-  .max(2048)
-  .refine((value) => value.startsWith("https://"), "Image URL must be https.");
+/**
+ * The slot an uploaded pathway image fills. Two named roles rather than a free string,
+ * because each one maps to its own column triple on `store_pathway` (`0091`).
+ */
+export const PathwayImageSlotSchema = z.enum(["hero", "card"]);
+
+export const PathwayImageParamsSchema = z
+  .object({
+    pathwayId: z.string().trim().min(1).max(200),
+    imageSlot: PathwayImageSlotSchema,
+  })
+  .strict();
 
 export const CreatePathwaySchema = z
   .object({
@@ -36,8 +43,12 @@ export const CreatePathwaySchema = z
     accent: PathwayAccentSchema.optional(),
     /** Non-null makes this an anchored set (§15.1). */
     anchorProductId: z.string().trim().min(1).max(200).optional(),
-    heroImageUrl: HttpsImageUrlSchema.optional(),
-    cardImageUrl: HttpsImageUrlSchema.optional(),
+    /**
+     * `heroImageUrl` / `cardImageUrl` were here and migration `0091` removed them. Art is
+     * uploaded to POST /commerce/pathways/:pathwayId/images/:imageSlot so the platform
+     * holds the bytes: a seller may propose a set (§15.5) and a moderator publishes it,
+     * and a URL let the seller change the picture after it was approved.
+     */
     startsAt: z.coerce.date().optional(),
     endsAt: z.coerce.date().optional(),
   })
@@ -53,8 +64,6 @@ export const UpdatePathwaySchema = z
     summary: z.string().trim().min(1).max(500).nullable().optional(),
     accent: PathwayAccentSchema.optional(),
     anchorProductId: z.string().trim().min(1).max(200).nullable().optional(),
-    heroImageUrl: HttpsImageUrlSchema.nullable().optional(),
-    cardImageUrl: HttpsImageUrlSchema.nullable().optional(),
     startsAt: z.coerce.date().nullable().optional(),
     endsAt: z.coerce.date().nullable().optional(),
   })

@@ -64,7 +64,10 @@ const EXPECTED_CONSTRAINTS: readonly {
     constraintName: "commerce_product_specification_group_ck",
   },
   { tableName: "store_hero_slide", constraintName: "store_hero_slide_link_target_ck" },
-  { tableName: "store_pathway_item", constraintName: "store_pathway_item_window_ck" },
+  // A19's fourth fix put a time window on `store_pathway_item`. Phase 9 carried that
+  // window onto `store_pathway_slot` and migration `0088` dropped the item table, so
+  // `store_pathway_slot_window_ck` is where the assertion lives now.
+  { tableName: "store_pathway_slot", constraintName: "store_pathway_slot_window_ck" },
   {
     tableName: "commerce_order_product_line",
     constraintName: "commerce_order_product_line_variant_ck",

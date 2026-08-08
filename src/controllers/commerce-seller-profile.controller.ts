@@ -13,6 +13,9 @@ const OrganizationIdSchema = z
 const MediaParamsSchema = OrganizationIdSchema.extend({
   mediaId: z.string().uuid(),
 }).strict();
+const StakeholderParamsSchema = OrganizationIdSchema.extend({
+  stakeholderId: z.string().uuid(),
+}).strict();
 const CertificationParamsSchema = z.object({ certificationId: z.string().uuid() }).strict();
 
 /**
@@ -39,10 +42,11 @@ const CapabilityKindSchema = z.enum([
   "sample_production",
 ]);
 
-const nullableHttpsUrl = z
-  .url()
-  .refine((url) => url.startsWith("https://"))
-  .nullable();
+/*
+ * `nullableHttpsUrl` lived here for `photoUrl`, the last client-supplied image URL on this
+ * surface. Migration `0091` replaced it with an upload, so nothing on this controller
+ * accepts an image location from a client any more.
+ */
 
 /**
  * `year_founded BETWEEN 1800 AND 2100` in the database stops a typo; THIS stops a claim
@@ -100,9 +104,20 @@ export const ReplaceStakeholdersSchema = z
       .array(
         z
           .object({
+            /**
+             * Echo back the id of a stakeholder you are keeping so their uploaded
+             * portrait survives an edit. A HINT, NOT A GRANT — honoured only when the id
+             * already belongs to this organization.
+             */
+            id: z.string().trim().min(1).max(200).optional(),
             fullName: z.string().trim().min(1).max(200),
             roleTitle: z.string().trim().min(1).max(200),
-            photoUrl: nullableHttpsUrl.optional(),
+            /**
+             * `photoUrl` was here and migration `0091` removed it. Upload to
+             * POST /commerce/organizations/:organizationId/stakeholders/:stakeholderId/photo
+             * so the platform holds the bytes — a portrait's EXIF carries the named
+             * person's coordinates, and a hotlink can never have them stripped.
+             */
           })
           .strict(),
       )
@@ -348,6 +363,42 @@ export async function replaceStakeholders(req: Request, res: Response): Promise<
     statusCode: 200,
     message: "Stakeholders replaced.",
     data: { rows: replaced.value },
+  } satisfies ApiResponse);
+}
+
+/**
+ * POST /commerce/organizations/:organizationId/stakeholders/:stakeholderId/photo
+ *
+ * Migration `0091`. Multipart, and the only way a portrait enters: `photoUrl` came off
+ * the stakeholder list in the same migration.
+ */
+export async function replaceStakeholderPhoto(req: Request, res: Response): Promise<void> {
+  const authContext = authenticatedRequest(req, res);
+  if (!authContext) return;
+  if (!parseNoQuery(req, res)) return;
+  const params = StakeholderParamsSchema.safeParse(req.params);
+  if (!params.success) return validationError(res, params.error);
+  if (!req.file) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "An image file is required in the `photo` field.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const replaced = await commerceSellerProfileService.replaceStakeholderPhoto({
+    userId: authContext.userId,
+    organizationId: params.data.organizationId,
+    stakeholderId: params.data.stakeholderId,
+    imageBytes: req.file.buffer,
+  });
+  if (!replaced.success) return respondSellerProfileError(res, replaced.error);
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Stakeholder photo updated.",
+    data: replaced.value,
   } satisfies ApiResponse);
 }
 

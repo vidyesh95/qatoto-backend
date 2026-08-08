@@ -12,10 +12,17 @@ import {
   session,
   user,
 } from "#src/db/schema.js";
+import type { CloudinaryError } from "#src/lib/cloudinary.js";
+import {
+  deleteOrganizationLogo,
+  uploadOrganizationLogo as uploadOrganizationLogoAsset,
+} from "#src/lib/cloudinary.js";
 import {
   decryptCommerceDocument,
   encryptCommerceDocument,
 } from "#src/lib/commerce-document-encryption.js";
+import type { ImageValidationError } from "#src/lib/image.js";
+import { validateAndNormalizeImage } from "#src/lib/image.js";
 import { decryptCommercePii, encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import {
   deletePrivateCommerceDocument,
@@ -66,6 +73,9 @@ export type CommerceOrganizationsError =
    * and a message string is not something a UI can switch on.
    */
   | { type: "ADDRESS_LIMIT_REACHED"; addressKind: string; limit: number }
+  /** `0091`. Same two tags `CommerceSellerProfileError` uses for hosted imagery. */
+  | { type: "IMAGE_REJECTED"; imageError: ImageValidationError }
+  | { type: "IMAGE_STORAGE_FAILED"; storageError: CloudinaryError }
   | { type: "SELF_REVIEW_FORBIDDEN" };
 
 type TradeState = Organization["tradeState"];
@@ -149,6 +159,8 @@ type VerificationDecisionOutcome =
   | { readonly status: "conflict" };
 
 const ORGANIZATION_MANAGERS: readonly MemberRole[] = ["owner", "administrator"];
+/** A logo is a mark rendered small; it does not need the gallery's 2048px ceiling. */
+const ORGANIZATION_LOGO_OUTPUT_MAX_DIMENSION_PX = 512;
 const ADDRESS_MANAGERS: readonly MemberRole[] = ["owner", "administrator", "finance"];
 const VERIFICATION_MANAGERS: readonly MemberRole[] = ["owner", "administrator"];
 const VERIFICATION_READERS: readonly MemberRole[] = ["owner", "administrator", "finance"];
@@ -470,6 +482,129 @@ export async function updateOrganization(
     await enqueueOrganizationSearchDocumentRefresh(organizationId);
   }
   return { success: true, value: updated };
+}
+
+/**
+ * Replace the organization's logo with platform-hosted bytes (migration `0091`).
+ *
+ * `logoUrl` used to be a client-supplied https string on the update patch. The store
+ * rendered it on every public storefront, product card, review card and Q&A card, which
+ * meant a seller chose bytes the platform served under its own chrome and could change
+ * them at any moment. It is now uploaded, re-encoded, and held by us.
+ *
+ * The Cloudinary public id is DERIVED FROM THE ORGANIZATION ID and `overwrite: true`, so
+ * a re-upload replaces the asset in place. The previous public id is still destroyed
+ * afterwards when it differs, which it will for any row whose logo predates `0091` or was
+ * written under a different scheme.
+ */
+export async function replaceOrganizationLogo(input: {
+  readonly userId: string;
+  readonly organizationId: string;
+  readonly imageBytes: Buffer;
+}): Promise<Result<ReturnType<typeof publicOrganization>, CommerceOrganizationsError>> {
+  const access = await requireMembershipRole(
+    input.userId,
+    input.organizationId,
+    ORGANIZATION_MANAGERS,
+  );
+  if (!access.success) return access;
+
+  /**
+   * Re-encode BEFORE Cloudinary. This is what proves the bytes are a raster image from
+   * their magic bytes rather than from the untrusted multipart header, and what strips
+   * EXIF. Dimensions come out of the normalized buffer, never from the client (A2).
+   */
+  const normalized = await validateAndNormalizeImage(input.imageBytes, {
+    outputMaxDimensionPx: ORGANIZATION_LOGO_OUTPUT_MAX_DIMENSION_PX,
+    outputFormat: "avif",
+  });
+  if (!normalized.success) {
+    return { success: false, error: { type: "IMAGE_REJECTED", imageError: normalized.error } };
+  }
+
+  const [existing] = await db
+    .select({ previousPublicId: commerceOrganization.logoCloudinaryPublicId })
+    .from(commerceOrganization)
+    .where(eq(commerceOrganization.id, input.organizationId))
+    .limit(1);
+  if (!existing) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  const uploaded = await uploadOrganizationLogoAsset(input.organizationId, normalized.value.buffer);
+  if (!uploaded.success) {
+    return { success: false, error: { type: "IMAGE_STORAGE_FAILED", storageError: uploaded.error } };
+  }
+
+  let updated: ReturnType<typeof publicOrganization> | null;
+  try {
+    updated = await db.transaction(async (transaction) => {
+      const occurredAt = new Date();
+      const [organization] = await transaction
+        .update(commerceOrganization)
+        .set({
+          logoUrl: uploaded.value.secureUrl,
+          logoCloudinaryPublicId: uploaded.value.publicId,
+          logoWidthPx: normalized.value.width,
+          logoHeightPx: normalized.value.height,
+          updatedAt: occurredAt,
+        })
+        .where(eq(commerceOrganization.id, input.organizationId))
+        .returning();
+      if (!organization) return null;
+
+      /**
+       * Dimensions only — never the public id. `FORBIDDEN_PAYLOAD_KEY` matches
+       * `object.*key` and `filename` and THROWS, and a storage handle has no business in
+       * an immutable log regardless. This is the guard that took down address creation in
+       * Phase 11 when `addressKind` matched it.
+       */
+      await appendAuditOrThrow(transaction, {
+        organizationId: input.organizationId,
+        eventKind: "organization_updated",
+        actorUserId: input.userId,
+        actorMemberRoleSnapshot: access.value.role,
+        targetEntityType: "commerce_organization",
+        targetEntityId: input.organizationId,
+        payload: {
+          changedFields: ["logo"],
+          widthPx: String(normalized.value.width),
+          heightPx: String(normalized.value.height),
+        },
+        occurredAt,
+      });
+      return publicOrganization(organization);
+    });
+  } catch (updateError: unknown) {
+    // The asset is in Cloudinary and no row points at it. Remove it before surfacing.
+    await deleteOrganizationLogo(uploaded.value.publicId);
+    throw updateError;
+  }
+
+  if (!updated) {
+    await deleteOrganizationLogo(uploaded.value.publicId);
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  if (
+    existing.previousPublicId !== null &&
+    existing.previousPublicId !== uploaded.value.publicId
+  ) {
+    // Best-effort: the row already names the new asset, so a failure here leaks an
+    // orphan rather than breaking the storefront.
+    await deleteOrganizationLogo(existing.previousPublicId);
+  }
+
+  await enqueueOrganizationSearchDocumentRefreshAfterLogoChange(input.organizationId);
+  return { success: true, value: updated };
+}
+
+async function enqueueOrganizationSearchDocumentRefreshAfterLogoChange(
+  organizationId: string,
+): Promise<void> {
+  const { enqueueOrganizationSearchDocumentRefresh } =
+    await import("#src/services/store-search.service.js");
+  await enqueueOrganizationSearchDocumentRefresh(organizationId);
 }
 
 export async function createMember(

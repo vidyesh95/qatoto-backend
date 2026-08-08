@@ -10,7 +10,11 @@ import {
   storePathwaySlot,
   storePathwaySlotCandidate,
 } from "#src/db/schema.js";
+import type { CloudinaryError } from "#src/lib/cloudinary.js";
+import { deleteStorePathwayImage, uploadStorePathwayImage } from "#src/lib/cloudinary.js";
 import { resolveUnitPriceInCents } from "#src/lib/commerce-pricing.js";
+import type { ImageValidationError } from "#src/lib/image.js";
+import { validateAndNormalizeImage } from "#src/lib/image.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import {
@@ -66,6 +70,9 @@ export type CommercePathwayError =
     }
   /** A moderator may not decide a proposal from an organization they belong to. */
   | { type: "SELF_MODERATION_FORBIDDEN" }
+  /** `0091`. The same two tags every other hosted-image surface in commerce uses. */
+  | { type: "IMAGE_REJECTED"; imageError: ImageValidationError }
+  | { type: "IMAGE_STORAGE_FAILED"; storageError: CloudinaryError }
   | { type: "PLATFORM_CAPABILITY_REQUIRED"; capability: "moderate_commerce" };
 
 export interface PathwayCandidateAuthoringProjection {
@@ -123,6 +130,8 @@ const MAXIMUM_CANDIDATES_PER_SLOT = 12;
 
 /** A set is editable while nobody is looking at it, and after it comes back rejected. */
 const EDITABLE_PATHWAY_STATES = ["draft", "rejected"] as const;
+/** Hero art is full-bleed on the store's widest surface. */
+const PATHWAY_IMAGE_OUTPUT_MAX_DIMENSION_PX = 2048;
 
 interface SlotInput {
   readonly roleLabel: string;
@@ -335,8 +344,6 @@ export async function createPathway(
     readonly summary?: string | undefined;
     readonly accent?: (typeof storePathway.$inferSelect)["accent"] | undefined;
     readonly anchorProductId?: string | undefined;
-    readonly heroImageUrl?: string | undefined;
-    readonly cardImageUrl?: string | undefined;
     readonly startsAt?: Date | undefined;
     readonly endsAt?: Date | undefined;
   },
@@ -361,8 +368,7 @@ export async function createPathway(
           accent: input.accent ?? "slate",
           state: "draft",
           anchorProductId: input.anchorProductId ?? null,
-          heroImageUrl: input.heroImageUrl ?? null,
-          cardImageUrl: input.cardImageUrl ?? null,
+          // Images arrive by upload after creation (`0091`), never as a URL on this body.
           ownerOrganizationId: actor.kind === "organization" ? actor.organizationId : null,
           createdByUserId: actor.actorUserId,
           startsAt: input.startsAt ?? null,
@@ -399,8 +405,6 @@ export async function updatePathway(
     readonly summary?: string | null | undefined;
     readonly accent?: (typeof storePathway.$inferSelect)["accent"] | undefined;
     readonly anchorProductId?: string | null | undefined;
-    readonly heroImageUrl?: string | null | undefined;
-    readonly cardImageUrl?: string | null | undefined;
     readonly startsAt?: Date | null | undefined;
     readonly endsAt?: Date | null | undefined;
   },
@@ -428,8 +432,6 @@ export async function updatePathway(
         ...(input.summary === undefined ? {} : { summary: input.summary }),
         ...(input.accent === undefined ? {} : { accent: input.accent }),
         ...(input.anchorProductId === undefined ? {} : { anchorProductId: input.anchorProductId }),
-        ...(input.heroImageUrl === undefined ? {} : { heroImageUrl: input.heroImageUrl }),
-        ...(input.cardImageUrl === undefined ? {} : { cardImageUrl: input.cardImageUrl }),
         ...(input.startsAt === undefined ? {} : { startsAt: input.startsAt }),
         ...(input.endsAt === undefined ? {} : { endsAt: input.endsAt }),
       })
@@ -466,6 +468,178 @@ export async function updatePathway(
     default: {
       const exhaustiveOutcome: never = outcome;
       throw new Error(`Unhandled pathway update outcome: ${JSON.stringify(exhaustiveOutcome)}`);
+    }
+  }
+}
+
+/**
+ * Replace one of a pathway's two images with platform-hosted bytes (migration `0091`).
+ *
+ * THIS IS THE ROUTE THE HOSTING DECISION WAS MADE FOR. `heroImageUrl` and `cardImageUrl`
+ * used to be client-supplied https strings on create and update. §15.5 lets a SELLER
+ * propose a pathway; a moderator publishes it; `EDITABLE_PATHWAY_STATES` then freezes the
+ * row — so the store presents that art as reviewed. Under a URL the moderator reviewed a
+ * pointer, and the seller could repoint it the moment the set went live. Approving a
+ * pointer is not approving a picture.
+ *
+ * The editable-state gate is unchanged and deliberate: an image may only be set while the
+ * pathway is `draft` or `rejected`, which is exactly the window in which the rest of the
+ * proposal can still change. A published set's art is as frozen as its slots.
+ */
+export async function replacePathwayImage(
+  actor: CommercePathwayActor,
+  pathwayId: string,
+  imageSlot: "hero" | "card",
+  imageBytes: Buffer,
+): Promise<Result<PathwayAuthoringProjection, CommercePathwayError>> {
+  const authorized = await authorizeActor(actor);
+  if (!authorized.success) return authorized;
+
+  /**
+   * Re-encode BEFORE Cloudinary: proves the bytes are a raster image from their magic
+   * bytes rather than the untrusted multipart header, and strips EXIF. Dimensions come
+   * from the normalized buffer, never the client (A2).
+   */
+  const normalized = await validateAndNormalizeImage(imageBytes, {
+    outputMaxDimensionPx: PATHWAY_IMAGE_OUTPUT_MAX_DIMENSION_PX,
+    outputFormat: "avif",
+  });
+  if (!normalized.success) {
+    return { success: false, error: { type: "IMAGE_REJECTED", imageError: normalized.error } };
+  }
+
+  /**
+   * Authorize and check the state BEFORE spending a Cloudinary upload. The row is read
+   * without a lock here and re-read under one inside the transaction below; this pass
+   * exists so an unauthorized caller or a published pathway never reaches the uploader.
+   */
+  const [preflight] = await db
+    .select({ state: storePathway.state, ownerOrganizationId: storePathway.ownerOrganizationId })
+    .from(storePathway)
+    .where(
+      actor.kind === "organization"
+        ? and(
+            eq(storePathway.id, pathwayId),
+            eq(storePathway.ownerOrganizationId, actor.organizationId),
+          )
+        : eq(storePathway.id, pathwayId),
+    )
+    .limit(1);
+  if (!preflight) return { success: false, error: { type: "NOT_FOUND" } };
+  if (!isEditableState(preflight.state)) {
+    return {
+      success: false,
+      error: {
+        type: "INVALID_STATE",
+        message: `A pathway in state ${preflight.state} cannot be edited.`,
+      },
+    };
+  }
+
+  const uploaded = await uploadStorePathwayImage(pathwayId, imageSlot, normalized.value.buffer);
+  if (!uploaded.success) {
+    return { success: false, error: { type: "IMAGE_STORAGE_FAILED", storageError: uploaded.error } };
+  }
+
+  const occurredAt = new Date();
+  let outcome:
+    | { readonly status: "not_found" }
+    | { readonly status: "invalid_state"; readonly state: PathwayRow["state"] }
+    | {
+        readonly status: "updated";
+        readonly projection: PathwayAuthoringProjection;
+        readonly previousPublicId: string | null;
+      };
+  try {
+    outcome = await db.transaction(async (transaction) => {
+      const row = await loadWritablePathwayForUpdate(transaction, actor, pathwayId);
+      if (row === null) return { status: "not_found" as const };
+      if (!isEditableState(row.state)) {
+        return { status: "invalid_state" as const, state: row.state };
+      }
+
+      const previousPublicId =
+        imageSlot === "hero" ? row.heroImageCloudinaryPublicId : row.cardImageCloudinaryPublicId;
+
+      const [updated] = await transaction
+        .update(storePathway)
+        .set(
+          imageSlot === "hero"
+            ? {
+                heroImageUrl: uploaded.value.secureUrl,
+                heroImageCloudinaryPublicId: uploaded.value.publicId,
+                heroImageWidthPx: normalized.value.width,
+                heroImageHeightPx: normalized.value.height,
+              }
+            : {
+                cardImageUrl: uploaded.value.secureUrl,
+                cardImageCloudinaryPublicId: uploaded.value.publicId,
+                cardImageWidthPx: normalized.value.width,
+                cardImageHeightPx: normalized.value.height,
+              },
+        )
+        .where(eq(storePathway.id, pathwayId))
+        .returning();
+      if (!updated) throw new Error("Pathway image update returned no row.");
+
+      /**
+       * `imageSlot` and dimensions — never the public id. `FORBIDDEN_PAYLOAD_KEY` matches
+       * `object.*key` and `filename` and throws, and a storage handle does not belong in
+       * an immutable log in any case.
+       */
+      await appendPathwayAudit(transaction, {
+        organizationId: updated.ownerOrganizationId,
+        eventKind: "pathway_updated",
+        actorUserId: actor.actorUserId,
+        memberRole: actor.kind === "organization" ? actor.memberRole : null,
+        pathwayId: updated.id,
+        payload: {
+          pathwayId: updated.id,
+          changedFields: [imageSlot === "hero" ? "heroImage" : "cardImage"],
+          widthPx: String(normalized.value.width),
+          heightPx: String(normalized.value.height),
+        },
+        occurredAt,
+      });
+
+      return {
+        status: "updated" as const,
+        projection: await projectPathway(transaction, updated),
+        previousPublicId,
+      };
+    });
+  } catch (updateError: unknown) {
+    // The asset is in Cloudinary and no row points at it. Remove it before surfacing.
+    await deleteStorePathwayImage(uploaded.value.publicId);
+    throw updateError;
+  }
+
+  switch (outcome.status) {
+    case "not_found":
+      await deleteStorePathwayImage(uploaded.value.publicId);
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "invalid_state":
+      await deleteStorePathwayImage(uploaded.value.publicId);
+      return {
+        success: false,
+        error: {
+          type: "INVALID_STATE",
+          message: `A pathway in state ${outcome.state} cannot be edited.`,
+        },
+      };
+    case "updated":
+      if (
+        outcome.previousPublicId !== null &&
+        outcome.previousPublicId !== uploaded.value.publicId
+      ) {
+        // Best-effort: the row already names the new asset, so a failure here leaks an
+        // orphan rather than breaking the set.
+        await deleteStorePathwayImage(outcome.previousPublicId);
+      }
+      return { success: true, value: outcome.projection };
+    default: {
+      const exhaustiveOutcome: never = outcome;
+      throw new Error(`Unhandled pathway image outcome: ${JSON.stringify(exhaustiveOutcome)}`);
     }
   }
 }

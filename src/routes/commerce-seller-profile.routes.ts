@@ -11,6 +11,7 @@ import {
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadCommerceCertificate } from "#src/middleware/upload-commerce-certificate.js";
 import { uploadOrganizationMediaImage } from "#src/middleware/upload-organization-media.js";
+import { uploadStakeholderPhotoFile } from "#src/middleware/upload-stakeholder-photo.js";
 
 /**
  * Seller profile depth (Appendix A13, Phase 12).
@@ -57,6 +58,18 @@ router.put(
   longFormBody,
   idempotency({ required: true }),
   commerceSellerProfileController.replaceStakeholders,
+);
+/**
+ * Migration `0091`. Multipart, so no body-cap middleware — multer owns this body, as on
+ * the company-media upload below.
+ */
+router.post(
+  "/organizations/:organizationId/stakeholders/:stakeholderId/photo",
+  requireAuth,
+  productCatalogDepthWriteLimiter,
+  uploadStakeholderPhotoFile,
+  idempotency({ required: true }),
+  commerceSellerProfileController.replaceStakeholderPhoto,
 );
 router.put(
   "/organizations/:organizationId/capabilities",

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, count, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import type {
   CreateProductInput,
@@ -20,7 +20,9 @@ import {
 } from "#src/db/schema.js";
 import {
   deleteAllProductImages,
+  deleteProductHighlightImage,
   deleteProductImage,
+  uploadProductHighlightImage,
   uploadProductImage,
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
@@ -72,8 +74,8 @@ export interface ProductImageView {
   /** A1. Null is the shared gallery; non-null scopes the asset to one variant. */
   readonly variantId: string | null;
   readonly url: string;
-  /** A2. What makes a 360 spin or a video expressible at all. */
-  readonly mediaKind: "photo" | "video" | "spin_360";
+  /** A2. What makes a 360 spin expressible at all. `video` was removed by `0090`. */
+  readonly mediaKind: "photo" | "spin_360";
   readonly altText: string | null;
   readonly widthPx: number | null;
   readonly heightPx: number | null;
@@ -530,30 +532,93 @@ async function replaceProductVariants(
 }
 
 /** A6. Highlights have no downstream references, so replace-all is safe. */
+/**
+ * A6. Replace the highlight plan, PRESERVING THE IDENTITY of rows the caller kept.
+ *
+ * It used to delete every row and re-insert, which was harmless while a highlight was
+ * three columns of text — and became wrong in `0091`, when a highlight gained a
+ * platform-hosted image. A delete-and-reinsert throws away the id the image is attached
+ * to, so editing a title would orphan the picture. Identity is matched the way
+ * `replaceProductVariants` matches `publicSlug` and `replaceProductCustomizationOptions`
+ * matches `slotKey`.
+ *
+ * A CLIENT-SUPPLIED ID IS A HINT, NEVER A GRANT. Only ids that already belong to THIS
+ * product are honoured; anything else is treated as a new row and gets a server-generated
+ * id, so naming another product's highlight cannot move or read it (CLAUDE.md §1.1).
+ *
+ * Position parking mirrors the variant path: `(productId, position)` is unique, so every
+ * surviving row is moved out of range before final positions are written.
+ *
+ * Returns the Cloudinary public ids of dropped rows so the CALLER can destroy them after
+ * the transaction commits — a remote delete inside a transaction that later rolls back
+ * would leave a live row pointing at an asset that no longer exists.
+ */
 async function replaceProductHighlights(
   transaction: DatabaseTransaction,
   productId: string,
   highlights: readonly {
+    readonly id?: string | undefined;
     readonly title: string;
     readonly bodyText: string;
-    readonly imageUrl?: string | undefined;
   }[],
-): Promise<void> {
-  await transaction
-    .delete(commerceProductHighlight)
+): Promise<readonly string[]> {
+  const existingHighlights = await transaction
+    .select({
+      id: commerceProductHighlight.id,
+      imageCloudinaryPublicId: commerceProductHighlight.imageCloudinaryPublicId,
+    })
+    .from(commerceProductHighlight)
     .where(eq(commerceProductHighlight.productId, productId));
-  if (highlights.length === 0) {
-    return;
+  const existingIds = new Set(existingHighlights.map((highlight) => highlight.id));
+
+  const positionParkingOffset = existingHighlights.length + highlights.length + 1000;
+  await transaction
+    .update(commerceProductHighlight)
+    .set({ position: sql`${commerceProductHighlight.position} + ${positionParkingOffset}` })
+    .where(eq(commerceProductHighlight.productId, productId));
+
+  const keptHighlightIds = new Set<string>();
+  for (const [index, highlight] of highlights.entries()) {
+    const existingId =
+      highlight.id !== undefined && existingIds.has(highlight.id) ? highlight.id : undefined;
+    if (existingId === undefined) {
+      const [inserted] = await transaction
+        .insert(commerceProductHighlight)
+        .values({
+          productId,
+          title: highlight.title,
+          bodyText: highlight.bodyText,
+          position: index,
+        })
+        .returning({ id: commerceProductHighlight.id });
+      if (!inserted) throw new Error("Product highlight insert returned no row.");
+      keptHighlightIds.add(inserted.id);
+      continue;
+    }
+
+    // The image columns are deliberately untouched: they are owned by the upload route.
+    await transaction
+      .update(commerceProductHighlight)
+      .set({ title: highlight.title, bodyText: highlight.bodyText, position: index })
+      .where(eq(commerceProductHighlight.id, existingId));
+    keptHighlightIds.add(existingId);
   }
-  await transaction.insert(commerceProductHighlight).values(
-    highlights.map((highlight, index) => ({
-      productId,
-      title: highlight.title,
-      bodyText: highlight.bodyText,
-      imageUrl: highlight.imageUrl ?? null,
-      position: index,
-    })),
+
+  const droppedHighlights = existingHighlights.filter(
+    (highlight) => !keptHighlightIds.has(highlight.id),
   );
+  if (droppedHighlights.length > 0) {
+    await transaction.delete(commerceProductHighlight).where(
+      inArray(
+        commerceProductHighlight.id,
+        droppedHighlights.map((highlight) => highlight.id),
+      ),
+    );
+  }
+
+  return droppedHighlights
+    .map((highlight) => highlight.imageCloudinaryPublicId)
+    .filter((publicId): publicId is string => publicId !== null);
 }
 
 /**
@@ -1106,9 +1171,9 @@ export async function replaceHighlights(
   sellerOrganizationId: string,
   productId: string,
   highlights: readonly {
+    readonly id?: string | undefined;
     readonly title: string;
     readonly bodyText: string;
-    readonly imageUrl?: string | undefined;
   }[],
 ): Promise<Result<PublicProduct, ProductError>> {
   const owned = await db.transaction(async (tx) => {
@@ -1118,12 +1183,108 @@ export async function replaceHighlights(
       .where(
         and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
       );
-    if (!row) return false;
-    await replaceProductHighlights(tx, productId, highlights);
-    return true;
+    if (!row) return { kept: false as const, droppedPublicIds: [] as readonly string[] };
+    const droppedPublicIds = await replaceProductHighlights(tx, productId, highlights);
+    return { kept: true as const, droppedPublicIds };
   });
-  if (!owned) {
+  if (!owned.kept) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  /**
+   * AFTER commit, never inside it. A remote delete inside a transaction that later rolls
+   * back would leave a surviving row pointing at an asset that no longer exists.
+   * Best-effort: a failure here leaks an orphan rather than breaking the listing.
+   */
+  for (const publicId of owned.droppedPublicIds) {
+    await deleteProductHighlightImage(publicId);
+  }
+
+  const reloaded = await loadOrganizationProduct(sellerOrganizationId, productId);
+  if (!reloaded) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+  await enqueueProductSearchDocumentRefresh(productId);
+  return { success: true, value: reloaded };
+}
+
+/**
+ * Attach platform-hosted bytes to one highlight card (A6, migration `0091`).
+ *
+ * `imageUrl` used to be a client-supplied https string on the highlight plan, which meant
+ * the PDP rendered bytes the seller held: EXIF unstripped, the seller's origin watching
+ * every product-page visitor, and the picture changeable after the listing was approved.
+ *
+ * The highlight must already exist — the plan is authored first at
+ * `PUT /products/:id/highlights`, and that call now preserves ids (see
+ * `replaceProductHighlights`) precisely so an image survives an edit to its own title.
+ */
+export async function replaceHighlightImage(
+  sellerOrganizationId: string,
+  productId: string,
+  highlightId: string,
+  rawImageBytes: Buffer,
+): Promise<Result<PublicProduct, ProductError>> {
+  const [existing] = await db
+    .select({
+      id: commerceProductHighlight.id,
+      previousPublicId: commerceProductHighlight.imageCloudinaryPublicId,
+    })
+    .from(commerceProductHighlight)
+    .innerJoin(product, eq(product.id, commerceProductHighlight.productId))
+    .where(
+      and(
+        eq(commerceProductHighlight.id, highlightId),
+        eq(commerceProductHighlight.productId, productId),
+        eq(product.sellerOrganizationId, sellerOrganizationId),
+      ),
+    )
+    .limit(1);
+  if (!existing) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  /**
+   * Re-encode BEFORE Cloudinary: proves the bytes are a raster image from their magic
+   * bytes rather than the untrusted multipart header, and strips EXIF. Dimensions come
+   * from the normalized buffer, never the client (A2).
+   */
+  const normalized = await validateAndNormalizeImage(rawImageBytes, {
+    outputMaxDimensionPx: PRODUCT_IMAGE_OUTPUT_MAX_DIMENSION_PX,
+    outputFormat: "avif",
+  });
+  if (!normalized.success) {
+    return { success: false, error: normalized.error };
+  }
+
+  const uploaded = await uploadProductHighlightImage(
+    productId,
+    highlightId,
+    normalized.value.buffer,
+  );
+  if (!uploaded.success) {
+    return { success: false, error: uploaded.error };
+  }
+
+  const [updated] = await db
+    .update(commerceProductHighlight)
+    .set({
+      imageUrl: uploaded.value.secureUrl,
+      imageCloudinaryPublicId: uploaded.value.publicId,
+      imageWidthPx: normalized.value.width,
+      imageHeightPx: normalized.value.height,
+    })
+    .where(eq(commerceProductHighlight.id, highlightId))
+    .returning({ id: commerceProductHighlight.id });
+  if (!updated) {
+    await deleteProductHighlightImage(uploaded.value.publicId);
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  if (existing.previousPublicId !== null && existing.previousPublicId !== uploaded.value.publicId) {
+    // Best-effort: the row already names the new asset, so a failure leaks an orphan
+    // rather than breaking the listing.
+    await deleteProductHighlightImage(existing.previousPublicId);
   }
 
   const reloaded = await loadOrganizationProduct(sellerOrganizationId, productId);
@@ -1181,7 +1342,7 @@ export async function addProductImage(
   rawImageBytes: Buffer,
   options: {
     readonly variantId?: string | undefined;
-    readonly mediaKind?: "photo" | "video" | "spin_360" | undefined;
+    readonly mediaKind?: "photo" | "spin_360" | undefined;
     readonly altText?: string | undefined;
   } = {},
 ): Promise<Result<ProductImageView, ProductError>> {

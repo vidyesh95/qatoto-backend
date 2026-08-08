@@ -9,6 +9,7 @@ import {
   product,
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { loadOrderCompletionIndex } from "#src/services/commerce-completion.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";
@@ -68,6 +69,13 @@ export interface OrderListPage {
 
 export interface OrderProductLineProjection {
   readonly id: string;
+  /**
+   * The completion this line produced, once it was fulfilled — the id
+   * `POST /commerce/completions/:completionId/reviews` demands. `null` until the line
+   * completes. Before this shipped, `completionId` was projected NOWHERE, so a buyer
+   * could not review a delivered line without guessing a UUID.
+   */
+  readonly completionId: string | null;
   readonly productId: string | null;
   readonly titleSnapshot: string;
   readonly specificationSnapshot: string;
@@ -112,6 +120,12 @@ export interface OrderDetailProjection {
   readonly createdAt: Date;
   readonly productLines: readonly OrderProductLineProjection[];
   readonly serviceLines: readonly OrderServiceLineProjection[];
+  /**
+   * Every completion this order produced, including the service-engagement ones that
+   * belong to no product line. The per-line id covers the common case; this covers the
+   * rest without making a client walk two shapes to find them.
+   */
+  readonly completionIds: readonly string[];
   /**
    * STORE Phase 14. How this order settles, and whether a third party is holding the money.
    *
@@ -162,9 +176,13 @@ function summarizeOrder(order: OrderRow): OrderSummaryProjection {
   };
 }
 
-function projectOrderProductLine(line: ProductLineRow): OrderProductLineProjection {
+function projectOrderProductLine(
+  line: ProductLineRow,
+  completionId: string | null,
+): OrderProductLineProjection {
   return {
     id: line.id,
+    completionId,
     productId: line.productId,
     titleSnapshot: line.titleSnapshot,
     specificationSnapshot: line.specificationSnapshot,
@@ -191,7 +209,7 @@ function projectOrderServiceLine(line: ServiceLineRow): OrderServiceLineProjecti
 }
 
 async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjection> {
-  const [productLines, serviceLines] = await Promise.all([
+  const [productLines, serviceLines, completionIndex] = await Promise.all([
     db
       .select()
       .from(commerceOrderProductLine)
@@ -202,6 +220,7 @@ async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjectio
       .from(commerceOrderServiceLine)
       .where(eq(commerceOrderServiceLine.orderId, order.id))
       .orderBy(asc(commerceOrderServiceLine.siblingOrder)),
+    loadOrderCompletionIndex(order.id),
   ]);
 
   return {
@@ -227,7 +246,10 @@ async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjectio
     // Derived, never stored twice: one fact cannot then disagree with itself.
     hasEscrowProtection: order.settlementRail === "external_escrow",
     createdAt: order.createdAt,
-    productLines: productLines.map(projectOrderProductLine),
+    completionIds: completionIndex.completionIds,
+    productLines: productLines.map((line) =>
+      projectOrderProductLine(line, completionIndex.completionIdByProductLineId.get(line.id) ?? null),
+    ),
     serviceLines: serviceLines.map(projectOrderServiceLine),
   };
 }
