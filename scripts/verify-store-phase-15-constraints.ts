@@ -164,6 +164,66 @@ const CHECKS: readonly Check[] = [
       return { ok: present, detail: present ? "present" : "missing" };
     },
   },
+
+  // -------------------------------------------------------------------------
+  // 0094 — A27 per-tier lead time.
+  // -------------------------------------------------------------------------
+  {
+    name: "0094 · product_pricing_tier.lead_time_days is nullable and bounded",
+    why: "NULL is the fallback to the product's lead time; a bogus value would reach promisedDeliveryAt.",
+    async run() {
+      const present = await columnExists("product_pricing_tier", "lead_time_days");
+      const nullable = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM information_schema.columns
+         WHERE table_name = 'product_pricing_tier'
+           AND column_name = 'lead_time_days' AND is_nullable = 'YES'`);
+      const constrained = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM pg_constraint WHERE conname = 'product_pricing_tier_lead_time_ck'`);
+      return {
+        ok: present && nullable === 1 && constrained === 1,
+        detail: `column=${String(present)} nullable=${String(nullable)} check=${String(constrained)}`,
+      };
+    },
+  },
+  {
+    name: "0094 · the lead-time check REFUSES an out-of-range band",
+    why: "A ten-thousand-day band would be snapshotted into a promise nobody can keep.",
+    async run() {
+      const tier = await db.execute<{ id: string }>(sql`
+        SELECT id FROM product_pricing_tier LIMIT 1`);
+      const row = tier.rows[0];
+      if (!row) {
+        return { ok: false, detail: "no product_pricing_tier rows — check UNEXERCISED" };
+      }
+      const refused = await probeRefusal(
+        `UPDATE product_pricing_tier SET lead_time_days = 4000 WHERE id = '${row.id}'`,
+      );
+      return { ok: refused, detail: refused ? "refused" : "ACCEPTED a 4000-day lead time" };
+    },
+  },
+  {
+    name: "0094 · nothing was backfilled onto the tier ladder",
+    why: "Copying the product's lead time down onto every band would fake a declaration the seller never made.",
+    async run() {
+      // Not an assertion that the column is unused — a seller may legitimately have set
+      // one since. It asserts only that the MIGRATION did not manufacture values, which
+      // would show as every tier of a product carrying its product's lead time exactly.
+      const declared = await scalar(sql`
+        SELECT count(*)::int AS value FROM product_pricing_tier WHERE lead_time_days IS NOT NULL`);
+      const inheritedFromProduct = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM product_pricing_tier tier
+          JOIN product ON product.id = tier.product_id
+         WHERE tier.lead_time_days IS NOT NULL
+           AND tier.lead_time_days = product.lead_time_max_days`);
+      return {
+        ok: declared === 0 || inheritedFromProduct < declared,
+        detail: `declared=${String(declared)} equal_to_product=${String(inheritedFromProduct)}`,
+      };
+    },
+  },
 ];
 
 async function main(): Promise<void> {

@@ -12,6 +12,12 @@ import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 const PricingTierSchema = z.object({
   unitPriceInCents: z.number().int().min(0),
   minimumOrderQuantity: z.number().int().min(1),
+  /**
+   * A27. This band's own maximum lead time. Optional, and absent means the product's
+   * `leadTimeMaxDays` applies — the pre-Phase-15 behaviour, which is what every existing
+   * ladder means. Bounds match `leadTimeMinDays`/`leadTimeMaxDays` and the quote lines.
+   */
+  leadTimeDays: z.number().int().min(0).max(3650).optional(),
 });
 
 /**

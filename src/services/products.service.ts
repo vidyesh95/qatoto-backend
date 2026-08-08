@@ -89,6 +89,8 @@ export interface PricingTierView {
   readonly variantId: string | null;
   readonly unitPriceInCents: number;
   readonly minimumOrderQuantity: number;
+  /** A27. Null means this band declared none and the product's lead time applies. */
+  readonly leadTimeDays: number | null;
   readonly position: number;
 }
 
@@ -255,6 +257,7 @@ const PRICING_TIER_VIEW_COLUMNS = {
   variantId: productPricingTier.variantId,
   unitPriceInCents: productPricingTier.unitPriceInCents,
   minimumOrderQuantity: productPricingTier.minimumOrderQuantity,
+  leadTimeDays: productPricingTier.leadTimeDays,
   position: productPricingTier.position,
 } as const;
 
@@ -492,6 +495,7 @@ async function replaceProductVariants(
     readonly pricingTiers: readonly {
       readonly unitPriceInCents: number;
       readonly minimumOrderQuantity: number;
+      readonly leadTimeDays?: number | undefined;
     }[];
   }[],
 ): Promise<void> {
@@ -559,6 +563,7 @@ async function replaceProductVariants(
           variantId,
           unitPriceInCents: tier.unitPriceInCents,
           minimumOrderQuantity: tier.minimumOrderQuantity,
+          leadTimeDays: tier.leadTimeDays ?? null,
           position: tierIndex,
         })),
       );
@@ -939,6 +944,7 @@ export async function createProduct(
                     productId: row.id,
                     unitPriceInCents: tier.unitPriceInCents,
                     minimumOrderQuantity: tier.minimumOrderQuantity,
+                    leadTimeDays: tier.leadTimeDays ?? null,
                     position: index,
                   })),
                 )
@@ -1107,6 +1113,7 @@ export async function updateProduct(
                 productId,
                 unitPriceInCents: tier.unitPriceInCents,
                 minimumOrderQuantity: tier.minimumOrderQuantity,
+                leadTimeDays: tier.leadTimeDays ?? null,
                 position: index,
               })),
             );
@@ -1167,6 +1174,7 @@ export async function replaceVariants(
     readonly pricingTiers: readonly {
       readonly unitPriceInCents: number;
       readonly minimumOrderQuantity: number;
+      readonly leadTimeDays?: number | undefined;
     }[];
   }[],
 ): Promise<Result<PublicProduct, ProductError>> {

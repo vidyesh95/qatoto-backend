@@ -2731,6 +2731,17 @@ export const productPricingTier = pgTable(
     }),
     unitPriceInCents: integer("unit_price_in_cents").notNull(),
     minimumOrderQuantity: integer("minimum_order_quantity").notNull(),
+    /**
+     * A27. The band's own maximum lead time, because a thousand units do not ship on
+     * the timetable fifty units ship on.
+     *
+     * NULL means the seller declared none for this band and the product's
+     * `leadTimeMaxDays` applies — which is what every pre-Phase-15 row means, and why
+     * nothing was backfilled. A13's promise chain reads whichever one wins at
+     * preparation, so a per-tier value reaches `promisedDeliveryAt` without any further
+     * plumbing.
+     */
+    leadTimeDays: integer("lead_time_days"),
     // Display order of the tier ladder.
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -2740,6 +2751,10 @@ export const productPricingTier = pgTable(
     index("product_pricing_tier_variantId_idx")
       .on(table.variantId)
       .where(sql`variant_id IS NOT NULL`),
+    check(
+      "product_pricing_tier_lead_time_ck",
+      sql`lead_time_days IS NULL OR lead_time_days BETWEEN 0 AND 3650`,
+    ),
   ],
 );
 

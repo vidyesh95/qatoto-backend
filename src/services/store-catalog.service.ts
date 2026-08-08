@@ -137,6 +137,12 @@ export interface StoreProductMediaProjection {
 export interface StoreProductPricingTierProjection {
   readonly unitPriceInCents: number;
   readonly minimumOrderQuantity: number;
+  /**
+   * A27. This band's own maximum lead time, or `null` when it declared none and the
+   * product's `leadTimeMaxDays` applies. It is the same band the buyer's quantity will
+   * be priced from at preparation, so the delivery panel and the promise agree.
+   */
+  readonly leadTimeDays: number | null;
   readonly position: number;
 }
 
@@ -1113,6 +1119,7 @@ export async function getPublicProductBySlug(
         variantId: productPricingTier.variantId,
         unitPriceInCents: productPricingTier.unitPriceInCents,
         minimumOrderQuantity: productPricingTier.minimumOrderQuantity,
+        leadTimeDays: productPricingTier.leadTimeDays,
         position: productPricingTier.position,
       })
       .from(productPricingTier)
@@ -1190,20 +1197,22 @@ export async function getPublicProductBySlug(
   const sharedImages = allImages.filter((media) => media.variantId === null).map(toMediaProjection);
   const sharedPricingTiers = allPricingTiers
     .filter((tier) => tier.variantId === null)
-    .map(({ unitPriceInCents, minimumOrderQuantity, position }) => ({
+    .map(({ unitPriceInCents, minimumOrderQuantity, leadTimeDays, position }) => ({
       unitPriceInCents,
       minimumOrderQuantity,
+      leadTimeDays,
       position,
     }));
 
   const variants: StoreProductVariantProjection[] = variantRows.map((variantRow) => {
     const variantTiers = allPricingTiers
       .filter((tier) => tier.variantId === variantRow.id)
-      .map(({ unitPriceInCents, minimumOrderQuantity, position }) => ({
+      .map(({ unitPriceInCents, minimumOrderQuantity, leadTimeDays, position }) => ({
         unitPriceInCents,
         minimumOrderQuantity,
+        leadTimeDays,
         position,
-      }));
+    }));
     return {
       id: variantRow.id,
       publicSlug: variantRow.publicSlug,

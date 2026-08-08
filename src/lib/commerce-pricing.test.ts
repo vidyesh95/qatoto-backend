@@ -20,7 +20,11 @@ describe("resolveUnitPriceInCents", () => {
       tiers: [],
     });
 
-    expect(result).toEqual({ unitPriceInCents: 1000, minimumOrderQuantity: 1 });
+    expect(result).toEqual({
+      unitPriceInCents: 1000,
+      minimumOrderQuantity: 1,
+      leadTimeDays: null,
+    });
   });
 
   it("picks the highest eligible tier by minimum order quantity", () => {
@@ -34,7 +38,11 @@ describe("resolveUnitPriceInCents", () => {
       ],
     });
 
-    expect(result).toEqual({ unitPriceInCents: 700, minimumOrderQuantity: 100 });
+    expect(result).toEqual({
+      unitPriceInCents: 700,
+      minimumOrderQuantity: 100,
+      leadTimeDays: null,
+    });
   });
 
   it("falls back to the base price at the lowest MOQ when quantity is below every tier", () => {
@@ -47,7 +55,11 @@ describe("resolveUnitPriceInCents", () => {
       ],
     });
 
-    expect(result).toEqual({ unitPriceInCents: 1000, minimumOrderQuantity: 100 });
+    expect(result).toEqual({
+      unitPriceInCents: 1000,
+      minimumOrderQuantity: 100,
+      leadTimeDays: null,
+    });
   });
 
   it("selects the tier whose MOQ exactly matches the requested quantity", () => {
@@ -60,7 +72,71 @@ describe("resolveUnitPriceInCents", () => {
       ],
     });
 
-    expect(result).toEqual({ unitPriceInCents: 800, minimumOrderQuantity: 100 });
+    expect(result).toEqual({
+      unitPriceInCents: 800,
+      minimumOrderQuantity: 100,
+      leadTimeDays: null,
+    });
+  });
+
+  /**
+   * A27. The lead time comes from the tier the QUANTITY selected, not from an aggregate
+   * over the ladder — 500 units ship on the 500-unit band's clock even though a shorter
+   * one exists lower down. `min()` across the ladder is how the displayed MOQ is
+   * computed elsewhere, and it would give the wrong answer here.
+   */
+  it("carries the selected tier's lead time, not the ladder's smallest", () => {
+    const result = resolveUnitPriceInCents({
+      basePriceInCents: 1000,
+      quantity: 500,
+      tiers: [
+        { unitPriceInCents: 900, minimumOrderQuantity: 100, leadTimeDays: 15 },
+        { unitPriceInCents: 800, minimumOrderQuantity: 250, leadTimeDays: 30 },
+        { unitPriceInCents: 700, minimumOrderQuantity: 500, leadTimeDays: 60 },
+      ],
+    });
+
+    expect(result).toEqual({
+      unitPriceInCents: 700,
+      minimumOrderQuantity: 100,
+      leadTimeDays: 60,
+    });
+  });
+
+  /** A band that declared none reports null, so the product's lead time can apply. */
+  it("reports null when the selected tier declared no lead time", () => {
+    const result = resolveUnitPriceInCents({
+      basePriceInCents: 1000,
+      quantity: 500,
+      tiers: [
+        { unitPriceInCents: 900, minimumOrderQuantity: 100, leadTimeDays: 15 },
+        { unitPriceInCents: 700, minimumOrderQuantity: 500 },
+      ],
+    });
+
+    expect(result).toEqual({
+      unitPriceInCents: 700,
+      minimumOrderQuantity: 100,
+      leadTimeDays: null,
+    });
+  });
+
+  /**
+   * Below every tier there is no selected band at all, so there is no band lead time to
+   * report — the fallback must not reach down and borrow one.
+   */
+  it("reports null when the quantity is below every tier", () => {
+    const result = resolveUnitPriceInCents({
+      basePriceInCents: 1000,
+      quantity: 10,
+      tiers: [{ unitPriceInCents: 900, minimumOrderQuantity: 100, leadTimeDays: 15 }],
+    });
+
+    expect(result).toEqual({
+      unitPriceInCents: 1000,
+      minimumOrderQuantity: 100,
+      leadTimeDays: null,
+    });
   });
 });
 
