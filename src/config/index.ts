@@ -293,6 +293,17 @@ const envSchema = z.object({
    * `resolveCommercePaymentProvider`. `stripe` is reserved for a future real processor.
    */
   COMMERCE_PAYMENT_PROVIDER: z.enum(["fake", "stripe"]).default("fake"),
+
+  /**
+   * Qatoto's commission, in basis points of an order's value (Store Phase 14).
+   *
+   * DEFAULTS TO ZERO, AND ZERO MEANS NOTHING IS POSTED — not that a zero-value entry is
+   * written. The commission MECHANISM ships in this phase; the commission POLICY is still
+   * an open decision (§14: receivable-then-invoice, which works on every rail, versus a
+   * processor application fee, which only works on `direct_processor`). Writing a rate
+   * here before that is decided would start accruing a receivable nobody has agreed to owe.
+   */
+  COMMERCE_PLATFORM_COMMISSION_BASIS_POINTS: z.coerce.number().int().min(0).max(10_000).default(0),
   // The GitHub App that grounds code artifacts. All three are required together, and
   // without them `POST …/integrations` answers 503 INTEGRATION_UNCONFIGURED and grounding
   // falls back to the evidence links §8 already stored.

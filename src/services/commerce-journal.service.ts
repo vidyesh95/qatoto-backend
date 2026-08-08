@@ -5,6 +5,7 @@ import {
   commerceJournalAccount,
   commerceJournalEntry,
   commerceJournalLine,
+  commerceOrder,
 } from "#src/db/schema.js";
 import { canonicalHashHex, type CanonicalValue } from "#src/lib/canonical-hash.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
@@ -33,6 +34,11 @@ export type CommerceJournalEntrySettlement =
 export const COMMERCE_JOURNAL_HASH_VERSION = 1;
 export const COMMERCE_JOURNAL_GENESIS_PREVIOUS_HASH = "genesis";
 
+/**
+ * The pre-Phase-14 account set. Retained under its original name because it is exactly the
+ * set the `internal_custody` rail permits, which is what every order created before Phase
+ * 14 runs on.
+ */
 export const COMMERCE_JOURNAL_ACCOUNT_KINDS: readonly CommerceJournalAccountKind[] = [
   "buyer_clearing",
   "order_held",
@@ -41,6 +47,72 @@ export const COMMERCE_JOURNAL_ACCOUNT_KINDS: readonly CommerceJournalAccountKind
   "refunds_payable",
   "reconciliation_suspense",
 ];
+
+export type CommerceSettlementRail = (typeof commerceOrder.$inferSelect)["settlementRail"];
+
+/**
+ * Which accounts each settlement rail may hold (STORE Phase 14).
+ *
+ * THIS MIRRORS `commerce_settlement_rail_account_guard` IN MIGRATION 0087, deliberately. It
+ * is not redundant: without it `ensureCommerceJournalAccounts` would try to create all six
+ * legacy accounts for an escrow order and the trigger would reject the whole transaction
+ * with a database error, which is a confusing way to learn that a rail forbids an account.
+ * The map fails fast and legibly; the trigger remains the thing that cannot be bypassed.
+ *
+ *   - `order_held` means QATOTO holds funds, so it exists only on the frozen rail.
+ *   - The four memo accounts record what a THIRD party holds, so they are absent from
+ *     `internal_custody` and from `direct_offline`.
+ *   - `settlement_custody_memo` is further absent from `direct_processor`, which settles
+ *     buyer straight to seller: funding goes directly to released with no custody hop, and
+ *     a custody balance there would be value nobody is holding.
+ *   - `direct_offline` holds NO settlement account at all. Qatoto cannot observe a wire
+ *     between two banks it has no relationship with, so it records commission and nothing
+ *     else; the movement itself lives in `commerce_settlement_attestation`.
+ *   - `seller_payable` appears only on the frozen rail and nothing posts it even there.
+ */
+const PLATFORM_FEE_ACCOUNT_KINDS: readonly CommerceJournalAccountKind[] = [
+  "platform_fee_receivable",
+  "platform_fee_earned",
+  "platform_fee_cash",
+];
+
+export const COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL: Readonly<
+  Record<CommerceSettlementRail, readonly CommerceJournalAccountKind[]>
+> = {
+  internal_custody: COMMERCE_JOURNAL_ACCOUNT_KINDS,
+  direct_offline: [...PLATFORM_FEE_ACCOUNT_KINDS, "reconciliation_suspense"],
+  direct_processor: [
+    "settlement_funding_memo",
+    "settlement_released_memo",
+    "settlement_refunded_memo",
+    ...PLATFORM_FEE_ACCOUNT_KINDS,
+    "reconciliation_suspense",
+  ],
+  external_escrow: [
+    "settlement_funding_memo",
+    "settlement_custody_memo",
+    "settlement_released_memo",
+    "settlement_refunded_memo",
+    ...PLATFORM_FEE_ACCOUNT_KINDS,
+    "reconciliation_suspense",
+  ],
+};
+
+/**
+ * Off balance sheet: value a third party holds, never a Qatoto asset. Bound to the kind by
+ * `commerce_journal_account_memorandum_ck` in both directions, so this function and the
+ * constraint cannot disagree about a row.
+ */
+const MEMORANDUM_ACCOUNT_KINDS: ReadonlySet<CommerceJournalAccountKind> = new Set([
+  "settlement_funding_memo",
+  "settlement_custody_memo",
+  "settlement_released_memo",
+  "settlement_refunded_memo",
+]);
+
+export function isMemorandumAccountKind(kind: CommerceJournalAccountKind): boolean {
+  return MEMORANDUM_ACCOUNT_KINDS.has(kind);
+}
 
 export interface CommerceJournalLineInput {
   readonly accountKind: CommerceJournalAccountKind;
@@ -84,9 +156,32 @@ export async function ensureCommerceJournalAccounts(
   orderId: string,
   currency: string,
 ): Promise<ReadonlyMap<CommerceJournalAccountKind, string>> {
+  /**
+   * The rail decides which accounts may exist, so it is read first. Creating the legacy
+   * six unconditionally — which is what this did before Phase 14 — now makes the rail
+   * guard reject the whole transaction the moment an order settles any other way.
+   */
+  const [order] = await tx
+    .select({ settlementRail: commerceOrder.settlementRail })
+    .from(commerceOrder)
+    .where(eq(commerceOrder.id, orderId))
+    .limit(1);
+  if (!order) {
+    throw new Error(`ensureCommerceJournalAccounts: order ${orderId} does not exist`);
+  }
+
+  const permittedKinds = COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL[order.settlementRail];
+
   await tx
     .insert(commerceJournalAccount)
-    .values(COMMERCE_JOURNAL_ACCOUNT_KINDS.map((kind) => ({ orderId, kind, currency })))
+    .values(
+      permittedKinds.map((kind) => ({
+        orderId,
+        kind,
+        currency,
+        isMemorandum: isMemorandumAccountKind(kind),
+      })),
+    )
     .onConflictDoNothing();
 
   const rows = await tx
@@ -96,7 +191,7 @@ export async function ensureCommerceJournalAccounts(
 
   const byKind = new Map<CommerceJournalAccountKind, string>(rows.map((row) => [row.kind, row.id]));
 
-  for (const kind of COMMERCE_JOURNAL_ACCOUNT_KINDS) {
+  for (const kind of permittedKinds) {
     if (!byKind.has(kind)) {
       throw new Error(
         `ensureCommerceJournalAccounts: account ${kind} missing for order ${orderId}`,
@@ -215,6 +310,20 @@ export async function appendCommerceJournalEntry(
   }
 
   const accountsByKind = await ensureCommerceJournalAccounts(tx, input.orderId, input.currency);
+
+  /**
+   * A line naming an account the rail does not permit is caught here rather than by the
+   * database trigger. Both refuse it; this one says which account and which order, where
+   * the trigger can only report a constraint name from inside a rolled-back transaction.
+   */
+  for (const line of input.lines) {
+    if (!accountsByKind.has(line.accountKind)) {
+      throw new Error(
+        `appendCommerceJournalEntry: account ${line.accountKind} is not permitted on order ${input.orderId}'s settlement rail`,
+      );
+    }
+  }
+
   const slot = await allocateCommerceJournalSlot(tx, input.orderId);
 
   const indexedLines = input.lines.map((line, lineIndex) => ({

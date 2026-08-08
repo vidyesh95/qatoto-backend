@@ -143,6 +143,13 @@ export const JOB_NAMES = {
   recomputeCommerceCategoryDemand: "recompute-commerce-category-demand",
   recomputeCommerceProductTrendingTick: "recompute-commerce-product-trending-tick",
   recomputeCommerceProductTrending: "recompute-commerce-product-trending",
+  // STORE Phase 14 — the external-connector substrate. One on-demand dispatcher shared by
+  // every connector kind, and one hourly reconciler that re-enqueues whatever was left
+  // pending by a worker that died mid-flight or an enqueue that failed after its row
+  // committed.
+  dispatchConnectorCommand: "dispatch-connector-command",
+  reconcileConnectorStateTick: "reconcile-connector-state-tick",
+  reconcileConnectorState: "reconcile-connector-state",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -288,6 +295,18 @@ const RefreshStoreSearchDocumentPayloadSchema = z.discriminatedUnion("targetKind
  * refs, and state are re-read from authoritative rows inside the handler.
  */
 const DispatchCommerceWebhookEventPayloadSchema = z
+  .object({
+    outboxId: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+/**
+ * STORE Phase 14 connector dispatch. Carries the outbox row id only, for the same reason
+ * the payment dispatcher does: amounts, provider references and state are re-read from
+ * authoritative rows inside the handler, so a payload that sat in a queue for an hour
+ * cannot act on a stale copy of anything.
+ */
+const DispatchConnectorCommandPayloadSchema = z
   .object({
     outboxId: z.string().trim().min(1).max(200),
   })
@@ -990,6 +1009,44 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.reconcileCommercePayments),
     },
   },
+  /**
+   * STORE Phase 14. `standard` rather than `singleton`: several connector commands for
+   * different orders are legitimately in flight at once, and the row lock in
+   * `claimConnectorOutboxRow` is what serialises work on any single row.
+   */
+  [JOB_NAMES.dispatchConnectorCommand]: {
+    name: JOB_NAMES.dispatchConnectorCommand,
+    payloadSchema: DispatchConnectorCommandPayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      expireInSeconds: 300,
+      deadLetter: deadLetterNameFor(JOB_NAMES.dispatchConnectorCommand),
+    },
+  },
+  [JOB_NAMES.reconcileConnectorStateTick]: {
+    name: JOB_NAMES.reconcileConnectorStateTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.reconcileConnectorStateTick),
+    },
+  },
+  [JOB_NAMES.reconcileConnectorState]: {
+    name: JOB_NAMES.reconcileConnectorState,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.reconcileConnectorState),
+    },
+  },
   [JOB_NAMES.deriveProductRelationsTick]: {
     name: JOB_NAMES.deriveProductRelationsTick,
     payloadSchema: TickPayloadSchema,
@@ -1207,6 +1264,10 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   [JOB_NAMES.releaseExpiredInventoryReservationsTick]: "35 * * * *",
   // STORE Phase 5 — hourly payment reconciliation. Minute :50 avoids inventory/quote ticks.
   [JOB_NAMES.reconcileCommercePaymentsTick]: "50 * * * *",
+  // STORE Phase 14 — hourly connector reconciliation. Minute :05 keeps it clear of the
+  // :20/:35/:50 commerce ticks, and puts it a comfortable distance after the top-of-hour
+  // trending run at :12 rather than contending with it.
+  [JOB_NAMES.reconcileConnectorStateTick]: "5 * * * *",
   // STORE Phase 9 — nightly relation derivation. 02:40 UTC sits after the 01:xx
   // recompute chain and well before the 04:55 prune, so a night's completed orders are
   // settled before their co-occurrence is mined.
@@ -1477,6 +1538,9 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.releaseExpiredInventoryReservationsTick]: TickPayloadSchema,
   [JOB_NAMES.releaseExpiredInventoryReservations]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.dispatchCommerceWebhookEvent]: DispatchCommerceWebhookEventPayloadSchema,
+  [JOB_NAMES.dispatchConnectorCommand]: DispatchConnectorCommandPayloadSchema,
+  [JOB_NAMES.reconcileConnectorStateTick]: TickPayloadSchema,
+  [JOB_NAMES.reconcileConnectorState]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.reconcileCommercePaymentsTick]: TickPayloadSchema,
   [JOB_NAMES.reconcileCommercePayments]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.deriveProductRelationsTick]: TickPayloadSchema,
@@ -1615,6 +1679,12 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.releaseExpiredInventoryReservations}:${asOfIso}`,
   dispatchCommerceWebhookEvent: (outboxId: string): string =>
     `${JOB_NAMES.dispatchCommerceWebhookEvent}:${outboxId}`,
+  // Keyed on the row, not the attempt: a re-enqueue from the reconciler must collapse into
+  // the dispatch that is already queued rather than doubling it.
+  dispatchConnectorCommand: (outboxId: string): string =>
+    `${JOB_NAMES.dispatchConnectorCommand}:${outboxId}`,
+  reconcileConnectorState: (asOfIso: string): string =>
+    `${JOB_NAMES.reconcileConnectorState}:${asOfIso}`,
   reconcileCommercePayments: (asOfIso: string): string =>
     `${JOB_NAMES.reconcileCommercePayments}:${asOfIso}`,
   deriveProductRelations: (asOfIso: string): string =>

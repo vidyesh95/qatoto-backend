@@ -671,3 +671,29 @@ export async function handleReconcileCommercePaymentsTick(
     );
   }
 }
+
+/**
+ * The hourly external-connector reconciliation tick (STORE Phase 14).
+ *
+ * Quantized to the HOUR like its siblings, so a double cron fire collapses to one real job.
+ * Re-enqueues stranded connector commands and polls escrow sessions whose next event has
+ * not arrived.
+ */
+export async function handleReconcileConnectorStateTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcHourStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.reconcileConnectorState,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.reconcileConnectorState(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `reconcile-connector-state-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}

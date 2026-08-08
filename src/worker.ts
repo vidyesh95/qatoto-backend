@@ -13,6 +13,7 @@ import { handleRecomputeCommerceCategoryDemand } from "#src/jobs/recompute-comme
 import { handleRecomputeCommerceProductTrending } from "#src/jobs/recompute-commerce-product-trending.js";
 import { handleRollupCommerceProductDailySignal } from "#src/jobs/rollup-commerce-product-daily-signal.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
+import { handleDispatchConnectorCommand } from "#src/jobs/dispatch-connector-command.js";
 import { handleExpireCommerceQuotes } from "#src/jobs/expire-commerce-quotes.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
 import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
@@ -30,6 +31,7 @@ import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affiniti
 import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
 import { handleReconcileCommercePayments } from "#src/jobs/reconcile-commerce-payments.js";
+import { handleReconcileConnectorState } from "#src/jobs/reconcile-connector-state.js";
 import { handleRefreshStoreSearchDocument } from "#src/jobs/refresh-store-search-document.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import { handleReleaseExpiredInventoryReservations } from "#src/jobs/release-expired-inventory-reservations.js";
@@ -60,6 +62,7 @@ import {
   handleRecomputeCommerceProductTrendingTick,
   handleRollupCommerceProductDailySignalTick,
   handleReconcileCommercePaymentsTick,
+  handleReconcileConnectorStateTick,
 } from "#src/jobs/scheduled-ticks.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
 import {
@@ -482,6 +485,25 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.reconcileCommercePayments,
     workOptions,
     runJob(JOB_NAMES.reconcileCommercePayments, handleReconcileCommercePayments),
+  );
+
+  // STORE Phase 14 — the external-connector substrate. One dispatcher for every connector
+  // kind, and an hourly reconciler that re-enqueues stranded commands and polls escrow
+  // sessions whose next event never arrived.
+  await boss.work(
+    JOB_NAMES.dispatchConnectorCommand,
+    workOptions,
+    runJob(JOB_NAMES.dispatchConnectorCommand, handleDispatchConnectorCommand),
+  );
+  await boss.work(
+    JOB_NAMES.reconcileConnectorStateTick,
+    workOptions,
+    runJob(JOB_NAMES.reconcileConnectorStateTick, handleReconcileConnectorStateTick),
+  );
+  await boss.work(
+    JOB_NAMES.reconcileConnectorState,
+    workOptions,
+    runJob(JOB_NAMES.reconcileConnectorState, handleReconcileConnectorState),
   );
 
   // STORE Phase 9 (§15.9) — nightly co-occurrence mining into the relation graph.
