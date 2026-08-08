@@ -58,8 +58,12 @@
 > that makes `onTimeShipmentRate`, reorder rate and measured response time real** — projected as a
 > `declaredProfile` object separate from `measuredMetrics`, because a seller's assertion and a
 > platform measurement must not be renderable through one code path.
-> Trade-assurance language, real payment processors, external provider adapters/webhooks, ranking,
-> and recommendations remain planned unless a section explicitly says otherwise. **A10 (public
+> **Phase 14 settled §14's custody question and built against it:** Qatoto provides no escrow
+> and never holds funds, escrow is negotiated between the parties and held by a licensed third
+> party reached through a connector, and the default rail is unprotected direct settlement.
+> The connector substrate, the external escrow adapter, the four remaining adapter seams and
+> the document scanner ship with it; see `docs/STORE_PHASE_14_ROLLOUT.md`.
+> Trade-assurance language and real payment processors remain blocked on §14. **A10 (public
 > product comments) stays deliberately unbuilt** pending the product decision the appendix asks
 > for. **Product organization-ownership and category columns are now NOT NULL** —
 > migration `0063` closed Phase 0's contract phase, dropping the expand-phase fill trigger
@@ -974,6 +978,32 @@ Scheduled jobs:
   procurement team behind one office NAT is indistinguishable from a click farm on the
   evidence this schema holds — on the seeded fixtures they read 0.98 and 0.91.
 
+### Phase 14 — external settlement, document scanning, and the legacy cleanup
+
+- **§14's custody question, decided and built.** Qatoto provides no escrow and never holds
+  funds. Escrow is a term the two parties negotiate in their own thread and opt into
+  together, held by a licensed third party reached through a connector; the default rail is
+  direct settlement with no protection at all, which is what most B2B trade at this size
+  actually does.
+- The shared external-connector substrate — provider registry, command outbox, event inbox,
+  the first inbound webhook route in this backend and the raw-body mount it needs — plus the
+  external escrow adapter, negotiated settlement agreements, and a rail-aware ledger whose
+  gross value is off balance sheet.
+- **14b** supplies the malware scanner A18 was missing, without which a product carrying a
+  required upload slot could not be checked out by anybody. **14c** adds the four remaining
+  §3 adapter seams. **14d** retires `product.seller_id` and the dead `store_pathway_item`.
+- **Shipped and hardened (`0082`–`0089`).** See `docs/STORE_PHASE_14_ROLLOUT.md`. Five things
+  the specification did not anticipate. **`ensureCommerceJournalAccounts` was a live
+  blocker** — it created all six legacy accounts unconditionally, which the new rail guard
+  rejects, so every escrow order would have failed at its first posting. **A successful
+  checkout could return 500**, because the post-commit dispatch enqueue threw rather than
+  returning a failed `Result`, telling a buyer to retry an order that had been placed.
+  **`seller_payable` is now asserted to stay unposted**, so wiring it later fails the build
+  and forces the conversation. **Migration `0088` created a duplicate index** that `0089`
+  removes, `0088` being left as applied because drizzle hashes migrations. And **the commerce
+  foundation verifier was silently wrong**, hidden behind the missing-column error the
+  `seller_id` drop exposed — 14 of 17 products read as mismatched and all 14 were correct.
+
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
 ---
@@ -1005,7 +1035,15 @@ conditions and contract.
 The following require legal, provider, or product decisions before implementation:
 
 - countries and industries Qatoto may serve;
-- merchant-of-record and custody model;
+- ~~merchant-of-record and custody model;~~ **DECIDED: Qatoto is not a custodian.** It never
+  holds funds. Buyer and seller either settle directly and carry the counterparty risk, or
+  they agree between themselves on a licensed third-party escrow provider reached through a
+  connector. The alternative — first-party custody, which is what Alibaba's Trade Assurance
+  does — was not chosen: it puts Qatoto inside money-transmitter and escrow licensing in
+  every jurisdiction it operates in, and the ledger would then have to assert a custody that
+  §0's own posture makes it answerable for. **Built in Phase 14.** Note that the merchant of
+  record on the `direct_processor` rail is the SELLER, which is why that rail settles to the
+  seller's account with an application fee rather than through Qatoto.
 - supported payment methods and refund authority;
 - Incoterms, tax, tariff, and sanctions providers;
 - legally valid e-signature and purchase-order requirements;
