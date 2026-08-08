@@ -28,7 +28,7 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–12 shipped and hardened.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–15 shipped and hardened.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
@@ -63,6 +63,12 @@
 > party reached through a connector, and the default rail is unprotected direct settlement.
 > The connector substrate, the external escrow adapter, the four remaining adapter seams and
 > the document scanner ship with it; see `docs/STORE_PHASE_14_ROLLOUT.md`.
+> **Phase 15 closes Appendix A (`0093`–`0097`):** the customization-option read that made a
+> required slot checkoutable at all, helpful votes on answers with per-viewer state on both
+> public reads, a supplier directory and the filters matching the facets the platform already
+> publishes, category ancestors, per-tier lead time, a participant dispute read, the cross-order
+> logistics queue, and buyer-authored trade attachments with the authorized download that makes
+> them openable. See `docs/STORE_PHASE_15_ROLLOUT.md`.
 > Trade-assurance language and real payment processors remain blocked on §14. **A10 (public
 > product comments) stays deliberately unbuilt** pending the product decision the appendix asks
 > for. **Product organization-ownership and category columns are now NOT NULL** —
@@ -83,20 +89,23 @@
 >
 > **What is NOT built, and what the frontend is standing in for meanwhile:**
 > [Appendix A](#appendix-a--what-the-frontend-needs-and-this-backend-does-not-have)
-> is the register of every remaining store feature the frontend renders as mock UI, with the tables,
-> columns and routes each one needs. **No entry there now describes a field that reaches the wire and
-> can never carry a real value** — `onTimeShipmentRate` was the last one, and Phase 12 supplied the
-> promised-delivery timestamp it needed (A13). It is `null` only below its sample threshold, and
+> is the register of every store feature the frontend rendered as mock UI, with the tables,
+> columns and routes each one needed. **No entry there now describes a field that reaches the wire
+> and can never carry a real value** — `onTimeShipmentRate` was the last one, and Phase 12 supplied
+> the promised-delivery timestamp it needed (A13). It is `null` only below its sample threshold, and
 > `onTimeSampleSize` rides alongside so "not enough data" is distinguishable from "not wired".
+> **After Phase 15 the register's only unbuilt entries are the deliberate ones**: A10 closed pending
+> a product decision, A20 blocked on §14, and A26 deferred until a category actually sells on two
+> dimensions.
 >
-> **A23–A27 were added by auditing this document from the frontend side after Phase 14, and A23 is
-> a worse shape than the one the paragraph above retired.** It is not a field that reaches the wire
-> and cannot carry a value; it is a commercial term the backend **enforces at
-> `checkout/prepare` and never projects to the buyer**, so a product carrying a required
-> customization option cannot be checked out by anybody. A18 shipped its write side, its uploads,
-> its scanner and its three-table selection chain, and no read. That is the first entry in this
-> register describing something already built that is unreachable for the party it binds — the same
-> failure mode as A22, one layer further in.
+> **A23–A30 were added by auditing this document from the frontend side after Phase 14, and three
+> of them described defects in shipped features rather than missing ones.** A23 was a commercial
+> term the backend enforced at `checkout/prepare` and never projected, so a product carrying a
+> required customization option could not be checked out by anybody. A30 was a request field no
+> route could fill. A28 was a dispute with no reader but platform staff. **Phase 15 closed every
+> buildable entry in the register (`0093`–`0097`)**; see `docs/STORE_PHASE_15_ROLLOUT.md`. What
+> remains open there is recorded under "Still open" rather than left to be rediscovered — chiefly
+> that `getCategoryFacets` and `/store/search` now compute from different tables and can drift.
 >
 > The `trending_placeholder` rail strategy still returns an empty list unconditionally and always
 > will — **Phase 13 shipped `trending` and `recommended` alongside it**, and the placeholder is kept
@@ -593,6 +602,14 @@ and buyer-safe projections.
 | GET    | `/store/organizations/:organizationSlug/reviews` | Reviews of a seller or provider, incl. product-less ones — A8         |
 | GET    | `/store/products/:productSlug/questions`         | Public Q&A with a seller-first answer preview — A9                    |
 
+`/store/search` also accepts `documentKind=organization` — the supplier directory — and the facet
+filters `priceMinInCents`, `priceMaxInCents`, `stockState`, `samplePolicy`, `condition`,
+`verificationState` and `leadTimeMaxDays` (A25). `/store/categories/:slug` carries `ancestors[]`.
+
+Reads that admit an optional session project a `viewer` member when one resolves and `null`
+otherwise — never a defaulted `false` (A11, A24). Public product detail carries
+`customizationOptions[]` (A23) and `leadTimeDays` on each pricing tier (A27).
+
 `category-slugs` and `pathway-slugs` mock endpoints are not durable public API requirements.
 Dynamic routes should render on demand; build-time static parameter generation may use a bounded
 featured-slug endpoint only if the deployment model requires it.
@@ -706,6 +723,13 @@ started, not that payment, booking, testing, or settlement succeeded.
 | POST   | `/commerce/products/:productId/inquiries`                 | Open or return a pre-sales inquiry — A14                 |
 | GET    | `/commerce/inquiries`                                     | Buyer/seller inquiry inbox — A14                         |
 | GET    | `/commerce/completions`                                   | Buyer completions + `hasReview` — A22                    |
+| PUT    | `/commerce/answers/:answerId/helpful`                     | Endorse an answer — A24                                  |
+| DELETE | `/commerce/answers/:answerId/helpful`                     | Withdraw the endorsement — A24                           |
+| GET    | `/commerce/disputes`                                      | Participant-scoped dispute list — A28                    |
+| GET    | `/commerce/disputes/:disputeId`                           | One dispute, with its timeline; 404 to a non-party — A28 |
+| GET    | `/commerce/provider/shipments`                            | Cross-order logistics queue — A29                        |
+| POST   | `/commerce/documents`                                     | Upload a trade attachment; 202, `pending_scan` — A30     |
+| GET    | `/commerce/documents/:documentId`                         | Decrypt and stream an authorized attachment — A30        |
 
 ---
 
@@ -1024,6 +1048,28 @@ Scheduled jobs:
   removes, `0088` being left as applied because drizzle hashes migrations. And **the commerce
   foundation verifier was silently wrong**, hidden behind the missing-column error the
   `seller_id` drop exposed — 14 of 17 products read as mismatched and all 14 were correct.
+
+### Phase 15 — closing Appendix A
+
+- **Every remaining buildable entry in the register**, and three of them were defects in
+  shipped features rather than missing ones: a required customization option made a
+  product uncheckoutable by anybody (A23), `documentIds` was a field no route could fill
+  (A30), and a dispute had no reader but platform staff (A28).
+- Also: helpful votes on answers and per-viewer vote state on both public reads (A24); a
+  supplier directory plus the filters matching the facets the platform already publishes,
+  and a category ancestor trail (A25); per-tier lead time and thread attachments (A27);
+  and the cross-order logistics queue (A29).
+- **Shipped and hardened (`0093`–`0097`).** See `docs/STORE_PHASE_15_ROLLOUT.md`. Five
+  things the specification did not anticipate. **`updateOrganization` refreshed search
+  only on a visibility change**, which was right while an organization was just an
+  eligibility flag on its products and would have left the new supplier directory
+  advertising a renamed company's old name indefinitely. **`assertOwnedDocuments` never
+  checked document state**, harmless only while the ids were unfillable. **The search
+  backfill covered products and offerings only**, and organizations have to run last
+  because a supplier's search text is built from its own product documents. **A29's ETA
+  is not on the shipment** — it is on the leg, which forced an `EXISTS` and a `max()`
+  rollup. And **the smoke script's first run 403'd everywhere** because it never
+  activated an organization, which the Phase 14 smoke already documents.
 
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
@@ -1989,104 +2035,102 @@ a state column on `commerce_review_media` and is not built.
 
 ---
 
-### A23. Customization options have no buyer read — **NOT BUILT, and it blocks a checkout**
+### A23. Customization options had no buyer read — **SHIPPED (Phase 15)**
 
 **Needed by:** `sections/customization-options.tsx` (four upload slots) and
 `sheets/customization-sheet.tsx` (per-slot accepted file types and minimum order quantity, plus the
 packaging-material choice).
 
-**What exists:** all of A18's write side. `commerce_product_customization_option` is authored at
-`PUT /products/:id/customization-options`, artwork uploads at `POST /commerce/customization-assets`
-behind the magic-byte check and the 14b scanner, selections ride cart → prepare → order, and the
-per-slot minimum is enforced at cart and again at preparation.
+**What was wrong.** All of A18's write side shipped and none of its read. The option list was
+projected only on the SELLER's own `GET /products/:id` — and in fact not even there, because
+`loadOrganizationProduct` never selected the table, so `PUT /products/:id/customization-options`
+could not read back what it had just written.
 
-**What is missing is the read.** The option list is projected only on the SELLER's own
-`GET /products/:id`. It is absent from `StoreProductDetailProjection`
-(`store-catalog.service.ts:151`) and from every `/store/*` route.
+**Which made it worse than a missing feature.** A18's rule is that required slots are mandatory at
+preparation. A buyer was never told the slot existed, so a product carrying a required customization
+option **could not be checked out by anybody** — `checkout/prepare` refused an order for a term the
+buyer had no way to read.
 
-**Which makes this worse than a missing feature.** A18's own rule is that required slots are
-mandatory at preparation. A buyer is never told the slot exists, so a product carrying a required
-customization option **cannot be checked out by anybody** — `checkout/prepare` refuses an order for
-a term the buyer had no way to read. Enforcement without disclosure is a trap rather than a
-commercial term.
+**What exists now:** `customizationOptions[]` on `StoreProductDetailProjection`, carrying `slotKey`,
+kind, accepted media types, choice values, `minimumOrderQuantity`, `isRequired` and position, active
+options only; and `ProductCustomizationOptionView[]` on the seller's `PublicProduct`, which does
+carry `state` so a retired slot does not look deleted. No migration — the data was always there.
 
-**What to build:** `customizationOptions[]` on the public product detail projection, carrying
-`slotKey`, kind, accepted media types, choice values, `minimumOrderQuantity` and `isRequired`.
-Retired options stay off the read while remaining referenced by the order lines bought under them.
-
-**Frontend today:** four hardcoded upload slots (`logo`/`graphics`/`packagingGraphics`/`cards` with
-minimums 50/100/200/50) and four packaging materials, all local; "Save customization" closes the
-sheet and sends nothing.
-
-**Rule:** a term checked at preparation must be readable before preparation. Any gate the buyer
-cannot see is a defect, not a policy.
+**Rule, still binding:** a term checked at preparation must be readable before preparation. Any gate
+the buyer cannot see is a defect, not a policy. The buyer wire carries no `state`, because the read
+is active-only and a retired option is not a thing a buyer can choose.
 
 ---
 
-### A24. Q&A answers cannot be voted on, and review votes have no viewer state — **NOT BUILT**
+### A24. Q&A answers could not be voted on, and review votes had no viewer state — **SHIPPED (`0093`)**
 
 **Needed by:** `sections/questions-and-answers.tsx` (like/dislike per answer, plus a flag) and
 `sections/ratings-and-reviews.tsx` (the helpful toggle on each review card).
 
-**What exists:** `commerce_review_vote` and `PUT`/`DELETE /commerce/reviews/:reviewId/helpful`, with
-`helpfulCount` on the public review projection.
+**Two absences, both closed.** `commerce-product-qa.service.ts` had **no vote table and no vote
+route at all** — A9 shipped questions, answers, derived `authorKind` and post-moderation, and
+nothing that ranks or endorses an answer. And per-viewer vote state was missing from the public
+review read, which A22 recorded as an absence without carrying it into a build item.
 
-**Two absences.** `commerce-product-qa.service.ts` has **no vote table and no vote route at all** —
-A9 shipped questions, answers, derived `authorKind` and post-moderation, and nothing that ranks or
-endorses an answer. And `viewerHasVoted` is missing from the public review read, which A22 records
-as an absence but does not carry into a build item.
-
-**Why the viewer state is a read gap rather than a nicety.** A toggle whose own state needs a second
-authenticated call renders wrong on first paint and then corrects itself, which reads as a bug and
-teaches a buyer that the count is not to be trusted. It is the same call A11 made with
+**Why the viewer state was a read gap rather than a nicety.** A toggle whose own state needs a
+second authenticated call renders wrong on first paint and then corrects itself, which reads as a
+bug and teaches a buyer that the count is not to be trusted. It is the same call A11 made with
 `engagement.viewer` and A22 made with `hasReview`: a fact about the CALLER belongs on the read the
 caller already made.
 
-**What to build:** `viewerHasVoted` on the review projection, and a `commerce_product_answer_vote`
-table with a route in the shape `/commerce/answers/:answerId/helpful` already used for reviews.
-Answer ordering may then be helpful-first behind the seller-first preview A9 promises.
+**What exists now:** `commerce_product_answer_vote` — `commerce_review_vote` byte for byte, keyed on
+`(answerId, voterOrganizationId)` with row presence as the vote — plus `helpful_count` on the
+answer, a partial helpful index, and `commerce_product_answer_vote_relationship_guard`, which
+refuses an author's vote on its own answer and a member id borrowed from another organization.
+`PUT`/`DELETE /commerce/answers/:answerId/helpful` take the review pair's shape exactly: no
+idempotency and no `compactBody`, because PUT and DELETE of a boolean are idempotent by verb. Both
+public reads gained `viewer`, and `loadTopAnswers` now breaks its tie on `helpfulCount` **behind**
+the seller-first rank — the paginated answer read keeps its plain `createdAt` keyset, because a
+cursor over a computed rank is how pagination starts skipping rows.
 
-**Frontend today:** like and dislike are icons with no handler; the review helpful count is a string
-literal.
-
-**Rule:** votes are integers on the wire and per-viewer state is a nullable object, never a
-defaulted `false` for an anonymous caller.
+**Rule, still binding:** votes are integers on the wire and per-viewer state is a nullable object,
+never a defaulted `false` for an anonymous caller. `null` here also means "you cannot vote", because
+both vote tables are keyed on the organization rather than the user.
 
 ---
 
-### A25. Search cannot find an organization, and its filters are thinner than its own facets — **PARTIALLY BUILT**
+### A25. Search could not find an organization, and its filters were thinner than its own facets — **SHIPPED (`0095`)**
 
 **Needed by:** the store's "Factories worldwide" tile, the `/store/providers` sibling a buyer
 expects for manufacturers, and `STORE_STRUCTURE.md` §7.3's filter list.
 
-**What exists:** `/store/search` over `store_search_document` with `documentKind:
-product | provider_offering`, `query`, `category`, `sellerCountryCode`, `providerKind`,
-`minOrderQuantityMax`, `sort: relevance | discovery`, and a bounded cursor
-(`store.controller.ts:43`). Category detail separately computes `getCategoryFacets` —
-`sellerCountryCodes`, `stockStates`, `samplePolicies` and `priceRangesInCents`.
+**Three gaps, and the first two were the same mistake.** A seller organization was **not a search
+document**, so there was no supplier directory: a buyer could reach one storefront by slug and could
+not browse or filter sellers at all, while service providers had both a directory and a detail page.
+The query schema omitted every facet the platform already computes — price range, `stockState`,
+`samplePolicy` — plus lead-time range, `condition` and verification state. And `getCategoryBySlug`
+returned `{category, children}` with **no ancestor trail**, so a breadcrumb over a nested category
+needed one request per level.
 
-**Three gaps, and the first two are the same mistake.** A seller organization is **not a search
-document**, so there is no supplier directory: a buyer can reach one storefront by slug and cannot
-browse or filter sellers at all, while service providers have both a directory and a detail page.
-The query schema omits every facet the platform already computes — price range, `stockState`,
-`samplePolicy` — plus lead-time range, `condition` and verification state. And
-`getCategoryBySlug` returns `{category, children}` with **no ancestor trail**, so a breadcrumb over
-a nested category needs one request per level.
+**Why the second one mattered more than it looked.** A facet the backend computes and the search
+cannot filter on is an invitation to filter the fetched page, which is precisely §2.4's prohibition.
+The facet counts were already the honest denominator; only the `WHERE` clause was missing.
 
-**Why the second one matters more than it looks.** A facet the backend computes and the search
-cannot filter on is an invitation to filter the fetched page, which is precisely §2.4's
-prohibition. The facet counts are already the honest denominator; only the `WHERE` clause is
-missing.
+**What exists now:** an `organization` member on `storeSearchDocumentKindEnum`, written by
+`refreshOrganizationSearchDocument` under the same public-eligibility rule products answer to
+(`tradeState = 'active' AND visibility = 'public'`), carrying the legal name and the category names
+it sells into so "cold chain" finds the manufacturer and not only the freezer. Five denormalized
+columns — `stock_state` (its own enum, matching `deriveStockState`'s four values), `sample_policy`,
+`condition`, `provider_verification_state`, `lead_time_max_days` — behind seven new
+`.strict()` query keys. And `ancestors[]` on the category read, root first, from an upward recursive
+CTE that STOPS at the first inactive ancestor rather than skipping it: a trail with a hole in it
+renders as a path whose middle link goes nowhere.
 
-**What to build:** an `organization` member on `storeSearchDocumentKindEnum` fed by the same
-public-eligibility rule products use; the missing filter keys on `SearchQuerySchema`, camelCase and
-`.strict()` as the others are; and `ancestors[]` on the category read.
+**Two rules this settled.** A NULL facet is **excluded** by these filters, not admitted —
+`minOrderQuantityMax` admits NULL because "no MOQ declared" satisfies "MOQ at most 50", but a
+document with no stock state is not a document that is in stock. And the denormalized `stock_state`
+is **variant-aware**, matching `mapProductCard`, because a card and a filter now read the same
+column and disagreeing would be the worse bug.
 
-**Frontend today:** no search page exists at all. Two of the six B2B tiles
-(`business-forum`, `find-cofounder`) are not commerce and have no backend anywhere.
-
-**Rule:** a filter and its facet are one concept and ship together. Publishing a count the caller
-cannot act on is worse than publishing neither.
+**Rule, still binding:** a filter and its facet are one concept and ship together. Publishing a
+count the caller cannot act on is worse than publishing neither. **Still open:**
+`getCategoryFacets` aggregates over `product` while the filters read `store_search_document`, so the
+two can drift — see `docs/STORE_PHASE_15_ROLLOUT.md`.
 
 ---
 
@@ -2118,91 +2162,115 @@ commercial fact. Axes are a browse construct; the variant is the commercial one.
 
 ---
 
-### A27. Two one-column absences, recorded so they are not rediscovered
+### A27. Two one-column absences — **SHIPPED (`0094`, `0097`)**
 
-Neither is worth an entry of its own and both are load-bearing for a surface above.
+Neither was worth an entry of its own and both were load-bearing for a surface above.
 
-- **Lead time is flat, not banded.** `product.leadTimeMinDays`/`leadTimeMaxDays` are per product,
-  but `sections/packaging-and-delivery.tsx` renders three lead-time bands keyed to the same
-  quantity bounds as the price tiers ("15 days", "30 days", "to be negotiated"). A `leadTimeDays`
-  column on `product_pricing_tier` is the natural home, and A13's promise chain would read it at
-  preparation exactly where it already reads `lead_time_max_days_snapshot`.
-- **A thread has no attachment upload.** `POST /commerce/threads/:threadId/messages` accepts
-  attachment ids that must already be authorized documents, and the only upload routes in this
-  backend are verification evidence, customization assets, and the image multiparts of A21. The
-  chat composer offers photo, video and PDF; there is **no first-party video ingest anywhere in
-  this codebase**, so a message video follows A8's shape — an external id under a supply CHECK —
-  or it does not ship. A message-attachment route reusing the 14b scanner path closes the other two.
+- **Lead time was flat, not banded.** `product.leadTimeMinDays`/`leadTimeMaxDays` are per product,
+  but `sections/packaging-and-delivery.tsx` renders three lead-time bands keyed to the same quantity
+  bounds as the price tiers. `product_pricing_tier.leadTimeDays` is the home, and it is resolved
+  inside `resolveUnitPriceInCents` so A13's promise chain reads it at preparation exactly where it
+  already reads `lead_time_max_days_snapshot`. **The SELECTED tier's value, never an aggregate** —
+  the `min()` both MOQ readers use ignores `variant_id` and conflates the product ladder with
+  variant ladders, and a `min(leadTimeDays)` would report a band the buyer's quantity never touched.
+  Nothing was backfilled: NULL means "the product's applies", which is what every existing row
+  means, and copying the product value down would fake a declaration the seller never made.
+- **A thread had no attachment upload.** Closed by A30's `POST /commerce/documents`, which is the
+  single authorized-document creation route both surfaces needed. There is still **no first-party
+  video ingest anywhere in this codebase**, so a message video follows A8's shape — an external id
+  under a supply CHECK — or it does not ship.
 
-**Still absent, and recorded rather than silently missing:** `viewerHasVoted` on the public review
-read (a client cannot render the helpful toggle's state without a second call), and any author
-edit/delete of a review — `deleteAllReviewMedia` having no caller is the trace of that absence.
+**Still absent, and recorded rather than silently missing:** any author edit/delete of a review —
+`deleteAllReviewMedia` having no caller is the trace of that absence. (Per-viewer vote state on the
+public review read, also recorded here, shipped with A24.)
 
-### A28. A participant cannot read a dispute they raised — **NOT BUILT, and the route exists on the frontend**
+### A28. A participant could not read a dispute they raised — **SHIPPED (`0096`)**
 
-`commerce-trust.routes.ts` exposes exactly three dispute routes:
+`commerce-trust.routes.ts` exposed exactly three dispute routes — a buyer raises one, an admin lists
+them, an admin decides — and **no participant-scoped read**. A buyer filed a dispute over a $200,000
+order and had no route that answered "what is happening with it". The reference existed, the row
+existed, `commerce_dispute_buyer_idx` and `_counterparty_idx` existed with no reader, and the only
+parties who could see any of it were platform staff.
 
-- `POST /commerce/orders/:orderId/disputes` — a buyer or counterparty **raises** one
-- `GET  /commerce/admin/disputes` — an **admin** lists them
-- `POST /commerce/admin/disputes/:disputeId/decisions` — an **admin** decides
+**What exists now:** `GET /commerce/disputes/:disputeId` and a cursor-paginated
+`GET /commerce/disputes`, authorized against the disputed order's `buyerOrganizationId` **or**
+`counterpartyOrganizationId` — `cancelOrder`'s predicate verbatim — answering `404` (not `403`) to
+anyone else so the route cannot probe which dispute ids exist. The detail carries the
+`commerce_dispute_event` timeline and `decisionNote`; the deciding moderator's identity is not
+projected, because which member of staff decided is not a fact either trading party has a claim on.
 
-There is **no participant-scoped read.** A buyer files a dispute over a $200,000 order and has no
-route that answers "what is happening with it". The reference exists, the row exists, and the only
-parties who can see it are platform staff.
+**Deliberately NOT `evaluateDisputeOpeningRelationship`**, which splits party-but-not-buyer into a
+403. Only a buyer may OPEN a dispute; both parties may READ one, and the counterparty being told a
+dispute exists against them is the entire point of telling them.
 
-**The ask is one route:** `GET /commerce/disputes/:disputeId`, authorized against the disputed
-order's `buyerOrganizationId` **or** `counterpartyOrganizationId` — the same predicate `cancelOrder`
-already uses — answering `404` (not `403`) to anyone else so the route cannot be used to probe which
-dispute ids exist. A participant-scoped `GET /commerce/disputes` list is the natural second half.
+**What it is still not wired to.** `dispute.service.ts` has a `DisputeView` with a tempting shape
+and it belongs to the **R&D proof-of-effort** dispute domain — the `dispute` / `dispute_vote`
+tables, scoped to a research project, about contribution claims. Wiring the commerce page to it
+would show one organization another's equity dispute.
 
-**What it must NOT be wired to.** `dispute.service.ts` has a `DisputeView` with a tempting shape and
-it belongs to the **R&D proof-of-effort** dispute domain — a different table, scoped to a research
-project, about contribution claims. Wiring the commerce page to it would show one organization
-another's equity dispute.
+Migration `0096` adds `(buyer_organization_id, created_at DESC, id)` and its counterparty twin; the
+shipped party indexes stop at `(org, state, id)` and cannot serve §7's ordering.
 
-`/disputes/[disputeId]` ships as the only `TRANSPORT: mock` page on the buyer surface: it renders no
-dispute, states that reading one back is not built, and routes the reader to the order and to
-support. Nothing is faked, deliberately — a dispute page showing a plausible "under review" would
-stop a participant chasing a case that nobody is looking at.
+### A29. There was no cross-order shipment list — **SHIPPED (`0096`)**
 
-### A29. There is no cross-order shipment list — **NOT BUILT, and it is the whole of a logistics queue**
+Every shipment route was scoped to an id the caller already held, so a freight forwarder carrying
+forty shipments across thirty-one orders had no route that listed them.
 
-`commerce-fulfillment.routes.ts` exposes `GET /commerce/orders/:orderId/shipments`,
-`GET /commerce/shipments/:shipmentId` and `GET /commerce/shipments/:shipmentId/events`. Every one is
-scoped to an id the caller already holds. A freight forwarder carrying forty shipments across
-thirty-one orders has no route that lists them.
-
-**The ask:** `GET /commerce/provider/shipments`, scoped to the active organization as the
-counterparty, cursor-paged, filterable by shipment state and by `estimatedArrivalAt` window — the
-same shape as `GET /commerce/provider/orders`, which already exists and is the join this needs.
-
-**Why the frontend must not work around it.** The available workaround is to list the provider's
+**Why the frontend must not work around it.** The available workaround was to list the provider's
 orders and fetch each one's shipments: one request per order, fanned out from a browser,
 re-implementing a server join in untrusted code. It also cannot be correct — the client holds one
-page of orders, so a shipment on page two would be missing from a view claiming to list all of them.
-`/studio/logistics` therefore ships as the second `TRANSPORT: mock` page: it lists nothing, explains
-that a queue has to be built server-side to be trustworthy, and points at each order's own
-fulfillment panel, which is wired and real.
+page of orders, so a shipment on order-page two would be missing from a view claiming to list all
+of them.
 
-### A30. A buyer cannot attach a file to anything — **NOT BUILT, and it silently removes an RFQ step**
+**What exists now:** `GET /commerce/provider/shipments`, scoped to the active organization as the
+order counterparty, cursor-paged on `(createdAt DESC, id)`, filterable by shipment state and by an
+`estimatedArrivalAt` window. Split as `listShipmentsBy(organizationFilter)` the way `listOrdersBy`
+is, so a buyer-facing twin is one line whenever it is asked for.
 
-`CreateDraftRfqSchema` accepts `documentIds`, and `assertOwnedDocuments` requires every id to name a
-`commerce_encrypted_document` row the buyer's organization already owns. **No route creates one for a
-buyer.** The upload routes in this backend are organization verification evidence
-(`POST /commerce/providers/:organizationId/evidence`), customization assets, and A21's image
-multiparts — none of which a buyer composing an RFQ can use.
+**Two things the shape of the data forced.** `commerce_shipment` has **no organization column**, so
+the scope is an inner join to `commerce_order` — that join is the whole point of the route. And it
+has **no `estimatedArrivalAt`** either; the ETA lives on `commerce_shipment_leg`. So the window
+filter is an `EXISTS` rather than a join — a join would duplicate a shipment with three legs in
+range and make the page size a lie — and the projected value is `max()` across legs, because a
+shipment arrives when its last leg does. `null` when no leg carries one, never a fabricated date:
+A16's rule that an uncovered lane returns nothing rather than a zero applies to a date as much as to
+a price.
 
-So `documentIds` is a field that exists and cannot be filled: any id a client invents comes back
-`DOCUMENT_NOT_OWNED`. `/store/rfqs/new` ships with **no attachment step at all** and says so in its
-review panel, because an upload control that could only produce rejected ids is worse than an absent
-one. Drawings and specifications go into the specification text instead — which is a real loss on a
-sourcing request, where the drawing _is_ the requirement.
+The queue row is lighter than `ShipmentProjection` — no product lines, no event history — so a
+forty-row page does not fan out into eighty child queries. `GET /commerce/shipments/:shipmentId`
+remains the detail.
 
-**The ask:** a buyer-scoped document upload reusing 14b's scanner path — the same shape verification
-evidence already uses — returning an id `documentIds` accepts. It closes A27's message-attachment
-absence at the same time, since both need exactly one authorized-document creation route.
+### A30. A buyer could not attach a file to anything — **SHIPPED (`0097`)**
 
-**Note for whoever builds it:** the RFQ read projects `encryptedDocumentId` and mints **no
-authorized URL**, so `rfq-detail.tsx` renders "an attachment exists" and offers no link. Upload
-without a matching download-URL route would leave the composer able to attach a file that nobody,
-including the buyer, can open.
+`CreateDraftRfqSchema` accepted `documentIds` and `assertOwnedDocuments` required every id to name a
+`commerce_encrypted_document` the buyer's organization already owned. **No route created one.** The
+uploads in this backend were verification evidence, customization assets and A21's image multiparts,
+none of which a buyer composing an RFQ can use — so `documentIds` was a field that existed and could
+not be filled, and `/store/rfqs/new` shipped with no attachment step at all. On a sourcing request
+that is a real loss: the drawing _is_ the requirement.
+
+**Both halves shipped together, because either alone is useless.** The RFQ read projects
+`encryptedDocumentId` and mints no URL, so an upload without a download would have left the composer
+able to attach a file that nobody — including the buyer — could open.
+
+**What exists now:** `POST /commerce/documents`, reusing the evidence multipart middleware and the
+14b scanner path, landing `pending_scan` and answering **202** because both attachment paths refuse
+anything that is not `available`; and `GET /commerce/documents/:documentId`, a decrypt-and-stream.
+One `trade_attachment` document kind rather than an rfq/message pair, because which resource it
+hangs off is a fact the LINK tables record and the same drawing legitimately rides both.
+
+**Access is ownership, a thread the document was messaged into, or an RFQ the reader was INVITED
+to** — an open RFQ is broadcast, its drawings are not. Every refusal is `404`, including
+`pending_scan` and `quarantined`, so the route cannot enumerate document ids. Cross-organization
+reads write a `document_downloaded` audit entry inside the read transaction, throwing if the append
+fails; an owner reading its own file is not audited, which is exactly the line
+`revealOrderDeliveryAddress` draws.
+
+**Not a presigned URL.** `presignPrivateCommerceDocumentDownload` still has no caller: a signed URL
+is a bearer capability that outlives the authorization decision, and thread participation and RFQ
+invitation are exactly the revocable sort.
+
+**Found on the way in:** `assertOwnedDocuments` checked ownership but **not**
+`state = 'available'`, unlike the message path. Harmless only while nothing could create a buyer
+document; the moment this route exists, an RFQ could carry an unscanned or already-quarantined file
+and broadcast it to every invited provider. Both paths now check both.
