@@ -270,12 +270,15 @@ export async function proposeSettlementAgreement(
       .for("update");
 
     const latest = existing[0];
-    if (latest?.state === "consumed") {
-      return {
-        success: false,
-        error: { type: "CONFLICT", message: "This thread's agreement has already been used by an order." },
-      };
-    }
+    /**
+     * A CONSUMED AGREEMENT DOES NOT BLOCK A NEW ONE, and an earlier draft of this function
+     * was wrong to make it. Spent terms are history: the same buyer ordering from the same
+     * seller through the same thread next month is ordinary repeat business, and refusing
+     * it would mean a thread can carry exactly one escrowed order for its whole life.
+     *
+     * Only a LIVE revision is superseded. Terminal rows — consumed, declined, withdrawn,
+     * expired — are left exactly as they are, because they are the record of what happened.
+     */
     if (latest !== undefined && (latest.state === "proposed" || latest.state === "accepted")) {
       await transaction
         .update(commerceSettlementAgreement)

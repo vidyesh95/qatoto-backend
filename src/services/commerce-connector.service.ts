@@ -9,7 +9,7 @@ import {
   commerceExternalProvider,
 } from "#src/db/schema.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
-import { logger } from "#src/lib/logger.js";
+import { errorFields, logger } from "#src/lib/logger.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -223,15 +223,36 @@ export async function enqueueConnectorCommand(
  * unwind a committed domain change for a scheduling hiccup.
  */
 export async function scheduleConnectorDispatch(outboxId: string): Promise<void> {
-  const scheduled = await sendJob(
-    JOB_NAMES.dispatchConnectorCommand,
-    { outboxId },
-    { idempotencyKey: idempotencyKeyFor.dispatchConnectorCommand(outboxId) },
-  );
-  if (!scheduled.success) {
-    logger.error("failed to enqueue connector dispatch; the reconciler will retry it", {
+  /**
+   * THIS FUNCTION MUST NOT THROW, and the try/catch is not defensive padding — an HTTP
+   * smoke found the bug it prevents.
+   *
+   * It runs AFTER the checkout transaction has committed. The order exists, the agreement
+   * is spent and the escrow session is written; all that remains is telling a worker to
+   * make a call. When `jobs:install` had not been run for a newly added queue, `sendJob`
+   * threw rather than returning a failed Result, the throw escaped into the request, and
+   * the buyer received a 500 for an order that had in fact been placed successfully —
+   * the worst possible answer, because a retry would place a second one.
+   *
+   * A lost notification costs latency and nothing else: the outbox row is durable and
+   * `reconcile-connector-state` re-enqueues anything still pending within the hour.
+   */
+  try {
+    const scheduled = await sendJob(
+      JOB_NAMES.dispatchConnectorCommand,
+      { outboxId },
+      { idempotencyKey: idempotencyKeyFor.dispatchConnectorCommand(outboxId) },
+    );
+    if (!scheduled.success) {
+      logger.error("failed to enqueue connector dispatch; the reconciler will retry it", {
+        outboxId,
+        enqueueError: scheduled.error.type,
+      });
+    }
+  } catch (error: unknown) {
+    logger.error("connector dispatch enqueue threw; the reconciler will retry it", {
       outboxId,
-      enqueueError: scheduled.error.type,
+      ...errorFields(error),
     });
   }
 }

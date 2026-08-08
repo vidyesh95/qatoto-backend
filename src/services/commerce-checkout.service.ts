@@ -213,6 +213,16 @@ export interface OrderProjection {
   readonly incotermSnapshot: string | null;
   readonly buyerLegalNameSnapshot: string;
   readonly counterpartyLegalNameSnapshot: string;
+  /**
+   * STORE Phase 14. How this order settles, and whether a third party is holding the money.
+   *
+   * `hasEscrowProtection` is derived from the rail rather than being a second stored fact,
+   * and it is on the wire because ABSENCE MUST BE LEGIBLE. A client has to be able to say
+   * plainly that nobody is holding the funds; leaving it to be inferred from a rail name is
+   * how an interface ends up implying a protection that was never agreed.
+   */
+  readonly settlementRail: OrderRow["settlementRail"];
+  readonly hasEscrowProtection: boolean;
   readonly createdAt: Date;
 }
 
@@ -479,6 +489,9 @@ function projectOrder(order: OrderRow): OrderProjection {
     incotermSnapshot: order.incotermSnapshot,
     buyerLegalNameSnapshot: order.buyerLegalNameSnapshot,
     counterpartyLegalNameSnapshot: order.counterpartyLegalNameSnapshot,
+    settlementRail: order.settlementRail,
+    // Derived, never stored twice: one fact cannot then disagree with itself.
+    hasEscrowProtection: order.settlementRail === "external_escrow",
     createdAt: order.createdAt,
   };
 }
