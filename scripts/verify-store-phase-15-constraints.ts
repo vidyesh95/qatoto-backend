@@ -224,6 +224,134 @@ const CHECKS: readonly Check[] = [
       };
     },
   },
+
+  // -------------------------------------------------------------------------
+  // 0095 — A25 search depth.
+  // -------------------------------------------------------------------------
+  {
+    name: "0095 · store_search_document_kind carries 'organization'",
+    why: "Without the enum member the supplier directory cannot store a single row.",
+    async run() {
+      const present = await enumHasValue("store_search_document_kind", "organization");
+      return { ok: present, detail: present ? "present" : "missing" };
+    },
+  },
+  {
+    name: "0095 · store_search_stock_state matches deriveStockState's four values",
+    why: "A fifth state in the function with no member here would be silently unfilterable.",
+    async run() {
+      const labels = await db.execute<{ enumlabel: string }>(sql`
+        SELECT e.enumlabel
+          FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+         WHERE t.typname = 'store_search_stock_state'
+         ORDER BY e.enumsortorder`);
+      const members = labels.rows.map((row) => row.enumlabel).join(",");
+      return {
+        ok: members === "in_stock,low_stock,made_to_order,unavailable",
+        detail: members === "" ? "type not found" : members,
+      };
+    },
+  },
+  {
+    name: "0095 · the five facet columns and their two indexes exist",
+    why: "A filter over a column the refresh job never populates returns an empty page, not an error.",
+    async run() {
+      const columns = await Promise.all(
+        ["stock_state", "sample_policy", "condition", "provider_verification_state", "lead_time_max_days"].map(
+          (column) => columnExists("store_search_document", column),
+        ),
+      );
+      const indexes = await Promise.all(
+        ["store_search_document_stock_idx", "store_search_document_price_idx"].map((index) =>
+          indexExists(index),
+        ),
+      );
+      const missingColumns = columns.filter((present) => !present).length;
+      const missingIndexes = indexes.filter((present) => !present).length;
+      return {
+        ok: missingColumns === 0 && missingIndexes === 0,
+        detail: `missing_columns=${String(missingColumns)} missing_indexes=${String(missingIndexes)}`,
+      };
+    },
+  },
+  {
+    name: "0095 · every eligible product document carries a stock state",
+    why: "A NULL facet is EXCLUDED by the filter, so an unpopulated column hides the product from every stock filter.",
+    async run() {
+      const eligible = await scalar(sql`
+        SELECT count(*)::int AS value FROM store_search_document
+         WHERE document_kind = 'product' AND is_eligible`);
+      const unpopulated = await scalar(sql`
+        SELECT count(*)::int AS value FROM store_search_document
+         WHERE document_kind = 'product' AND is_eligible AND stock_state IS NULL`);
+      return {
+        ok: unpopulated === 0,
+        detail: `eligible=${String(eligible)} without_stock_state=${String(unpopulated)}`,
+      };
+    },
+  },
+  {
+    name: "0095 · the denormalized stock state agrees with the product it describes",
+    why: "A card saying 'in stock' that the stock filter disagrees with is the worse of the two bugs.",
+    async run() {
+      /*
+       * Recomputes `deriveStockState` in SQL over products WITHOUT variants — the
+       * variant-aware case sums active variant stock and is exercised by the smoke
+       * script against a real listing rather than restated here.
+       */
+      const disagreeing = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM store_search_document AS document
+          JOIN product ON product.id = document.entity_id
+         WHERE document.document_kind = 'product'
+           AND document.is_eligible
+           AND NOT EXISTS (
+                 SELECT 1 FROM commerce_product_variant variant
+                  WHERE variant.product_id = product.id AND variant.state = 'active')
+           AND document.stock_state::text <> CASE
+                 WHEN product.stock_quantity <= 0 AND product.lead_time_min_days IS NOT NULL
+                      AND product.lead_time_max_days IS NOT NULL THEN 'made_to_order'
+                 WHEN product.stock_quantity <= 0 THEN 'unavailable'
+                 WHEN product.stock_quantity <= 5 THEN 'low_stock'
+                 ELSE 'in_stock' END`);
+      return {
+        ok: disagreeing === 0,
+        detail: `${String(disagreeing)} product document(s) disagree with their listing`,
+      };
+    },
+  },
+  {
+    name: "0095 · every organization has a search document",
+    why: "A missing row means the supplier never appears in the directory and nothing reports it.",
+    async run() {
+      const organizations = await scalar(sql`
+        SELECT count(*)::int AS value FROM commerce_organization`);
+      const documents = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM store_search_document WHERE document_kind = 'organization'`);
+      return {
+        ok: documents >= organizations,
+        detail: `organizations=${String(organizations)} documents=${String(documents)}`,
+      };
+    },
+  },
+  {
+    name: "0095 · organization eligibility matches active-and-public exactly",
+    why: "A private or pending organization in the directory discloses a company that has not chosen to trade publicly.",
+    async run() {
+      const mismatched = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM store_search_document AS document
+          JOIN commerce_organization AS organization ON organization.id = document.entity_id
+         WHERE document.document_kind = 'organization'
+           AND document.is_eligible
+             <> (organization.trade_state = 'active' AND organization.visibility = 'public')`);
+      return {
+        ok: mismatched === 0,
+        detail: `${String(mismatched)} organization document(s) disagree with their row`,
+      };
+    },
+  },
 ];
 
 async function main(): Promise<void> {

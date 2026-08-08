@@ -62,8 +62,28 @@ const SearchQuerySchema = z
         "foreign_exchange_facilitator",
       ])
       .optional(),
-    documentKind: z.enum(["product", "provider_offering"]).optional(),
+    // A25. `organization` is the supplier directory — the same public-eligibility rule
+    // products answer to, so a buyer can browse sellers the way they already can
+    // service providers.
+    documentKind: z.enum(["product", "provider_offering", "organization"]).optional(),
     minOrderQuantityMax: z.coerce.number().int().min(0).max(1_000_000).optional(),
+    /**
+     * A25. The filters matching the facets `getCategoryFacets` already computes, plus
+     * lead time, condition and verification state.
+     *
+     * A facet the backend publishes and the search cannot filter on is an invitation to
+     * filter the fetched page, which is what §2.4 forbids. The counts were already the
+     * honest denominator; only the WHERE clause was missing.
+     */
+    priceMinInCents: z.coerce.number().int().min(0).optional(),
+    priceMaxInCents: z.coerce.number().int().min(0).optional(),
+    stockState: z.enum(["in_stock", "low_stock", "made_to_order", "unavailable"]).optional(),
+    samplePolicy: z.enum(["unavailable", "paid", "refundable"]).optional(),
+    condition: z.enum(["new", "refurbished", "used"]).optional(),
+    verificationState: z
+      .enum(["unverified", "documents_pending", "verified", "rejected", "suspended"])
+      .optional(),
+    leadTimeMaxDays: z.coerce.number().int().min(0).max(3650).optional(),
     // `discovery` is Phase 13's ranked sort. Deliberately a SEPARATE value rather than a
     // blend: relevance never reads the ranking score and discovery never reads ts_rank_cd.
     sort: z.enum(["relevance", "discovery"]).optional(),
@@ -231,6 +251,13 @@ export async function search(req: Request, res: Response): Promise<void> {
     providerKind: parsed.data.providerKind,
     documentKind: parsed.data.documentKind,
     minOrderQuantityMax: parsed.data.minOrderQuantityMax,
+    priceMinInCents: parsed.data.priceMinInCents,
+    priceMaxInCents: parsed.data.priceMaxInCents,
+    stockState: parsed.data.stockState,
+    samplePolicy: parsed.data.samplePolicy,
+    condition: parsed.data.condition,
+    verificationState: parsed.data.verificationState,
+    leadTimeMaxDays: parsed.data.leadTimeMaxDays,
     sort: parsed.data.sort ?? "relevance",
     limit: parsed.data.limit,
     cursor: parsed.data.cursor,

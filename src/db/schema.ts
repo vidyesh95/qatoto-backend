@@ -1031,6 +1031,28 @@ export const commerceEmailDomainClassificationEnum = pgEnum(
 export const storeSearchDocumentKindEnum = pgEnum("store_search_document_kind", [
   "product",
   "provider_offering",
+  /**
+   * A25. A seller organization as a first-class search result, so a buyer can browse
+   * and filter suppliers the way they already can service providers. Fed by the same
+   * public-eligibility rule products answer to — active trade state, public visibility.
+   */
+  "organization",
+]);
+
+/**
+ * A25. The stock state as `deriveStockState` computes it, denormalized onto the search
+ * document so it can be filtered on.
+ *
+ * Its own type rather than a borrowed one: this value is DERIVED from stock quantity and
+ * the lead-time pair, so unlike `sample_policy` and `condition` there is no column
+ * elsewhere whose type it could share. Keeping the members in step with that function is
+ * the point — a fifth state would have to be added here deliberately.
+ */
+export const storeSearchStockStateEnum = pgEnum("store_search_stock_state", [
+  "in_stock",
+  "low_stock",
+  "made_to_order",
+  "unavailable",
 ]);
 
 export const commerceProviderKindSlugEnum = pgEnum("commerce_provider_kind_slug", [
@@ -4162,6 +4184,23 @@ export const storeSearchDocument = pgTable(
     priceInCents: integer("price_in_cents"),
     currency: text("currency"),
     minimumOrderQuantity: integer("minimum_order_quantity"),
+    /**
+     * A25. The facets `getCategoryFacets` already computes, denormalized so
+     * `/store/search` can FILTER on them and not merely count them.
+     *
+     * Publishing a count the caller cannot act on is an invitation to filter the fetched
+     * page, which is what §2.4 forbids. Joining to `product` for these would defeat every
+     * keyset index the three sort branches rely on — the same argument that put
+     * `discoveryScorePoints` on this table.
+     *
+     * All five are NULL on the document kinds they do not describe: a provider offering
+     * has no stock state, an organization has neither stock nor a sample policy.
+     */
+    stockState: storeSearchStockStateEnum("stock_state"),
+    samplePolicy: productSamplePolicyEnum("sample_policy"),
+    condition: productConditionEnum("condition"),
+    providerVerificationState: commerceProviderVerificationStateEnum("provider_verification_state"),
+    leadTimeMaxDays: integer("lead_time_max_days"),
     searchText: text("search_text").notNull(),
     /**
      * Weighted FTS document for `/store/search` relevance ranking.
@@ -4206,6 +4245,12 @@ export const storeSearchDocument = pgTable(
     index("store_search_document_category_idx").on(table.categoryId, table.id),
     index("store_search_document_provider_kind_idx").on(table.providerKind, table.id),
     index("store_search_document_fts_idx").using("gin", table.searchDocument),
+    index("store_search_document_stock_idx")
+      .on(table.isEligible, table.stockState, table.id)
+      .where(sql`is_eligible`),
+    index("store_search_document_price_idx")
+      .on(table.isEligible, table.priceInCents, table.id)
+      .where(sql`is_eligible`),
     index("store_search_document_discovery_idx")
       .on(table.isEligible, table.discoveryScorePoints.desc().nullsLast(), table.id)
       .where(sql`is_eligible`),
@@ -4220,6 +4265,10 @@ export const storeSearchDocument = pgTable(
           AND organization_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
     ),
     check("store_search_document_country_ck", sql`organization_country_code ~ '^[A-Z]{2}$'`),
+    check(
+      "store_search_document_lead_time_ck",
+      sql`lead_time_max_days IS NULL OR lead_time_max_days BETWEEN 0 AND 3650`,
+    ),
   ],
 );
 

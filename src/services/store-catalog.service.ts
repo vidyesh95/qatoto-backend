@@ -513,11 +513,65 @@ export async function listActiveCategories(input: {
   return { items: rows };
 }
 
+/**
+ * A25. The active ancestor chain of a category, root first, excluding the category
+ * itself.
+ *
+ * An upward recursive CTE, sibling to `listActiveCategorySubtreeIds`. Without it a
+ * breadcrumb over a nested category costs one request per level — the client walking
+ * `parentCategoryId` by hand, which is a server join re-implemented in untrusted code.
+ *
+ * The walk STOPS at the first inactive ancestor rather than skipping it. A trail with a
+ * hole in it would render as a path a buyer could click through, and the retired link in
+ * the middle of it goes nowhere.
+ */
+async function listCategoryAncestors(
+  categoryId: string,
+): Promise<readonly StoreCategoryProjection[]> {
+  const result = await db.execute<{
+    id: string;
+    slug: string;
+    name: string;
+    parent_category_id: string | null;
+    sibling_order: number;
+    image_url: string | null;
+  }>(sql`
+    WITH RECURSIVE category_ancestors AS (
+      SELECT id, slug, name, parent_category_id, sibling_order, image_url, 0 AS depth
+      FROM commerce_category
+      WHERE id = (SELECT parent_category_id FROM commerce_category WHERE id = ${categoryId})
+        AND state = 'active'
+      UNION ALL
+      SELECT parent.id, parent.slug, parent.name, parent.parent_category_id,
+             parent.sibling_order, parent.image_url, child.depth + 1
+      FROM commerce_category AS parent
+      INNER JOIN category_ancestors AS child ON child.parent_category_id = parent.id
+      WHERE parent.state = 'active'
+    )
+    SELECT id, slug, name, parent_category_id, sibling_order, image_url
+    FROM category_ancestors
+    ORDER BY depth DESC
+  `);
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    parentCategoryId: row.parent_category_id,
+    // `sibling_order` is int4, which the driver hands back as a number. It would need a
+    // `Number()` if it were int8 — those arrive as strings.
+    siblingOrder: row.sibling_order,
+    imageUrl: row.image_url,
+  }));
+}
+
 export async function getCategoryBySlug(categorySlug: string): Promise<
   Result<
     {
       readonly category: StoreCategoryProjection;
       readonly children: readonly StoreCategoryProjection[];
+      /** A25. Root first, excluding this category. Empty for a root. */
+      readonly ancestors: readonly StoreCategoryProjection[];
     },
     StoreCatalogError
   >
@@ -539,12 +593,16 @@ export async function getCategoryBySlug(categorySlug: string): Promise<
     return { success: false, error: { type: "NOT_FOUND" } };
   }
 
-  const childrenResult = await listActiveCategories({ parentCategoryId: categoryRow.id });
+  const [childrenResult, ancestors] = await Promise.all([
+    listActiveCategories({ parentCategoryId: categoryRow.id }),
+    listCategoryAncestors(categoryRow.id),
+  ]);
   return {
     success: true,
     value: {
       category: categoryRow,
       children: childrenResult.items,
+      ancestors,
     },
   };
 }

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, lte, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -17,6 +17,7 @@ import {
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { escapeLikePattern } from "#src/lib/sql-pattern.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { deriveStockState } from "#src/services/store-catalog.service.js";
 import type { Result } from "#src/types/index.js";
 
 async function listActiveCategorySubtreeSlugs(
@@ -102,7 +103,19 @@ export async function enqueueOrganizationSearchDocumentRefresh(
   await enqueueRefresh({ targetKind: "organization", organizationId });
 }
 
-export type StoreSearchDocumentKind = "product" | "provider_offering";
+export type StoreSearchDocumentKind = (typeof storeSearchDocument.$inferSelect)["documentKind"];
+export type StoreSearchStockState = NonNullable<
+  (typeof storeSearchDocument.$inferSelect)["stockState"]
+>;
+export type StoreSearchSamplePolicy = NonNullable<
+  (typeof storeSearchDocument.$inferSelect)["samplePolicy"]
+>;
+export type StoreSearchCondition = NonNullable<
+  (typeof storeSearchDocument.$inferSelect)["condition"]
+>;
+export type StoreSearchVerificationState = NonNullable<
+  (typeof storeSearchDocument.$inferSelect)["providerVerificationState"]
+>;
 
 export interface StoreSearchHit {
   readonly documentKind: StoreSearchDocumentKind;
@@ -118,6 +131,15 @@ export interface StoreSearchHit {
   readonly priceInCents: number | null;
   readonly currency: string | null;
   readonly minimumOrderQuantity: number | null;
+  /**
+   * A25. The filterable facets, projected alongside the filter so a result card can
+   * render what it was matched on. All null on a kind that has no such fact.
+   */
+  readonly stockState: StoreSearchStockState | null;
+  readonly samplePolicy: StoreSearchSamplePolicy | null;
+  readonly condition: StoreSearchCondition | null;
+  readonly providerVerificationState: StoreSearchVerificationState | null;
+  readonly leadTimeMaxDays: number | null;
   readonly relevanceScore: number | null;
 }
 
@@ -146,6 +168,17 @@ export async function searchStoreDocuments(input: {
   readonly providerKind?: StoreProviderKind | undefined;
   readonly documentKind?: StoreSearchDocumentKind | undefined;
   readonly minOrderQuantityMax?: number | undefined;
+  /**
+   * A25. The filters that match the facets the platform already publishes. Every one is
+   * optional and every one narrows; none of them is a sort.
+   */
+  readonly priceMinInCents?: number | undefined;
+  readonly priceMaxInCents?: number | undefined;
+  readonly stockState?: StoreSearchStockState | undefined;
+  readonly samplePolicy?: StoreSearchSamplePolicy | undefined;
+  readonly condition?: StoreSearchCondition | undefined;
+  readonly verificationState?: StoreSearchVerificationState | undefined;
+  readonly leadTimeMaxDays?: number | undefined;
   /**
    * `discovery` is STORE Phase 13's ranked sort. IT NEVER TOUCHES `ts_rank_cd`, and
    * `relevance` never touches the discovery score — see `commerce-trending-score.ts` for
@@ -207,6 +240,35 @@ export async function searchStoreDocuments(input: {
       ? undefined
       : sql`(${storeSearchDocument.minimumOrderQuantity} IS NULL
             OR ${storeSearchDocument.minimumOrderQuantity} <= ${input.minOrderQuantityMax})`,
+    /**
+     * A25. The facet filters, all of them here rather than in the three sort branches,
+     * which share this array.
+     *
+     * A NULL FACET IS EXCLUDED, not admitted. `minOrderQuantityMax` above admits NULL
+     * because "no MOQ declared" genuinely satisfies "MOQ at most 50" — the buyer may
+     * order any quantity. These are different: a document with no `stock_state` is not
+     * a document that is in stock, and admitting it would put provider offerings and
+     * organizations into a stock filter that cannot describe them.
+     */
+    input.priceMinInCents === undefined
+      ? undefined
+      : gte(storeSearchDocument.priceInCents, input.priceMinInCents),
+    input.priceMaxInCents === undefined
+      ? undefined
+      : lte(storeSearchDocument.priceInCents, input.priceMaxInCents),
+    input.stockState === undefined
+      ? undefined
+      : eq(storeSearchDocument.stockState, input.stockState),
+    input.samplePolicy === undefined
+      ? undefined
+      : eq(storeSearchDocument.samplePolicy, input.samplePolicy),
+    input.condition === undefined ? undefined : eq(storeSearchDocument.condition, input.condition),
+    input.verificationState === undefined
+      ? undefined
+      : eq(storeSearchDocument.providerVerificationState, input.verificationState),
+    input.leadTimeMaxDays === undefined
+      ? undefined
+      : lte(storeSearchDocument.leadTimeMaxDays, input.leadTimeMaxDays),
   ];
 
   if (useDiscovery) {
@@ -247,6 +309,11 @@ export async function searchStoreDocuments(input: {
         priceInCents: storeSearchDocument.priceInCents,
         currency: storeSearchDocument.currency,
         minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
+        stockState: storeSearchDocument.stockState,
+        samplePolicy: storeSearchDocument.samplePolicy,
+        condition: storeSearchDocument.condition,
+        providerVerificationState: storeSearchDocument.providerVerificationState,
+        leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
         discoveryScorePoints: storeSearchDocument.discoveryScorePoints,
       })
       .from(storeSearchDocument)
@@ -286,6 +353,11 @@ export async function searchStoreDocuments(input: {
           priceInCents: row.priceInCents,
           currency: row.currency,
           minimumOrderQuantity: row.minimumOrderQuantity,
+          stockState: row.stockState,
+          samplePolicy: row.samplePolicy,
+          condition: row.condition,
+          providerVerificationState: row.providerVerificationState,
+          leadTimeMaxDays: row.leadTimeMaxDays,
           // NULL, not the discovery score. `relevanceScore` means "how well did this match
           // the words you typed", and this sort did not ask that question.
           relevanceScore: null,
@@ -335,6 +407,11 @@ export async function searchStoreDocuments(input: {
         priceInCents: storeSearchDocument.priceInCents,
         currency: storeSearchDocument.currency,
         minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
+        stockState: storeSearchDocument.stockState,
+        samplePolicy: storeSearchDocument.samplePolicy,
+        condition: storeSearchDocument.condition,
+        providerVerificationState: storeSearchDocument.providerVerificationState,
+        leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
         id: storeSearchDocument.id,
       })
       .from(storeSearchDocument)
@@ -366,6 +443,11 @@ export async function searchStoreDocuments(input: {
           priceInCents: row.priceInCents,
           currency: row.currency,
           minimumOrderQuantity: row.minimumOrderQuantity,
+          stockState: row.stockState,
+          samplePolicy: row.samplePolicy,
+          condition: row.condition,
+          providerVerificationState: row.providerVerificationState,
+          leadTimeMaxDays: row.leadTimeMaxDays,
           relevanceScore: null,
         })),
         page: { nextCursor, hasMore: nextCursor !== null },
@@ -415,6 +497,11 @@ export async function searchStoreDocuments(input: {
       priceInCents: storeSearchDocument.priceInCents,
       currency: storeSearchDocument.currency,
       minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
+      stockState: storeSearchDocument.stockState,
+      samplePolicy: storeSearchDocument.samplePolicy,
+      condition: storeSearchDocument.condition,
+      providerVerificationState: storeSearchDocument.providerVerificationState,
+      leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
       id: storeSearchDocument.id,
       relevanceScore: sql<number>`${rankExpression}`.mapWith(Number),
     })
@@ -450,6 +537,11 @@ export async function searchStoreDocuments(input: {
         priceInCents: row.priceInCents,
         currency: row.currency,
         minimumOrderQuantity: row.minimumOrderQuantity,
+        stockState: row.stockState,
+        samplePolicy: row.samplePolicy,
+        condition: row.condition,
+        providerVerificationState: row.providerVerificationState,
+        leadTimeMaxDays: row.leadTimeMaxDays,
         relevanceScore: row.relevanceScore,
       })),
       page: { nextCursor, hasMore: nextCursor !== null },
@@ -470,6 +562,12 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
       status: product.status,
       moderationState: product.moderationState,
       publishedAt: product.publishedAt,
+      // A25. The facet columns, read here so `/store/search` can filter on them.
+      stockQuantity: product.stockQuantity,
+      samplePolicy: product.samplePolicy,
+      condition: product.condition,
+      leadTimeMinDays: product.leadTimeMinDays,
+      leadTimeMaxDays: product.leadTimeMaxDays,
       organizationId: commerceOrganization.id,
       organizationSlug: commerceOrganization.slug,
       organizationDisplayName: commerceOrganization.displayName,
@@ -538,7 +636,10 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
         .where(eq(commerceProductSpecification.productId, productId))
         .orderBy(asc(commerceProductSpecification.position)),
       db
-        .select({ name: commerceProductVariant.name })
+        .select({
+          name: commerceProductVariant.name,
+          stockQuantity: commerceProductVariant.stockQuantity,
+        })
         .from(commerceProductVariant)
         .where(
           and(
@@ -570,6 +671,21 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
     row.organizationVisibility === "public" &&
     row.categoryState === "active" &&
     row.categoryId !== null;
+
+  /**
+   * A25. Variant-aware, exactly as `mapProductCard` is: a product whose variants are all
+   * out of stock is unavailable even when the product row still carries stock. A card
+   * saying "in stock" that the stock filter disagreed with would be the worse bug of the
+   * two, because both come from this same denormalized column.
+   */
+  const searchStockState = deriveStockState({
+    stockQuantity:
+      variantNameRows.length > 0
+        ? variantNameRows.reduce((total, variant) => total + variant.stockQuantity, 0)
+        : row.stockQuantity,
+    leadTimeMinDays: row.leadTimeMinDays,
+    leadTimeMaxDays: row.leadTimeMaxDays,
+  });
 
   const searchText = [
     row.title,
@@ -607,6 +723,11 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
       priceInCents: searchPriceInCents,
       currency: row.currency,
       minimumOrderQuantity: moqRow?.minimumOrderQuantity ?? null,
+      stockState: searchStockState,
+      samplePolicy: row.samplePolicy,
+      condition: row.condition,
+      providerVerificationState: null,
+      leadTimeMaxDays: row.leadTimeMaxDays,
       searchText,
       isEligible,
       publishedAt: row.publishedAt,
@@ -626,6 +747,15 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
         priceInCents: searchPriceInCents,
         currency: row.currency,
         minimumOrderQuantity: moqRow?.minimumOrderQuantity ?? null,
+        // Every A25 column is listed explicitly. This `set` block survives by style
+        // rather than by guarantee — a column omitted here keeps a stale value forever
+        // while the row around it updates, which is the drift `0081`'s trigger exists
+        // to prevent on the two columns it owns.
+        stockState: searchStockState,
+        samplePolicy: row.samplePolicy,
+        condition: row.condition,
+        providerVerificationState: null,
+        leadTimeMaxDays: row.leadTimeMaxDays,
         searchText,
         isEligible,
         publishedAt: row.publishedAt,
@@ -644,6 +774,7 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
       state: commerceServiceOffering.state,
       providerKind: commerceServiceOffering.providerKind,
       indicativePriceMinInCents: commerceServiceOffering.indicativePriceMinInCents,
+      maximumLeadTimeDays: commerceServiceOffering.maximumLeadTimeDays,
       currency: commerceServiceOffering.currency,
       organizationId: commerceOrganization.id,
       organizationSlug: commerceOrganization.slug,
@@ -720,6 +851,13 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
       priceInCents: row.indicativePriceMinInCents,
       currency: row.currency,
       minimumOrderQuantity: null,
+      // A25. A service offering has no stock, no sample and no condition; it has a
+      // verification state, which is the one facet a provider directory filters on.
+      stockState: null,
+      samplePolicy: null,
+      condition: null,
+      providerVerificationState: row.profileVerificationState,
+      leadTimeMaxDays: row.maximumLeadTimeDays,
       searchText,
       isEligible,
       publishedAt: null,
@@ -737,6 +875,11 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
         providerKind: row.providerKind,
         priceInCents: row.indicativePriceMinInCents,
         currency: row.currency,
+        stockState: null,
+        samplePolicy: null,
+        condition: null,
+        providerVerificationState: row.profileVerificationState,
+        leadTimeMaxDays: row.maximumLeadTimeDays,
         searchText,
         isEligible,
         updatedAt: new Date(),
@@ -744,7 +887,118 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
     });
 }
 
-/** Recompute eligibility for every search document owned by an organization. */
+/**
+ * A25. The organization itself as a search document — the supplier directory.
+ *
+ * A buyer could reach one storefront by slug and could not browse or filter sellers at
+ * all, while service providers had both a directory and a detail page. This closes that
+ * asymmetry with the SAME public-eligibility rule products already answer to.
+ *
+ * The document carries no price, no MOQ, no category and no stock: an organization is
+ * not a thing with a price. What it carries is the text a buyer would actually type —
+ * the legal name as well as the display name, and the categories it sells into, so
+ * "cold chain" finds the manufacturer and not only the freezer.
+ */
+export async function refreshOrganizationSearchDocument(organizationId: string): Promise<void> {
+  const [row] = await db
+    .select({
+      id: commerceOrganization.id,
+      slug: commerceOrganization.slug,
+      legalName: commerceOrganization.legalName,
+      displayName: commerceOrganization.displayName,
+      summary: commerceOrganization.summary,
+      countryCode: commerceOrganization.countryCode,
+      tradeState: commerceOrganization.tradeState,
+      visibility: commerceOrganization.visibility,
+      createdAt: commerceOrganization.createdAt,
+    })
+    .from(commerceOrganization)
+    .where(eq(commerceOrganization.id, organizationId))
+    .limit(1);
+
+  if (!row) {
+    await db
+      .delete(storeSearchDocument)
+      .where(
+        and(
+          eq(storeSearchDocument.documentKind, "organization"),
+          eq(storeSearchDocument.entityId, organizationId),
+        ),
+      );
+    return;
+  }
+
+  /**
+   * The category names this organization actually sells into, and only through products
+   * the public can already see. Deriving them from ineligible listings would let a
+   * suspended catalog keep steering supplier search.
+   */
+  const categoryNameRows = await db
+    .selectDistinct({ name: commerceCategory.name })
+    .from(storeSearchDocument)
+    .innerJoin(commerceCategory, eq(commerceCategory.id, storeSearchDocument.categoryId))
+    .where(
+      and(
+        eq(storeSearchDocument.organizationId, organizationId),
+        eq(storeSearchDocument.documentKind, "product"),
+        eq(storeSearchDocument.isEligible, true),
+      ),
+    );
+
+  const isEligible = row.tradeState === "active" && row.visibility === "public";
+
+  const searchText = [
+    row.displayName,
+    row.legalName,
+    row.summary,
+    ...categoryNameRows.map((category) => category.name),
+  ]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join(" ");
+
+  const documentValues = {
+    publicSlug: row.slug,
+    title: row.displayName,
+    summary: row.summary,
+    organizationId: row.id,
+    organizationSlug: row.slug,
+    organizationDisplayName: row.displayName,
+    organizationCountryCode: row.countryCode,
+    categoryId: null,
+    categorySlug: null,
+    providerKind: null,
+    priceInCents: null,
+    currency: null,
+    minimumOrderQuantity: null,
+    stockState: null,
+    samplePolicy: null,
+    condition: null,
+    // A seller organization's own verification is per PROVIDER KIND and does not
+    // describe it as a seller, so this stays null rather than borrowing a provider's.
+    providerVerificationState: null,
+    leadTimeMaxDays: null,
+    searchText,
+    isEligible,
+    publishedAt: row.createdAt,
+  } as const;
+
+  await db
+    .insert(storeSearchDocument)
+    .values({ documentKind: "organization", entityId: row.id, ...documentValues })
+    .onConflictDoUpdate({
+      target: [storeSearchDocument.documentKind, storeSearchDocument.entityId],
+      set: { ...documentValues, updatedAt: new Date() },
+    });
+}
+
+/**
+ * Recompute every search document owned by an organization — its products, its
+ * offerings, and (A25) the organization document itself.
+ *
+ * The organization document is refreshed LAST, because its `searchText` reads the
+ * category names off its own eligible product documents and would otherwise be built
+ * from the previous generation of them.
+ */
 export async function refreshOrganizationSearchEligibility(organizationId: string): Promise<void> {
   const productIds = await db
     .select({ id: product.id })
@@ -761,6 +1015,8 @@ export async function refreshOrganizationSearchEligibility(organizationId: strin
   for (const row of offeringIds) {
     await refreshOfferingSearchDocument(row.id);
   }
+
+  await refreshOrganizationSearchDocument(organizationId);
 }
 
 /** Newest eligible product cards for algorithmic rails, with optional cursor. */

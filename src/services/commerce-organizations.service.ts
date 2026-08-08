@@ -114,6 +114,21 @@ export interface UpdateOrganizationInput {
   readonly visibility?: "private" | "public";
 }
 
+/**
+ * A25. The patch fields that reach `store_search_document`, so a change to any of them
+ * re-enqueues the refresh.
+ *
+ * Declared as a list rather than checked inline because the failure mode is silent: a
+ * field added to the document without being added here goes stale in the supplier
+ * directory and nothing reports it. `websiteUrl` is absent deliberately — it is a link a
+ * buyer chooses to follow, and it is not projected on the search document.
+ */
+const SEARCH_DOCUMENT_ORGANIZATION_FIELDS = [
+  "displayName",
+  "summary",
+  "visibility",
+] as const satisfies readonly (keyof UpdateOrganizationInput)[];
+
 export interface CreateMemberInput {
   readonly userId: string;
   readonly role: Exclude<MemberRole, "owner">;
@@ -476,7 +491,19 @@ export async function updateOrganization(
   if (!updated) {
     return { success: false, error: { type: "NOT_FOUND" } };
   }
-  if (patch.visibility !== undefined) {
+  /**
+   * A25 WIDENED THIS from `patch.visibility !== undefined`.
+   *
+   * Visibility was the only field that mattered while the organization existed in search
+   * purely as an eligibility flag on its products. Now the organization is itself a
+   * search document carrying its display name, legal name and summary, so a rename that
+   * did not refresh would leave the supplier directory advertising the old company name
+   * indefinitely — with nothing to correct it until an unrelated visibility edit.
+   */
+  const patchTouchesSearchDocument = SEARCH_DOCUMENT_ORGANIZATION_FIELDS.some(
+    (field) => patch[field] !== undefined,
+  );
+  if (patchTouchesSearchDocument) {
     const { enqueueOrganizationSearchDocumentRefresh } =
       await import("#src/services/store-search.service.js");
     await enqueueOrganizationSearchDocumentRefresh(organizationId);

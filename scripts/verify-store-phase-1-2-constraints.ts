@@ -1,8 +1,8 @@
 /**
  * Verifies Store Phase 1/2 database invariants after migrations 0043–0044.
  *
- * Also backfills missing `store_search_document` rows for eligible products and
- * active provider offerings when `--backfill` is passed.
+ * Also backfills missing `store_search_document` rows for eligible products,
+ * active provider offerings and (A25) seller organizations when `--backfill` is passed.
  *
  *   npm run db:verify-store-phase-1-2-constraints
  *   npm run db:backfill-store-search-documents
@@ -11,6 +11,7 @@ import "dotenv/config";
 import { pool } from "#src/db/index.js";
 import {
   refreshOfferingSearchDocument,
+  refreshOrganizationSearchDocument,
   refreshProductSearchDocument,
 } from "#src/services/store-search.service.js";
 
@@ -158,6 +159,7 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
 async function backfillSearchDocuments(): Promise<{
   readonly productsRefreshed: number;
   readonly offeringsRefreshed: number;
+  readonly organizationsRefreshed: number;
 }> {
   const productRows = await pool.query<{ readonly id: string }>(
     `SELECT id
@@ -176,9 +178,26 @@ async function backfillSearchDocuments(): Promise<{
     await refreshOfferingSearchDocument(row.id);
   }
 
+  /**
+   * A25. Organizations, LAST — `refreshOrganizationSearchDocument` reads the category
+   * names off its own eligible product documents, so running it before the product loop
+   * would build every supplier's search text from the previous generation.
+   *
+   * Every organization, not only the eligible ones: the refresher decides eligibility
+   * itself, and a pending or private organization needs an `is_eligible = false` row so
+   * that becoming active later is an UPDATE rather than a first insert nothing triggers.
+   */
+  const organizationRows = await pool.query<{ readonly id: string }>(
+    `SELECT id FROM commerce_organization`,
+  );
+  for (const row of organizationRows.rows) {
+    await refreshOrganizationSearchDocument(row.id);
+  }
+
   return {
     productsRefreshed: productRows.rows.length,
     offeringsRefreshed: offeringRows.rows.length,
+    organizationsRefreshed: organizationRows.rows.length,
   };
 }
 
@@ -187,7 +206,7 @@ async function main(): Promise<void> {
   if (shouldBackfill) {
     const backfill = await backfillSearchDocuments();
     console.log(
-      `Backfilled search documents: products=${String(backfill.productsRefreshed)} offerings=${String(backfill.offeringsRefreshed)}`,
+      `Backfilled search documents: products=${String(backfill.productsRefreshed)} offerings=${String(backfill.offeringsRefreshed)} organizations=${String(backfill.organizationsRefreshed)}`,
     );
   }
 
