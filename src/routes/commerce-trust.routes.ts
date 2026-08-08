@@ -148,6 +148,28 @@ router.post(
   commerceTrustController.openDispute,
 );
 
+/**
+ * A28. The participant reads, which had no route at all: a buyer could file a dispute
+ * over a $200,000 order and had nothing that answered "what is happening with it". The
+ * two party indexes existed with no reader.
+ *
+ * NOT under `/admin`. These are scoped to the caller's organization by the service, and
+ * a non-party gets `404` rather than `403` so the route cannot enumerate dispute ids.
+ */
+router.get(
+  "/disputes",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceTrustController.listParticipantDisputes,
+);
+
+router.get(
+  "/disputes/:disputeId",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceTrustController.getDispute,
+);
+
 router.get(
   "/admin/disputes",
   requireAuth,

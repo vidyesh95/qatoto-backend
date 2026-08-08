@@ -353,6 +353,60 @@ export async function listModeratorDisputes(req: Request, res: Response): Promis
   } satisfies ApiResponse);
 }
 
+/**
+ * A28. A participant reads a dispute they are a party to.
+ *
+ * `requireCommerceActor` is the same gate every other participant-scoped read uses; the
+ * service refuses a non-party with `NOT_FOUND`, never `FORBIDDEN`, so the route cannot
+ * be used to discover which dispute ids exist.
+ */
+export async function getDispute(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+
+  const params = DisputeIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  if (!parseNoQuery(req, res)) return;
+
+  const result = await commerceTrustService.getDisputeForParticipant(actor, params.data.disputeId);
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Dispute loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+export async function listParticipantDisputes(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+
+  const query = ListDisputesQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await commerceTrustService.listDisputesForParticipant(actor, query.data);
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Disputes loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
 export async function decideDispute(req: Request, res: Response): Promise<void> {
   if (!req.user) {
     res.status(401).json({

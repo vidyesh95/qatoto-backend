@@ -163,6 +163,17 @@ export interface DisputeProjection {
   readonly decidedAt: Date | null;
 }
 
+/** A28. One dispute as its own participants see it, with the timeline behind it. */
+export interface DisputeDetailProjection extends DisputeProjection {
+  readonly decisionNote: string | null;
+  readonly timeline: readonly {
+    readonly sequence: number;
+    readonly eventKind: (typeof commerceDisputeEvent.$inferSelect)["eventKind"];
+    readonly note: string | null;
+    readonly occurredAt: Date;
+  }[];
+}
+
 const DEFAULT_PAGE_LIMIT = 20;
 const DISPUTABLE_ORDER_STATES: readonly OrderState[] = [
   "confirmed",
@@ -627,6 +638,130 @@ export async function listDisputesForModerator(
                 sortKey: lastRow.createdAt.toISOString(),
                 id: lastRow.id,
               })
+            : null,
+        hasMore,
+      },
+    },
+  };
+}
+
+/**
+ * A28. One dispute, read by a party to the order it is about.
+ *
+ * THE PREDICATE IS `cancelOrder`'S, and both refusals collapse to `NOT_FOUND`. "No such
+ * dispute" and "not your dispute" must be indistinguishable, or the route becomes an
+ * oracle for which dispute ids exist — and a dispute id names two organizations and a
+ * commercial disagreement between them.
+ *
+ * This is deliberately NOT `evaluateDisputeOpeningRelationship`. That one splits
+ * party-but-not-buyer into a 403 because only a buyer may OPEN a dispute; both parties
+ * may read one, and the counterparty being told a dispute exists against them is the
+ * entire point of telling them.
+ */
+export async function getDisputeForParticipant(
+  actor: CommerceTrustActorContext,
+  disputeId: string,
+): Promise<Result<DisputeDetailProjection, CommerceTrustError>> {
+  const [dispute] = await db
+    .select()
+    .from(commerceDispute)
+    .where(eq(commerceDispute.id, disputeId))
+    .limit(1);
+
+  if (
+    !dispute ||
+    (dispute.buyerOrganizationId !== actor.organizationId &&
+      dispute.counterpartyOrganizationId !== actor.organizationId)
+  ) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  const eventRows = await db
+    .select({
+      sequence: commerceDisputeEvent.sequence,
+      eventKind: commerceDisputeEvent.eventKind,
+      note: commerceDisputeEvent.note,
+      occurredAt: commerceDisputeEvent.occurredAt,
+    })
+    .from(commerceDisputeEvent)
+    .where(eq(commerceDisputeEvent.disputeId, dispute.id))
+    .orderBy(asc(commerceDisputeEvent.occurredAt), asc(commerceDisputeEvent.sequence));
+
+  return {
+    success: true,
+    value: {
+      ...projectDispute(dispute),
+      /**
+       * `decisionNote` is included, and it is the reason a participant asks. The
+       * moderator's identity is NOT: which member of staff decided is not a fact either
+       * trading party has any claim on.
+       */
+      decisionNote: dispute.decisionNote,
+      timeline: eventRows,
+    },
+  };
+}
+
+/**
+ * A28. Every dispute the caller's organization is a party to, newest first.
+ *
+ * Both sides of the predicate, not just the buyer: `commerce_dispute_parties_ck` means
+ * only a buyer opens one, but a seller with a dispute filed against them needs to find
+ * it without being handed the id by someone else.
+ */
+export async function listDisputesForParticipant(
+  actor: CommerceTrustActorContext,
+  input: { readonly limit?: number; readonly cursor?: string; readonly state?: DisputeState },
+): Promise<
+  Result<
+    {
+      readonly items: readonly DisputeProjection[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    CommerceTrustError
+  >
+> {
+  const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
+  let cursorPredicate: SQL | undefined;
+  if (input.cursor) {
+    const decodedCursor = decodeTimestampStoreCursor(input.cursor);
+    if (!decodedCursor) return { success: false, error: { type: "INVALID_CURSOR" } };
+    cursorPredicate = or(
+      lt(commerceDispute.createdAt, decodedCursor.sortKey),
+      and(
+        eq(commerceDispute.createdAt, decodedCursor.sortKey),
+        gt(commerceDispute.id, decodedCursor.id),
+      ),
+    );
+  }
+
+  const rows = await db
+    .select()
+    .from(commerceDispute)
+    .where(
+      and(
+        or(
+          eq(commerceDispute.buyerOrganizationId, actor.organizationId),
+          eq(commerceDispute.counterpartyOrganizationId, actor.organizationId),
+        ),
+        input.state === undefined ? undefined : eq(commerceDispute.state, input.state),
+        cursorPredicate,
+      ),
+    )
+    .orderBy(desc(commerceDispute.createdAt), asc(commerceDispute.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const lastRow = pageRows.at(-1);
+  return {
+    success: true,
+    value: {
+      items: pageRows.map(projectDispute),
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.id })
             : null,
         hasMore,
       },

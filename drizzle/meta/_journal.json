@@ -673,6 +673,13 @@
       "when": 1786105824394,
       "tag": "0095_store_phase_15_search_depth",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1786105829394,
+      "tag": "0096_store_phase_15_queue_indexes",
+      "breakpoints": true
     }
   ]
 }

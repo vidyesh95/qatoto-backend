@@ -1,4 +1,19 @@
-import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  lt,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -121,6 +136,49 @@ export interface ListServiceEngagementsInput {
   readonly limit?: number;
   readonly cursor?: string;
   readonly role?: "buyer" | "provider";
+}
+
+export interface ListShipmentsInput {
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly state?: ShipmentState;
+  readonly estimatedArrivalFrom?: Date;
+  readonly estimatedArrivalTo?: Date;
+}
+
+/**
+ * A29. One row of a cross-order logistics queue.
+ *
+ * Lighter than `ShipmentProjection`: no product lines and no event history, because a
+ * forty-shipment page would otherwise fan out into eighty child queries to render a
+ * list nobody reads the detail of. `GET /commerce/shipments/:shipmentId` is the detail.
+ */
+export interface ShipmentQueueRowProjection {
+  readonly id: string;
+  readonly orderId: string;
+  readonly buyerOrganizationId: string;
+  readonly state: ShipmentState;
+  readonly originCountryCode: string | null;
+  readonly originLocality: string | null;
+  readonly destinationCountryCode: string | null;
+  readonly destinationLocality: string | null;
+  readonly packageCount: number;
+  readonly totalWeightGrams: number | null;
+  /**
+   * The latest ETA across this shipment's legs, or `null` when no leg carries one.
+   *
+   * `commerce_shipment` has no ETA of its own — it lives on the LEG. `max()` rather than
+   * `min()` because a shipment arrives when its last leg does. Null is never a
+   * fabricated date: A16's rule that an uncovered lane returns nothing rather than a
+   * zero applies to a date exactly as it does to a price.
+   */
+  readonly estimatedArrivalAt: Date | null;
+  readonly createdAt: Date;
+}
+
+export interface ShipmentQueuePage {
+  readonly items: readonly ShipmentQueueRowProjection[];
+  readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
 }
 
 export interface ServiceEngagementProjection {
@@ -648,6 +706,125 @@ export async function listServiceEngagements(
       page: { nextCursor, hasMore: nextCursor !== null },
     },
   };
+}
+
+/**
+ * A29. Every shipment across every order where `organizationFilter` matches — the
+ * logistics queue.
+ *
+ * `commerce_shipment` HAS NO ORGANIZATION COLUMN, so the scope is an inner join to
+ * `commerce_order`. That join is the whole point of the route: the available workaround
+ * was to list the provider's orders and fetch each one's shipments, which is one request
+ * per order fanned out from a browser and cannot even be correct — the client holds one
+ * page of orders, so a shipment on order-page two is missing from a view claiming to
+ * list all of them.
+ *
+ * Split the way `listOrdersBy` is, so a buyer-facing twin is one line whenever asked for.
+ */
+async function listShipmentsBy(
+  organizationFilter: SQL,
+  input: ListShipmentsInput,
+): Promise<Result<ShipmentQueuePage, CommerceFulfillmentError>> {
+  const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
+  const cursorPredicate =
+    decodedCursor === null
+      ? undefined
+      : or(
+          lt(commerceShipment.createdAt, decodedCursor.sortKey),
+          and(
+            eq(commerceShipment.createdAt, decodedCursor.sortKey),
+            gt(commerceShipment.id, decodedCursor.id),
+          ),
+        );
+
+  /**
+   * The ETA window filters through the LEGS, because that is where an ETA is recorded.
+   * An `EXISTS` rather than a join so a shipment with three legs inside the window is
+   * still one row — a join would duplicate it and make the page size a lie.
+   */
+  const arrivalWindowPredicate =
+    input.estimatedArrivalFrom === undefined && input.estimatedArrivalTo === undefined
+      ? undefined
+      : exists(
+          db
+            .select({ present: sql`1` })
+            .from(commerceShipmentLeg)
+            .where(
+              and(
+                eq(commerceShipmentLeg.shipmentId, commerceShipment.id),
+                isNotNull(commerceShipmentLeg.estimatedArrivalAt),
+                input.estimatedArrivalFrom === undefined
+                  ? undefined
+                  : gte(commerceShipmentLeg.estimatedArrivalAt, input.estimatedArrivalFrom),
+                input.estimatedArrivalTo === undefined
+                  ? undefined
+                  : lte(commerceShipmentLeg.estimatedArrivalAt, input.estimatedArrivalTo),
+              ),
+            ),
+        );
+
+  const rows = await db
+    .select({
+      id: commerceShipment.id,
+      orderId: commerceShipment.orderId,
+      buyerOrganizationId: commerceOrder.buyerOrganizationId,
+      state: commerceShipment.state,
+      originCountryCode: commerceShipment.originCountryCode,
+      originLocality: commerceShipment.originLocality,
+      destinationCountryCode: commerceShipment.destinationCountryCode,
+      destinationLocality: commerceShipment.destinationLocality,
+      packageCount: commerceShipment.packageCount,
+      totalWeightGrams: commerceShipment.totalWeightGrams,
+      createdAt: commerceShipment.createdAt,
+      estimatedArrivalAt: sql<Date | null>`(
+        SELECT max(${commerceShipmentLeg.estimatedArrivalAt})
+          FROM ${commerceShipmentLeg}
+         WHERE ${commerceShipmentLeg.shipmentId} = ${commerceShipment.id})`,
+    })
+    .from(commerceShipment)
+    .innerJoin(commerceOrder, eq(commerceOrder.id, commerceShipment.orderId))
+    .where(
+      and(
+        organizationFilter,
+        input.state === undefined ? undefined : eq(commerceShipment.state, input.state),
+        arrivalWindowPredicate,
+        cursorPredicate,
+      ),
+    )
+    .orderBy(desc(commerceShipment.createdAt), asc(commerceShipment.id))
+    .limit(limit + 1);
+
+  const pageRows = rows.slice(0, limit);
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor =
+    rows.length > limit && lastRow
+      ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.id })
+      : null;
+
+  return {
+    success: true,
+    value: {
+      items: pageRows,
+      page: { nextCursor, hasMore: nextCursor !== null },
+    },
+  };
+}
+
+/** A29. The seller's or logistics provider's queue across every order they carry. */
+export async function listCounterpartyShipments(
+  actor: CommerceFulfillmentActorContext,
+  input: ListShipmentsInput,
+): Promise<Result<ShipmentQueuePage, CommerceFulfillmentError>> {
+  return listShipmentsBy(
+    eq(commerceOrder.counterpartyOrganizationId, actor.organizationId),
+    input,
+  );
 }
 
 /**

@@ -352,6 +352,74 @@ const CHECKS: readonly Check[] = [
       };
     },
   },
+
+  // -------------------------------------------------------------------------
+  // 0096 — A28 and A29 queue indexes.
+  // -------------------------------------------------------------------------
+  {
+    name: "0096 · the four queue indexes exist",
+    why: "Every new list orders by (created_at DESC, id), which no shipped index on these tables serves.",
+    async run() {
+      const names = [
+        "commerce_dispute_buyer_created_idx",
+        "commerce_dispute_counterparty_created_idx",
+        "commerce_shipment_order_created_idx",
+        "commerce_shipment_leg_eta_idx",
+      ];
+      const present = await Promise.all(names.map((name) => indexExists(name)));
+      const missing = names.filter((_name, position) => !present[position]);
+      return {
+        ok: missing.length === 0,
+        detail: missing.length === 0 ? "all four present" : `missing: ${missing.join(", ")}`,
+      };
+    },
+  },
+  {
+    name: "0096 · the shipment queue's org scope and ETA rollup actually run",
+    why: "commerce_shipment has no organization column; a broken join would 500 rather than return an empty page.",
+    async run() {
+      /*
+       * Executes the queue's own shape — the join `commerce_shipment` cannot do without
+       * `commerce_order`, plus the correlated `max()` over legs. It asserts that the
+       * query PLANS AND RUNS, which a type-check cannot: `estimated_arrival_at` lives on
+       * the leg, and getting that wrong is a runtime error, not a compile one.
+       */
+      const probe = await db.execute<{ shipments: number; with_eta: number }>(sql`
+        SELECT count(*)::int AS shipments,
+               count(*) FILTER (WHERE eta IS NOT NULL)::int AS with_eta
+          FROM (
+            SELECT shipment.id,
+                   (SELECT max(leg.estimated_arrival_at)
+                      FROM commerce_shipment_leg leg
+                     WHERE leg.shipment_id = shipment.id) AS eta
+              FROM commerce_shipment AS shipment
+              JOIN commerce_order AS "order" ON "order".id = shipment.order_id
+             WHERE "order".counterparty_organization_id IS NOT NULL
+             ORDER BY shipment.created_at DESC, shipment.id
+          ) AS queue`);
+      const row = probe.rows[0];
+      return {
+        ok: row !== undefined,
+        detail:
+          row === undefined
+            ? "query returned no row"
+            : `shipments=${String(row.shipments)} with_leg_eta=${String(row.with_eta)}`,
+      };
+    },
+  },
+  {
+    name: "0096 · every dispute names two DIFFERENT organizations",
+    why: "The participant read admits both parties; one organization on both sides would let a seller read its own filing as the buyer.",
+    async run() {
+      const selfDisputes = await scalar(sql`
+        SELECT count(*)::int AS value FROM commerce_dispute
+         WHERE buyer_organization_id = counterparty_organization_id`);
+      return {
+        ok: selfDisputes === 0,
+        detail: `${String(selfDisputes)} dispute(s) with one organization on both sides`,
+      };
+    },
+  },
 ];
 
 async function main(): Promise<void> {

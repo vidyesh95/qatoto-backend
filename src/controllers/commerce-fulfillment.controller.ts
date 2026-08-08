@@ -32,6 +32,19 @@ const ListServiceEngagementsQuerySchema = ListQuerySchema.extend({
   role: z.enum(["buyer", "provider"]).optional(),
 }).strict();
 
+/**
+ * A29. The logistics queue's filters.
+ *
+ * The two ETA bounds are strict ISO instants rather than dates, because the value they
+ * filter (`commerce_shipment_leg.estimated_arrival_at`) is an instant — accepting a bare
+ * `2026-08-08` would silently mean midnight UTC and quietly exclude the whole day.
+ */
+const ListShipmentsQuerySchema = ListQuerySchema.extend({
+  state: z.enum(["planned", "in_transit", "delivered", "cancelled"]).optional(),
+  estimatedArrivalFrom: z.coerce.date().optional(),
+  estimatedArrivalTo: z.coerce.date().optional(),
+}).strict();
+
 export const CreateShipmentSchema = CreateShipmentWithLegsSchema;
 
 export const AppendShipmentEventSchema = z
@@ -344,6 +357,37 @@ export async function listServiceEngagements(req: Request, res: Response): Promi
     status: "success",
     statusCode: 200,
     message: "Service engagements loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * A29. The cross-order logistics queue, scoped to the active organization as the order
+ * counterparty — a freight forwarder carrying forty shipments across thirty-one orders
+ * had no route that listed them.
+ */
+export async function listCounterpartyShipments(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+
+  const parsedQuery = ListShipmentsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendZodError(res, parsedQuery.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentService.listCounterpartyShipments(
+    actor,
+    parsedQuery.data,
+  );
+  if (!result.success) {
+    mapFulfillmentError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Shipments loaded.",
     data: result.value,
   } satisfies ApiResponse);
 }

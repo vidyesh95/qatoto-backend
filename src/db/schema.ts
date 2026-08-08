@@ -6099,6 +6099,16 @@ export const commerceShipment = pgTable(
   },
   (table) => [
     index("commerce_shipment_order_idx").on(table.orderId, table.id),
+    /**
+     * A29. The logistics queue's keyset. Leads with `orderId` so the org-scoped join to
+     * `commerce_order` can drive it, and carries the sort so a matched order's shipments
+     * arrive already ordered.
+     */
+    index("commerce_shipment_order_created_idx").on(
+      table.orderId,
+      table.createdAt.desc(),
+      table.id,
+    ),
     check("commerce_shipment_package_ck", sql`package_count > 0`),
     check("commerce_shipment_weight_ck", sql`total_weight_grams IS NULL OR total_weight_grams > 0`),
     check("commerce_shipment_version_ck", sql`version >= 0`),
@@ -6248,6 +6258,13 @@ export const commerceShipmentLeg = pgTable(
     uniqueIndex("commerce_shipment_leg_sequence_uidx").on(table.shipmentId, table.sequence),
     index("commerce_shipment_leg_shipment_idx").on(table.shipmentId, table.id),
     index("commerce_shipment_leg_engagement_idx").on(table.logisticsEngagementId),
+    /**
+     * A29. The queue's ETA-window `EXISTS` probes this per shipment. Partial, because a
+     * leg with no ETA can never satisfy a window and has no business widening it.
+     */
+    index("commerce_shipment_leg_eta_idx")
+      .on(table.shipmentId, table.estimatedArrivalAt)
+      .where(sql`estimated_arrival_at IS NOT NULL`),
     check("commerce_shipment_leg_sequence_ck", sql`sequence >= 0`),
     check("commerce_shipment_leg_version_ck", sql`version >= 0`),
     check(
@@ -8235,6 +8252,21 @@ export const commerceDispute = pgTable(
       table.id,
     ),
     index("commerce_dispute_state_idx").on(table.state, table.createdAt, table.id),
+    /**
+     * A28. The participant list's keyset. The two indexes above stop at
+     * `(org, state, id)` and cannot serve `(created_at DESC, id)`; they are kept for the
+     * state-scoped lookups they already do.
+     */
+    index("commerce_dispute_buyer_created_idx").on(
+      table.buyerOrganizationId,
+      table.createdAt.desc(),
+      table.id,
+    ),
+    index("commerce_dispute_counterparty_created_idx").on(
+      table.counterpartyOrganizationId,
+      table.createdAt.desc(),
+      table.id,
+    ),
     check(
       "commerce_dispute_reason_ck",
       sql`char_length(reason_code) BETWEEN 1 AND 80

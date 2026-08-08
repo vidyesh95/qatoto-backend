@@ -26,6 +26,23 @@ router.post(
   commerceFulfillmentController.createShipment,
 );
 
+/**
+ * A29. The cross-order logistics queue, scoped to the active organization as the
+ * ORDER's counterparty.
+ *
+ * The join is the whole point of the route. `commerce_shipment` carries no organization
+ * column, so the only client-side workaround was to list the provider's orders and fetch
+ * each one's shipments — one request per order fanned out from a browser, and it cannot
+ * be correct anyway, because the client holds one page of orders and a shipment on
+ * order-page two is missing from a view claiming to list all of them.
+ */
+router.get(
+  "/provider/shipments",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentController.listCounterpartyShipments,
+);
+
 router.get(
   "/shipments/:shipmentId",
   requireAuth,
