@@ -2,6 +2,7 @@ import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.j
 import { logger } from "#src/lib/logger.js";
 import { reconcileConnectorOutbox } from "#src/services/commerce-connector.service.js";
 import { reconcileExternalEscrowSessions } from "#src/services/commerce-escrow.service.js";
+import { expireStaleSettlementAgreements } from "#src/services/commerce-settlement.service.js";
 
 /**
  * Hourly connector reconciliation (STORE Phase 14).
@@ -14,6 +15,9 @@ import { reconcileExternalEscrowSessions } from "#src/services/commerce-escrow.s
  *   2. Escrow sessions that have been waiting on an event long enough to be suspicious.
  *      These are POLLED through the adapter, and any state the provider reports is applied
  *      through the same function a webhook would use.
+ *   3. Settlement agreements past their deadline. An expired ACCEPTED agreement is the one
+ *      that matters: it is a standing offer to bind an order, and it occupies the partial
+ *      unique index that stops the parties agreeing fresh terms.
  *
  * That last point is the one worth protecting. A poll and a webhook must not be two ways of
  * moving money, or the two will disagree in exactly the cases that matter — a redelivery
@@ -29,10 +33,12 @@ export async function handleReconcileConnectorState(rawPayload: unknown): Promis
 
   const outbox = await reconcileConnectorOutbox();
   const sessions = await reconcileExternalEscrowSessions();
+  const agreements = await expireStaleSettlementAgreements();
 
   logger.info("reconcile-connector-state complete", {
     reEnqueuedCommands: outbox.reEnqueued,
     polledSessions: sessions.polled,
     appliedEvents: sessions.applied,
+    expiredAgreements: agreements.expired,
   });
 }
