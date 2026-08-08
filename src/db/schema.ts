@@ -1364,13 +1364,34 @@ export const commerceRefundStateEnum = pgEnum("commerce_refund_state", [
 /**
  * Commerce journal account kinds (ESCROW_LEDGER_STRUCTURE.md §3, retargeted at orders).
  *
- * Sign conventions are FIXED here, not inferred:
+ * Sign conventions are FIXED here, not inferred. Source accounts run NEGATIVE,
+ * destination accounts POSITIVE, and the lines of one entry sum to exactly zero.
+ *
+ * THE FIRST SIX ARE FROZEN (Phase 14). They belong to the `internal_custody` rail,
+ * which asserts that QATOTO holds the buyer's money — the custody model §14 has now
+ * decided against. They are kept, never removed, so historical entries stay readable
+ * and so backing Phase 14 out is a data edit rather than a deploy:
  *   - `buyer_clearing` — outside world; permanently negative when funds enter
  *   - `order_held` — positive while the hold stands
- *   - `seller_payable` — seller entitlement not yet paid out
- *   - `platform_fee` — retained at zero until a fee policy exists
+ *   - `seller_payable` — NEVER POSTED, and deliberately so. It means "Qatoto owes the
+ *     seller money it is holding", which under no-custody can never be true: the escrow
+ *     provider owes the seller, or nobody does. Its honest mirror is
+ *     `platform_fee_receivable`
+ *   - `platform_fee` — superseded by the three `platform_fee_*` kinds below
  *   - `refunds_payable` — owed back to the buyer
  *   - `reconciliation_suspense` — provider/ledger delta until a human resolves it
+ *
+ * THE FOUR `settlement_*_memo` KINDS ARE OFF BALANCE SHEET. They record gross order
+ * value so it stays reconcilable without Qatoto ever claiming it as an asset, and they
+ * satisfy one identity on every rail that moves money:
+ *
+ *     funding + custody + released + refunded = 0     (per order, always)
+ *
+ * `commerce_journal_account.isMemorandum` is bound to these four by check constraint so
+ * no future balance report can sum memo value and real money into one number.
+ *
+ * THE THREE `platform_fee_*` KINDS ARE THE ONLY REAL MONEY IN THIS PHASE — Qatoto's own
+ * commission. Receiving one's own revenue is not custody of anyone else's funds.
  */
 export const commerceJournalAccountKindEnum = pgEnum("commerce_journal_account_kind", [
   "buyer_clearing",
@@ -1379,6 +1400,20 @@ export const commerceJournalAccountKindEnum = pgEnum("commerce_journal_account_k
   "platform_fee",
   "refunds_payable",
   "reconciliation_suspense",
+  /** Off balance sheet. The outside world funding the rail; negative, and it never returns to zero. */
+  "settlement_funding_memo",
+  /** Off balance sheet. Positive only while a THIRD PARTY holds the funds. */
+  "settlement_custody_memo",
+  /** Off balance sheet. Cumulative released to the seller; positive. */
+  "settlement_released_memo",
+  /** Off balance sheet. Cumulative returned to the buyer; positive. */
+  "settlement_refunded_memo",
+  /** Real. Commission the seller owes Qatoto; positive. */
+  "platform_fee_receivable",
+  /** Real. Recognized revenue — a CREDIT account, so it runs negative like `buyer_clearing`. */
+  "platform_fee_earned",
+  /** Real. Commission actually collected; positive. */
+  "platform_fee_cash",
 ]);
 
 export const commerceJournalKindEnum = pgEnum("commerce_journal_kind", [
@@ -1388,6 +1423,18 @@ export const commerceJournalKindEnum = pgEnum("commerce_journal_kind", [
   "payment_refunded",
   "reconciliation_adjustment",
   "reversal",
+  /**
+   * Phase 14. Every escrow value below is posted ONLY from a normalized provider event —
+   * a webhook, or the same event pulled by the reconciler. Qatoto's books follow the
+   * provider and never lead it, so a release REQUEST posts nothing at all.
+   */
+  "escrow_funded",
+  "escrow_released",
+  "escrow_refunded",
+  /** The `direct_processor` rail settling buyer → seller, with the seller as the settlement account. */
+  "direct_settled",
+  "fee_recognized",
+  "fee_collected",
 ]);
 
 export const commerceJournalEntrySettlementEnum = pgEnum("commerce_journal_entry_settlement", [
@@ -1406,6 +1453,150 @@ export const commercePaymentOutboxStateEnum = pgEnum("commerce_payment_outbox_st
   "processing",
   "completed",
   "failed",
+]);
+
+// ---------------------------------------------------------------------------
+// STORE Phase 14 — EXTERNAL SETTLEMENT. See docs/STORE_PHASE_14_ROLLOUT.md.
+//
+// THE DECISION THAT GOVERNS EVERY TABLE BELOW: Qatoto provides no escrow and never
+// holds funds. Two parties who want to trade cheaply transact directly and carry the
+// counterparty risk themselves — that is the DEFAULT and it stays the default. Parties
+// who want the risk reduced discuss it in the thread they are already talking in, agree
+// on a third-party licensed escrow provider, and opt in TOGETHER. Qatoto is the venue
+// and the record-keeper, never the holder.
+//
+// Escrow is therefore never auto-selected by policy, never silently applied, and never
+// silently dropped. Its absence is the normal case and is legible on the wire.
+// ---------------------------------------------------------------------------
+
+/**
+ * How one order settles. A per-ORDER fact, not per checkout group: §2.3 already gives
+ * one order per counterparty, and two sellers in one cart may settle differently.
+ *
+ * `internal_custody` is FROZEN — it is the shipped `buyer_clearing`/`order_held` path,
+ * refuse-closed in production and retained only so historical orders stay readable.
+ */
+export const commerceSettlementRailEnum = pgEnum("commerce_settlement_rail", [
+  "internal_custody",
+  /** The default. T/T, L/C, or whatever the parties arranged. Qatoto observes nothing. */
+  "direct_offline",
+  /** Processor settles buyer → seller with the SELLER as settlement account; Qatoto takes a fee. */
+  "direct_processor",
+  /** A licensed third party holds and releases against milestones. Requires a mutual agreement. */
+  "external_escrow",
+]);
+
+export const commerceConnectorKindEnum = pgEnum("commerce_connector_kind", [
+  "external_escrow",
+  "logistics",
+  "insurance",
+  "laboratory",
+  "foreign_exchange",
+]);
+
+export const commerceExternalProviderStateEnum = pgEnum("commerce_external_provider_state", [
+  "draft",
+  "active",
+  "suspended",
+  "retired",
+]);
+
+/**
+ * A negotiated settlement term, in the append-only shape `commerce_quote_revision`
+ * already uses — because it is the same kind of object. A counter-proposal is a NEW
+ * revision; the previous row goes `superseded`. Nothing is ever edited in place.
+ */
+export const commerceSettlementAgreementStateEnum = pgEnum(
+  "commerce_settlement_agreement_state",
+  ["proposed", "accepted", "declined", "withdrawn", "superseded", "expired", "consumed"],
+);
+
+/** Who bears the escrow provider's own fee. Negotiated, never defaulted silently. */
+export const commerceEscrowFeeBearerEnum = pgEnum("commerce_escrow_fee_bearer", [
+  "buyer",
+  "seller",
+  "split",
+]);
+
+/**
+ * Deliberately letter-of-credit shaped. The closest real analogue to a neutral licensed
+ * party releasing against documents is documentary credit, not a marketplace feature.
+ */
+export const commerceEscrowMilestoneKindEnum = pgEnum("commerce_escrow_milestone_kind", [
+  "deposit",
+  "shipment",
+  "inspection",
+  "delivery",
+  "final",
+]);
+
+export const commerceEscrowSessionStateEnum = pgEnum("commerce_escrow_session_state", [
+  "created",
+  "awaiting_funding",
+  "funded",
+  "partially_released",
+  "released",
+  "refunded",
+  "cancelled",
+  "disputed",
+]);
+
+export const commerceEscrowMilestoneStateEnum = pgEnum("commerce_escrow_milestone_state", [
+  "planned",
+  "locked",
+  "verification_pending",
+  "verification_failed",
+  "release_requested",
+  "released",
+  "refunded",
+  "cancelled",
+]);
+
+/**
+ * What proved a milestone. Every source is a record this schema ALREADY keeps, because
+ * a verification invented for escrow would be a second source of truth about fulfillment.
+ */
+export const commerceEscrowVerificationSourceEnum = pgEnum(
+  "commerce_escrow_verification_source",
+  ["order_confirmed", "shipment_leg_event", "inspection_engagement", "order_completion"],
+);
+
+/**
+ * The `direct_offline` rail posts NO settlement entries, because Qatoto cannot observe a
+ * wire between two banks it has no relationship with. What it records instead is each
+ * party's own claim, attributed to the organization that made it.
+ */
+export const commerceSettlementAttestationKindEnum = pgEnum(
+  "commerce_settlement_attestation_kind",
+  ["payment_sent", "payment_received"],
+);
+
+export const commerceConnectorOutboxKindEnum = pgEnum("commerce_connector_outbox_kind", [
+  "escrow_create_session",
+  "escrow_lock_milestones",
+  "escrow_submit_verification",
+  "escrow_request_release",
+  "escrow_request_refund",
+]);
+
+export const commerceConnectorOutboxStateEnum = pgEnum("commerce_connector_outbox_state", [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+]);
+
+/**
+ * Phase 14. A settlement proposal must be legible in the conversation where it was
+ * discussed, and encoding that in body text would make it unparseable and forgeable.
+ * Every pre-Phase-14 row is `participant`, which is what a human typed.
+ */
+export const commerceMessageKindEnum = pgEnum("commerce_message_kind", [
+  "participant",
+  "settlement_proposed",
+  "settlement_accepted",
+  "settlement_declined",
+  "settlement_withdrawn",
 ]);
 
 /**
@@ -5008,6 +5199,22 @@ export const commerceOrder = pgTable(
       .array()
       .default([])
       .notNull(),
+    /**
+     * HOW THIS ORDER SETTLES (Phase 14). Fixed at confirm, under the same row lock that
+     * makes every other commercial fact on this row immutable.
+     *
+     * Defaults to `internal_custody` because that is what every pre-Phase-14 row
+     * actually did. Nothing backfills it to something truer: those orders really did
+     * post `buyer_clearing → order_held`, and relabelling them would make the journal
+     * disagree with the rail it claims to have run on.
+     *
+     * Which agreement bound an `external_escrow` order is reachable through
+     * `commerce_settlement_agreement.consumedByOrderId`, which is uniquely indexed —
+     * a column here as well would be a second, divergible answer to one question.
+     */
+    settlementRail: commerceSettlementRailEnum("settlement_rail")
+      .default("internal_custody")
+      .notNull(),
     createdByMemberId: text("created_by_member_id")
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
@@ -5260,11 +5467,29 @@ export const commerceMessage = pgTable(
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
     bodyText: text("body_text").notNull(),
+    /**
+     * Phase 14. A settlement proposal must be legible in the conversation where it was
+     * discussed, and encoding that in `bodyText` would make it unparseable by the client
+     * and forgeable by any participant who can type.
+     *
+     * `authorMemberId` stays NOT NULL and honest: a settlement message is authored by the
+     * member who proposed or accepted, not by "the system".
+     */
+    messageKind: commerceMessageKindEnum("message_kind").default("participant").notNull(),
+    /** Set only on the settlement kinds; the agreement the message announces. */
+    settlementAgreementId: text("settlement_agreement_id").references(
+      (): AnyPgColumn => commerceSettlementAgreement.id,
+      { onDelete: "cascade" },
+    ),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     index("commerce_message_thread_idx").on(table.threadId, table.createdAt, table.id),
     check("commerce_message_body_ck", sql`char_length(body_text) BETWEEN 1 AND 10000`),
+    check(
+      "commerce_message_settlement_ck",
+      sql`(message_kind = 'participant') = (settlement_agreement_id IS NULL)`,
+    ),
   ],
 );
 
@@ -6707,11 +6932,26 @@ export const commerceJournalAccount = pgTable(
       .references(() => commerceOrder.id, { onDelete: "restrict" }),
     kind: commerceJournalAccountKindEnum("kind").notNull(),
     currency: text("currency").notNull(),
+    /**
+     * Phase 14. OFF BALANCE SHEET: this account records value a third party holds, not
+     * a Qatoto asset or liability.
+     *
+     * Derived from `kind` and bound to it by check, so it cannot drift — the point is
+     * not the column but that no future balance report can sum memo value and real money
+     * into one number. Flattening the two is unavailable rather than discouraged, the
+     * same call Phase 12 made splitting `declaredProfile` from `measuredMetrics`.
+     */
+    isMemorandum: boolean("is_memorandum").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     uniqueIndex("commerce_journal_account_order_kind_uidx").on(table.orderId, table.kind),
     check("commerce_journal_account_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_journal_account_memorandum_ck",
+      sql`is_memorandum = (kind IN ('settlement_funding_memo', 'settlement_custody_memo',
+                                    'settlement_released_memo', 'settlement_refunded_memo'))`,
+    ),
   ],
 );
 
@@ -7849,6 +8089,528 @@ export const commerceDisputeEvent = pgTable(
     check(
       "commerce_dispute_event_note_ck",
       sql`note IS NULL OR char_length(note) BETWEEN 1 AND 4000`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// STORE Phase 14 — the external-connector substrate, negotiated settlement
+// agreements, and external escrow sessions.
+// ---------------------------------------------------------------------------
+
+/**
+ * The registry of external systems this backend may talk to — escrow holders, freight
+ * forwarders, insurers, laboratories and FX facilitators.
+ *
+ * NO SECRET LIVES HERE. `credentialRef` and `webhookSigningSecretRef` name the
+ * environment variable that holds the secret; the value stays backend-only (§11).
+ *
+ * Coverage is a fact about REACHABILITY, not a policy about preference. Nothing in this
+ * table selects a provider for anybody — §5's agreement does that, and only when both
+ * parties have said so.
+ */
+export const commerceExternalProvider = pgTable(
+  "commerce_external_provider",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    connectorKind: commerceConnectorKindEnum("connector_kind").notNull(),
+    /**
+     * Stable machine identity, snake_case. Parsed through a closed Zod enum at the
+     * adapter boundary rather than being an enum here, so adding a provider is an
+     * INSERT plus an adapter, not a migration on every connector kind at once.
+     */
+    providerSlug: text("provider_slug").notNull(),
+    displayName: text("display_name").notNull(),
+    state: commerceExternalProviderStateEnum("state").default("draft").notNull(),
+    credentialRef: text("credential_ref"),
+    webhookSigningSecretRef: text("webhook_signing_secret_ref"),
+    supportedCountryCodes: text("supported_country_codes").array().default([]).notNull(),
+    supportedCurrencies: text("supported_currencies").array().default([]).notNull(),
+    minimumOrderInCents: bigint("minimum_order_in_cents", { mode: "number" }),
+    maximumOrderInCents: bigint("maximum_order_in_cents", { mode: "number" }),
+    /** Deterministic tie-break when two eligible providers are otherwise equal (§7 ordering). */
+    platformRank: integer("platform_rank").default(100).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_external_provider_slug_uidx").on(table.connectorKind, table.providerSlug),
+    index("commerce_external_provider_active_idx")
+      .on(table.connectorKind, table.platformRank, table.id)
+      .where(sql`state = 'active'`),
+    check("commerce_external_provider_slug_ck", sql`provider_slug ~ '^[a-z][a-z0-9_]{1,60}$'`),
+    check(
+      "commerce_external_provider_display_ck",
+      sql`char_length(display_name) BETWEEN 1 AND 200`,
+    ),
+    /**
+     * Element-wise format checks. A CHECK cannot contain a subquery, so `unnest` is
+     * unavailable — joining and matching the whole string is the shape that works.
+     */
+    check(
+      "commerce_external_provider_countries_ck",
+      sql`cardinality(supported_country_codes) = 0
+          OR array_to_string(supported_country_codes, ',') ~ '^[A-Z]{2}(,[A-Z]{2})*$'`,
+    ),
+    check(
+      "commerce_external_provider_currencies_ck",
+      sql`cardinality(supported_currencies) = 0
+          OR array_to_string(supported_currencies, ',') ~ '^[A-Z]{3}(,[A-Z]{3})*$'`,
+    ),
+    check(
+      "commerce_external_provider_bounds_ck",
+      sql`(minimum_order_in_cents IS NULL OR minimum_order_in_cents >= 0)
+          AND (maximum_order_in_cents IS NULL OR maximum_order_in_cents >= 0)
+          AND (minimum_order_in_cents IS NULL OR maximum_order_in_cents IS NULL
+               OR minimum_order_in_cents <= maximum_order_in_cents)`,
+    ),
+    check("commerce_external_provider_rank_ck", sql`platform_rank >= 0`),
+  ],
+);
+
+/**
+ * Durable outbox for outbound connector commands. Parallel to `commerce_payment_outbox`
+ * rather than a widening of it: that table's `transferId` is NOT NULL and its kind enum
+ * is payment-only, so generalizing it would have made both lies. The same call Phase 10
+ * made for `commerce_content_report` and Phase 12 for organization certifications.
+ *
+ * A COMMAND POSTS NOTHING TO THE LEDGER. A release request is an intent; only the
+ * provider's own event moves a memo balance (§4.4).
+ */
+export const commerceConnectorOutbox = pgTable(
+  "commerce_connector_outbox",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    providerId: text("provider_id")
+      .notNull()
+      .references(() => commerceExternalProvider.id, { onDelete: "restrict" }),
+    connectorKind: commerceConnectorKindEnum("connector_kind").notNull(),
+    kind: commerceConnectorOutboxKindEnum("kind").notNull(),
+    state: commerceConnectorOutboxStateEnum("state").default("pending").notNull(),
+    orderId: text("order_id").references(() => commerceOrder.id, { onDelete: "restrict" }),
+    escrowSessionId: text("escrow_session_id"),
+    escrowMilestoneId: text("escrow_milestone_id"),
+    /** Ours, minted before the call, so a retried worker never looks like a second command. */
+    idempotencyKey: text("idempotency_key").notNull(),
+    requestPayloadJson: text("request_payload_json").notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    lastError: text("last_error"),
+    availableAt: timestamp("available_at").defaultNow().notNull(),
+    processedAt: timestamp("processed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_connector_outbox_idempotency_uidx").on(table.idempotencyKey),
+    index("commerce_connector_outbox_pending_idx").on(table.state, table.availableAt, table.id),
+    index("commerce_connector_outbox_order_idx").on(table.orderId, table.id),
+    check("commerce_connector_outbox_attempt_ck", sql`attempt_count >= 0`),
+    check(
+      "commerce_connector_outbox_payload_ck",
+      sql`char_length(request_payload_json) BETWEEN 2 AND 50000
+          AND request_payload_json LIKE '{%'`,
+    ),
+  ],
+);
+
+/**
+ * Inbound connector event inbox. PERSIST BEFORE PROCESSING; unique
+ * `(providerId, providerEventId)` makes replay harmless, which is the only reason a
+ * public unauthenticated-by-session webhook route can be safe.
+ */
+export const commerceConnectorWebhookEvent = pgTable(
+  "commerce_connector_webhook_event",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    providerId: text("provider_id")
+      .notNull()
+      .references(() => commerceExternalProvider.id, { onDelete: "restrict" }),
+    connectorKind: commerceConnectorKindEnum("connector_kind").notNull(),
+    providerEventId: text("provider_event_id").notNull(),
+    eventType: text("event_type").notNull(),
+    orderId: text("order_id").references(() => commerceOrder.id, { onDelete: "set null" }),
+    escrowSessionId: text("escrow_session_id"),
+    payloadJson: text("payload_json").notNull(),
+    receivedAt: timestamp("received_at").defaultNow().notNull(),
+    processedAt: timestamp("processed_at"),
+    processingError: text("processing_error"),
+  },
+  (table) => [
+    uniqueIndex("commerce_connector_webhook_event_provider_uidx").on(
+      table.providerId,
+      table.providerEventId,
+    ),
+    index("commerce_connector_webhook_event_unprocessed_idx")
+      .on(table.receivedAt, table.id)
+      .where(sql`processed_at IS NULL`),
+    index("commerce_connector_webhook_event_order_idx").on(table.orderId, table.id),
+    check(
+      "commerce_connector_webhook_event_type_ck",
+      sql`char_length(event_type) BETWEEN 1 AND 120`,
+    ),
+    check(
+      "commerce_connector_webhook_event_payload_ck",
+      sql`char_length(payload_json) BETWEEN 2 AND 50000 AND payload_json LIKE '{%'`,
+    ),
+  ],
+);
+
+/**
+ * A settlement term the two parties NEGOTIATED, in the thread they were already talking
+ * in. Append-only, exactly like `commerce_quote_revision`: a counter-proposal is a new
+ * revision and the previous row goes `superseded`. Nothing here is ever edited.
+ *
+ * `acceptedByOrganizationId` exists so the self-acceptance rule is STRUCTURAL rather
+ * than merely enforced in a service — a proposer accepting its own proposal is not a
+ * mutual agreement, and `commerce_settlement_agreement_acceptor_ck` makes it
+ * unrepresentable.
+ */
+export const commerceSettlementAgreement = pgTable(
+  "commerce_settlement_agreement",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => commerceThread.id, { onDelete: "cascade" }),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    sellerOrganizationId: text("seller_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    proposedByOrganizationId: text("proposed_by_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    proposedByMemberId: text("proposed_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    revisionNumber: integer("revision_number").notNull(),
+    supersedesAgreementId: text("supersedes_agreement_id").references(
+      (): AnyPgColumn => commerceSettlementAgreement.id,
+      { onDelete: "restrict" },
+    ),
+    externalProviderId: text("external_provider_id")
+      .notNull()
+      .references(() => commerceExternalProvider.id, { onDelete: "restrict" }),
+    escrowFeeBearer: commerceEscrowFeeBearerEnum("escrow_fee_bearer").notNull(),
+    currency: text("currency").notNull(),
+    totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
+    state: commerceSettlementAgreementStateEnum("state").default("proposed").notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    acceptedAt: timestamp("accepted_at"),
+    acceptedByOrganizationId: text("accepted_by_organization_id").references(
+      () => commerceOrganization.id,
+      { onDelete: "restrict" },
+    ),
+    acceptedByMemberId: text("accepted_by_member_id").references(
+      () => commerceOrganizationMember.id,
+      { onDelete: "restrict" },
+    ),
+    /** Which order consumed it. An agreement is spent once, like a sample credit. */
+    consumedByOrderId: text("consumed_by_order_id").references(() => commerceOrder.id, {
+      onDelete: "restrict",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_settlement_agreement_revision_uidx").on(
+      table.threadId,
+      table.revisionNumber,
+    ),
+    /**
+     * At most ONE live accepted agreement per party pair per thread. Without this, two
+     * concurrent acceptances of two revisions would both bind and `confirm` would have
+     * to guess which one the buyer meant.
+     */
+    uniqueIndex("commerce_settlement_agreement_accepted_uidx")
+      .on(table.threadId, table.buyerOrganizationId, table.sellerOrganizationId)
+      .where(sql`state = 'accepted'`),
+    index("commerce_settlement_agreement_buyer_idx").on(
+      table.buyerOrganizationId,
+      table.state,
+      table.id,
+    ),
+    index("commerce_settlement_agreement_seller_idx").on(
+      table.sellerOrganizationId,
+      table.state,
+      table.id,
+    ),
+    uniqueIndex("commerce_settlement_agreement_consumed_uidx")
+      .on(table.consumedByOrderId)
+      .where(sql`consumed_by_order_id IS NOT NULL`),
+    check("commerce_settlement_agreement_revision_ck", sql`revision_number >= 1`),
+    check("commerce_settlement_agreement_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("commerce_settlement_agreement_total_ck", sql`total_in_cents > 0`),
+    check(
+      "commerce_settlement_agreement_parties_ck",
+      sql`buyer_organization_id <> seller_organization_id
+          AND proposed_by_organization_id IN (buyer_organization_id, seller_organization_id)`,
+    ),
+    /**
+     * The mutual-agreement rule, both directions. An accepted row names its acceptor,
+     * a non-accepted row names none, and the acceptor is the OTHER party.
+     */
+    check(
+      "commerce_settlement_agreement_acceptor_ck",
+      sql`(state IN ('accepted', 'consumed')
+             AND accepted_at IS NOT NULL
+             AND accepted_by_organization_id IS NOT NULL
+             AND accepted_by_member_id IS NOT NULL
+             AND accepted_by_organization_id <> proposed_by_organization_id
+             AND accepted_by_organization_id IN (buyer_organization_id, seller_organization_id))
+          OR (state NOT IN ('accepted', 'consumed')
+             AND accepted_at IS NULL
+             AND accepted_by_organization_id IS NULL
+             AND accepted_by_member_id IS NULL)`,
+    ),
+    check(
+      "commerce_settlement_agreement_consumed_ck",
+      sql`(state = 'consumed') = (consumed_by_order_id IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The milestone plan a proposal carries. Amounts must sum to the agreement total —
+ * enforced by `commerce_settlement_agreement_milestone_sum_trg` in migration 0084,
+ * because a CHECK cannot see sibling rows and a half-funded set is not a plan.
+ */
+export const commerceSettlementAgreementMilestone = pgTable(
+  "commerce_settlement_agreement_milestone",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    agreementId: text("agreement_id")
+      .notNull()
+      .references(() => commerceSettlementAgreement.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    milestoneKind: commerceEscrowMilestoneKindEnum("milestone_kind").notNull(),
+    amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    releaseConditionNote: text("release_condition_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_settlement_agreement_milestone_uidx").on(
+      table.agreementId,
+      table.sequence,
+    ),
+    check("commerce_settlement_agreement_milestone_sequence_ck", sql`sequence >= 1`),
+    check("commerce_settlement_agreement_milestone_amount_ck", sql`amount_in_cents > 0`),
+    check("commerce_settlement_agreement_milestone_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_settlement_agreement_milestone_note_ck",
+      sql`release_condition_note IS NULL OR char_length(release_condition_note) BETWEEN 1 AND 2000`,
+    ),
+  ],
+);
+
+/**
+ * What each party CLAIMS happened on the `direct_offline` rail. Not an observation and
+ * never posted to the journal: Qatoto cannot see a bank wire, and recording a memo entry
+ * for money it did not observe would assert a fact from an absence — the same error A16
+ * refused when it returned an empty estimate array rather than a zero.
+ */
+export const commerceSettlementAttestation = pgTable(
+  "commerce_settlement_attestation",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    attestedByOrganizationId: text("attested_by_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    attestedByMemberId: text("attested_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    attestationKind: commerceSettlementAttestationKindEnum("attestation_kind").notNull(),
+    amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    /** A wire reference or L/C number the parties can reconcile against. Free text, theirs. */
+    referenceNote: text("reference_note"),
+    occurredAt: timestamp("occurred_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_settlement_attestation_uidx").on(
+      table.orderId,
+      table.attestedByOrganizationId,
+      table.attestationKind,
+    ),
+    index("commerce_settlement_attestation_order_idx").on(table.orderId, table.occurredAt),
+    check("commerce_settlement_attestation_amount_ck", sql`amount_in_cents > 0`),
+    check("commerce_settlement_attestation_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_settlement_attestation_note_ck",
+      sql`reference_note IS NULL OR char_length(reference_note) BETWEEN 1 AND 500`,
+    ),
+  ],
+);
+
+/**
+ * One external escrow session per order. The funds live at the provider; this row is
+ * Qatoto's read-only shadow of what the provider says it is holding, and every state
+ * here is written from a normalized provider event rather than from our own opinion.
+ */
+export const commerceExternalEscrowSession = pgTable(
+  "commerce_external_escrow_session",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    orderId: text("order_id")
+      .notNull()
+      .references(() => commerceOrder.id, { onDelete: "restrict" }),
+    agreementId: text("agreement_id")
+      .notNull()
+      .references(() => commerceSettlementAgreement.id, { onDelete: "restrict" }),
+    providerId: text("provider_id")
+      .notNull()
+      .references(() => commerceExternalProvider.id, { onDelete: "restrict" }),
+    /** Null until the provider answers `createSession`. */
+    providerSessionRef: text("provider_session_ref"),
+    /** Where the BUYER funds the session. The provider's page, never ours. */
+    hostedActionUrl: text("hosted_action_url"),
+    state: commerceEscrowSessionStateEnum("state").default("created").notNull(),
+    currency: text("currency").notNull(),
+    totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
+    fundedAt: timestamp("funded_at"),
+    releasedAt: timestamp("released_at"),
+    refundedAt: timestamp("refunded_at"),
+    cancelledAt: timestamp("cancelled_at"),
+    disputedAt: timestamp("disputed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_external_escrow_session_order_uidx").on(table.orderId),
+    uniqueIndex("commerce_external_escrow_session_provider_ref_uidx")
+      .on(table.providerId, table.providerSessionRef)
+      .where(sql`provider_session_ref IS NOT NULL`),
+    uniqueIndex("commerce_external_escrow_session_agreement_uidx").on(table.agreementId),
+    index("commerce_external_escrow_session_state_idx").on(table.state, table.updatedAt, table.id),
+    check("commerce_external_escrow_session_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("commerce_external_escrow_session_total_ck", sql`total_in_cents > 0`),
+    check(
+      "commerce_external_escrow_session_url_ck",
+      sql`hosted_action_url IS NULL
+          OR (char_length(hosted_action_url) BETWEEN 8 AND 2000 AND hosted_action_url LIKE 'https://%')`,
+    ),
+  ],
+);
+
+/**
+ * A milestone as the PROVIDER holds it, copied from the agreement plan at session
+ * creation so a later agreement revision cannot rewrite money already locked.
+ */
+export const commerceEscrowMilestone = pgTable(
+  "commerce_escrow_milestone",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => commerceExternalEscrowSession.id, { onDelete: "cascade" }),
+    agreementMilestoneId: text("agreement_milestone_id")
+      .notNull()
+      .references(() => commerceSettlementAgreementMilestone.id, { onDelete: "restrict" }),
+    sequence: integer("sequence").notNull(),
+    milestoneKind: commerceEscrowMilestoneKindEnum("milestone_kind").notNull(),
+    amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    state: commerceEscrowMilestoneStateEnum("state").default("planned").notNull(),
+    providerMilestoneRef: text("provider_milestone_ref"),
+    lockedAt: timestamp("locked_at"),
+    verificationSubmittedAt: timestamp("verification_submitted_at"),
+    releaseRequestedAt: timestamp("release_requested_at"),
+    releasedAt: timestamp("released_at"),
+    refundedAt: timestamp("refunded_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_escrow_milestone_sequence_uidx").on(table.sessionId, table.sequence),
+    uniqueIndex("commerce_escrow_milestone_provider_ref_uidx")
+      .on(table.sessionId, table.providerMilestoneRef)
+      .where(sql`provider_milestone_ref IS NOT NULL`),
+    uniqueIndex("commerce_escrow_milestone_agreement_uidx").on(table.agreementMilestoneId),
+    index("commerce_escrow_milestone_state_idx").on(table.state, table.id),
+    check("commerce_escrow_milestone_sequence_ck", sql`sequence >= 1`),
+    check("commerce_escrow_milestone_amount_ck", sql`amount_in_cents > 0`),
+    check("commerce_escrow_milestone_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    /** A released or refunded milestone must carry the instant it happened. */
+    check(
+      "commerce_escrow_milestone_terminal_ck",
+      sql`(state <> 'released' OR released_at IS NOT NULL)
+          AND (state <> 'refunded' OR refunded_at IS NOT NULL)
+          AND (released_at IS NULL OR refunded_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * What Qatoto sent the provider as proof, and what the provider made of it.
+ *
+ * `sourceKind` plus `sourceId` point at a record this schema ALREADY keeps — a shipment
+ * leg event, an inspection engagement, a completion. Escrow does not get its own private
+ * notion of whether a thing shipped; that would be a second source of truth about
+ * fulfillment, and the two would drift.
+ */
+export const commerceEscrowVerification = pgTable(
+  "commerce_escrow_verification",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    milestoneId: text("milestone_id")
+      .notNull()
+      .references(() => commerceEscrowMilestone.id, { onDelete: "cascade" }),
+    sourceKind: commerceEscrowVerificationSourceEnum("source_kind").notNull(),
+    sourceId: text("source_id").notNull(),
+    submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+    /** Null until the provider rules. NOT a local decision — we do not grade our own evidence. */
+    providerAccepted: boolean("provider_accepted"),
+    providerNote: text("provider_note"),
+  },
+  (table) => [
+    uniqueIndex("commerce_escrow_verification_uidx").on(
+      table.milestoneId,
+      table.sourceKind,
+      table.sourceId,
+    ),
+    index("commerce_escrow_verification_milestone_idx").on(table.milestoneId, table.submittedAt),
+    check(
+      "commerce_escrow_verification_note_ck",
+      sql`provider_note IS NULL OR char_length(provider_note) BETWEEN 1 AND 2000`,
     ),
   ],
 );
