@@ -105,6 +105,16 @@ const serviceStubs = vi.hoisted(() => ({
 
 vi.mock("#src/services/commerce-orders.service.js", () => serviceStubs);
 
+const arrivalWindowStubs = vi.hoisted(() => ({
+  getOrderArrivalWindow: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  projectPrepareArrivalWindow: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  composeArrivalWindow: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  projectManufacturing: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  projectFreight: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
+
+vi.mock("#src/services/commerce-arrival-window.service.js", () => arrivalWindowStubs);
+
 const ORDER_SUMMARY = {
   id: "order-1",
   buyerOrganizationId: BUYER_ORGANIZATION_ID,
@@ -193,5 +203,79 @@ describe("commerce order routes", () => {
       expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
       "order-owned-by-another-tenant",
     );
+  });
+
+  it("returns the arrival window with no mode selected, listing the covered modes", async () => {
+    arrivalWindowStubs.getOrderArrivalWindow.mockResolvedValue({
+      success: true,
+      value: {
+        clockStartAt: null,
+        clockStartBasis: "not_confirmed",
+        components: {
+          freight: { status: "unknown", reason: "mode_not_selected", availableModes: ["air", "sea"] },
+        },
+        arrivalWindow: null,
+        missingComponents: ["freight"],
+      },
+    });
+
+    const response = await request(app).get("/commerce/orders/order-1/arrival-window");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.arrivalWindow.missingComponents).toEqual(["freight"]);
+    expect(arrivalWindowStubs.getOrderArrivalWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
+      "order-1",
+      expect.objectContaining({ mode: undefined }),
+    );
+  });
+
+  it("passes a requested mode through to the service", async () => {
+    arrivalWindowStubs.getOrderArrivalWindow.mockResolvedValue({
+      success: true,
+      value: { clockStartAt: null, arrivalWindow: null, missingComponents: [] },
+    });
+
+    const response = await request(app)
+      .get("/commerce/orders/order-1/arrival-window")
+      .query({ mode: "sea" });
+
+    expect(response.status).toBe(200);
+    expect(arrivalWindowStubs.getOrderArrivalWindow).toHaveBeenCalledWith(
+      expect.anything(),
+      "order-1",
+      expect.objectContaining({ mode: "sea" }),
+    );
+  });
+
+  it("refuses a mode outside the shipment leg enum with 422", async () => {
+    const response = await request(app)
+      .get("/commerce/orders/order-1/arrival-window")
+      .query({ mode: "truck" });
+
+    expect(response.status).toBe(422);
+    expect(arrivalWindowStubs.getOrderArrivalWindow).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown query key with 422", async () => {
+    const response = await request(app)
+      .get("/commerce/orders/order-1/arrival-window")
+      .query({ mode: "sea", pretendToBeConfirmed: "true" });
+
+    expect(response.status).toBe(422);
+    expect(arrivalWindowStubs.getOrderArrivalWindow).not.toHaveBeenCalled();
+  });
+
+  it("answers a non-party with 404, never 403 — an order id must not be probeable", async () => {
+    arrivalWindowStubs.getOrderArrivalWindow.mockResolvedValue({
+      success: false,
+      error: { type: "NOT_FOUND" },
+    });
+
+    const response = await request(app).get(
+      "/commerce/orders/order-owned-by-another-tenant/arrival-window",
+    );
+
+    expect(response.status).toBe(404);
   });
 });
