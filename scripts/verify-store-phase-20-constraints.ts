@@ -74,8 +74,8 @@ async function columnExists(tableName: string, columnName: string): Promise<bool
 const PROBE_CARD_INSERT = `
   INSERT INTO commerce_freight_rate_card
     (id, provider_organization_id, origin_country_code, destination_country_code, mode,
-     currency, valid_from, source_forwarder_name)
-  SELECT 'probe_rate_card', organization_id, 'IN', 'DE', 'sea', 'USD', now(), 'Probe Forwarder'
+     currency, valid_from, source_forwarder_name, volumetric_divisor_cm3_per_kg)
+  SELECT 'probe_rate_card', organization_id, 'IN', 'DE', 'sea', 'USD', now(), 'Probe Forwarder', 1000
     FROM commerce_provider_profile LIMIT 1`;
 
 const CHECKS: readonly Check[] = [
@@ -213,6 +213,45 @@ const CHECKS: readonly Check[] = [
     async run() {
       const present = await indexExists("commerce_freight_rate_card_active_uidx");
       return { ok: present, detail: present ? "present" : "MISSING" };
+    },
+  },
+  {
+    name: "§19.9 · the volumetric divisor column exists and is NOT NULL",
+    why: "Without it, rating falls back to actual weight and a light bulky consignment is underpriced — the one Phase 20 defect that produced a wrong number rather than a missing one.",
+    async run() {
+      const nullable = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM information_schema.columns
+         WHERE table_name = 'commerce_freight_rate_card'
+           AND column_name = 'volumetric_divisor_cm3_per_kg'
+           AND is_nullable = 'NO'`);
+      return { ok: nullable === 1, detail: nullable === 1 ? "present, NOT NULL" : "MISSING or nullable" };
+    },
+  },
+  {
+    name: "§19.9 · a card with NO volumetric divisor is refused",
+    why: "A missing divisor would have to be defaulted, and defaulting one is the platform choosing a tariff convention on a forwarder's behalf.",
+    async run() {
+      const refused = await probeRefusal(`
+        INSERT INTO commerce_freight_rate_card
+          (id, provider_organization_id, origin_country_code, destination_country_code, mode,
+           currency, valid_from, source_forwarder_name)
+        SELECT 'probe_no_divisor', organization_id, 'IN', 'DE', 'sea', 'USD', now(), 'Probe'
+          FROM commerce_provider_profile LIMIT 1`);
+      return { ok: refused, detail: refused ? "refused" : "ACCEPTED a card with no divisor" };
+    },
+  },
+  {
+    name: "§19.9 · an out-of-range volumetric divisor is refused",
+    why: "A transposed figure — 100000 for 1000 — would underprice by two orders of magnitude and look plausible in a form.",
+    async run() {
+      const refused = await probeRefusal(`
+        INSERT INTO commerce_freight_rate_card
+          (id, provider_organization_id, origin_country_code, destination_country_code, mode,
+           currency, valid_from, source_forwarder_name, volumetric_divisor_cm3_per_kg)
+        SELECT 'probe_bad_divisor', organization_id, 'IN', 'DE', 'sea', 'USD', now(), 'Probe', 0
+          FROM commerce_provider_profile LIMIT 1`);
+      return { ok: refused, detail: refused ? "refused" : "ACCEPTED a zero divisor" };
     },
   },
   {

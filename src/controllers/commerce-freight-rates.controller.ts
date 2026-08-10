@@ -60,6 +60,7 @@ export async function createFreightRateCard(req: Request, res: Response): Promis
     validFrom: parseOptionalInstant(parsed.data.validFrom, new Date()),
     validUntil: parsed.data.validUntil === undefined ? null : new Date(parsed.data.validUntil),
     sourceForwarderName: parsed.data.sourceForwarderName,
+    volumetricDivisorCm3PerKg: parsed.data.volumetricDivisorCm3PerKg,
     breaks: parsed.data.breaks,
   });
 

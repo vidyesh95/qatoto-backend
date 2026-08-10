@@ -101,6 +101,7 @@ export interface AdminFreightRateCard {
   readonly validFrom: Date;
   readonly validUntil: Date | null;
   readonly sourceForwarderName: string;
+  readonly volumetricDivisorCm3PerKg: number;
   readonly state: "active" | "superseded" | "withdrawn";
   readonly supersededByRateCardId: string | null;
   readonly breaks: readonly AdminFreightRateBreak[];
@@ -144,6 +145,7 @@ export interface CreateFreightRateCardInput {
   readonly validFrom: Date;
   readonly validUntil: Date | null;
   readonly sourceForwarderName: string;
+  readonly volumetricDivisorCm3PerKg: number;
   readonly breaks: readonly FreightRateBreakInput[];
 }
 
@@ -227,6 +229,7 @@ function projectRateCard(
     validFrom: row.validFrom,
     validUntil: row.validUntil,
     sourceForwarderName: row.sourceForwarderName,
+    volumetricDivisorCm3PerKg: row.volumetricDivisorCm3PerKg,
     state: row.state,
     supersededByRateCardId: row.supersededByRateCardId,
     breaks: breakRows.map(projectBreak).toSorted((left, right) => left.position - right.position),
@@ -412,6 +415,7 @@ export async function createFreightRateCard(
           validFrom: input.validFrom,
           validUntil: input.validUntil,
           sourceForwarderName: input.sourceForwarderName,
+          volumetricDivisorCm3PerKg: input.volumetricDivisorCm3PerKg,
         })
         .returning();
 
@@ -453,6 +457,7 @@ export async function createFreightRateCard(
               currency: input.currency,
               validFrom: input.validFrom.toISOString(),
               validUntil: input.validUntil === null ? null : input.validUntil.toISOString(),
+              volumetricDivisorCm3PerKg: String(input.volumetricDivisorCm3PerKg),
               breakCount: String(input.breaks.length),
               // The supersession rides in the create's payload rather than a second entry:
               // it is a consequence of this decision, not a decision of its own.

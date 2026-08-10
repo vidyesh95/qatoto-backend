@@ -19,6 +19,8 @@ function option(overrides: Partial<Option> & Pick<Option, "rateCardId">): Option
     rateBreakId: `${overrides.rateCardId}_b0`,
     sourceForwarderName: "Blue Anchor Logistics",
     validUntil: null,
+    chargeableWeightGrams: 50_000,
+    chargeableWeightBasis: "actual",
     ...overrides,
   };
 }
@@ -216,6 +218,43 @@ describe("composeJourneys", () => {
     // Adding a USD leg to a EUR leg would invent an exchange rate.
     expect(composed.journeys).toEqual([]);
     expect(composed.unpriceableReasons).toEqual([{ kind: "no_common_currency_across_legs" }]);
+  });
+
+  it("carries a per-leg chargeable weight, because divisors belong to forwarders", () => {
+    const composed = composeJourneys([
+      leg({
+        sequence: 0,
+        kind: "international",
+        options: [
+          option({
+            rateCardId: "rc_sea",
+            // Ocean W/M: 1 m³ bills as 1000 kg.
+            chargeableWeightGrams: 1_000_000,
+            chargeableWeightBasis: "volumetric",
+          }),
+        ],
+      }),
+      leg({
+        sequence: 1,
+        kind: "inland_destination",
+        originCountryCode: "DE",
+        options: [
+          option({
+            rateCardId: "rc_inland",
+            mode: "land",
+            // A road divisor of 3000 turns the same 1 m³ into ~333 kg.
+            chargeableWeightGrams: 333_334,
+            chargeableWeightBasis: "volumetric",
+          }),
+        ],
+      }),
+    ]);
+
+    // The SAME boxes, two legitimate weights. A single journey-level figure would make one of
+    // the two leg prices read as an arithmetic error.
+    expect(composed.journeys[0]?.legSelections.map((entry) => entry.chargeableWeightGrams)).toEqual([
+      1_000_000, 333_334,
+    ]);
   });
 
   it("expires a journey with its earliest card", () => {

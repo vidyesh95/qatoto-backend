@@ -87,6 +87,8 @@ const VALID_CREATE_BODY = {
   mode: "sea",
   currency: "USD",
   sourceForwarderName: "Blue Anchor Logistics",
+  // §19.9. Ocean LCL's W/M convention: one cubic metre bills as 1000 kg.
+  volumetricDivisorCm3PerKg: 1000,
   breaks: [VALID_BAND],
 };
 
@@ -165,6 +167,7 @@ describe("commerce freight rate card admin routes", () => {
       expect.objectContaining({
         providerOrganizationId: "commerce_org_forwarder",
         mode: "sea",
+        volumetricDivisorCm3PerKg: 1000,
         // Absent `validFrom` means "live now", resolved at the controller boundary.
         validFrom: expect.any(Date),
         validUntil: null,
@@ -202,6 +205,44 @@ describe("commerce freight rate card admin routes", () => {
       .send({ breaks: [VALID_BAND] });
 
     expect(response.status).toBe(409);
+  });
+
+  it("refuses a card with no volumetric divisor — the platform must not pick one", async () => {
+    const { volumetricDivisorCm3PerKg: _omitted, ...withoutDivisor } = VALID_CREATE_BODY;
+
+    const response = await request(app)
+      .post("/commerce/admin/freight-rate-cards")
+      .set("Idempotency-Key", "idem-no-divisor-0001")
+      .send(withoutDivisor);
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.createFreightRateCard).not.toHaveBeenCalled();
+  });
+
+  it("refuses a transposed divisor on either side of the bound", async () => {
+    for (const [index, divisor] of [50, 999_999].entries()) {
+      const response = await request(app)
+        .post("/commerce/admin/freight-rate-cards")
+        .set("Idempotency-Key", `idem-bad-divisor-${String(index)}`)
+        .send({ ...VALID_CREATE_BODY, volumetricDivisorCm3PerKg: divisor });
+
+      expect(response.status).toBe(422);
+    }
+    expect(serviceStubs.createFreightRateCard).not.toHaveBeenCalled();
+  });
+
+  it("refuses a PATCH that restates the divisor — it reprices every past quote", async () => {
+    const response = await request(app)
+      .patch("/commerce/admin/freight-rate-cards/rate_card_1")
+      .set("Idempotency-Key", "idem-restate-divisor-0001")
+      .send({
+        intent: "shorten_window",
+        validUntil: "2026-09-30T00:00:00.000Z",
+        volumetricDivisorCm3PerKg: 6000,
+      });
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.updateFreightRateCard).not.toHaveBeenCalled();
   });
 
   it("refuses a PATCH that restates a price, as an unrecognized key", async () => {

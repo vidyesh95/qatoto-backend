@@ -64,6 +64,8 @@ export interface FreightRateCard {
   readonly validFrom: Date;
   readonly validUntil: Date | null;
   readonly sourceForwarderName: string;
+  /** §19.9. cm³ per kilogram, this forwarder's own convention. */
+  readonly volumetricDivisorCm3PerKg: number;
   readonly breaks: readonly FreightRateBreak[];
 }
 
@@ -71,12 +73,37 @@ export interface FreightRateCard {
 export type FreightRatingUnavailableReason =
   | "no_active_rate_card"
   | "consignment_not_measurable"
+  | "volume_not_declared"
   | "below_smallest_break"
   | "card_has_no_breaks";
 
+/**
+ * §19.9. What this consignment BILLS AT under one card's convention.
+ *
+ * PER CARD, NOT PER CONSIGNMENT, and that is the structural point: the divisor belongs to the
+ * forwarder, so the same boxes legitimately bill as two different weights under two different
+ * cards. It therefore cannot live on `ConsignmentMeasurement`.
+ */
+export type ChargeableWeight =
+  | {
+      readonly status: "chargeable";
+      readonly grams: number;
+      readonly basis: "actual" | "volumetric";
+      /**
+       * The volume this was computed from, carried out because proving it non-null happened
+       * HERE. Returning it saves every caller a redundant null check that could only ever be
+       * satisfied by a fallback constant — and a fallback of `0` would read as "no volume",
+       * which is the exact conflation this phase spends its constraints refusing.
+       */
+      readonly volumeCubicCm: number;
+    }
+  | {
+      readonly status: "not_measurable";
+      readonly reason: "weight_not_declared" | "volume_not_declared";
+    };
+
 export type RateBreakSelection =
   | { readonly status: "selected"; readonly selected: FreightRateBreak }
-  | { readonly status: "consignment_not_measurable" }
   | { readonly status: "card_has_no_breaks" }
   | {
       readonly status: "below_smallest_break";
@@ -101,6 +128,15 @@ export interface FreightOption {
   readonly rateBreakId: string;
   readonly sourceForwarderName: string;
   readonly validUntil: Date | null;
+  /**
+   * §19.9. The weight this option was actually priced on, and which basis won.
+   *
+   * ON THE WIRE because §19.6 makes the basis of a number travel with the number. Without it a
+   * buyer whose 20 kg of cushions billed as 3,000 kg has no way to see why, and would read a
+   * correct volumetric charge as an error.
+   */
+  readonly chargeableWeightGrams: number;
+  readonly chargeableWeightBasis: "actual" | "volumetric";
 }
 
 export interface RatedLane {
@@ -112,24 +148,81 @@ export interface RatedLane {
 }
 
 /**
+ * §19.9. What this consignment bills at under this card — `max(actual, volumetric)`.
+ *
+ * THE DEFECT THIS CLOSES: rating on actual weight alone underprices a light bulky consignment,
+ * and a container of cushions costs a forwarder the same as a container of bolts. It was the one
+ * place in Phase 20 that published a WRONG number rather than a missing one.
+ *
+ * `* 1000` converts kilograms to grams, so a divisor of 6000 makes one cubic metre ≈ 166.7 kg
+ * (air) and a divisor of 1000 makes it 1000 kg (the ocean W/M revenue ton). Both are correct
+ * under one formula, which is why no per-mode branching is needed here.
+ *
+ * ROUNDED UP, matching `priceRatedBreak`: rounding a chargeable weight down publishes a number
+ * the forwarder will not honour.
+ *
+ * AN UNDECLARED VOLUME REFUSES rather than falling back to actual weight. Falling back would
+ * silently reintroduce exactly the underpricing this function exists to remove, and would do it
+ * on the consignments most likely to be bulky — the ones whose seller never measured a box.
+ */
+export function computeChargeableWeight(
+  card: FreightRateCard,
+  consignment: ConsignmentMeasurement,
+): ChargeableWeight {
+  if (consignment.billableWeightGrams === null) {
+    return { status: "not_measurable", reason: "weight_not_declared" };
+  }
+  if (consignment.volumeCubicCm === null) {
+    return { status: "not_measurable", reason: "volume_not_declared" };
+  }
+
+  const volumetricWeightGrams = Math.ceil(
+    (consignment.volumeCubicCm * 1000) / card.volumetricDivisorCm3PerKg,
+  );
+
+  // Ties resolve to `actual`: when the two agree there is nothing to explain, and naming the
+  // volumetric basis would invite a buyer to look for a bulk surcharge that did not apply.
+  return volumetricWeightGrams > consignment.billableWeightGrams
+    ? {
+        status: "chargeable",
+        grams: volumetricWeightGrams,
+        basis: "volumetric",
+        volumeCubicCm: consignment.volumeCubicCm,
+      }
+    : {
+        status: "chargeable",
+        grams: consignment.billableWeightGrams,
+        basis: "actual",
+        volumeCubicCm: consignment.volumeCubicCm,
+      };
+}
+
+/**
  * Does this consignment clear the band's volume floor?
  *
- * A `minVolumeCubicCm` of 0 marks a WEIGHT-ONLY band and always qualifies. A positive floor
- * cannot be cleared by an unknown volume: `null` means the seller declared no dimensions, and
- * treating that as "small enough" would select a band on a measurement nobody made.
+ * A `minVolumeCubicCm` of 0 marks a WEIGHT-ONLY band and always qualifies.
+ *
+ * NOT A DUPLICATE OF THE VOLUMETRIC DIVISOR, though both read volume. The divisor converts volume
+ * into a billable weight for the WHOLE card; this floor restricts one BAND to consignments above
+ * a given bulk — "this rate applies from 2 CBM up". A card can use either, both, or neither.
  */
-function volumeQualifies(band: FreightRateBreak, consignment: ConsignmentMeasurement): boolean {
+function volumeQualifies(band: FreightRateBreak, volumeCubicCm: number): boolean {
   if (band.minVolumeCubicCm === 0) {
     return true;
   }
-  if (consignment.volumeCubicCm === null) {
-    return false;
-  }
-  return consignment.volumeCubicCm >= band.minVolumeCubicCm;
+  return volumeCubicCm >= band.minVolumeCubicCm;
 }
 
 /**
  * The ladder: pick the HIGHEST band this consignment clears.
+ *
+ * MEASURED IN CHARGEABLE WEIGHT, not gross (§19.9). A tariff's "45 kg+" band means 45 kg
+ * CHARGEABLE, which is what makes a bulky consignment climb the ladder the way the forwarder
+ * intended. Selecting on gross would put a 3 CBM shipment of cushions in the base band and then
+ * price it there.
+ *
+ * THE CONSIGNMENT IS ALREADY MEASURED by the time this runs — `computeChargeableWeight` decides
+ * measurability first, so there is no `not_measurable` branch here.
  *
  * SORTED BY THE FLOORS, NOT BY `position`. `position` is authoring order and the unique index
  * on it does not make it monotone in weight, so a badly ordered card would otherwise select
@@ -151,15 +244,13 @@ function volumeQualifies(band: FreightRateBreak, consignment: ConsignmentMeasure
  */
 export function selectRateBreak(
   breaks: readonly FreightRateBreak[],
-  consignment: ConsignmentMeasurement,
+  consignment: {
+    readonly chargeableWeightGrams: number;
+    readonly volumeCubicCm: number;
+  },
 ): RateBreakSelection {
   if (breaks.length === 0) {
     return { status: "card_has_no_breaks" };
-  }
-
-  const billableWeightGrams = consignment.billableWeightGrams;
-  if (billableWeightGrams === null) {
-    return { status: "consignment_not_measurable" };
   }
 
   const byFloor = breaks.toSorted(
@@ -171,7 +262,8 @@ export function selectRateBreak(
 
   const qualifying = byFloor.filter(
     (band) =>
-      billableWeightGrams >= band.minBillableWeightGrams && volumeQualifies(band, consignment),
+      consignment.chargeableWeightGrams >= band.minBillableWeightGrams &&
+      volumeQualifies(band, consignment.volumeCubicCm),
   );
 
   const selected = qualifying.at(-1);
@@ -200,17 +292,17 @@ export function selectRateBreak(
  */
 export function priceRatedBreak(
   selected: FreightRateBreak,
-  billableWeightGrams: number,
+  chargeableWeightGrams: number,
 ): number {
   const weightedInCents = Math.ceil(
-    (billableWeightGrams * selected.unitPriceInCents) / BILLABLE_WEIGHT_UNIT_GRAMS,
+    (chargeableWeightGrams * selected.unitPriceInCents) / BILLABLE_WEIGHT_UNIT_GRAMS,
   );
 
   if (!Number.isSafeInteger(weightedInCents)) {
     // Unrecoverable, per CLAUDE §3.3: a lossy cent is worse than a refusal, and no input this
     // service accepts should be able to reach here.
     throw new Error(
-      `priceRatedBreak: ${billableWeightGrams}g at ${selected.unitPriceInCents} cents/kg exceeds safe integer range`,
+      `priceRatedBreak: ${chargeableWeightGrams}g at ${selected.unitPriceInCents} cents/kg exceeds safe integer range`,
     );
   }
 
@@ -224,26 +316,37 @@ export function rateCard(
 ):
   | { readonly status: "priced"; readonly option: FreightOption }
   | { readonly status: "unpriceable"; readonly reason: FreightRatingUnavailableReason } {
-  const selection = selectRateBreak(card.breaks, consignment);
+  /**
+   * CHARGEABLE WEIGHT FIRST (§19.9). It decides measurability and it is what both the ladder and
+   * the price are measured in, so nothing downstream ever sees gross weight again.
+   */
+  const chargeable = computeChargeableWeight(card, consignment);
+  if (chargeable.status === "not_measurable") {
+    return {
+      status: "unpriceable",
+      reason:
+        chargeable.reason === "volume_not_declared"
+          ? "volume_not_declared"
+          : "consignment_not_measurable",
+    };
+  }
+
+  const selection = selectRateBreak(card.breaks, {
+    chargeableWeightGrams: chargeable.grams,
+    volumeCubicCm: chargeable.volumeCubicCm,
+  });
 
   switch (selection.status) {
     case "card_has_no_breaks":
       return { status: "unpriceable", reason: "card_has_no_breaks" };
-    case "consignment_not_measurable":
-      return { status: "unpriceable", reason: "consignment_not_measurable" };
     case "below_smallest_break":
       return { status: "unpriceable", reason: "below_smallest_break" };
-    case "selected": {
-      const billableWeightGrams = consignment.billableWeightGrams;
-      if (billableWeightGrams === null) {
-        // Unreachable: `selectRateBreak` returns `consignment_not_measurable` first.
-        return { status: "unpriceable", reason: "consignment_not_measurable" };
-      }
+    case "selected":
       return {
         status: "priced",
         option: {
           mode: card.mode,
-          priceInCents: priceRatedBreak(selection.selected, billableWeightGrams),
+          priceInCents: priceRatedBreak(selection.selected, chargeable.grams),
           currency: card.currency,
           transitDaysMin: selection.selected.transitDaysMin,
           transitDaysMax: selection.selected.transitDaysMax,
@@ -251,9 +354,10 @@ export function rateCard(
           rateBreakId: selection.selected.id,
           sourceForwarderName: card.sourceForwarderName,
           validUntil: card.validUntil,
+          chargeableWeightGrams: chargeable.grams,
+          chargeableWeightBasis: chargeable.basis,
         },
       };
-    }
     default: {
       const exhaustiveCheck: never = selection;
       throw new Error(`Unhandled rate break selection: ${JSON.stringify(exhaustiveCheck)}`);
@@ -405,6 +509,7 @@ export async function rateLane(input: {
       validFrom: card.validFrom,
       validUntil: card.validUntil,
       sourceForwarderName: card.sourceForwarderName,
+      volumetricDivisorCm3PerKg: card.volumetricDivisorCm3PerKg,
       breaks: breaksByCardId.get(card.id) ?? [],
     })),
     consignment: input.consignment,

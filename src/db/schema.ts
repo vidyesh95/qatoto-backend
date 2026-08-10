@@ -21464,6 +21464,21 @@ export const commerceFreightRateCard = pgTable(
     validUntil: timestamp("valid_until", { precision: 3 }),
     /** Who sold us this list. Provenance rides with the number (§19.2, §19.6). */
     sourceForwarderName: text("source_forwarder_name").notNull(),
+    /**
+     * §19.9. The forwarder's own volumetric divisor, in cm³ per kilogram.
+     *
+     * FREIGHT BILLS ON `max(actual weight, volumetric weight)`, and without this column Phase 20
+     * rated on actual weight alone — which UNDERPRICES a light bulky consignment. That was the one
+     * defect in the phase that produced a WRONG number rather than a missing one.
+     *
+     * NOT NULL AND NO DEFAULT, deliberately. The divisor is a tariff convention and it varies by
+     * forwarder as well as by mode — air is 5000 or 6000 depending on who is quoting, ocean LCL is
+     * 1000 (the W/M "revenue ton": one cubic metre billed as 1000 kg), road is around 3000. A
+     * DEFAULT would be the platform choosing a convention on the forwarder's behalf, which is the
+     * error §19.4 refuses everywhere else. Requiring it costs nothing because it landed while the
+     * table was still empty.
+     */
+    volumetricDivisorCm3PerKg: integer("volumetric_divisor_cm3_per_kg").notNull(),
     state: commerceFreightRateCardStateEnum("state").default("active").notNull(),
     /**
      * BEYOND §19.2, and worth the column. Without it "which card replaced this one" is
@@ -21527,6 +21542,14 @@ export const commerceFreightRateCard = pgTable(
       sql`origin_country_code ~ '^[A-Z]{2}$' AND destination_country_code ~ '^[A-Z]{2}$'`,
     ),
     check("commerce_freight_rate_card_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    /**
+     * The bound catches a transposed figure, not a policy. Every real convention sits inside it:
+     * ocean LCL 1000, road ~3000, air 5000–6000.
+     */
+    check(
+      "commerce_freight_rate_card_volumetric_divisor_ck",
+      sql`volumetric_divisor_cm3_per_kg BETWEEN 100 AND 20000`,
+    ),
     check(
       "commerce_freight_rate_card_window_ck",
       sql`valid_until IS NULL OR valid_until > valid_from`,

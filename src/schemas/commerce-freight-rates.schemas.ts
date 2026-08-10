@@ -93,6 +93,14 @@ export const CreateFreightRateCardSchema = z
     validFrom: z.iso.datetime().optional(),
     validUntil: z.iso.datetime().optional(),
     sourceForwarderName: z.string().trim().min(1).max(200),
+    /**
+     * §19.9. The forwarder's own volumetric divisor, cm³ per kilogram — REQUIRED, because
+     * freight bills on `max(actual, volumetric)` and the platform must not pick the convention.
+     *
+     * Ocean LCL is 1000 (the W/M revenue ton), road around 3000, air 5000 or 6000 depending on
+     * who is quoting. The bounds catch a transposed figure, not a policy.
+     */
+    volumetricDivisorCm3PerKg: z.number().int().min(100).max(20_000),
     breaks: FreightRateBreakListSchema,
   })
   .strict();

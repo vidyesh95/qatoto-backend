@@ -56,6 +56,14 @@ export interface FreightJourneyLegSelection {
   readonly transitDaysMin: number;
   readonly transitDaysMax: number;
   readonly sourceForwarderName: string;
+  /**
+   * §19.9. PER LEG, because the divisor belongs to the forwarder and not to the boxes: an ocean
+   * card (divisor 1000) and an inland card (divisor 3000) rating the SAME consignment produce
+   * two different chargeable weights on one journey. Reporting a single journey-level weight
+   * would make one of the two leg prices look like an arithmetic error.
+   */
+  readonly chargeableWeightGrams: number;
+  readonly chargeableWeightBasis: "actual" | "volumetric";
 }
 
 /**
@@ -341,6 +349,8 @@ export function composeJourneys(legs: readonly FreightLegPlan[]): {
           transitDaysMin: cheapest.transitDaysMin,
           transitDaysMax: cheapest.transitDaysMax,
           sourceForwarderName: cheapest.sourceForwarderName,
+          chargeableWeightGrams: cheapest.chargeableWeightGrams,
+          chargeableWeightBasis: cheapest.chargeableWeightBasis,
         });
       }
 
