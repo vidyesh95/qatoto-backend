@@ -1558,6 +1558,14 @@ The following require legal, provider, or product decisions before implementatio
   expressible. **BUILT in Phase 20 (`0106`–`0108`); §19 is now a record.** The remaining
   dependency is commercial rather than technical: the tables are empty until a forwarder lane
   list is bought.
+- **the volumetric divisor, and therefore chargeable weight.** Freight bills on
+  `max(actual gross weight, volumetric weight)`; Phase 20 rates on actual weight alone, so a light
+  bulky consignment is **underpriced** — a wrong number rather than a missing one, which is the one
+  failure §19.6 does not already cover. The divisor is mode-dependent by industry convention
+  (≈6000 cm³/kg air, ≈1 CBM per 1000 kg ocean LCL) and `commerce_freight_rate_card` carries no
+  column to hold it. Picking one divisor for every mode would be the platform inventing a tariff
+  convention. **Needs a product decision plus one additive column**; the volume it would multiply
+  is already measured. See §19.9.
 - ~~**how a seller obtains a buyer's full delivery address.**~~ **DECIDED: an authorized decrypt
   path.** A seller organization with an active order fetches the buyer's decrypted street lines,
   recipient name and phone through a server route that authorizes the caller against that specific
@@ -2261,7 +2269,9 @@ silently becomes the weaker.
 
 **SHIPPED (Phase 20, `0106`–`0108`).** This section was written as a specification, and it is now a
 record. The tables exist, the admin writes fill them, the rating read prices a lane, and an order
-projects an arrival window.
+projects an arrival window. **Migrations applied 2026-08-10**; `db:verify-store-phase-20-constraints`
+passes 14/14 against the live database, so every CHECK in §19.2–§19.4 is confirmed to actually
+refuse rather than merely to have been written.
 
 **They ship EMPTY, and that is the remaining gap.** No forwarder lane list has been bought and no
 broker dwell figure recorded, so every lane is uncovered until somebody loads real data through
@@ -2269,7 +2279,8 @@ broker dwell figure recorded, so every lane is uncovered until somebody loads re
 then own, which is §19.4's own argument applied to its own migration. `sheets/delivery-sheet.tsx`
 can now wire against real contracts; what it renders stays honest-and-empty until the rows arrive.
 
-**Where §19 was silent, §19.8 records what was chosen.**
+**Where §19 was silent, §19.8 records what was chosen. Where this backend deliberately behaves
+differently from Alibaba — and where it currently behaves worse — §19.9 says so.**
 
 ### 19.1 What A16 decided, and what it left out
 
@@ -2528,6 +2539,60 @@ usually the person deciding whether to change one.
 - **A quote-originated order's destination comes from `commerce_rfq.destinationCountryCode`.**
   `buyerAddressSnapshot` is never parsed — reading geography back out of formatted prose is how a
   comma inside a locality becomes a wrong country.
+
+
+### 19.9 Measured against Alibaba — what matches, what is stricter, and what is missing
+
+§19.4 justifies the null window by citing Alibaba's degradation. That citation is accurate for the
+**window**, and it was worth checking whether it holds for the rest of the phase. It does not hold
+uniformly, and the differences are recorded here so nobody re-derives them from an argument that was
+only ever made about one decision.
+
+**Behaves as Alibaba does**
+
+| This backend | Alibaba |
+| ------------ | ------- |
+| No delivery date until a rated option is selected; lead time plus "shipping to be arranged" until then | Same |
+| Per-mode options carrying a price **and** a transit range | Same — sea, air and express side by side |
+| The buyer selects the mode; the server never picks one | Same |
+| Manufacturing lead time as a range, tied to the quantity band | Same — tiered lead times on the listing |
+| A weight-band ladder with a per-unit rate and a minimum charge | Same — the standard forwarder tariff shape |
+| Provenance and an expiry on every quoted number | Same — Alibaba's quotes carry a validity |
+
+**Deliberately stricter than Alibaba.** Each is defensible, and each has a visible cost. None is a
+bug; all four are open to being revisited as product decisions.
+
+- **Below the smallest band yields no option at all.** Alibaba, and every real forwarder, applies the
+  band's **minimum charge** to an undersized shipment — that is what a minimum charge is for. §19.6's
+  "never a zero" was read here as "never a price outside a published band", which is the stricter
+  reading. **Cost:** a 5 kg parcel against a card whose smallest band starts at 45 kg reports an
+  uncovered lane where Alibaba reports a price.
+- **Currencies are never converted, so a journey whose legs quote in different currencies emits
+  nothing.** Alibaba converts and shows the rate. This follows A16 and §15.4 rather than Alibaba.
+  **Cost:** a USD ocean card plus a EUR inland card is unpriceable, though both are real prices.
+- **An uncovered inland leg makes the whole journey unpriceable.** Alibaba would still sell the
+  international leg **port-to-port** and let the buyer arrange the rest — because Alibaba models
+  Incoterms and this backend does not. **Cost:** on most lanes, where no forwarder sells a domestic
+  card in the destination country, a perfectly good ocean rate goes unshown. **This is the largest
+  practical divergence in the phase**, and the fix is an Incoterm concept, not a rate table.
+- **Customs dwell is exposed as its own component.** Alibaba does not surface it; it bundles
+  clearance into the estimate or sells DDP. Here the backend is **more** transparent than Alibaba,
+  not less, which is the intended direction.
+
+**A genuine gap, not a choice — `chargeable weight` is not implemented**
+
+Air and ocean freight bill on **`max(actual gross weight, volumetric weight)`**, and every forwarder
+— Alibaba's included — quotes that way. This backend rates on actual gross weight alone and uses
+volume only as a band **floor**. A light, bulky consignment is therefore **underpriced**, which is
+the one failure mode §19.6 does not cover: it is not a missing number, it is a wrong one.
+
+The data needed is already stored (`ConsignmentMeasurement.volumeCubicCm`, from the Phase 8 package
+geometry), so this is a rating-service change and needs no migration. What it does need is a
+**decision**, which is why it is not silently fixed: the volumetric divisor is mode-dependent by
+convention — roughly 6000 cm³/kg for air, and 1 CBM ≈ 1000 kg for ocean LCL — and §19.2's card
+carries no `chargeable_unit` or divisor column to hold it. Picking one divisor for every mode would
+be the platform inventing a tariff convention, which is the same error §19.4 refuses elsewhere.
+Recorded in §14 until that decision is made.
 
 ---
 
@@ -3645,8 +3710,14 @@ defaulted, averaged, or extrapolated; an uncovered lane returns an empty `option
 an uncovered **leg** makes the whole journey unpriceable rather than cheaper; and `shippingInCents`
 stays literal `0` — rating from a card is not a booking and confers no capacity.
 
-**Still open, and it is commercial rather than technical:** the tables ship **empty**. No forwarder
-lane list has been purchased and no broker dwell figure recorded, so every lane is currently
-uncovered. There is no seed, deliberately. Until rows are loaded, the sheet's honest render is
-"ships in 15–25 days · shipping and clearance not yet estimated" — which is exactly what §19.4
-designed the `null` window to make expressible.
+**Still open — two things, and only one of them is technical.**
+
+*Commercial:* the tables ship **empty**. No forwarder lane list has been purchased and no broker
+dwell figure recorded, so every lane is currently uncovered. There is no seed, deliberately. Until
+rows are loaded, the sheet's honest render is "ships in 15–25 days · shipping and clearance not yet
+estimated" — exactly what §19.4 designed the `null` window to make expressible.
+
+*Technical:* **chargeable weight is not implemented**, so a light bulky consignment will be
+underpriced once rows do exist. It needs a decision on the volumetric divisor rather than a
+migration — see §19.9 and the new §14 entry. Everything else in §19.9's divergence list is a
+deliberate choice, not a defect.

@@ -95,14 +95,26 @@ const CHECKS: readonly Check[] = [
     },
   },
   {
-    name: "§19.2 · NO second freight mode enum was minted",
-    why: "commerce_shipment_leg_mode already carries air|sea|land|rail. A parallel enum is how a card becomes unmatchable to the shipment it priced.",
+    name: "§19.2 · NO second enum duplicates the shipment leg modes",
+    why: "commerce_shipment_leg_mode already carries air|sea|land|rail. A parallel enum with the same members is how a card becomes unmatchable to the shipment it priced.",
     async run() {
-      const rogue = await scalar(sql`
-        SELECT count(*)::int AS value
-          FROM pg_type
-         WHERE typname LIKE '%freight%mode%' OR typname = 'commerce_freight_mode'`);
-      return { ok: rogue === 0, detail: `${String(rogue)} rogue mode enum(s)` };
+      /**
+       * MATCHED ON THE MEMBER SET, NOT ON THE NAME. A name pattern flags
+       * `freight_transport_mode`, which is the pre-existing OFFERING-level enum — it carries
+       * `multimodal` as a fifth member and is a different thing legitimately. The invariant is
+       * "no second type carries exactly these four", and that is what is asked here.
+       */
+      const duplicates = await scalar(sql`
+        SELECT count(*)::int AS value FROM (
+          SELECT t.typname
+            FROM pg_type t
+            JOIN pg_enum e ON e.enumtypid = t.oid
+           WHERE t.typname <> 'commerce_shipment_leg_mode'
+           GROUP BY t.typname
+          HAVING array_agg(e.enumlabel::text ORDER BY e.enumlabel::text)
+                 = ARRAY['air','land','rail','sea']
+        ) AS duplicated_mode_enums`);
+      return { ok: duplicates === 0, detail: `${String(duplicates)} duplicate mode enum(s)` };
     },
   },
   {
