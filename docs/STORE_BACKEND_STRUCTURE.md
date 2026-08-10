@@ -189,6 +189,24 @@ exchange rate, tax estimate, or order status. It may never establish any of them
   persisted before processing, and applied by workers.
 - Expected failures are `Result<T, E>` values. Controllers exhaustively map them to HTTP responses.
 
+**Qatoto is a marketplace, and never a principal.** It provides no freight, no escrow, no
+insurance, no customs brokerage and no inspection. It lists providers who do, and the buyer engages
+them; the buyer's counterparty on any such engagement is the **provider organization**, never the
+platform. Three consequences bind the backend:
+
+- **A provider-sourced number is the provider's.** It travels with the identity of whoever quoted
+  it, and the wire shape must make rendering it *without* that identity impossible rather than
+  merely discouraged — the mechanism A13 already established for declared-versus-measured stats.
+  §19.9's `providerQuote` is the freight instance of this.
+- **A quote is not a booking.** Rating from a card reserves nothing, confers no capacity, and
+  writes no money into an order.
+- **The platform states no guarantee it does not itself perform.** §14 decided the custody half of
+  this — Qatoto is not a custodian and never holds funds — and A20 keeps the trade-protection copy
+  behind that decision.
+
+This was implied in six places and stated in none until Phase 20. It is stated here because a rule
+that lives only in the shape of the code is a rule the next surface can violate by accident.
+
 If a rule must remain true after DevTools changes or request replay, it belongs in this backend.
 
 ---
@@ -997,7 +1015,8 @@ neither the capability nor a card id is probeable from the route table. Every on
 `Idempotency-Key` scoped to the **user**: a moderator acts for the platform and may not belong to any
 commerce organization, and a retried create would supersede the card the first attempt just minted.
 
-Two existing reads were **extended, never replaced**:
+Freight prices on every one of these reads live inside `providerQuote`, and an unrateable lane
+carries `quotableProviders` (§19.9b). Two existing reads were **extended, never replaced**:
 `GET /store/products/:productSlug/delivery-estimate` keeps `data.estimates` byte-identical and adds a
 sibling `data.lanePlan`; `checkout/prepare` keeps `deliveryEstimates` and adds `arrivalWindows`.
 
@@ -2429,6 +2448,12 @@ an inconsistency.
   between currencies without an FX quote (§15.4's rule).
 - **A rate card is not a booking and confers no capacity.** Pricing from a card does not reserve
   space, and no copy may imply it does.
+- **Every price is a named provider's, structurally.** The money lives inside `providerQuote`
+  alongside the forwarder's identity and `subjectToRemeasurement`, so no client can render a rate
+  without rendering whose rate it is. Qatoto sells no freight (§0).
+- **An unrateable lane still names who could quote it.** `quotableProviders` carries the forwarders
+  selling that lane so the buyer can open an RFQ. A refusal that offers no way forward is a dead
+  end, not honesty.
 
 ### 19.7 Frontend status
 
@@ -2615,10 +2640,61 @@ one consignment legitimately bills as two different weights across a two-leg jou
 `FreightJourneyLegSelection`, not `ConsignmentMeasurement`; a single journey-level weight would make
 one of the two leg prices read as an arithmetic error.
 
-**An undeclared volume now refuses**, with a named `volume_not_declared`, rather than falling back to
+**An undeclared volume refuses**, with a named `volume_not_declared`, rather than falling back to
 gross weight. The fallback would silently reintroduce the underpricing on exactly the consignments
-most likely to be bulky — the ones whose seller never measured a box. It costs coverage: a seller who
-declared weight but no dimensions gets no freight rate until they declare them.
+most likely to be bulky — the ones whose seller never measured a box.
+
+**But a refusal is not a dead end.** The lane still returns `quotableProviders` — every forwarder
+selling it — so the client can open an RFQ against machinery that already exists rather than showing
+the buyer a blank. This is §15.6's honest degradation applied to freight, and it is what Alibaba
+actually does: no computed number for an unmeasured listing, and a route to a real quote instead.
+
+**And the hole is closed at the source.** Publishing a listing now requires all five shipping facts
+(§19.9a), so the unmeasured case shrinks to legacy listings rather than being the steady state.
+
+### 19.9a The five shipping facts, and why not three
+
+Publishing requires `packageLengthMm`, `packageWidthMm`, `packageHeightMm`,
+`packageGrossWeightGrams` **and** `unitsPerPackage`.
+
+**Three would not have been enough, and would have looked like enough.**
+`computeConsignmentMeasurement` skips a line entirely when `unitsPerPackage` is null — volume is
+box volume MULTIPLIED BY the package count — and `computePackagingTotals` skips it without a gross
+weight. A dimensions-only gate would have passed listings that still contribute **zero volume and
+zero weight** to the rater: a gate that looks done and is not.
+
+**Required to publish, not to draft.** The columns stay nullable and there is no migration, because
+nobody can invent a box size for a listing that already exists. A pre-Phase-20 listing keeps
+selling; it is refused on its next edit, and `POST /products/:id/unpublish` stays ungated as the
+escape hatch. The edit gate checks the **post-patch** values, so the patch is allowed to be the fix.
+
+**One projection, two consumers.** `projectListingCompleteness` feeds both the publish refusal and
+`PublicProduct.listingCompleteness`, so the checklist a seller sees on the form cannot disagree with
+the 422 behind the button. It reuses §15.6's guided-pathway shape — per-item `state`, named missing
+fields, a filled/required pair — rather than inventing a parallel vocabulary.
+
+**Unconditional, because every listing is physical goods.** The browse taxonomy has had no services
+or digital root since `0098` retired `digital_goods`. If a services category is ever seeded, this is
+the requirement that has to become conditional.
+
+### 19.9b The price is the provider's, structurally
+
+Qatoto sells no freight (§0). So `FreightOption` does not carry a price — it carries a
+**`providerQuote`**, and the money lives inside it beside `providerOrganizationId`,
+`sourceForwarderName`, `validUntil` and `subjectToRemeasurement: true`.
+
+**Nesting is the mechanism, not decoration.** A sibling `sourceForwarderName` is a field a renderer
+can ignore; a price reachable only through the object that names its author is not. This is A13's
+move — declared and measured stats in two objects so neither can be flattened into the other —
+applied to the case where flattening would present a forwarder's rate as the platform's.
+
+`FreightLanePlan.contracting.party` states `"provider"` **once**. Who the buyer contracts with is a
+fact about the engagement, not about each row, and a constant repeated per option is a field
+renderers learn to ignore.
+
+`subjectToRemeasurement` is always `true` and is on the wire anyway: forwarders re-weigh and
+re-measure at pickup and bill the result, so a rate computed from a seller's declaration is the
+provider's estimate against that declaration and never a fixed charge.
 
 ---
 
@@ -2708,7 +2784,12 @@ and one projection line.
 
 ---
 
-### A5. Packaging dimensions and gross weight — **SHIPPED (Phase 8)**
+### A5. Packaging dimensions and gross weight — **SHIPPED (Phase 8), REQUIRED TO PUBLISH (Phase 20)**
+
+**Phase 20 update:** all five shipping facts are now required to PUBLISH a listing — the three
+dimensions plus `packageGrossWeightGrams` and `unitsPerPackage`. Drafting stays free, the columns
+stay nullable, and there is no migration: nobody can invent a box size for a listing that already
+exists. See §19.9a for why three would not have been enough.
 
 **Needed by:** `sections/packaging-and-delivery.tsx` (three spec rows plus three lead-time bands) and
 the "In the box" line in `sections/product-details-section.tsx`.
@@ -3735,6 +3816,11 @@ PDP's unchanged `estimates`, and per-seller `arrivalWindows` on `checkout/prepar
 defaulted, averaged, or extrapolated; an uncovered lane returns an empty `options[]`, never a zero;
 an uncovered **leg** makes the whole journey unpriceable rather than cheaper; and `shippingInCents`
 stays literal `0` — rating from a card is not a booking and confers no capacity.
+
+**And a named absence now names a way forward.** An unrateable lane returns `quotableProviders`, so
+the buyer can open an RFQ with the forwarders who sell it. Every price it does return lives inside
+`providerQuote` — Qatoto is a marketplace and never a principal (§0), so the rate is the
+forwarder's and the wire shape makes rendering it as the platform's impossible (§19.9b).
 
 **Still open — two things, and only one of them is technical.**
 
