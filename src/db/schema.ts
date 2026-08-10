@@ -6033,11 +6033,32 @@ export const commerceOrderProductLine = pgTable(
      * reads the order; a future per-line view has the fact it needs without a migration.
      */
     promisedDeliveryAt: timestamp("promised_delivery_at"),
+    /**
+     * Phase 20, §19.4. Carried verbatim from
+     * `commerce_checkout_prepare_product_line.leadTimeMinDaysSnapshot` at confirm.
+     *
+     * THE MAXIMUM IS DELIBERATELY NOT DUPLICATED HERE. It is already recoverable losslessly
+     * from `promised_delivery_at` minus the order's `created_at` — `derivePromisedDeliveryAt`
+     * added whole days to the insert instant — and that reconstruction works on every order
+     * ever placed, whereas a new column would work on none of them. One derivation beats one
+     * column plus one derivation.
+     *
+     * NULL on every order confirmed before this column existed, and on every quote-originated
+     * order: `commerce_quote_product_line` carries a single lead-time figure, not a range.
+     */
+    leadTimeMinDaysSnapshot: integer("lead_time_min_days_snapshot"),
     siblingOrder: integer("sibling_order").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     index("commerce_order_product_line_order_idx").on(table.orderId, table.siblingOrder),
+    // Phase 20. Bounded like the prepare line's, and NOT paired against a maximum here
+    // because no maximum column exists on this table — see the column comment.
+    check(
+      "commerce_order_product_line_lead_time_ck",
+      sql`lead_time_min_days_snapshot IS NULL
+          OR (lead_time_min_days_snapshot >= 0 AND lead_time_min_days_snapshot <= 3650)`,
+    ),
     check(
       "commerce_order_product_line_qty_ck",
       sql`quantity_ordered > 0
@@ -6361,6 +6382,20 @@ export const commerceCheckoutPrepareProductLine = pgTable(
      * a line produces no promise and is excluded from the on-time denominator entirely.
      */
     leadTimeMaxDaysSnapshot: integer("lead_time_max_days_snapshot"),
+    /**
+     * Phase 20, §19.4. The MINIMUM half of the same declaration, snapshotted for the same
+     * reason and carried to the order line at confirm.
+     *
+     * §19.4's arrival window reports manufacturing as a RANGE, and until this column existed
+     * only the maximum was recoverable — an order could say "ships within 25 days" but never
+     * "in 15 to 25". Nothing backfills it: inventing a minimum for an order placed before
+     * the column existed is exactly the fabrication `leadTimeMaxDaysSnapshot`'s own note
+     * refuses, so a pre-Phase-20 order reports `daysMin: null` and says so on the wire.
+     *
+     * The two are independently nullable ON PURPOSE. A seller may declare a maximum and no
+     * minimum; the CHECK below only refuses the incoherent pair, not the partial one.
+     */
+    leadTimeMinDaysSnapshot: integer("lead_time_min_days_snapshot"),
     siblingOrder: integer("sibling_order").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -6377,8 +6412,13 @@ export const commerceCheckoutPrepareProductLine = pgTable(
     check("commerce_checkout_prepare_product_line_qty_ck", sql`quantity > 0`),
     check(
       "commerce_checkout_prepare_product_line_lead_time_ck",
-      sql`lead_time_max_days_snapshot IS NULL
-          OR (lead_time_max_days_snapshot >= 0 AND lead_time_max_days_snapshot <= 3650)`,
+      sql`(lead_time_max_days_snapshot IS NULL
+           OR (lead_time_max_days_snapshot >= 0 AND lead_time_max_days_snapshot <= 3650))
+          AND (lead_time_min_days_snapshot IS NULL
+               OR (lead_time_min_days_snapshot >= 0 AND lead_time_min_days_snapshot <= 3650))
+          AND (lead_time_min_days_snapshot IS NULL
+               OR lead_time_max_days_snapshot IS NULL
+               OR lead_time_min_days_snapshot <= lead_time_max_days_snapshot)`,
     ),
     check(
       "commerce_checkout_prepare_product_line_money_ck",
@@ -17022,6 +17062,23 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // front of every visitor, so the verdict names the moderator who made it.
   "community_cofounder_profile_published",
   "community_cofounder_profile_rejected",
+  // Lane rate cards and customs dwell (Phase 20, §19.2–§19.3). EVERY mutation is named,
+  // the `commerce_category_*` posture, because a rate card is a number a BUYER is shown —
+  // §19.6 puts its provenance on the wire — and a price that moved with no named human
+  // behind it is the one thing this chain exists to make impossible.
+  //
+  // A SUPERSESSION EMITS NO KIND OF ITS OWN. It is a consequence of a create, not a second
+  // decision, and its predecessor id rides in that entry's payload. Two entries would claim
+  // two decisions were made.
+  "commerce_freight_rate_card_created",
+  "commerce_freight_rate_card_window_shortened",
+  "commerce_freight_rate_card_withdrawn",
+  // Two kinds, not one: a REPLACE destroys prices and an APPEND does not. The audit list
+  // filters by `eventKind`, and collapsing them would hide the destructive half.
+  "commerce_freight_rate_break_added",
+  "commerce_freight_rate_breaks_replaced",
+  "commerce_customs_dwell_estimate_created",
+  "commerce_customs_dwell_estimate_retired",
 ]);
 
 /**
@@ -21341,6 +21398,334 @@ export const communityCofounderPriorVenture = pgTable(
           AND char_length(years_active_label) BETWEEN 1 AND 40
           AND (outcome_summary IS NULL OR char_length(outcome_summary) BETWEEN 1 AND 1000)
           AND position >= 0`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Store Phase 20 — lane rate cards and customs dwell
+// (STORE_BACKEND_STRUCTURE.md §19.2, §19.3)
+// ---------------------------------------------------------------------------
+//
+// THE MISSING INPUT WAS NEVER AN ENDPOINT — it was data nobody had bought (§19.1). A16's
+// coverage-derived estimate says a provider SERVES this lane, not what it CHARGES or how
+// long it TAKES by sea versus by air. Forwarders sell lane price lists; these are where
+// one lands.
+//
+// NO SECOND MODE ENUM. `commerceShipmentLegModeEnum` already carries air|sea|land|rail and
+// a shipment leg already records one. A parallel enum is how a card becomes unmatchable to
+// the shipment it priced (§19.2).
+//
+// NO `createdByUserId` ON ANY OF THESE. Every write goes through `recordPlatformAction`,
+// whose `actorUserId` is NOT NULL — a second copy of the same fact is a second thing to
+// drift.
+
+/**
+ * `proposed` is DELIBERATELY ABSENT, which is why this is not a reuse of
+ * `compensationAgreementStatusEnum`. Nobody ACCEPTS a rate card: an admin keys in a list a
+ * forwarder already sold. A `proposed` member would be a state the rating read must
+ * remember to exclude, and the reader that forgets prices from a card nobody activated.
+ */
+export const commerceFreightRateCardStateEnum = pgEnum("commerce_freight_rate_card_state", [
+  "active",
+  "superseded",
+  "withdrawn",
+]);
+
+export const commerceFreightRateCard = pgTable(
+  "commerce_freight_rate_card",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /**
+     * References `commerceProviderProfile.organizationId`, NOT `commerceOrganization.id`,
+     * which is what `commerceServiceOffering` does and for the same reason: the FK then
+     * proves STRUCTURALLY that the org is a registered provider, so §0's
+     * "providerOrganizationId is never trusted merely because it appears in a body" cannot
+     * be violated by a service that forgot to check.
+     */
+    providerOrganizationId: text("provider_organization_id")
+      .notNull()
+      .references(() => commerceProviderProfile.organizationId, { onDelete: "restrict" }),
+    /**
+     * BOTH NOT NULL, unlike `commerceServiceCoverage`'s nullable pair. Coverage says "this
+     * provider serves anywhere"; a PRICE is always for a named lane.
+     *
+     * `origin = destination` is legal and must stay legal — §19.4's inland leg is a
+     * domestic lane with a real land rate behind it.
+     */
+    originCountryCode: text("origin_country_code").notNull(),
+    destinationCountryCode: text("destination_country_code").notNull(),
+    mode: commerceShipmentLegModeEnum("mode").notNull(),
+    currency: text("currency").notNull(),
+    validFrom: timestamp("valid_from", { precision: 3 }).notNull(),
+    /** NULL = in force with no announced end. Exclusive upper bound. */
+    validUntil: timestamp("valid_until", { precision: 3 }),
+    /** Who sold us this list. Provenance rides with the number (§19.2, §19.6). */
+    sourceForwarderName: text("source_forwarder_name").notNull(),
+    state: commerceFreightRateCardStateEnum("state").default("active").notNull(),
+    /**
+     * BEYOND §19.2, and worth the column. Without it "which card replaced this one" is
+     * recoverable only by matching lane plus `valid_until = successor.valid_from`, which is
+     * silently wrong the moment two cards share an instant.
+     * `compensationPeriod.supersededByPeriodId` is the precedent.
+     */
+    supersededByRateCardId: text("superseded_by_rate_card_id").references(
+      (): AnyPgColumn => commerceFreightRateCard.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /**
+     * The rating read's lane lookup. `validUntil` rides in the index because the read
+     * predicate is the WINDOW, not the state — see the partial unique below. Ends in
+     * `table.id` so two cards sharing an instant cannot swap places between reads.
+     */
+    index("commerce_freight_rate_card_lane_idx").on(
+      table.originCountryCode,
+      table.destinationCountryCode,
+      table.mode,
+      table.validUntil,
+      table.id,
+    ),
+    index("commerce_freight_rate_card_provider_idx").on(
+      table.providerOrganizationId,
+      table.state,
+      table.id,
+    ),
+    /**
+     * AT MOST ONE ACTIVE CARD PER LANE, PER PROVIDER, PER CURRENCY — the
+     * `member_cash_comp_agreement_active_unq` shape.
+     *
+     * PROVIDER AND CURRENCY ARE IN THE KEY ON PURPOSE. §19.5's `options[]` is plural, so
+     * several forwarders quoting one lane at once is the normal case, and §19.1's estimate
+     * is per-currency, so a USD card and a EUR card coexist. Dropping either from the key
+     * would make the second forwarder's card unstorable.
+     *
+     * THIS IS A WRITE INVARIANT, NOT THE READ PREDICATE. A future-dated successor flips its
+     * incumbent to `superseded` immediately while the incumbent's window is still open, so
+     * the rating read selects on the WINDOW plus `state <> 'withdrawn'`. Reading on
+     * `state = 'active'` would black out a lane the moment a successor was scheduled.
+     */
+    uniqueIndex("commerce_freight_rate_card_active_uidx")
+      .on(
+        table.providerOrganizationId,
+        table.originCountryCode,
+        table.destinationCountryCode,
+        table.mode,
+        table.currency,
+      )
+      .where(sql`state = 'active'`),
+    check(
+      "commerce_freight_rate_card_country_ck",
+      sql`origin_country_code ~ '^[A-Z]{2}$' AND destination_country_code ~ '^[A-Z]{2}$'`,
+    ),
+    check("commerce_freight_rate_card_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check(
+      "commerce_freight_rate_card_window_ck",
+      sql`valid_until IS NULL OR valid_until > valid_from`,
+    ),
+    check(
+      "commerce_freight_rate_card_source_ck",
+      sql`char_length(source_forwarder_name) BETWEEN 1 AND 200`,
+    ),
+    /**
+     * The lifecycle cannot be half-true. A superseded card names its successor; an active
+     * or withdrawn one has none; and no card supersedes itself.
+     */
+    check(
+      "commerce_freight_rate_card_lifecycle_ck",
+      sql`(state = 'superseded') = (superseded_by_rate_card_id IS NOT NULL)
+          AND (superseded_by_rate_card_id IS NULL OR superseded_by_rate_card_id <> id)`,
+    ),
+  ],
+);
+
+/**
+ * One weight/volume band on one card.
+ *
+ * TRANSIT DAYS LIVE HERE, NOT ON THE CARD (§19.2). An air break and a sea break on one lane
+ * have different durations by definition, and a heavier break can route differently — a
+ * 40 kg consignment and a 4 t consignment on one lane are not the same journey. Putting the
+ * duration on the card forces one number across every weight band, which is the flattening
+ * A13 rejected.
+ *
+ * THE DENOMINATOR OF `unitPriceInCents` IS CENTS PER KILOGRAM OF CHARGEABLE WEIGHT, and §19
+ * never states it. The two `min_*` columns are the band's FLOOR — its entry condition — and
+ * NOT the denominator: a break is selected as the highest band a consignment clears, then
+ * charged `max(unit_price * chargeable_kg, minimum_charge)`. Nothing here may be read as a
+ * per-cbm or per-container rate without a `chargeable_unit` column that deliberately does
+ * not exist yet.
+ */
+export const commerceFreightRateBreak = pgTable(
+  "commerce_freight_rate_break",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    rateCardId: text("rate_card_id")
+      .notNull()
+      .references(() => commerceFreightRateCard.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    minBillableWeightGrams: bigint("min_billable_weight_grams", { mode: "number" }).notNull(),
+    minVolumeCubicCm: bigint("min_volume_cubic_cm", { mode: "number" }).notNull(),
+    /**
+     * `integer`, not `bigint`: a per-kilogram rate is a CATALOGUE-SCALE price, the same tier
+     * as `commerceServiceOffering.indicativePriceMinInCents`. The rating read widens to
+     * bigint BEFORE multiplying by a weight — a 4 t consignment at a plausible rate is
+     * comfortably past `integer`.
+     */
+    unitPriceInCents: integer("unit_price_in_cents").notNull(),
+    /** `bigint`: this one is a TOTAL — the floor on the line's charge. */
+    minimumChargeInCents: bigint("minimum_charge_in_cents", { mode: "number" }).notNull(),
+    transitDaysMin: integer("transit_days_min").notNull(),
+    transitDaysMax: integer("transit_days_max").notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /** §19.2's `UNIQUE (rateCardId, position)`, verbatim. */
+    uniqueIndex("commerce_freight_rate_break_position_uidx").on(table.rateCardId, table.position),
+    /**
+     * TWO BANDS MAY NOT SHARE A FLOOR. The ladder picks "the highest band this consignment
+     * clears"; two rows with the same floor make that pick arbitrary, and an arbitrary pick
+     * is a price the platform cannot explain.
+     */
+    uniqueIndex("commerce_freight_rate_break_floor_uidx").on(
+      table.rateCardId,
+      table.minBillableWeightGrams,
+      table.minVolumeCubicCm,
+    ),
+    /** The ladder scan itself, ending in a unique column. */
+    index("commerce_freight_rate_break_ladder_idx").on(
+      table.rateCardId,
+      table.minBillableWeightGrams,
+      table.id,
+    ),
+    check(
+      "commerce_freight_rate_break_bounds_ck",
+      sql`position >= 0 AND min_billable_weight_grams >= 0 AND min_volume_cubic_cm >= 0`,
+    ),
+    /**
+     * `unit_price > 0` because a zero is §19.6's forbidden zero — "an uncovered lane returns
+     * an empty options[], never a zero". A zero MINIMUM CHARGE is legitimate: plenty of
+     * tariffs have no floor, and refusing one would push admins to type `1`.
+     */
+    check(
+      "commerce_freight_rate_break_price_ck",
+      sql`unit_price_in_cents > 0 AND minimum_charge_in_cents >= 0`,
+    ),
+    check(
+      "commerce_freight_rate_break_transit_ck",
+      sql`transit_days_min >= 0
+          AND transit_days_max >= transit_days_min
+          AND transit_days_max <= 365`,
+    ),
+  ],
+);
+
+/**
+ * "Clearance on this lane for this commodity takes 3–10 days."
+ *
+ * NOTHING MODELS THIS TODAY (§19.3). `customs_broker` exists as a `commerce_provider_kind`
+ * and its offerings carry lead times, but an offering's lead time is the BROKER's own
+ * turnaround, not the PORT's, and the two are not interchangeable.
+ *
+ * NO `state` COLUMN, unlike the rate card. §19.3 defines none and it needs none: the window
+ * IS the lifecycle, and retiring an estimate is closing its window.
+ */
+export const commerceCustomsDwellEstimate = pgTable(
+  "commerce_customs_dwell_estimate",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /** The clearing country. NOT NULL — dwell is always somebody's border. */
+    destinationCountryCode: text("destination_country_code").notNull(),
+    /** NULL = any origin — the `commerceServiceCoverage` precedent. */
+    originCountryCode: text("origin_country_code"),
+    /**
+     * §19.3 calls this `commodityScope`; it is spelled `...CategoryId` because it is an FK
+     * and every other FK column in this file says what it points at. NULL = any commodity.
+     * `restrict` matches `product.categoryId` — §16's admin surface has no DELETE at all,
+     * only retire, so this can never fire in normal operation, and if it ever does then
+     * refusing is right: a dwell estimate scoped to a category nobody can name is unreadable.
+     */
+    commodityScopeCategoryId: text("commodity_scope_category_id").references(
+      () => commerceCategory.id,
+      { onDelete: "restrict" },
+    ),
+    clearanceDaysMin: integer("clearance_days_min").notNull(),
+    clearanceDaysMax: integer("clearance_days_max").notNull(),
+    /** The broker or published figure this came from. Provenance, as on the card. */
+    source: text("source").notNull(),
+    validFrom: timestamp("valid_from", { precision: 3 }).notNull(),
+    validUntil: timestamp("valid_until", { precision: 3 }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /** The resolver's lookup: destination first, then the two optional narrowings. */
+    index("commerce_customs_dwell_estimate_lane_idx").on(
+      table.destinationCountryCode,
+      table.originCountryCode,
+      table.commodityScopeCategoryId,
+      table.id,
+    ),
+    /**
+     * AT MOST ONE OPEN-ENDED ESTIMATE PER SCOPE — the rate card's partial-unique move, keyed
+     * on the window instead of a state because there is no state.
+     *
+     * `coalesce` because NULL is a VALUE here ("any origin", "any commodity"), and two rows
+     * both claiming "any origin into DE, indefinitely" is the ambiguity this refuses.
+     *
+     * `WHERE valid_until IS NULL` AND NOT `valid_until > now()`: `now()` is not IMMUTABLE
+     * and Postgres refuses it in an index predicate. Overlap between two CLOSED windows is
+     * checked in the service and answered 409 — a full exclusion would need a `tstzrange`
+     * EXCLUDE constraint and `btree_gist`, an extension this repo does not install for one
+     * table.
+     */
+    uniqueIndex("commerce_customs_dwell_estimate_live_uidx")
+      .on(
+        table.destinationCountryCode,
+        sql`coalesce(origin_country_code, '__any__')`,
+        sql`coalesce(commodity_scope_category_id, '__any__')`,
+      )
+      .where(sql`valid_until IS NULL`),
+    /**
+     * A DOMESTIC LANE HAS NO CUSTOMS LEG AT ALL (§19.3) — an ABSENT component, not a
+     * zero-day one. A row asserting IN→IN dwell would make "not applicable" storable as
+     * "known to be short", which is the A11 mistake in a new place.
+     */
+    check(
+      "commerce_customs_dwell_estimate_country_ck",
+      sql`destination_country_code ~ '^[A-Z]{2}$'
+          AND (origin_country_code IS NULL
+               OR (origin_country_code ~ '^[A-Z]{2}$'
+                   AND origin_country_code <> destination_country_code))`,
+    ),
+    check(
+      "commerce_customs_dwell_estimate_days_ck",
+      sql`clearance_days_min >= 0
+          AND clearance_days_max >= clearance_days_min
+          AND clearance_days_max <= 365`,
+    ),
+    check("commerce_customs_dwell_estimate_source_ck", sql`char_length(source) BETWEEN 1 AND 200`),
+    check(
+      "commerce_customs_dwell_estimate_window_ck",
+      sql`valid_until IS NULL OR valid_until > valid_from`,
     ),
   ],
 );
