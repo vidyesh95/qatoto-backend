@@ -7,7 +7,6 @@ import {
   commerceManufacturingInquiry,
   commerceManufacturingInquiryCertification,
   commerceOrganization,
-  commerceOrganizationMember,
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
@@ -656,28 +655,4 @@ export async function listFactoryManufacturingInquiries(input: {
   readonly cursor?: string;
 }): Promise<Result<ManufacturingInquiryPage, CommerceManufacturingInquiryError>> {
   return listInquiries({ ...input, side: "factory" });
-}
-
-/**
- * Resolves the caller's active membership id, which the create needs for `buyerMemberId`.
- *
- * The organization itself is already proven by `requireActiveCommerceOrganization`; this
- * is the row id inside it, and it is read here rather than trusted from a body.
- */
-export async function resolveBuyerMemberId(input: {
-  readonly userId: string;
-  readonly organizationId: string;
-}): Promise<string | null> {
-  const [membership] = await db
-    .select({ id: commerceOrganizationMember.id })
-    .from(commerceOrganizationMember)
-    .where(
-      and(
-        eq(commerceOrganizationMember.organizationId, input.organizationId),
-        eq(commerceOrganizationMember.userId, input.userId),
-        eq(commerceOrganizationMember.state, "active"),
-      ),
-    )
-    .limit(1);
-  return membership?.id ?? null;
 }

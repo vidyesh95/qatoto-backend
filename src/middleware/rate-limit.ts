@@ -1354,3 +1354,61 @@ export const commerceConnectorWebhookLimiter = createLimiter({
   limit: 300,
   keyGenerator: "ip",
 });
+
+/**
+ * The manufacturer directory's public reads (Store Phase 17, §16).
+ *
+ * SEPARATE FROM `storeReadLimiter`, which the whole `/store` router already applies, and
+ * these two routes sit under it — so they are the one place in this file where two limiters
+ * DO stack, deliberately. The directory read fans out into five batched queries plus a
+ * fulfillment-metrics aggregate over completed orders, so it is several times the cost of
+ * a catalogue page and gets its own tighter ceiling on top of the shared one.
+ */
+export const storeFactoryReadLimiter = createLimiter({
+  namespace: "storeFactoryRead",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
+ * Manufacturing inquiry writes (§16.5) — create, send, answer, close.
+ *
+ * TIGHTER THAN AN ORDINARY WRITE BUCKET because every `send` lands in a human's queue. The
+ * `Idempotency-Key` on the create defends against a retry storm; this defends against a
+ * buyer who has decided to write to two hundred factories in an afternoon.
+ */
+export const manufacturingInquiryWriteLimiter = createLimiter({
+  namespace: "manufacturingInquiryWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});
+
+/** The buyer's and factory's own inquiry lists. Ordinary authenticated reads. */
+export const manufacturingInquiryReadLimiter = createLimiter({
+  namespace: "manufacturingInquiryRead",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
+ * The seller-owned factory collections — production lines, sites, commercial terms.
+ *
+ * Matches `commerceOrganizationWriteLimiter`'s shape, which the sibling seller-profile
+ * collections already carry: whole-collection replaces, so editing a six-line list is one
+ * request rather than six.
+ */
+export const factoryDepthWriteLimiter = createLimiter({
+  namespace: "factoryDepthWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/**
+ * Staff site audits. Low-frequency by nature — somebody has to physically visit a factory
+ * before one of these is written — so the ceiling exists only to bound a scripted mistake.
+ */
+export const siteAuditWriteLimiter = createLimiter({
+  namespace: "siteAuditWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});

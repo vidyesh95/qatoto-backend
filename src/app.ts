@@ -17,6 +17,7 @@ import commerceCatalogRouter from "#src/routes/commerce-catalog.routes.js";
 import commerceCategoriesRouter from "#src/routes/commerce-categories.routes.js";
 import commerceContentReportsRouter from "#src/routes/commerce-content-reports.routes.js";
 import commerceDocumentsRouter from "#src/routes/commerce-documents.routes.js";
+import commerceFactoriesRouter from "#src/routes/commerce-factories.routes.js";
 import commerceFulfillmentRouter from "#src/routes/commerce-fulfillment.routes.js";
 import commerceMerchandisingRouter from "#src/routes/commerce-merchandising.routes.js";
 import commerceMessagesRouter from "#src/routes/commerce-messages.routes.js";
@@ -208,6 +209,15 @@ app.use("/commerce", commerceDocumentsRouter);
 // routers; its segments (`/settlement`, `/settlement-agreements`, and a sub-path under
 // `/threads`) collide with none of them.
 app.use("/commerce", commerceSettlementRouter);
+/**
+ * STORE Phase 17 — manufacturing inquiries, seller-owned factory depth and staff site
+ * audits (§16). The PUBLIC directory reads are on `storeRouter` instead.
+ *
+ * Declared after `commerceSellerProfileRouter` even though three of its paths sit under
+ * `/organizations/:organizationId`: `production-lines`, `sites` and `factory-terms` are
+ * segments that router does not claim, the same argument A13's mount note already makes.
+ */
+app.use("/commerce", commerceFactoriesRouter);
 /**
  * STORE Phase 14. Inbound connector webhooks, mounted at `/webhooks` and NOT under
  * `/commerce`, because everything under that prefix requires a session and an active

@@ -2,8 +2,9 @@ import express from "express";
 
 import * as commerceProductQaController from "#src/controllers/commerce-product-qa.controller.js";
 import * as storeController from "#src/controllers/store.controller.js";
+import * as storeFactoriesController from "#src/controllers/store-factories.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
-import { storeReadLimiter } from "#src/middleware/rate-limit.js";
+import { storeFactoryReadLimiter, storeReadLimiter } from "#src/middleware/rate-limit.js";
 
 /**
  * Public buyer store surface (STORE_BACKEND_STRUCTURE.md §5).
@@ -66,5 +67,19 @@ storeRouter.get("/services/:offeringSlug", storeController.getServiceOffering);
 storeRouter.get("/pathways", storeController.listPathways);
 storeRouter.get("/pathways/:pathwaySlug", storeController.getPathway);
 storeRouter.get("/rails/:railSlug", storeController.getRail);
+/**
+ * The manufacturer directory (§16, Appendix A32).
+ *
+ * These two carry a SECOND limiter on top of the router-wide `storeReadLimiter`, which is
+ * the only place in this router that happens: the directory read fans out into five
+ * batched queries plus a fulfillment-metrics aggregate over completed orders, so it is
+ * several times the cost of a catalogue page.
+ */
+storeRouter.get("/factories", storeFactoryReadLimiter, storeFactoriesController.listFactories);
+storeRouter.get(
+  "/factories/:factorySlug",
+  storeFactoryReadLimiter,
+  storeFactoriesController.getFactory,
+);
 
 export default storeRouter;

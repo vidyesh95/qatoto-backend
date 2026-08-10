@@ -88,6 +88,17 @@ const MOUNTED_ROUTERS: readonly {
   // become an excuse for "no bound".
   { mountPath: "/commerce", specifier: "#src/routes/commerce-settlement.routes.js", exportName: "default" },
   { mountPath: "/webhooks", specifier: "#src/routes/commerce-webhooks.routes.js", exportName: "default" },
+  /**
+   * Phase 15's trade attachments and Phase 16's taxonomy admin were mounted in `app.ts`
+   * and missing from this list — the SAME omission the Phase 10 note above records, twice
+   * more. Added while wiring Phase 17, along with Phase 17's own router.
+   */
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-documents.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-categories.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-ranking.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-seller-profile.routes.js", exportName: "default" },
+  // Phase 17 (§16, Appendix A32).
+  { mountPath: "/commerce", specifier: "#src/routes/commerce-factories.routes.js", exportName: "default" },
 ];
 
 /** A write. GETs are excluded — §7's bounds are about writes and expensive reads. */
