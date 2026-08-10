@@ -224,24 +224,30 @@ describe("projectManufacturing", () => {
   });
 });
 
-describe("projectFreight", () => {
-  function lanePlan(journeys: readonly unknown[], unpriceableReasons: readonly unknown[] = []) {
-    return {
-      origin: { countryCode: "IN", locality: null },
-      destination: { countryCode: "DE", locality: null },
-      consignment: {
-        billableWeightGrams: 50_000,
-        volumeCubicCm: 200_000,
-        packageCount: 4,
-        hasIncompletePackageData: false,
-      },
-      legs: [],
-      journeys,
-      unpriceableReasons,
-    } as unknown as Parameters<typeof projectFreight>[0]["lanePlan"];
-  }
+type LanePlan = NonNullable<Parameters<typeof projectFreight>[0]["lanePlan"]>;
+type Journey = LanePlan["journeys"][number];
 
-  const seaJourney = {
+function lanePlan(
+  journeys: readonly Journey[],
+  unpriceableReasons: LanePlan["unpriceableReasons"] = [],
+): LanePlan {
+  return {
+    origin: { countryCode: "IN", locality: null },
+    destination: { countryCode: "DE", locality: null },
+    consignment: {
+      billableWeightGrams: 50_000,
+      volumeCubicCm: 200_000,
+      packageCount: 4,
+      hasIncompletePackageData: false,
+    },
+    legs: [],
+    journeys,
+    unpriceableReasons,
+  };
+}
+
+describe("projectFreight", () => {
+  const seaJourney: Journey = {
     currency: "USD",
     primaryMode: "sea",
     totalInCents: 210_000,
@@ -250,7 +256,13 @@ describe("projectFreight", () => {
     validUntil: null,
     legSelections: [],
   };
-  const airJourney = { ...seaJourney, primaryMode: "air", totalInCents: 960_000, transitDaysMin: 6, transitDaysMax: 12 };
+  const airJourney: Journey = {
+    ...seaJourney,
+    primaryMode: "air",
+    totalInCents: 960_000,
+    transitDaysMin: 6,
+    transitDaysMax: 12,
+  };
 
   it("lists the covered modes and selects none when no mode was requested", () => {
     const freight = projectFreight({

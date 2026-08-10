@@ -504,3 +504,110 @@ async function loadCommodityCategoryIds(
 
   return [...new Set(rows.map((row) => row.categoryId).filter((id): id is string => id !== null))];
 }
+
+/**
+ * The prepare-time projection (§19.5's "`checkout/prepare` gains the §19.4 projection").
+ *
+ * §19.5 and §19.4 are in tension here, and this is how it is resolved: COMPONENTS YES, WINDOW
+ * NO. A prepare is not an order, so there is no `confirmedAt` and therefore no calendar —
+ * §19.4's "no arrival window before an order exists" governs, and `arrivalWindow` is ALWAYS
+ * null. But the components are fully resolvable, and they are what let the sheet render
+ * "ships in 15–25 days · 24–34 days at sea · 3–10 days clearance" without printing a date.
+ *
+ * MANUFACTURING IS ANCHORED ON `asOf`, not on a stored promise, because no promise exists yet
+ * — nothing has been ordered. `endsAt` is therefore indicative, and the null window is what
+ * stops it being read as a commitment.
+ */
+export async function projectPrepareArrivalWindow(input: {
+  readonly sellerOrganizationId: string;
+  readonly destinationCountryCode: string | null;
+  readonly lines: readonly {
+    readonly productId: string;
+    readonly quantity: number;
+    readonly leadTimeMinDaysSnapshot: number | null;
+    readonly leadTimeMaxDaysSnapshot: number | null;
+  }[];
+  readonly asOf: Date;
+}): Promise<ArrivalWindowProjection> {
+  const hasPhysicalGoods = input.lines.length > 0;
+
+  const maximums = input.lines
+    .map((line) => line.leadTimeMaxDaysSnapshot)
+    .filter((days): days is number => days !== null);
+
+  // The slowest line, matching `latestPromisedDeliveryAt`: an order ships when its last line does.
+  const daysMax = maximums.length === input.lines.length && maximums.length > 0 ? Math.max(...maximums) : null;
+
+  const manufacturing: ManufacturingComponentProjection = !hasPhysicalGoods
+    ? { status: "not_applicable", reason: "no_physical_goods_on_order" }
+    : daysMax === null
+      ? { status: "unknown", reason: "no_seller_declared_lead_time" }
+      : projectManufacturing({
+          hasPhysicalGoods,
+          orderPlacedAt: input.asOf,
+          promisedDeliveryAt: new Date(input.asOf.getTime() + daysMax * MILLISECONDS_PER_DAY),
+          leadTimeMinDaysSnapshots: input.lines.map((line) => line.leadTimeMinDaysSnapshot),
+        });
+
+  const originCountryCode = hasPhysicalGoods
+    ? await resolveShippingOriginCountryCode(input.sellerOrganizationId)
+    : null;
+
+  const lanePlan =
+    hasPhysicalGoods && input.destinationCountryCode !== null
+      ? await planFreightJourney({
+          originCountryCode,
+          originLocality: null,
+          destinationCountryCode: input.destinationCountryCode,
+          destinationLocality: null,
+          lines: input.lines.map((line) => ({
+            productId: line.productId,
+            quantity: line.quantity,
+          })),
+          asOf: input.asOf,
+        })
+      : null;
+
+  const freight: FreightComponentProjection =
+    hasPhysicalGoods && input.destinationCountryCode === null
+      ? { status: "unknown", reason: "destination_unresolved", availableModes: [] }
+      : projectFreight({ hasPhysicalGoods, lanePlan, requestedMode: undefined });
+
+  const customs: CustomsComponentProjection = !hasPhysicalGoods
+    ? { status: "not_applicable", reason: "no_physical_goods_on_order" }
+    : input.destinationCountryCode === null
+      ? { status: "unknown", reason: "no_dwell_estimate_for_lane" }
+      : await resolveCustomsDwell({
+          originCountryCode,
+          destinationCountryCode: input.destinationCountryCode,
+          commodityCategoryIds: await loadCommodityCategoryIds(
+            input.lines.map((line) => line.productId),
+          ),
+          asOf: input.asOf,
+        });
+
+  const composed = composeArrivalWindow({
+    // Always null at prepare — there is no order and so no clock. `composeArrivalWindow` still
+    // computes `missingComponents`, which is the half that IS meaningful here.
+    clockStartAt: null,
+    manufacturing,
+    freight,
+    customs,
+  });
+
+  return {
+    clockStartAt: null,
+    clockStartBasis: "not_confirmed",
+    orderPlacedAt: input.asOf,
+    lane: {
+      originCountryCode,
+      destinationCountryCode: input.destinationCountryCode,
+      destinationSource:
+        input.destinationCountryCode === null ? "unresolved" : "order_delivery_address",
+    },
+    consignment: lanePlan?.consignment ?? null,
+    components: { manufacturing, freight, customs },
+    arrivalWindow: null,
+    missingComponents: composed.missingComponents,
+  };
+}

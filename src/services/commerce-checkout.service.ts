@@ -28,6 +28,7 @@ import {
   type CommercePricingError,
   type PricedProductLine,
 } from "#src/lib/commerce-pricing.js";
+import { projectPrepareArrivalWindow } from "#src/services/commerce-arrival-window.service.js";
 import {
   derivePromisedDeliveryAt,
   latestPromisedDeliveryAt,
@@ -181,6 +182,19 @@ export interface CheckoutPrepareProjection {
    * None of this reaches `shippingInCents`. Nothing is being charged for freight.
    */
   readonly deliveryEstimates: readonly SellerDeliveryEstimateProjection[];
+  /**
+   * Phase 20, §19.5. Grouped per seller exactly like `deliveryEstimates`, because §2.3 makes
+   * each seller its own order and each order its own journey.
+   *
+   * `arrivalWindow` inside each entry is ALWAYS null here — there is no order yet, so no clock
+   * (§19.4). The COMPONENTS are what the sheet renders.
+   */
+  readonly arrivalWindows: readonly SellerArrivalWindowProjection[];
+}
+
+export interface SellerArrivalWindowProjection {
+  readonly sellerOrganizationId: string;
+  readonly arrivalWindow: Awaited<ReturnType<typeof projectPrepareArrivalWindow>>;
 }
 
 export interface SellerDeliveryEstimateProjection {
@@ -397,11 +411,54 @@ async function estimatePrepareDelivery(
   );
 }
 
+/**
+ * Phase 20, §19.5. The §19.4 components, per seller, at prepare time.
+ *
+ * Grouped exactly like `estimatePrepareDelivery` because each seller becomes its own order,
+ * and returning `[]` for an unresolved destination for the same reason: a buyer who has not
+ * chosen where the goods go has not asked a question freight can answer.
+ */
+async function projectPrepareArrivalWindows(
+  items: readonly PrepareProductLineRow[],
+  deliveryCountryCode: string | null,
+): Promise<readonly SellerArrivalWindowProjection[]> {
+  if (deliveryCountryCode === null || items.length === 0) return [];
+
+  const linesBySeller = new Map<string, PrepareProductLineRow[]>();
+  for (const line of items) {
+    const sellerLines = linesBySeller.get(line.sellerOrganizationId) ?? [];
+    sellerLines.push(line);
+    linesBySeller.set(line.sellerOrganizationId, sellerLines);
+  }
+
+  const projected = await Promise.all(
+    [...linesBySeller.entries()].map(async ([sellerOrganizationId, sellerLines]) => ({
+      sellerOrganizationId,
+      arrivalWindow: await projectPrepareArrivalWindow({
+        sellerOrganizationId,
+        destinationCountryCode: deliveryCountryCode,
+        lines: sellerLines.map((line) => ({
+          productId: line.productId,
+          quantity: line.quantity,
+          leadTimeMinDaysSnapshot: line.leadTimeMinDaysSnapshot,
+          leadTimeMaxDaysSnapshot: line.leadTimeMaxDaysSnapshot,
+        })),
+        asOf: new Date(),
+      }),
+    })),
+  );
+
+  return projected.toSorted((left, right) =>
+    left.sellerOrganizationId.localeCompare(right.sellerOrganizationId),
+  );
+}
+
 function projectPrepare(
   prepare: PrepareRow,
   items: readonly PrepareProductLineRow[],
   currencyTotals: readonly PrepareCurrencyTotalRow[],
   deliveryEstimates: readonly SellerDeliveryEstimateProjection[] = [],
+  arrivalWindows: readonly SellerArrivalWindowProjection[] = [],
 ): CheckoutPrepareProjection {
   return {
     prepareId: prepare.id,
@@ -419,6 +476,7 @@ function projectPrepare(
         isMadeToOrder: line.isMadeToOrder,
       })),
     deliveryEstimates,
+    arrivalWindows,
     currencyTotals: currencyTotals.map((total) => ({
       currency: total.currency,
       subtotalInCents: total.subtotalInCents,
@@ -698,6 +756,9 @@ export async function prepareCheckout(
              * the buyer was shown can be captured.
              */
             leadTimeMaxDaysSnapshot: pricedLine.leadTimeMaxDays,
+            /** Phase 20, §19.4. The other end of the same declaration, snapshotted here for
+             *  the reason above: this is the only place the range the buyer saw is capturable. */
+            leadTimeMinDaysSnapshot: pricedLine.leadTimeMinDays,
             siblingOrder: pricedLine.siblingOrder,
           })
           .returning();
@@ -819,10 +880,10 @@ export async function prepareCheckout(
          * display-only (A16) — nothing about it gates the prepare, so a slow or empty
          * provider directory must not hold a row lock or fail a checkout.
          */
-        const deliveryEstimates = await estimatePrepareDelivery(
-          outcome.items,
-          outcome.deliveryCountryCode,
-        );
+        const [deliveryEstimates, arrivalWindows] = await Promise.all([
+          estimatePrepareDelivery(outcome.items, outcome.deliveryCountryCode),
+          projectPrepareArrivalWindows(outcome.items, outcome.deliveryCountryCode),
+        ]);
         return {
           success: true,
           value: projectPrepare(
@@ -830,6 +891,7 @@ export async function prepareCheckout(
             outcome.items,
             outcome.currencyTotals,
             deliveryEstimates,
+            arrivalWindows,
           ),
         };
       }
@@ -1268,6 +1330,13 @@ export async function confirmCheckout(
               unitPriceInCents: line.unitPriceInCents,
               lineTotalInCents: line.lineTotalInCents,
               promisedDeliveryAt: linePromisedDeliveryDates[index] ?? null,
+              /**
+               * Phase 20, §19.4. Carried VERBATIM from the prepare line, like every other
+               * snapshot column here. The maximum is not copied alongside it: it is already
+               * recoverable from `promisedDeliveryAt` minus the order's `createdAt`, and that
+               * derivation works on orders placed before this column existed.
+               */
+              leadTimeMinDaysSnapshot: line.leadTimeMinDaysSnapshot,
               siblingOrder: index,
             })
             .returning({ id: commerceOrderProductLine.id });

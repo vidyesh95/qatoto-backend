@@ -38,6 +38,14 @@ const deliveryEstimateStubs = vi.hoisted(() => ({
   groupOfferingsIntoEstimates: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
+const freightJourneyStubs = vi.hoisted(() => ({
+  planFreightJourney: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  measureConsignmentForLines: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  computeConsignmentMeasurement: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  composeJourneys: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  planLegs: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
+
 const pathwayStubs = vi.hoisted(() => ({
   listActivePathways: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getPathwaySetBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
@@ -54,6 +62,7 @@ vi.mock("#src/services/store-search.service.js", () => searchStubs);
 vi.mock("#src/services/store-merchandising.service.js", () => merchandisingStubs);
 vi.mock("#src/services/store-pathways.service.js", () => pathwayStubs);
 vi.mock("#src/services/commerce-delivery-estimate.service.js", () => deliveryEstimateStubs);
+vi.mock("#src/services/commerce-freight-journey.service.js", () => freightJourneyStubs);
 vi.mock("#src/services/commerce-providers.service.js", () => providersStubs);
 
 describe("public store routes", () => {
@@ -482,5 +491,105 @@ describe("public store routes", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.estimates).toEqual([]);
+  });
+
+  /**
+   * Phase 20, §19.5: EXTENDED, not replaced. A client reading only `data.estimates` must see
+   * exactly what it saw before `lanePlan` existed.
+   */
+  it("leaves the A16 estimate untouched when a lane plan is added beside it", async () => {
+    catalogStubs.getPublicProductBySlug.mockResolvedValue({
+      success: true,
+      value: { id: "prd_1", seller: { organizationId: "commerce_org_seller" } },
+    });
+    deliveryEstimateStubs.estimateDeliveryForLines.mockResolvedValue([
+      { currency: "USD", estimatedMinInCents: 25_000, estimatedMaxInCents: 90_000 },
+    ]);
+    deliveryEstimateStubs.resolveShippingOriginCountryCode.mockResolvedValue("IN");
+    freightJourneyStubs.planFreightJourney.mockResolvedValue({
+      origin: { countryCode: "IN", locality: null },
+      destination: { countryCode: "DE", locality: null },
+      consignment: { billableWeightGrams: 24_000, volumeCubicCm: 48_000, packageCount: 2, hasIncompletePackageData: false },
+      legs: [],
+      journeys: [],
+      unpriceableReasons: [{ kind: "leg_uncovered", legSequence: 1, reasons: ["no_active_rate_card"] }],
+    });
+
+    const response = await request(app)
+      .get("/store/products/solar-freezer/delivery-estimate")
+      .query({ destinationCountryCode: "DE", quantity: 50 });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.estimates).toEqual([
+      { currency: "USD", estimatedMinInCents: 25_000, estimatedMaxInCents: 90_000 },
+    ]);
+    expect(response.body.data.lanePlan.journeys).toEqual([]);
+  });
+
+  it("carries no date anywhere in a lane plan — a product page has no clock to start", async () => {
+    catalogStubs.getPublicProductBySlug.mockResolvedValue({
+      success: true,
+      value: { id: "prd_1", seller: { organizationId: "commerce_org_seller" } },
+    });
+    deliveryEstimateStubs.estimateDeliveryForLines.mockResolvedValue([]);
+    deliveryEstimateStubs.resolveShippingOriginCountryCode.mockResolvedValue("IN");
+    freightJourneyStubs.planFreightJourney.mockResolvedValue({
+      origin: { countryCode: "IN", locality: null },
+      destination: { countryCode: "DE", locality: null },
+      consignment: { billableWeightGrams: 24_000, volumeCubicCm: 48_000, packageCount: 2, hasIncompletePackageData: false },
+      legs: [
+        {
+          sequence: 0,
+          kind: "international",
+          originCountryCode: "IN",
+          originLocality: null,
+          destinationCountryCode: "DE",
+          destinationLocality: null,
+          options: [
+            {
+              mode: "sea",
+              priceInCents: 186_000,
+              currency: "USD",
+              transitDaysMin: 24,
+              transitDaysMax: 34,
+              rateCardId: "rc_1",
+              rateBreakId: "rb_1",
+              sourceForwarderName: "Blue Anchor Logistics",
+              validUntil: null,
+            },
+          ],
+          unavailableReasons: [],
+        },
+      ],
+      journeys: [],
+      unpriceableReasons: [],
+    });
+
+    const response = await request(app)
+      .get("/store/products/solar-freezer/delivery-estimate")
+      .query({ destinationCountryCode: "DE" });
+
+    expect(response.status).toBe(200);
+    // Durations only. `validUntil` is a card's expiry, not a delivery date, and it is null here.
+    const serialized = JSON.stringify(response.body.data.lanePlan);
+    expect(serialized).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+    expect(response.body.data.lanePlan.legs[0].options[0].transitDaysMin).toBe(24);
+  });
+
+  it("returns a null lane plan when the seller's origin cannot be resolved", async () => {
+    catalogStubs.getPublicProductBySlug.mockResolvedValue({
+      success: true,
+      value: { id: "prd_1", seller: { organizationId: "commerce_org_seller" } },
+    });
+    deliveryEstimateStubs.estimateDeliveryForLines.mockResolvedValue([]);
+    deliveryEstimateStubs.resolveShippingOriginCountryCode.mockResolvedValue(null);
+    freightJourneyStubs.planFreightJourney.mockResolvedValue(null);
+
+    const response = await request(app)
+      .get("/store/products/solar-freezer/delivery-estimate")
+      .query({ destinationCountryCode: "DE" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.lanePlan).toBeNull();
   });
 });

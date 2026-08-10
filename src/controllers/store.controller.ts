@@ -7,6 +7,7 @@ import {
   StoreReviewListQuerySchema,
 } from "#src/schemas/store-reviews.schemas.js";
 import * as commerceDeliveryEstimateService from "#src/services/commerce-delivery-estimate.service.js";
+import * as commerceFreightJourneyService from "#src/services/commerce-freight-journey.service.js";
 import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
@@ -379,17 +380,44 @@ export async function getProductDeliveryEstimate(req: Request, res: Response): P
     return;
   }
 
-  const estimates = await commerceDeliveryEstimateService.estimateDeliveryForLines({
-    sellerOrganizationId: productResult.value.seller.organizationId,
+  const lines = [{ productId: productResult.value.id, quantity: query.data.quantity }];
+
+  /**
+   * Phase 20, §19.5. `lanePlan` is EXTENDED ALONGSIDE `estimates`, never in place of it —
+   * A16's per-currency whole-journey projection is unchanged, byte for byte, and clients
+   * reading only `data.estimates` see exactly what they saw before.
+   *
+   * The two are independent, so they run together. `estimates` is derived from provider
+   * COVERAGE (who serves this lane); `lanePlan` is derived from purchased RATE CARDS (what a
+   * lane costs by mode). Neither can answer the other's question.
+   */
+  const [estimates, originCountryCode] = await Promise.all([
+    commerceDeliveryEstimateService.estimateDeliveryForLines({
+      sellerOrganizationId: productResult.value.seller.organizationId,
+      destinationCountryCode: query.data.destinationCountryCode,
+      lines,
+    }),
+    commerceDeliveryEstimateService.resolveShippingOriginCountryCode(
+      productResult.value.seller.organizationId,
+    ),
+  ]);
+
+  const lanePlan = await commerceFreightJourneyService.planFreightJourney({
+    originCountryCode,
+    originLocality: null,
     destinationCountryCode: query.data.destinationCountryCode,
-    lines: [{ productId: productResult.value.id, quantity: query.data.quantity }],
+    destinationLocality: null,
+    lines,
+    asOf: new Date(),
   });
 
   res.status(200).json({
     status: "success",
     statusCode: 200,
     message: "Indicative delivery estimate.",
-    data: { estimates },
+    // NO DATES IN `lanePlan` — durations only. A product page has no order, so there is no
+    // clock to start (§19.4: "no arrival window before an order exists").
+    data: { estimates, lanePlan },
   } satisfies ApiResponse);
 }
 
