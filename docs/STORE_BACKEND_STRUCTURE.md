@@ -28,7 +28,7 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–15 shipped and hardened.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–16 shipped and hardened.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
@@ -69,6 +69,13 @@
 > publishes, category ancestors, per-tier lead time, a participant dispute read, the cross-order
 > logistics queue, and buyer-authored trade attachments with the authorized download that makes
 > them openable. See `docs/STORE_PHASE_15_ROLLOUT.md`.
+> **Phase 16 gave the browse taxonomy an author (`0098`):** `commerce_category` had shipped in
+> Phase 0 with public reads and a seed script and no way for anybody to change it, so the
+> hierarchy every buyer browses was editable only by hand in psql. Phase 16 adds the staff CRUD
+> surface — create with an image, rename, re-parent, reorder a whole sibling set at once, retire
+> reversibly — plus `commerce_category_request`, the queue through which a seller asks for a
+> category that does not exist yet and a moderator either mints it or says why not. See §4.3 and
+> §6.5. It is the first store phase whose frontend shipped **wired rather than mocked**.
 > Trade-assurance language and real payment processors remain blocked on §14. **A10 (public
 > product comments) stays deliberately unbuilt** pending the product decision the appendix asks
 > for. **Product organization-ownership and category columns are now NOT NULL** —
@@ -94,9 +101,24 @@
 > and can never carry a real value** — `onTimeShipmentRate` was the last one, and Phase 12 supplied
 > the promised-delivery timestamp it needed (A13). It is `null` only below its sample threshold, and
 > `onTimeSampleSize` rides alongside so "not enough data" is distinguishable from "not wired".
-> **After Phase 15 the register's only unbuilt entries are the deliberate ones**: A10 closed pending
+> **After Phase 15 the register's only unbuilt entries were the deliberate ones**: A10 closed pending
 > a product decision, A20 blocked on §14, and A26 deferred until a category actually sells on two
 > dimensions.
+>
+> **Three new surfaces then arrived from the frontend side, and they are the register's only
+> buildable gaps today** — A32, A33 and A34, specified in full as §16, §17 and §18. The store
+> frontend shipped a manufacturer directory (`/store/factories`), a business forum (`/store/forum`)
+> and cofounder matching (`/store/find-cofounder`), each with a complete Zod wire contract in
+> `src/lib/store/*.schemas.ts` and a mock-backed `*.api.ts` beside it. None of the three has a table,
+> route or service here. **Read them in that order of surprise:** the manufacturer directory is
+> mostly a projection of things Phase 12 already built, while the forum and cofounder profiles are
+> genuinely new and are not commerce at all (§1.1).
+>
+> **A31 and A35 are the other direction, and both matter more than they look.** A31 records a
+> feature this document did not describe because it shipped after the last documentation pass, not
+> because it is missing. A35 records **eighteen routes the backend serves that §5 and §6 never
+> listed**, plus two places where a shipped response and the frontend's parser disagree. A document
+> that undercounts what exists sends somebody to build it twice.
 >
 > **A23–A30 were added by auditing this document from the frontend side after Phase 14, and three
 > of them described defects in shipped features rather than missing ones.** A23 was a commercial
@@ -164,6 +186,19 @@ If a rule must remain true after DevTools changes or request replay, it belongs 
 | Fulfillment         | Product shipments and connector engagements                                      |
 | Trust               | Trade-assurance cases, disputes, reviews, Q&A, reports, moderation               |
 | Communication       | Resource-scoped threads, participants, messages, attachment metadata             |
+| Taxonomy            | The browse category tree, its ordering and imagery, and the seller request queue |
+
+**Community is a sibling context, not a row in that table.** The business forum (§17) and cofounder
+profiles (§18) are public text written by people, attached to a commerce platform's domain and
+sharing none of commerce's nouns — no organization is required to post, nothing is priced, nothing is
+ordered. They own `community_*` tables and mount their writes at `/community/*`.
+
+**Their public reads still live under `/store/*`, and that is a mount point rather than a context
+claim.** The precedent is already in the code: `commerceProductEngagementRouter` mounts at `/store`
+(`src/app.ts:228`) while owning no store table. `/store` is the prefix a signed-out visitor browses;
+`/commerce` and `/community` are where the two write surfaces live. Do not read
+`GET /store/forum/threads` as evidence that a forum thread is a commerce object — the section it is
+specified in is the authority, not the path.
 
 ### 1.2 What this domain does not own
 
@@ -175,6 +210,11 @@ If a rule must remain true after DevTools changes or request replay, it belongs 
   separate commerce ledger tables, even if it reuses accounting code and provider adapters.
 - Product research, proof of effort, equity, and programme contribution do not affect store price,
   provider verification, or order entitlement.
+- Forum threads and cofounder profiles are **community**, not commerce (§1.1). A forum reply confers
+  no standing in a dispute, a cofounder profile is not an organization, and neither may be joined to
+  a commerce row to imply either. The one hard rule underneath: **nothing on the community surface
+  may be read as a commercial fact about a party**, because no order, payment or verification stands
+  behind any of it.
 
 ### 1.3 One organization may participate in several roles
 
@@ -354,6 +394,65 @@ Migration:
 
 Product enum values remain snake_case. Public category slugs remain kebab-case. These are separate
 wire concepts and must not be converted into each other implicitly.
+
+#### 4.3a Who edits the tree — **SHIPPED (Phase 16, `0098`)**
+
+The block above shipped in Phase 0 with public reads and a seed script and **no way for anybody to
+change it**. The hierarchy every buyer browses was editable only by hand in psql, and a seller whose
+product fitted no existing category had nowhere to say so. Phase 16 closes both.
+
+`commerce_category_request`
+
+- `id`, `requestedByUserId`, `requestedOrganizationId` — both `ON DELETE SET NULL`, because a
+  deleted account must not pin a decided request and the verdict stays a fact about the taxonomy
+  after its author is gone
+- `proposedName` — what the seller typed, **not a slug**
+- `proposedParentCategoryId` — where the seller thinks it belongs; `null` means "a new root"
+- `justification`
+- `state`: `pending | approved | rejected`
+- `reviewedByUserId`, `reviewedAt`, `reviewNote`, `resultingCategoryId`, timestamps
+- queue index `(state, createdAt, id)` — the same shape as `store_pathway_moderation_queue_idx`
+- `CHECK (reviewed_at IS NULL) = (state = 'pending')`, a `resultingCategoryId` only on the approve
+  arm, and `review_note NOT NULL` on the reject arm
+
+**Why it is its own table and not a `pending` state on `commerce_category`.** A request is a
+different thing from a category: it has an author, a justification and a verdict, and it has no place
+in the tree — no `siblingOrder`, no children, no products. Proposals living in `commerce_category`
+would mean either excluding a state from every browse query forever, where one forgotten `WHERE` puts
+unapproved user text on the storefront, or minting a fake `siblingOrder` to satisfy an index that
+exists to order things users can actually see.
+
+**A pending request does not block the listing.** The seller publishes immediately, the product parks
+in `misc`, and `product.pendingCategoryRequestId` points back at the request. That column is the
+**only** link, and it is what makes approval surgical: the verdict rehomes the products belonging to
+_this_ request and leaves genuine `misc` listings alone. Repointing by `WHERE category_id = misc`
+would sweep up unrelated sellers' products, so no code path may do it.
+
+Five rules the shipped surface enforces, each of which a future edit will be tempted to relax:
+
+- **`childCount` and `productCount` are DERIVED and appear in no request body.** They are what the
+  retire guard reads. A client able to set them could talk that guard into hiding a category that
+  still has listings under it.
+- **There is no DELETE, deliberately.** `product.categoryId` is `ON DELETE RESTRICT` and the demand
+  snapshots cascade, so removal would either fail or take history with it. `retire` is reversible
+  removal from browse and is the only exit.
+- **`slug` is absent from the PATCH body**, and the body is `.strict()` so sending it is a 422. A
+  slug is a public URL identity — linked and indexed the moment the category is published — and a
+  category that needs a different one is a new category.
+- **The moderator chooses the slug, not the requester.** It exists only on the approve arm of the
+  verdict, which is a discriminated union: a rejection _requires_ a note, an approval does not.
+- **Route order is load-bearing.** Express matches in declaration order, so the literal
+  `/admin/categories/reorder` must precede `/admin/categories/:categoryId` or every reorder 404s with
+  `"reorder"` captured as a category id.
+
+The `moderate_commerce` check runs **inside the service, not as route middleware** — so it returns a
+`Result` that takes part in the controller's exhaustive error switch, and so it can be proven to run
+before any id is read. This is the §11 rule about id oracles, applied.
+
+Eleven `platform_audit_event_kind` members ship with it: `commerce_category_created`,
+`commerce_category_updated`, `commerce_category_reordered`, `commerce_category_image_replaced`,
+`commerce_category_retired`, `commerce_category_request_approved`,
+`commerce_category_request_rejected`, alongside the four `commerce_content_*` members Phase 10 added.
 
 ### 4.4 Public product extensions
 
@@ -601,6 +700,16 @@ and buyer-safe projections.
 | GET    | `/store/products/:productSlug/reviews`           | Reviews with summary, histogram and sub-scores — A8                   |
 | GET    | `/store/organizations/:organizationSlug/reviews` | Reviews of a seller or provider, incl. product-less ones — A8         |
 | GET    | `/store/products/:productSlug/questions`         | Public Q&A with a seller-first answer preview — A9                    |
+| GET    | `/store/factories`                               | Manufacturer directory — §16, **NOT BUILT**                           |
+| GET    | `/store/factories/:factorySlug`                  | One factory: lines, certifications, sites — §16, **NOT BUILT**        |
+| GET    | `/store/forum/threads`                           | Board-filtered thread list — §17, **NOT BUILT**                       |
+| GET    | `/store/forum/threads/:threadSlug`               | One thread and a cursor page of replies — §17, **NOT BUILT**          |
+| GET    | `/store/cofounder-profiles`                      | Cofounder directory, `published` only — §18, **NOT BUILT**            |
+| GET    | `/store/cofounder-profiles/:profileSlug`         | One cofounder profile — §18, **NOT BUILT**                            |
+
+**The six rows marked NOT BUILT are specified, not served.** They are listed here rather than only in
+§16–§18 so that this table stays the one place to read the public surface, and marked in the row
+itself so nobody wires against them by scanning the table. Every other row in it resolves today.
 
 `/store/search` also accepts `documentKind=organization` — the supplier directory — and the facet
 filters `priceMinInCents`, `priceMaxInCents`, `stockState`, `samplePolicy`, `condition`,
@@ -730,6 +839,47 @@ started, not that payment, booking, testing, or settlement succeeded.
 | GET    | `/commerce/provider/shipments`                            | Cross-order logistics queue — A29                        |
 | POST   | `/commerce/documents`                                     | Upload a trade attachment; 202, `pending_scan` — A30     |
 | GET    | `/commerce/documents/:documentId`                         | Decrypt and stream an authorized attachment — A30        |
+
+### 6.5 Category taxonomy administration — **SHIPPED (Phase 16, `0098`)**
+
+| Method | Route                                                 | Result                                           |
+| ------ | ----------------------------------------------------- | ------------------------------------------------ |
+| POST   | `/commerce/category-requests`                         | A seller asks for a category that does not exist |
+| GET    | `/commerce/category-requests/mine`                    | The seller's own requests and their verdicts     |
+| GET    | `/commerce/admin/categories`                          | The whole tree, draft and retired included       |
+| POST   | `/commerce/admin/categories`                          | Create; multipart, optional `image` field        |
+| PATCH  | `/commerce/admin/categories/reorder`                  | Sets one parent's WHOLE sibling order at once    |
+| PATCH  | `/commerce/admin/categories/:categoryId`              | Name, parent, synonyms, state — never `slug`     |
+| PATCH  | `/commerce/admin/categories/:categoryId/image`        | Replace the image in place; multipart            |
+| POST   | `/commerce/admin/categories/:categoryId/retire`       | Out of browse, reversibly. There is no DELETE    |
+| GET    | `/commerce/admin/category-requests`                   | The moderation queue, `?state=` filtered         |
+| POST   | `/commerce/admin/category-requests/:requestId/decide` | The terminal verdict                             |
+
+The eight `/admin/*` routes are gated by the `moderate_commerce` platform capability, checked
+in-service (§4.3a). The two seller routes are the only non-staff writes here and they touch a
+different table: a request mints nothing, and only a moderator's verdict creates a category. The
+`POST` additionally carries `requireIdentifiedUser`, because `src/lib/auth.ts` registers the
+`anonymous()` plugin and a session therefore proves nothing about identity on its own — **a request
+nobody can be traced to is a request nobody can act on**. The `/mine` read does not need it: a caller
+who cannot be identified has no requests to return.
+
+**Reorder takes the whole set, not one move.** The body is `{ parentCategoryId, categoryIds[] }` and
+must be an exact permutation of that parent's children. A per-row "move up" would have to write
+intermediate orders that violate `commerce_category_siblingOrder_uidx` mid-transaction; taking the
+final arrangement in one call means the unique index never sees an illegal state.
+
+**The verdict body is a discriminated union, mirroring the decision rather than flattening it:**
+
+- `{ decision: "approve", slug, name?, parentCategoryId?, note?, productAssignments? }`
+- `{ decision: "reject", note, productAssignments? }`
+
+`note` is required on the reject arm and optional on the approve arm, and `slug` exists only on
+approve. **Both arms accept `productAssignments[]`** — `{ productId, categoryId }` pairs that override
+the verdict's default target — because a rejection still has to put the waiting listings somewhere,
+and a moderator reading the request often finds one of them belongs in a category that already
+exists. That is also why the queue projects `waitingProducts` as **named titles rather than a
+count**: a number tells a moderator how much work there is, a title tells them the request was
+unnecessary.
 
 ---
 
@@ -1071,6 +1221,62 @@ Scheduled jobs:
   rollup. And **the smoke script's first run 403'd everywhere** because it never
   activated an organization, which the Phase 14 smoke already documents.
 
+### Phase 16 — store taxonomy administration
+
+- **The browse tree finally got an author.** `commerce_category` shipped in Phase 0 with public
+  reads, a unique sibling-order index and a seed script, and no write surface of any kind — so
+  the hierarchy every buyer navigates was editable only by hand in psql, and a seller whose
+  product fitted no existing category had nowhere to say so. §6.5's ten routes and
+  `commerce_category_request` close both halves.
+- Create with an image, rename, re-parent, reorder a whole sibling set in one call, retire
+  reversibly; plus the seller request queue and its terminal verdict. See §4.3a.
+- **Shipped (`0098`).** Two things the specification did not anticipate, both of which changed
+  the shape rather than the scope. **The `moderate_commerce` check moved into the service**, so a
+  refusal returns a `Result` that joins the controller's exhaustive error switch and can be
+  proven to run before any id is read — a middleware cannot do either, and a route that reads an
+  id before authorizing is an id oracle (§11). And **`productAssignments[]` had to appear on both
+  arms of the verdict, not just the approve arm**: a rejection still has to put the waiting
+  listings somewhere, and a moderator reading the request frequently finds one of them belongs in
+  a category that already exists. That is also what turned `waitingProducts` from a count into a
+  list of titles.
+- **The first store phase whose frontend shipped wired rather than mocked** — all ten calls in
+  `src/lib/store/admin-categories.api.ts` use the real transport. Appendix A31 records it as
+  shipped for exactly that reason.
+
+### Phase 17 — manufacturer directory
+
+- `/store/factories` and its detail read, as a **projection over Phase 12's seller profile** and
+  A25's organization search document rather than a parallel table set (§16).
+- The three conflicts resolved first, because each is a migration or a deletion and none of them
+  is a rendering decision: the capability enum widened additively, a nullable `standardCode`
+  beside the free-text certification name, and `site_audited` either dropped from the wire or
+  given the audit record it currently asserts without.
+- Genuinely new: named production lines, per-site rows, org-level sample policy and order
+  bounds, and a decision about whether `exportMarkets` is declared or derived.
+- The factory inquiry and its `sent` transition, plus the `/mine` read without which a create is
+  a write into a hole (§16.5).
+
+### Phase 18 — business forum
+
+- `community_forum_thread`, its replies and their helpful votes, modelled on
+  `research_program_post` (§17.2).
+- **The reply, accept-answer and helpful writes ship with the thread create, not after it.** The
+  frontend already renders all three; a forum with only thread-create is a wall of unanswerable
+  questions (§17.3).
+- `pending_review` on create, the moderation queue behind it, and `community_content_report` on
+  the existing `moderate_content` capability — which is what keeps A10 closed while a public text
+  surface exists at all (§17.1, §17.4).
+
+### Phase 19 — cofounder directory
+
+- **Blocked on the §14 decision**, not merely unscheduled: publishing self-declared capital
+  ranges beside equity expectations is a legal question before it is a product one.
+- If it clears: `community_cofounder_profile`, prior ventures, and the full lifecycle — `/mine`,
+  submit, withdraw and the engagement-state route — because as the frontend contract stands a
+  user creates a `draft` that nobody, including themselves, can ever read (§18.3).
+- The four rules in §18.1 are enforced server-side. A rule that lives only on the frontend is a
+  comment on code an attacker can edit.
+
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
 ---
@@ -1102,6 +1308,19 @@ conditions and contract.
 The following require legal, provider, or product decisions before implementation:
 
 - countries and industries Qatoto may serve;
+- **whether Qatoto may publish self-declared capital ranges and equity expectations, and in which
+  jurisdictions.** §18's directory lists people looking for a cofounder, and the frontend's proposed
+  card carries both a stated capital range and an `equityExpectationBasisPoints`. A platform that
+  publishes "this person has $2–5M and wants 15%" beside a contact affordance is close to
+  facilitating a securities solicitation, and "close to" is decided by a lawyer per market, not by a
+  schema. §18.1's four rules are the shape the surface takes **if** it ships — self-reported and
+  labelled as such, no ranking that reads as a recommendation, an ask rather than an allocation, and
+  an identity check that is explicitly not a claims check. Whether it may ship at all is separate.
+  **Until decided, the backend stores no capital figure it would then have to publish.** Note this is
+  a stricter posture than the revenue-disclosure decision below, and deliberately: a seller consenting
+  to publish its own trading volume is disclosing a fact about a business, while a person publishing
+  what they will invest is advertising an intent to deploy capital;
+
 - ~~merchant-of-record and custody model;~~ **DECIDED: Qatoto is not a custodian.** It never
   holds funds. Buyer and seller either settle directly and carry the counterparty risk, or
   they agree between themselves on a licensed third-party escrow provider reached through a
@@ -1390,6 +1609,462 @@ This job was the raw material for a `trending` rail strategy, and **Phase 13 bui
 `trending` and `recommended` strategies now read `commerce_product_ranking_state`.
 `trending_placeholder` survives, still returning an empty list, and is deliberately never
 removed: while it exists, backing Phase 13 out is a per-rail data edit rather than a deploy.
+
+---
+
+## 16. Manufacturer directory — the factory browse surface
+
+> **Status: NOT BUILT (Appendix A32).** The frontend ships `/store/factories`,
+> `/store/factories/:factorySlug` and a factory inquiry composer against
+> `src/lib/store/factories.schemas.ts`, all three mock-backed. Nothing here exists yet.
+
+### 16.1 A factory is a projection, not a new entity
+
+The temptation this section exists to defeat is building `commerce_factory_*` to match the
+frontend's proposed schema field for field. Do not. **A manufacturer is a `commerce_organization`
+that sells physical goods and has declared how it makes them**, and Phase 12 already built most of
+what the directory renders. A parallel table set would give one organization two capability lists
+that can disagree, and the disagreement is the bug — not the duplication.
+
+The second temptation, already forbidden in `catalog.schemas.ts`, is synthesising the directory by
+searching products and grouping by seller. That ranks a manufacturer by whichever of its listings
+happened to match a keyword, which is not a claim about the manufacturer at all.
+
+What the frontend renders, and what already answers it:
+
+| Frontend field                               | Already exists                                                                                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| directory browse, filtering, cursor          | `store_search_document` with `documentKind = 'organization'` (A25)                                                                                                  |
+| `displayName`, `countryCode`, `logoUrl`      | `commerce_organization`                                                                                                                                             |
+| `publicSummary`                              | `commerce_seller_profile.publicSummary`                                                                                                                             |
+| `capabilityKinds[]`                          | `commerce_organization_capability` — see the conflict in §16.2                                                                                                      |
+| `certifications[]`, `certificationRecords[]` | `commerce_organization_certification` — standard, issuer, number, validity, state                                                                                   |
+| `fulfillmentMetrics`                         | identical shape to `PublicProviderCard.fulfillmentMetrics`, already computed                                                                                        |
+| factory scale                                | `commerce_seller_profile.factoryCount`, `productionLineCount`, `factoryAreaSquareMetres`, `totalStaffCount`, `businessType`, `visitPolicy`, `acceptingCustomOrders` |
+| factory photography                          | `commerce_organization_media`, whose kinds are already `factory`, `production_line`, `warehouse`, `office`, `showcase`                                              |
+| eligibility for the directory at all         | `refreshOrganizationSearchDocument`'s rule: `tradeState = 'active' AND visibility = 'public'`                                                                       |
+
+`commerce_seller_profile` was built for a storefront page and reads as a factory profile because that
+is what a Phase 12 seller is. `visitPolicy`'s own comment in the schema says "whether a buyer may
+visit the **factory**". The directory is the browse surface that profile never got.
+
+### 16.2 Three conflicts between the shipped model and the proposed contract
+
+Each of these is a place where building the frontend's contract literally would be wrong, and where
+building the backend's model literally would not serve the page.
+
+**1. The capability vocabularies overlap by two values out of six.**
+
+- Shipped `commerce_organization_capability_kind`: `oem`, `odm`, `customization`,
+  `in_house_inspection`, `in_house_rnd`, `sample_production`.
+- Proposed `FACTORY_CAPABILITY_KINDS`: `odm`, `oem`, `contract_manufacturing`, `private_label`,
+  `tooling_and_moulds`, `assembly`.
+
+Resolve by **`ALTER TYPE … ADD VALUE`** on the shipped enum — additive, no data migration, no rewrite
+of the rows Phase 12 already collected — and widen the frontend tuple to the union. `oem` and `odm`
+are already the two the tile advertises and they stay the two that matter: an ODM designs the product
+and sells you the design, an OEM builds to a design you already own, and a buyer arriving with
+drawings needs a different row from a buyer arriving with an idea.
+
+`customization` and `private_label` are **not merged**, and the distinction is not pedantry:
+customization is "we will change this product for you", private label is "we will put your name on
+ours". A factory frequently does one and refuses the other.
+
+**2. The certification vocabulary is closed on one side and open on the other.**
+
+The frontend wants a closed 8-value set so the filter chips are buildable and two spellings of one
+standard cannot sit side by side. `commerce_organization_certification.standardName` is free text,
+deliberately — "the vocabulary is the world's", and a factory holds standards no enum will ever
+enumerate.
+
+Both are right. Resolve by adding a **nullable `standardCode`** column over a new seeded enum
+(`iso_9001`, `iso_14001`, `bsci`, `sedex_smeta`, `gots`, `fsc`, `ce_marking`, `fda_registered`),
+keeping `standardName` as the display string. The filter reads `standardCode`; anything outside the
+set carries `standardCode IS NULL` and **still renders on the detail page**. This is exactly the split
+the frontend's own header already asks for when it says anything outside the set "rides in
+`issuingBody` as free text, where it is read rather than matched".
+
+The read-time expiry rule carries over unchanged and is load-bearing: there is no `expired` state,
+because lapsing is `valid_until < current_date` evaluated at read time. A nightly job to flip a state
+would be wrong between ticks and would publish a lapsed certificate until the next run.
+
+**3. `verificationState` and `lastAuditedAt` have nothing behind them at all.**
+
+`FACTORY_VERIFICATION_STATES` is `unverified | documents_reviewed | site_audited`, and
+`FactoryDetail.lastAuditedAt` is "the ISO date of the most recent site audit". **No site-audit record
+exists anywhere in this schema.** `commerce_organization_verification` covers business registration,
+tax registration, identity, address and bank account — paperwork, all of it. `site_audited` asserts
+that somebody stood in the building.
+
+Two ways forward, and only these two:
+
+- Drop `site_audited` and `lastAuditedAt` from the wire until a record exists. The directory ships
+  with two states and is honest.
+- Add `commerce_organization_site_audit` — auditor identity, audit date, scope summary, the sites
+  covered — and derive the third state from an approved row.
+
+**Never derive `site_audited` from a document review.** That is the precise collapse the frontend's
+own rule forbids, and it is the same mistake `FACTORY_VERIFICATION_LABELS` is written to prevent when
+it says "documents"/"site" in every string. A verification state is about the **organization**, never
+about a capability: `site_audited` does not mean this factory is approved to do injection moulding,
+and there is no per-capability approval on the wire at all. Never render a bare tick.
+
+### 16.3 What is genuinely new
+
+Four additions, and they are small because §16.1 did most of the work.
+
+`commerce_organization_production_line`
+
+- `id`, `organizationId`, `name`, `processSummary`, `position`
+- `monthlyCapacityUnits` (nullable), `unitLabel` (required beside it), timestamps
+- unique `(organizationId, position)`
+
+Today `commerce_seller_profile.productionLineCount` is a bare integer. **The unit is required beside
+the capacity** for the same reason the MOQ pair is both-or-neither: a capacity with no unit cannot be
+compared against an order.
+
+`commerce_organization_site`
+
+- `id`, `organizationId`, `label`, `countryCode`, `locality` (nullable)
+- `floorAreaSquareMetres` (nullable), `productionStaffCount` (nullable), timestamps
+
+Distinct from `commerce_organization_site_access`, which carries only transport modes
+(`road | sea | air | rail`) and is about reaching a site rather than describing one. State the
+relationship to the org-wide `commerce_seller_profile.factoryAreaSquareMetres` explicitly in the
+projection: the org-wide figure is seller-declared and the per-site figures are seller-declared, and
+if they disagree **the read publishes both rather than summing or reconciling them**. A platform that
+silently prefers one is asserting something neither party said.
+
+Org-level sample policy and order bounds, as columns on `commerce_seller_profile`:
+
+- `offersSamples`, `sampleLeadTimeDays`, `sampleFeeInCents`, `currency`
+- `minimumOrderQuantity`, `minimumOrderQuantityUnitLabel`
+- `minimumLeadTimeDays`, `maximumLeadTimeDays`
+
+**`sampleFeeInCents = null` means unstated and `0` means free.** Two different facts, and the one
+thing this surface must not do is render an unstated fee as free — a buyer who orders a sample on that
+basis finds out at invoice time. The MOQ pair is both-or-neither: a bare `500` is unreadable, because
+500 pieces and 500 cartons are different businesses.
+
+`exportMarkets[]` — **and this one needs a decision before a column.** "ISO country codes this factory
+has actually shipped to" is a _derived_ claim, computable from settled order delivery addresses. If it
+is instead seller-declared it must be labelled declared, per A13's rule that a derived stat and a
+declared stat are visibly different on the wire — which is why the storefront carries `declaredProfile`
+and `measuredMetrics` and nothing else. Pick one and put it in the matching member. An empty array is
+a fact, not a gap.
+
+### 16.4 Public API
+
+| Method | Route                           | Purpose                                                         |
+| ------ | ------------------------------- | --------------------------------------------------------------- |
+| GET    | `/store/factories`              | Filterable manufacturer directory                               |
+| GET    | `/store/factories/:factorySlug` | One factory: lines, certifications, sites, sample policy, audit |
+
+Query keys, camelCase over a `.strict()` schema: `capabilityKind`, `countryCode`, `certification`,
+`maxMinimumOrderQuantity`, `limit`, `cursor`. `maxMinimumOrderQuantity` is an upper bound on the
+factory's own MOQ — "show me factories that will take an order this small" — and admits NULL, because
+"no MOQ declared" satisfies it, which is the A25 rule about NULL facets applied here.
+
+**Every key above ships with the endpoint or comes out of the frontend first.** A `.strict()` query
+schema answers **422** for an unrecognized key rather than ignoring it, and `providers.schemas.ts`
+documents at length what that costs: seven filters were specified there and one was built, and the
+directory row still cannot say what the provider does. Repeating that in a contract written from
+scratch would be choosing it — which is why `capabilityKinds[]` is projected on the **card**, not only
+the detail.
+
+`certifications[]` on the card carries names only; validity windows live on the detail read, because a
+card that shows a certification cannot tell you whether it has lapsed and must not imply that it
+has not.
+
+### 16.5 The inquiry, and the one decision it still needs
+
+`CreateFactoryInquiryInput` — `capabilityKind`, `productDescription`, `estimatedAnnualQuantity`,
+`unitLabel`, `targetUnitPriceInCents`, `currency`, `requiredCertifications[]`,
+`desiredFirstDeliveryAt`, `notes` — is **field for field a single-recipient RFQ**.
+
+`commerce_product_inquiry` cannot carry it. That table requires a `productId` and is uniquely indexed
+on `(productId, buyerOrganizationId)`; a manufacturing inquiry has no product, which is the whole
+point of sending it. Two options:
+
+- **Reuse `commerce_rfq`** with `visibility = 'invited_only'` and exactly one
+  `commerce_rfq_invitation`. Free: the quote revision flow, the thread, trade attachments, expiry and
+  the whole state machine. Costs: a manufacturing shape on a table built for service sourcing, and an
+  RFQ list that now contains rows a buyer did not think of as RFQs.
+- **A thin `commerce_manufacturing_inquiry`** with its own `draft | sent | answered | closed`, a
+  human-quotable `reference`, and a `convertedToRfqId` the way `commerce_product_inquiry` already has
+  one.
+
+The second is recommended, for the reason A14 gives for keeping a pre-sales inquiry out of the RFQ
+thread: an RFQ thread has every invited provider in it, so folding a one-to-one conversation into that
+shape exposes one seller's chat to its competitors. A manufacturing inquiry is one-to-one by
+definition.
+
+Whichever ships, three rules hold:
+
+- **`POST` answers `draft`, always.** Creating a draft notifies nobody, exactly as an RFQ does, so no
+  success copy may say "sent". The response is the table's own columns, not a projection — the success
+  screen has no factory object to read and must not pretend otherwise.
+- **A `sent` transition route and a `/commerce/factories/inquiries/mine` read are both required**, and
+  neither is specified today. `src/hooks/store/factories.ts` records the missing `/mine` as the reason
+  its mutation invalidates nothing. A create with no transition and no list is a write into a hole.
+- **`capabilityKind` is required**, because it is the one field that decides whether the inquiry is
+  answerable at all. A buyer who needs tooling and writes to an assembly-only shop should find that out
+  from the form, not from silence three weeks later.
+
+`Idempotency-Key` is required on the create. A retry without one is a second inquiry in the factory's
+queue.
+
+---
+
+## 17. Business forum — the public text surface
+
+> **Status: NOT BUILT (Appendix A33).** `grep -ril 'forum' src/routes/` in the backend returns
+> nothing. The frontend ships `/store/forum`, a thread page and a composer against
+> `src/lib/store/forum.schemas.ts`, all mock-backed.
+
+### 17.1 Why a new thread is `pending_review` and not `open`
+
+A10 closed public product comments, and the reasoning was never about listings. It was that a comment
+would be **"the only public text surface with no purchase proof and no standing requirement behind
+it"**. Reviews require a completed order, Q&A requires a seller relationship or a verified purchase,
+private inquiries require an authenticated buyer organization. A free-floating text box requires
+nothing.
+
+A standalone forum is a different surface from a listing comment, and it inherits that problem
+exactly: public text, written by anyone, attached to a commerce platform's domain.
+
+**Moderation is what lets the forum exist without reopening A10.** It is the same shape the platform
+already runs for research papers and for service offerings — `draft` → `pending_review` → a
+moderator decides. So `POST` answers `pending_review`, the public reads filter that state out the way
+the provider directory never returns a `draft` offering, and the composer says "queued for review" and
+means it.
+
+**Do not "fix" this into an immediate publish** because a forum usually publishes immediately. This
+one has a documented reason not to, and the reason is the decision A10 already made.
+
+### 17.2 Tables
+
+Model these on `research_program_post` and its reaction/report/moderation siblings — the closest
+already-built precedent in this codebase, a threaded board with a moderation queue in front of it.
+Copying a shipped shape is worth more here than a clean-sheet design.
+
+`community_forum_thread`
+
+- `id`, immutable `slug`, `board`, `title`, `body`
+- `authorUserId`, `authorOrganizationId` (nullable)
+- `state`: `pending_review | open | answered | locked`
+- `acceptedReplyId` (nullable), `replyCount`, `lastActivityAt`, timestamps
+- `board`: `sourcing | logistics_and_customs | compliance_and_certification |
+payments_and_trade_finance | manufacturing | selling_on_qatoto`
+- queue index `(state, createdAt, id)`; browse index `(board, state, lastActivityAt, id)`
+
+**Six boards, matching the work rather than the org chart**, each mapping to a thing a business gets
+stuck on and to a surface this platform already has — sourcing to the catalogue, logistics and customs
+to `/store/providers`, compliance to factory certifications, payments to quotes and orders. **A
+"General" board is deliberately absent**: it is where every thread ends up when nobody can decide, and
+a board nobody can characterise is a board nobody subscribes to.
+
+`community_forum_reply`
+
+- `id`, `threadId`, `authorUserId`, `authorOrganizationId` (nullable), `body`
+- `helpfulCount`, visibility state, timestamps
+
+`community_forum_reply_vote`
+
+- `replyId`, `userId`, `createdAt`; primary key `(replyId, userId)`
+
+Four rules the projection must hold:
+
+- **`authorOrganizationName` is nullable and that is a real distinction, not a missing join.** Somebody
+  posting as an individual has no organization behind them, and a reader weighing an answer about
+  customs clearance wants to know whether it came from a broker or from a stranger. Rendering a
+  placeholder organization erases exactly the signal the field exists to carry.
+- **`answered` is derived from `acceptedReplyId`** and carried separately so a list row does not have
+  to fetch replies to know. `acceptedReplyId = null` is **not** "nobody helped" — plenty of useful
+  threads never get an accepted answer. It means only that nobody pressed the button.
+- **`helpfulCount` is a count, not a score.** There is no downvote on the wire and there must never be
+  one: a negative signal against a named organization on a commerce platform is a reputational act,
+  and this surface has no appeal process to put behind it.
+- **`excerpt` is server-truncated.** The card carries first lines; only the detail read carries the
+  whole opening post.
+
+The vote shape copies `commerce_product_answer_vote` exactly, **including that `PUT` and `DELETE` of a
+boolean take no `Idempotency-Key`** — they are idempotent by verb (A24). Per-viewer vote state is
+projected as a `viewer` member that is `null` for an anonymous reader and never a defaulted `false`,
+which is the A11/A24 rule.
+
+### 17.3 The writes the frontend renders and cannot produce
+
+**This is the most important subsection here.** `ForumThreadDetail` renders a cursor page of replies,
+a `helpfulCount` on each and an `acceptedReplyId` on the thread. There is **no endpoint for any of
+them** — the frontend contract has exactly one write, thread creation. A forum that ships with only
+thread-create is a wall of unanswerable questions.
+
+Public reads (added to §5):
+
+| Method | Route                              | Purpose                                                    |
+| ------ | ---------------------------------- | ---------------------------------------------------------- |
+| GET    | `/store/forum/threads`             | Board-filtered thread list; never returns `pending_review` |
+| GET    | `/store/forum/threads/:threadSlug` | One thread, its body, and a cursor page of replies         |
+
+Authenticated writes, mounted at `/community` (§1.1):
+
+| Method | Route                                               | Result                                              |
+| ------ | --------------------------------------------------- | --------------------------------------------------- |
+| POST   | `/community/forum/threads`                          | Create; answers `pending_review`. Idempotency-Key   |
+| POST   | `/community/forum/threads/:threadId/replies`        | Append a reply. Idempotency-Key                     |
+| POST   | `/community/forum/threads/:threadId/accepted-reply` | The thread author marks the answer                  |
+| DELETE | `/community/forum/threads/:threadId/accepted-reply` | Unmark it                                           |
+| PUT    | `/community/forum/replies/:replyId/helpful`         | Endorse                                             |
+| DELETE | `/community/forum/replies/:replyId/helpful`         | Withdraw the endorsement                            |
+| GET    | `/community/forum/threads/mine`                     | The author's own threads, `pending_review` included |
+| GET    | `/community/admin/forum/threads`                    | Moderation queue                                    |
+| POST   | `/community/admin/forum/threads/:threadId/moderate` | Publish, reject, or lock                            |
+
+`/mine` is not optional. Without it, an author who posts a thread has no way to learn what happened to
+it — the create response is the last thing they ever see, and `pending_review` appears in no public
+read by design.
+
+Replies require a thread in `open` or `answered`; a `locked` thread refuses with a tagged error rather
+than a silent no-op. Only the thread author may accept an answer, and accepting one on a `locked`
+thread is allowed — locking stops new text, not bookkeeping.
+
+### 17.4 Reporting and moderation
+
+Use a new `community_content_report` rather than adding `forum_thread` and `forum_reply` members to
+`commerce_content_target_kind`. The precedent is Phase 10, which built `commerce_content_report`
+instead of generalizing the R&D `content_review_action` table, because the two queues are gated by
+different capabilities and merging them creates **"the coupling capabilities exist to prevent"**. The
+same call applies: a commerce moderator working a counterfeit-listing queue and a community moderator
+working an off-topic-thread queue are not the same shift.
+
+Gate on the existing `moderate_content` platform capability rather than minting a new one. There is no
+community equivalent of an organization role here — a forum has no members, only authors.
+
+---
+
+## 18. Cofounder matching — the people directory
+
+> **Status: NOT BUILT (Appendix A34), and gated on a legal decision (§14).** The frontend ships
+> `/store/find-cofounder`, a profile page and a composer against
+> `src/lib/store/cofounders.schemas.ts`, all mock-backed.
+
+### 18.1 Four rules the backend enforces, because the client is untrusted
+
+The frontend wrote three of these into its own schema file. **A rule that lives only on the frontend
+is not a rule** — it is a comment on code an attacker can edit. Each one below is a sentence the
+response body must be unable to support.
+
+1. **A stated capital range is self-reported and unverified.** Nobody checked. No field, label,
+   derived value or aggregate may imply "committed", "funded", "raised", "escrowed" or "available",
+   and the projection labels the figure as declared _in the row_, not in a tooltip a renderer can drop.
+   A number that looks audited is worse than no number.
+2. **A profile is not an offer and Qatoto is not a broker.** Listing yourself is not soliciting
+   investment; reading a profile is not receiving advice. There is no "invest" affordance, no "matched"
+   language, and **no ranking that could read as a recommendation** — which is why the directory read
+   takes no `sort` parameter at all. Ordering is deterministic and boring on purpose.
+3. **This is not equity.** Nothing on this surface mints, holds, transfers or records a stake.
+   `equityExpectationBasisPoints` is an **ask** — the number someone hopes to negotiate towards — and
+   is projected as an expectation, never as an allocation or a holding. Basis points, not a float
+   percentage, for the same reason money is integer cents: `0.075` and `7.5` are one careless division
+   apart, and an equity figure wrong by two orders of magnitude is the worst thing this surface could
+   render.
+4. **`identity_verified` means only that this person is who they say they are.** It says nothing about
+   their capital, their track record or their reach, none of which anybody checked. This is why the
+   state tuple is two values and not a ladder — a third rung would be read as verifying the claims.
+
+### 18.2 Tables
+
+`community_cofounder_profile`
+
+- `id`, immutable `slug`, `userId` (unique — one profile per person)
+- `displayName`, `headline`, `bio`, `lookingFor`, `countryCode`, `avatarUrl` (nullable)
+- `commitmentLevel`: `full_time | part_time | advisory`
+- `engagementState`: `open_to_intros | in_conversation | not_looking`
+- `identityState`: `unverified | identity_verified`
+- `state`: `draft | pending_review | published | withdrawn`
+- `capitalRangeMinInCents`, `capitalRangeMaxInCents`, `currency` — all three nullable together
+- `equityExpectationBasisPoints` (nullable), `publishedAt` (nullable), timestamps
+- `contributionKinds` and `sectors` as link tables, in `talent_profile_skill`'s shape
+- `CHECK` that the capital triple is all-null or all-set
+
+`community_cofounder_prior_venture`
+
+- `id`, `profileId`, `name`, `roleLabel`, `yearsActiveLabel`, `outcomeSummary` (nullable), `position`
+
+**The near-miss, and why it stays a near-miss.** `talent_profile` is already user-scoped with
+availability, visibility, skills and a compensation ask, and it is genuinely close. **Do not extend
+it.** The R&D talent directory reads that table, and a cofounder row landing in "people open to work
+on your project" is a different claim about a different person's intent. Reuse its _shape_ — and
+`talent_profile_skill`'s tag-table pattern for `sectors` — not its rows.
+
+Three projection rules:
+
+- **`capitalRange` is both-or-neither, and the whole object is nullable rather than its fields.** Half
+  a range is not "a floor with no ceiling", it is an unanswerable question. `null` means they did not
+  say; it is not zero, and a renderer must show an absence. A blank field is _omitted_ from the create
+  body, never sent as `0` — `0` for a capital minimum publishes an offer of nothing, and `0` basis
+  points publishes an expectation of no stake, which nobody means.
+- **`not_looking` stays visible in the directory** rather than being filtered out. A profile is also a
+  record, and hiding it makes a person who is mid-conversation look as though they had left. The row
+  says so and offers no contact affordance. This is why the list filter accepts no `state` key.
+- **`contributionKinds` are four and are not interchangeable**: `capital` is money, `expertise` is a
+  domain somebody has already done, `influence` is reach, `operations` is the person who runs the
+  thing day to day. Claiming all four is itself a signal, and the projection must not collapse them.
+
+### 18.3 The lifecycle the contract is missing
+
+As specified today, `POST` answers `draft`, public reads return only `published`, and **there is no
+publish route, no `/mine` read and no withdraw**. A user creates a profile that nobody can ever see,
+including themselves.
+
+Public reads (added to §5):
+
+| Method | Route                                    | Purpose                                       |
+| ------ | ---------------------------------------- | --------------------------------------------- |
+| GET    | `/store/cofounder-profiles`              | The directory; `published` only               |
+| GET    | `/store/cofounder-profiles/:profileSlug` | One profile with prior ventures and languages |
+
+Filter keys: `contributionKind`, `commitmentLevel`, `countryCode`, `limit`, `cursor`. No `sort`, and
+no `state` — see rule 2 and the `not_looking` rule above.
+
+Authenticated writes, mounted at `/community` (§1.1):
+
+| Method | Route                                                     | Result                                            |
+| ------ | --------------------------------------------------------- | ------------------------------------------------- |
+| POST   | `/community/cofounder-profiles`                           | Create your own; answers `draft`. Idempotency-Key |
+| GET    | `/community/cofounder-profiles/mine`                      | The viewer's own profile in any state             |
+| PATCH  | `/community/cofounder-profiles/mine`                      | Edit while `draft` or `withdrawn`                 |
+| POST   | `/community/cofounder-profiles/mine/submit`               | `draft` → `pending_review`                        |
+| POST   | `/community/cofounder-profiles/mine/withdraw`             | Out of the directory, reversibly                  |
+| PATCH  | `/community/cofounder-profiles/mine/engagement-state`     | Move between the three engagement states          |
+| GET    | `/community/admin/cofounder-profiles`                     | Moderation queue                                  |
+| POST   | `/community/admin/cofounder-profiles/:profileId/moderate` | Publish or reject                                 |
+
+**The viewer posts about themselves, never about somebody else**, and there is deliberately no route
+by which one person lists another: a directory of people who did not consent to being in it is a
+different product with a different legal shape. `userId` is unique for the same reason.
+
+`engagement-state` is its own route rather than a field on the `PATCH` because it is the one edit a
+**published** profile may make without re-entering moderation. Everything else — headline, bio,
+capital range — is content a moderator approved, and changing it after approval must go back through
+`submit`.
+
+### 18.4 Identity, and what not to invent
+
+`identity_verified` needs a source, and there are already two candidates in the codebase. Pick one and
+record which:
+
+- `requireIdentifiedUser` is **user-scoped** and already runs in front of the category-request write
+  (§6.5). It exists because `src/lib/auth.ts` registers the `anonymous()` plugin, so a session proves
+  nothing about identity on its own.
+- `commerce_verification_kind = 'identity'` is **organization-scoped** and is the wrong tool — a
+  cofounder is a person, and requiring an organization to list yourself contradicts §18.2.
+
+The first is the fit. **Do not add a third identity notion for this surface.** If the standard
+`requireIdentifiedUser` enforces is not strong enough to carry the badge, raise that standard where it
+lives rather than building a parallel one here — two definitions of "identified" is how one of them
+silently becomes the weaker.
 
 ---
 
@@ -2199,8 +2874,7 @@ anyone else so the route cannot probe which dispute ids exist. The detail carrie
 `commerce_dispute_event` timeline and `decisionNote`; the deciding moderator's identity is not
 projected, because which member of staff decided is not a fact either trading party has a claim on.
 
-**Deliberately NOT `evaluateDisputeOpeningRelationship`**, which splits party-but-not-buyer into a
-403. Only a buyer may OPEN a dispute; both parties may READ one, and the counterparty being told a
+**Deliberately NOT `evaluateDisputeOpeningRelationship`**, which splits party-but-not-buyer into a 403. Only a buyer may OPEN a dispute; both parties may READ one, and the counterparty being told a
 dispute exists against them is the entire point of telling them.
 
 **What it is still not wired to.** `dispute.service.ts` has a `DisputeView` with a tempting shape
@@ -2274,3 +2948,190 @@ invitation are exactly the revocable sort.
 `state = 'available'`, unlike the message path. Harmless only while nothing could create a buyer
 document; the moment this route exists, an RFQ could carry an unscanned or already-quarantined file
 and broadcast it to every invited provider. Both paths now check both.
+
+---
+
+### A31. The browse taxonomy had no author — **SHIPPED (Phase 16, `0098`)**
+
+**Needed by:** `src/components/admin/store-categories/store-category-admin-page.tsx`, the staff
+console, and `src/components/home/store/categories-index-page.tsx`, whose tree it edits.
+
+**What was wrong.** `commerce_category` shipped in Phase 0 with public reads, a unique sibling-order
+index, a cycle check and a seed script — and **no write surface at all**. The hierarchy every buyer
+browses was editable only by hand in psql. A seller whose product fitted no existing category had
+nowhere to say so, so the honest options were listing under something wrong or not listing.
+
+**What exists now:** ten routes on `commerce-categories.routes.ts` (§6.5) and
+`commerce_category_request` (§4.3a) — create with an image, rename, re-parent, reorder a whole
+sibling set at once, retire reversibly, plus the seller request queue and its verdict. Eleven new
+`platform_audit_event_kind` members record every one of them.
+
+**Frontend today: WIRED, and this entry exists partly to say so.** All ten calls in
+`src/lib/store/admin-categories.api.ts` use `getJson`/`sendJson`/`sendForm` against the real
+backend — no `resolveMockRead` anywhere in the file. It is one of only two store api modules in that
+state, the other being `catalog.api.ts`. **An appendix entry describing something already built is
+the failure this register was written to avoid**, so read this one as a record, not as work.
+
+**Rule:** the retire guard's two inputs — `childCount` and `productCount` — are **derived** and appear
+in no request body. A client able to set them could talk the guard into hiding a category that still
+has listings under it, and a category disappearing from browse while its products remain purchasable
+by direct link is the exact inconsistency `ON DELETE RESTRICT` exists to prevent.
+
+**Rule, second:** the moderator chooses the slug, never the requester, and the PATCH body has no
+`slug` at all. A slug is a public URL identity from the moment the category is published.
+
+---
+
+### A32. There is no manufacturer directory — **NOT BUILT (§16)**
+
+**Needed by:** `factory-directory-page.tsx`, `factory-detail-page.tsx` and
+`composers/factory-inquiry-composer.tsx`, plus the store home's "Factories worldwide" tile that links
+into all three.
+
+**What exists:** far more than the frontend's own header assumes. A25 shipped the organization search
+document, so a supplier directory is browsable and filterable already. Phase 12 shipped
+`commerce_seller_profile` (`factoryCount`, `productionLineCount`, `factoryAreaSquareMetres`,
+`totalStaffCount`, `businessType`, `visitPolicy`, `acceptingCustomOrders`),
+`commerce_organization_capability` (`oem`, `odm`, …), `commerce_organization_certification` with a
+full validity window, and `commerce_organization_media` whose kinds are already `factory` and
+`production_line`. The card's `fulfillmentMetrics` is the same object the provider directory already
+computes.
+
+**What to build:** §16 in full — but as a **projection**, not a `commerce_factory_*` table set. The
+new rows are four and small: named production lines, per-site descriptions, org-level sample policy
+and order bounds, and a decision about `exportMarkets`. Everything else is a read.
+
+**Frontend today:** `factories.api.ts` resolves fixtures through the real schemas, and its header
+cites A25 for the claim that no backend exists. That citation is now stale in one direction —
+A25 shipped the directory substrate this surface should be built on.
+
+**Rule:** a verification state is about the **organization**, never about a capability. `site_audited`
+means somebody stood in the building; it does not mean this factory is approved to do injection
+moulding, and there is no per-capability approval on the wire at all.
+
+**Rule, and this one blocks the build:** `site_audited` and `lastAuditedAt` have **no record behind
+them anywhere in this schema**. `commerce_organization_verification` covers registration, tax,
+identity, address and bank account — paperwork, all of it. Either drop the third state from the wire
+or add `commerce_organization_site_audit`. **Never derive it from a document review**, which would let
+a paper review carry the weight of an audit — the precise collapse the three-state enum exists to
+prevent.
+
+---
+
+### A33. There is no business forum — **NOT BUILT (§17)**
+
+**Needed by:** `forum-index-page.tsx`, `forum-thread-page.tsx`, `composers/forum-thread-composer.tsx`.
+
+**What exists:** nothing under this name — `grep -ril 'forum' src/routes/` in the backend returns no
+file. The nearest built thing is `research_program_post` and its reaction, report and moderation
+siblings, which is a threaded board with a moderation queue and is the right shape to copy.
+Commerce's own text surfaces are all standing-gated: `commerce_thread` is resource-scoped and 1:1,
+Q&A requires a seller relationship or a verified purchase, reviews require a completed order.
+
+**What to build:** §17 — three tables, two public reads, and **nine writes rather than the one the
+frontend contract has**.
+
+**Frontend today:** `forum.api.ts` resolves fixtures; the composer writes to a path that does not
+exist. `ForumThreadDetail` renders replies, `helpfulCount` and `acceptedReplyId` **and there is no
+endpoint that can produce any of the three** — the contract has thread-create and nothing else. This
+is the entry's real finding: shipping the specified surface as specified produces a forum where
+nobody can answer anything.
+
+**Rule:** `pending_review` on create is the design, not a placeholder. A10 closed public product
+comments because a comment would be the only public text surface with no standing requirement behind
+it; a forum inherits that problem exactly, and moderation is what lets it exist without reopening the
+decision. No copy may say "posted", "live" or "published" on the create response.
+
+**Rule, second:** `helpfulCount` is a count and never a score. No downvote reaches the wire — a
+negative signal against a named organization is a reputational act, and this surface has no appeal
+process to put behind one.
+
+---
+
+### A34. There is no cofounder directory — **NOT BUILT (§18), and blocked on §14**
+
+**Needed by:** `cofounder-directory-page.tsx`, `cofounder-profile-page.tsx`,
+`composers/cofounder-profile-composer.tsx`.
+
+**What exists:** nothing — `grep -ril 'cofounder' src/` in the backend returns no file at all. The
+near-miss is `talent_profile`, user-scoped with availability, visibility, skills and a compensation
+ask, which is close enough to be dangerous: extending it would put cofounder rows in the R&D talent
+directory, which is a different claim about a different person's intent.
+
+**What to build:** §18 — two tables and the **lifecycle the contract omits**. As specified, `POST`
+answers `draft`, public reads return only `published`, and there is no publish route, no `/mine` read
+and no withdraw. A user creates a profile nobody can ever see, including themselves.
+
+**Frontend today:** `cofounders.api.ts` resolves fixtures. Its header carries three rules the
+frontend cannot enforce, which is why §18.1 restates them as backend rules and adds a fourth.
+
+**Rule:** a declared figure is never rendered as a verified one. `capitalRange` is what somebody typed
+about themselves and nobody checked, so no field, label or aggregate may imply "committed", "funded",
+"raised", "escrowed" or "available".
+
+**Rule, second:** an equity expectation is an **ask**, never a holding. Nothing here mints, holds,
+transfers or records a stake, and the figure is integer basis points for the same reason money is
+integer cents — `0.075` and `7.5` are one careless division apart.
+
+**Still blocked:** §14 now carries the open decision. Publishing what a person will invest, beside a
+contact affordance, is close to facilitating a securities solicitation, and how close is a per-market
+legal answer. Until it lands, **the backend stores no capital figure it would then have to publish**.
+
+---
+
+### A35. Routes this backend serves that §5 and §6 never listed — **DOC GAP, not a build request**
+
+**Needed by:** nobody — that is the point. This entry exists because a specification that undercounts
+what exists sends somebody to build a route twice, and because two of the drifts below will be a bug
+on the day their surface is wired.
+
+**What was wrong.** §5 and §6 were written phase by phase and several routes shipped without a row.
+Verified against `src/routes/*.ts` and the mounts at `src/app.ts:171-341`:
+
+- `GET /commerce/rfqs/:rfqId/quotes` — the quote comparison the buyer's compare page reads. Absent
+  from §6.2 entirely, which lists every other quote route.
+- `GET /commerce/orders/:orderId/fulfillment` — derived fulfillment progress; §6.4 lists the writes
+  that feed it and not the read.
+- `GET /commerce/shipments/:shipmentId`, `GET /commerce/shipment-legs/:legId/events`,
+  `POST /commerce/shipment-legs/:legId/commands`, `GET /commerce/service-engagements/:engagementId`,
+  `GET /commerce/service-engagements/:engagementId/events`,
+  `POST /commerce/service-engagements/:engagementId/commands`.
+- `POST /commerce/providers/offerings`, `GET /commerce/providers/offerings/mine`,
+  `POST /commerce/providers/profile`, `POST /commerce/providers/kinds` — **id-free aliases**.
+  `mountProviderWriteRoutes` registers each write at both `/providers` and `/providers/:organizationId`,
+  aliases first so `/providers/profile` is not captured as `:organizationId = "profile"`. §6.1 lists
+  only the id-bearing form; the frontend calls the alias.
+- `POST /commerce/organizations/:organizationId/activate`,
+  `POST /commerce/organizations/:organizationId/logo`, the addresses CRUD, the verifications pair, and
+  `POST /commerce/organizations/:organizationId/documents/:documentId/scanner-verdict`.
+- `GET /commerce/settlement/escrow-providers`, `GET|POST /commerce/threads/:threadId/settlement-agreements`,
+  `POST /commerce/settlement-agreements/:agreementId/responses` — Phase 14 shipped these and §6 never
+  grew a settlement subsection.
+- `GET /commerce/admin/moderation-actions`, `PUT /commerce/service-offerings/:offeringId/coverage`,
+  `POST /commerce/admin/products/:productId/moderate`,
+  `POST /commerce/admin/suppliers/:supplierId/link-organization`,
+  `GET /commerce/products/:productId/ranking-status`,
+  `POST /commerce/admin/products/:productId/ranking-enforcement`.
+- `PUT|DELETE /commerce/reviews/:reviewId/helpful`, `PUT|DELETE /commerce/reviews/:reviewId/reply`,
+  `POST /commerce/reviews/:reviewId/media`, `POST /commerce/reviews/:reviewId/videos`,
+  `DELETE /commerce/reviews/:reviewId/media/:mediaId`.
+- `POST /commerce/products/:productId/questions`, `POST /commerce/questions/:questionId/answers`,
+  and the two author deletes.
+- `GET /store/products/:productSlug/questions/:questionId/answers`, and the four engagement writes
+  `PUT|DELETE /store/products/:productSlug/save`, `.../bookmark`, `POST .../share`,
+  `POST .../view-beacon` — which mount at `/store` while owning no store table (§1.1).
+
+**Two contract drifts, and each is a wiring-day bug rather than a documentation nicety:**
+
+- **`GET /commerce/organizations/mine` returns `{ organization, membership }[]`**, and the frontend
+  parses `string[]` (`src/lib/store/orders.api.ts:56`, whose own comment admits the mismatch). The
+  parse fails closed as a `PARSE` result rather than crashing, which means the failure presents as an
+  empty organization list rather than as an error — the worst of both.
+- **`GET /store/providers` accepts only `providerKind`, `limit` and `cursor`**
+  (`src/routes/store.routes.ts:63`), while `src/lib/store/providers.schemas.ts` documents seven filters
+  the frontend expects. A `.strict()` query schema answers **422** for an unrecognized key, not an
+  ignored value, so sending one of the seven does not degrade — it fails the whole read.
+
+**Rule:** a route that ships without a row in §5 or §6 is invisible to the next reader of this
+document, and the next reader is usually the person deciding whether to build it. When a phase adds a
+route, it adds the row in the same change.
