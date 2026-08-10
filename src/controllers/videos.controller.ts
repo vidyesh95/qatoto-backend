@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   firstParam,
+  respondFieldRefusal,
   respondStudioError,
   respondUnauthenticated,
   respondValidationFailed,
@@ -409,12 +410,9 @@ export async function uploadThumbnail(req: Request, res: Response): Promise<void
   }
 
   if (!req.file) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed",
-      errors: { image: ["An image file is required."] },
-    });
+    // Wording matched to the eleven sibling missing-file handlers: naming the multipart field is
+    // the difference between a fixable request and a guess.
+    respondFieldRefusal(res, "image", "An image file is required (multipart field 'image').");
     return;
   }
 

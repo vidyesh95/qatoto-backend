@@ -1,5 +1,6 @@
 import type { Response } from "express";
 
+import { fieldRefusal } from "#src/controllers/project-error-response.js";
 import type { CommerceFreightRateError } from "#src/services/commerce-freight-rates.service.js";
 
 /**
@@ -30,6 +31,7 @@ import type { CommerceFreightRateError } from "#src/services/commerce-freight-ra
  */
 
 export {
+  fieldRefusal,
   firstParam,
   optionalBody,
   respondUnauthenticated,
@@ -58,45 +60,53 @@ export function mapCommerceFreightRateErrorToResponse(
     case "COMMERCE_CUSTOMS_DWELL_ESTIMATE_NOT_FOUND":
       return { statusCode: 404, message: "Customs dwell estimate not found." };
 
-    case "COMMERCE_FREIGHT_PROVIDER_NOT_FOUND": {
-      const reason = "That organization is not a registered commerce provider, so it cannot sell a lane rate.";
-      return { statusCode: 422, message: reason, errors: { providerOrganizationId: [reason] } };
-    }
+    case "COMMERCE_FREIGHT_PROVIDER_NOT_FOUND":
+      return fieldRefusal(
+        "providerOrganizationId",
+        "That organization is not a registered commerce provider, so it cannot sell a lane rate.",
+      );
 
-    case "COMMERCE_CUSTOMS_DWELL_COMMODITY_NOT_FOUND": {
-      const reason = "That store category does not exist. Send null to scope the estimate to any commodity.";
-      return { statusCode: 422, message: reason, errors: { commodityScopeCategoryId: [reason] } };
-    }
+    case "COMMERCE_CUSTOMS_DWELL_COMMODITY_NOT_FOUND":
+      return fieldRefusal(
+        "commodityScopeCategoryId",
+        "That store category does not exist. Send null to scope the estimate to any commodity.",
+      );
 
-    case "COMMERCE_FREIGHT_RATE_CARD_WINDOW_EMPTY": {
-      const reason = `A card's validity must end after it begins; this one begins at ${error.validFrom.toISOString()}.`;
-      return { statusCode: 422, message: reason, errors: { validUntil: [reason] } };
-    }
+    case "COMMERCE_FREIGHT_RATE_CARD_WINDOW_EMPTY":
+      return fieldRefusal(
+        "validUntil",
+        `A card's validity must end after it begins; this one begins at ${error.validFrom.toISOString()}.`,
+      );
 
-    case "COMMERCE_CUSTOMS_DWELL_WINDOW_EMPTY": {
-      const reason = `An estimate's validity must end after it begins; this one begins at ${error.validFrom.toISOString()}.`;
-      return { statusCode: 422, message: reason, errors: { validUntil: [reason] } };
-    }
+    case "COMMERCE_CUSTOMS_DWELL_WINDOW_EMPTY":
+      return fieldRefusal(
+        "validUntil",
+        `An estimate's validity must end after it begins; this one begins at ${error.validFrom.toISOString()}.`,
+      );
 
-    case "COMMERCE_FREIGHT_RATE_CARD_WINDOW_WIDENED": {
-      const reason = `A card's validity may be shortened, never extended — an expired card is not a price. It currently ends at ${error.currentValidUntil.toISOString()}.`;
-      return { statusCode: 422, message: reason, errors: { validUntil: [reason] } };
-    }
+    case "COMMERCE_FREIGHT_RATE_CARD_WINDOW_WIDENED":
+      return fieldRefusal(
+        "validUntil",
+        `A card's validity may be shortened, never extended — an expired card is not a price. It currently ends at ${error.currentValidUntil.toISOString()}.`,
+      );
 
-    case "COMMERCE_CUSTOMS_DWELL_WINDOW_WIDENED": {
-      const reason = `An estimate's validity may be shortened, never extended. It currently ends at ${error.currentValidUntil.toISOString()}.`;
-      return { statusCode: 422, message: reason, errors: { validUntil: [reason] } };
-    }
+    case "COMMERCE_CUSTOMS_DWELL_WINDOW_WIDENED":
+      return fieldRefusal(
+        "validUntil",
+        `An estimate's validity may be shortened, never extended. It currently ends at ${error.currentValidUntil.toISOString()}.`,
+      );
 
-    case "COMMERCE_FREIGHT_RATE_CARD_PREDATES_PREDECESSOR": {
-      const reason = `A successor cannot begin before the card it replaces, which begins at ${error.predecessorValidFrom.toISOString()}.`;
-      return { statusCode: 422, message: reason, errors: { validFrom: [reason] } };
-    }
+    case "COMMERCE_FREIGHT_RATE_CARD_PREDATES_PREDECESSOR":
+      return fieldRefusal(
+        "validFrom",
+        `A successor cannot begin before the card it replaces, which begins at ${error.predecessorValidFrom.toISOString()}.`,
+      );
 
-    case "COMMERCE_FREIGHT_RATE_BREAK_FLOOR_DUPLICATED": {
-      const reason = `Two bands share the floor ${error.minBillableWeightGrams}g / ${error.minVolumeCubicCm}cm³. A shared floor makes "the highest band this consignment clears" an arbitrary pick.`;
-      return { statusCode: 422, message: reason, errors: { breaks: [reason] } };
-    }
+    case "COMMERCE_FREIGHT_RATE_BREAK_FLOOR_DUPLICATED":
+      return fieldRefusal(
+        "breaks",
+        `Two bands share the floor ${error.minBillableWeightGrams}g / ${error.minVolumeCubicCm}cm³. A shared floor makes "the highest band this consignment clears" an arbitrary pick.`,
+      );
 
     case "COMMERCE_FREIGHT_RATE_CARD_NOT_ACTIVE":
       return {

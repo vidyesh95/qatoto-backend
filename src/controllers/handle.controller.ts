@@ -3,7 +3,10 @@ import { z } from "zod";
 
 import * as handleService from "#src/services/handle.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import {
+  respondFieldRefusal,
+  respondValidationFailed,
+} from "#src/controllers/project-error-response.js";
 
 /**
  * Body for PATCH /users/me/handle. The raw handle is accepted as a loosely
@@ -126,20 +129,12 @@ export async function updateMyHandle(req: Request, res: Response): Promise<void>
   if (!setResult.success) {
     switch (setResult.error.type) {
       case "INVALID":
-        res.status(422).json({
-          status: "error",
-          statusCode: 422,
-          message: "Validation failed",
-          errors: { handle: [setResult.error.reason] },
-        });
+        // The service's reasons are already user-facing sentences ("Handle must be 3–30
+        // characters."), so this promotes rather than rewords.
+        respondFieldRefusal(res, "handle", setResult.error.reason);
         return;
       case "TAKEN":
-        res.status(422).json({
-          status: "error",
-          statusCode: 422,
-          message: "Validation failed",
-          errors: { handle: ["Handle is already taken."] },
-        });
+        respondFieldRefusal(res, "handle", "Handle is already taken.");
         return;
       case "RATE_LIMITED": {
         const resetAt = setResult.error.cooldownResetAt;

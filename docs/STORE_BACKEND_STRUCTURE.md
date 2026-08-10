@@ -1084,9 +1084,12 @@ so the envelope can be asserted as a value — pinned by `project-error-response
 either call the responder or wrap it; none rebuilds the body.
 
 A domain error reshaped into the validation envelope — a 422 that names a field but is not a parse
-failure — puts **the same sentence** in `message` and in the `errors` entry, declared once and used
-twice. Only two client surfaces render `errors`, so a reason living solely there reaches most screens
-as a bare "please check the fields" and names nothing.
+failure — is built by **`fieldRefusal(field, reason)`**, which puts the same sentence in `message`
+and in the `errors` entry. Only two client surfaces render `errors`, so a reason living solely there
+reaches most screens as a bare "please check the fields" and names nothing; a reason living only in
+`message` leaves those two unable to highlight the input. The helper exists so this is a function
+call rather than a rule eleven call sites each had to remember — and it emits no `form` key, because
+a domain refusal always knows which field it is about.
 
 ---
 

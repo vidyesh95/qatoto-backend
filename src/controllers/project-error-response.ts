@@ -109,6 +109,34 @@ export function buildValidationFailureBody(error: z.ZodError): ValidationFailure
   };
 }
 
+export interface FieldRefusal {
+  readonly statusCode: 422;
+  readonly message: string;
+  readonly errors: Readonly<Record<string, readonly string[]>>;
+}
+
+/**
+ * A DOMAIN refusal shaped as a field-level 422 — "that handle is taken", "that organization is not a
+ * registered provider". NOT a parse failure, so `respondValidationFailed` cannot serve it: that one
+ * takes a `ZodError`, and no Zod error exists here.
+ *
+ * ONE SENTENCE, BOTH PLACES, and that is the entire point (§7.1). `message` is what ~46 client
+ * surfaces render, and most of them render nothing else; `errors[field]` is what the 2 field-aware
+ * ones use to highlight the offending input. A reason living in only one of them is invisible on one
+ * side or the other — which is exactly how eleven sites came to answer "Validation failed" while
+ * holding a perfectly good explanation they never showed anyone.
+ *
+ * NO `form` KEY, ever. `form` is reserved for object-level PARSE issues (`.strict()`'s rejected
+ * keys); a domain refusal always knows which field it is about.
+ */
+export function fieldRefusal(field: string, reason: string): FieldRefusal {
+  return { statusCode: 422, message: reason, errors: { [field]: [reason] } };
+}
+
+export function respondFieldRefusal(res: Response, field: string, reason: string): void {
+  res.status(422).json({ status: "error", ...fieldRefusal(field, reason) });
+}
+
 export function respondValidationFailed(res: Response, error: z.ZodError): void {
   const body = buildValidationFailureBody(error);
   res.status(body.statusCode).json(body);

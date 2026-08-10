@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { buildValidationFailureBody } from "#src/controllers/project-error-response.js";
+import {
+  buildValidationFailureBody,
+  fieldRefusal,
+} from "#src/controllers/project-error-response.js";
 
 /**
  * The 422 envelope, pinned.
@@ -74,5 +77,39 @@ describe("buildValidationFailureBody", () => {
 
   it("never uses `data` — that is the success payload, which clients do not read on a failure", () => {
     expect(failureFor({ title: "" })).not.toHaveProperty("data");
+  });
+});
+
+/**
+ * The DOMAIN half of the 422 surface. Not a parse failure — "that handle is taken" has no ZodError
+ * behind it — so it gets its own builder, and the same rule: one sentence, both places.
+ */
+describe("fieldRefusal", () => {
+  const REASON = "Handle is already taken.";
+
+  it("puts the identical sentence in `message` and in the field entry", () => {
+    const body = fieldRefusal("handle", REASON);
+
+    // The point of the helper. `message` reaches ~46 client surfaces; `errors.handle` reaches the 2
+    // that can highlight an input. Neither may be the only one that knows why.
+    expect(body.message).toBe(REASON);
+    expect(body.errors.handle).toEqual([REASON]);
+  });
+
+  it("answers 422", () => {
+    expect(fieldRefusal("handle", REASON).statusCode).toBe(422);
+  });
+
+  it("names exactly one field", () => {
+    expect(Object.keys(fieldRefusal("handle", REASON).errors)).toEqual(["handle"]);
+  });
+
+  /**
+   * `form` is reserved for object-level PARSE issues — `.strict()`'s rejected keys. A domain
+   * refusal always knows which field it is about, so emitting `form` here would tell a client the
+   * problem was unattributable when it is not.
+   */
+  it("never emits the reserved `form` key", () => {
+    expect(fieldRefusal("handle", REASON).errors.form).toBeUndefined();
   });
 });

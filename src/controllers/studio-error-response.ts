@@ -45,6 +45,7 @@ import type { VideoError } from "#src/services/videos.service.js";
 export {
   firstParam,
   optionalBody,
+  respondFieldRefusal,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
