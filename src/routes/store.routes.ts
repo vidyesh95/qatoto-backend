@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as commerceProductQaController from "#src/controllers/commerce-product-qa.controller.js";
+import * as communityForumController from "#src/controllers/community-forum.controller.js";
 import * as storeController from "#src/controllers/store.controller.js";
 import * as storeFactoriesController from "#src/controllers/store-factories.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
@@ -81,5 +82,17 @@ storeRouter.get(
   storeFactoryReadLimiter,
   storeFactoriesController.getFactory,
 );
+/**
+ * The business forum's PUBLIC reads (§17, Appendix A33).
+ *
+ * `/store` IS A MOUNT POINT HERE, NOT A CONTEXT CLAIM (§1.1). A forum thread is community,
+ * not commerce; it lives under this prefix because `/store` is what a signed-out visitor
+ * browses, and the precedent is `commerceProductEngagementRouter`, which mounts at `/store`
+ * while owning no store table. The WRITES are at `/community`.
+ *
+ * Neither read ever returns a `pending_review` thread.
+ */
+storeRouter.get("/forum/threads", communityForumController.listForumThreads);
+storeRouter.get("/forum/threads/:threadSlug", communityForumController.getForumThread);
 
 export default storeRouter;

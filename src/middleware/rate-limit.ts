@@ -1412,3 +1412,55 @@ export const siteAuditWriteLimiter = createLimiter({
   windowMs: ONE_MINUTE_MS,
   limit: 20,
 });
+
+/**
+ * Community forum writes (Store Phase 18, §17).
+ *
+ * THREAD CREATE IS THE TIGHTEST OF THE THREE. Every thread lands in a human moderation
+ * queue, and the `Idempotency-Key` on the route defends against a retry storm rather than
+ * against somebody deciding to post forty questions.
+ */
+export const communityForumThreadCreateLimiter = createLimiter({
+  namespace: "communityForumThreadCreate",
+  windowMs: ONE_MINUTE_MS,
+  limit: 5,
+});
+
+/** Replies are conversation rather than queue, so the ceiling is a conversation's. */
+export const communityForumReplyCreateLimiter = createLimiter({
+  namespace: "communityForumReplyCreate",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});
+
+/**
+ * The helpful toggle and the accept-answer pair.
+ *
+ * Matches `postReactionLimiter`'s shape: a boolean a reader flips while scrolling, so the
+ * ceiling has to survive somebody endorsing a whole page of replies.
+ */
+export const communityForumVoteLimiter = createLimiter({
+  namespace: "communityForumVote",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
+ * Community content reports.
+ *
+ * The partial unique index already makes a second report of the same target by the same
+ * person a 409, so this bounds somebody reporting many DIFFERENT things — which is the
+ * shape a brigading attempt takes.
+ */
+export const communityContentReportLimiter = createLimiter({
+  namespace: "communityContentReport",
+  windowMs: ONE_MINUTE_MS,
+  limit: 10,
+});
+
+/** Staff moderation on the community surface. Low-frequency, deliberate work. */
+export const communityModerationLimiter = createLimiter({
+  namespace: "communityModeration",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});

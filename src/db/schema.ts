@@ -17008,6 +17008,16 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // retracted it. Nothing else in Phase 17 is staff-written.
   "commerce_organization_site_audit_recorded",
   "commerce_organization_site_audit_withdrawn",
+  // The business forum — `community-forum` (Phase 18, §17.4). Staff decisions only. An
+  // ordinary member posting a thread or endorsing a reply is deliberately absent: recording
+  // those would drown the entries that name an accountable human, the same call §10 made.
+  "community_forum_thread_published",
+  "community_forum_thread_rejected",
+  "community_forum_thread_locked",
+  "community_forum_thread_unlocked",
+  "community_forum_reply_hidden",
+  "community_forum_reply_restored",
+  "community_content_report_dismissed",
 ]);
 
 /**
@@ -20672,3 +20682,375 @@ export const feedSpotlightSlotRelations = relations(feedSpotlightSlot, ({ one })
     references: [user.id],
   }),
 }));
+
+// ---------------------------------------------------------------------------
+// COMMUNITY — the business forum (STORE_BACKEND_STRUCTURE.md §17, Appendix A33)
+// ---------------------------------------------------------------------------
+//
+// A SIBLING CONTEXT, NOT COMMERCE (§1.1). No organization is required to post, nothing is
+// priced, nothing is ordered. Nothing here shares an enum or a target-kind with the
+// `commerce_*` family, and that separation is the point rather than an oversight: the one
+// hard rule underneath this surface is that NOTHING ON IT MAY BE READ AS A COMMERCIAL FACT
+// ABOUT A PARTY, because no order, payment or verification stands behind any of it.
+//
+// Modelled on `researchProgramPost` and its reaction/report/moderation siblings — a
+// threaded board with a moderation queue, already shipped and already load-bearing.
+
+/**
+ * SIX BOARDS, MATCHING THE WORK RATHER THAN THE ORG CHART.
+ *
+ * Each maps to a thing a business actually gets stuck on and to a surface this platform
+ * already has — sourcing to the catalogue, logistics and customs to `/store/providers`,
+ * compliance to factory certifications, payments to quotes and orders.
+ *
+ * A "GENERAL" BOARD IS DELIBERATELY ABSENT. It is where every thread ends up when nobody
+ * can decide, and a board nobody can characterise is a board nobody subscribes to.
+ */
+export const communityForumBoardEnum = pgEnum("community_forum_board", [
+  "sourcing",
+  "logistics_and_customs",
+  "compliance_and_certification",
+  "payments_and_trade_finance",
+  "manufacturing",
+  "selling_on_qatoto",
+]);
+
+/**
+ * A thread's lifecycle. `pending_review` ON CREATE IS THE DESIGN, NOT A PLACEHOLDER.
+ *
+ * A10 closed public product comments because a comment would be "the only public text
+ * surface with no purchase proof and no standing requirement behind it". A standalone forum
+ * inherits that problem exactly: public text, written by anyone, attached to a commerce
+ * platform's domain. MODERATION IS WHAT LETS IT EXIST without reopening that decision, so
+ * the public reads filter this state out the way the provider directory never returns a
+ * `draft` offering.
+ *
+ * Do not "fix" this into an immediate publish because a forum usually publishes
+ * immediately. This one has a documented reason not to.
+ */
+export const communityForumThreadStateEnum = pgEnum("community_forum_thread_state", [
+  "pending_review",
+  "open",
+  "answered",
+  "locked",
+]);
+
+export const communityForumReplyStateEnum = pgEnum("community_forum_reply_state", [
+  "visible",
+  "hidden",
+]);
+
+export const communityContentTargetKindEnum = pgEnum("community_content_target_kind", [
+  "forum_thread",
+  "forum_reply",
+]);
+
+/**
+ * Narrower than `commerce_content_report_reason`, because the failures differ. There is no
+ * `counterfeit` and no `prohibited_item` here: nothing on this surface is for sale.
+ */
+export const communityContentReportReasonEnum = pgEnum("community_content_report_reason", [
+  "spam",
+  "misinformation",
+  "harassment",
+  "off_topic",
+  "intellectual_property",
+  "other",
+]);
+
+export const communityContentReportStatusEnum = pgEnum("community_content_report_status", [
+  "open",
+  "actioned",
+  "dismissed",
+]);
+
+export const communityModerationActionKindEnum = pgEnum("community_moderation_action_kind", [
+  "thread_published",
+  "thread_rejected",
+  "thread_locked",
+  "thread_unlocked",
+  "reply_hidden",
+  "reply_restored",
+  "report_dismissed",
+]);
+
+export const communityForumThread = pgTable(
+  "community_forum_thread",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    board: communityForumBoardEnum("board").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    /**
+     * `set null` on both authors: a deleted account must not take a published thread with
+     * it, and the answer somebody relied on stays readable after its author leaves.
+     */
+    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
+    /**
+     * NULLABLE, AND THAT IS A REAL DISTINCTION rather than a missing join. Somebody posting
+     * as an individual has no organization behind them, and a reader weighing an answer
+     * about customs clearance wants to know whether it came from a broker or from a
+     * stranger. Rendering a placeholder organization erases exactly the signal this column
+     * exists to carry.
+     *
+     * DERIVED FROM THE CALLER'S ACTIVE ORGANIZATION AT WRITE TIME, never taken from a body.
+     */
+    authorOrganizationId: text("author_organization_id").references(
+      () => commerceOrganization.id,
+      { onDelete: "set null" },
+    ),
+    state: communityForumThreadStateEnum("state").default("pending_review").notNull(),
+    /**
+     * `null` IS NOT "NOBODY HELPED". Plenty of useful threads never get an accepted answer;
+     * this means only that nobody pressed the button. `state = 'answered'` is derived from
+     * it and stored so a list row does not have to fetch replies to know.
+     */
+    acceptedReplyId: text("accepted_reply_id"),
+    replyCount: integer("reply_count").default(0).notNull(),
+    lastActivityAt: timestamp("last_activity_at", { precision: 3 }).defaultNow().notNull(),
+    /** Set when the thread first leaves the queue, and never cleared. */
+    publishedAt: timestamp("published_at"),
+    moderatedByUserId: text("moderated_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    moderatedAt: timestamp("moderated_at"),
+    decisionReason: text("decision_reason"),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("community_forum_thread_slug_uidx").on(table.slug),
+    index("community_forum_thread_queue_idx").on(table.state, table.createdAt, table.id),
+    /**
+     * The public browse. `lastActivityAt` leads the tail because the list is
+     * newest-activity first, which is the one ordering a forum can have that is not a
+     * ranking — and §18's rule against ranking-as-recommendation is a community rule, not
+     * only a cofounder one.
+     */
+    index("community_forum_thread_browse_idx").on(
+      table.board,
+      table.state,
+      table.lastActivityAt,
+      table.id,
+    ),
+    index("community_forum_thread_author_idx").on(table.authorUserId, table.createdAt, table.id),
+    check(
+      "community_forum_thread_slug_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 120`,
+    ),
+    check(
+      "community_forum_thread_text_ck",
+      sql`char_length(title) BETWEEN 8 AND 200
+          AND char_length(body) BETWEEN 20 AND 20000
+          AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 2000)`,
+    ),
+    check("community_forum_thread_counts_ck", sql`reply_count >= 0`),
+    /**
+     * A REJECTION MUST CARRY A REASON; an approval need not — the published thread is the
+     * explanation, and requiring prose there would be a stricter rule than a moderator's
+     * job actually has. The same call `commerce_category_request_review_ck` makes.
+     */
+    check(
+      "community_forum_thread_moderation_ck",
+      sql`(state = 'pending_review') = (published_at IS NULL)
+          AND (moderated_at IS NULL) = (moderated_by_user_id IS NULL)`,
+    ),
+    /**
+     * A `locked` thread may hold either: locking stops new text, not bookkeeping, so the
+     * author can still mark the answer afterwards. Every other state is pinned.
+     */
+    check(
+      "community_forum_thread_answered_ck",
+      sql`(state <> 'answered' OR accepted_reply_id IS NOT NULL)
+          AND (state NOT IN ('open', 'pending_review') OR accepted_reply_id IS NULL)`,
+    ),
+  ],
+);
+
+export const communityForumReply = pgTable(
+  "community_forum_reply",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => communityForumThread.id, { onDelete: "cascade" }),
+    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
+    authorOrganizationId: text("author_organization_id").references(
+      () => commerceOrganization.id,
+      { onDelete: "set null" },
+    ),
+    body: text("body").notNull(),
+    /**
+     * A COUNT, NOT A SCORE. There is no downvote on the wire and there must never be one: a
+     * negative signal against a named organization on a commerce platform is a reputational
+     * act, and this surface has no appeal process to put behind it.
+     */
+    helpfulCount: integer("helpful_count").default(0).notNull(),
+    state: communityForumReplyStateEnum("state").default("visible").notNull(),
+    hiddenByUserId: text("hidden_by_user_id").references(() => user.id, { onDelete: "restrict" }),
+    hiddenAt: timestamp("hidden_at"),
+    hiddenReason: text("hidden_reason"),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("community_forum_reply_thread_idx").on(table.threadId, table.createdAt, table.id),
+    index("community_forum_reply_author_idx").on(table.authorUserId, table.createdAt, table.id),
+    check(
+      "community_forum_reply_text_ck",
+      sql`char_length(body) BETWEEN 2 AND 10000
+          AND (hidden_reason IS NULL OR char_length(hidden_reason) BETWEEN 1 AND 2000)`,
+    ),
+    check("community_forum_reply_counts_ck", sql`helpful_count >= 0`),
+    /** The hidden columns move as a set, copied from `research_program_post_hidden_ck`. */
+    check(
+      "community_forum_reply_hidden_ck",
+      sql`(state = 'hidden') = (hidden_at IS NOT NULL)
+          AND (hidden_at IS NULL) = (hidden_by_user_id IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * ROW PRESENCE IS THE VOTE. No `id`, no `value` column — `commerceProductAnswerVote`'s
+ * shape, and the reason `PUT` and `DELETE` of it carry no `Idempotency-Key`: they are
+ * idempotent by verb (A24).
+ *
+ * KEYED ON THE USER, NOT AN ORGANIZATION, and that is the one place this table departs from
+ * its commerce sibling. That one keys on the organization so a procurement team does not
+ * get five votes for five logins — but a FORUM HAS NO MEMBERS, ONLY AUTHORS, and requiring
+ * an organization to endorse an answer would exclude exactly the individuals the nullable
+ * `authorOrganizationId` exists to distinguish.
+ */
+export const communityForumReplyVote = pgTable(
+  "community_forum_reply_vote",
+  {
+    replyId: text("reply_id")
+      .notNull()
+      .references(() => communityForumReply.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "community_forum_reply_vote_pk",
+      columns: [table.replyId, table.userId],
+    }),
+    /** "Have I endorsed this" for a whole page of replies, in one prefix scan. */
+    index("community_forum_reply_vote_user_idx").on(table.userId, table.replyId),
+  ],
+);
+
+/**
+ * A report against community content (§17.4).
+ *
+ * ITS OWN TABLE rather than two new members on `commerceContentTargetKind`. The precedent
+ * is Phase 10, which built `commerceContentReport` instead of generalizing the R&D one,
+ * because the two queues are gated by different capabilities and merging them creates "the
+ * coupling capabilities exist to prevent". A commerce moderator working a
+ * counterfeit-listing queue and a community moderator working an off-topic-thread queue are
+ * not the same shift.
+ */
+export const communityContentReport = pgTable(
+  "community_content_report",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    targetKind: communityContentTargetKindEnum("target_kind").notNull(),
+    threadId: text("thread_id").references(() => communityForumThread.id, {
+      onDelete: "cascade",
+    }),
+    replyId: text("reply_id").references(() => communityForumReply.id, { onDelete: "cascade" }),
+    reason: communityContentReportReasonEnum("reason").notNull(),
+    detailText: text("detail_text"),
+    reporterUserId: text("reporter_user_id").references(() => user.id, { onDelete: "set null" }),
+    status: communityContentReportStatusEnum("status").default("open").notNull(),
+    resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    resolvedAt: timestamp("resolved_at", { precision: 3 }),
+    resolutionNote: text("resolution_note"),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("community_content_report_thread_reporter_uidx")
+      .on(table.threadId, table.reporterUserId)
+      .where(sql`thread_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    uniqueIndex("community_content_report_reply_reporter_uidx")
+      .on(table.replyId, table.reporterUserId)
+      .where(sql`reply_id IS NOT NULL AND reporter_user_id IS NOT NULL`),
+    index("community_content_report_queue_idx").on(table.status, table.createdAt, table.id),
+    check(
+      "community_content_report_target_ck",
+      sql`num_nonnulls(thread_id, reply_id) = 1
+          AND (target_kind <> 'forum_thread' OR thread_id IS NOT NULL)
+          AND (target_kind <> 'forum_reply' OR reply_id IS NOT NULL)`,
+    ),
+    check(
+      "community_content_report_text_ck",
+      sql`(detail_text IS NULL OR char_length(detail_text) BETWEEN 1 AND 2000)
+          AND (resolution_note IS NULL OR char_length(resolution_note) BETWEEN 1 AND 2000)`,
+    ),
+    check(
+      "community_content_report_resolution_ck",
+      sql`(resolved_by_user_id IS NULL) = (resolved_at IS NULL)
+          AND (status = 'open') = (resolved_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The community decision log. Mirrors `commerceModerationAction`.
+ *
+ * TARGETS ARE `set null`, the opposite of the report table's cascade, so the record of a
+ * decision survives the thing it was about. `auditEntryId` is NOT NULL so every row names
+ * an accountable human.
+ */
+export const communityModerationAction = pgTable(
+  "community_moderation_action",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    actionKind: communityModerationActionKindEnum("action_kind").notNull(),
+    threadId: text("thread_id").references(() => communityForumThread.id, {
+      onDelete: "set null",
+    }),
+    replyId: text("reply_id").references(() => communityForumReply.id, { onDelete: "set null" }),
+    reportId: text("report_id").references(() => communityContentReport.id, {
+      onDelete: "set null",
+    }),
+    moderatorUserId: text("moderator_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    moderatorRoleSnapshot: text("moderator_role_snapshot").notNull(),
+    reasonNote: text("reason_note").notNull(),
+    auditEntryId: text("audit_entry_id")
+      .notNull()
+      .references(() => platformAuditEntry.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("community_moderation_action_auditEntryId_uidx").on(table.auditEntryId),
+    index("community_moderation_action_recent_idx").on(table.createdAt, table.id),
+    check(
+      "community_moderation_action_reason_ck",
+      sql`char_length(reason_note) BETWEEN 1 AND 2000
+          AND char_length(moderator_role_snapshot) BETWEEN 1 AND 40`,
+    ),
+  ],
+);

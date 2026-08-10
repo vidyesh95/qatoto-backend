@@ -35,6 +35,7 @@ import commerceSellerProfileRouter from "#src/routes/commerce-seller-profile.rou
 import commerceSettlementRouter from "#src/routes/commerce-settlement.routes.js";
 import commerceTrustRouter from "#src/routes/commerce-trust.routes.js";
 import commerceWebhooksRouter from "#src/routes/commerce-webhooks.routes.js";
+import communityForumRouter from "#src/routes/community-forum.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
@@ -218,6 +219,19 @@ app.use("/commerce", commerceSettlementRouter);
  * segments that router does not claim, the same argument A13's mount note already makes.
  */
 app.use("/commerce", commerceFactoriesRouter);
+/**
+ * STORE Phase 18 — the business forum's write surface (§17).
+ *
+ * A NEW PREFIX, AND THAT IS THE POINT (§1.1). Community is a sibling context, not a row in
+ * commerce's table: no organization is required to post, nothing is priced, nothing is
+ * ordered, and a forum reply confers no standing in a dispute. Mounting it under
+ * `/commerce` would make that claim in the URL every client sees.
+ *
+ * Its PUBLIC reads are on `storeRouter` instead, because `/store` is the prefix a
+ * signed-out visitor browses — the precedent being `commerceProductEngagementRouter`, which
+ * mounts at `/store` while owning no store table.
+ */
+app.use("/community", communityForumRouter);
 /**
  * STORE Phase 14. Inbound connector webhooks, mounted at `/webhooks` and NOT under
  * `/commerce`, because everything under that prefix requires a session and an active

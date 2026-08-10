@@ -715,6 +715,20 @@
       "when": 1786105854394,
       "tag": "0101_store_phase_17_manufacturing_inquiry",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1786105859394,
+      "tag": "0102_community_forum_enums",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1786105864394,
+      "tag": "0103_community_forum",
+      "breakpoints": true
     }
   ]
 }
