@@ -1398,6 +1398,22 @@ Scheduled jobs:
 - **The write schema refuses a capital field with 422 rather than discarding it.** Silently
   dropping a number somebody typed about themselves would let them believe it was recorded.
 
+### Phase 20 — lane rate cards and the arrival window — **SPECIFIED, NOT BUILT**
+
+The only store surface with a named backend gap in front of it. Specified in full at §19:
+
+- `commerce_freight_rate_card` and `commerce_freight_rate_break` — the lane price lists nobody has
+  bought yet, with transit days on the **break** rather than the card;
+- `commerce_customs_dwell_estimate` — the second missing input, which §14's rate-card entry did not
+  name;
+- the arrival-window projection on the order and on `checkout/prepare`, which is what makes a
+  delivery **window** expressible without making a delivery **date** a promise;
+- the extension of `GET /store/products/:productSlug/delivery-estimate` into per-leg, per-mode
+  options.
+
+`sheets/delivery-sheet.tsx` is the one store component held at `TRANSPORT: mock` against this
+phase. Everything else on the store surface wires against contracts that already exist.
+
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
 ---
@@ -1506,7 +1522,9 @@ The following require legal, provider, or product decisions before implementatio
   owns neither, so A16's two rules carry across unchanged: **a rate card produces a range with its
   provenance and never a date**, and an uncovered lane returns an empty array, never a zero.
   Rating from a card still never writes `shippingInCents` — nothing is charged for freight until
-  something is booked.
+  something is booked. **Specified in §19**, which also adds the second missing input this entry
+  did not name — customs dwell — and the arrival-window projection the two of them make
+  expressible. Still not built; §19 is the spec, not a record.
 - ~~**how a seller obtains a buyer's full delivery address.**~~ **DECIDED: an authorized decrypt
   path.** A seller organization with an active order fetches the buyer's decrypted street lines,
   recipient name and phone through a server route that authorizes the caller against that specific
@@ -2203,6 +2221,174 @@ The first is the fit. **Do not add a third identity notion for this surface.** I
 `requireIdentifiedUser` enforces is not strong enough to carry the badge, raise that standard where it
 lives rather than building a parallel one here — two definitions of "identified" is how one of them
 silently becomes the weaker.
+
+---
+
+## 19. Lane rate cards and the arrival window — the delivery surface
+
+**NOT BUILT. This section is a specification, not a record.** Everything in §1–§18 describes
+something that exists; this describes the one delivery capability the store frontend renders and
+this backend cannot serve. It is written down so the gap stays a gap rather than becoming an
+oversight, and so `sheets/delivery-sheet.tsx` has a named thing to wait for.
+
+### 19.1 What A16 decided, and what it left out
+
+A16 chose a **coverage-derived estimate**: `GET /store/products/:productSlug/delivery-estimate`
+walks the provider offerings whose declared coverage matches the seller's shipping origin and the
+buyer's destination, and returns one `DeliveryEstimateProjection` per currency — an integer-cent
+range, a lead-time day range, the basis it was computed from, and the offerings it was derived
+from. That shipped, and it stands.
+
+What it cannot express is a **choice**. The mock sheet decomposes the journey into an
+international leg and an inland leg and lets the buyer pick a mode per leg, with a price and a
+duration behind each option. Coverage does not carry either number per mode — it says a provider
+_serves_ this lane, not what it _charges_ or how long it _takes_ by sea versus by air. So the
+sheet sums local floats today, which is the client establishing a price, which §0 forbids.
+
+The missing input is not an endpoint. It is **data nobody has bought**: forwarders sell lane
+price lists, and Qatoto stores none.
+
+### 19.2 Rate cards
+
+```text
+commerce_freight_rate_card
+  id, providerOrganizationId → commerce_organization
+  originCountryCode, destinationCountryCode
+  mode                       -- REUSE commerce_shipment_leg_mode: air | sea | land | rail
+  currency
+  validFrom, validUntil
+  sourceForwarderName        -- who sold us this list; provenance rides with the number
+  state                      -- active | superseded | withdrawn
+  createdAt, updatedAt
+```
+
+```text
+commerce_freight_rate_break
+  id, rateCardId → commerce_freight_rate_card (on delete cascade)
+  minBillableWeightGrams, minVolumeCubicCm
+  unitPriceInCents, minimumChargeInCents
+  transitDaysMin, transitDaysMax
+  position
+  UNIQUE (rateCardId, position)
+```
+
+**Do not mint a second mode enum.** `commerce_shipment_leg_mode` already has these four members
+and a leg already records one; a parallel enum is how a card becomes unmatchable to the shipment
+it priced.
+
+**Transit days live on the BREAK, not the card.** An air break and a sea break on the same lane
+have different durations by definition, and a heavier break can route differently — a 40 kg
+consignment and a 4 t consignment on one lane are not the same journey. Putting the duration on
+the card forces one number across every weight band, which is the same flattening A13 rejected.
+
+### 19.3 Customs dwell
+
+```text
+commerce_customs_dwell_estimate
+  id
+  destinationCountryCode
+  originCountryCode          -- NULLABLE: null means "any origin"
+  commodityScope             -- NULLABLE: null means "any commodity"
+  clearanceDaysMin, clearanceDaysMax
+  source                     -- the broker or published figure this came from
+  validFrom, validUntil
+```
+
+Nothing models this today. `customs_broker` exists as a `commerce_provider_kind` and its
+offerings carry lead times, but "clearance on this lane for this commodity takes 3–10 days" is
+stored nowhere, and an offering's lead time is the broker's own turnaround, not the port's.
+
+**A domestic lane has no customs leg at all.** That is an _absent_ component, not a zero-day one,
+and §19.4's projection must be able to say which — see the two-facts rule below.
+
+### 19.4 The arrival window
+
+A new projection on the order, and on `checkout/prepare` once the cart has a delivery address:
+
+```text
+{
+  clockStartAt,
+  components: {
+    manufacturing: { daysMin, daysMax },
+    freight:       { daysMin, daysMax, rateCardId, mode } | null,
+    customs:       { daysMin, daysMax, source } | null,
+  },
+  arrivalWindow:     { fromDate, toDate } | null,
+  missingComponents: ("freight" | "customs")[],
+}
+```
+
+**`clockStartAt` is `order.confirmedAt`.** State it on the wire rather than leaving the client to
+assume, because "confirmed", "payment settled" and "first shipment event" give three different
+answers and the buyer is entitled to know which promise they were given.
+
+**`arrivalWindow` is emitted only when every applicable component resolves.** No rate card for
+the lane, no mode selected yet, or no dwell estimate → the window is **`null`** and
+`missingComponents` names what is missing. **A missing component is never defaulted, averaged or
+extrapolated.** It is reported.
+
+**`customs: null` carries two different facts and they must be distinguishable.** On a domestic
+lane there is no customs leg — the component is absent, the window still closes, and
+`missingComponents` stays empty. On a cross-border lane with no dwell estimate the component is
+unknown, and the window cannot close. Modelling both as a bare `null` collapses "not applicable"
+into "not known", which is the A11 mistake in a new place.
+
+**This is Alibaba's degradation, chosen deliberately.** When a buyer does not book freight
+through Alibaba, the listing keeps showing the seller-declared manufacturing lead time and marks
+shipping as to-be-arranged; **no delivery date appears at all.** The estimated-delivery date
+surfaces only once a logistics option with real rates behind it is selected. The alternative —
+approximating the freight and customs legs from a regional average — was **not chosen**: B2B
+freight variance is large enough that an average is wrong more often than right (a container
+sitting at port for three weeks is ordinary, not an outlier), and a printed number is a claim the
+platform then owns. Amazon prints a single date because it owns the network and absorbs the risk;
+Qatoto owns neither.
+
+**The components ship alongside the window, never collapsed into it.** 15–25 manufacturing +
+3–10 customs + 18–30 sea is a **29-day spread**; presenting that as one date is false precision,
+and presenting it as three visible parts is an estimate a buyer can reason about. It also means
+the client always has something honest to render when `arrivalWindow` is `null` — "ships in
+15–25 days after order · shipping and clearance not yet estimated" — rather than an empty state.
+
+**No arrival window before an order exists.** With no clock start there is no calendar, so a
+product page shows _durations_ only. This is why the PDP and the order page differ, and it is not
+an inconsistency.
+
+### 19.5 Public API
+
+| Method        | Path                                                           | Notes                                                                                                                                                                                                                                                                            |
+| ------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET           | `/store/products/:productSlug/delivery-estimate`               | **Extended**, not replaced. Keeps the existing per-currency whole-journey projection; adds an ordered `legs[]`, each with its own origin/destination and an `options[]` of `{ mode, priceInCents, transitDaysMin, transitDaysMax, rateCardId, sourceForwarderName, validUntil }` |
+| GET           | `/commerce/orders/:orderId/arrival-window`                     | §19.4 projection. Order membership required; 404 to a non-party, per §7                                                                                                                                                                                                          |
+| POST \| PATCH | `/commerce/admin/freight-rate-cards` (+ `/:rateCardId/breaks`) | `moderate_commerce`, checked in-service. Idempotency-Key                                                                                                                                                                                                                         |
+| POST \| PATCH | `/commerce/admin/customs-dwell-estimates`                      | `moderate_commerce`. Idempotency-Key                                                                                                                                                                                                                                             |
+
+`checkout/prepare` gains the §19.4 projection alongside its existing `deliveryEstimates`.
+
+### 19.6 Rules
+
+- **A rate card produces a range with its provenance, never a single day.** `sourceForwarderName`
+  and `validUntil` travel with every option; an expired card is not a price.
+- **An uncovered lane returns an empty `options[]`, never a zero**, and an uncovered _leg_ makes
+  the whole journey unpriceable rather than cheaper. A15's and A16's rule, unchanged.
+- **Partial data yields a partial answer, never an extrapolated whole one.** §19.2, §19.3 and
+  §19.4 are three expressions of this one rule: report the components you have, name the ones you
+  do not. It is the call A16 made for money, applied to time.
+- **Rating from a card never writes `shippingInCents`.** Nothing is charged for freight until
+  something is booked; `shippingInCents` stays literal `0` at checkout. That is A16's decision,
+  not a gap this section closes.
+- **The client never sums legs or components.** The server returns the journey total and the
+  arrival window already computed — integer cents, whole days, per currency, never converting
+  between currencies without an FX quote (§15.4's rule).
+- **A rate card is not a booking and confers no capacity.** Pricing from a card does not reserve
+  space, and no copy may imply it does.
+
+### 19.7 Frontend status
+
+`src/components/home/store/sheets/delivery-sheet.tsx` is **held at `TRANSPORT: mock` against this
+section** — it is the one store sheet deliberately left unwired, and it stays that way until
+§19.2–§19.4 are built. `sections/delivery-cost.tsx` wires against the _existing_ A16 estimate and
+degrades to the manufacturing lead time plus "shipping to be arranged" when the estimate array is
+empty; it must not render a date or a zero.
 
 ---
 
