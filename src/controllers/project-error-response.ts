@@ -62,7 +62,21 @@ export function firstParam(value: string | readonly string[]): string {
  * this body themselves and every one of them dropped it, so a `.strict()` rejection reached the
  * browser as an empty object. If you are writing a new controller: call this, do not re-implement it.
  */
-export function respondValidationFailed(res: Response, error: z.ZodError): void {
+export interface ValidationFailureBody {
+  readonly status: "error";
+  readonly statusCode: 422;
+  readonly message: string;
+  readonly errors: Readonly<Record<string, readonly string[]>>;
+}
+
+/**
+ * The envelope, as a VALUE.
+ *
+ * Split out from the responder so it can be asserted without faking an Express `Response` — the
+ * same mapper/responder split every `*-error-response.ts` in this directory already uses, and the
+ * reason those files are testable without a single type assertion.
+ */
+export function buildValidationFailureBody(error: z.ZodError): ValidationFailureBody {
   const flattened = z.flattenError(error);
 
   // Object-level issues — notably `.strict()`'s unrecognized_keys, which is how EVERY
@@ -76,12 +90,28 @@ export function respondValidationFailed(res: Response, error: z.ZodError): void 
     errors.form = flattened.formErrors;
   }
 
-  res.status(422).json({
+  return {
     status: "error",
     statusCode: 422,
-    message: "Validation failed",
+    /**
+     * USER-FACING COPY, not a diagnostic — and on most screens it is the ONLY thing rendered.
+     *
+     * 48 client components render `message`; exactly 2 also render `fieldErrors`. So on ~46
+     * surfaces this sentence IS the error, with the per-field detail below invisible. It says what
+     * to DO for that reason, and it matches the house style the other 656 error messages keep:
+     * sentence case, second person, trailing period. `"Validation failed"` was none of those.
+     *
+     * Pinned by `project-error-response.test.ts`, because it changed once already without anything
+     * noticing.
+     */
+    message: "Please check the highlighted fields.",
     errors,
-  });
+  };
+}
+
+export function respondValidationFailed(res: Response, error: z.ZodError): void {
+  const body = buildValidationFailureBody(error);
+  res.status(body.statusCode).json(body);
 }
 
 /**

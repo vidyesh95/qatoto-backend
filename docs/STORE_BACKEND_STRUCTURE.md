@@ -1057,6 +1057,37 @@ HTTP mapping:
 List responses contain `{ items, page: { nextCursor, hasMore } }`. Every order ends with a unique
 column, normally `id`, so cursor pagination cannot skip equal timestamps.
 
+### 7.1 The error envelope's three fields
+
+This was folklore until Phase 20 — 670 error messages followed it and nothing wrote it down, so a
+refactor unified 12 of them onto a string that broke it and no test noticed.
+
+**`message` is USER-FACING COPY, not a diagnostic.** Sentence case, ends with a period, second
+person where it helps. It is frequently **the only thing a client renders** — 48 components display
+it and only 2 also display `errors` — so it must stand alone and name an action rather than a
+condition. `"Validation failed"` is the shape to avoid; `"Please check the highlighted fields."` and
+`"This listing is not complete enough to publish."` are the shape to copy.
+
+**Error-code tokens never reach the wire.** `NOT_FOUND`, `QUOTE_EXPIRED` and the rest are the `type`
+discriminant of the tagged union above; the controller maps them to a sentence. No `message` is a
+SCREAMING_SNAKE token, and none starts lowercase.
+
+**`errors` is the only field-level channel — never `data`,** which is the success payload and which
+clients do not read on a failure. Inside it, **`form` is reserved** for object-level issues:
+`.strict()`'s `unrecognized_keys` is not attributable to any single field, and it is how every
+rejected server-owned field arrives, so a responder that forwards only per-field entries answers
+`422` with an empty object for precisely the hostile-payload case §0 exists for.
+
+**One responder owns all of this**: `respondValidationFailed` in
+`src/controllers/project-error-response.ts`, which delegates to the pure `buildValidationFailureBody`
+so the envelope can be asserted as a value — pinned by `project-error-response.test.ts`. Controllers
+either call the responder or wrap it; none rebuilds the body.
+
+A domain error reshaped into the validation envelope — a 422 that names a field but is not a parse
+failure — puts **the same sentence** in `message` and in the `errors` entry, declared once and used
+twice. Only two client surfaces render `errors`, so a reason living solely there reaches most screens
+as a bare "please check the fields" and names nothing.
+
 ---
 
 ## 8. State transitions and concurrency
