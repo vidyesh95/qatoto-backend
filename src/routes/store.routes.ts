@@ -1,6 +1,7 @@
 import express from "express";
 
 import * as commerceProductQaController from "#src/controllers/commerce-product-qa.controller.js";
+import * as communityCofounderController from "#src/controllers/community-cofounder.controller.js";
 import * as communityForumController from "#src/controllers/community-forum.controller.js";
 import * as storeController from "#src/controllers/store.controller.js";
 import * as storeFactoriesController from "#src/controllers/store-factories.controller.js";
@@ -94,5 +95,15 @@ storeRouter.get(
  */
 storeRouter.get("/forum/threads", communityForumController.listForumThreads);
 storeRouter.get("/forum/threads/:threadSlug", communityForumController.getForumThread);
+/**
+ * The cofounder directory's PUBLIC reads (§18, Appendix A34). `published` only, and a
+ * `not_looking` profile stays in the list — hiding one would make somebody who is
+ * mid-conversation look as though they had left.
+ */
+storeRouter.get("/cofounder-profiles", communityCofounderController.listCofounderProfiles);
+storeRouter.get(
+  "/cofounder-profiles/:profileSlug",
+  communityCofounderController.getCofounderProfile,
+);
 
 export default storeRouter;

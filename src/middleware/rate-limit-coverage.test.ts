@@ -101,6 +101,8 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/commerce", specifier: "#src/routes/commerce-factories.routes.js", exportName: "default" },
   // Phase 18 (§17, Appendix A33). A new mount prefix — community is a sibling context.
   { mountPath: "/community", specifier: "#src/routes/community-forum.routes.js", exportName: "default" },
+  // Phase 19 (§18, Appendix A34).
+  { mountPath: "/community", specifier: "#src/routes/community-cofounder.routes.js", exportName: "default" },
 ];
 
 /** A write. GETs are excluded — §7's bounds are about writes and expensive reads. */

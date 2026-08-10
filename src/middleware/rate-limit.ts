@@ -1464,3 +1464,16 @@ export const communityModerationLimiter = createLimiter({
   windowMs: ONE_MINUTE_MS,
   limit: 60,
 });
+
+/**
+ * Cofounder profile writes (Store Phase 19, §18).
+ *
+ * ONE BUCKET FOR THE WHOLE LIFECYCLE — create, edit, submit, withdraw, engagement state.
+ * There is one profile per person, so none of these is a volume surface; the ceiling exists
+ * to bound a script flipping `engagementState` rather than to ration a real edit.
+ */
+export const cofounderProfileWriteLimiter = createLimiter({
+  namespace: "cofounderProfileWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});

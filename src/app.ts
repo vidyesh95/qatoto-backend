@@ -35,6 +35,7 @@ import commerceSellerProfileRouter from "#src/routes/commerce-seller-profile.rou
 import commerceSettlementRouter from "#src/routes/commerce-settlement.routes.js";
 import commerceTrustRouter from "#src/routes/commerce-trust.routes.js";
 import commerceWebhooksRouter from "#src/routes/commerce-webhooks.routes.js";
+import communityCofounderRouter from "#src/routes/community-cofounder.routes.js";
 import communityForumRouter from "#src/routes/community-forum.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
@@ -232,6 +233,12 @@ app.use("/commerce", commerceFactoriesRouter);
  * mounts at `/store` while owning no store table.
  */
 app.use("/community", communityForumRouter);
+/**
+ * STORE Phase 19 — the cofounder directory (§18). Declared after the forum router; their
+ * segments (`/forum/*` and `/cofounder-profiles/*`) collide nowhere, and both `/admin`
+ * sub-paths are distinct literals.
+ */
+app.use("/community", communityCofounderRouter);
 /**
  * STORE Phase 14. Inbound connector webhooks, mounted at `/webhooks` and NOT under
  * `/commerce`, because everything under that prefix requires a session and an active

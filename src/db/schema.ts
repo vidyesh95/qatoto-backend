@@ -17018,6 +17018,10 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "community_forum_reply_hidden",
   "community_forum_reply_restored",
   "community_content_report_dismissed",
+  // The cofounder directory (Phase 19, §18.3). Publishing a profile puts a named person in
+  // front of every visitor, so the verdict names the moderator who made it.
+  "community_cofounder_profile_published",
+  "community_cofounder_profile_rejected",
 ]);
 
 /**
@@ -20772,6 +20776,9 @@ export const communityModerationActionKindEnum = pgEnum("community_moderation_ac
   "reply_hidden",
   "reply_restored",
   "report_dismissed",
+  /** Phase 19 (§18.3). The cofounder directory shares this queue's decision log. */
+  "cofounder_profile_published",
+  "cofounder_profile_rejected",
 ]);
 
 export const communityForumThread = pgTable(
@@ -21034,6 +21041,11 @@ export const communityModerationAction = pgTable(
     reportId: text("report_id").references(() => communityContentReport.id, {
       onDelete: "set null",
     }),
+    /** Phase 19. The cofounder directory shares this log rather than growing its own. */
+    cofounderProfileId: text("cofounder_profile_id").references(
+      () => communityCofounderProfile.id,
+      { onDelete: "set null" },
+    ),
     moderatorUserId: text("moderator_user_id")
       .notNull()
       .references(() => user.id, { onDelete: "restrict" }),
@@ -21051,6 +21063,284 @@ export const communityModerationAction = pgTable(
       "community_moderation_action_reason_ck",
       sql`char_length(reason_note) BETWEEN 1 AND 2000
           AND char_length(moderator_role_snapshot) BETWEEN 1 AND 40`,
+    ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// COMMUNITY — the cofounder directory (STORE_BACKEND_STRUCTURE.md §18, Appendix A34)
+// ---------------------------------------------------------------------------
+//
+// THE COLUMNS THIS TABLE DOES NOT HAVE ARE THE POINT.
+//
+// There is no `capitalRangeMinInCents`, no `capitalRangeMaxInCents`, no `currency` and no
+// `equityExpectationBasisPoints`. §14 defers whether Qatoto may publish a self-declared
+// capital range beside an equity expectation — "close to facilitating a securities
+// solicitation, and 'close to' is decided by a lawyer per market, not by a schema" — and
+// its instruction is literal: UNTIL DECIDED, THE BACKEND STORES NO CAPITAL FIGURE IT WOULD
+// THEN HAVE TO PUBLISH.
+//
+// A column that exists and is withheld by a projection is one careless edit from being
+// published. A column that does not exist cannot be. The wire keeps both fields — the
+// frontend contract already types them nullable — and they serve `null` until the decision
+// lands, at which point adding them is one additive migration.
+//
+// WHY NOT EXTEND `talentProfile`, which is genuinely close: the R&D talent directory READS
+// that table, and a cofounder row landing in "people open to work on your project" is a
+// different claim about a different person's intent. Reuse its SHAPE, and
+// `talentProfileSkill`'s tag-table pattern, not its rows.
+
+/**
+ * What this person brings.
+ *
+ * THE FOUR ARE DELIBERATELY NOT INTERCHANGEABLE, and the filter exists because they are the
+ * thing a founder is actually short of. `capital` is money; `expertise` is a domain
+ * somebody has already done; `influence` is reach — distribution, an audience, a room you
+ * cannot get into; `operations` is the person who runs the thing day to day. Claiming all
+ * four is itself a signal, so the projection must not collapse them.
+ */
+export const communityCofounderContributionKindEnum = pgEnum(
+  "community_cofounder_contribution_kind",
+  ["capital", "expertise", "influence", "operations"],
+);
+
+/** How much of themselves they are offering. `advisory` is hours a month, not a job. */
+export const communityCofounderCommitmentLevelEnum = pgEnum(
+  "community_cofounder_commitment_level",
+  ["full_time", "part_time", "advisory"],
+);
+
+/**
+ * Whether they want to hear from you right now.
+ *
+ * `not_looking` STAYS VISIBLE in the directory rather than being filtered out, because a
+ * profile is also a record — hiding it would make a person who is mid-conversation look as
+ * though they had left. The row says so and offers no contact affordance, which is also why
+ * the list filter accepts no `state` key.
+ */
+export const communityCofounderEngagementStateEnum = pgEnum(
+  "community_cofounder_engagement_state",
+  ["open_to_intros", "in_conversation", "not_looking"],
+);
+
+/**
+ * TWO VALUES AND NOT A LADDER.
+ *
+ * `identity_verified` means ONLY that this person is who they say they are. It says nothing
+ * about their capital, their track record or their reach, none of which anybody checked — a
+ * third rung would be read as verifying the claims.
+ *
+ * NOT STORED AS A COLUMN. It is derived at read time from `isIdentifiedUser`, the same
+ * predicate `requireIdentifiedUser` enforces (§18.4), so the badge cannot go stale and
+ * there is only ever one definition of "identified" on this platform. The enum exists so
+ * the wire value has a name.
+ */
+export const communityCofounderIdentityStateEnum = pgEnum(
+  "community_cofounder_identity_state",
+  ["unverified", "identity_verified"],
+);
+
+/** `POST` answers `draft`. Publishing is a separate act behind moderation. */
+export const communityCofounderProfileStateEnum = pgEnum("community_cofounder_profile_state", [
+  "draft",
+  "pending_review",
+  "published",
+  "withdrawn",
+]);
+
+export const communityCofounderProfile = pgTable(
+  "community_cofounder_profile",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    slug: text("slug").notNull(),
+    /**
+     * UNIQUE — one profile per person, and the storage-layer form of the rule that THE
+     * VIEWER POSTS ABOUT THEMSELVES AND NEVER ABOUT SOMEBODY ELSE. A directory of people
+     * who did not consent to being in it is a different product with a different legal
+     * shape, so there is deliberately no route by which one person lists another.
+     *
+     * `cascade`, unlike the forum's `set null`: a cofounder profile IS a person, so a
+     * deleted account must take its own listing with it. A forum answer somebody relied on
+     * is a different thing from a personal advertisement nobody stands behind any more.
+     */
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    displayName: text("display_name").notNull(),
+    /** One line in their own words. Never generated from the enums. */
+    headline: text("headline").notNull(),
+    bio: text("bio").notNull(),
+    /** What they want from the other side. Their words, not a form's summary. */
+    lookingFor: text("looking_for").notNull(),
+    countryCode: text("country_code").notNull(),
+    avatarUrl: text("avatar_url"),
+    commitmentLevel: communityCofounderCommitmentLevelEnum("commitment_level").notNull(),
+    engagementState: communityCofounderEngagementStateEnum("engagement_state")
+      .default("open_to_intros")
+      .notNull(),
+    state: communityCofounderProfileStateEnum("state").default("draft").notNull(),
+    /**
+     * "HAS BEEN APPROVED AT LEAST ONCE", set on the first publish and never cleared. Not
+     * re-derived on the way back in: a withdrawn profile that is edited and resubmitted
+     * still carries it, because it was published once and that stays true.
+     */
+    publishedAt: timestamp("published_at"),
+    moderatedByUserId: text("moderated_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    moderatedAt: timestamp("moderated_at"),
+    decisionReason: text("decision_reason"),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("community_cofounder_profile_slug_uidx").on(table.slug),
+    uniqueIndex("community_cofounder_profile_user_uidx").on(table.userId),
+    /**
+     * The directory's keyset. DETERMINISTIC AND BORING ON PURPOSE (§18.1 rule 2): the read
+     * takes no `sort` parameter and computes no ranking, because a ranking on this surface
+     * could read as a platform recommendation about a person.
+     */
+    index("community_cofounder_profile_directory_idx").on(
+      table.state,
+      table.publishedAt,
+      table.id,
+    ),
+    index("community_cofounder_profile_queue_idx").on(table.state, table.createdAt, table.id),
+    check(
+      "community_cofounder_profile_slug_ck",
+      sql`slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' AND char_length(slug) BETWEEN 3 AND 120`,
+    ),
+    check(
+      "community_cofounder_profile_text_ck",
+      sql`char_length(display_name) BETWEEN 1 AND 120
+          AND char_length(headline) BETWEEN 8 AND 200
+          AND char_length(bio) BETWEEN 20 AND 5000
+          AND char_length(looking_for) BETWEEN 8 AND 2000
+          AND country_code ~ '^[A-Z]{2}$'
+          AND (avatar_url IS NULL OR (avatar_url LIKE 'https://%' AND char_length(avatar_url) <= 2048))
+          AND (decision_reason IS NULL OR char_length(decision_reason) BETWEEN 1 AND 2000)`,
+    ),
+    check(
+      "community_cofounder_profile_lifecycle_ck",
+      sql`(state <> 'published' OR published_at IS NOT NULL)
+          AND (state <> 'withdrawn' OR published_at IS NOT NULL)
+          AND (moderated_at IS NULL) = (moderated_by_user_id IS NULL)`,
+    ),
+  ],
+);
+
+export const communityCofounderProfileContribution = pgTable(
+  "community_cofounder_profile_contribution",
+  {
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => communityCofounderProfile.id, { onDelete: "cascade" }),
+    contributionKind:
+      communityCofounderContributionKindEnum("contribution_kind").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "community_cofounder_profile_contribution_pk",
+      columns: [table.profileId, table.contributionKind],
+    }),
+    /** The reverse lookup the `contributionKind` filter scans. */
+    index("community_cofounder_profile_contribution_kind_idx").on(
+      table.contributionKind,
+      table.profileId,
+    ),
+  ],
+);
+
+/**
+ * FREE TEXT, NOT AN ENUM: the long tail here is the whole point, and a closed sector list
+ * would refuse exactly the niches a cofounder search is for.
+ */
+export const communityCofounderProfileSector = pgTable(
+  "community_cofounder_profile_sector",
+  {
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => communityCofounderProfile.id, { onDelete: "cascade" }),
+    sectorLabel: text("sector_label").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "community_cofounder_profile_sector_pk",
+      columns: [table.profileId, table.sectorLabel],
+    }),
+    check(
+      "community_cofounder_profile_sector_text_ck",
+      sql`char_length(sector_label) BETWEEN 1 AND 60`,
+    ),
+  ],
+);
+
+/**
+ * ISO 639-1, lowercase, which the detail read renders as chips. A free-text language field
+ * produces "english", "English" and "EN" side by side.
+ */
+export const communityCofounderProfileLanguage = pgTable(
+  "community_cofounder_profile_language",
+  {
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => communityCofounderProfile.id, { onDelete: "cascade" }),
+    languageCode: text("language_code").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "community_cofounder_profile_language_pk",
+      columns: [table.profileId, table.languageCode],
+    }),
+    check("community_cofounder_profile_language_code_ck", sql`language_code ~ '^[a-z]{2}$'`),
+  ],
+);
+
+export const communityCofounderPriorVenture = pgTable(
+  "community_cofounder_prior_venture",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => communityCofounderProfile.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    roleLabel: text("role_label").notNull(),
+    yearsActiveLabel: text("years_active_label").notNull(),
+    /**
+     * STAYS NULLABLE. Plenty of ventures have no tidy outcome, and a renderer that requires
+     * one invites people to invent one. An absent outcome renders as absent.
+     */
+    outcomeSummary: text("outcome_summary"),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("community_cofounder_prior_venture_position_uidx").on(
+      table.profileId,
+      table.position,
+    ),
+    check(
+      "community_cofounder_prior_venture_text_ck",
+      sql`char_length(name) BETWEEN 1 AND 160
+          AND char_length(role_label) BETWEEN 1 AND 120
+          AND char_length(years_active_label) BETWEEN 1 AND 40
+          AND (outcome_summary IS NULL OR char_length(outcome_summary) BETWEEN 1 AND 1000)
+          AND position >= 0`,
     ),
   ],
 );

@@ -42,26 +42,24 @@ import { account, passkey, user } from "#src/db/schema.js";
  * rejected middleware promise to `errorHandler`, which is the correct outcome for a
  * lost DB connection (CLAUDE.md §3.3 — throw only for the unrecoverable).
  */
-export async function requireIdentifiedUser(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
-  if (!req.user) {
-    res.status(401).json({
-      status: "error",
-      statusCode: 401,
-      message: "Please sign in.",
-    });
-    return;
-  }
-
+/**
+ * THE PREDICATE ITSELF, exported so a read can ask the same question this guard asks.
+ *
+ * §18.4 needs it: `community_cofounder_profile.identityState` is a badge that says "this
+ * person is who they say they are", and there was a standing temptation to mint a second
+ * notion of "identified" for that surface. Two definitions is how one of them silently
+ * becomes the weaker, so the badge derives from THIS function and the guard keeps using it
+ * too — they cannot drift because there is one predicate.
+ *
+ * Still not cached, for the reason above: stale in the wrong direction reopens the hole.
+ */
+export async function isIdentifiedUser(userId: string): Promise<boolean> {
   const identifiedRows = await db
     .select({ id: user.id })
     .from(user)
     .where(
       and(
-        eq(user.id, req.user.id),
+        eq(user.id, userId),
         or(isNull(user.isAnonymous), eq(user.isAnonymous, false)),
         or(
           exists(
@@ -80,8 +78,24 @@ export async function requireIdentifiedUser(
       ),
     )
     .limit(1);
+  return identifiedRows.length > 0;
+}
 
-  if (identifiedRows.length === 0) {
+export async function requireIdentifiedUser(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    });
+    return;
+  }
+
+  if (!(await isIdentifiedUser(req.user.id))) {
     res.status(403).json({
       status: "error",
       statusCode: 403,
