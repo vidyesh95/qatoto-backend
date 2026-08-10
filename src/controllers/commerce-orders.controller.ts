@@ -1,6 +1,8 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { FreightModeSchema } from "#src/schemas/commerce-freight-rates.schemas.js";
+import * as commerceArrivalWindowService from "#src/services/commerce-arrival-window.service.js";
 import * as commerceDeliveryAddressService from "#src/services/commerce-delivery-address.service.js";
 import type { CommerceDeliveryAddressError } from "#src/services/commerce-delivery-address.service.js";
 import * as commerceOrdersService from "#src/services/commerce-orders.service.js";
@@ -11,6 +13,16 @@ import type { ApiResponse } from "#src/types/index.js";
 const EmptyObjectSchema = z.object({}).strict();
 const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
 const OrderIdParamsSchema = z.object({ orderId: z.string().trim().min(1).max(200) }).strict();
+/**
+ * §19.4's mode selection, and the whole of it.
+ *
+ * OPTIONAL, AND NOTHING IS AUTO-SELECTED WHEN IT IS ABSENT. Omitting it is a legitimate state
+ * the projection reports — `freight: unknown / mode_not_selected`, with the covered modes
+ * listed — rather than a prompt for the server to guess. Picking the cheapest would publish
+ * the slowest window as though the buyer had chosen it.
+ */
+const ArrivalWindowQuerySchema = z.object({ mode: FreightModeSchema.optional() }).strict();
+
 const ListQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -243,6 +255,47 @@ function mapDeliveryAddressError(res: Response, error: CommerceDeliveryAddressEr
  * with an active order reaches the street lines, recipient name and phone that the
  * snapshot deliberately omits. Every counterparty read is audited on the buyer's stream.
  */
+/**
+ * §19.4's arrival window. A read, so no idempotency and no body.
+ *
+ * The service reuses `CommerceOrdersError`, so `mapOrdersError` handles the refusals unchanged
+ * — including the 404 a non-party gets, which is byte-identical to the one an unknown id gets.
+ */
+export async function getOrderArrivalWindow(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+
+  const params = OrderIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const query = ArrivalWindowQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const arrivalWindowResult = await commerceArrivalWindowService.getOrderArrivalWindow(
+    { organizationId: actor.organizationId },
+    params.data.orderId,
+    { mode: query.data.mode, asOf: new Date() },
+  );
+
+  if (!arrivalWindowResult.success) {
+    mapOrdersError(res, arrivalWindowResult.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Order arrival window.",
+    data: { arrivalWindow: arrivalWindowResult.value },
+  } satisfies ApiResponse);
+}
+
 export async function getOrderDeliveryAddress(req: Request, res: Response): Promise<void> {
   const actor = requireCommerceActor(req, res);
   if (!actor) return;

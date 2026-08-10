@@ -5,6 +5,7 @@ import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
   commerceAddressRevealLimiter,
+  commerceArrivalWindowReadLimiter,
   commerceOrderWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import {
@@ -47,6 +48,20 @@ router.get(
   requireActiveCommerceOrganization,
   commerceAddressRevealLimiter,
   commerceOrdersController.getOrderDeliveryAddress,
+);
+
+/**
+ * §19.4. Each call RATES A LANE — scanning rate cards and their bands, then resolving a dwell
+ * estimate — so it carries its own tighter limiter rather than riding the ordinary order read.
+ *
+ * `?mode=` is optional and nothing is auto-selected without it; see the controller's schema.
+ */
+router.get(
+  "/orders/:orderId/arrival-window",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceArrivalWindowReadLimiter,
+  commerceOrdersController.getOrderArrivalWindow,
 );
 
 router.post(
