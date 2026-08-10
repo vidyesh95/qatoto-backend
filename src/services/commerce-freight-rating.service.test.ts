@@ -303,9 +303,9 @@ describe("rateCard", () => {
     expect(rated).toEqual({
       status: "priced",
       option: expect.objectContaining({
-        priceInCents: 1_200_000,
         chargeableWeightGrams: 3_000_000,
         chargeableWeightBasis: "volumetric",
+        providerQuote: expect.objectContaining({ priceInCents: 1_200_000 }),
       }),
     });
   });
@@ -354,7 +354,7 @@ describe("rateLaneFromCards", () => {
     });
 
     expect(lane.options).toHaveLength(2);
-    expect(lane.options.map((option) => option.sourceForwarderName).toSorted()).toEqual([
+    expect(lane.options.map((option) => option.providerQuote.sourceForwarderName).toSorted()).toEqual([
       "Blue Anchor Logistics",
       "Harbour Line",
     ]);
@@ -374,7 +374,9 @@ describe("rateLaneFromCards", () => {
       }),
     });
 
-    const prices = lane.options.map((option) => option.priceInCents).toSorted((l, r) => l - r);
+    const prices = lane.options
+      .map((option) => option.providerQuote.priceInCents)
+      .toSorted((left, right) => left - right);
     // 166_667 g and 1_000_000 g at 400 cents/kg.
     expect(prices).toEqual([66_667, 400_000]);
   });
@@ -401,14 +403,21 @@ describe("rateLaneFromCards", () => {
 
     expect(lane.options[0]).toEqual(
       expect.objectContaining({
-        sourceForwarderName: "Blue Anchor Logistics",
-        validUntil,
         rateCardId: "rc_a",
-        currency: "USD",
         chargeableWeightBasis: expect.any(String),
         chargeableWeightGrams: expect.any(Number),
+        providerQuote: expect.objectContaining({
+          sourceForwarderName: "Blue Anchor Logistics",
+          providerOrganizationId: "org_forwarder",
+          validUntil,
+          currency: "USD",
+          subjectToRemeasurement: true,
+        }),
       }),
     );
+
+    // The price is NOT readable without the provider — that is the whole mechanism.
+    expect(lane.options[0]).not.toHaveProperty("priceInCents");
   });
 
   it("reports reasons only when they explain an absence", () => {
@@ -449,5 +458,43 @@ describe("rateLaneFromCards", () => {
 
     expect(lane.options).toEqual([]);
     expect(lane.unavailableReasons).toEqual(["volume_not_declared"]);
+  });
+
+  /**
+   * THE MARKETPLACE FALLBACK. An unrateable lane must not be a dead end — the buyer is owed
+   * somewhere to go, and Qatoto's answer is the forwarders who sell that lane.
+   */
+  it("names the quotable forwarders even when nothing could be priced", () => {
+    const lane = rateLaneFromCards({
+      originCountryCode: "IN",
+      destinationCountryCode: "DE",
+      cards: [
+        card({ id: "rc_sea", sourceForwarderName: "Blue Anchor Logistics" }),
+        card({ id: "rc_air", mode: "air", sourceForwarderName: "Harbour Line" }),
+      ],
+      consignment: consignment({ volumeCubicCm: null, hasIncompletePackageData: true }),
+    });
+
+    expect(lane.options).toEqual([]);
+    expect(lane.quotableProviders).toEqual([
+      { providerOrganizationId: "org_forwarder", sourceForwarderName: "Harbour Line", mode: "air" },
+      {
+        providerOrganizationId: "org_forwarder",
+        sourceForwarderName: "Blue Anchor Logistics",
+        mode: "sea",
+      },
+    ]);
+  });
+
+  it("reports no quotable forwarder for a lane nobody sells", () => {
+    const lane = rateLaneFromCards({
+      originCountryCode: "IN",
+      destinationCountryCode: "DE",
+      cards: [],
+      consignment: consignment(),
+    });
+
+    expect(lane.quotableProviders).toEqual([]);
+    expect(lane.unavailableReasons).toEqual(["no_active_rate_card"]);
   });
 });

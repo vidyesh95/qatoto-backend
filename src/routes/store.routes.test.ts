@@ -507,12 +507,16 @@ describe("public store routes", () => {
     ]);
     deliveryEstimateStubs.resolveShippingOriginCountryCode.mockResolvedValue("IN");
     freightJourneyStubs.planFreightJourney.mockResolvedValue({
+      contracting: { party: "provider" },
       origin: { countryCode: "IN", locality: null },
       destination: { countryCode: "DE", locality: null },
       consignment: { billableWeightGrams: 24_000, volumeCubicCm: 48_000, packageCount: 2, hasIncompletePackageData: false },
       legs: [],
       journeys: [],
       unpriceableReasons: [{ kind: "leg_uncovered", legSequence: 1, reasons: ["no_active_rate_card"] }],
+      quotableProviders: [
+        { providerOrganizationId: "org_forwarder", sourceForwarderName: "Blue Anchor Logistics", mode: "sea" },
+      ],
     });
 
     const response = await request(app)
@@ -524,6 +528,10 @@ describe("public store routes", () => {
       { currency: "USD", estimatedMinInCents: 25_000, estimatedMaxInCents: 90_000 },
     ]);
     expect(response.body.data.lanePlan.journeys).toEqual([]);
+    // Qatoto is a marketplace, not a carrier: the buyer contracts with the provider, and an
+    // unpriceable lane still names who could quote it.
+    expect(response.body.data.lanePlan.contracting).toEqual({ party: "provider" });
+    expect(response.body.data.lanePlan.quotableProviders).toHaveLength(1);
   });
 
   it("carries no date anywhere in a lane plan — a product page has no clock to start", async () => {
@@ -548,21 +556,30 @@ describe("public store routes", () => {
           options: [
             {
               mode: "sea",
-              priceInCents: 186_000,
-              currency: "USD",
               transitDaysMin: 24,
               transitDaysMax: 34,
               rateCardId: "rc_1",
               rateBreakId: "rb_1",
-              sourceForwarderName: "Blue Anchor Logistics",
-              validUntil: null,
+              chargeableWeightGrams: 48_000,
+              chargeableWeightBasis: "volumetric",
+              providerQuote: {
+                providerOrganizationId: "org_forwarder",
+                sourceForwarderName: "Blue Anchor Logistics",
+                priceInCents: 186_000,
+                currency: "USD",
+                validUntil: null,
+                subjectToRemeasurement: true,
+              },
             },
           ],
           unavailableReasons: [],
+          quotableProviders: [],
         },
       ],
       journeys: [],
       unpriceableReasons: [],
+      contracting: { party: "provider" },
+      quotableProviders: [],
     });
 
     const response = await request(app)
@@ -574,6 +591,9 @@ describe("public store routes", () => {
     const serialized = JSON.stringify(response.body.data.lanePlan);
     expect(serialized).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
     expect(response.body.data.lanePlan.legs[0].options[0].transitDaysMin).toBe(24);
+    // The price is reachable only through the provider that quoted it.
+    expect(response.body.data.lanePlan.legs[0].options[0].providerQuote.priceInCents).toBe(186_000);
+    expect(response.body.data.lanePlan.legs[0].options[0].priceInCents).toBeUndefined();
   });
 
   it("returns a null lane plan when the seller's origin cannot be resolved", async () => {

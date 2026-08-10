@@ -9,19 +9,30 @@ const { composeJourneys, computeConsignmentMeasurement, planLegs } = await impor
 type LegPlan = Parameters<typeof composeJourneys>[0][number];
 type Option = LegPlan["options"][number];
 
-function option(overrides: Partial<Option> & Pick<Option, "rateCardId">): Option {
+function option(
+  overrides: Partial<Omit<Option, "providerQuote">> &
+    Pick<Option, "rateCardId"> & {
+      readonly providerQuote?: Partial<Option["providerQuote"]>;
+    },
+): Option {
+  const { providerQuote, ...rest } = overrides;
   return {
     mode: "sea",
-    priceInCents: 186_000,
-    currency: "USD",
     transitDaysMin: 24,
     transitDaysMax: 34,
     rateBreakId: `${overrides.rateCardId}_b0`,
-    sourceForwarderName: "Blue Anchor Logistics",
-    validUntil: null,
     chargeableWeightGrams: 50_000,
     chargeableWeightBasis: "actual",
-    ...overrides,
+    ...rest,
+    providerQuote: {
+      providerOrganizationId: "org_forwarder",
+      sourceForwarderName: "Blue Anchor Logistics",
+      priceInCents: 186_000,
+      currency: "USD",
+      validUntil: null,
+      subjectToRemeasurement: true,
+      ...providerQuote,
+    },
   };
 }
 
@@ -33,6 +44,7 @@ function leg(overrides: Partial<LegPlan> & Pick<LegPlan, "sequence" | "kind">): 
     destinationLocality: null,
     options: [],
     unavailableReasons: [],
+    quotableProviders: [],
     ...overrides,
   };
 }
@@ -145,7 +157,7 @@ describe("composeJourneys", () => {
       leg({
         sequence: 0,
         kind: "international",
-        options: [option({ rateCardId: "rc_sea", priceInCents: 186_000, transitDaysMin: 24, transitDaysMax: 34 })],
+        options: [option({ rateCardId: "rc_sea", transitDaysMin: 24, transitDaysMax: 34 })],
       }),
       leg({
         sequence: 1,
@@ -155,9 +167,9 @@ describe("composeJourneys", () => {
           option({
             rateCardId: "rc_inland",
             mode: "land",
-            priceInCents: 24_000,
             transitDaysMin: 2,
             transitDaysMax: 4,
+            providerQuote: { priceInCents: 24_000 },
           }),
         ],
       }),
@@ -185,15 +197,15 @@ describe("composeJourneys", () => {
         sequence: 0,
         kind: "international",
         options: [
-          option({ rateCardId: "rc_sea", mode: "sea", priceInCents: 186_000 }),
-          option({ rateCardId: "rc_air", mode: "air", priceInCents: 940_000, transitDaysMin: 4, transitDaysMax: 8 }),
+          option({ rateCardId: "rc_sea", mode: "sea" }),
+          option({ rateCardId: "rc_air", mode: "air", transitDaysMin: 4, transitDaysMax: 8, providerQuote: { priceInCents: 940_000 } }),
         ],
       }),
       leg({
         sequence: 1,
         kind: "inland_destination",
         originCountryCode: "DE",
-        options: [option({ rateCardId: "rc_inland", mode: "land", priceInCents: 24_000 })],
+        options: [option({ rateCardId: "rc_inland", mode: "land", providerQuote: { priceInCents: 24_000 } })],
       }),
     ]);
 
@@ -205,13 +217,13 @@ describe("composeJourneys", () => {
       leg({
         sequence: 0,
         kind: "international",
-        options: [option({ rateCardId: "rc_sea", currency: "USD" })],
+        options: [option({ rateCardId: "rc_sea", providerQuote: { currency: "USD" } })],
       }),
       leg({
         sequence: 1,
         kind: "inland_destination",
         originCountryCode: "DE",
-        options: [option({ rateCardId: "rc_inland", mode: "land", currency: "EUR" })],
+        options: [option({ rateCardId: "rc_inland", mode: "land", providerQuote: { currency: "EUR" } })],
       }),
     ]);
 
@@ -265,13 +277,13 @@ describe("composeJourneys", () => {
       leg({
         sequence: 0,
         kind: "international",
-        options: [option({ rateCardId: "rc_sea", validUntil: late })],
+        options: [option({ rateCardId: "rc_sea", providerQuote: { validUntil: late } })],
       }),
       leg({
         sequence: 1,
         kind: "inland_destination",
         originCountryCode: "DE",
-        options: [option({ rateCardId: "rc_inland", mode: "land", validUntil: early })],
+        options: [option({ rateCardId: "rc_inland", mode: "land", providerQuote: { validUntil: early } })],
       }),
     ]);
 
@@ -284,7 +296,7 @@ describe("composeJourneys", () => {
         sequence: 0,
         kind: "domestic",
         destinationCountryCode: "IN",
-        options: [option({ rateCardId: "rc_land", mode: "land", priceInCents: 12_000 })],
+        options: [option({ rateCardId: "rc_land", mode: "land", providerQuote: { priceInCents: 12_000 } })],
       }),
     ]);
 

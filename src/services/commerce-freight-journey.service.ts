@@ -9,6 +9,7 @@ import {
   type ConsignmentMeasurement,
   type FreightOption,
   type FreightRatingUnavailableReason,
+  type QuotableFreightProvider,
 } from "#src/services/commerce-freight-rating.service.js";
 import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
 
@@ -46,6 +47,7 @@ export interface FreightLegPlan {
   readonly destinationLocality: string | null;
   readonly options: readonly FreightOption[];
   readonly unavailableReasons: readonly FreightRatingUnavailableReason[];
+  readonly quotableProviders: readonly QuotableFreightProvider[];
 }
 
 export interface FreightJourneyLegSelection {
@@ -102,12 +104,27 @@ export type JourneyUnpriceableReason =
   | { readonly kind: "origin_country_unresolved" };
 
 export interface FreightLanePlan {
+  /**
+   * WHO THE BUYER CONTRACTS WITH. Stated once, at the level the fact belongs to: an engagement has
+   * one counterparty, and repeating a constant on every option is how a field becomes one that
+   * renderers learn to ignore.
+   *
+   * Qatoto provides no freight, escrow or insurance. It lists providers, and the buyer engages
+   * them. Every price below is a named provider's.
+   */
+  readonly contracting: { readonly party: "provider" };
   readonly origin: { readonly countryCode: string; readonly locality: string | null };
   readonly destination: { readonly countryCode: string; readonly locality: string | null };
   readonly consignment: ConsignmentMeasurement;
   readonly legs: readonly FreightLegPlan[];
   readonly journeys: readonly FreightJourneyProjection[];
   readonly unpriceableReasons: readonly JourneyUnpriceableReason[];
+  /**
+   * The RFQ affordance for the whole journey — every forwarder selling any leg of it, deduplicated.
+   * Present even when nothing priced, which is the point: an unrateable lane must still offer the
+   * buyer somewhere to go.
+   */
+  readonly quotableProviders: readonly QuotableFreightProvider[];
 }
 
 export interface ConsignmentLineInput {
@@ -310,7 +327,7 @@ export function composeJourneys(legs: readonly FreightLegPlan[]): {
         );
 
   const candidateCurrencies = [
-    ...new Set(legs.flatMap((leg) => leg.options.map((option) => option.currency))),
+    ...new Set(legs.flatMap((leg) => leg.options.map((option) => option.providerQuote.currency))),
   ].toSorted();
 
   const journeys: FreightJourneyProjection[] = [];
@@ -326,12 +343,12 @@ export function composeJourneys(legs: readonly FreightLegPlan[]): {
         // whatever mode is cheapest, because nobody chooses how a truck reaches the warehouse.
         const eligible = leg.options.filter(
           (option) =>
-            option.currency === currency &&
+            option.providerQuote.currency === currency &&
             (leg.kind === "inland_destination" || option.mode === mode),
         );
         const cheapest = eligible.toSorted(
           (left, right) =>
-            left.priceInCents - right.priceInCents ||
+            left.providerQuote.priceInCents - right.providerQuote.priceInCents ||
             left.rateCardId.localeCompare(right.rateCardId),
         )[0];
 
@@ -345,10 +362,10 @@ export function composeJourneys(legs: readonly FreightLegPlan[]): {
           legSequence: leg.sequence,
           rateCardId: cheapest.rateCardId,
           mode: cheapest.mode,
-          priceInCents: cheapest.priceInCents,
+          priceInCents: cheapest.providerQuote.priceInCents,
           transitDaysMin: cheapest.transitDaysMin,
           transitDaysMax: cheapest.transitDaysMax,
-          sourceForwarderName: cheapest.sourceForwarderName,
+          sourceForwarderName: cheapest.providerQuote.sourceForwarderName,
           chargeableWeightGrams: cheapest.chargeableWeightGrams,
           chargeableWeightBasis: cheapest.chargeableWeightBasis,
         });
@@ -364,7 +381,7 @@ export function composeJourneys(legs: readonly FreightLegPlan[]): {
             .filter((option) =>
               selections.some((selection) => selection.rateCardId === option.rateCardId),
             )
-            .map((option) => option.validUntil),
+            .map((option) => option.providerQuote.validUntil),
         )
         .filter((validUntil): validUntil is Date => validUntil !== null);
 
@@ -428,12 +445,25 @@ export async function planFreightJourney(input: {
       consignment,
       asOf: input.asOf,
     });
-    legs.push({ ...leg, options: rated.options, unavailableReasons: rated.unavailableReasons });
+    legs.push({
+      ...leg,
+      options: rated.options,
+      unavailableReasons: rated.unavailableReasons,
+      quotableProviders: rated.quotableProviders,
+    });
   }
 
   const composed = composeJourneys(legs);
 
+  const quotableByKey = new Map<string, QuotableFreightProvider>();
+  for (const leg of legs) {
+    for (const provider of leg.quotableProviders) {
+      quotableByKey.set(`${provider.providerOrganizationId}:${provider.mode}`, provider);
+    }
+  }
+
   return {
+    contracting: { party: "provider" },
     origin: { countryCode: originCountryCode, locality: input.originLocality },
     destination: {
       countryCode: input.destinationCountryCode,
@@ -443,5 +473,6 @@ export async function planFreightJourney(input: {
     legs,
     journeys: composed.journeys,
     unpriceableReasons: composed.unpriceableReasons,
+    quotableProviders: [...quotableByKey.values()],
   };
 }

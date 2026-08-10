@@ -118,16 +118,39 @@ export type RateBreakSelection =
  * and a list mixing USD and EUR is exactly the collapse A16 refused when it grouped estimates
  * per currency and never converted.
  */
-export interface FreightOption {
-  readonly mode: FreightMode;
+/**
+ * The price, AND WHOSE PRICE IT IS, in one object that cannot be taken apart.
+ *
+ * QATOTO IS A FREIGHT MARKETPLACE, NOT A CARRIER. It sells no freight, holds no funds and carries
+ * no consignment; the buyer's counterparty is the provider organization named here. So the price
+ * is not the platform's to state, and nesting it means a client physically CANNOT render the
+ * number without holding the provider's identity — attribution stops being a convention that a
+ * future surface can quietly drop.
+ *
+ * This is A13's move, which this codebase already defends: a seller's declared stats and Qatoto's
+ * measured stats sit in two objects precisely so a renderer cannot flatten one into the other.
+ */
+export interface ProviderFreightQuote {
+  readonly providerOrganizationId: string;
+  readonly sourceForwarderName: string;
   readonly priceInCents: number;
   readonly currency: string;
+  readonly validUntil: Date | null;
+  /**
+   * Always true, and on the wire so a client cannot claim it was not told. Forwarders re-weigh and
+   * re-measure at pickup and bill the result; a rate computed from a seller's declared geometry is
+   * the provider's estimate against that declaration, not a fixed charge.
+   */
+  readonly subjectToRemeasurement: true;
+}
+
+export interface FreightOption {
+  readonly mode: FreightMode;
+  readonly providerQuote: ProviderFreightQuote;
   readonly transitDaysMin: number;
   readonly transitDaysMax: number;
   readonly rateCardId: string;
   readonly rateBreakId: string;
-  readonly sourceForwarderName: string;
-  readonly validUntil: Date | null;
   /**
    * §19.9. The weight this option was actually priced on, and which basis won.
    *
@@ -139,12 +162,30 @@ export interface FreightOption {
   readonly chargeableWeightBasis: "actual" | "volumetric";
 }
 
+/** A forwarder who sells this lane and could be asked for a real quote. */
+export interface QuotableFreightProvider {
+  readonly providerOrganizationId: string;
+  readonly sourceForwarderName: string;
+  readonly mode: FreightMode;
+}
+
 export interface RatedLane {
   readonly originCountryCode: string;
   readonly destinationCountryCode: string;
   readonly options: readonly FreightOption[];
   /** Sorted and de-duplicated. Empty options WITH an empty reason list is not representable. */
   readonly unavailableReasons: readonly FreightRatingUnavailableReason[];
+  /**
+   * THE MARKETPLACE FALLBACK. Who sells this lane, whether or not anything could be priced.
+   *
+   * A lane that cannot be rated — most often because the seller never measured a box — used to end
+   * in a named absence and nothing else, which is a dead end: the buyer is told no price exists and
+   * offered no way forward. Naming the forwarders lets the client open an RFQ against the machinery
+   * that already exists, which is both §15.6's honest degradation and what Alibaba actually does.
+   *
+   * Derived from the cards already loaded for this lane, so it costs no extra query.
+   */
+  readonly quotableProviders: readonly QuotableFreightProvider[];
 }
 
 /**
@@ -346,14 +387,18 @@ export function rateCard(
         status: "priced",
         option: {
           mode: card.mode,
-          priceInCents: priceRatedBreak(selection.selected, chargeable.grams),
-          currency: card.currency,
+          providerQuote: {
+            providerOrganizationId: card.providerOrganizationId,
+            sourceForwarderName: card.sourceForwarderName,
+            priceInCents: priceRatedBreak(selection.selected, chargeable.grams),
+            currency: card.currency,
+            validUntil: card.validUntil,
+            subjectToRemeasurement: true,
+          },
           transitDaysMin: selection.selected.transitDaysMin,
           transitDaysMax: selection.selected.transitDaysMax,
           rateCardId: card.id,
           rateBreakId: selection.selected.id,
-          sourceForwarderName: card.sourceForwarderName,
-          validUntil: card.validUntil,
           chargeableWeightGrams: chargeable.grams,
           chargeableWeightBasis: chargeable.basis,
         },
@@ -399,8 +444,27 @@ export function rateLaneFromCards(input: {
   const sortedOptions = options.toSorted(
     (left, right) =>
       FREIGHT_MODE_ORDER.indexOf(left.mode) - FREIGHT_MODE_ORDER.indexOf(right.mode) ||
-      left.priceInCents - right.priceInCents ||
+      left.providerQuote.priceInCents - right.providerQuote.priceInCents ||
       left.rateCardId.localeCompare(right.rateCardId),
+  );
+
+  /**
+   * Every forwarder selling this lane, priced or not — the RFQ affordance. Deduplicated on
+   * (provider, mode) because one forwarder may sell the lane by sea and by air, and those are two
+   * distinct things to ask about.
+   */
+  const quotableByKey = new Map<string, QuotableFreightProvider>();
+  for (const card of input.cards) {
+    quotableByKey.set(`${card.providerOrganizationId}:${card.mode}`, {
+      providerOrganizationId: card.providerOrganizationId,
+      sourceForwarderName: card.sourceForwarderName,
+      mode: card.mode,
+    });
+  }
+  const quotableProviders = [...quotableByKey.values()].toSorted(
+    (left, right) =>
+      FREIGHT_MODE_ORDER.indexOf(left.mode) - FREIGHT_MODE_ORDER.indexOf(right.mode) ||
+      left.sourceForwarderName.localeCompare(right.sourceForwarderName),
   );
 
   return {
@@ -410,6 +474,7 @@ export function rateLaneFromCards(input: {
     // Reasons are only meaningful when they explain an absence. A lane with options and one
     // unpriceable card is a covered lane.
     unavailableReasons: sortedOptions.length > 0 ? [] : [...reasons].toSorted(),
+    quotableProviders,
   };
 }
 

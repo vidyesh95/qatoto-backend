@@ -475,6 +475,18 @@ function mapProductErrorToResponse(error: productsService.ProductError): {
         message: "This listing is not complete enough to publish.",
         errors: { missing: error.missing },
       };
+    /**
+     * 422, not 409. This is not a state conflict the seller must resolve elsewhere — there are
+     * fields on the form in front of them and this response names every one.
+     */
+    case "ACTIVE_LISTING_MISSING_PACKAGE_DIMENSIONS":
+      return {
+        statusCode: 422,
+        message:
+          "A published listing must declare its package size, weight and units per package so " +
+          "buyers can get a freight rate. Add them to this edit, or unpublish the listing first.",
+        errors: { missing: error.missing },
+      };
     case "IMAGE_ORDER_MISMATCH":
       return {
         statusCode: 422,

@@ -60,6 +60,12 @@ export type ProductError =
     }
   | { type: "TOO_MANY_IMAGES"; limit: number }
   | { type: "INCOMPLETE_FOR_PUBLISH"; missing: readonly string[] }
+  /**
+   * §19.9. A PUBLISHED listing is one a buyer can freight-rate, so an edit may not leave it
+   * without the facts the rater needs. Distinct from `INCOMPLETE_FOR_PUBLISH` because that one
+   * refuses a transition and this one refuses a mutation of something already live.
+   */
+  | { type: "ACTIVE_LISTING_MISSING_PACKAGE_DIMENSIONS"; missing: readonly string[] }
   | { type: "IMAGE_ORDER_MISMATCH" }
   | ImageValidationError
   | CloudinaryError;
@@ -67,7 +73,11 @@ export type ProductError =
 type ProductUpdateOutcome =
   | { readonly status: "updated" }
   | { readonly status: "not_found" }
-  | { readonly status: "category_error"; readonly error: ProductError };
+  | { readonly status: "category_error"; readonly error: ProductError }
+  | {
+      readonly status: "active_listing_unmeasured";
+      readonly missing: readonly string[];
+    };
 
 type ProductPublishOutcome =
   | { readonly status: "published" }
@@ -154,6 +164,193 @@ export interface ProductCustomizationOptionView {
 }
 
 /**
+ * What a listing still owes before it can be published (A5, §19.9).
+ *
+ * §15.6's SHAPE, REUSED RATHER THAN RE-INVENTED. Guided pathways already solved "the UI must
+ * disable a CTA and say which piece is missing" with a per-item `state`, a named reason and a
+ * filled/required pair; freight readiness is the same problem and gets the same answer.
+ *
+ * THE PUBLISH GATE AND THE SELLER'S READ CALL THIS ONE FUNCTION, which is the point: a checklist
+ * that disagreed with the 422 behind it would be worse than no checklist.
+ */
+export type ListingRequirementKey =
+  | "title"
+  | "price"
+  | "images"
+  | "samplePrice"
+  | "shippingFacts";
+
+export type ListingRequirementState = "satisfied" | "missing" | "not_applicable";
+
+export interface ListingRequirementProjection {
+  readonly key: ListingRequirementKey;
+  readonly state: ListingRequirementState;
+  /**
+   * The exact field tokens the seller must fill. Empty unless `state` is `missing`.
+   *
+   * These are the SAME tokens `INCOMPLETE_FOR_PUBLISH.missing` has always carried, because other
+   * clients already read that vocabulary and a rename would be a silent break.
+   */
+  readonly missingFields: readonly string[];
+}
+
+export interface ListingCompletenessProjection {
+  readonly requirements: readonly ListingRequirementProjection[];
+  readonly requirementCount: number;
+  /** Requirements that apply to THIS listing — the denominator of `isComplete`. */
+  readonly applicableRequirementCount: number;
+  readonly satisfiedRequirementCount: number;
+  readonly isComplete: boolean;
+}
+
+export interface ListingCompletenessFacts {
+  readonly title: string;
+  readonly priceInCents: number;
+  readonly imageCount: number;
+  readonly samplePolicy: "unavailable" | "paid" | "refundable";
+  readonly samplePriceInCents: number | null;
+  readonly packageLengthMm: number | null;
+  readonly packageWidthMm: number | null;
+  readonly packageHeightMm: number | null;
+  readonly packageGrossWeightGrams: number | null;
+  readonly unitsPerPackage: number | null;
+}
+
+/**
+ * ALL FIVE SHIPPING FACTS, NOT JUST THE THREE DIMENSIONS.
+ *
+ * Freight rates on chargeable weight, and the rater needs every one of these: volume comes from
+ * L x W x H MULTIPLIED BY the package count, and the package count comes from `unitsPerPackage`.
+ * `computeConsignmentMeasurement` skips a line entirely when `unitsPerPackage` is null, and
+ * `computePackagingTotals` skips it when either that or `packageGrossWeightGrams` is null. A gate
+ * that demanded only the three dimensions would pass listings that still contribute ZERO volume
+ * and ZERO weight — a gate that looks done and is not.
+ *
+ * UNCONDITIONAL, because every `product` row is physical goods: the browse taxonomy has had no
+ * services or digital root since migration 0098 retired `digital_goods`. IF A SERVICES CATEGORY IS
+ * EVER SEEDED, THIS IS THE REQUIREMENT THAT HAS TO BECOME CONDITIONAL.
+ */
+export interface ShippingFacts {
+  readonly packageLengthMm: number | null;
+  readonly packageWidthMm: number | null;
+  readonly packageHeightMm: number | null;
+  readonly packageGrossWeightGrams: number | null;
+  readonly unitsPerPackage: number | null;
+}
+
+/** The five tokens, in the order a seller's form presents them. Empty when all are declared. */
+export function missingShippingFacts(facts: ShippingFacts): readonly string[] {
+  return [
+    facts.packageLengthMm === null ? "packageLengthMm" : null,
+    facts.packageWidthMm === null ? "packageWidthMm" : null,
+    facts.packageHeightMm === null ? "packageHeightMm" : null,
+    facts.packageGrossWeightGrams === null ? "packageGrossWeightGrams" : null,
+    facts.unitsPerPackage === null ? "unitsPerPackage" : null,
+  ].filter((fieldName): fieldName is string => fieldName !== null);
+}
+
+function projectShippingFactsRequirement(
+  facts: ListingCompletenessFacts,
+): ListingRequirementProjection {
+  const missingFields = missingShippingFacts(facts);
+  return missingFields.length === 0
+    ? { key: "shippingFacts", state: "satisfied", missingFields: [] }
+    : { key: "shippingFacts", state: "missing", missingFields };
+}
+
+export function projectListingCompleteness(
+  facts: ListingCompletenessFacts,
+): ListingCompletenessProjection {
+  const hasTitle = facts.title.trim().length > 0;
+  const hasPrice = facts.priceInCents > 0;
+  const hasImage = facts.imageCount >= 1;
+  const samplePolicyChargesForSamples =
+    facts.samplePolicy === "paid" || facts.samplePolicy === "refundable";
+  const hasSamplePrice = facts.samplePriceInCents !== null && facts.samplePriceInCents > 0;
+
+  // Declared in the order the legacy `missing` array used, because that order is the wire
+  // contract other clients already render.
+  const requirements: readonly ListingRequirementProjection[] = [
+    {
+      key: "title",
+      state: hasTitle ? "satisfied" : "missing",
+      missingFields: hasTitle ? [] : ["title"],
+    },
+    {
+      key: "price",
+      state: hasPrice ? "satisfied" : "missing",
+      missingFields: hasPrice ? [] : ["price"],
+    },
+    {
+      key: "images",
+      state: hasImage ? "satisfied" : "missing",
+      missingFields: hasImage ? [] : ["images"],
+    },
+    samplePolicyChargesForSamples
+      ? {
+          key: "samplePrice",
+          state: hasSamplePrice ? "satisfied" : "missing",
+          missingFields: hasSamplePrice ? [] : ["samplePriceInCents"],
+        }
+      : { key: "samplePrice", state: "not_applicable", missingFields: [] },
+    projectShippingFactsRequirement(facts),
+  ];
+
+  const applicable = requirements.filter((requirement) => requirement.state !== "not_applicable");
+  const satisfied = applicable.filter((requirement) => requirement.state === "satisfied");
+
+  return {
+    requirements,
+    requirementCount: requirements.length,
+    applicableRequirementCount: applicable.length,
+    satisfiedRequirementCount: satisfied.length,
+    isComplete: satisfied.length === applicable.length,
+  };
+}
+
+function missingFieldsForRequirement(
+  requirement: ListingRequirementProjection,
+): readonly string[] {
+  switch (requirement.state) {
+    case "missing":
+      return requirement.missingFields;
+    case "satisfied":
+    case "not_applicable":
+      return [];
+    default: {
+      const exhaustiveState: never = requirement.state;
+      throw new Error(`Unhandled listing requirement state: ${JSON.stringify(exhaustiveState)}`);
+    }
+  }
+}
+
+/**
+ * Which listing statuses owe the freight rater a measured box?
+ *
+ * A SWITCH RATHER THAN `status === "active"`, so a future `scheduled` or `archived` status breaks
+ * the build here instead of silently letting an unrateable listing stay live (CLAUDE.md §3.2).
+ */
+function listingStatusRequiresShippingFacts(status: "draft" | "active"): boolean {
+  switch (status) {
+    case "active":
+      return true;
+    case "draft":
+      return false;
+    default: {
+      const exhaustiveStatus: never = status;
+      throw new Error(`Unhandled product status: ${JSON.stringify(exhaustiveStatus)}`);
+    }
+  }
+}
+
+/** The `INCOMPLETE_FOR_PUBLISH.missing` payload, derived from the same projection. */
+export function collectMissingListingFields(
+  completeness: ListingCompletenessProjection,
+): readonly string[] {
+  return completeness.requirements.flatMap(missingFieldsForRequirement);
+}
+
+/**
  * Full listing for the create/edit/detail flows. One canonical projection so the
  * shape can't drift between mutations (mirrors PublicUser / PUBLIC_USER_COLUMNS).
  */
@@ -196,6 +393,19 @@ export interface PublicProduct {
   readonly packageGrossWeightGrams: number | null;
   readonly unitsPerPackage: number | null;
   readonly moderationState: "pending" | "approved" | "rejected" | "suspended";
+  /**
+   * A5/§19.9. Why the Publish control is disabled, named field by field, so the seller learns it
+   * from the form rather than from a 422 after they press the button.
+   *
+   * Computed from the row and its images with NO extra query, by the same function the publish
+   * gate uses.
+   *
+   * THE CATEGORY ACTIVE-LEAF CHECK IS DELIBERATELY ABSENT. It needs a `commerce_category` read
+   * that `createProduct` does not make, and it is a RACE rather than a blank field — the seller
+   * picked from a list of active leaves. It stays a publish-time re-check; do not "fix" the
+   * asymmetry by adding a query here.
+   */
+  readonly listingCompleteness: ListingCompletenessProjection;
   readonly images: readonly ProductImageView[];
   readonly pricingTiers: readonly PricingTierView[];
   readonly specifications: readonly ProductSpecificationView[];
@@ -380,6 +590,18 @@ function toPublicProduct(
     packageGrossWeightGrams: row.packageGrossWeightGrams,
     unitsPerPackage: row.unitsPerPackage,
     moderationState: row.moderationState,
+    listingCompleteness: projectListingCompleteness({
+      title: row.title,
+      priceInCents: row.priceInCents,
+      imageCount: images.length,
+      samplePolicy: row.samplePolicy,
+      samplePriceInCents: row.samplePriceInCents,
+      packageLengthMm: row.packageLengthMm,
+      packageWidthMm: row.packageWidthMm,
+      packageHeightMm: row.packageHeightMm,
+      packageGrossWeightGrams: row.packageGrossWeightGrams,
+      unitsPerPackage: row.unitsPerPackage,
+    }),
     images,
     pricingTiers,
     specifications,
@@ -1177,14 +1399,49 @@ export async function updateProduct(
     const outcome = await db.transaction(
       async (tx): Promise<ProductUpdateOutcome> => {
         const [owned] = await tx
-          .select({ id: product.id })
+          .select({
+            id: product.id,
+            status: product.status,
+            packageLengthMm: product.packageLengthMm,
+            packageWidthMm: product.packageWidthMm,
+            packageHeightMm: product.packageHeightMm,
+            packageGrossWeightGrams: product.packageGrossWeightGrams,
+            unitsPerPackage: product.unitsPerPackage,
+          })
           .from(product)
           .where(
             and(eq(product.id, productId), eq(product.sellerOrganizationId, sellerOrganizationId)),
-          );
+          )
+          .for("update");
 
         if (!owned) {
           return { status: "not_found" };
+        }
+
+        /**
+         * §19.9. A live listing is never re-published, so the publish gate would never catch it
+         * again — the check has to be here, BEFORE any write.
+         *
+         * CHECKED ON THE POST-PATCH VALUES, so the patch is allowed to be the fix: a PATCH that
+         * SUPPLIES the missing facts passes. A seller fixing a typo on a legacy listing must send
+         * the geometry in the same request, and `POST /products/:id/unpublish` stays ungated as
+         * the escape hatch the 422 message names.
+         */
+        if (listingStatusRequiresShippingFacts(owned.status)) {
+          // Only the SHIPPING half is re-checked. Title, price and images are publish-time
+          // requirements an active listing already satisfied, and re-asserting them here would
+          // refuse an edit for a reason the seller cannot see in this request.
+          const missing = missingShippingFacts({
+            packageLengthMm: patch.packageLengthMm ?? owned.packageLengthMm,
+            packageWidthMm: patch.packageWidthMm ?? owned.packageWidthMm,
+            packageHeightMm: patch.packageHeightMm ?? owned.packageHeightMm,
+            packageGrossWeightGrams:
+              patch.packageGrossWeightGrams ?? owned.packageGrossWeightGrams,
+            unitsPerPackage: patch.unitsPerPackage ?? owned.unitsPerPackage,
+          });
+          if (missing.length > 0) {
+            return { status: "active_listing_unmeasured", missing };
+          }
         }
 
         if (patch.category !== undefined || patch.categoryId !== undefined) {
@@ -1259,6 +1516,14 @@ export async function updateProduct(
         return { success: false, error: { type: "NOT_FOUND", productId } };
       case "category_error":
         return { success: false, error: outcome.error };
+      case "active_listing_unmeasured":
+        return {
+          success: false,
+          error: {
+            type: "ACTIVE_LISTING_MISSING_PACKAGE_DIMENSIONS",
+            missing: outcome.missing,
+          },
+        };
       default: {
         const exhaustiveOutcome: never = outcome;
         throw new Error(`Unhandled product update outcome: ${JSON.stringify(exhaustiveOutcome)}`);
@@ -1731,9 +1996,13 @@ export async function reorderImages(
 }
 
 /**
- * Publish a draft. Re-checks completeness SERVER-SIDE (title, price > 0, ≥ 1
- * image — category is a NOT NULL enum, always present); the client's "Publish"
- * click is a request, not an authorization. Sets status active + publishedAt.
+ * Publish a draft. Re-checks completeness SERVER-SIDE; the client's "Publish" click is a request,
+ * not an authorization. Sets status active + publishedAt.
+ *
+ * SINCE PHASE 20 THAT INCLUDES THE FIVE SHIPPING FACTS (§19.9). A published listing is one a buyer
+ * can freight-rate, and a listing with no box is one the rater must refuse — so the requirement
+ * belongs at the moment the listing becomes buyable rather than at the moment somebody tries to
+ * ship it.
  */
 export async function publishProduct(
   sellerOrganizationId: string,
@@ -1750,6 +2019,11 @@ export async function publishProduct(
           publicSlug: product.publicSlug,
           samplePolicy: product.samplePolicy,
           samplePriceInCents: product.samplePriceInCents,
+          packageLengthMm: product.packageLengthMm,
+          packageWidthMm: product.packageWidthMm,
+          packageHeightMm: product.packageHeightMm,
+          packageGrossWeightGrams: product.packageGrossWeightGrams,
+          unitsPerPackage: product.unitsPerPackage,
         })
         .from(product)
         .where(
@@ -1773,17 +2047,28 @@ export async function publishProduct(
         .select({ value: count() })
         .from(productImage)
         .where(eq(productImage.productId, productId));
-      const missing: string[] = [];
-      if (row.title.trim().length === 0) missing.push("title");
-      if (row.priceInCents <= 0) missing.push("price");
-      if ((imageCount?.value ?? 0) < 1) missing.push("images");
-      if (
-        (row.samplePolicy === "paid" || row.samplePolicy === "refundable") &&
-        (row.samplePriceInCents === null || row.samplePriceInCents <= 0)
-      ) {
-        missing.push("samplePriceInCents");
+      /**
+       * ONE PROJECTION, SHARED WITH THE SELLER'S READ. The checklist the seller sees on the form
+       * and the refusal they get here are computed by the same function, so they cannot disagree.
+       *
+       * The row is `SELECT ... FOR UPDATE` inside a serializable transaction, so a concurrent
+       * PATCH clearing the geometry cannot slip between this check and the write below.
+       */
+      const completeness = projectListingCompleteness({
+        title: row.title,
+        priceInCents: row.priceInCents,
+        imageCount: imageCount?.value ?? 0,
+        samplePolicy: row.samplePolicy,
+        samplePriceInCents: row.samplePriceInCents,
+        packageLengthMm: row.packageLengthMm,
+        packageWidthMm: row.packageWidthMm,
+        packageHeightMm: row.packageHeightMm,
+        packageGrossWeightGrams: row.packageGrossWeightGrams,
+        unitsPerPackage: row.unitsPerPackage,
+      });
+      if (!completeness.isComplete) {
+        return { status: "incomplete", missing: collectMissingListingFields(completeness) };
       }
-      if (missing.length > 0) return { status: "incomplete", missing };
 
       const publicSlug = row.publicSlug ?? slugifyPublicTitle(row.title, row.id);
       await transaction

@@ -232,6 +232,7 @@ function lanePlan(
   unpriceableReasons: LanePlan["unpriceableReasons"] = [],
 ): LanePlan {
   return {
+    contracting: { party: "provider" },
     origin: { countryCode: "IN", locality: null },
     destination: { countryCode: "DE", locality: null },
     consignment: {
@@ -243,6 +244,7 @@ function lanePlan(
     legs: [],
     journeys,
     unpriceableReasons,
+    quotableProviders: [],
   };
 }
 

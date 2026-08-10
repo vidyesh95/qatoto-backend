@@ -72,6 +72,14 @@ describe("product publish category eligibility", () => {
           publicSlug: null,
           samplePolicy: "unavailable",
           samplePriceInCents: null,
+          // Present and null ON PURPOSE. An absent key arrives `undefined`, and `=== null` is
+          // false for `undefined`, so omitting these would make the shipping-facts gate pass
+          // vacuously in every test that reuses this fixture.
+          packageLengthMm: 400,
+          packageWidthMm: 300,
+          packageHeightMm: 200,
+          packageGrossWeightGrams: 12_000,
+          unitsPerPackage: 5,
         },
       ],
       [{ id: "category-one", parentCategoryId: null, state: "retired" }],
@@ -99,6 +107,14 @@ describe("product publish category eligibility", () => {
           publicSlug: null,
           samplePolicy: "unavailable",
           samplePriceInCents: null,
+          // Present and null ON PURPOSE. An absent key arrives `undefined`, and `=== null` is
+          // false for `undefined`, so omitting these would make the shipping-facts gate pass
+          // vacuously in every test that reuses this fixture.
+          packageLengthMm: 400,
+          packageWidthMm: 300,
+          packageHeightMm: 200,
+          packageGrossWeightGrams: 12_000,
+          unitsPerPackage: 5,
         },
       ],
       [{ id: "category-one", parentCategoryId: null, state: "active" }],
