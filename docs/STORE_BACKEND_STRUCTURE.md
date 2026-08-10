@@ -976,6 +976,31 @@ rejection would return to the queue forever.
 **No cofounder route takes a `:userId`.** The viewer posts about themselves and `/mine` is the only
 addressing an owner gets.
 
+
+### 6.8 Lane rate cards and the arrival window — **SHIPPED (Phase 20, `0106`–`0108`)**
+
+Per A35's rule: a route that ships without a row here is invisible to the next reader, so the rows
+land in the same change as the routes.
+
+| Method      | Route                                                          | Result                                                                          |
+| ----------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| POST        | `/commerce/admin/freight-rate-cards`                           | Create a lane card **with its bands**; supersedes the incumbent. Idempotency-Key |
+| PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId`               | `shorten_window` or `withdraw` — narrowing only. Idempotency-Key                 |
+| POST        | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Append one band; refused once the card is in force. Idempotency-Key              |
+| PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Replace the whole ordered set; same guard. Idempotency-Key                       |
+| POST        | `/commerce/admin/customs-dwell-estimates`                      | Record a dwell figure; closes the open-ended row on that scope. Idempotency-Key  |
+| PATCH       | `/commerce/admin/customs-dwell-estimates/:dwellEstimateId`     | Retire it by closing its window. Idempotency-Key                                 |
+| GET         | `/commerce/orders/:orderId/arrival-window`                     | §19.4's projection. Optional `?mode=`; order membership required, `404` otherwise |
+
+All six writes are gated on `moderate_commerce` **checked in-service**, before any id is read, so
+neither the capability nor a card id is probeable from the route table. Every one carries a required
+`Idempotency-Key` scoped to the **user**: a moderator acts for the platform and may not belong to any
+commerce organization, and a retried create would supersede the card the first attempt just minted.
+
+Two existing reads were **extended, never replaced**:
+`GET /store/products/:productSlug/delivery-estimate` keeps `data.estimates` byte-identical and adds a
+sibling `data.lanePlan`; `checkout/prepare` keeps `deliveryEstimates` and adds `arrivalWindows`.
+
 ---
 
 ## 7. Boundary schemas and response rules
@@ -1398,9 +1423,9 @@ Scheduled jobs:
 - **The write schema refuses a capital field with 422 rather than discarding it.** Silently
   dropping a number somebody typed about themselves would let them believe it was recorded.
 
-### Phase 20 — lane rate cards and the arrival window — **SPECIFIED, NOT BUILT**
+### Phase 20 — lane rate cards and the arrival window — **SHIPPED (`0106`–`0108`)**
 
-The only store surface with a named backend gap in front of it. Specified in full at §19:
+The last store surface with a named backend gap in front of it. Specified in full at §19, and built:
 
 - `commerce_freight_rate_card` and `commerce_freight_rate_break` — the lane price lists nobody has
   bought yet, with transit days on the **break** rather than the card;
@@ -1411,8 +1436,14 @@ The only store surface with a named backend gap in front of it. Specified in ful
 - the extension of `GET /store/products/:productSlug/delivery-estimate` into per-leg, per-mode
   options.
 
-`sheets/delivery-sheet.tsx` is the one store component held at `TRANSPORT: mock` against this
-phase. Everything else on the store surface wires against contracts that already exist.
+`sheets/delivery-sheet.tsx` was the one store component held at `TRANSPORT: mock` against this
+phase. Every contract it needs now exists; the tables behind them are empty until a forwarder tariff
+is purchased and loaded, so the sheet renders named absences rather than mock floats.
+
+Beyond the specification, this phase also added `lead_time_min_days_snapshot` to the prepare and
+order lines (`0108`) — §19.4 reports manufacturing as a RANGE, and only the maximum had ever been
+snapshotted. Nothing is backfilled: an order placed before the column existed reports `daysMin: null`
+and says so.
 
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
@@ -1524,7 +1555,9 @@ The following require legal, provider, or product decisions before implementatio
   Rating from a card still never writes `shippingInCents` — nothing is charged for freight until
   something is booked. **Specified in §19**, which also adds the second missing input this entry
   did not name — customs dwell — and the arrival-window projection the two of them make
-  expressible. Still not built; §19 is the spec, not a record.
+  expressible. **BUILT in Phase 20 (`0106`–`0108`); §19 is now a record.** The remaining
+  dependency is commercial rather than technical: the tables are empty until a forwarder lane
+  list is bought.
 - ~~**how a seller obtains a buyer's full delivery address.**~~ **DECIDED: an authorized decrypt
   path.** A seller organization with an active order fetches the buyer's decrypted street lines,
   recipient name and phone through a server route that authorizes the caller against that specific
@@ -2226,10 +2259,17 @@ silently becomes the weaker.
 
 ## 19. Lane rate cards and the arrival window — the delivery surface
 
-**NOT BUILT. This section is a specification, not a record.** Everything in §1–§18 describes
-something that exists; this describes the one delivery capability the store frontend renders and
-this backend cannot serve. It is written down so the gap stays a gap rather than becoming an
-oversight, and so `sheets/delivery-sheet.tsx` has a named thing to wait for.
+**SHIPPED (Phase 20, `0106`–`0108`).** This section was written as a specification, and it is now a
+record. The tables exist, the admin writes fill them, the rating read prices a lane, and an order
+projects an arrival window.
+
+**They ship EMPTY, and that is the remaining gap.** No forwarder lane list has been bought and no
+broker dwell figure recorded, so every lane is uncovered until somebody loads real data through
+§19.5's admin routes. There is deliberately no seed: a made-up rate is a claim the platform would
+then own, which is §19.4's own argument applied to its own migration. `sheets/delivery-sheet.tsx`
+can now wire against real contracts; what it renders stays honest-and-empty until the rows arrive.
+
+**Where §19 was silent, §19.8 records what was chosen.**
 
 ### 19.1 What A16 decided, and what it left out
 
@@ -2384,11 +2424,110 @@ an inconsistency.
 
 ### 19.7 Frontend status
 
-`src/components/home/store/sheets/delivery-sheet.tsx` is **held at `TRANSPORT: mock` against this
-section** — it is the one store sheet deliberately left unwired, and it stays that way until
-§19.2–§19.4 are built. `sections/delivery-cost.tsx` wires against the _existing_ A16 estimate and
+`src/components/home/store/sheets/delivery-sheet.tsx` was **held at `TRANSPORT: mock` against this
+section** — the one store sheet deliberately left unwired. §19.2–§19.4 are now built, so it can be
+wired; with no rate cards loaded it must render the named absences (`unavailableReasons`,
+`unpriceableReasons`, `missingComponents`) rather than a zero or a date. `sections/delivery-cost.tsx` wires against the _existing_ A16 estimate and
 degrades to the manufacturing lead time plus "shipping to be arranged" when the estimate array is
 empty; it must not render a date or a zero.
+
+
+### 19.8 Where §19 was silent, and what was chosen
+
+§19 was written before the code and left real questions open. Each was decided during Phase 20;
+each is recorded here rather than only in a comment, because the next reader of this document is
+usually the person deciding whether to change one.
+
+**Pricing and band selection**
+
+- **`unitPriceInCents` is CENTS PER KILOGRAM of chargeable weight.** §19.2 lists a unit price beside
+  two `min*` floors and never says which the price is per. This is the one assumption that, if a
+  future writer disagreed, would make a published number **wrong** rather than absent — so it is
+  named in three places: the column comment, the migration banner, and
+  `BILLABLE_WEIGHT_UNIT_GRAMS` in the rating service. The two `min*` columns are the band's
+  **entry condition**, not its denominator.
+- **A band's two floors are conjunctive (AND).** A weight-only band is authored with
+  `minVolumeCubicCm: 0`. AND is monotone, which is what makes "the highest qualifying band" well
+  defined; OR would let a bulky-but-light consignment fall into a heavy band's cheap per-kg rate.
+- **Bands are ordered by their FLOORS, not by `position`.** `position` is authoring order and its
+  unique index does not make it monotone in weight; it survives only as the final tie-break.
+- **Below the smallest band yields NO option, not the minimum charge.** A card whose smallest band
+  starts at 45 kg is a tariff that says so; charging a 5 kg parcel from it extrapolates out of a
+  band the forwarder excluded. Floor coverage is one reviewable row (`minBillableWeightGrams: 0`).
+- **There is no "above the largest band".** Bands carry floors and no ceilings, so the top band is
+  open-ended by construction. Capping a forwarder's tariff would be the platform authoring a price.
+- **An unknown weight never rates**, and an unknown volume cannot clear a positive volume floor.
+- **Prices round UP.** Rounding a freight charge down publishes a number the forwarder will not
+  honour, and the platform would own the difference.
+
+**Cards and the read predicate**
+
+- **`currency` was added to §19.5's option shape.** A `priceInCents` with no currency is
+  unrenderable, and a list mixing USD and EUR is the collapse A16 refused.
+- **The rating read selects on the WINDOW plus `state <> 'withdrawn'`, never on `state = 'active'`.**
+  A future-dated successor supersedes its incumbent the moment it is written, while the incumbent's
+  window is still open — reading on the state would black out a lane from the instant an admin
+  scheduled next month's tariff. The partial unique index is a **write** invariant only.
+- **A card is append-only in its commercial content.** POST supersedes and mints; PATCH may only
+  shorten a window or withdraw. Lane, mode, currency, `validFrom` and `sourceForwarderName` are
+  absent from every PATCH schema, so `.strict()` refuses them loudly. Rewriting a number under an
+  unchanged provenance string is a claim that forwarder never made.
+- **`breaks` is required on create**, 1..20, written in the same transaction. A two-call create
+  would leave the lane priced by nothing between the two requests, because the create supersedes.
+- **A live card's bands are frozen** (`409 …_IN_FORCE`); only a card staged for the future can be
+  corrected. A ladder has no monotone insertion.
+- **The uniqueness key is (provider, lane, mode, currency)**, not the bare lane: §19.5's `options[]`
+  is plural and §19.1's estimate is per-currency, so a bare-lane key would make a second
+  forwarder's card unstorable.
+
+**Legs and journeys**
+
+- **`journeys[]` was added beyond §19.5's `legs[]`.** §19.6 forbids the client summing legs, which
+  `legs[]` alone cannot satisfy.
+- **The inland leg is on the DESTINATION side, and there are at most two legs.** Nothing in the
+  schema says where an inland leg starts — cards are keyed by country pair and no rate table is
+  keyed by a locality — so an origin-side leg would be unpriceable by construction and would poison
+  every journey under the uncovered-leg rule.
+- **Localities are labels.** They render; they never select a card.
+- **A journey is never summed across currencies**, and an uncovered leg empties `journeys[]`
+  entirely rather than pricing the international leg alone.
+
+**Customs dwell**
+
+- **Precedence is origin-scoped > commodity-scoped > any**, ties broken by latest `validFrom` then
+  `id` so two admins cannot make the endpoint flap.
+- **Commodity matching is exact-or-null; category ancestors are deliberately NOT walked.** Walking
+  them would apply a broad figure to a narrow commodity, the same flattening §19.2 rejected for
+  transit days. A mixed-category order falls back to the any-commodity row.
+- **Overlap between two CLOSED windows is a service-level 409**, not a constraint: `now()` is not
+  IMMUTABLE, and a real exclusion would need `btree_gist` for one table.
+
+**The arrival window**
+
+- **Every component is a discriminated union**, not a nullable object. §19.4 demands the
+  distinction for customs; it is applied uniformly so the emission rule reads once.
+- **`missingComponents` was widened to include `"manufacturing"`.** §19.4 lists only freight and
+  customs, but the lead-time snapshot is nullable, so an order whose seller declared no lead time
+  would otherwise return a null window with an **empty** `missingComponents` — an unnamed absence,
+  which is what §19.6 forbids.
+- **The window anchors on the stored `promisedDeliveryAt`, not on `clockStartAt` plus a duration.**
+  §19.4 assumes the two clocks share a start; **they do not**. `promisedDeliveryAt` is derived at
+  order CREATION while `confirmedAt` is stamped later by settlement, so anchoring on the clock start
+  would let payment latency silently shorten the manufacturing leg. `clockStartAt` is still reported
+  exactly as §19.4 mandates, with `orderPlacedAt` beside it so the gap is legible rather than hidden.
+- **Manufacturing `daysMax` is reconstructed from `promisedDeliveryAt − createdAt`**, losslessly,
+  and works on every order ever placed. `daysMin` comes from the `0108` snapshot and is the MAXIMUM
+  of the line minimums — an order waits on its slowest line — and is `null` unless **every** line
+  declared one.
+- **No mode is ever auto-selected.** `?mode=` is optional; omitting it reports
+  `freight: unknown / mode_not_selected` with the covered modes listed. Cheapest-wins would publish
+  the slowest window as though the buyer had chosen it, and would erase the "no mode selected yet"
+  state §19.4 explicitly lists.
+- **`checkout/prepare` emits components with `arrivalWindow: null` always.** This resolves §19.5's
+  "gains the §19.4 projection" against §19.4's "no arrival window before an order exists".
+- **A quote-originated order's destination comes from `commerce_rfq.destinationCountryCode`.**
+  `buyerAddressSnapshot` is never parsed — reading geography back out of formatted prose is how a
+  comma inside a locality becomes a wrong country.
 
 ---
 
@@ -3483,3 +3622,31 @@ Verified against `src/routes/*.ts` and the mounts at `src/app.ts:171-341`:
 **Rule:** a route that ships without a row in §5 or §6 is invisible to the next reader of this
 document, and the next reader is usually the person deciding whether to build it. When a phase adds a
 route, it adds the row in the same change.
+
+---
+
+### A36. There were no lane rates, and no arrival window — **SHIPPED (Phase 20, `0106`–`0108`), tables empty**
+
+**Needed by:** `sheets/delivery-sheet.tsx` — the per-leg mode picker with a price and a duration
+behind each option, and a running estimate.
+
+**What was wrong:** A16's coverage-derived estimate knows a provider *serves* a lane. It cannot say
+what that lane *costs* by sea versus by air, because coverage carries neither number per mode. So
+the sheet summed local floats, which is the client establishing a price, which §0 forbids. The
+missing input was never an endpoint — it was **data nobody had bought**.
+
+**What exists now:** `commerce_freight_rate_card` and `commerce_freight_rate_break` (transit days on
+the **band**, per §19.2), `commerce_customs_dwell_estimate`, six `moderate_commerce` admin routes to
+fill them, a rating service, `GET /commerce/orders/:orderId/arrival-window`, a `lanePlan` beside the
+PDP's unchanged `estimates`, and per-seller `arrivalWindows` on `checkout/prepare`.
+
+**Rule, honoured:** partial data yields a partial answer. A missing component is **named**, never
+defaulted, averaged, or extrapolated; an uncovered lane returns an empty `options[]`, never a zero;
+an uncovered **leg** makes the whole journey unpriceable rather than cheaper; and `shippingInCents`
+stays literal `0` — rating from a card is not a booking and confers no capacity.
+
+**Still open, and it is commercial rather than technical:** the tables ship **empty**. No forwarder
+lane list has been purchased and no broker dwell figure recorded, so every lane is currently
+uncovered. There is no seed, deliberately. Until rows are loaded, the sheet's honest render is
+"ships in 15–25 days · shipping and clearance not yet estimated" — which is exactly what §19.4
+designed the `null` window to make expressible.
