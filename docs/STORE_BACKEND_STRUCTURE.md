@@ -977,14 +977,14 @@ rejection would return to the queue forever.
 addressing an owner gets.
 
 
-### 6.8 Lane rate cards and the arrival window — **SHIPPED (Phase 20, `0106`–`0108`)**
+### 6.8 Lane rate cards and the arrival window — **SHIPPED (Phase 20, `0106`–`0109`)**
 
 Per A35's rule: a route that ships without a row here is invisible to the next reader, so the rows
 land in the same change as the routes.
 
 | Method      | Route                                                          | Result                                                                          |
 | ----------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| POST        | `/commerce/admin/freight-rate-cards`                           | Create a lane card **with its bands**; supersedes the incumbent. Idempotency-Key |
+| POST        | `/commerce/admin/freight-rate-cards`                           | Create a lane card **with its bands and its volumetric divisor**; supersedes the incumbent. Idempotency-Key |
 | PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId`               | `shorten_window` or `withdraw` — narrowing only. Idempotency-Key                 |
 | POST        | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Append one band; refused once the card is in force. Idempotency-Key              |
 | PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Replace the whole ordered set; same guard. Idempotency-Key                       |
@@ -1423,7 +1423,7 @@ Scheduled jobs:
 - **The write schema refuses a capital field with 422 rather than discarding it.** Silently
   dropping a number somebody typed about themselves would let them believe it was recorded.
 
-### Phase 20 — lane rate cards and the arrival window — **SHIPPED (`0106`–`0108`)**
+### Phase 20 — lane rate cards and the arrival window — **SHIPPED (`0106`–`0109`)**
 
 The last store surface with a named backend gap in front of it. Specified in full at §19, and built:
 
@@ -1555,17 +1555,13 @@ The following require legal, provider, or product decisions before implementatio
   Rating from a card still never writes `shippingInCents` — nothing is charged for freight until
   something is booked. **Specified in §19**, which also adds the second missing input this entry
   did not name — customs dwell — and the arrival-window projection the two of them make
-  expressible. **BUILT in Phase 20 (`0106`–`0108`); §19 is now a record.** The remaining
+  expressible. **BUILT in Phase 20 (`0106`–`0109`); §19 is now a record.** The remaining
   dependency is commercial rather than technical: the tables are empty until a forwarder lane
   list is bought.
-- **the volumetric divisor, and therefore chargeable weight.** Freight bills on
-  `max(actual gross weight, volumetric weight)`; Phase 20 rates on actual weight alone, so a light
-  bulky consignment is **underpriced** — a wrong number rather than a missing one, which is the one
-  failure §19.6 does not already cover. The divisor is mode-dependent by industry convention
-  (≈6000 cm³/kg air, ≈1 CBM per 1000 kg ocean LCL) and `commerce_freight_rate_card` carries no
-  column to hold it. Picking one divisor for every mode would be the platform inventing a tariff
-  convention. **Needs a product decision plus one additive column**; the volume it would multiply
-  is already measured. See §19.9.
+- ~~**the volumetric divisor, and therefore chargeable weight.**~~ **DECIDED: the divisor is a
+  required column on the rate card (`0109`).** It varies by forwarder as well as by mode, so no
+  platform constant could be correct for everyone; requiring it means the forwarder's own convention
+  rides with their tariff and the platform never picks one. See §19.9.
 - ~~**how a seller obtains a buyer's full delivery address.**~~ **DECIDED: an authorized decrypt
   path.** A seller organization with an active order fetches the buyer's decrypted street lines,
   recipient name and phone through a server route that authorizes the caller against that specific
@@ -2267,10 +2263,10 @@ silently becomes the weaker.
 
 ## 19. Lane rate cards and the arrival window — the delivery surface
 
-**SHIPPED (Phase 20, `0106`–`0108`).** This section was written as a specification, and it is now a
+**SHIPPED (Phase 20, `0106`–`0109`).** This section was written as a specification, and it is now a
 record. The tables exist, the admin writes fill them, the rating read prices a lane, and an order
 projects an arrival window. **Migrations applied 2026-08-10**; `db:verify-store-phase-20-constraints`
-passes 14/14 against the live database, so every CHECK in §19.2–§19.4 is confirmed to actually
+passes 17/17 against the live database, so every CHECK in §19.2–§19.4 is confirmed to actually
 refuse rather than merely to have been written.
 
 **They ship EMPTY, and that is the remaining gap.** No forwarder lane list has been bought and no
@@ -2309,6 +2305,7 @@ commerce_freight_rate_card
   currency
   validFrom, validUntil
   sourceForwarderName        -- who sold us this list; provenance rides with the number
+  volumetricDivisorCm3PerKg  -- §19.9. REQUIRED. cm³/kg; ocean W/M 1000, road ~3000, air 5000-6000
   state                      -- active | superseded | withdrawn
   createdAt, updatedAt
 ```
@@ -2451,6 +2448,13 @@ usually the person deciding whether to change one.
 
 **Pricing and band selection**
 
+- **Freight bills on chargeable weight, `max(actual, volumetric)`** (`0109`, §19.9). The divisor is
+  a **required per-card column** — never a platform constant, because it varies by forwarder as well
+  as by mode. Volumetric weight rounds **up**, ties resolve to the `actual` basis, and the band
+  ladder selects on the chargeable figure because that is what a tariff's "45 kg+" band means.
+- **An undeclared volume refuses to rate** (`volume_not_declared`) rather than falling back to gross
+  weight, which would reintroduce underpricing on the bulkiest consignments.
+
 - **`unitPriceInCents` is CENTS PER KILOGRAM of chargeable weight.** §19.2 lists a unit price beside
   two `min*` floors and never says which the price is per. This is the one assumption that, if a
   future writer disagreed, would make a published number **wrong** rather than absent — so it is
@@ -2579,20 +2583,42 @@ bug; all four are open to being revisited as product decisions.
   clearance into the estimate or sells DDP. Here the backend is **more** transparent than Alibaba,
   not less, which is the intended direction.
 
-**A genuine gap, not a choice — `chargeable weight` is not implemented**
+**The one genuine gap — `chargeable weight` — is now CLOSED (`0109`)**
 
 Air and ocean freight bill on **`max(actual gross weight, volumetric weight)`**, and every forwarder
-— Alibaba's included — quotes that way. This backend rates on actual gross weight alone and uses
-volume only as a band **floor**. A light, bulky consignment is therefore **underpriced**, which is
-the one failure mode §19.6 does not cover: it is not a missing number, it is a wrong one.
+— Alibaba's included — quotes that way. Phase 20 shipped rating on actual gross weight alone, using
+volume only as a band **floor**, so a light bulky consignment was **underpriced**. That was the one
+failure mode §19.6 does not cover: not a missing number, a **wrong** one. A container of cushions
+weighs nothing and costs a forwarder the same as a container of bolts.
 
-The data needed is already stored (`ConsignmentMeasurement.volumeCubicCm`, from the Phase 8 package
-geometry), so this is a rating-service change and needs no migration. What it does need is a
-**decision**, which is why it is not silently fixed: the volumetric divisor is mode-dependent by
-convention — roughly 6000 cm³/kg for air, and 1 CBM ≈ 1000 kg for ocean LCL — and §19.2's card
-carries no `chargeable_unit` or divisor column to hold it. Picking one divisor for every mode would
-be the platform inventing a tariff convention, which is the same error §19.4 refuses elsewhere.
-Recorded in §14 until that decision is made.
+**What the fix is.** `commerce_freight_rate_card.volumetric_divisor_cm3_per_kg` — `NOT NULL`, no
+default, `BETWEEN 100 AND 20000`. `computeChargeableWeight(card, consignment)` returns
+`max(actual, ceil(volume × 1000 ÷ divisor))` with the winning `basis` named, the band ladder selects
+on the result, and the price is computed from it. Every option carries `chargeableWeightGrams` and
+`chargeableWeightBasis`, because §19.6 makes the basis of a number travel with the number — without
+it a buyer whose 20 kg billed as 3,000 kg reads a correct volumetric charge as an error.
+
+**Why a column rather than a constant.** The divisor is a tariff convention that varies by
+**forwarder** as well as by mode: air is 5000 or 6000 depending on who is quoting, ocean LCL is 1000
+(the W/M "revenue ton" — one cubic metre billed as 1000 kg), road is around 3000. One constant per
+mode would price a 5000-divisor air tariff wrong, and would be the platform choosing a convention on
+a forwarder's behalf — the error §19.4 refuses everywhere else. The single formula covers all four
+modes, so no per-mode branching exists anywhere in the rating path.
+
+**`NOT NULL` was affordable only because the table was still empty.** Nothing to backfill, no default
+to invent. That will not be true for the next person: once cards exist, this column pattern needs a
+real per-card figure per row, and a blanket default would silently reprice every lane.
+
+**Chargeable weight is PER CARD, never per consignment.** The divisor belongs to the forwarder, so
+one consignment legitimately bills as two different weights across a two-leg journey — 1 m³ is
+1000 kg to the ocean carrier and ~333 kg to the road carrier. It therefore rides
+`FreightJourneyLegSelection`, not `ConsignmentMeasurement`; a single journey-level weight would make
+one of the two leg prices read as an arithmetic error.
+
+**An undeclared volume now refuses**, with a named `volume_not_declared`, rather than falling back to
+gross weight. The fallback would silently reintroduce the underpricing on exactly the consignments
+most likely to be bulky — the ones whose seller never measured a box. It costs coverage: a seller who
+declared weight but no dimensions gets no freight rate until they declare them.
 
 ---
 
@@ -3690,7 +3716,7 @@ route, it adds the row in the same change.
 
 ---
 
-### A36. There were no lane rates, and no arrival window — **SHIPPED (Phase 20, `0106`–`0108`), tables empty**
+### A36. There were no lane rates, and no arrival window — **SHIPPED (Phase 20, `0106`–`0109`), tables empty**
 
 **Needed by:** `sheets/delivery-sheet.tsx` — the per-leg mode picker with a price and a duration
 behind each option, and a running estimate.
@@ -3717,7 +3743,6 @@ dwell figure recorded, so every lane is currently uncovered. There is no seed, d
 rows are loaded, the sheet's honest render is "ships in 15–25 days · shipping and clearance not yet
 estimated" — exactly what §19.4 designed the `null` window to make expressible.
 
-*Technical:* **chargeable weight is not implemented**, so a light bulky consignment will be
-underpriced once rows do exist. It needs a decision on the volumetric divisor rather than a
-migration — see §19.9 and the new §14 entry. Everything else in §19.9's divergence list is a
-deliberate choice, not a defect.
+*Technical:* **closed.** Chargeable weight shipped in `0109` — every option now prices on
+`max(actual, volumetric)` under the forwarder's own divisor and reports which basis won. Everything
+remaining in §19.9's divergence list is a deliberate choice, not a defect.
