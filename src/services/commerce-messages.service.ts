@@ -3,6 +3,7 @@ import { and, asc, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import {
   commerceEncryptedDocument,
+  commerceManufacturingInquiry,
   commerceMessage,
   commerceMessageAttachment,
   commerceProductInquiry,
@@ -24,9 +25,14 @@ import type { Result } from "#src/types/index.js";
  * readable through this service. `projectThread` re-checks at read time for exactly
  * that reason.
  *
- * `product_inquiry` joined the list in Phase 10 (Appendix A14).
+ * `product_inquiry` joined the list in Phase 10 (Appendix A14), and
+ * `manufacturing_inquiry` in Phase 17 (§16.5) — both one-to-one, both for the same reason.
  */
-export type CommerceThreadResourceKind = "rfq" | "quote" | "product_inquiry";
+export type CommerceThreadResourceKind =
+  | "rfq"
+  | "quote"
+  | "product_inquiry"
+  | "manufacturing_inquiry";
 
 export type CommerceMessagesError =
   | { type: "NOT_FOUND" }
@@ -181,6 +187,45 @@ async function resolveProductInquiryParties(
   };
 }
 
+/**
+ * Parties to a manufacturing inquiry (§16.5): exactly two, like a product inquiry.
+ *
+ * A DRAFT HAS NO CONVERSATION. The inquiry service opens the thread on the `sent`
+ * transition, so a resolver reaching a `draft` row means somebody guessed an id — hence
+ * NOT_FOUND rather than an empty thread.
+ */
+async function resolveManufacturingInquiryParties(
+  inquiryId: string,
+  callerOrganizationId: string,
+): Promise<Result<ResourceParties, CommerceMessagesError>> {
+  const [inquiry] = await db
+    .select({
+      buyerOrganizationId: commerceManufacturingInquiry.buyerOrganizationId,
+      factoryOrganizationId: commerceManufacturingInquiry.factoryOrganizationId,
+      state: commerceManufacturingInquiry.state,
+    })
+    .from(commerceManufacturingInquiry)
+    .where(eq(commerceManufacturingInquiry.id, inquiryId))
+    .limit(1);
+
+  if (
+    !inquiry ||
+    inquiry.state === "draft" ||
+    (inquiry.buyerOrganizationId !== callerOrganizationId &&
+      inquiry.factoryOrganizationId !== callerOrganizationId)
+  ) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  return {
+    success: true,
+    value: {
+      buyerOrganizationId: inquiry.buyerOrganizationId,
+      providerOrganizationIds: [inquiry.factoryOrganizationId],
+    },
+  };
+}
+
 async function resolveResourceParties(input: {
   readonly resourceKind: CommerceThreadResourceKind;
   readonly resourceId: string;
@@ -193,6 +238,8 @@ async function resolveResourceParties(input: {
       return resolveQuoteParties(input.resourceId, input.organizationId);
     case "product_inquiry":
       return resolveProductInquiryParties(input.resourceId, input.organizationId);
+    case "manufacturing_inquiry":
+      return resolveManufacturingInquiryParties(input.resourceId, input.organizationId);
     default: {
       const exhaustiveKind: never = input.resourceKind;
       void exhaustiveKind;
@@ -232,7 +279,8 @@ async function projectThread(threadId: string): Promise<CommerceThreadProjection
   if (
     thread.resourceKind !== "rfq" &&
     thread.resourceKind !== "quote" &&
-    thread.resourceKind !== "product_inquiry"
+    thread.resourceKind !== "product_inquiry" &&
+    thread.resourceKind !== "manufacturing_inquiry"
   ) {
     return null;
   }

@@ -694,6 +694,27 @@
       "when": 1786105839394,
       "tag": "0098_commerce_category_admin_taxonomy",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1786105844394,
+      "tag": "0099_store_phase_17_enums",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1786105849394,
+      "tag": "0100_store_phase_17_factory_directory",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1786105854394,
+      "tag": "0101_store_phase_17_manufacturing_inquiry",
+      "breakpoints": true
     }
   ]
 }

@@ -622,6 +622,20 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "capabilities_changed",
     "certification_submitted",
     "certification_decided",
+    /** Phase 17. The manufacturer directory's two seller-owned collections (§16.3). */
+    "production_lines_changed",
+    "sites_changed",
+    /**
+     * Phase 17. Staff-written, and mirrored into `platform_audit_entry` — this row records
+     * the fact against the ORGANIZATION, the platform chain records the accountable human.
+     */
+    "site_audit_recorded",
+    "site_audit_withdrawn",
+    /** Phase 17, §16.5. The buyer's side of a manufacturing inquiry's state machine. */
+    "manufacturing_inquiry_created",
+    "manufacturing_inquiry_sent",
+    "manufacturing_inquiry_answered",
+    "manufacturing_inquiry_closed",
   ],
 );
 
@@ -669,10 +683,36 @@ export const commerceSiteAccessModeEnum = pgEnum("commerce_site_access_mode", [
   "rail",
 ]);
 
-/** Declared production capabilities. `oem`/`odm` are the terms buyers actually search. */
+/**
+ * Declared production capabilities. `oem`/`odm` are the terms buyers actually search.
+ *
+ * WIDENED IN PHASE 17 (§16.2 conflict 1), additively — migration `0099`. The shipped six
+ * and the manufacturer directory's proposed six overlapped by two, and `ALTER TYPE … ADD
+ * VALUE` is what let the rows Phase 12 collected stay exactly as they were.
+ *
+ * `customization` AND `private_label` ARE NOT ONE VALUE, and the distinction is not
+ * pedantry: customization is "we will change this product for you", private label is "we
+ * will put your name on ours". A factory frequently does one and refuses the other.
+ *
+ * `oem` and `odm` remain the two the directory tile advertises, because they are different
+ * propositions — an ODM designs the product and sells you the design, an OEM builds to a
+ * design you already own — and a buyer arriving with drawings needs a different row from a
+ * buyer arriving with an idea.
+ */
 export const commerceOrganizationCapabilityKindEnum = pgEnum(
   "commerce_organization_capability_kind",
-  ["oem", "odm", "customization", "in_house_inspection", "in_house_rnd", "sample_production"],
+  [
+    "oem",
+    "odm",
+    "customization",
+    "in_house_inspection",
+    "in_house_rnd",
+    "sample_production",
+    "contract_manufacturing",
+    "private_label",
+    "tooling_and_moulds",
+    "assembly",
+  ],
 );
 
 /** Whether a buyer may visit the factory. A policy, not an invitation. */
@@ -697,6 +737,52 @@ export const commerceCertificationStateEnum = pgEnum("commerce_certification_sta
   "rejected",
   "withdrawn",
 ]);
+
+/**
+ * The eight standards a buyer can FILTER on (Phase 17, §16.2 conflict 2).
+ *
+ * A closed set beside the free-text `standardName`, not instead of it. The filter needs a
+ * closed vocabulary or the chips are unbuildable and two spellings of one standard sit
+ * side by side; the display needs an open one or a real certificate cannot be recorded.
+ * Both are right, so the row carries both and `standardCode` is nullable.
+ */
+export const commerceCertificationStandardCodeEnum = pgEnum(
+  "commerce_certification_standard_code",
+  [
+    "iso_9001",
+    "iso_14001",
+    "bsci",
+    "sedex_smeta",
+    "gots",
+    "fsc",
+    "ce_marking",
+    "fda_registered",
+  ],
+);
+
+/**
+ * A site audit is RECORDED or WITHDRAWN.
+ *
+ * No `expired`, for the same reason `commerceCertificationStateEnum` has none: an audit
+ * going stale is a read-time judgement about its date, and a nightly job to flip a stored
+ * flag would be wrong between ticks.
+ */
+export const commerceSiteAuditStateEnum = pgEnum("commerce_site_audit_state", [
+  "recorded",
+  "withdrawn",
+]);
+
+/**
+ * A manufacturing inquiry's lifecycle (§16.5).
+ *
+ * `POST` ANSWERS `draft`, ALWAYS. Creating a draft notifies nobody, exactly as an RFQ
+ * does, which is why `sent` is a separate transition with its own route and why no success
+ * copy on the create may say "sent".
+ */
+export const commerceManufacturingInquiryStateEnum = pgEnum(
+  "commerce_manufacturing_inquiry_state",
+  ["draft", "sent", "answered", "closed"],
+);
 
 // Public catalog buyer-contract fields (STORE_BACKEND_STRUCTURE.md §4.4).
 export const productSamplePolicyEnum = pgEnum("product_sample_policy", [
@@ -1208,6 +1294,13 @@ export const commerceThreadResourceKindEnum = pgEnum("commerce_thread_resource_k
   "service_engagement",
   "dispute",
   "product_inquiry",
+  /**
+   * Phase 17. A manufacturing inquiry is ONE-TO-ONE, which is exactly why it gets its own
+   * thread instead of being folded into an RFQ: an RFQ thread has every invited provider
+   * in it, so reusing that shape would expose one factory's conversation to its
+   * competitors.
+   */
+  "manufacturing_inquiry",
 ]);
 
 export const commerceThreadParticipantRoleEnum = pgEnum("commerce_thread_participant_role", [
@@ -1992,6 +2085,42 @@ export const commerceSellerProfile = pgTable(
      * of derived metrics, which is what it had been since Phase 2.
      */
     declaredResponseTimeHours: integer("declared_response_time_hours"),
+    /**
+     * Org-level sample policy (Phase 17, §16.3).
+     *
+     * `sampleFeeInCents = null` MEANS UNSTATED AND `0` MEANS FREE. Two different facts,
+     * and the one thing this surface must not do is render an unstated fee as free — a
+     * buyer who orders a sample on that basis finds out at invoice time. Product-level
+     * sample policy is separate and narrower; this is what the factory says in general.
+     */
+    offersSamples: boolean("offers_samples").default(false).notNull(),
+    sampleLeadTimeDays: integer("sample_lead_time_days"),
+    sampleFeeInCents: bigint("sample_fee_in_cents", { mode: "number" }),
+    /**
+     * Server-owned and never null, the `talentProfile.currency` precedent. A fee needs a
+     * currency to be a fee at all, and the wire carries this even when the fee is unstated.
+     */
+    sampleCurrency: text("sample_currency").default("USD").notNull(),
+    /**
+     * THE MOQ PAIR IS BOTH-OR-NEITHER. A bare `500` is unreadable — 500 pieces and 500
+     * cartons are different businesses — so a renderer must have the unit before it prints
+     * the number. The DB check refuses half of it.
+     */
+    minimumOrderQuantity: integer("minimum_order_quantity"),
+    minimumOrderQuantityUnitLabel: text("minimum_order_quantity_unit_label"),
+    /**
+     * Ordered but not paired, unlike the MOQ: a floor with no ceiling is a readable claim
+     * where half a MOQ is not.
+     */
+    minimumLeadTimeDays: integer("minimum_lead_time_days"),
+    maximumLeadTimeDays: integer("maximum_lead_time_days"),
+    /**
+     * The factory's own inbox switch, read by the directory card as `acceptingInquiries`
+     * and enforced by the manufacturing-inquiry create. Without it the only way to stop
+     * inquiries is to leave the platform, and a card claiming a factory is accepting them
+     * would be asserting something the seller never chose.
+     */
+    acceptingInquiries: boolean("accepting_inquiries").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -2024,6 +2153,29 @@ export const commerceSellerProfile = pgTable(
     check(
       "commerce_seller_profile_text_ck",
       sql`public_summary IS NULL OR char_length(public_summary) <= 4000`,
+    ),
+    check(
+      "commerce_seller_profile_order_bounds_ck",
+      sql`(minimum_order_quantity IS NULL) = (minimum_order_quantity_unit_label IS NULL)
+          AND (minimum_order_quantity IS NULL OR minimum_order_quantity > 0)
+          AND (minimum_order_quantity_unit_label IS NULL
+               OR char_length(minimum_order_quantity_unit_label) BETWEEN 1 AND 40)
+          AND (minimum_lead_time_days IS NULL OR minimum_lead_time_days >= 0)
+          AND (maximum_lead_time_days IS NULL OR maximum_lead_time_days >= 0)
+          AND (minimum_lead_time_days IS NULL
+               OR maximum_lead_time_days IS NULL
+               OR minimum_lead_time_days <= maximum_lead_time_days)`,
+    ),
+    /**
+     * A lead time or a fee on a profile that does not offer samples is a contradiction the
+     * read would have to pick a winner for, so the write refuses it instead.
+     */
+    check(
+      "commerce_seller_profile_sample_policy_ck",
+      sql`sample_currency ~ '^[A-Z]{3}$'
+          AND (sample_lead_time_days IS NULL OR sample_lead_time_days >= 0)
+          AND (sample_fee_in_cents IS NULL OR sample_fee_in_cents >= 0)
+          AND (offers_samples OR (sample_lead_time_days IS NULL AND sample_fee_in_cents IS NULL))`,
     ),
   ],
 );
@@ -2123,6 +2275,221 @@ export const commerceOrganizationSiteAccess = pgTable(
       sql`char_length(facility_name) BETWEEN 1 AND 200
           AND (notes IS NULL OR char_length(notes) <= 1000)`,
     ),
+  ],
+);
+
+/**
+ * Named production lines (Phase 17, §16.3).
+ *
+ * `commerceSellerProfile.productionLineCount` is a bare integer, and a count is not a
+ * capability: "four lines" tells a buyer nothing about whether any of them can hold the
+ * order. This is the row that can.
+ *
+ * `unitLabel` IS REQUIRED BESIDE `monthlyCapacityUnits`, for the same reason the MOQ pair
+ * is both-or-neither: a capacity with no unit cannot be compared against an order. The
+ * capacity itself is nullable, because plenty of factories will name a line and decline to
+ * publish its throughput.
+ */
+export const commerceOrganizationProductionLine = pgTable(
+  "commerce_organization_production_line",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    processSummary: text("process_summary").notNull(),
+    monthlyCapacityUnits: integer("monthly_capacity_units"),
+    unitLabel: text("unit_label").notNull(),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /**
+     * Same ordering contract as `commerceOrganizationSiteAccess` and
+     * `commerceOrganizationMedia`, and the same consequence: the collection is rewritten
+     * whole inside one transaction rather than patched row by row, because a per-row
+     * update against a unique position deadlocks itself on any reorder.
+     */
+    uniqueIndex("commerce_organization_production_line_position_uidx").on(
+      table.organizationId,
+      table.position,
+    ),
+    check(
+      "commerce_organization_production_line_text_ck",
+      sql`char_length(name) BETWEEN 1 AND 200
+          AND char_length(process_summary) BETWEEN 1 AND 2000
+          AND char_length(unit_label) BETWEEN 1 AND 40`,
+    ),
+    check(
+      "commerce_organization_production_line_numbers_ck",
+      sql`position >= 0 AND (monthly_capacity_units IS NULL OR monthly_capacity_units >= 0)`,
+    ),
+  ],
+);
+
+/**
+ * One physical site (Phase 17, §16.3).
+ *
+ * DISTINCT FROM `commerceOrganizationSiteAccess`, which carries only transport modes and
+ * is about REACHING a site rather than describing one. A factory may run several sites, in
+ * more than one country.
+ *
+ * THE RELATIONSHIP TO THE ORG-WIDE FIGURE IS PUBLISHED, NOT RECONCILED.
+ * `commerceSellerProfile.factoryAreaSquareMetres` is seller-declared and these per-site
+ * areas are seller-declared, and when they disagree the read carries both. A platform that
+ * silently prefers one, or sums these into that, is asserting something neither party
+ * said.
+ */
+export const commerceOrganizationSite = pgTable(
+  "commerce_organization_site",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    countryCode: text("country_code").notNull(),
+    locality: text("locality"),
+    floorAreaSquareMetres: integer("floor_area_square_metres"),
+    productionStaffCount: integer("production_staff_count"),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_organization_site_position_uidx").on(
+      table.organizationId,
+      table.position,
+    ),
+    check(
+      "commerce_organization_site_text_ck",
+      sql`char_length(label) BETWEEN 1 AND 200
+          AND country_code ~ '^[A-Z]{2}$'
+          AND (locality IS NULL OR char_length(locality) BETWEEN 1 AND 200)`,
+    ),
+    check(
+      "commerce_organization_site_numbers_ck",
+      sql`position >= 0
+          AND (floor_area_square_metres IS NULL OR floor_area_square_metres >= 0)
+          AND (production_staff_count IS NULL OR production_staff_count >= 0)`,
+    ),
+  ],
+);
+
+/**
+ * The record behind `site_audited` (Phase 17, §16.2 conflict 3).
+ *
+ * THIS TABLE EXISTS BECAUSE THE STATE COULD NOT BE DERIVED FROM ANYTHING ELSE.
+ * `commerceOrganizationVerification` covers business registration, tax registration,
+ * identity, address and bank account — paperwork, all of it. `site_audited` asserts that
+ * somebody stood in the building. Deriving it from a document review is the precise
+ * collapse the three-state wire enum exists to prevent, and no read may do it.
+ *
+ * A VERIFICATION STATE IS ABOUT THE ORGANIZATION, NEVER ABOUT A CAPABILITY. A recorded
+ * audit does not mean this factory is approved to do injection moulding, and there is no
+ * per-capability approval anywhere on the wire.
+ *
+ * STAFF-WRITTEN ONLY, and `auditEntryId` is NOT NULL so every row names an accountable
+ * human — the shape `commerceModerationAction` already uses. `restrict` on the
+ * organization rather than `cascade`: this is a statement the platform made and stands
+ * behind, and deleting the subject must not quietly delete the statement.
+ */
+export const commerceOrganizationSiteAudit = pgTable(
+  "commerce_organization_site_audit",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    /** A calendar date — `mode: "string"`, like the certification validity window. */
+    auditedAt: date("audited_at", { mode: "string" }).notNull(),
+    auditorName: text("auditor_name").notNull(),
+    auditorOrganizationName: text("auditor_organization_name"),
+    scopeSummary: text("scope_summary").notNull(),
+    state: commerceSiteAuditStateEnum("state").default("recorded").notNull(),
+    recordedByUserId: text("recorded_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    auditEntryId: text("audit_entry_id")
+      .notNull()
+      .references(() => platformAuditEntry.id, { onDelete: "restrict" }),
+    withdrawnByUserId: text("withdrawn_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    withdrawnAt: timestamp("withdrawn_at"),
+    withdrawalReason: text("withdrawal_reason"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_organization_site_audit_auditEntryId_uidx").on(table.auditEntryId),
+    /** What the card scans to decide the state, and the detail to find `lastAuditedAt`. */
+    index("commerce_organization_site_audit_recent_idx").on(
+      table.organizationId,
+      table.state,
+      table.auditedAt,
+    ),
+    /**
+     * The three withdrawal columns move as a set, the discipline `researchProgramPost`'s
+     * hidden columns keep. A withdrawal MUST carry its reason: this is the platform
+     * retracting a claim it published, and "why" is the entire content of that act.
+     */
+    check(
+      "commerce_organization_site_audit_withdrawal_ck",
+      sql`(state = 'withdrawn') = (withdrawn_at IS NOT NULL)
+          AND (withdrawn_at IS NULL) = (withdrawn_by_user_id IS NULL)
+          AND (withdrawn_at IS NULL) = (withdrawal_reason IS NULL)`,
+    ),
+    check(
+      "commerce_organization_site_audit_text_ck",
+      sql`char_length(auditor_name) BETWEEN 1 AND 200
+          AND (auditor_organization_name IS NULL OR char_length(auditor_organization_name) BETWEEN 1 AND 200)
+          AND char_length(scope_summary) BETWEEN 1 AND 2000
+          AND (withdrawal_reason IS NULL OR char_length(withdrawal_reason) BETWEEN 1 AND 2000)`,
+    ),
+  ],
+);
+
+/**
+ * Which declared sites an auditor actually walked.
+ *
+ * A LINK TABLE RATHER THAN A COLUMN ON THE AUDIT, because an audit covering no listed site
+ * is still a real audit — a factory may simply not have declared its sites yet — and
+ * because one visit can cover several.
+ */
+export const commerceOrganizationSiteAuditSite = pgTable(
+  "commerce_organization_site_audit_site",
+  {
+    auditId: text("audit_id")
+      .notNull()
+      .references(() => commerceOrganizationSiteAudit.id, { onDelete: "cascade" }),
+    siteId: text("site_id")
+      .notNull()
+      .references(() => commerceOrganizationSite.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "commerce_organization_site_audit_site_pk",
+      columns: [table.auditId, table.siteId],
+    }),
   ],
 );
 
@@ -2261,6 +2628,20 @@ export const commerceOrganizationCertification = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "restrict" }),
     /** "ISO 9001:2015", "CE", "RoHS 3". Free text: the vocabulary is the world's. */
     standardName: text("standard_name").notNull(),
+    /**
+     * THE MATCHABLE HALF OF AN OPEN VOCABULARY (Phase 17, §16.2 conflict 2).
+     *
+     * `standardName` above is free text and stays the display string, deliberately: the
+     * vocabulary is the world's, and a factory holds standards no enum will ever
+     * enumerate. But a filter chip needs a closed set, and two spellings of one standard
+     * must not sit side by side in a facet.
+     *
+     * So this is NULLABLE FOREVER. The manufacturer directory's `certification` filter
+     * reads this column; anything outside the eight carries NULL, is unfilterable, and
+     * STILL RENDERS on the detail page. Nothing infers a code from the name — a fuzzy
+     * match would put a factory in a compliance filter it never claimed.
+     */
+    standardCode: commerceCertificationStandardCodeEnum("standard_code"),
     issuerName: text("issuer_name").notNull(),
     certificateNumber: text("certificate_number").notNull(),
     scopeSummary: text("scope_summary"),
@@ -2302,6 +2683,10 @@ export const commerceOrganizationCertification = pgTable(
       table.state,
       table.validUntil,
     ),
+    /** What the manufacturer directory's `certification` filter scans (Phase 17). */
+    index("commerce_organization_certification_standardCode_idx")
+      .on(table.standardCode, table.state, table.validUntil)
+      .where(sql`standard_code IS NOT NULL`),
     /**
      * One live claim per (organization, standard, certificate number). Rejected rows are
      * excluded so a seller can resubmit a corrected application after a rejection —
@@ -8188,6 +8573,155 @@ export const commerceProductInquiry = pgTable(
       "commerce_product_inquiry_parties_ck",
       sql`buyer_organization_id <> seller_organization_id`,
     ),
+  ],
+);
+
+/**
+ * "Can you make this?" — the manufacturer directory's inquiry (Phase 17, §16.5).
+ *
+ * WHY NOT `commerceProductInquiry` ABOVE: that table requires a `productId` and is
+ * uniquely indexed on `(productId, buyerOrganizationId)`. A manufacturing inquiry has no
+ * product, which is the whole point of sending it — the thing does not exist yet.
+ *
+ * WHY NOT `commerceRfq` WITH ONE INVITATION, which was the cheaper option and would have
+ * brought the quote-revision flow, expiry and trade attachments for free: an RFQ thread
+ * has every invited provider in it, so folding a one-to-one conversation into that shape
+ * exposes one factory's chat to its competitors. That is the same reason A14 gives for
+ * keeping a pre-sales product inquiry out of the RFQ thread.
+ *
+ * `capabilityKind` IS NOT NULL and is the one field that decides whether this inquiry is
+ * answerable at all. A buyer who needs tooling and writes to an assembly-only shop should
+ * learn that from the form, not from silence three weeks later.
+ *
+ * THE OPTIONAL FIELDS ARE PAIRS AND THE CHECK REFUSES HALF OF ONE. A quantity with no unit
+ * cannot be compared against a line; a price with no currency is not a price. A blank
+ * input is OMITTED by the client rather than sent as `0`, because `0` for a target unit
+ * price asks the factory to work for free.
+ */
+export const commerceManufacturingInquiry = pgTable(
+  "commerce_manufacturing_inquiry",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /**
+     * The handle a buyer reads out on a call. SERVER-MINTED — a client-supplied reference
+     * is a client-chosen primary key by another name.
+     */
+    reference: text("reference").notNull(),
+    factoryOrganizationId: text("factory_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    buyerOrganizationId: text("buyer_organization_id")
+      .notNull()
+      .references(() => commerceOrganization.id, { onDelete: "restrict" }),
+    buyerMemberId: text("buyer_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    state: commerceManufacturingInquiryStateEnum("state").default("draft").notNull(),
+    capabilityKind: commerceOrganizationCapabilityKindEnum("capability_kind").notNull(),
+    productDescription: text("product_description").notNull(),
+    estimatedAnnualQuantity: integer("estimated_annual_quantity"),
+    unitLabel: text("unit_label"),
+    targetUnitPriceInCents: bigint("target_unit_price_in_cents", { mode: "number" }),
+    currency: text("currency"),
+    /** A calendar date. A buyer wants delivery "by 30 June", not at an instant. */
+    desiredFirstDeliveryAt: date("desired_first_delivery_at", { mode: "string" }),
+    notes: text("notes"),
+    /**
+     * The same escape hatch `commerceProductInquiry` has: an inquiry that grows into real
+     * sourcing points at the RFQ it became, and the two conversations stay separate.
+     */
+    convertedToRfqId: text("converted_to_rfq_id").references(() => commerceRfq.id, {
+      onDelete: "set null",
+    }),
+    /** Opened by the `sent` transition, never at create — a draft notifies nobody. */
+    threadId: text("thread_id").references(() => commerceThread.id, { onDelete: "set null" }),
+    sentAt: timestamp("sent_at"),
+    answeredAt: timestamp("answered_at"),
+    closedAt: timestamp("closed_at"),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_manufacturing_inquiry_reference_uidx").on(table.reference),
+    index("commerce_manufacturing_inquiry_buyer_idx").on(
+      table.buyerOrganizationId,
+      table.createdAt,
+      table.id,
+    ),
+    /**
+     * The factory's queue. `state` sits in the key because a factory works `sent` first
+     * and never wants a buyer's abandoned drafts in the list — which it cannot see anyway.
+     */
+    index("commerce_manufacturing_inquiry_factory_idx").on(
+      table.factoryOrganizationId,
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    check(
+      "commerce_manufacturing_inquiry_pairs_ck",
+      sql`(estimated_annual_quantity IS NULL) = (unit_label IS NULL)
+          AND (target_unit_price_in_cents IS NULL) = (currency IS NULL)
+          AND (estimated_annual_quantity IS NULL OR estimated_annual_quantity > 0)
+          AND (target_unit_price_in_cents IS NULL OR target_unit_price_in_cents > 0)
+          AND (currency IS NULL OR currency ~ '^[A-Z]{3}$')`,
+    ),
+    check(
+      "commerce_manufacturing_inquiry_parties_ck",
+      sql`buyer_organization_id <> factory_organization_id`,
+    ),
+    check(
+      "commerce_manufacturing_inquiry_text_ck",
+      sql`char_length(reference) BETWEEN 6 AND 40
+          AND char_length(product_description) BETWEEN 1 AND 5000
+          AND (unit_label IS NULL OR char_length(unit_label) BETWEEN 1 AND 40)
+          AND (notes IS NULL OR char_length(notes) BETWEEN 1 AND 4000)`,
+    ),
+    /**
+     * EVERY STATE AGREES WITH ITS TIMESTAMP, so no code path can leave a row claiming it
+     * was sent with nothing recording when. `answered` implies `sent`; `closed` is
+     * reachable from anywhere, including straight from a draft the buyer abandoned.
+     */
+    check(
+      "commerce_manufacturing_inquiry_state_ck",
+      sql`(state = 'draft') = (sent_at IS NULL AND answered_at IS NULL AND closed_at IS NULL)
+          AND (state = 'closed') = (closed_at IS NOT NULL)
+          AND (answered_at IS NULL OR sent_at IS NOT NULL)
+          AND (state <> 'sent' OR (sent_at IS NOT NULL AND answered_at IS NULL))
+          AND (state <> 'answered' OR answered_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The certifications a buyer needs the factory to hold.
+ *
+ * OVER THE CLOSED CODE SET, not the free-text standard name, because this is a REQUIREMENT
+ * the factory is matched against. Free text here would be unmatchable, which is the
+ * opposite of what a requirement is for.
+ */
+export const commerceManufacturingInquiryCertification = pgTable(
+  "commerce_manufacturing_inquiry_certification",
+  {
+    inquiryId: text("inquiry_id")
+      .notNull()
+      .references(() => commerceManufacturingInquiry.id, { onDelete: "cascade" }),
+    standardCode: commerceCertificationStandardCodeEnum("standard_code").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "commerce_manufacturing_inquiry_certification_pk",
+      columns: [table.inquiryId, table.standardCode],
+    }),
   ],
 );
 
@@ -16468,6 +17002,12 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // those would drown the entries that name an accountable human.
   "commerce_category_request_approved",
   "commerce_category_request_rejected",
+  // Site audits — `commerce-seller-profile` (Phase 17, §16.2). Both verdicts are here
+  // because `site_audited` is the strongest claim this platform makes about a factory,
+  // and a claim of that weight must name the human who made it and the human who
+  // retracted it. Nothing else in Phase 17 is staff-written.
+  "commerce_organization_site_audit_recorded",
+  "commerce_organization_site_audit_withdrawn",
 ]);
 
 /**

@@ -1,15 +1,20 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
   commerceEncryptedDocument,
+  commerceOrganization,
   commerceOrganizationCapability,
   commerceOrganizationCertification,
   commerceOrganizationMedia,
   commerceOrganizationMember,
+  commerceOrganizationProductionLine,
+  commerceOrganizationSite,
   commerceOrganizationSiteAccess,
+  commerceOrganizationSiteAudit,
+  commerceOrganizationSiteAuditSite,
   commerceOrganizationStakeholder,
   commerceSellerProfile,
 } from "#src/db/schema.js";
@@ -30,6 +35,7 @@ import {
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
+import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -42,6 +48,9 @@ type SiteAccessRow = typeof commerceOrganizationSiteAccess.$inferSelect;
 type StakeholderRow = typeof commerceOrganizationStakeholder.$inferSelect;
 type CapabilityRow = typeof commerceOrganizationCapability.$inferSelect;
 type CertificationRow = typeof commerceOrganizationCertification.$inferSelect;
+type ProductionLineRow = typeof commerceOrganizationProductionLine.$inferSelect;
+type SiteRow = typeof commerceOrganizationSite.$inferSelect;
+type SiteAuditRow = typeof commerceOrganizationSiteAudit.$inferSelect;
 
 export type CommerceSellerProfileError =
   | { type: "NOT_FOUND" }
@@ -80,6 +89,9 @@ const CERTIFICATION_READERS: readonly MemberRole[] = [
 const MAXIMUM_MEDIA_PER_ORGANIZATION = 12;
 const MAXIMUM_SITE_ACCESS_ROWS = 12;
 const MAXIMUM_STAKEHOLDERS = 12;
+/** Phase 17. Same ceiling as its sibling collections — a directory row, not a catalogue. */
+const MAXIMUM_PRODUCTION_LINES = 12;
+const MAXIMUM_SITES = 12;
 const MEDIA_OUTPUT_MAX_DIMENSION_PX = 2400;
 /** A headshot rendered in a profile card; it does not need the gallery's ceiling. */
 const STAKEHOLDER_PHOTO_OUTPUT_MAX_DIMENSION_PX = 800;
@@ -123,6 +135,65 @@ export interface OrganizationCapabilityProjection {
 }
 
 /**
+ * One named production line (Phase 17, §16.3).
+ *
+ * `unitLabel` is NOT NULLABLE beside a nullable capacity, on purpose: a capacity with no
+ * unit cannot be compared against an order, so the unit is required even when the number
+ * is withheld.
+ */
+export interface OrganizationProductionLineProjection {
+  readonly id: string;
+  readonly name: string;
+  readonly processSummary: string;
+  readonly monthlyCapacityUnits: number | null;
+  readonly unitLabel: string;
+  readonly position: number;
+}
+
+/**
+ * One physical site (Phase 17, §16.3).
+ *
+ * These areas and the org-wide `factoryAreaSquareMetres` are BOTH seller-declared, and
+ * when they disagree the read publishes both rather than summing or preferring one.
+ */
+export interface OrganizationSiteProjection {
+  readonly id: string;
+  readonly label: string;
+  readonly countryCode: string;
+  readonly locality: string | null;
+  readonly floorAreaSquareMetres: number | null;
+  readonly productionStaffCount: number | null;
+  readonly position: number;
+}
+
+/**
+ * What the factory says about samples (Phase 17, §16.3).
+ *
+ * `sampleFeeInCents = null` MEANS UNSTATED AND `0` MEANS FREE. Rendering the first as the
+ * second is the failure this object is shaped to prevent, which is why the fee is nullable
+ * while the currency never is.
+ */
+export interface OrganizationSamplePolicyProjection {
+  readonly offersSamples: boolean;
+  readonly sampleLeadTimeDays: number | null;
+  readonly sampleFeeInCents: number | null;
+  readonly currency: string;
+}
+
+/**
+ * The smallest order this factory takes, and how long it needs (Phase 17, §16.3).
+ *
+ * The MOQ pair is BOTH-OR-NEITHER: a bare `500` is unreadable, because 500 pieces and 500
+ * cartons are different businesses.
+ */
+export interface OrganizationOrderBoundsProjection {
+  readonly minimumOrderQuantity: number | null;
+  readonly minimumOrderQuantityUnitLabel: string | null;
+  readonly minimumLeadTimeDays: number | null;
+  readonly maximumLeadTimeDays: number | null;
+}
+
+/**
  * A certification as the PUBLIC sees it.
  *
  * NOTE WHAT IS ABSENT: `evidenceDocumentId`, and any URL or token that could reach the
@@ -134,6 +205,8 @@ export interface OrganizationCapabilityProjection {
 export interface OrganizationCertificationProjection {
   readonly id: string;
   readonly standardName: string;
+  /** `null` for a standard outside the eight filterable codes — see the column comment. */
+  readonly standardCode: CertificationRow["standardCode"];
   readonly issuerName: string;
   readonly certificateNumber: string;
   readonly scopeSummary: string | null;
@@ -179,12 +252,38 @@ export interface SellerDeclaredProfileProjection {
    * sibling of the derived `onTimeShipmentRate` since Phase 2.
    */
   readonly declaredResponseTimeHours: number | null;
+  /** Phase 17 (§16.3). Still declarations — nobody checked any of the three. */
+  readonly samplePolicy: OrganizationSamplePolicyProjection;
+  readonly orderBounds: OrganizationOrderBoundsProjection;
+  readonly acceptingInquiries: boolean;
   readonly media: readonly OrganizationMediaProjection[];
   readonly siteAccess: readonly OrganizationSiteAccessProjection[];
   readonly stakeholders: readonly OrganizationStakeholderProjection[];
   readonly capabilities: readonly OrganizationCapabilityProjection[];
   readonly certifications: readonly OrganizationCertificationProjection[];
+  readonly productionLines: readonly OrganizationProductionLineProjection[];
+  readonly sites: readonly OrganizationSiteProjection[];
 }
+
+/**
+ * The defaults a seller who has never filled the form projects as.
+ *
+ * `USD` is the column default and is server-owned; `offersSamples: false` is the honest
+ * reading of silence, and it is what makes every other sample field null by construction.
+ */
+const UNSTATED_SAMPLE_POLICY: OrganizationSamplePolicyProjection = {
+  offersSamples: false,
+  sampleLeadTimeDays: null,
+  sampleFeeInCents: null,
+  currency: "USD",
+};
+
+const UNSTATED_ORDER_BOUNDS: OrganizationOrderBoundsProjection = {
+  minimumOrderQuantity: null,
+  minimumOrderQuantityUnitLabel: null,
+  minimumLeadTimeDays: null,
+  maximumLeadTimeDays: null,
+};
 
 function projectMedia(row: MediaRow): OrganizationMediaProjection {
   return {
@@ -228,10 +327,34 @@ function projectCapability(row: CapabilityRow): OrganizationCapabilityProjection
   };
 }
 
+function projectProductionLine(row: ProductionLineRow): OrganizationProductionLineProjection {
+  return {
+    id: row.id,
+    name: row.name,
+    processSummary: row.processSummary,
+    monthlyCapacityUnits: row.monthlyCapacityUnits,
+    unitLabel: row.unitLabel,
+    position: row.position,
+  };
+}
+
+function projectSite(row: SiteRow): OrganizationSiteProjection {
+  return {
+    id: row.id,
+    label: row.label,
+    countryCode: row.countryCode,
+    locality: row.locality,
+    floorAreaSquareMetres: row.floorAreaSquareMetres,
+    productionStaffCount: row.productionStaffCount,
+    position: row.position,
+  };
+}
+
 function projectCertification(row: CertificationRow): OrganizationCertificationProjection {
   return {
     id: row.id,
     standardName: row.standardName,
+    standardCode: row.standardCode,
     issuerName: row.issuerName,
     certificateNumber: row.certificateNumber,
     scopeSummary: row.scopeSummary,
@@ -331,6 +454,8 @@ export async function loadSellerDeclaredProfiles(
     stakeholderRows,
     capabilityRows,
     certificationRows,
+    productionLineRows,
+    siteRows,
   ] = await Promise.all([
     db
       .select()
@@ -389,6 +514,22 @@ export async function loadSellerDeclaredProfiles(
         asc(commerceOrganizationCertification.organizationId),
         asc(commerceOrganizationCertification.standardName),
       ),
+    db
+      .select()
+      .from(commerceOrganizationProductionLine)
+      .where(inArray(commerceOrganizationProductionLine.organizationId, requestedIds))
+      .orderBy(
+        asc(commerceOrganizationProductionLine.organizationId),
+        asc(commerceOrganizationProductionLine.position),
+      ),
+    db
+      .select()
+      .from(commerceOrganizationSite)
+      .where(inArray(commerceOrganizationSite.organizationId, requestedIds))
+      .orderBy(
+        asc(commerceOrganizationSite.organizationId),
+        asc(commerceOrganizationSite.position),
+      ),
   ]);
 
   const mediaByOrganization = new Map<string, OrganizationMediaProjection[]>();
@@ -421,6 +562,21 @@ export async function loadSellerDeclaredProfiles(
     existing.push(projectCertification(row));
     certificationsByOrganization.set(row.organizationId, existing);
   }
+  const productionLinesByOrganization = new Map<
+    string,
+    OrganizationProductionLineProjection[]
+  >();
+  for (const row of productionLineRows) {
+    const existing = productionLinesByOrganization.get(row.organizationId) ?? [];
+    existing.push(projectProductionLine(row));
+    productionLinesByOrganization.set(row.organizationId, existing);
+  }
+  const sitesByOrganization = new Map<string, OrganizationSiteProjection[]>();
+  for (const row of siteRows) {
+    const existing = sitesByOrganization.get(row.organizationId) ?? [];
+    existing.push(projectSite(row));
+    sitesByOrganization.set(row.organizationId, existing);
+  }
 
   for (const row of profileRows) {
     profiles.set(row.organizationId, {
@@ -434,11 +590,26 @@ export async function loadSellerDeclaredProfiles(
       acceptingCustomOrders: row.acceptingCustomOrders,
       publicSummary: row.publicSummary,
       declaredResponseTimeHours: row.declaredResponseTimeHours,
+      samplePolicy: {
+        offersSamples: row.offersSamples,
+        sampleLeadTimeDays: row.sampleLeadTimeDays,
+        sampleFeeInCents: row.sampleFeeInCents,
+        currency: row.sampleCurrency,
+      },
+      orderBounds: {
+        minimumOrderQuantity: row.minimumOrderQuantity,
+        minimumOrderQuantityUnitLabel: row.minimumOrderQuantityUnitLabel,
+        minimumLeadTimeDays: row.minimumLeadTimeDays,
+        maximumLeadTimeDays: row.maximumLeadTimeDays,
+      },
+      acceptingInquiries: row.acceptingInquiries,
       media: mediaByOrganization.get(row.organizationId) ?? [],
       siteAccess: siteAccessByOrganization.get(row.organizationId) ?? [],
       stakeholders: stakeholdersByOrganization.get(row.organizationId) ?? [],
       capabilities: capabilitiesByOrganization.get(row.organizationId) ?? [],
       certifications: certificationsByOrganization.get(row.organizationId) ?? [],
+      productionLines: productionLinesByOrganization.get(row.organizationId) ?? [],
+      sites: sitesByOrganization.get(row.organizationId) ?? [],
     });
   }
 
@@ -455,7 +626,11 @@ export async function loadSellerDeclaredProfiles(
     const stakeholders = stakeholdersByOrganization.get(organizationId) ?? [];
     const capabilities = capabilitiesByOrganization.get(organizationId) ?? [];
     const certifications = certificationsByOrganization.get(organizationId) ?? [];
+    const productionLines = productionLinesByOrganization.get(organizationId) ?? [];
+    const sites = sitesByOrganization.get(organizationId) ?? [];
     if (
+      productionLines.length === 0 &&
+      sites.length === 0 &&
       media.length === 0 &&
       siteAccess.length === 0 &&
       stakeholders.length === 0 &&
@@ -475,11 +650,20 @@ export async function loadSellerDeclaredProfiles(
       acceptingCustomOrders: false,
       publicSummary: null,
       declaredResponseTimeHours: null,
+      samplePolicy: UNSTATED_SAMPLE_POLICY,
+      orderBounds: UNSTATED_ORDER_BOUNDS,
+      /**
+       * A seller with no profile row has not turned its inbox off, so the default is the
+       * column default. An inquiry create still re-reads the row rather than trusting this.
+       */
+      acceptingInquiries: true,
       media,
       siteAccess,
       stakeholders,
       capabilities,
       certifications,
+      productionLines,
+      sites,
     });
   }
 
@@ -501,6 +685,29 @@ export interface UpsertSellerProfileInput {
   readonly acceptingCustomOrders?: boolean;
   readonly publicSummary?: string | null;
   readonly declaredResponseTimeHours?: number | null;
+}
+
+/**
+ * The commercial terms the manufacturer directory renders (Phase 17, §16.3).
+ *
+ * A WHOLE-OBJECT REPLACE, NOT PART OF THE SCALAR PATCH ABOVE, and the reason is coherence.
+ * Both invariants here are cross-field — a sample fee is only meaningful when samples are
+ * offered, and a MOQ is only readable beside its unit — so a PARTIAL patch could not
+ * validate either of them without first reading the stored row and merging. Sending the
+ * whole object means Zod can refuse a contradiction at the boundary, which is where
+ * `pg-errors.ts` says these belong: the DB CHECKs stay defense-in-depth, and a 23514
+ * reaching the application would still be a bug.
+ */
+export interface ReplaceFactoryTermsInput {
+  readonly offersSamples: boolean;
+  readonly sampleLeadTimeDays: number | null;
+  readonly sampleFeeInCents: number | null;
+  readonly sampleCurrency: string;
+  readonly minimumOrderQuantity: number | null;
+  readonly minimumOrderQuantityUnitLabel: string | null;
+  readonly minimumLeadTimeDays: number | null;
+  readonly maximumLeadTimeDays: number | null;
+  readonly acceptingInquiries: boolean;
 }
 
 /**
@@ -555,9 +762,73 @@ export async function upsertSellerProfile(input: {
   return { success: true, value: profile };
 }
 
+/**
+ * Replaces the factory's commercial terms (Phase 17, §16.3).
+ *
+ * An upsert like `upsertSellerProfile`, for the same reason: one row per organization and
+ * no "already exists" conflict a caller could resolve. Unlike it, every field is required,
+ * because this object's invariants are cross-field.
+ */
+export async function replaceFactoryTerms(input: {
+  readonly userId: string;
+  readonly organizationId: string;
+  readonly terms: ReplaceFactoryTermsInput;
+}): Promise<Result<SellerDeclaredProfileProjection, CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
+  if (!access.success) return access;
+
+  await db.transaction(async (transaction) => {
+    const occurredAt = new Date();
+    await transaction
+      .insert(commerceSellerProfile)
+      .values({
+        organizationId: input.organizationId,
+        ...input.terms,
+        createdAt: occurredAt,
+        updatedAt: occurredAt,
+      })
+      .onConflictDoUpdate({
+        target: commerceSellerProfile.organizationId,
+        set: { ...input.terms, updatedAt: occurredAt },
+      });
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: input.organizationId,
+      eventKind: "seller_profile_updated",
+      actorUserId: input.userId,
+      actorMemberRoleSnapshot: access.value.role,
+      targetEntityType: "commerce_seller_profile",
+      targetEntityId: input.organizationId,
+      payload: { changedFields: Object.keys(input.terms).toSorted() },
+      occurredAt,
+    });
+  });
+
+  const reloaded = await loadSellerDeclaredProfiles([input.organizationId]);
+  const profile = reloaded.get(input.organizationId);
+  if (!profile) throw new Error("Seller profile vanished immediately after terms replace.");
+  return { success: true, value: profile };
+}
+
 // ---------------------------------------------------------------------------
 // PUT-replace collections
 // ---------------------------------------------------------------------------
+
+export interface ProductionLineInput {
+  readonly name: string;
+  readonly processSummary: string;
+  readonly monthlyCapacityUnits?: number | null;
+  /** Required even when the capacity is withheld — see the projection's comment. */
+  readonly unitLabel: string;
+}
+
+export interface OrganizationSiteInput {
+  readonly label: string;
+  readonly countryCode: string;
+  readonly locality?: string | null;
+  readonly floorAreaSquareMetres?: number | null;
+  readonly productionStaffCount?: number | null;
+}
 
 export interface SiteAccessInput {
   readonly accessMode: SiteAccessRow["accessMode"];
@@ -646,6 +917,136 @@ export async function replaceSiteAccess(input: {
   });
 
   return { success: true, value: replaced.map(projectSiteAccess) };
+}
+
+/**
+ * Phase 17. Same delete-then-insert-in-one-transaction shape as `replaceSiteAccess`, and
+ * safe for the same reason: every row is replaced, so the old positions are gone before
+ * any new one is written against `(organizationId, position)`.
+ */
+export async function replaceProductionLines(input: {
+  readonly userId: string;
+  readonly organizationId: string;
+  readonly rows: readonly ProductionLineInput[];
+}): Promise<Result<readonly OrganizationProductionLineProjection[], CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
+  if (!access.success) return access;
+  if (input.rows.length > MAXIMUM_PRODUCTION_LINES) {
+    return {
+      success: false,
+      error: {
+        type: "CONFLICT",
+        message: `At most ${String(MAXIMUM_PRODUCTION_LINES)} production lines are allowed.`,
+      },
+    };
+  }
+
+  const replaced = await db.transaction(async (transaction) => {
+    const occurredAt = new Date();
+    await transaction
+      .delete(commerceOrganizationProductionLine)
+      .where(eq(commerceOrganizationProductionLine.organizationId, input.organizationId));
+
+    const inserted =
+      input.rows.length === 0
+        ? []
+        : await transaction
+            .insert(commerceOrganizationProductionLine)
+            .values(
+              input.rows.map((row, index) => ({
+                organizationId: input.organizationId,
+                name: row.name,
+                processSummary: row.processSummary,
+                monthlyCapacityUnits: row.monthlyCapacityUnits ?? null,
+                unitLabel: row.unitLabel,
+                position: index,
+                createdAt: occurredAt,
+                updatedAt: occurredAt,
+              })),
+            )
+            .returning();
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: input.organizationId,
+      eventKind: "production_lines_changed",
+      actorUserId: input.userId,
+      actorMemberRoleSnapshot: access.value.role,
+      targetEntityType: "commerce_organization_production_line",
+      targetEntityId: input.organizationId,
+      payload: { rowCount: String(inserted.length) },
+      occurredAt,
+    });
+    return inserted;
+  });
+
+  return { success: true, value: replaced.map(projectProductionLine) };
+}
+
+/**
+ * Phase 17. NOTE THE DELETE'S REACH: `commerce_organization_site_audit_site` cascades from
+ * the site, so rewriting the site list drops the link rows saying which sites an auditor
+ * walked. The AUDIT ITSELF SURVIVES — it references the organization, not a site — so
+ * `site_audited` and `lastAuditedAt` are unaffected by a seller editing its own site list.
+ * That is the intended asymmetry: a seller may restate where its factories are, and may
+ * not thereby erase or claim a platform audit.
+ */
+export async function replaceOrganizationSites(input: {
+  readonly userId: string;
+  readonly organizationId: string;
+  readonly rows: readonly OrganizationSiteInput[];
+}): Promise<Result<readonly OrganizationSiteProjection[], CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
+  if (!access.success) return access;
+  if (input.rows.length > MAXIMUM_SITES) {
+    return {
+      success: false,
+      error: {
+        type: "CONFLICT",
+        message: `At most ${String(MAXIMUM_SITES)} sites are allowed.`,
+      },
+    };
+  }
+
+  const replaced = await db.transaction(async (transaction) => {
+    const occurredAt = new Date();
+    await transaction
+      .delete(commerceOrganizationSite)
+      .where(eq(commerceOrganizationSite.organizationId, input.organizationId));
+
+    const inserted =
+      input.rows.length === 0
+        ? []
+        : await transaction
+            .insert(commerceOrganizationSite)
+            .values(
+              input.rows.map((row, index) => ({
+                organizationId: input.organizationId,
+                label: row.label,
+                countryCode: row.countryCode,
+                locality: row.locality ?? null,
+                floorAreaSquareMetres: row.floorAreaSquareMetres ?? null,
+                productionStaffCount: row.productionStaffCount ?? null,
+                position: index,
+                createdAt: occurredAt,
+                updatedAt: occurredAt,
+              })),
+            )
+            .returning();
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: input.organizationId,
+      eventKind: "sites_changed",
+      actorUserId: input.userId,
+      actorMemberRoleSnapshot: access.value.role,
+      targetEntityType: "commerce_organization_site",
+      targetEntityId: input.organizationId,
+      payload: { rowCount: String(inserted.length) },
+      occurredAt,
+    });
+    return inserted;
+  });
+
+  return { success: true, value: replaced.map(projectSite) };
 }
 
 export async function replaceStakeholders(input: {
@@ -1205,6 +1606,12 @@ export async function submitCertification(input: {
   readonly userId: string;
   readonly organizationId: string;
   readonly standardName: string;
+  /**
+   * Phase 17 (§16.2). OPTIONAL, and nothing infers it from `standardName` — a fuzzy match
+   * would put a factory into a compliance filter it never claimed. Omitting it costs the
+   * seller only filterability; the certificate still renders on the detail page.
+   */
+  readonly standardCode?: CertificationRow["standardCode"];
   readonly issuerName: string;
   readonly certificateNumber: string;
   readonly scopeSummary: string | null;
@@ -1291,6 +1698,7 @@ export async function submitCertification(input: {
         .values({
           organizationId: input.organizationId,
           standardName: input.standardName,
+          standardCode: input.standardCode ?? null,
           issuerName: input.issuerName,
           certificateNumber: input.certificateNumber,
           scopeSummary: input.scopeSummary,
@@ -1515,4 +1923,302 @@ async function handleCertificationSubmissionFailure(
     };
   }
   throw submissionError;
+}
+
+// ---------------------------------------------------------------------------
+// Site audits — the record behind `site_audited` (Phase 17, §16.2 conflict 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * One recorded audit, as the owner and the moderator see it.
+ *
+ * The PUBLIC read never projects this object. The manufacturer detail carries only
+ * `lastAuditedAt`, because publishing an auditor's name and the scope they walked is a
+ * disclosure about a third party that nobody consented to on a browse page.
+ */
+export interface OrganizationSiteAuditProjection {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly auditedAt: string;
+  readonly auditorName: string;
+  readonly auditorOrganizationName: string | null;
+  readonly scopeSummary: string;
+  readonly state: SiteAuditRow["state"];
+  readonly siteIds: readonly string[];
+  readonly withdrawnAt: Date | null;
+  readonly withdrawalReason: string | null;
+  readonly createdAt: Date;
+}
+
+function projectSiteAudit(
+  row: SiteAuditRow,
+  siteIds: readonly string[],
+): OrganizationSiteAuditProjection {
+  return {
+    id: row.id,
+    organizationId: row.organizationId,
+    auditedAt: row.auditedAt,
+    auditorName: row.auditorName,
+    auditorOrganizationName: row.auditorOrganizationName,
+    scopeSummary: row.scopeSummary,
+    state: row.state,
+    siteIds,
+    withdrawnAt: row.withdrawnAt,
+    withdrawalReason: row.withdrawalReason,
+    createdAt: row.createdAt,
+  };
+}
+
+export interface RecordSiteAuditInput {
+  readonly moderatorUserId: string;
+  readonly organizationId: string;
+  readonly auditedAt: string;
+  readonly auditorName: string;
+  readonly auditorOrganizationName: string | null;
+  readonly scopeSummary: string;
+  /**
+   * Which of the organization's declared sites were walked. A HINT THAT IS VERIFIED, never
+   * a grant: ids belonging to another organization are refused rather than filtered out,
+   * because silently dropping one would record an audit narrower than the moderator wrote.
+   */
+  readonly siteIds: readonly string[];
+}
+
+/**
+ * Records that somebody stood in the building.
+ *
+ * `moderate_commerce` IS CHECKED FIRST, before any id in the input is read, which is what
+ * keeps the route from being an existence oracle for organization ids.
+ *
+ * The platform audit entry is appended IN THE SAME TRANSACTION and its id is stored on the
+ * row, so no audit can exist without an accountable human attached to it. That is the
+ * shape `commerce_moderation_action` already uses.
+ */
+export async function recordSiteAudit(
+  input: RecordSiteAuditInput,
+): Promise<Result<OrganizationSiteAuditProjection, CommerceSellerProfileError>> {
+  const capability = await requirePlatformCapability(input.moderatorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return { success: false, error: { type: "PLATFORM_CAPABILITY_REQUIRED" } };
+  }
+
+  const outcome = await db.transaction(async (transaction) => {
+    const occurredAt = new Date();
+
+    const [organization] = await transaction
+      .select({ id: commerceOrganization.id })
+      .from(commerceOrganization)
+      .where(eq(commerceOrganization.id, input.organizationId))
+      .limit(1);
+    if (!organization) return { status: "not_found" as const };
+
+    const requestedSiteIds = [...new Set(input.siteIds)];
+    if (requestedSiteIds.length > 0) {
+      const ownedSites = await transaction
+        .select({ id: commerceOrganizationSite.id })
+        .from(commerceOrganizationSite)
+        .where(
+          and(
+            eq(commerceOrganizationSite.organizationId, input.organizationId),
+            inArray(commerceOrganizationSite.id, requestedSiteIds),
+          ),
+        );
+      if (ownedSites.length !== requestedSiteIds.length) {
+        return { status: "unknown_site" as const };
+      }
+    }
+
+    const auditEntry = await appendPlatformAuditEntry(transaction, {
+      eventKind: "commerce_organization_site_audit_recorded",
+      actorUserId: input.moderatorUserId,
+      actorRoleSnapshot: capability.value.platformRole,
+      actionLabel: "commerce_organization_site_audit_recorded",
+      targetLabel: `commerce_organization:${input.organizationId}`,
+      detailNote: input.scopeSummary,
+      payload: {
+        organizationId: input.organizationId,
+        auditedAt: input.auditedAt,
+        siteCount: String(requestedSiteIds.length),
+      },
+      occurredAt,
+    });
+
+    const [row] = await transaction
+      .insert(commerceOrganizationSiteAudit)
+      .values({
+        organizationId: input.organizationId,
+        auditedAt: input.auditedAt,
+        auditorName: input.auditorName,
+        auditorOrganizationName: input.auditorOrganizationName,
+        scopeSummary: input.scopeSummary,
+        state: "recorded",
+        recordedByUserId: input.moderatorUserId,
+        auditEntryId: auditEntry.id,
+        createdAt: occurredAt,
+        updatedAt: occurredAt,
+      })
+      .returning();
+    if (!row) throw new Error("Site audit insert returned no row.");
+
+    if (requestedSiteIds.length > 0) {
+      await transaction.insert(commerceOrganizationSiteAuditSite).values(
+        requestedSiteIds.map((siteId) => ({
+          auditId: row.id,
+          siteId,
+          createdAt: occurredAt,
+        })),
+      );
+    }
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: input.organizationId,
+      eventKind: "site_audit_recorded",
+      actorUserId: input.moderatorUserId,
+      actorMemberRoleSnapshot: null,
+      targetEntityType: "commerce_organization_site_audit",
+      targetEntityId: row.id,
+      payload: { auditedAt: input.auditedAt },
+      occurredAt,
+    });
+
+    return { status: "recorded" as const, row, siteIds: requestedSiteIds };
+  });
+
+  if (outcome.status === "not_found") {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+  if (outcome.status === "unknown_site") {
+    return {
+      success: false,
+      error: { type: "CONFLICT", message: "One or more sites do not belong to this organization." },
+    };
+  }
+  return { success: true, value: projectSiteAudit(outcome.row, outcome.siteIds) };
+}
+
+/**
+ * Retracts a published audit.
+ *
+ * REVERSIBLE IS THE WRONG WORD FOR IT — a withdrawal is its own recorded act with its own
+ * reason, not an undo. The row survives, `site_audited` stops deriving from it, and the
+ * platform chain carries both the claim and its retraction.
+ */
+export async function withdrawSiteAudit(input: {
+  readonly moderatorUserId: string;
+  readonly auditId: string;
+  readonly reason: string;
+}): Promise<Result<OrganizationSiteAuditProjection, CommerceSellerProfileError>> {
+  const capability = await requirePlatformCapability(input.moderatorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return { success: false, error: { type: "PLATFORM_CAPABILITY_REQUIRED" } };
+  }
+
+  const outcome = await db.transaction(async (transaction) => {
+    const occurredAt = new Date();
+    const [existing] = await transaction
+      .select()
+      .from(commerceOrganizationSiteAudit)
+      .where(eq(commerceOrganizationSiteAudit.id, input.auditId))
+      .for("update");
+    if (!existing) return { status: "not_found" as const };
+    if (existing.state === "withdrawn") return { status: "already_withdrawn" as const };
+
+    await appendPlatformAuditEntry(transaction, {
+      eventKind: "commerce_organization_site_audit_withdrawn",
+      actorUserId: input.moderatorUserId,
+      actorRoleSnapshot: capability.value.platformRole,
+      actionLabel: "commerce_organization_site_audit_withdrawn",
+      targetLabel: `commerce_organization_site_audit:${existing.id}`,
+      detailNote: input.reason,
+      payload: { organizationId: existing.organizationId, auditId: existing.id },
+      occurredAt,
+    });
+
+    const [row] = await transaction
+      .update(commerceOrganizationSiteAudit)
+      .set({
+        state: "withdrawn",
+        withdrawnByUserId: input.moderatorUserId,
+        withdrawnAt: occurredAt,
+        withdrawalReason: input.reason,
+        updatedAt: occurredAt,
+      })
+      .where(eq(commerceOrganizationSiteAudit.id, input.auditId))
+      .returning();
+    if (!row) throw new Error("Site audit withdrawal returned no row.");
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: existing.organizationId,
+      eventKind: "site_audit_withdrawn",
+      actorUserId: input.moderatorUserId,
+      actorMemberRoleSnapshot: null,
+      targetEntityType: "commerce_organization_site_audit",
+      targetEntityId: row.id,
+      payload: { auditId: row.id },
+      occurredAt,
+    });
+
+    return { status: "withdrawn" as const, row };
+  });
+
+  if (outcome.status === "not_found") {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+  if (outcome.status === "already_withdrawn") {
+    return {
+      success: false,
+      error: { type: "CONFLICT", message: "This audit has already been withdrawn." },
+    };
+  }
+
+  const linkedSites = await db
+    .select({ siteId: commerceOrganizationSiteAuditSite.siteId })
+    .from(commerceOrganizationSiteAuditSite)
+    .where(eq(commerceOrganizationSiteAuditSite.auditId, outcome.row.id));
+  return {
+    success: true,
+    value: projectSiteAudit(
+      outcome.row,
+      linkedSites.map((link) => link.siteId),
+    ),
+  };
+}
+
+/** Every audit on one organization, newest first. Staff-only, like the writes above. */
+export async function listSiteAudits(input: {
+  readonly moderatorUserId: string;
+  readonly organizationId: string;
+}): Promise<Result<readonly OrganizationSiteAuditProjection[], CommerceSellerProfileError>> {
+  const capability = await requirePlatformCapability(input.moderatorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return { success: false, error: { type: "PLATFORM_CAPABILITY_REQUIRED" } };
+  }
+
+  const rows = await db
+    .select()
+    .from(commerceOrganizationSiteAudit)
+    .where(eq(commerceOrganizationSiteAudit.organizationId, input.organizationId))
+    .orderBy(desc(commerceOrganizationSiteAudit.auditedAt), desc(commerceOrganizationSiteAudit.id));
+  if (rows.length === 0) return { success: true, value: [] };
+
+  const linkRows = await db
+    .select()
+    .from(commerceOrganizationSiteAuditSite)
+    .where(
+      inArray(
+        commerceOrganizationSiteAuditSite.auditId,
+        rows.map((row) => row.id),
+      ),
+    );
+  const siteIdsByAudit = new Map<string, string[]>();
+  for (const link of linkRows) {
+    const existing = siteIdsByAudit.get(link.auditId) ?? [];
+    existing.push(link.siteId);
+    siteIdsByAudit.set(link.auditId, existing);
+  }
+
+  return {
+    success: true,
+    value: rows.map((row) => projectSiteAudit(row, siteIdsByAudit.get(row.id) ?? [])),
+  };
 }
