@@ -911,21 +911,21 @@ unnecessary.
 
 ### 6.6 Manufacturer directory writes — **SHIPPED (Phase 17, `0099`–`0101`)**
 
-| Method | Route                                                       | Result                                              |
-| ------ | ----------------------------------------------------------- | --------------------------------------------------- |
-| POST   | `/commerce/factories/:factorySlug/inquiries`                | Create; answers `draft`. **Idempotency-Key**        |
-| GET    | `/commerce/factories/inquiries/mine`                        | The buyer's own inquiries, any state                |
-| GET    | `/commerce/factories/inquiries/received`                    | The factory's queue; drafts are never in it         |
-| GET    | `/commerce/factories/inquiries/:inquiryId`                  | One inquiry, for either party                       |
-| POST   | `/commerce/factories/inquiries/:inquiryId/send`             | `draft` → `sent`; opens the one-to-one thread       |
-| POST   | `/commerce/factories/inquiries/:inquiryId/answer`           | The factory marks it answered                       |
-| POST   | `/commerce/factories/inquiries/:inquiryId/close`            | Either party, from any state but `closed`           |
-| PUT    | `/commerce/organizations/:organizationId/production-lines`  | Replace the whole named-line list                   |
-| PUT    | `/commerce/organizations/:organizationId/sites`             | Replace the whole per-site list                     |
-| PUT    | `/commerce/organizations/:organizationId/factory-terms`     | Sample policy, MOQ, lead times, inbox switch        |
-| GET    | `/commerce/admin/organizations/:organizationId/site-audits` | Every audit on one organization                     |
-| POST   | `/commerce/admin/organizations/:organizationId/site-audits` | Record one. **Idempotency-Key**                     |
-| POST   | `/commerce/admin/site-audits/:auditId/withdraw`             | Retract it, with a required reason                  |
+| Method | Route                                                       | Result                                        |
+| ------ | ----------------------------------------------------------- | --------------------------------------------- |
+| POST   | `/commerce/factories/:factorySlug/inquiries`                | Create; answers `draft`. **Idempotency-Key**  |
+| GET    | `/commerce/factories/inquiries/mine`                        | The buyer's own inquiries, any state          |
+| GET    | `/commerce/factories/inquiries/received`                    | The factory's queue; drafts are never in it   |
+| GET    | `/commerce/factories/inquiries/:inquiryId`                  | One inquiry, for either party                 |
+| POST   | `/commerce/factories/inquiries/:inquiryId/send`             | `draft` → `sent`; opens the one-to-one thread |
+| POST   | `/commerce/factories/inquiries/:inquiryId/answer`           | The factory marks it answered                 |
+| POST   | `/commerce/factories/inquiries/:inquiryId/close`            | Either party, from any state but `closed`     |
+| PUT    | `/commerce/organizations/:organizationId/production-lines`  | Replace the whole named-line list             |
+| PUT    | `/commerce/organizations/:organizationId/sites`             | Replace the whole per-site list               |
+| PUT    | `/commerce/organizations/:organizationId/factory-terms`     | Sample policy, MOQ, lead times, inbox switch  |
+| GET    | `/commerce/admin/organizations/:organizationId/site-audits` | Every audit on one organization               |
+| POST   | `/commerce/admin/organizations/:organizationId/site-audits` | Record one. **Idempotency-Key**               |
+| POST   | `/commerce/admin/site-audits/:auditId/withdraw`             | Retract it, with a required reason            |
 
 Literal `/factories/inquiries/*` paths are declared **before** `/factories/:factorySlug/inquiries`,
 which is the same depth; `commerce-factories.routes.order.test.ts` asserts it.
@@ -1344,7 +1344,7 @@ Scheduled jobs:
   and A25's organization search document rather than a parallel table set (§16). The directory
   substrate is `store_search_document` where `documentKind = 'organization' AND isEligible`, inner
   joined to `commerce_seller_profile` and narrowed to `businessType IN ('manufacturer',
-  'manufacturer_trading')` — a trading company is not a factory.
+'manufacturer_trading')` — a trading company is not a factory.
 - The three conflicts of §16.2 were resolved first, and all three decisions are recorded:
   **the capability enum widened additively** (`0099`), **a nullable `standardCode`** over a seeded
   eight-value enum beside the free-text certification name (`0100`), and **`site_audited` was given
