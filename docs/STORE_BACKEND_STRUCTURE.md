@@ -383,15 +383,15 @@ organization trade state, and category state must all be eligible.
 `commerce_provider_kind`
 
 - seeded values:
-    - `freight_forwarder`
-    - `logistics_operator`
-    - `customs_broker`
-    - `insurance_provider`
-    - `inspection_agency`
-    - `testing_certification_lab`
-    - `marketing_agency`
-    - `warehouse_provider`
-    - `foreign_exchange_facilitator`
+  - `freight_forwarder`
+  - `logistics_operator`
+  - `customs_broker`
+  - `insurance_provider`
+  - `inspection_agency`
+  - `testing_certification_lab`
+  - `marketing_agency`
+  - `warehouse_provider`
+  - `foreign_exchange_facilitator`
 
 `commerce_provider_kind_link` is many-to-many because one verified organization may operate, for
 example, freight forwarding and warehousing. Verification is recorded per kind, not globally.
