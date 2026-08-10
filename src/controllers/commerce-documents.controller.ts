@@ -5,6 +5,7 @@ import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-ver
 import * as commerceTradeDocumentService from "#src/services/commerce-trade-document.service.js";
 import type { CommerceTradeDocumentError } from "#src/services/commerce-trade-document.service.js";
 import type { ApiResponse } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const EmptyObjectSchema = z.object({}).strict();
 
@@ -13,12 +14,16 @@ const DocumentIdParamsSchema = z
   .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
-  res.status(422).json({
-    status: "error",
-    statusCode: 422,
-    message: "Validation failed.",
-    data: z.flattenError(error).fieldErrors,
-  } satisfies ApiResponse);
+  /**
+   * Delegates to the ONE shared responder (§0).
+   *
+   * This used to build its own body, and got two things wrong that only showed up in the browser:
+   * it forwarded `fieldErrors` alone, so `.strict()`'s `unrecognized_keys` — the way EVERY rejected
+   * server-owned field arrives — vanished into an empty object; and it put the payload under `data`,
+   * which the client's envelope reader never looks at. The result was a 422 that said "Validation
+   * failed." and named nothing.
+   */
+  respondValidationFailed(res, error);
 }
 
 function parseNoQuery(req: Request, res: Response): boolean {

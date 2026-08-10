@@ -129,10 +129,10 @@ import {
  * Which Zod schema each R&D route parses its body with (§11l.2 item 8).
  *
  * WHY A MAP AND NOT A DERIVATION. Nothing at runtime connects a route to its schema. There
- * is no validation middleware on any chain — `src/middleware/validate.ts` exists and is used
- * by zero routes — and the real pattern is an in-controller `Schema.safeParse(req.body)`, so
- * the schema is a local inside a closure the router cannot see. The only link between the
- * two is the controller function's name.
+ * is no validation middleware on any chain — a `src/middleware/validate.ts` once existed, was
+ * used by zero routes, and has been deleted — and the real pattern is an in-controller
+ * `Schema.safeParse(req.body)`, so the schema is a local inside a closure the router cannot
+ * see. The only link between the two is the controller function's name.
  *
  * WHICH MAKES THIS THE ONE HAND-MAINTAINED THING IN A DERIVED SPEC, and therefore the one
  * thing that can drift. `openapi-rnd-bodies.test.ts` is what stops it: it walks the same

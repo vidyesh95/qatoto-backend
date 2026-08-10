@@ -19,6 +19,13 @@ const apiResponseSchema = {
   required: ["status", "statusCode", "message"],
 };
 
+/**
+ * `errors` is the ONLY validation channel — never `data`, which is the success payload.
+ *
+ * `form` is a RESERVED key inside it, carrying object-level Zod issues. `.strict()`'s
+ * `unrecognized_keys` is the common one, and it is not attributable to any single field, so a
+ * client that renders only per-field entries will show nothing for the most common rejection.
+ */
 const validationErrorResponseSchema = {
   allOf: [
     { $ref: "#/components/schemas/ApiResponse" },
@@ -27,6 +34,9 @@ const validationErrorResponseSchema = {
       properties: {
         errors: {
           type: "object",
+          description:
+            "Field name to messages. The reserved key `form` carries object-level issues, " +
+            "notably the keys rejected by `.strict()`.",
           additionalProperties: { type: "array", items: { type: "string" } },
         },
       },
@@ -162,7 +172,9 @@ const handWrittenSpec = {
     },
     responses: {
       ValidationFailed: {
-        description: "422 — request body/query failed Zod `.safeParse()`.",
+        description:
+          "422 — request body/query failed Zod `.safeParse()`. Detail arrives under `errors`, " +
+          "with rejected unknown keys under the reserved `errors.form`.",
         content: {
           "application/json": { schema: { $ref: "#/components/schemas/ValidationErrorResponse" } },
         },

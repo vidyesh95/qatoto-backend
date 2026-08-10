@@ -18,6 +18,7 @@ import * as storePathwaysService from "#src/services/store-pathways.service.js";
 import * as storeReviewsService from "#src/services/store-reviews.service.js";
 import * as storeSearchService from "#src/services/store-search.service.js";
 import type { ApiResponse } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const CursorPageQuerySchema = z
   .object({
@@ -120,12 +121,16 @@ const ProvidersQuerySchema = z
   .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
-  res.status(422).json({
-    status: "error",
-    statusCode: 422,
-    message: "Validation failed.",
-    errors: z.flattenError(error).fieldErrors,
-  });
+  /**
+   * Delegates to the ONE shared responder (§0).
+   *
+   * This used to build its own body, and got two things wrong that only showed up in the browser:
+   * it forwarded `fieldErrors` alone, so `.strict()`'s `unrecognized_keys` — the way EVERY rejected
+   * server-owned field arrives — vanished into an empty object; and it put the payload under `data`,
+   * which the client's envelope reader never looks at. The result was a 422 that said "Validation
+   * failed." and named nothing.
+   */
+  respondValidationFailed(res, error);
 }
 
 export async function getHome(_req: Request, res: Response): Promise<void> {

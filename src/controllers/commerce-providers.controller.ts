@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import type { ApiResponse } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const ProviderKindSchema = z.enum([
   "freight_forwarder",
@@ -222,12 +223,16 @@ const LinkSupplierSchema = z
   .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
-  res.status(422).json({
-    status: "error",
-    statusCode: 422,
-    message: "Validation failed.",
-    errors: z.flattenError(error).fieldErrors,
-  });
+  /**
+   * Delegates to the ONE shared responder (§0).
+   *
+   * This used to build its own body, and got two things wrong that only showed up in the browser:
+   * it forwarded `fieldErrors` alone, so `.strict()`'s `unrecognized_keys` — the way EVERY rejected
+   * server-owned field arrives — vanished into an empty object; and it put the payload under `data`,
+   * which the client's envelope reader never looks at. The result was a 422 that said "Validation
+   * failed." and named nothing.
+   */
+  respondValidationFailed(res, error);
 }
 
 function requireCommerceContext(

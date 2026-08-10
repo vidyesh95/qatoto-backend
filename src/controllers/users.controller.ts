@@ -4,6 +4,7 @@ import { z } from "zod";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import * as usersService from "#src/services/users.service.js";
 import type { ApiResponse } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * Display name a user is allowed to set. Trimmed first, then bounded 1–100 and
@@ -87,12 +88,7 @@ export async function updateMyProfile(req: Request, res: Response): Promise<void
   const parsedBody = UpdateMyProfileSchema.safeParse(req.body);
 
   if (!parsedBody.success) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed",
-      errors: z.flattenError(parsedBody.error).fieldErrors,
-    });
+    respondValidationFailed(res, parsedBody.error);
     return;
   }
 

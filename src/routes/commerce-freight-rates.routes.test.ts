@@ -116,7 +116,7 @@ describe("commerce freight rate card admin routes", () => {
     expect(serviceStubs.createFreightRateCard).not.toHaveBeenCalled();
   });
 
-  it("refuses an unknown body key with 422 rather than dropping it", async () => {
+  it("refuses an unknown body key with 422 AND names it", async () => {
     const response = await request(app)
       .post("/commerce/admin/freight-rate-cards")
       .set("Idempotency-Key", "idem-unknown-key-0001")
@@ -124,6 +124,15 @@ describe("commerce freight rate card admin routes", () => {
 
     expect(response.status).toBe(422);
     expect(serviceStubs.createFreightRateCard).not.toHaveBeenCalled();
+
+    /**
+     * ASSERTING THE STATUS ALONE IS WHAT LET THE BUG SURVIVE. `.strict()`'s `unrecognized_keys`
+     * is an OBJECT-level issue, so it lands in `formErrors` and reaches the client under the
+     * reserved `errors.form`. Twenty-five controllers used to forward `fieldErrors` alone and
+     * answered 422 with an empty `errors` — a refusal naming nothing.
+     */
+    expect(response.body.errors.form).toBeDefined();
+    expect(JSON.stringify(response.body.errors.form)).toContain("chargeableUnit");
   });
 
   it("refuses a card with no bands: a card that prices nothing reads as an uncovered lane", async () => {

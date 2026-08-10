@@ -5,6 +5,7 @@ import { firstParam, optionalBody } from "#src/controllers/project-error-respons
 import * as platformRolesService from "#src/services/platform-roles-admin.service.js";
 import type { PlatformRoleAdminError } from "#src/services/platform-roles-admin.service.js";
 import type { ApiResponse } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * Staff role administration (§4a Layer 3).
@@ -162,12 +163,7 @@ export async function lookupUserForRoleGrant(req: Request, res: Response): Promi
 
   const parsedQuery = LookupUserQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed.",
-      data: parsedQuery.error.flatten().fieldErrors,
-    } satisfies ApiResponse);
+    respondValidationFailed(res, parsedQuery.error);
     return;
   }
 
@@ -223,12 +219,7 @@ export async function proposePlatformRoleChange(req: Request, res: Response): Pr
 
   const parsedBody = ProposePlatformRoleSchema.safeParse(req.body);
   if (!parsedBody.success) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed.",
-      data: parsedBody.error.flatten().fieldErrors,
-    } satisfies ApiResponse);
+    respondValidationFailed(res, parsedBody.error);
     return;
   }
 
@@ -263,12 +254,7 @@ export async function countersignPlatformRoleChange(req: Request, res: Response)
   // spec that quietly loosens — `openapi-rnd-bodies.test.ts` asserts the correspondence.
   const parsedBody = CountersignPlatformRoleSchema.safeParse(optionalBody(req));
   if (!parsedBody.success) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed.",
-      data: parsedBody.error.flatten().fieldErrors,
-    } satisfies ApiResponse);
+    respondValidationFailed(res, parsedBody.error);
     return;
   }
 

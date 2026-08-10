@@ -9,6 +9,7 @@ import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { auth, sendSignupOtp } from "#src/lib/auth.js";
 import type { ApiResponse, Result } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * Body for POST /signup/start. `.strict()` rejects unknown keys.
@@ -49,21 +50,6 @@ function timingSafeStringEqual(expected: string, provided: string): boolean {
 }
 
 /**
- * Emit a 422 validation-failure envelope from a Zod parse error.
- */
-function respondValidationFailed(
-  res: Response,
-  fieldErrors: Record<string, string[] | undefined>,
-): void {
-  res.status(422).json({
-    status: "error",
-    statusCode: 422,
-    message: "Validation failed",
-    errors: fieldErrors,
-  });
-}
-
-/**
  * POST /signup/start — phase 1 of signup.
  *
  * Sends a one-time code to the email. Crucially, this does NOT create a user:
@@ -76,7 +62,7 @@ export async function startSignup(req: Request, res: Response): Promise<void> {
   const parsedBody = StartSignupSchema.safeParse(req.body);
 
   if (!parsedBody.success) {
-    respondValidationFailed(res, z.flattenError(parsedBody.error).fieldErrors);
+    respondValidationFailed(res, parsedBody.error);
     return;
   }
 
@@ -128,7 +114,7 @@ export async function completeSignup(req: Request, res: Response): Promise<void>
   const parsedBody = CompleteSignupSchema.safeParse(req.body);
 
   if (!parsedBody.success) {
-    respondValidationFailed(res, z.flattenError(parsedBody.error).fieldErrors);
+    respondValidationFailed(res, parsedBody.error);
     return;
   }
 

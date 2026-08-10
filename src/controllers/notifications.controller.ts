@@ -4,6 +4,7 @@ import { z } from "zod";
 import * as notificationsService from "#src/services/notifications.service.js";
 import type { NotificationError } from "#src/services/notifications.service.js";
 import type { ApiResponse } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * The caller's notification inbox (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 1).
@@ -76,12 +77,7 @@ export async function listNotifications(req: Request, res: Response): Promise<vo
 
   const parsedQuery = ListNotificationsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed.",
-      data: parsedQuery.error.flatten().fieldErrors,
-    } satisfies ApiResponse);
+    respondValidationFailed(res, parsedQuery.error);
     return;
   }
 
@@ -135,12 +131,7 @@ export async function markNotificationsRead(req: Request, res: Response): Promis
 
   const parsedBody = MarkNotificationsReadSchema.safeParse(req.body);
   if (!parsedBody.success) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed.",
-      data: parsedBody.error.flatten().fieldErrors,
-    } satisfies ApiResponse);
+    respondValidationFailed(res, parsedBody.error);
     return;
   }
 

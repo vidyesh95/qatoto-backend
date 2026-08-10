@@ -134,7 +134,7 @@ describe("commerce cart and checkout routes", () => {
     expect(cartServiceStubs.getCart).not.toHaveBeenCalled();
   });
 
-  it("returns 422 on a bad set-cart-item body", async () => {
+  it("returns 422 on a bad set-cart-item body, with the field named under `errors`", async () => {
     const response = await request(app)
       .put("/commerce/cart/items/product-1")
       .set("Idempotency-Key", "cart-set-bad-body")
@@ -142,6 +142,28 @@ describe("commerce cart and checkout routes", () => {
 
     expect(response.status).toBe(422);
     expect(cartServiceStubs.setCartItem).not.toHaveBeenCalled();
+
+    /**
+     * `errors`, NEVER `data`. This controller used to answer with
+     * `data: error.flatten().fieldErrors`, and the client's envelope reader only ever looks at
+     * `errors` — so every 422 across cart, checkout, orders and quotes arrived in the browser
+     * with no field detail at all. The status was right and the response was useless.
+     */
+    expect(response.body.errors.quantity).toBeDefined();
+    expect(response.body.data).toBeUndefined();
+  });
+
+  it("names an unknown key on a cart write rather than dropping it", async () => {
+    const response = await request(app)
+      .put("/commerce/cart/items/product-1")
+      .set("Idempotency-Key", "cart-set-unknown-key")
+      .send({ quantity: 2, sellerOrganizationId: "commerce_org_attacker" });
+
+    // A server-owned field smuggled into the body is the case §0 cares most about, and it
+    // reaches the client under the reserved `errors.form`.
+    expect(response.status).toBe(422);
+    expect(cartServiceStubs.setCartItem).not.toHaveBeenCalled();
+    expect(JSON.stringify(response.body.errors.form)).toContain("sellerOrganizationId");
   });
 
   it("requires Idempotency-Key on checkout prepare", async () => {

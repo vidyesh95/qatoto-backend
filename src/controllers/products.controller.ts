@@ -4,6 +4,7 @@ import { z } from "zod";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import * as productsService from "#src/services/products.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * B2B volume-pricing tier. Prices are integer cents (server-authoritative — the
@@ -416,16 +417,6 @@ function getProductOrganizationContext(
     userId: req.user.id,
     organizationId: req.commerceOrganization.organizationId,
   };
-}
-
-/** 422 for a Zod parse failure, carrying the flattened field errors. */
-function respondValidationFailed(res: Response, error: z.ZodError): void {
-  res.status(422).json({
-    status: "error",
-    statusCode: 422,
-    message: "Validation failed",
-    errors: z.flattenError(error).fieldErrors,
-  });
 }
 
 /**

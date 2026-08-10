@@ -51,9 +51,16 @@ export function firstParam(value: string | readonly string[]): string {
 }
 
 /**
- * Zod v4: `z.flattenError(error).fieldErrors`, NOT `error.flatten()`. 422, not 400 —
- * the controller-inline convention in this repo (src/middleware/validate.ts is dead
- * code and disagrees).
+ * THE ONE Zod-failure responder. Every controller routes here, directly or through a thin local
+ * wrapper that keeps its own name for its call sites.
+ *
+ * Zod v4: `z.flattenError(error).fieldErrors`, NOT the deprecated `error.flatten()`. 422, not 400.
+ * (A `validate.ts` middleware used to sit in `src/middleware/` answering 400 with a raw issue list;
+ * it was used by zero routes and was deleted rather than left as a contradictory example.)
+ *
+ * THE `form` KEY IS THE WHOLE POINT — see the comment inside. Twenty-five controllers once built
+ * this body themselves and every one of them dropped it, so a `.strict()` rejection reached the
+ * browser as an empty object. If you are writing a new controller: call this, do not re-implement it.
  */
 export function respondValidationFailed(res: Response, error: z.ZodError): void {
   const flattened = z.flattenError(error);

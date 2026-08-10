@@ -4,6 +4,7 @@ import { z } from "zod";
 import * as platformAuditService from "#src/services/platform-audit.service.js";
 import type { PlatformAuditError } from "#src/services/platform-audit.service.js";
 import type { ApiResponse } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * The platform moderation log (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 2).
@@ -93,12 +94,7 @@ export async function listPlatformAuditTrail(req: Request, res: Response): Promi
 
   const parsedQuery = ListPlatformAuditQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed.",
-      data: parsedQuery.error.flatten().fieldErrors,
-    } satisfies ApiResponse);
+    respondValidationFailed(res, parsedQuery.error);
     return;
   }
 

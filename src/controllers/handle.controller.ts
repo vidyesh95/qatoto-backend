@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import * as handleService from "#src/services/handle.service.js";
 import type { ApiResponse } from "#src/types/index.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * Body for PATCH /users/me/handle. The raw handle is accepted as a loosely
@@ -82,12 +83,7 @@ export async function getHandleAvailability(req: Request, res: Response): Promis
   const parsedQuery = AvailabilityQuerySchema.safeParse(req.query);
 
   if (!parsedQuery.success) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed",
-      errors: z.flattenError(parsedQuery.error).fieldErrors,
-    });
+    respondValidationFailed(res, parsedQuery.error);
     return;
   }
 
@@ -121,12 +117,7 @@ export async function updateMyHandle(req: Request, res: Response): Promise<void>
   const parsedBody = UpdateMyHandleSchema.safeParse(req.body);
 
   if (!parsedBody.success) {
-    res.status(422).json({
-      status: "error",
-      statusCode: 422,
-      message: "Validation failed",
-      errors: z.flattenError(parsedBody.error).fieldErrors,
-    });
+    respondValidationFailed(res, parsedBody.error);
     return;
   }
 
