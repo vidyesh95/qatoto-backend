@@ -458,7 +458,17 @@ export async function answerManufacturingInquiry(input: {
       .where(eq(commerceManufacturingInquiry.id, input.inquiryId))
       .for("update");
 
-    if (!existing || existing.factoryOrganizationId !== input.organizationId) {
+    /**
+     * A DRAFT IS NOT_FOUND TO THE FACTORY, not INVALID_STATE — the same line
+     * `loadInquiryForParty` and `closeManufacturingInquiry` draw. A 409 here would tell a
+     * factory that a buyer is drafting an inquiry to it, which is precisely the fact the
+     * draft state exists to withhold.
+     */
+    if (
+      !existing ||
+      existing.factoryOrganizationId !== input.organizationId ||
+      existing.state === "draft"
+    ) {
       return { status: "not_found" as const };
     }
     if (existing.state !== "sent") {

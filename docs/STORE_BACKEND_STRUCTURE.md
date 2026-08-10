@@ -28,7 +28,7 @@
 > **Stack:** Express 5 + TypeScript strict + Drizzle ORM + PostgreSQL + Zod + Better Auth +
 > Cloudinary/object storage + pg-boss + the existing provider-adapter and rate-limit patterns.
 >
-> **Status:** **Phases 0–16 shipped and hardened.** Seller `/products/*` CRUD, commerce
+> **Status:** **Phases 0–19 shipped and hardened.** Seller `/products/*` CRUD, commerce
 > organizations/memberships/addresses/verification, public `/store/*` catalog reads,
 > merchandising, search documents, the provider connector directory, RFQs, quote negotiation,
 > quote-originated order snapshots, RFQ/quote threads, buyer carts, server-priced checkout
@@ -76,7 +76,12 @@
 > reversibly — plus `commerce_category_request`, the queue through which a seller asks for a
 > category that does not exist yet and a moderator either mints it or says why not. See §4.3 and
 > §6.5. It is the first store phase whose frontend shipped **wired rather than mocked**.
-> Trade-assurance language and real payment processors remain blocked on §14. **A10 (public
+> **Phases 17–19 closed the last three buildable Appendix A entries (`0099`–`0105`)** — the
+> manufacturer directory, the business forum and the cofounder directory. See §16, §17, §18 and the
+> per-phase notes in §12, plus `docs/STORE_PHASE_17_18_19_ROLLOUT.md`.
+> Trade-assurance language and real payment processors remain blocked on §14, as do the cofounder
+> directory's capital and equity figures — Phase 19 shipped the rest of that surface and stores
+> neither. **A10 (public
 > product comments) stays deliberately unbuilt** pending the product decision the appendix asks
 > for. **Product organization-ownership and category columns are now NOT NULL** —
 > migration `0063` closed Phase 0's contract phase, dropping the expand-phase fill trigger
@@ -101,18 +106,36 @@
 > and can never carry a real value** — `onTimeShipmentRate` was the last one, and Phase 12 supplied
 > the promised-delivery timestamp it needed (A13). It is `null` only below its sample threshold, and
 > `onTimeSampleSize` rides alongside so "not enough data" is distinguishable from "not wired".
-> **After Phase 15 the register's only unbuilt entries were the deliberate ones**: A10 closed pending
-> a product decision, A20 blocked on §14, and A26 deferred until a category actually sells on two
-> dimensions.
+> **After Phase 19 the register's only unbuilt entries are the deliberate ones**: A10 closed pending
+> a product decision, A20 blocked on §14, A26 deferred until a category actually sells on two
+> dimensions, and the capital half of A34 held behind the same §14 answer A20 is waiting on.
 >
-> **Three new surfaces then arrived from the frontend side, and they are the register's only
-> buildable gaps today** — A32, A33 and A34, specified in full as §16, §17 and §18. The store
-> frontend shipped a manufacturer directory (`/store/factories`), a business forum (`/store/forum`)
-> and cofounder matching (`/store/find-cofounder`), each with a complete Zod wire contract in
-> `src/lib/store/*.schemas.ts` and a mock-backed `*.api.ts` beside it. None of the three has a table,
-> route or service here. **Read them in that order of surprise:** the manufacturer directory is
-> mostly a projection of things Phase 12 already built, while the forum and cofounder profiles are
-> genuinely new and are not commerce at all (§1.1).
+> **Phases 17–19 closed the last three buildable entries in the register (`0099`–`0105`)** — A32,
+> A33 and A34, specified as §16, §17 and §18. The store frontend had shipped a manufacturer
+> directory (`/store/factories`), a business forum (`/store/forum`) and cofounder matching
+> (`/store/find-cofounder`), each with a complete Zod wire contract in `src/lib/store/*.schemas.ts`
+> and a mock-backed `*.api.ts` beside it, and none of the three had a table, route or service here.
+> All three are now served.
+>
+> **Phase 17** built the manufacturer directory as a projection over Phase 12's seller profile and
+> A25's organization search document, resolved §16.2's three conflicts (the capability enum widened
+> additively; a nullable `standardCode` beside the free-text certification name; **`site_audited`
+> given the audit record it had been asserting without**, never derived from a document review), and
+> added the manufacturing inquiry with its own one-to-one thread. `exportMarkets` was decided
+> **derived** rather than declared.
+>
+> **Phase 18** built the forum, and shipped the reply, accept-answer and helpful writes alongside
+> the thread create rather than after it — a forum with only thread-create is a wall of unanswerable
+> questions. `pending_review` on create is what keeps A10 closed while a public text surface exists.
+>
+> **Phase 19** built the cofounder directory **without any capital or equity column**, which is §14's
+> deferral honoured literally rather than waited on: the surface and its whole lifecycle are live,
+> and both wire fields serve `null` until a lawyer answers per market. A verifier asserts that
+> absence so nobody adds the columns by accident.
+>
+> **Community is a sibling context, and Phase 18 introduced the `/community` mount to say so** (§1.1).
+> Forum and cofounder READS live under `/store` because that is the prefix a signed-out visitor
+> browses; their writes do not.
 >
 > **A31 and A35 are the other direction, and both matter more than they look.** A31 records a
 > feature this document did not describe because it shipped after the last documentation pass, not
@@ -700,16 +723,21 @@ and buyer-safe projections.
 | GET    | `/store/products/:productSlug/reviews`           | Reviews with summary, histogram and sub-scores — A8                   |
 | GET    | `/store/organizations/:organizationSlug/reviews` | Reviews of a seller or provider, incl. product-less ones — A8         |
 | GET    | `/store/products/:productSlug/questions`         | Public Q&A with a seller-first answer preview — A9                    |
-| GET    | `/store/factories`                               | Manufacturer directory — §16, **NOT BUILT**                           |
-| GET    | `/store/factories/:factorySlug`                  | One factory: lines, certifications, sites — §16, **NOT BUILT**        |
-| GET    | `/store/forum/threads`                           | Board-filtered thread list — §17, **NOT BUILT**                       |
-| GET    | `/store/forum/threads/:threadSlug`               | One thread and a cursor page of replies — §17, **NOT BUILT**          |
-| GET    | `/store/cofounder-profiles`                      | Cofounder directory, `published` only — §18, **NOT BUILT**            |
-| GET    | `/store/cofounder-profiles/:profileSlug`         | One cofounder profile — §18, **NOT BUILT**                            |
+| GET    | `/store/factories`                               | Manufacturer directory — §16 (Phase 17)                               |
+| GET    | `/store/factories/:factorySlug`                  | One factory: lines, certifications, sites, audit — §16 (Phase 17)     |
+| GET    | `/store/forum/threads`                           | Board-filtered thread list — §17 (Phase 18)                           |
+| GET    | `/store/forum/threads/:threadSlug`               | One thread and a cursor page of replies — §17 (Phase 18)              |
+| GET    | `/store/cofounder-profiles`                      | Cofounder directory, `published` only — §18 (Phase 19)                |
+| GET    | `/store/cofounder-profiles/:profileSlug`         | One cofounder profile — §18 (Phase 19)                                |
 
-**The six rows marked NOT BUILT are specified, not served.** They are listed here rather than only in
-§16–§18 so that this table stays the one place to read the public surface, and marked in the row
-itself so nobody wires against them by scanning the table. Every other row in it resolves today.
+**Every row in this table resolves today.** The last six were marked NOT BUILT until Phases 17–19
+shipped them; the marking is kept in the git history rather than in the table, because a table that
+carries stale warnings is one nobody reads.
+
+The two forum rows and the two cofounder rows are **community, not commerce** (§1.1). `/store` is
+where they are mounted because it is the prefix a signed-out visitor browses; their WRITES are at
+`/community` (§6.6). Do not read `GET /store/forum/threads` as evidence that a forum thread is a
+commerce object.
 
 `/store/search` also accepts `documentKind=organization` — the supplier directory — and the facet
 filters `priceMinInCents`, `priceMaxInCents`, `stockState`, `samplePolicy`, `condition`,
@@ -880,6 +908,73 @@ and a moderator reading the request often finds one of them belongs in a categor
 exists. That is also why the queue projects `waitingProducts` as **named titles rather than a
 count**: a number tells a moderator how much work there is, a title tells them the request was
 unnecessary.
+
+### 6.6 Manufacturer directory writes — **SHIPPED (Phase 17, `0099`–`0101`)**
+
+| Method | Route                                                       | Result                                              |
+| ------ | ----------------------------------------------------------- | --------------------------------------------------- |
+| POST   | `/commerce/factories/:factorySlug/inquiries`                | Create; answers `draft`. **Idempotency-Key**        |
+| GET    | `/commerce/factories/inquiries/mine`                        | The buyer's own inquiries, any state                |
+| GET    | `/commerce/factories/inquiries/received`                    | The factory's queue; drafts are never in it         |
+| GET    | `/commerce/factories/inquiries/:inquiryId`                  | One inquiry, for either party                       |
+| POST   | `/commerce/factories/inquiries/:inquiryId/send`             | `draft` → `sent`; opens the one-to-one thread       |
+| POST   | `/commerce/factories/inquiries/:inquiryId/answer`           | The factory marks it answered                       |
+| POST   | `/commerce/factories/inquiries/:inquiryId/close`            | Either party, from any state but `closed`           |
+| PUT    | `/commerce/organizations/:organizationId/production-lines`  | Replace the whole named-line list                   |
+| PUT    | `/commerce/organizations/:organizationId/sites`             | Replace the whole per-site list                     |
+| PUT    | `/commerce/organizations/:organizationId/factory-terms`     | Sample policy, MOQ, lead times, inbox switch        |
+| GET    | `/commerce/admin/organizations/:organizationId/site-audits` | Every audit on one organization                     |
+| POST   | `/commerce/admin/organizations/:organizationId/site-audits` | Record one. **Idempotency-Key**                     |
+| POST   | `/commerce/admin/site-audits/:auditId/withdraw`             | Retract it, with a required reason                  |
+
+Literal `/factories/inquiries/*` paths are declared **before** `/factories/:factorySlug/inquiries`,
+which is the same depth; `commerce-factories.routes.order.test.ts` asserts it.
+
+**`factory-terms` is a whole-object PUT and not part of the seller-profile PATCH**, because both its
+invariants are cross-field: a sample fee is only meaningful when samples are offered, and a MOQ is
+only readable beside its unit. A partial patch could not validate either without first reading the
+stored row and merging.
+
+The two audit routes are gated by `moderate_commerce`, checked in-service. **A site audit is never
+derived from a document review** (§16.2), and the public detail read projects only `lastAuditedAt` —
+publishing an auditor's name and scope on a browse page is a disclosure about a third party nobody
+consented to.
+
+### 6.7 Community writes — **SHIPPED (Phases 18–19, `0102`–`0105`)**
+
+**Mounted at `/community`, not `/commerce`** (§1.1). Their public reads are in §5.
+
+| Method      | Route                                                     | Result                                            |
+| ----------- | --------------------------------------------------------- | ------------------------------------------------- |
+| POST        | `/community/forum/threads`                                | Create; answers `pending_review`. Idempotency-Key |
+| POST        | `/community/forum/threads/:threadId/replies`              | Append a reply. Idempotency-Key                   |
+| POST        | `/community/forum/threads/:threadId/accepted-reply`       | The thread author marks the answer                |
+| DELETE      | `/community/forum/threads/:threadId/accepted-reply`       | Unmark it                                         |
+| PUT\|DELETE | `/community/forum/replies/:replyId/helpful`               | Endorse / withdraw. **No Idempotency-Key** (A24)  |
+| GET         | `/community/forum/threads/mine`                           | The author's own, `pending_review` included       |
+| POST        | `/community/reports`                                      | Report a thread or a reply                        |
+| GET         | `/community/admin/forum/threads`                          | The moderation queue                              |
+| POST        | `/community/admin/forum/threads/:threadId/moderate`       | `publish` / `reject` / `lock` / `unlock`          |
+| POST        | `/community/admin/forum/replies/:replyId/moderate`        | `hidden` / `restored`                             |
+| GET         | `/community/admin/content-reports`                        | The community report queue                        |
+| POST        | `/community/admin/content-reports/:reportId/decisions`    | Dismiss a report                                  |
+| POST        | `/community/cofounder-profiles`                           | Create your own; answers `draft`. Idempotency-Key |
+| GET         | `/community/cofounder-profiles/mine`                      | The viewer's own profile in any state             |
+| PATCH       | `/community/cofounder-profiles/mine`                      | Edit while `draft` or `withdrawn`                 |
+| POST        | `/community/cofounder-profiles/mine/submit`               | `draft` → `pending_review`                        |
+| POST        | `/community/cofounder-profiles/mine/withdraw`             | Out of the directory, reversibly                  |
+| PATCH       | `/community/cofounder-profiles/mine/engagement-state`     | The one edit a `published` profile may make       |
+| GET         | `/community/admin/cofounder-profiles`                     | The moderation queue                              |
+| POST        | `/community/admin/cofounder-profiles/:profileId/moderate` | `publish` / `reject`                              |
+
+Every authoring route carries `requireIdentifiedUser`; the moderation routes do not, because their
+gate is `moderate_content` checked in-service. **A rejected thread stays `pending_review` with its
+reason**, which is what keeps it out of every public read while remaining readable on `/mine` — and
+the queue predicate is therefore `state = 'pending_review' AND moderated_at IS NULL`, or every
+rejection would return to the queue forever.
+
+**No cofounder route takes a `:userId`.** The viewer posts about themselves and `/mine` is the only
+addressing an owner gets.
 
 ---
 
@@ -1243,39 +1338,65 @@ Scheduled jobs:
   `src/lib/store/admin-categories.api.ts` use the real transport. Appendix A31 records it as
   shipped for exactly that reason.
 
-### Phase 17 — manufacturer directory
+### Phase 17 — manufacturer directory — **SHIPPED (`0099`–`0101`)**
 
-- `/store/factories` and its detail read, as a **projection over Phase 12's seller profile** and
-  A25's organization search document rather than a parallel table set (§16).
-- The three conflicts resolved first, because each is a migration or a deletion and none of them
-  is a rendering decision: the capability enum widened additively, a nullable `standardCode`
-  beside the free-text certification name, and `site_audited` either dropped from the wire or
-  given the audit record it currently asserts without.
-- Genuinely new: named production lines, per-site rows, org-level sample policy and order
-  bounds, and a decision about whether `exportMarkets` is declared or derived.
-- The factory inquiry and its `sent` transition, plus the `/mine` read without which a create is
-  a write into a hole (§16.5).
+- `/store/factories` and its detail read, built as a **projection over Phase 12's seller profile**
+  and A25's organization search document rather than a parallel table set (§16). The directory
+  substrate is `store_search_document` where `documentKind = 'organization' AND isEligible`, inner
+  joined to `commerce_seller_profile` and narrowed to `businessType IN ('manufacturer',
+  'manufacturer_trading')` — a trading company is not a factory.
+- The three conflicts of §16.2 were resolved first, and all three decisions are recorded:
+  **the capability enum widened additively** (`0099`), **a nullable `standardCode`** over a seeded
+  eight-value enum beside the free-text certification name (`0100`), and **`site_audited` was given
+  the record it had been asserting without** — `commerce_organization_site_audit`, staff-written,
+  carrying a NOT NULL `audit_entry_id`. It is never derived from a document review.
+- Genuinely new: `commerce_organization_production_line`, `commerce_organization_site`, the audit
+  pair, and nine columns on `commerce_seller_profile` for sample policy, order bounds and the
+  inbox switch. **`exportMarkets` is DERIVED**, not declared: distinct delivery-address country
+  codes over completed orders where the factory is the counterparty. Empty is a fact.
+- `commerce_manufacturing_inquiry` with the `sent`, `answered` and `closed` transitions, the
+  `/mine` and `/received` reads without which a create is a write into a hole, and its own
+  one-to-one thread through the `manufacturing_inquiry` resource kind (§16.5).
+- **One wire addition beyond the frontend's contract:** the detail read carries
+  `otherCertifications[]` for approved certificates whose standard is outside the closed eight.
+  `certificationRecords[]` cannot hold them — its `certification` field is a closed enum — and
+  dropping them would mean the platform silently refusing to show a valid certificate.
 
-### Phase 18 — business forum
+### Phase 18 — business forum — **SHIPPED (`0102`–`0103`)**
 
 - `community_forum_thread`, its replies and their helpful votes, modelled on
   `research_program_post` (§17.2).
-- **The reply, accept-answer and helpful writes ship with the thread create, not after it.** The
-  frontend already renders all three; a forum with only thread-create is a wall of unanswerable
-  questions (§17.3).
+- **The reply, accept-answer and helpful writes shipped with the thread create, not after it.** A
+  forum with only thread-create is a wall of unanswerable questions (§17.3).
 - `pending_review` on create, the moderation queue behind it, and `community_content_report` on
   the existing `moderate_content` capability — which is what keeps A10 closed while a public text
   surface exists at all (§17.1, §17.4).
+- **The vote is keyed on the USER, not an organization**, which is the one place it departs from
+  `commerce_product_answer_vote`: a forum has no members, only authors, and keying on the
+  organization would exclude every individual poster.
+- **The queue predicate is `state = 'pending_review' AND moderated_at IS NULL`.** A rejected thread
+  stays `pending_review` — that is what keeps it out of every public read while leaving it
+  readable on `/mine` with its reason — so filtering on state alone would return every rejection
+  to the queue forever.
 
-### Phase 19 — cofounder directory
+### Phase 19 — cofounder directory — **SHIPPED (`0104`–`0105`), without the capital figures**
 
-- **Blocked on the §14 decision**, not merely unscheduled: publishing self-declared capital
-  ranges beside equity expectations is a legal question before it is a product one.
-- If it clears: `community_cofounder_profile`, prior ventures, and the full lifecycle — `/mine`,
-  submit, withdraw and the engagement-state route — because as the frontend contract stands a
-  user creates a `draft` that nobody, including themselves, can ever read (§18.3).
-- The four rules in §18.1 are enforced server-side. A rule that lives only on the frontend is a
-  comment on code an attacker can edit.
+- **§14 is still open, and the build respects it literally rather than waiting on it.** The full
+  surface ships — the directory, the detail read, and the seven lifecycle routes the frontend
+  contract omitted — and **no capital or equity column exists**. `capitalRange` and
+  `equityExpectationBasisPoints` are already `.nullable()` on the wire and serve `null`.
+  A stored figure withheld by a projection is one careless edit from being published; an absent
+  column cannot be. `verify-store-phase-19-constraints` asserts that absence as its first check.
+- `community_cofounder_profile`, prior ventures, and the three tag tables in
+  `talent_profile_skill`'s shape — **`talent_profile` itself is deliberately not extended**, since
+  the R&D talent directory reads it and a cofounder row there is a different claim about a
+  different person's intent.
+- The four rules in §18.1 are enforced server-side. No `sort` parameter exists on the directory
+  read, `not_looking` profiles stay in the list, and `identityState` derives from
+  `isIdentifiedUser` — the predicate `requireIdentifiedUser` already enforces, extracted rather
+  than duplicated, so there is one definition of "identified" on this platform (§18.4).
+- **The write schema refuses a capital field with 422 rather than discarding it.** Silently
+  dropping a number somebody typed about themselves would let them believe it was recorded.
 
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
@@ -1319,7 +1440,16 @@ The following require legal, provider, or product decisions before implementatio
   **Until decided, the backend stores no capital figure it would then have to publish.** Note this is
   a stricter posture than the revenue-disclosure decision below, and deliberately: a seller consenting
   to publish its own trading volume is disclosing a fact about a business, while a person publishing
-  what they will invest is advertising an intent to deploy capital;
+  what they will invest is advertising an intent to deploy capital.
+  **Phase 19 shipped the rest of §18 against this rule rather than waiting on it.** The directory,
+  the detail read and the full lifecycle are live; `community_cofounder_profile` has **no
+  `capital_range_*`, no `currency` and no `equity_expectation_basis_points` column**, both wire
+  fields serve `null`, and the create schema answers **422** for either rather than accepting and
+  discarding it. `scripts/verify-store-phase-19-constraints.ts` asserts the absence as its first
+  check, so adding one of those columns before this decision lands fails a verifier by name.
+  **What landing it costs:** one additive migration, the four columns, a `CHECK` that the capital
+  triple is all-null or all-set, and replacing the `UNDECIDED_CAPITAL_DISCLOSURE` constant in
+  `community-cofounder.service.ts` with a column read. Nothing else on the surface changes;
 
 - ~~merchant-of-record and custody model;~~ **DECIDED: Qatoto is not a custodian.** It never
   holds funds. Buyer and seller either settle directly and carry the counterparty risk, or
@@ -1614,9 +1744,12 @@ removed: while it exists, backing Phase 13 out is a per-rail data edit rather th
 
 ## 16. Manufacturer directory — the factory browse surface
 
-> **Status: NOT BUILT (Appendix A32).** The frontend ships `/store/factories`,
-> `/store/factories/:factorySlug` and a factory inquiry composer against
-> `src/lib/store/factories.schemas.ts`, all three mock-backed. Nothing here exists yet.
+> **Status: SHIPPED (Phase 17, `0099`–`0101`).** All three surfaces are served. The sections below
+> are kept in the present tense because they are the specification the code was built against and
+> the argument it has to keep honouring — chiefly §16.1's rule that a factory is a projection, and
+> §16.2's third conflict, which was resolved by BUILDING the audit record rather than dropping the
+> state. The one addition beyond the frontend's contract is `otherCertifications[]` on the detail
+> read; see Phase 17 in §12.
 
 ### 16.1 A factory is a projection, not a new entity
 
@@ -1818,9 +1951,10 @@ queue.
 
 ## 17. Business forum — the public text surface
 
-> **Status: NOT BUILT (Appendix A33).** `grep -ril 'forum' src/routes/` in the backend returns
-> nothing. The frontend ships `/store/forum`, a thread page and a composer against
-> `src/lib/store/forum.schemas.ts`, all mock-backed.
+> **Status: SHIPPED (Phase 18, `0102`–`0103`).** Two public reads on `/store` and twelve writes at
+> `/community`, including every one §17.3 says the frontend renders and cannot produce. The sections
+> below are the specification the code was built against; §17.1's reasoning in particular is the
+> thing to read before anybody "fixes" `pending_review` into an immediate publish.
 
 ### 17.1 Why a new thread is `pending_review` and not `open`
 
@@ -1945,9 +2079,13 @@ community equivalent of an organization role here — a forum has no members, on
 
 ## 18. Cofounder matching — the people directory
 
-> **Status: NOT BUILT (Appendix A34), and gated on a legal decision (§14).** The frontend ships
-> `/store/find-cofounder`, a profile page and a composer against
-> `src/lib/store/cofounders.schemas.ts`, all mock-backed.
+> **Status: SHIPPED (Phase 19, `0104`–`0105`) WITHOUT THE CAPITAL FIGURES.** §14's decision is still
+> open, so the build respects it literally rather than waiting on it: the directory, the detail read
+> and the full lifecycle are live, and `community_cofounder_profile` has no capital or equity column
+> at all. Both wire fields serve `null` and the create schema answers 422 for either. §18.2's table
+> listing is therefore aspirational in exactly one respect — the capital triple and
+> `equityExpectationBasisPoints` are specified there and deliberately unbuilt. Everything else in
+> §18 is code.
 
 ### 18.1 Four rules the backend enforces, because the client is untrusted
 
@@ -2982,7 +3120,7 @@ by direct link is the exact inconsistency `ON DELETE RESTRICT` exists to prevent
 
 ---
 
-### A32. There is no manufacturer directory — **NOT BUILT (§16)**
+### A32. There was no manufacturer directory — **SHIPPED (Phase 17, `0099`–`0101`)**
 
 **Needed by:** `factory-directory-page.tsx`, `factory-detail-page.tsx` and
 `composers/factory-inquiry-composer.tsx`, plus the store home's "Factories worldwide" tile that links
@@ -2997,28 +3135,35 @@ full validity window, and `commerce_organization_media` whose kinds are already 
 `production_line`. The card's `fulfillmentMetrics` is the same object the provider directory already
 computes.
 
-**What to build:** §16 in full — but as a **projection**, not a `commerce_factory_*` table set. The
-new rows are four and small: named production lines, per-site descriptions, org-level sample policy
-and order bounds, and a decision about `exportMarkets`. Everything else is a read.
+**What was built:** §16 in full, as a **projection** rather than a `commerce_factory_*` table set.
+The new rows are five and small: named production lines, per-site descriptions, the site-audit pair,
+the manufacturing inquiry, and nine columns on `commerce_seller_profile` for sample policy, order
+bounds and the inbox switch. **`exportMarkets` was decided DERIVED** — distinct delivery-address
+country codes over completed orders where the factory is the counterparty — so it needs no column
+and no seller can edit it. Everything else is a read.
 
-**Frontend today:** `factories.api.ts` resolves fixtures through the real schemas, and its header
-cites A25 for the claim that no backend exists. That citation is now stale in one direction —
-A25 shipped the directory substrate this surface should be built on.
+**Frontend today:** `factories.api.ts` still resolves fixtures through the real schemas. Its header
+cites A25 for the claim that no backend exists; that claim is now stale in both directions — A25
+shipped the substrate, and Phase 17 shipped the surface. The remaining work there is dropping the
+mock transport, and optionally adopting `otherCertifications[]` on the detail read, which `.strip()`
+discards until it does.
 
 **Rule:** a verification state is about the **organization**, never about a capability. `site_audited`
 means somebody stood in the building; it does not mean this factory is approved to do injection
 moulding, and there is no per-capability approval on the wire at all.
 
-**Rule, and this one blocks the build:** `site_audited` and `lastAuditedAt` have **no record behind
-them anywhere in this schema**. `commerce_organization_verification` covers registration, tax,
-identity, address and bank account — paperwork, all of it. Either drop the third state from the wire
-or add `commerce_organization_site_audit`. **Never derive it from a document review**, which would let
-a paper review carry the weight of an audit — the precise collapse the three-state enum exists to
-prevent.
+**Rule, and this one blocked the build until it was answered:** `site_audited` and `lastAuditedAt`
+had **no record behind them anywhere in this schema**. `commerce_organization_verification` covers
+registration, tax, identity, address and bank account — paperwork, all of it. The resolution was to
+**add `commerce_organization_site_audit`** rather than drop the third state: staff-written, carrying
+a NOT NULL `audit_entry_id` so every row names an accountable human, and withdrawable with a
+required reason. `deriveVerificationState` in `store-factories.service.ts` reads it FIRST and falls
+through to `documents_reviewed` only when there is no audit — **it never derives one from the
+other**, which is the precise collapse the three-state enum exists to prevent.
 
 ---
 
-### A33. There is no business forum — **NOT BUILT (§17)**
+### A33. There was no business forum — **SHIPPED (Phase 18, `0102`–`0103`)**
 
 **Needed by:** `forum-index-page.tsx`, `forum-thread-page.tsx`, `composers/forum-thread-composer.tsx`.
 
@@ -3028,14 +3173,20 @@ siblings, which is a threaded board with a moderation queue and is the right sha
 Commerce's own text surfaces are all standing-gated: `commerce_thread` is resource-scoped and 1:1,
 Q&A requires a seller relationship or a verified purchase, reviews require a completed order.
 
-**What to build:** §17 — three tables, two public reads, and **nine writes rather than the one the
-frontend contract has**.
+**What was built:** §17 — five tables, two public reads, and **twelve writes rather than the one the
+frontend contract has**. The extra three beyond §17.3's table are the reply-moderation route, the
+community report create and its dismissal, without which the queue §17.4 asks for has nothing to
+work on.
 
-**Frontend today:** `forum.api.ts` resolves fixtures; the composer writes to a path that does not
-exist. `ForumThreadDetail` renders replies, `helpfulCount` and `acceptedReplyId` **and there is no
-endpoint that can produce any of the three** — the contract has thread-create and nothing else. This
-is the entry's real finding: shipping the specified surface as specified produces a forum where
-nobody can answer anything.
+**Frontend today:** `forum.api.ts` still resolves fixtures and its composer still writes to
+`/commerce/forum/threads`. **The write path moved to `/community/forum/threads`** (§1.1), so the
+remaining work there is two path strings and dropping the mock transport — which
+`forum.schemas.ts`'s own header anticipates as "the only edit is in `forum.api.ts`".
+
+This entry's real finding stands as the reason the phase was scoped the way it was:
+`ForumThreadDetail` renders replies, `helpfulCount` and `acceptedReplyId`, and the frontend contract
+had thread-create and nothing else. Shipping the specified surface as specified would have produced
+a forum where nobody can answer anything.
 
 **Rule:** `pending_review` on create is the design, not a placeholder. A10 closed public product
 comments because a comment would be the only public text surface with no standing requirement behind
@@ -3048,7 +3199,7 @@ process to put behind one.
 
 ---
 
-### A34. There is no cofounder directory — **NOT BUILT (§18), and blocked on §14**
+### A34. There was no cofounder directory — **SHIPPED (Phase 19, `0104`–`0105`), capital figures still blocked on §14**
 
 **Needed by:** `cofounder-directory-page.tsx`, `cofounder-profile-page.tsx`,
 `composers/cofounder-profile-composer.tsx`.
@@ -3058,12 +3209,17 @@ near-miss is `talent_profile`, user-scoped with availability, visibility, skills
 ask, which is close enough to be dangerous: extending it would put cofounder rows in the R&D talent
 directory, which is a different claim about a different person's intent.
 
-**What to build:** §18 — two tables and the **lifecycle the contract omits**. As specified, `POST`
-answers `draft`, public reads return only `published`, and there is no publish route, no `/mine` read
-and no withdraw. A user creates a profile nobody can ever see, including themselves.
+**What was built:** §18 — five tables and the **lifecycle the contract omitted**. As specified,
+`POST` answered `draft`, public reads returned only `published`, and there was no submit route, no
+`/mine` read and no withdraw: a user created a profile nobody could ever see, including themselves.
+All seven missing routes ship (§6.7), plus the two-route moderation queue behind them.
 
-**Frontend today:** `cofounders.api.ts` resolves fixtures. Its header carries three rules the
-frontend cannot enforce, which is why §18.1 restates them as backend rules and adds a fourth.
+**Frontend today:** `cofounders.api.ts` still resolves fixtures and writes to
+`/commerce/cofounder-profiles`; the write path is now `/community/cofounder-profiles` (§1.1). Its
+header carries three rules the frontend cannot enforce, which is why §18.1 restates them as backend
+rules and adds a fourth — all four are now enforced in `community-cofounder.service.ts`. **The
+composer additionally needs its capital and equity fields removed**, because the create schema is
+`.strict()` and answers 422 for them.
 
 **Rule:** a declared figure is never rendered as a verified one. `capitalRange` is what somebody typed
 about themselves and nobody checked, so no field, label or aggregate may imply "committed", "funded",
@@ -3073,9 +3229,15 @@ about themselves and nobody checked, so no field, label or aggregate may imply "
 transfers or records a stake, and the figure is integer basis points for the same reason money is
 integer cents — `0.075` and `7.5` are one careless division apart.
 
-**Still blocked:** §14 now carries the open decision. Publishing what a person will invest, beside a
-contact affordance, is close to facilitating a securities solicitation, and how close is a per-market
-legal answer. Until it lands, **the backend stores no capital figure it would then have to publish**.
+**Still blocked, and built around rather than waited on:** §14 carries the open decision. Publishing
+what a person will invest, beside a contact affordance, is close to facilitating a securities
+solicitation, and how close is a per-market legal answer. So Phase 19 shipped everything else and
+**stores no capital figure it would then have to publish**: there is no `capital_range_*`, no
+`currency` and no `equity_expectation_basis_points` column on `community_cofounder_profile`, both
+wire fields serve `null`, and the create schema answers **422** for either rather than accepting and
+discarding it — silently dropping a number somebody typed about themselves would let them believe it
+had been recorded. `scripts/verify-store-phase-19-constraints.ts` asserts the absence as its FIRST
+check, so adding one of those columns before the decision lands fails a verifier by name.
 
 ---
 
