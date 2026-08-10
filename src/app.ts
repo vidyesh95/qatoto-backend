@@ -18,6 +18,7 @@ import commerceCategoriesRouter from "#src/routes/commerce-categories.routes.js"
 import commerceContentReportsRouter from "#src/routes/commerce-content-reports.routes.js";
 import commerceDocumentsRouter from "#src/routes/commerce-documents.routes.js";
 import commerceFactoriesRouter from "#src/routes/commerce-factories.routes.js";
+import commerceFreightRatesRouter from "#src/routes/commerce-freight-rates.routes.js";
 import commerceFulfillmentRouter from "#src/routes/commerce-fulfillment.routes.js";
 import commerceMerchandisingRouter from "#src/routes/commerce-merchandising.routes.js";
 import commerceMessagesRouter from "#src/routes/commerce-messages.routes.js";
@@ -191,6 +192,7 @@ app.use("/commerce", commerceCartRouter);
 app.use("/commerce", commerceOrdersRouter);
 app.use("/commerce", commercePaymentsRouter);
 app.use("/commerce", commerceFulfillmentRouter);
+app.use("/commerce", commerceFreightRatesRouter);
 app.use("/commerce", commerceTrustRouter);
 app.use("/commerce", commerceCatalogRouter);
 // The browse taxonomy's ADMIN surface and the seller request queue. The public category

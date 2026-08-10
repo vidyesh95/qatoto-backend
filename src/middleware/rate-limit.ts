@@ -1477,3 +1477,30 @@ export const cofounderProfileWriteLimiter = createLimiter({
   windowMs: ONE_MINUTE_MS,
   limit: 30,
 });
+
+/**
+ * The §19 reference-data writes — lane rate cards, their bands, and customs dwell estimates
+ * (Store Phase 20).
+ *
+ * ONE BUCKET, the `cofounderProfileWriteLimiter` shape: low-frequency staff data entry
+ * against a small, staff-authored table. A whole price list lands in ONE request because the
+ * create carries its bands, so keying in a forwarder's full tariff is a single call per lane
+ * and a busy afternoon is a dozen.
+ */
+export const commerceFreightRateWriteLimiter = createLimiter({
+  namespace: "commerceFreightRateWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/**
+ * `GET /commerce/orders/:orderId/arrival-window` (Store Phase 20, §19.4).
+ *
+ * Tighter than an ordinary order read because each call RATES A LANE — it scans rate cards
+ * and their bands and resolves a dwell estimate — and no cache absorbs any of it.
+ */
+export const commerceArrivalWindowReadLimiter = createLimiter({
+  namespace: "commerceArrivalWindowRead",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
