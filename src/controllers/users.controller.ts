@@ -1,10 +1,10 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import * as usersService from "#src/services/users.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * Display name a user is allowed to set. Trimmed first, then bounded 1–100 and

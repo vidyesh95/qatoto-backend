@@ -43,17 +43,17 @@ import {
   latestPromisedDeliveryAt,
 } from "#src/lib/commerce-promised-delivery.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
-import { deriveStockState } from "#src/services/store-catalog.service.js";
 import {
   createEscrowSessionForOrder,
   scheduleEscrowCommands,
 } from "#src/services/commerce-escrow.service.js";
+import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import {
   consumeSettlementAgreement,
   resolveSettlementRail,
 } from "#src/services/commerce-settlement.service.js";
+import { deriveStockState } from "#src/services/store-catalog.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

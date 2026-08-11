@@ -36,14 +36,10 @@ describe("store cursor helpers", () => {
     });
 
     expect(
-      decodeTimestampStoreCursor(
-        encodeStoreCursor({ sortKey: "+275760-09-13T00:00:00.000Z", id: "dispute-1" }),
-      ),
+      decodeTimestampStoreCursor(encodeStoreCursor({ sortKey: "+275760-09-13T00:00:00.000Z", id: "dispute-1" })),
     ).toBeNull();
     expect(
-      decodeTimestampStoreCursor(
-        encodeStoreCursor({ sortKey: "2026-08-05 12:00:00", id: "dispute-1" }),
-      ),
+      decodeTimestampStoreCursor(encodeStoreCursor({ sortKey: "2026-08-05 12:00:00", id: "dispute-1" })),
     ).toBeNull();
   });
 

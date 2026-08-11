@@ -33,8 +33,8 @@ import {
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
@@ -562,10 +562,7 @@ export async function loadSellerDeclaredProfiles(
     existing.push(projectCertification(row));
     certificationsByOrganization.set(row.organizationId, existing);
   }
-  const productionLinesByOrganization = new Map<
-    string,
-    OrganizationProductionLineProjection[]
-  >();
+  const productionLinesByOrganization = new Map<string, OrganizationProductionLineProjection[]>();
   for (const row of productionLineRows) {
     const existing = productionLinesByOrganization.get(row.organizationId) ?? [];
     existing.push(projectProductionLine(row));
@@ -1234,7 +1231,10 @@ export async function replaceStakeholderPhoto(input: {
     normalized.value.buffer,
   );
   if (!uploaded.success) {
-    return { success: false, error: { type: "IMAGE_STORAGE_FAILED", storageError: uploaded.error } };
+    return {
+      success: false,
+      error: { type: "IMAGE_STORAGE_FAILED", storageError: uploaded.error },
+    };
   }
 
   let updatedRow: StakeholderRow | null;
@@ -1782,7 +1782,8 @@ export async function listCertifications(input: {
 }
 
 export type CertificationDecision =
-  { readonly kind: "approve" } | { readonly kind: "reject"; readonly decisionReason: string };
+  | { readonly kind: "approve" }
+  | { readonly kind: "reject"; readonly decisionReason: string };
 
 /**
  * A moderator approves or rejects. Platform capability, NOT an organization role — a

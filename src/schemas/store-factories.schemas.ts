@@ -140,9 +140,7 @@ export const ListManufacturingInquiriesQuerySchema = z
   })
   .strict();
 
-export type ListManufacturingInquiriesQuery = z.infer<
-  typeof ListManufacturingInquiriesQuerySchema
->;
+export type ListManufacturingInquiriesQuery = z.infer<typeof ListManufacturingInquiriesQuerySchema>;
 
 // ---------------------------------------------------------------------------
 // Seller-owned writes (§16.3)

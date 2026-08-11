@@ -89,9 +89,7 @@ describe("computeChargeableWeight", () => {
       consignment({ billableWeightGrams: 900_000, volumeCubicCm: 200_000 }),
     );
 
-    expect(chargeable).toEqual(
-      expect.objectContaining({ grams: 900_000, basis: "actual" }),
-    );
+    expect(chargeable).toEqual(expect.objectContaining({ grams: 900_000, basis: "actual" }));
   });
 
   it("resolves a tie to the actual basis", () => {
@@ -101,9 +99,7 @@ describe("computeChargeableWeight", () => {
       consignment({ billableWeightGrams: 1_000_000, volumeCubicCm: ONE_CUBIC_METRE_CM3 }),
     );
 
-    expect(chargeable).toEqual(
-      expect.objectContaining({ grams: 1_000_000, basis: "actual" }),
-    );
+    expect(chargeable).toEqual(expect.objectContaining({ grams: 1_000_000, basis: "actual" }));
   });
 
   it("applies the AIR divisor when the card declares one", () => {
@@ -122,14 +118,8 @@ describe("computeChargeableWeight", () => {
       volumeCubicCm: ONE_CUBIC_METRE_CM3,
     });
 
-    const bySea = computeChargeableWeight(
-      card({ id: "rc_sea", volumetricDivisorCm3PerKg: OCEAN_DIVISOR }),
-      boxes,
-    );
-    const byAir = computeChargeableWeight(
-      card({ id: "rc_air", volumetricDivisorCm3PerKg: AIR_DIVISOR }),
-      boxes,
-    );
+    const bySea = computeChargeableWeight(card({ id: "rc_sea", volumetricDivisorCm3PerKg: OCEAN_DIVISOR }), boxes);
+    const byAir = computeChargeableWeight(card({ id: "rc_air", volumetricDivisorCm3PerKg: AIR_DIVISOR }), boxes);
 
     // The divisor belongs to the forwarder, not to the boxes — this is why chargeable weight
     // cannot live on `ConsignmentMeasurement`.
@@ -192,12 +182,14 @@ describe("selectRateBreak", () => {
     ];
 
     // 20 kg gross would sit in `b0`; 3 tonnes chargeable reaches `b500`.
-    expect(selectRateBreak(bands, { chargeableWeightGrams: 3_000_000, volumeCubicCm: 3_000_000 })).toEqual(
-      { status: "selected", selected: expect.objectContaining({ id: "b500" }) },
-    );
-    expect(selectRateBreak(bands, { chargeableWeightGrams: 20_000, volumeCubicCm: 3_000_000 })).toEqual(
-      { status: "selected", selected: expect.objectContaining({ id: "b0" }) },
-    );
+    expect(selectRateBreak(bands, { chargeableWeightGrams: 3_000_000, volumeCubicCm: 3_000_000 })).toEqual({
+      status: "selected",
+      selected: expect.objectContaining({ id: "b500" }),
+    });
+    expect(selectRateBreak(bands, { chargeableWeightGrams: 20_000, volumeCubicCm: 3_000_000 })).toEqual({
+      status: "selected",
+      selected: expect.objectContaining({ id: "b0" }),
+    });
   });
 
   it("treats a band's floor as inclusive", () => {
@@ -270,9 +262,7 @@ describe("selectRateBreak", () => {
 describe("priceRatedBreak", () => {
   it("charges per kilogram of chargeable weight", () => {
     expect(BILLABLE_WEIGHT_UNIT_GRAMS).toBe(1000);
-    expect(priceRatedBreak(band({ id: "b", minBillableWeightGrams: 0, unitPriceInCents: 400 }), 50_000)).toBe(
-      20_000,
-    );
+    expect(priceRatedBreak(band({ id: "b", minBillableWeightGrams: 0, unitPriceInCents: 400 }), 50_000)).toBe(20_000);
   });
 
   it("rounds up, never down — a rounded-down freight charge is one the forwarder will not honour", () => {

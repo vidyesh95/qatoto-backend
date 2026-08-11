@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
 import {
@@ -22,7 +23,6 @@ import type {
   CommercePathwayError,
 } from "#src/services/commerce-pathways.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const EmptyObjectSchema = z.object({}).strict();
 const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);

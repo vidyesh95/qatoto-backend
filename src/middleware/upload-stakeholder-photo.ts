@@ -29,11 +29,7 @@ const memoryUpload = multer({
   },
 });
 
-export function uploadStakeholderPhotoFile(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
+export function uploadStakeholderPhotoFile(req: Request, res: Response, next: NextFunction): void {
   memoryUpload.single("photo")(req, res, (uploadError: unknown) => {
     if (!uploadError) {
       next();

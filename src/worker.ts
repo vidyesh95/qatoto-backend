@@ -9,15 +9,14 @@ import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
 import { handleDeliverNotification } from "#src/jobs/deliver-notification.js";
 import { handleDeriveProductRelations } from "#src/jobs/derive-product-relations.js";
-import { handleRecomputeCommerceCategoryDemand } from "#src/jobs/recompute-commerce-category-demand.js";
-import { handleRecomputeCommerceProductTrending } from "#src/jobs/recompute-commerce-product-trending.js";
-import { handleRollupCommerceProductDailySignal } from "#src/jobs/rollup-commerce-product-daily-signal.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
 import { handleDispatchConnectorCommand } from "#src/jobs/dispatch-connector-command.js";
 import { handleExpireCommerceQuotes } from "#src/jobs/expire-commerce-quotes.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
 import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
 import { handleRecomputeBranchSignals } from "#src/jobs/recompute-branch-signals.js";
+import { handleRecomputeCommerceCategoryDemand } from "#src/jobs/recompute-commerce-category-demand.js";
+import { handleRecomputeCommerceProductTrending } from "#src/jobs/recompute-commerce-product-trending.js";
 import { handleRecomputeCompensationDraft } from "#src/jobs/recompute-compensation-draft.js";
 import { handleRecomputeDailyLogStreaks } from "#src/jobs/recompute-daily-log-streaks.js";
 import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals.js";
@@ -32,12 +31,12 @@ import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-duratio
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
 import { handleReconcileCommercePayments } from "#src/jobs/reconcile-commerce-payments.js";
 import { handleReconcileConnectorState } from "#src/jobs/reconcile-connector-state.js";
-import { handleScanEncryptedDocument } from "#src/jobs/scan-encrypted-document.js";
-import { handleSweepPendingDocumentScans } from "#src/jobs/sweep-pending-document-scans.js";
 import { handleRefreshStoreSearchDocument } from "#src/jobs/refresh-store-search-document.js";
 import { handleRefreshTalentProjections } from "#src/jobs/refresh-talent-projections.js";
 import { handleReleaseExpiredInventoryReservations } from "#src/jobs/release-expired-inventory-reservations.js";
 import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
+import { handleRollupCommerceProductDailySignal } from "#src/jobs/rollup-commerce-product-daily-signal.js";
+import { handleScanEncryptedDocument } from "#src/jobs/scan-encrypted-document.js";
 import {
   handleCloseCompensationPeriodTick,
   handleRecomputeCompensationDraftTick,
@@ -68,6 +67,7 @@ import {
   handleSweepPendingDocumentScansTick,
 } from "#src/jobs/scheduled-ticks.js";
 import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
+import { handleSweepPendingDocumentScans } from "#src/jobs/sweep-pending-document-scans.js";
 import {
   handleAnalyzeSubstance,
   handleAnalyzeTemporal,
@@ -558,7 +558,10 @@ async function startWorker(): Promise<void> {
   await boss.work(
     JOB_NAMES.recomputeCommerceCategoryDemandTick,
     workOptions,
-    runJob(JOB_NAMES.recomputeCommerceCategoryDemandTick, handleRecomputeCommerceCategoryDemandTick),
+    runJob(
+      JOB_NAMES.recomputeCommerceCategoryDemandTick,
+      handleRecomputeCommerceCategoryDemandTick,
+    ),
   );
   await boss.work(
     JOB_NAMES.recomputeCommerceCategoryDemand,

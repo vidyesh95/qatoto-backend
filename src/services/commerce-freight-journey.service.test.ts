@@ -2,9 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 
-const { composeJourneys, computeConsignmentMeasurement, planLegs } = await import(
-  "#src/services/commerce-freight-journey.service.js"
-);
+const { composeJourneys, computeConsignmentMeasurement, planLegs } =
+  await import("#src/services/commerce-freight-journey.service.js");
 
 type LegPlan = Parameters<typeof composeJourneys>[0][number];
 type Option = LegPlan["options"][number];
@@ -76,9 +75,7 @@ describe("planLegs", () => {
     ]);
     // The inland leg is a DOMESTIC lane in the destination country — that is what makes it
     // rateable at all, since cards are keyed by country pair.
-    expect(legs[1]).toEqual(
-      expect.objectContaining({ originCountryCode: "DE", destinationCountryCode: "DE" }),
-    );
+    expect(legs[1]).toEqual(expect.objectContaining({ originCountryCode: "DE", destinationCountryCode: "DE" }));
   });
 
   it("carries localities as labels only, on the ends where they are known", () => {
@@ -185,10 +182,7 @@ describe("composeJourneys", () => {
         transitDaysMax: 38,
       }),
     );
-    expect(composed.journeys[0]?.legSelections.map((entry) => entry.rateCardId)).toEqual([
-      "rc_sea",
-      "rc_inland",
-    ]);
+    expect(composed.journeys[0]?.legSelections.map((entry) => entry.rateCardId)).toEqual(["rc_sea", "rc_inland"]);
   });
 
   it("emits one journey per international mode", () => {
@@ -198,7 +192,13 @@ describe("composeJourneys", () => {
         kind: "international",
         options: [
           option({ rateCardId: "rc_sea", mode: "sea" }),
-          option({ rateCardId: "rc_air", mode: "air", transitDaysMin: 4, transitDaysMax: 8, providerQuote: { priceInCents: 940_000 } }),
+          option({
+            rateCardId: "rc_air",
+            mode: "air",
+            transitDaysMin: 4,
+            transitDaysMax: 8,
+            providerQuote: { priceInCents: 940_000 },
+          }),
         ],
       }),
       leg({

@@ -690,7 +690,9 @@ export async function handleSweepPendingDocumentScansTick(
    */
   const QUARTER_HOUR_MS = 15 * 60 * 1000;
   const now = readClock();
-  const asOfIso = new Date(Math.floor(now.getTime() / QUARTER_HOUR_MS) * QUARTER_HOUR_MS).toISOString();
+  const asOfIso = new Date(
+    Math.floor(now.getTime() / QUARTER_HOUR_MS) * QUARTER_HOUR_MS,
+  ).toISOString();
 
   const enqueueResult = await sendJob(
     JOB_NAMES.sweepPendingDocumentScans,
@@ -725,8 +727,6 @@ export async function handleReconcileConnectorStateTick(
   );
 
   if (!enqueueResult.success) {
-    throw new Error(
-      `reconcile-connector-state-tick: enqueue failed (${enqueueResult.error.type})`,
-    );
+    throw new Error(`reconcile-connector-state-tick: enqueue failed (${enqueueResult.error.type})`);
   }
 }

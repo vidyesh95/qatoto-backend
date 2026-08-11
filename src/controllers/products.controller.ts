@@ -1,10 +1,10 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import * as productsService from "#src/services/products.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * B2B volume-pricing tier. Prices are integer cents (server-authoritative — the

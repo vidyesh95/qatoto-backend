@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-// From `network-block.js` and not `client-subnet.js`: the latter reads `config` at module
-// scope for its hashing secret, and this parser needs no environment at all.
-import { deriveClientNetworkBlock } from "#src/lib/network-block.js";
 import {
   clampViewDwellSeconds,
   isCountedViewDwell,
   MAXIMUM_VIEW_DWELL_SECONDS,
   VIEW_DWELL_GRACE_SECONDS,
 } from "#src/lib/commerce-view-clamp.js";
+// From `network-block.js` and not `client-subnet.js`: the latter reads `config` at module
+// scope for its hashing secret, and this parser needs no environment at all.
+import { deriveClientNetworkBlock } from "#src/lib/network-block.js";
 
 /**
  * The two modules that stand between a hostile request and a ranking input.
@@ -99,16 +99,12 @@ describe("deriveClientNetworkBlock", () => {
   });
 
   it("separates two different /24s", () => {
-    expect(deriveClientNetworkBlock("203.0.113.5")).not.toBe(
-      deriveClientNetworkBlock("203.0.114.5"),
-    );
+    expect(deriveClientNetworkBlock("203.0.113.5")).not.toBe(deriveClientNetworkBlock("203.0.114.5"));
   });
 
   it("unwraps an IPv4-mapped IPv6 address to the same block as the bare form", () => {
     // Otherwise one host would be two networks depending on which listener accepted it.
-    expect(deriveClientNetworkBlock("::ffff:203.0.113.5")).toBe(
-      deriveClientNetworkBlock("203.0.113.5"),
-    );
+    expect(deriveClientNetworkBlock("::ffff:203.0.113.5")).toBe(deriveClientNetworkBlock("203.0.113.5"));
   });
 
   it("puts two hosts in one IPv6 /56 into the same block", () => {

@@ -105,7 +105,12 @@ export const WriteCofounderProfileSchema = z
     /** Free text: the long tail is the whole point. Normalized lowercase by the service. */
     sectors: z.array(z.string().trim().min(1).max(60)).max(8).optional(),
     languages: z
-      .array(z.string().trim().regex(/^[a-z]{2}$/, "Use ISO 639-1 codes, lowercase."))
+      .array(
+        z
+          .string()
+          .trim()
+          .regex(/^[a-z]{2}$/, "Use ISO 639-1 codes, lowercase."),
+      )
       .max(8)
       .optional(),
     priorVentures: z.array(PriorVentureSchema).max(8).optional(),

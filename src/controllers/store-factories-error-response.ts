@@ -53,9 +53,10 @@ export function respondStoreFactoriesError(res: Response, error: StoreFactoriesE
   res.status(statusCode).json({ status: "error", statusCode, message });
 }
 
-export function mapManufacturingInquiryErrorToResponse(
-  error: CommerceManufacturingInquiryError,
-): { readonly statusCode: number; readonly message: string } {
+export function mapManufacturingInquiryErrorToResponse(error: CommerceManufacturingInquiryError): {
+  readonly statusCode: number;
+  readonly message: string;
+} {
   switch (error.type) {
     case "NOT_FOUND":
       return { statusCode: 404, message: "Manufacturing inquiry not found." };

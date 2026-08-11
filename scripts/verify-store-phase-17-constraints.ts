@@ -98,7 +98,9 @@ async function indexExists(indexName: string): Promise<boolean> {
  * the CHECK that is under test.
  */
 async function anyOrganizationId(): Promise<string | null> {
-  const result = await db.execute<{ id: string }>(sql`SELECT id FROM commerce_organization LIMIT 1`);
+  const result = await db.execute<{ id: string }>(
+    sql`SELECT id FROM commerce_organization LIMIT 1`,
+  );
   return result.rows[0]?.id ?? null;
 }
 
@@ -106,16 +108,16 @@ const CHECKS: readonly Check[] = [
   // -------------------------------------------------------------------------
   // 0099 — the enum widening.
   // -------------------------------------------------------------------------
-  ...(
-    ["contract_manufacturing", "private_label", "tooling_and_moulds", "assembly"] as const
-  ).map((value) => ({
-    name: `0099 · commerce_organization_capability_kind carries '${value}'`,
-    why: "The directory's capabilityKind filter answers 422 for a value the column cannot hold.",
-    async run() {
-      const present = await enumHasValue("commerce_organization_capability_kind", value);
-      return { ok: present, detail: present ? "present" : "MISSING" };
-    },
-  })),
+  ...(["contract_manufacturing", "private_label", "tooling_and_moulds", "assembly"] as const).map(
+    (value) => ({
+      name: `0099 · commerce_organization_capability_kind carries '${value}'`,
+      why: "The directory's capabilityKind filter answers 422 for a value the column cannot hold.",
+      async run() {
+        const present = await enumHasValue("commerce_organization_capability_kind", value);
+        return { ok: present, detail: present ? "present" : "MISSING" };
+      },
+    }),
+  ),
   {
     name: "0099 · the Phase 12 capability values SURVIVED the widening",
     why: "ALTER TYPE ADD VALUE is additive; if these are gone the migration was a rewrite and Phase 12's rows are lost.",
@@ -193,10 +195,7 @@ const CHECKS: readonly Check[] = [
     name: "0100 · commerce_organization_certification.standard_code is NULLABLE",
     why: "The vocabulary is the world's; a NOT NULL code would refuse every standard outside the eight.",
     async run() {
-      const notNull = await columnIsNotNull(
-        "commerce_organization_certification",
-        "standard_code",
-      );
+      const notNull = await columnIsNotNull("commerce_organization_certification", "standard_code");
       return { ok: !notNull, detail: notNull ? "NOT NULL — wrong" : "nullable" };
     },
   },

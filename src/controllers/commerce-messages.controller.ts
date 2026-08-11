@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import * as commerceMessagesService from "#src/services/commerce-messages.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const CreateThreadBodySchema = z
   .object({

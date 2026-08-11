@@ -173,12 +173,7 @@ export interface ProductCustomizationOptionView {
  * THE PUBLISH GATE AND THE SELLER'S READ CALL THIS ONE FUNCTION, which is the point: a checklist
  * that disagreed with the 422 behind it would be worse than no checklist.
  */
-export type ListingRequirementKey =
-  | "title"
-  | "price"
-  | "images"
-  | "samplePrice"
-  | "shippingFacts";
+export type ListingRequirementKey = "title" | "price" | "images" | "samplePrice" | "shippingFacts";
 
 export type ListingRequirementState = "satisfied" | "missing" | "not_applicable";
 
@@ -308,9 +303,7 @@ export function projectListingCompleteness(
   };
 }
 
-function missingFieldsForRequirement(
-  requirement: ListingRequirementProjection,
-): readonly string[] {
+function missingFieldsForRequirement(requirement: ListingRequirementProjection): readonly string[] {
   switch (requirement.state) {
     case "missing":
       return requirement.missingFields;
@@ -1435,8 +1428,7 @@ export async function updateProduct(
             packageLengthMm: patch.packageLengthMm ?? owned.packageLengthMm,
             packageWidthMm: patch.packageWidthMm ?? owned.packageWidthMm,
             packageHeightMm: patch.packageHeightMm ?? owned.packageHeightMm,
-            packageGrossWeightGrams:
-              patch.packageGrossWeightGrams ?? owned.packageGrossWeightGrams,
+            packageGrossWeightGrams: patch.packageGrossWeightGrams ?? owned.packageGrossWeightGrams,
             unitsPerPackage: patch.unitsPerPackage ?? owned.unitsPerPackage,
           });
           if (missing.length > 0) {

@@ -257,9 +257,13 @@ const CHECKS: readonly Check[] = [
     why: "A filter over a column the refresh job never populates returns an empty page, not an error.",
     async run() {
       const columns = await Promise.all(
-        ["stock_state", "sample_policy", "condition", "provider_verification_state", "lead_time_max_days"].map(
-          (column) => columnExists("store_search_document", column),
-        ),
+        [
+          "stock_state",
+          "sample_policy",
+          "condition",
+          "provider_verification_state",
+          "lead_time_max_days",
+        ].map((column) => columnExists("store_search_document", column)),
       );
       const indexes = await Promise.all(
         ["store_search_document_stock_idx", "store_search_document_price_idx"].map((index) =>

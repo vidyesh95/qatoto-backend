@@ -1,11 +1,11 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commercePaymentsService from "#src/services/commerce-payments.service.js";
 import type { CommercePaymentsError } from "#src/services/commerce-payments.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const EmptyObjectSchema = z.object({}).strict();
 const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);

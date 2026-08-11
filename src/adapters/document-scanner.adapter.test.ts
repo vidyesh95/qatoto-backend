@@ -6,9 +6,8 @@ stubServerEnvironment();
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
-const { FakeDocumentScannerAdapter, resolveDocumentScanner } = await import(
-  "#src/adapters/document-scanner.adapter.js"
-);
+const { FakeDocumentScannerAdapter, resolveDocumentScanner } =
+  await import("#src/adapters/document-scanner.adapter.js");
 
 /**
  * The EICAR test string, assembled at runtime so this test file is not itself quarantined

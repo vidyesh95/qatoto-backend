@@ -42,9 +42,7 @@ const qaStubs = vi.hoisted(() => ({
 }));
 
 vi.mock("#src/services/commerce-product-qa.service.js", async () => ({
-  ...(await vi.importActual<Record<string, unknown>>(
-    "#src/services/commerce-product-qa.service.js",
-  )),
+  ...(await vi.importActual<Record<string, unknown>>("#src/services/commerce-product-qa.service.js")),
   ...qaStubs,
 }));
 
@@ -202,9 +200,7 @@ describe("product Q&A vote routes (A24)", () => {
         },
       });
 
-      const response = await request(app).get(
-        "/store/products/solar-freezer/questions/qst_1/answers",
-      );
+      const response = await request(app).get("/store/products/solar-freezer/questions/qst_1/answers");
 
       expect(response.status).toBe(200);
       expect(response.body.data.items[0].helpfulCount).toBe(7);
@@ -232,9 +228,7 @@ describe("product Q&A vote routes (A24)", () => {
         },
       });
 
-      const response = await request(app).get(
-        "/store/products/solar-freezer/questions/qst_1/answers",
-      );
+      const response = await request(app).get("/store/products/solar-freezer/questions/qst_1/answers");
 
       expect(response.status).toBe(200);
       expect(response.body.data.items[0].viewer).toBeNull();

@@ -69,11 +69,9 @@ describe("computeTrendingScorePoints", () => {
   });
 
   it("throws on a count that could not have come from a COUNT", () => {
-    expect(() => computeTrendingScorePoints(risingVideo({ countedViewsInWindow: -1 }))).toThrow(
-      /countedViewsInWindow/,
+    expect(() => computeTrendingScorePoints(risingVideo({ countedViewsInWindow: -1 }))).toThrow(/countedViewsInWindow/);
+    expect(() => computeTrendingScorePoints(risingVideo({ watchedMinutesInWindow: Number.NaN }))).toThrow(
+      /watchedMinutesInWindow/,
     );
-    expect(() =>
-      computeTrendingScorePoints(risingVideo({ watchedMinutesInWindow: Number.NaN })),
-    ).toThrow(/watchedMinutesInWindow/);
   });
 });

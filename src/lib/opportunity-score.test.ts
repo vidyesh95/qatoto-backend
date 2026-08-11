@@ -209,9 +209,7 @@ describe("linkedProjectScarcityPoints", () => {
   it("does not let a negative count fabricate the full 10-point scarcity budget", () => {
     // The pre-fix behaviour: -1 fell through `<= 0` and returned the component maximum,
     // so a broken COUNT(*) inflated every affected cluster's total by 10 points silently.
-    expect(() => linkedProjectScarcityPoints(-1)).toThrow(
-      /must be a non-negative safe integer, got -1/,
-    );
+    expect(() => linkedProjectScarcityPoints(-1)).toThrow(/must be a non-negative safe integer, got -1/);
   });
 });
 
@@ -434,14 +432,9 @@ describe("computeOpportunityScorePoints", () => {
       };
 
       const breakdown = computeOpportunityScorePoints(inputs);
-      const describeCase = (problem: string): string =>
-        `#${iterationIndex} ${JSON.stringify(inputs)}: ${problem}`;
+      const describeCase = (problem: string): string => `#${iterationIndex} ${JSON.stringify(inputs)}: ${problem}`;
 
-      if (
-        breakdown.totalPoints < 0 ||
-        breakdown.totalPoints > 100 ||
-        !Number.isSafeInteger(breakdown.totalPoints)
-      ) {
+      if (breakdown.totalPoints < 0 || breakdown.totalPoints > 100 || !Number.isSafeInteger(breakdown.totalPoints)) {
         violations.push(describeCase(`totalPoints out of range (${breakdown.totalPoints})`));
       }
 
@@ -453,28 +446,14 @@ describe("computeOpportunityScorePoints", () => {
         breakdown.recencyPoints +
         breakdown.linkedProjectScarcityPoints;
       if (summedSubscores !== breakdown.totalPoints) {
-        violations.push(
-          describeCase(`components sum to ${summedSubscores}, total is ${breakdown.totalPoints}`),
-        );
+        violations.push(describeCase(`components sum to ${summedSubscores}, total is ${breakdown.totalPoints}`));
       }
 
       // Every component stays inside its own budget.
       const budgetChecks: readonly (readonly [string, number, number])[] = [
-        [
-          "distinctReporters",
-          breakdown.distinctReporterPoints,
-          OPPORTUNITY_SCORE_COMPONENT_BUDGETS.distinctReporters,
-        ],
-        [
-          "geographicSpread",
-          breakdown.geographicSpreadPoints,
-          OPPORTUNITY_SCORE_COMPONENT_BUDGETS.geographicSpread,
-        ],
-        [
-          "categoryDemand",
-          breakdown.categoryDemandPoints,
-          OPPORTUNITY_SCORE_COMPONENT_BUDGETS.categoryDemand,
-        ],
+        ["distinctReporters", breakdown.distinctReporterPoints, OPPORTUNITY_SCORE_COMPONENT_BUDGETS.distinctReporters],
+        ["geographicSpread", breakdown.geographicSpreadPoints, OPPORTUNITY_SCORE_COMPONENT_BUDGETS.geographicSpread],
+        ["categoryDemand", breakdown.categoryDemandPoints, OPPORTUNITY_SCORE_COMPONENT_BUDGETS.categoryDemand],
         ["recency", breakdown.recencyPoints, OPPORTUNITY_SCORE_COMPONENT_BUDGETS.recency],
         [
           "linkedProjectScarcity",
@@ -484,9 +463,7 @@ describe("computeOpportunityScorePoints", () => {
       ];
       for (const [componentName, awarded, budget] of budgetChecks) {
         if (awarded > budget) {
-          violations.push(
-            describeCase(`${componentName} awarded ${awarded} over budget ${budget}`),
-          );
+          violations.push(describeCase(`${componentName} awarded ${awarded} over budget ${budget}`));
         }
       }
     }

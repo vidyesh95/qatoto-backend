@@ -748,16 +748,7 @@ export const commerceCertificationStateEnum = pgEnum("commerce_certification_sta
  */
 export const commerceCertificationStandardCodeEnum = pgEnum(
   "commerce_certification_standard_code",
-  [
-    "iso_9001",
-    "iso_14001",
-    "bsci",
-    "sedex_smeta",
-    "gots",
-    "fsc",
-    "ce_marking",
-    "fda_registered",
-  ],
+  ["iso_9001", "iso_14001", "bsci", "sedex_smeta", "gots", "fsc", "ce_marking", "fda_registered"],
 );
 
 /**
@@ -20862,10 +20853,9 @@ export const communityForumThread = pgTable(
      *
      * DERIVED FROM THE CALLER'S ACTIVE ORGANIZATION AT WRITE TIME, never taken from a body.
      */
-    authorOrganizationId: text("author_organization_id").references(
-      () => commerceOrganization.id,
-      { onDelete: "set null" },
-    ),
+    authorOrganizationId: text("author_organization_id").references(() => commerceOrganization.id, {
+      onDelete: "set null",
+    }),
     state: communityForumThreadStateEnum("state").default("pending_review").notNull(),
     /**
      * `null` IS NOT "NOBODY HELPED". Plenty of useful threads never get an accepted answer;
@@ -20947,10 +20937,9 @@ export const communityForumReply = pgTable(
       .notNull()
       .references(() => communityForumThread.id, { onDelete: "cascade" }),
     authorUserId: text("author_user_id").references(() => user.id, { onDelete: "set null" }),
-    authorOrganizationId: text("author_organization_id").references(
-      () => commerceOrganization.id,
-      { onDelete: "set null" },
-    ),
+    authorOrganizationId: text("author_organization_id").references(() => commerceOrganization.id, {
+      onDelete: "set null",
+    }),
     body: text("body").notNull(),
     /**
      * A COUNT, NOT A SCORE. There is no downvote on the wire and there must never be one: a
@@ -21192,10 +21181,10 @@ export const communityCofounderEngagementStateEnum = pgEnum(
  * there is only ever one definition of "identified" on this platform. The enum exists so
  * the wire value has a name.
  */
-export const communityCofounderIdentityStateEnum = pgEnum(
-  "community_cofounder_identity_state",
-  ["unverified", "identity_verified"],
-);
+export const communityCofounderIdentityStateEnum = pgEnum("community_cofounder_identity_state", [
+  "unverified",
+  "identity_verified",
+]);
 
 /** `POST` answers `draft`. Publishing is a separate act behind moderation. */
 export const communityCofounderProfileStateEnum = pgEnum("community_cofounder_profile_state", [
@@ -21263,11 +21252,7 @@ export const communityCofounderProfile = pgTable(
      * takes no `sort` parameter and computes no ranking, because a ranking on this surface
      * could read as a platform recommendation about a person.
      */
-    index("community_cofounder_profile_directory_idx").on(
-      table.state,
-      table.publishedAt,
-      table.id,
-    ),
+    index("community_cofounder_profile_directory_idx").on(table.state, table.publishedAt, table.id),
     index("community_cofounder_profile_queue_idx").on(table.state, table.createdAt, table.id),
     check(
       "community_cofounder_profile_slug_ck",
@@ -21298,8 +21283,7 @@ export const communityCofounderProfileContribution = pgTable(
     profileId: text("profile_id")
       .notNull()
       .references(() => communityCofounderProfile.id, { onDelete: "cascade" }),
-    contributionKind:
-      communityCofounderContributionKindEnum("contribution_kind").notNull(),
+    contributionKind: communityCofounderContributionKindEnum("contribution_kind").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [

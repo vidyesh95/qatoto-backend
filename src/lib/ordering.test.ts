@@ -20,9 +20,7 @@ describe("compareUtf8Bytes", () => {
     const samples = ["a", "z", "A", "Z", "0", "é", "日本", "🌍", "水", "ß"];
     for (const left of samples) {
       for (const right of samples) {
-        expect(signOf(compareUtf8Bytes(left, right))).toBe(
-          -signOf(compareUtf8Bytes(right, left)) + 0,
-        );
+        expect(signOf(compareUtf8Bytes(left, right))).toBe(-signOf(compareUtf8Bytes(right, left)) + 0);
       }
     }
   });
@@ -105,10 +103,7 @@ describe("rankByTotalOrder", () => {
     for (let attempt = 0; attempt < 1_000; attempt += 1) {
       // A deterministic shuffle: rotate by a varying amount, then reverse odd passes.
       // Math.random() is avoided so a failure is reproducible.
-      const rotated = [
-        ...rows.slice(attempt % rows.length),
-        ...rows.slice(0, attempt % rows.length),
-      ];
+      const rotated = [...rows.slice(attempt % rows.length), ...rows.slice(0, attempt % rows.length)];
       const shuffled = attempt % 2 === 0 ? rotated : rotated.toReversed();
 
       expect(JSON.stringify(rankByTotalOrder(shuffled, keys))).toBe(expected);
@@ -120,9 +115,7 @@ describe("rankByTotalOrder", () => {
       { id: "a", score: 1, reporters: 1 },
       { id: "b", score: 1, reporters: 1 },
     ];
-    const nonUniqueKeys = [
-      { extract: (row: ScoredRow) => row.score, direction: "descending" as const },
-    ];
+    const nonUniqueKeys = [{ extract: (row: ScoredRow) => row.score, direction: "descending" as const }];
 
     expect(() => rankByTotalOrder(rows, nonUniqueKeys)).toThrow(/not total/);
   });

@@ -4,9 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 // touch it in that path would throw and fail the test, which is the assertion.
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 
-const { resolveCustomsDwell, selectMostSpecificDwellEstimate } = await import(
-  "#src/services/commerce-customs-dwell.service.js"
-);
+const { resolveCustomsDwell, selectMostSpecificDwellEstimate } =
+  await import("#src/services/commerce-customs-dwell.service.js");
 
 type DwellRow = Parameters<typeof selectMostSpecificDwellEstimate>[0][number];
 
@@ -110,10 +109,7 @@ describe("selectMostSpecificDwellEstimate", () => {
 
   it("falls back to the any-commodity row when an order spans categories", () => {
     const matched = selectMostSpecificDwellEstimate(
-      [
-        row({ id: "any" }),
-        row({ id: "electronics", commodityScopeCategoryId: "cat_electronics" }),
-      ],
+      [row({ id: "any" }), row({ id: "electronics", commodityScopeCategoryId: "cat_electronics" })],
       { originCountryCode: "IN", commodityCategoryIds: ["cat_electronics", "cat_textiles"] },
     );
 

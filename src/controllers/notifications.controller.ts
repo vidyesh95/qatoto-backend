@@ -1,10 +1,10 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import * as notificationsService from "#src/services/notifications.service.js";
 import type { NotificationError } from "#src/services/notifications.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * The caller's notification inbox (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 1).

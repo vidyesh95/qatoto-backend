@@ -118,9 +118,7 @@ const completionStubs = vi.hoisted(() => ({
 }));
 
 vi.mock("#src/services/commerce-completion.service.js", async () => ({
-  ...(await vi.importActual<Record<string, unknown>>(
-    "#src/services/commerce-completion.service.js",
-  )),
+  ...(await vi.importActual<Record<string, unknown>>("#src/services/commerce-completion.service.js")),
   ...completionStubs,
 }));
 
@@ -182,9 +180,7 @@ describe("commerce trust routes", () => {
      * rather than a silently ignored parameter.
      */
     it("rejects an unknown query key with 422", async () => {
-      const response = await request(app).get(
-        "/commerce/completions?buyerOrganizationId=someone-else",
-      );
+      const response = await request(app).get("/commerce/completions?buyerOrganizationId=someone-else");
 
       expect(response.status).toBe(422);
       expect(completionStubs.listBuyerCompletions).not.toHaveBeenCalled();

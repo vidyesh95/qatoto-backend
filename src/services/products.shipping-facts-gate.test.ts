@@ -33,9 +33,7 @@ function pendingQueryResult(): Promise<readonly Record<string, unknown>[]> & {
   return Object.assign(Promise.resolve(rows), { for: () => Promise.resolve(rows) });
 }
 
-const whereMock = vi.fn<(condition: unknown) => ReturnType<typeof pendingQueryResult>>(() =>
-  pendingQueryResult(),
-);
+const whereMock = vi.fn<(condition: unknown) => ReturnType<typeof pendingQueryResult>>(() => pendingQueryResult());
 const fromMock = vi.fn<(table: unknown) => { where: typeof whereMock }>(() => ({
   where: whereMock,
 }));
@@ -50,10 +48,7 @@ const updateMock = vi.fn<(table: unknown) => { set: typeof setMock }>(() => {
   return { set: setMock };
 });
 const transactionMock = vi.fn<
-  (
-    callback: (transaction: unknown) => Promise<unknown>,
-    options?: unknown,
-  ) => Promise<unknown>
+  (callback: (transaction: unknown) => Promise<unknown>, options?: unknown) => Promise<unknown>
 >(async (callback) => {
   databaseState.transactionCalled = true;
   return callback({ select: selectMock, update: updateMock });
@@ -64,9 +59,7 @@ const transactionMock = vi.fn<
  * returns nothing, so a successful write reloads to `NOT_FOUND` — which is fine here: these tests
  * assert the GATE, and every success case checks that the write ran rather than what came back.
  */
-const topLevelWhereMock = vi.fn<(condition: unknown) => Promise<readonly unknown[]>>(() =>
-  Promise.resolve([]),
-);
+const topLevelWhereMock = vi.fn<(condition: unknown) => Promise<readonly unknown[]>>(() => Promise.resolve([]));
 const topLevelFromMock = vi.fn<(table: unknown) => { where: typeof topLevelWhereMock }>(() => ({
   where: topLevelWhereMock,
 }));
@@ -129,12 +122,7 @@ function publishRow(overrides: Record<string, unknown> = {}): Record<string, unk
 
 /** Row, active leaf category, no child, then the image count. */
 function publishQueryResults(row: Record<string, unknown>, imageCount: number): Record<string, unknown>[][] {
-  return [
-    [row],
-    [{ id: "category-one", parentCategoryId: null, state: "active" }],
-    [],
-    [{ value: imageCount }],
-  ];
+  return [[row], [{ id: "category-one", parentCategoryId: null, state: "active" }], [], [{ value: imageCount }]];
 }
 
 describe("publish gate — the five shipping facts", () => {
@@ -154,13 +142,7 @@ describe("publish gate — the five shipping facts", () => {
       success: false,
       error: {
         type: "INCOMPLETE_FOR_PUBLISH",
-        missing: [
-          "packageLengthMm",
-          "packageWidthMm",
-          "packageHeightMm",
-          "packageGrossWeightGrams",
-          "unitsPerPackage",
-        ],
+        missing: ["packageLengthMm", "packageWidthMm", "packageHeightMm", "packageGrossWeightGrams", "unitsPerPackage"],
       },
     });
     // The listing must NOT have flipped to active.
@@ -219,13 +201,7 @@ describe("edit gate — a published listing may not lose its shipping facts", ()
       success: false,
       error: {
         type: "ACTIVE_LISTING_MISSING_PACKAGE_DIMENSIONS",
-        missing: [
-          "packageLengthMm",
-          "packageWidthMm",
-          "packageHeightMm",
-          "packageGrossWeightGrams",
-          "unitsPerPackage",
-        ],
+        missing: ["packageLengthMm", "packageWidthMm", "packageHeightMm", "packageGrossWeightGrams", "unitsPerPackage"],
       },
     });
     // Refused BEFORE any write.

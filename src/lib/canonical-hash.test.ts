@@ -32,9 +32,7 @@ describe("canonicalizeDocument", () => {
   });
 
   it("serializes bigints as decimal strings with no quotes and no precision loss", () => {
-    expect(canonicalizeDocument({ amountInCents: 1_200_000_000_000n })).toBe(
-      '{"amountInCents":1200000000000}',
-    );
+    expect(canonicalizeDocument({ amountInCents: 1_200_000_000_000n })).toBe('{"amountInCents":1200000000000}');
     // 560x the int4 ceiling and past 2^53 — the case §4b calls out by name.
     expect(canonicalizeDocument({ big: 9_007_199_254_740_993n })).toBe('{"big":9007199254740993}');
   });
@@ -65,28 +63,20 @@ describe("canonicalizeDocument", () => {
   });
 
   it("throws on a year outside the 4-digit range", () => {
-    expect(() => canonicalizeDocument({ at: new Date("+010000-01-01T00:00:00Z") })).toThrow(
-      /4-digit-year/,
-    );
+    expect(() => canonicalizeDocument({ at: new Date("+010000-01-01T00:00:00Z") })).toThrow(/4-digit-year/);
   });
 
   it("throws on a plain number, naming its path", () => {
     // Floats are banned in this domain (§4c) and JCS's double serialization is easy
     // to get subtly wrong across platforms. Integers must arrive as bigint.
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-    const documentWithFloat = { entry: { amount: 12.5 } } as unknown as Parameters<
-      typeof canonicalizeDocument
-    >[0];
-    expect(() => canonicalizeDocument(documentWithFloat)).toThrow(
-      /unsupported number at "\$\.entry\.amount"/,
-    );
+    const documentWithFloat = { entry: { amount: 12.5 } } as unknown as Parameters<typeof canonicalizeDocument>[0];
+    expect(() => canonicalizeDocument(documentWithFloat)).toThrow(/unsupported number at "\$\.entry\.amount"/);
   });
 
   it("throws on an explicitly undefined value, naming its path", () => {
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-    const documentWithUndefined = { note: undefined } as unknown as Parameters<
-      typeof canonicalizeDocument
-    >[0];
+    const documentWithUndefined = { note: undefined } as unknown as Parameters<typeof canonicalizeDocument>[0];
     expect(() => canonicalizeDocument(documentWithUndefined)).toThrow(/use null explicitly/);
   });
 
@@ -134,9 +124,7 @@ describe("canonicalHashHex", () => {
     // end to end rather than restating the implementation.
     const expectedDigest = createHash("sha256").update(canonical, "utf8").digest("hex");
     expect(canonicalHashHex(document)).toBe(expectedDigest);
-    expect(canonicalHashHex(document)).toBe(
-      "07bf9c2ac40a7ee8383763c72aa2dfb6ccedb772aa66870f53ff660bdcc39e9b",
-    );
+    expect(canonicalHashHex(document)).toBe("07bf9c2ac40a7ee8383763c72aa2dfb6ccedb772aa66870f53ff660bdcc39e9b");
   });
 
   it("changes when any field changes", () => {

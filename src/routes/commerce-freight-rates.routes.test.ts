@@ -108,9 +108,7 @@ describe("commerce freight rate card admin routes", () => {
   });
 
   it("requires an Idempotency-Key to create a rate card", async () => {
-    const response = await request(app)
-      .post("/commerce/admin/freight-rate-cards")
-      .send(VALID_CREATE_BODY);
+    const response = await request(app).post("/commerce/admin/freight-rate-cards").send(VALID_CREATE_BODY);
 
     expect(response.status).toBe(400);
     expect(serviceStubs.createFreightRateCard).not.toHaveBeenCalled();

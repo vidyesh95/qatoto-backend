@@ -792,7 +792,10 @@ function buildMultipliers(input: {
   readonly enforcementMultiplierBasisPoints: number;
   readonly subnetConcentrationBasisPoints: number | null;
   readonly penaltyKinds: (
-    "subnet_concentration" | "refund_rate" | "cancellation_rate" | "low_order_value"
+    | "subnet_concentration"
+    | "refund_rate"
+    | "cancellation_rate"
+    | "low_order_value"
   )[];
 } {
   const subnet = computeSubnetConcentrationPenalty({
@@ -821,7 +824,10 @@ function buildMultipliers(input: {
     subnet.status === "measured" ? subnet.multiplierBasisPoints : NEUTRAL_MULTIPLIER_BASIS_POINTS;
 
   const penaltyKinds: (
-    "subnet_concentration" | "refund_rate" | "cancellation_rate" | "low_order_value"
+    | "subnet_concentration"
+    | "refund_rate"
+    | "cancellation_rate"
+    | "low_order_value"
   )[] = [];
   if (subnetMultiplierBasisPoints < NEUTRAL_MULTIPLIER_BASIS_POINTS) {
     penaltyKinds.push("subnet_concentration");
@@ -1099,7 +1105,8 @@ export async function getProductRankingStatus(input: {
 }
 
 export type ModerateRankingError =
-  { type: "NOT_FOUND" } | { type: "PLATFORM_CAPABILITY_REQUIRED"; capability: "moderate_commerce" };
+  | { type: "NOT_FOUND" }
+  | { type: "PLATFORM_CAPABILITY_REQUIRED"; capability: "moderate_commerce" };
 
 /**
  * A moderator's decision on a product's ranking enforcement (stage 5).

@@ -91,84 +91,79 @@ const ladderExpectations: readonly LadderExpectation[] = [
   },
 ];
 
-describe.each(ladderExpectations)(
-  "$name ladder",
-  ({ name, evaluate, budget, rungs, direction }: LadderExpectation) => {
-    for (const [minimumInclusive, expectedPoints] of rungs) {
-      it(`awards ${expectedPoints} at exactly ${minimumInclusive}`, () => {
-        expect(evaluate(minimumInclusive)).toBe(expectedPoints);
-      });
-    }
-
-    // The off-by-one these tables exist to prevent — and the direction matters, which is
-    // the whole reason `assertLadderIsWellFormed` takes a direction.
-    //
-    // On an "at least" ladder the interesting neighbour of a rung is one BELOW it: it must
-    // drop to the rung beneath, never stay on the rung itself and never fall to zero.
-    // On the inverted "at most" ladder the interesting neighbour is one ABOVE: everything
-    // between two thresholds already scores the HIGHER threshold's rung, so `threshold - 1`
-    // is not a boundary at all and probing it would prove nothing.
-    for (const [rungIndex, rung] of rungs.entries()) {
-      const [rungThreshold] = rung;
-      const neighbourIndex = direction === "ascending" ? rungIndex - 1 : rungIndex + 1;
-      const neighbourRung = rungs[neighbourIndex];
-      if (neighbourRung === undefined) {
-        continue;
-      }
-      const [, neighbourPoints] = neighbourRung;
-      const probedCount = direction === "ascending" ? rungThreshold - 1 : rungThreshold + 1;
-
-      it(`steps to ${neighbourPoints} at ${probedCount}, just past the ${rungThreshold} rung`, () => {
-        expect(evaluate(probedCount)).toBe(neighbourPoints);
-      });
-    }
-
-    it("saturates at the top rung and never exceeds its budget", () => {
-      const topRung = rungs[rungs.length - 1];
-      if (topRung === undefined) {
-        throw new Error(`${name}: ladder has no rungs`);
-      }
-      const [topMinimum, topPoints] = topRung;
-
-      for (const multiplier of [1, 2, 10, 1000, 1_000_000]) {
-        expect(evaluate(topMinimum * multiplier)).toBe(topPoints);
-      }
-      expect(evaluate(Number.MAX_SAFE_INTEGER)).toBe(topPoints);
+describe.each(ladderExpectations)("$name ladder", ({ name, evaluate, budget, rungs, direction }: LadderExpectation) => {
+  for (const [minimumInclusive, expectedPoints] of rungs) {
+    it(`awards ${expectedPoints} at exactly ${minimumInclusive}`, () => {
+      expect(evaluate(minimumInclusive)).toBe(expectedPoints);
     });
+  }
 
-    it(`is ${direction === "ascending" ? "non-decreasing" : "non-increasing"} across its whole domain`, () => {
-      const topRung = rungs[rungs.length - 1];
-      if (topRung === undefined) {
-        throw new Error(`${name}: ladder has no rungs`);
-      }
-      const [topMinimum] = topRung;
-
-      let previousPoints = evaluate(0);
-      for (let candidateCount = 1; candidateCount <= topMinimum * 2 + 10; candidateCount += 1) {
-        const currentPoints = evaluate(candidateCount);
-        // Phrased as one unconditional assertion rather than an if/else around two
-        // `expect`s: a conditional expect can silently assert nothing if the branch
-        // condition is itself wrong, which is the failure mode this loop cannot afford.
-        const movedTheWrongWay =
-          direction === "ascending"
-            ? currentPoints < previousPoints
-            : currentPoints > previousPoints;
-        expect(movedTheWrongWay).toBe(false);
-        expect(currentPoints).toBeGreaterThanOrEqual(0);
-        expect(currentPoints).toBeLessThanOrEqual(budget);
-        expect(Number.isSafeInteger(currentPoints)).toBe(true);
-        previousPoints = currentPoints;
-      }
-    });
-
-    const invalidCounts: readonly number[] = [-1, -1000, 1.5, Number.NaN, Number.POSITIVE_INFINITY];
-    for (const invalidCount of invalidCounts) {
-      it(`throws on a count of ${invalidCount}`, () => {
-        expect(() => evaluate(invalidCount)).toThrow(/must be a non-negative safe integer/);
-      });
+  // The off-by-one these tables exist to prevent — and the direction matters, which is
+  // the whole reason `assertLadderIsWellFormed` takes a direction.
+  //
+  // On an "at least" ladder the interesting neighbour of a rung is one BELOW it: it must
+  // drop to the rung beneath, never stay on the rung itself and never fall to zero.
+  // On the inverted "at most" ladder the interesting neighbour is one ABOVE: everything
+  // between two thresholds already scores the HIGHER threshold's rung, so `threshold - 1`
+  // is not a boundary at all and probing it would prove nothing.
+  for (const [rungIndex, rung] of rungs.entries()) {
+    const [rungThreshold] = rung;
+    const neighbourIndex = direction === "ascending" ? rungIndex - 1 : rungIndex + 1;
+    const neighbourRung = rungs[neighbourIndex];
+    if (neighbourRung === undefined) {
+      continue;
     }
-  },
-);
+    const [, neighbourPoints] = neighbourRung;
+    const probedCount = direction === "ascending" ? rungThreshold - 1 : rungThreshold + 1;
+
+    it(`steps to ${neighbourPoints} at ${probedCount}, just past the ${rungThreshold} rung`, () => {
+      expect(evaluate(probedCount)).toBe(neighbourPoints);
+    });
+  }
+
+  it("saturates at the top rung and never exceeds its budget", () => {
+    const topRung = rungs[rungs.length - 1];
+    if (topRung === undefined) {
+      throw new Error(`${name}: ladder has no rungs`);
+    }
+    const [topMinimum, topPoints] = topRung;
+
+    for (const multiplier of [1, 2, 10, 1000, 1_000_000]) {
+      expect(evaluate(topMinimum * multiplier)).toBe(topPoints);
+    }
+    expect(evaluate(Number.MAX_SAFE_INTEGER)).toBe(topPoints);
+  });
+
+  it(`is ${direction === "ascending" ? "non-decreasing" : "non-increasing"} across its whole domain`, () => {
+    const topRung = rungs[rungs.length - 1];
+    if (topRung === undefined) {
+      throw new Error(`${name}: ladder has no rungs`);
+    }
+    const [topMinimum] = topRung;
+
+    let previousPoints = evaluate(0);
+    for (let candidateCount = 1; candidateCount <= topMinimum * 2 + 10; candidateCount += 1) {
+      const currentPoints = evaluate(candidateCount);
+      // Phrased as one unconditional assertion rather than an if/else around two
+      // `expect`s: a conditional expect can silently assert nothing if the branch
+      // condition is itself wrong, which is the failure mode this loop cannot afford.
+      const movedTheWrongWay =
+        direction === "ascending" ? currentPoints < previousPoints : currentPoints > previousPoints;
+      expect(movedTheWrongWay).toBe(false);
+      expect(currentPoints).toBeGreaterThanOrEqual(0);
+      expect(currentPoints).toBeLessThanOrEqual(budget);
+      expect(Number.isSafeInteger(currentPoints)).toBe(true);
+      previousPoints = currentPoints;
+    }
+  });
+
+  const invalidCounts: readonly number[] = [-1, -1000, 1.5, Number.NaN, Number.POSITIVE_INFINITY];
+  for (const invalidCount of invalidCounts) {
+    it(`throws on a count of ${invalidCount}`, () => {
+      expect(() => evaluate(invalidCount)).toThrow(/must be a non-negative safe integer/);
+    });
+  }
+});
 
 describe("DEMAND_SCORE_COMPONENT_BUDGETS", () => {
   it("sums to exactly 100", () => {
@@ -247,9 +242,7 @@ describe("computeDemandScorePoints", () => {
     });
 
     expect(unserved.totalPoints).toBeGreaterThan(crowded.totalPoints);
-    expect(unserved.totalPoints - crowded.totalPoints).toBe(
-      DEMAND_SCORE_COMPONENT_BUDGETS.projectScarcity,
-    );
+    expect(unserved.totalPoints - crowded.totalPoints).toBe(DEMAND_SCORE_COMPONENT_BUDGETS.projectScarcity);
     // Only the scarcity component may differ — the evidence components are identical inputs.
     expect(unserved.distinctReporterPoints).toBe(crowded.distinctReporterPoints);
     expect(unserved.clusterVolumePoints).toBe(crowded.clusterVolumePoints);
@@ -447,33 +440,25 @@ describe("deriveTrendDirection", () => {
 
   for (const nonScoreValue of nonScoreValues) {
     it(`throws rather than guessing a direction from a current score of ${nonScoreValue}`, () => {
-      expect(() => deriveTrendDirection(nonScoreValue, 50)).toThrow(
-        /must be an integer demand score in 0\.\.100/,
-      );
+      expect(() => deriveTrendDirection(nonScoreValue, 50)).toThrow(/must be an integer demand score in 0\.\.100/);
     });
 
     it(`throws rather than guessing a direction from a previous score of ${nonScoreValue}`, () => {
-      expect(() => deriveTrendDirection(50, nonScoreValue)).toThrow(
-        /must be an integer demand score in 0\.\.100/,
-      );
+      expect(() => deriveTrendDirection(50, nonScoreValue)).toThrow(/must be an integer demand score in 0\.\.100/);
     });
   }
 
   it("rejects a NaN current score even when there is no history to compare against", () => {
     // The null branch returns early, so it must not become a way to smuggle a
     // nonsense current score past validation.
-    expect(() => deriveTrendDirection(Number.NaN, null)).toThrow(
-      /must be an integer demand score in 0\.\.100/,
-    );
+    expect(() => deriveTrendDirection(Number.NaN, null)).toThrow(/must be an integer demand score in 0\.\.100/);
   });
 
   it("rejects a raw un-scored count passed where a score belongs", () => {
     // Partial mitigation for the untyped-`number` signature: a caller who passes
     // a reporter COUNT instead of that cell's points is caught whenever the count
     // exceeds 100, which is precisely when the mistake would flip the arrow.
-    expect(() => deriveTrendDirection(312, 40)).toThrow(
-      /must be an integer demand score in 0\.\.100/,
-    );
+    expect(() => deriveTrendDirection(312, 40)).toThrow(/must be an integer demand score in 0\.\.100/);
   });
 
   it("still accepts every legitimate score in the closed 0..100 range", () => {

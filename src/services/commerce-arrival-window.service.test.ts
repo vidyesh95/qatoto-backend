@@ -2,9 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 
-const { composeArrivalWindow, projectFreight, projectManufacturing } = await import(
-  "#src/services/commerce-arrival-window.service.js"
-);
+const { composeArrivalWindow, projectFreight, projectManufacturing } =
+  await import("#src/services/commerce-arrival-window.service.js");
 
 const ORDER_PLACED_AT = new Date("2026-01-01T00:00:00.000Z");
 const PROMISED_DELIVERY_AT = new Date("2026-01-26T00:00:00.000Z"); // 25 days later
@@ -227,10 +226,7 @@ describe("projectManufacturing", () => {
 type LanePlan = NonNullable<Parameters<typeof projectFreight>[0]["lanePlan"]>;
 type Journey = LanePlan["journeys"][number];
 
-function lanePlan(
-  journeys: readonly Journey[],
-  unpriceableReasons: LanePlan["unpriceableReasons"] = [],
-): LanePlan {
+function lanePlan(journeys: readonly Journey[], unpriceableReasons: LanePlan["unpriceableReasons"] = []): LanePlan {
   return {
     contracting: { party: "provider" },
     origin: { countryCode: "IN", locality: null },
@@ -298,9 +294,7 @@ describe("projectFreight", () => {
       requestedMode: "air",
     });
 
-    expect(freight).toEqual(
-      expect.objectContaining({ status: "known", mode: "air", daysMin: 6, daysMax: 12 }),
-    );
+    expect(freight).toEqual(expect.objectContaining({ status: "known", mode: "air", daysMin: 6, daysMax: 12 }));
   });
 
   it("reports an uncovered mode with the covered ones listed, not a 404", () => {

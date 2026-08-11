@@ -458,7 +458,10 @@ export class FakeExternalEscrowProviderAdapter implements ExternalEscrowProvider
     providerSessionRef: string,
   ): Promise<Result<EscrowSessionResult, EscrowProviderError>> {
     if (!providerSessionRef.startsWith(FAKE_SESSION_PREFIX)) {
-      return { success: false, error: { type: "PROVIDER_NOT_FOUND", providerRef: providerSessionRef } };
+      return {
+        success: false,
+        error: { type: "PROVIDER_NOT_FOUND", providerRef: providerSessionRef },
+      };
     }
     /**
      * The fake holds no state, so the reconciler learns nothing new from it. That is
@@ -574,7 +577,10 @@ function decodeEscrowWebhookBody(
      * The reason is a stable tag, not the Zod message. A provider's payload can contain
      * commercial detail, and this string reaches logs and a 4xx body.
      */
-    return { success: false, error: { type: "PROVIDER_REJECTED", reason: "webhook_schema_invalid" } };
+    return {
+      success: false,
+      error: { type: "PROVIDER_REJECTED", reason: "webhook_schema_invalid" },
+    };
   }
 
   return {

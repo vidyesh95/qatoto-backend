@@ -4,14 +4,16 @@ import { db } from "#src/db/index.js";
 import { storeHeroSlide, storePathway, storeRail, storeRailPlacement } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { merchandisingWindowOpen } from "#src/lib/store-merchandising-window.js";
-import * as storeRankingService from "#src/services/commerce-ranking.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
+import * as storeRankingService from "#src/services/commerce-ranking.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";
 import * as storeSearchService from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type StoreMerchandisingError =
-  { type: "NOT_FOUND" } | { type: "INVALID_CURSOR" } | { type: "PROVIDER_DIRECTORY_FAILED" };
+  | { type: "NOT_FOUND" }
+  | { type: "INVALID_CURSOR" }
+  | { type: "PROVIDER_DIRECTORY_FAILED" };
 
 export type MerchandisingItemProjection =
   | {

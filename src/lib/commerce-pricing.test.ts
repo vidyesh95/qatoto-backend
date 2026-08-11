@@ -5,12 +5,9 @@ import { stubServerEnvironment } from "#src/test-support/server-env.js";
 stubServerEnvironment();
 
 vi.mock("dotenv/config", () => ({}));
-vi.mock("#src/db/index.js", async () =>
-  (await import("#src/test-support/database-mock.js")).databaseModuleMock(),
-);
+vi.mock("#src/db/index.js", async () => (await import("#src/test-support/database-mock.js")).databaseModuleMock());
 
-const { buildSpecificationSnapshot, resolveUnitPriceInCents } =
-  await import("#src/lib/commerce-pricing.js");
+const { buildSpecificationSnapshot, resolveUnitPriceInCents } = await import("#src/lib/commerce-pricing.js");
 
 describe("resolveUnitPriceInCents", () => {
   it("uses the base price when no tiers exist", () => {
@@ -163,12 +160,8 @@ describe("buildSpecificationSnapshot", () => {
   });
 
   it("falls back to a generic snapshot when both are absent or blank", () => {
-    expect(buildSpecificationSnapshot({ brand: null, description: null })).toBe(
-      "Product listing snapshot",
-    );
-    expect(buildSpecificationSnapshot({ brand: "   ", description: "" })).toBe(
-      "Product listing snapshot",
-    );
+    expect(buildSpecificationSnapshot({ brand: null, description: null })).toBe("Product listing snapshot");
+    expect(buildSpecificationSnapshot({ brand: "   ", description: "" })).toBe("Product listing snapshot");
   });
 
   it("truncates the combined snapshot at 10,000 characters", () => {

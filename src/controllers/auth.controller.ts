@@ -5,11 +5,11 @@ import { and, eq } from "drizzle-orm";
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { auth, sendSignupOtp } from "#src/lib/auth.js";
 import type { ApiResponse, Result } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * Body for POST /signup/start. `.strict()` rejects unknown keys.

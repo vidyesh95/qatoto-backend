@@ -46,7 +46,11 @@ export type FraudGuardClause =
   | "fraud_risk_above_threshold";
 
 export type RankingEnforcementAction =
-  "none" | "weight_reduced" | "capped" | "quarantined" | "review_queued";
+  | "none"
+  | "weight_reduced"
+  | "capped"
+  | "quarantined"
+  | "review_queued";
 
 export interface FraudGuardInput {
   /** Today's counted views/saves/orders exceeded their dynamic-or-floor threshold. */

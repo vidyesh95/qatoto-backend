@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import {
   CreateProductInquiryParamsSchema,
   ListProductInquiriesQuerySchema,
@@ -10,7 +11,6 @@ import * as commerceProductInquiryService from "#src/services/commerce-product-i
 import type { CommerceProductInquiryError } from "#src/services/commerce-product-inquiry.service.js";
 import { resolveEligibleProductRefById } from "#src/services/store-catalog.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const EmptyObjectSchema = z.object({}).strict();
 

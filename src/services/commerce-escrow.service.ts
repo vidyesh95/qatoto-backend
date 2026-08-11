@@ -90,9 +90,7 @@ const NON_TERMINAL_SESSION_STATES = [
  * unchanged, which is the whole point of normalizing at the adapter rather than storing a
  * provider's own state string.
  */
-function toSessionStateColumn(
-  state: NormalizedEscrowSessionState,
-): EscrowSessionRow["state"] {
+function toSessionStateColumn(state: NormalizedEscrowSessionState): EscrowSessionRow["state"] {
   return state === "awaiting_agreement" ? "created" : state;
 }
 
@@ -413,7 +411,11 @@ async function dispatchCreateSession(
     for (const milestone of created.value.milestones) {
       await transaction
         .update(commerceEscrowMilestone)
-        .set({ providerMilestoneRef: milestone.providerMilestoneRef, state: "locked", lockedAt: new Date() })
+        .set({
+          providerMilestoneRef: milestone.providerMilestoneRef,
+          state: "locked",
+          lockedAt: new Date(),
+        })
         .where(
           and(
             eq(commerceEscrowMilestone.sessionId, sessionId),
@@ -490,7 +492,7 @@ async function dispatchMilestoneCommand(
 
 async function runMilestoneCommand(
   adapter: ExternalEscrowProviderAdapter,
-  kind: typeof commerceConnectorOutbox.$inferSelect["kind"],
+  kind: (typeof commerceConnectorOutbox.$inferSelect)["kind"],
   args: {
     readonly idempotencyKey: string;
     readonly providerSessionRef: string;
@@ -571,7 +573,9 @@ export interface ApplyEscrowEventInput {
  */
 export async function applyNormalizedEscrowEvent(
   input: ApplyEscrowEventInput,
-): Promise<Result<{ readonly applied: boolean; readonly deduplicated: boolean }, CommerceEscrowError>> {
+): Promise<
+  Result<{ readonly applied: boolean; readonly deduplicated: boolean }, CommerceEscrowError>
+> {
   return db.transaction(async (transaction) => {
     const [session] = await transaction
       .select()

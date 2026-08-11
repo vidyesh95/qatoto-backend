@@ -248,7 +248,10 @@ async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjectio
     createdAt: order.createdAt,
     completionIds: completionIndex.completionIds,
     productLines: productLines.map((line) =>
-      projectOrderProductLine(line, completionIndex.completionIdByProductLineId.get(line.id) ?? null),
+      projectOrderProductLine(
+        line,
+        completionIndex.completionIdByProductLineId.get(line.id) ?? null,
+      ),
     ),
     serviceLines: serviceLines.map(projectOrderServiceLine),
   };

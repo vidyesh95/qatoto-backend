@@ -10,13 +10,7 @@ import {
   type VerificationStepStatus,
 } from "#src/lib/verdict.js";
 
-const ALL_STATUSES: readonly VerificationStepStatus[] = [
-  "pending",
-  "passed",
-  "flagged",
-  "failed",
-  "skipped",
-];
+const ALL_STATUSES: readonly VerificationStepStatus[] = ["pending", "passed", "flagged", "failed", "skipped"];
 
 function stepsWith(statuses: readonly VerificationStepStatus[]): VerificationStepOutcome[] {
   return VERIFICATION_STEP_KINDS.map((stepKind, index) => ({
@@ -101,9 +95,7 @@ describe("decideClaimVerdict precedence", () => {
     // Both steps are flagged; the verdict must name the earlier one whichever way the
     // caller happened to build the array (§4c rule 4).
     const forwards = decideClaimVerdict(stepsWith(["passed", "flagged", "flagged", "passed"]));
-    const shuffled = decideClaimVerdict(
-      [...stepsWith(["passed", "flagged", "flagged", "passed"])].toReversed(),
-    );
+    const shuffled = decideClaimVerdict([...stepsWith(["passed", "flagged", "flagged", "passed"])].toReversed());
     expect(forwards.decidedByStepKind).toBe("artifact_grounding");
     expect(shuffled.decidedByStepKind).toBe("artifact_grounding");
   });
@@ -111,12 +103,7 @@ describe("decideClaimVerdict precedence", () => {
 
 describe("overrides", () => {
   it("lets a human override rescue a flagged step", () => {
-    const steps: VerificationStepOutcome[] = stepsWith([
-      "passed",
-      "passed",
-      "flagged",
-      "passed",
-    ]).map((step) =>
+    const steps: VerificationStepOutcome[] = stepsWith(["passed", "passed", "flagged", "passed"]).map((step) =>
       step.stepKind === "substance_analysis" ? { ...step, overriddenStatus: "passed" } : step,
     );
 
@@ -126,12 +113,7 @@ describe("overrides", () => {
   it("lets a human override sink a passing step", () => {
     // The override edits an AI JUDGEMENT, never a number — this is the whole of §9.1's
     // one permitted hand-edit.
-    const steps: VerificationStepOutcome[] = stepsWith([
-      "passed",
-      "passed",
-      "passed",
-      "passed",
-    ]).map((step) =>
+    const steps: VerificationStepOutcome[] = stepsWith(["passed", "passed", "passed", "passed"]).map((step) =>
       step.stepKind === "temporal_analysis" ? { ...step, overriddenStatus: "failed" } : step,
     );
 

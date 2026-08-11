@@ -132,7 +132,7 @@ const CHECKS: readonly Check[] = [
   },
   {
     name: "§19.6 · a zero unit price is refused",
-    why: "\"An uncovered lane returns an empty options[], never a zero.\" A zero-priced band would publish free freight.",
+    why: '"An uncovered lane returns an empty options[], never a zero." A zero-priced band would publish free freight.',
     async run() {
       const refused = await probeRefusal(`
         ${PROBE_CARD_INSERT};
@@ -172,7 +172,7 @@ const CHECKS: readonly Check[] = [
   },
   {
     name: "§19.3 · a DOMESTIC customs dwell row is refused",
-    why: "A domestic lane has no customs leg — an ABSENT component, not a zero-day one. A stored IN→IN row would make \"not applicable\" recordable as \"known to be short\", which is the A11 mistake in a new place.",
+    why: 'A domestic lane has no customs leg — an ABSENT component, not a zero-day one. A stored IN→IN row would make "not applicable" recordable as "known to be short", which is the A11 mistake in a new place.',
     async run() {
       const refused = await probeRefusal(`
         INSERT INTO commerce_customs_dwell_estimate
@@ -184,7 +184,7 @@ const CHECKS: readonly Check[] = [
   },
   {
     name: "§19.3 · at most one OPEN-ENDED dwell estimate per scope",
-    why: "Two rows both claiming \"any origin into DE, indefinitely\" make the resolver's answer arbitrary.",
+    why: 'Two rows both claiming "any origin into DE, indefinitely" make the resolver\'s answer arbitrary.',
     async run() {
       const refused = await probeRefusal(`
         INSERT INTO commerce_customs_dwell_estimate
@@ -225,7 +225,10 @@ const CHECKS: readonly Check[] = [
          WHERE table_name = 'commerce_freight_rate_card'
            AND column_name = 'volumetric_divisor_cm3_per_kg'
            AND is_nullable = 'NO'`);
-      return { ok: nullable === 1, detail: nullable === 1 ? "present, NOT NULL" : "MISSING or nullable" };
+      return {
+        ok: nullable === 1,
+        detail: nullable === 1 ? "present, NOT NULL" : "MISSING or nullable",
+      };
     },
   },
   {
@@ -268,7 +271,7 @@ const CHECKS: readonly Check[] = [
   },
   {
     name: "§19.4 · a snapshotted lead-time minimum may not exceed its maximum",
-    why: "A prepare line reporting \"25 to 15 days\" would make the arrival window run backwards.",
+    why: 'A prepare line reporting "25 to 15 days" would make the arrival window run backwards.',
     async run() {
       const refused = await probeRefusal(`
         UPDATE commerce_checkout_prepare_product_line
@@ -277,7 +280,12 @@ const CHECKS: readonly Check[] = [
         SELECT count(*)::int AS value FROM commerce_checkout_prepare_product_line`);
       return {
         ok: refused || anyRows === 0,
-        detail: anyRows === 0 ? "no rows to probe (vacuously ok)" : refused ? "refused" : "ACCEPTED an inverted range",
+        detail:
+          anyRows === 0
+            ? "no rows to probe (vacuously ok)"
+            : refused
+              ? "refused"
+              : "ACCEPTED an inverted range",
       };
     },
   },

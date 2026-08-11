@@ -9,20 +9,14 @@ stubServerEnvironment();
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
-const {
-  COMMERCE_JOURNAL_ACCOUNT_KINDS,
-  COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL,
-  isMemorandumAccountKind,
-} = await import("#src/services/commerce-journal.service.js");
+const { COMMERCE_JOURNAL_ACCOUNT_KINDS, COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL, isMemorandumAccountKind } =
+  await import("#src/services/commerce-journal.service.js");
 
 /**
  * The migration that defines `commerce_settlement_rail_account_guard`. Asserted to be the
  * ONLY definition below, so this test cannot silently read a superseded one.
  */
-const RAIL_BINDING_MIGRATION_URL = new URL(
-  "../../drizzle/0087_store_phase_14_rail_binding.sql",
-  import.meta.url,
-);
+const RAIL_BINDING_MIGRATION_URL = new URL("../../drizzle/0087_store_phase_14_rail_binding.sql", import.meta.url);
 
 /**
  * Pull the `WHEN '<rail>' THEN ARRAY[ ... ]` arms out of the trigger's CASE expression.
@@ -55,9 +49,7 @@ describe("settlement rail account binding (Phase 14)", () => {
 
   it("reads the only definition of the guard, so parity cannot be checked against a stale one", () => {
     const definitionCount = [
-      ...migrationSql.matchAll(
-        /CREATE OR REPLACE FUNCTION commerce_settlement_rail_account_guard/g,
-      ),
+      ...migrationSql.matchAll(/CREATE OR REPLACE FUNCTION commerce_settlement_rail_account_guard/g),
     ].length;
     expect(definitionCount).toBe(1);
   });
@@ -72,9 +64,7 @@ describe("settlement rail account binding (Phase 14)", () => {
     const triggerRailAccountKinds = parseTriggerRailAccountKinds(migrationSql);
 
     const serviceEntries = Object.entries(COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL);
-    expect(Object.keys(triggerRailAccountKinds).toSorted()).toEqual(
-      serviceEntries.map(([rail]) => rail).toSorted(),
-    );
+    expect(Object.keys(triggerRailAccountKinds).toSorted()).toEqual(serviceEntries.map(([rail]) => rail).toSorted());
 
     for (const [rail, serviceKinds] of serviceEntries) {
       expect(
@@ -114,8 +104,8 @@ describe("settlement rail account binding (Phase 14)", () => {
    * empty estimate array instead of a zero.
    */
   it("gives `direct_offline` no settlement account at all", () => {
-    const settlementAccounts = COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.direct_offline.filter(
-      (accountKind) => accountKind.startsWith("settlement_"),
+    const settlementAccounts = COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.direct_offline.filter((accountKind) =>
+      accountKind.startsWith("settlement_"),
     );
     expect(settlementAccounts).toEqual([]);
   });
@@ -125,18 +115,10 @@ describe("settlement rail account binding (Phase 14)", () => {
    * released with no custody hop, so a custody balance there would be value nobody holds.
    */
   it("gives `direct_processor` funding and release but no custody", () => {
-    expect(COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.direct_processor).toContain(
-      "settlement_funding_memo",
-    );
-    expect(COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.direct_processor).toContain(
-      "settlement_released_memo",
-    );
-    expect(COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.direct_processor).not.toContain(
-      "settlement_custody_memo",
-    );
-    expect(COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.external_escrow).toContain(
-      "settlement_custody_memo",
-    );
+    expect(COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.direct_processor).toContain("settlement_funding_memo");
+    expect(COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.direct_processor).toContain("settlement_released_memo");
+    expect(COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.direct_processor).not.toContain("settlement_custody_memo");
+    expect(COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL.external_escrow).toContain("settlement_custody_memo");
   });
 
   /** The legacy six are exactly the frozen rail's set, which is what their name claims. */
@@ -192,9 +174,7 @@ describe("memorandum account classification", () => {
         .filter((accountKind) => accountKind.startsWith("settlement_")),
     );
     for (const accountKind of settlementAccountKinds) {
-      expect(isMemorandumAccountKind(accountKind), `${accountKind} must be off balance sheet`).toBe(
-        true,
-      );
+      expect(isMemorandumAccountKind(accountKind), `${accountKind} must be off balance sheet`).toBe(true);
     }
   });
 });

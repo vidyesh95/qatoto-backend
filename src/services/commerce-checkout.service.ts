@@ -28,12 +28,12 @@ import {
   type CommercePricingError,
   type PricedProductLine,
 } from "#src/lib/commerce-pricing.js";
-import { projectPrepareArrivalWindow } from "#src/services/commerce-arrival-window.service.js";
 import {
   derivePromisedDeliveryAt,
   latestPromisedDeliveryAt,
 } from "#src/lib/commerce-promised-delivery.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { projectPrepareArrivalWindow } from "#src/services/commerce-arrival-window.service.js";
 import {
   getOrCreateCartForUpdate,
   supersedeActiveCheckoutPrepares,
@@ -1206,8 +1206,7 @@ export async function confirmCheckout(
            * orders settled by wire, which do not come through this path.
            */
           hasProcessorPayment: true,
-          requestedAgreementId:
-            agreementBySeller.get(sellerGroup.sellerOrganizationId) ?? null,
+          requestedAgreementId: agreementBySeller.get(sellerGroup.sellerOrganizationId) ?? null,
         });
         if (!railResolution.success) {
           return {
@@ -1292,8 +1291,7 @@ export async function confirmCheckout(
             return {
               status: "escrow_session_failed" as const,
               sellerOrganizationId: sellerGroup.sellerOrganizationId,
-              reason:
-                "reason" in session.error ? session.error.reason : session.error.type,
+              reason: "reason" in session.error ? session.error.reason : session.error.type,
             };
           }
           escrowOutboxIds.push(session.value.outboxId);

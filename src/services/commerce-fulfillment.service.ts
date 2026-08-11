@@ -821,10 +821,7 @@ export async function listCounterpartyShipments(
   actor: CommerceFulfillmentActorContext,
   input: ListShipmentsInput,
 ): Promise<Result<ShipmentQueuePage, CommerceFulfillmentError>> {
-  return listShipmentsBy(
-    eq(commerceOrder.counterpartyOrganizationId, actor.organizationId),
-    input,
-  );
+  return listShipmentsBy(eq(commerceOrder.counterpartyOrganizationId, actor.organizationId), input);
 }
 
 /**

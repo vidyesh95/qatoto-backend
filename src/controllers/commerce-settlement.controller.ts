@@ -1,13 +1,13 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import * as commerceSettlementService from "#src/services/commerce-settlement.service.js";
 import type {
   CommerceSettlementError,
   SettlementActorContext,
 } from "#src/services/commerce-settlement.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * HTTP mapping for negotiated settlement agreements (STORE Phase 14).
@@ -62,8 +62,14 @@ const RespondBodySchema = z
 
 const EligibleProvidersQuerySchema = z
   .object({
-    buyerCountryCode: z.string().trim().regex(/^[A-Z]{2}$/),
-    sellerCountryCode: z.string().trim().regex(/^[A-Z]{2}$/),
+    buyerCountryCode: z
+      .string()
+      .trim()
+      .regex(/^[A-Z]{2}$/),
+    sellerCountryCode: z
+      .string()
+      .trim()
+      .regex(/^[A-Z]{2}$/),
     currency: CurrencySchema,
     totalInCents: z.coerce.number().int().positive(),
   })

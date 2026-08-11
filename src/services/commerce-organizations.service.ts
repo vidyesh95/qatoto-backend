@@ -21,17 +21,17 @@ import {
   decryptCommerceDocument,
   encryptCommerceDocument,
 } from "#src/lib/commerce-document-encryption.js";
+import { decryptCommercePii, encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import type { ImageValidationError } from "#src/lib/image.js";
 import { validateAndNormalizeImage } from "#src/lib/image.js";
-import { decryptCommercePii, encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import {
   deletePrivateCommerceDocument,
   downloadPrivateCommerceDocument,
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -560,7 +560,10 @@ export async function replaceOrganizationLogo(input: {
 
   const uploaded = await uploadOrganizationLogoAsset(input.organizationId, normalized.value.buffer);
   if (!uploaded.success) {
-    return { success: false, error: { type: "IMAGE_STORAGE_FAILED", storageError: uploaded.error } };
+    return {
+      success: false,
+      error: { type: "IMAGE_STORAGE_FAILED", storageError: uploaded.error },
+    };
   }
 
   let updated: ReturnType<typeof publicOrganization> | null;
@@ -613,10 +616,7 @@ export async function replaceOrganizationLogo(input: {
     return { success: false, error: { type: "NOT_FOUND" } };
   }
 
-  if (
-    existing.previousPublicId !== null &&
-    existing.previousPublicId !== uploaded.value.publicId
-  ) {
+  if (existing.previousPublicId !== null && existing.previousPublicId !== uploaded.value.publicId) {
     // Best-effort: the row already names the new asset, so a failure here leaks an
     // orphan rather than breaking the storefront.
     await deleteOrganizationLogo(existing.previousPublicId);

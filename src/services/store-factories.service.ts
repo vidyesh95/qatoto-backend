@@ -14,15 +14,15 @@ import {
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import {
-  loadOrganizationFulfillmentMetrics,
-  type OrganizationFulfillmentMetrics,
-} from "#src/services/commerce-trust-metrics.service.js";
-import {
   loadSellerDeclaredProfiles,
   type OrganizationProductionLineProjection,
   type OrganizationSamplePolicyProjection,
   type OrganizationSiteProjection,
 } from "#src/services/commerce-seller-profile.service.js";
+import {
+  loadOrganizationFulfillmentMetrics,
+  type OrganizationFulfillmentMetrics,
+} from "#src/services/commerce-trust-metrics.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -377,10 +377,7 @@ export async function listFactories(
           .from(commerceOrganizationCapability)
           .where(
             and(
-              eq(
-                commerceOrganizationCapability.organizationId,
-                storeSearchDocument.organizationId,
-              ),
+              eq(commerceOrganizationCapability.organizationId, storeSearchDocument.organizationId),
               eq(commerceOrganizationCapability.capabilityKind, capabilityKind),
             ),
           ),

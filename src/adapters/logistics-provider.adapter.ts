@@ -112,9 +112,7 @@ export interface LogisticsProviderAdapter {
   retrieveTracking(
     providerBookingRef: string,
   ): Promise<Result<readonly TrackingEvent[], LogisticsProviderError>>;
-  cancelBooking(
-    providerBookingRef: string,
-  ): Promise<Result<BookingResult, LogisticsProviderError>>;
+  cancelBooking(providerBookingRef: string): Promise<Result<BookingResult, LogisticsProviderError>>;
 }
 
 /**

@@ -1,11 +1,7 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
-import {
-  computePerceptualHash,
-  perceptualHashDistance,
-  readReceiptExif,
-} from "#src/lib/receipt-forensics.js";
+import { computePerceptualHash, perceptualHashDistance, readReceiptExif } from "#src/lib/receipt-forensics.js";
 
 /** A deterministic gradient, so every hash below is reproducible rather than fixture-shaped. */
 async function gradientImage(
@@ -17,10 +13,7 @@ async function gradientImage(
   for (let row = 0; row < height; row += 1) {
     for (let column = 0; column < width; column += 1) {
       const ramp = Math.floor((column / width) * 200);
-      const value = Math.min(
-        255,
-        (options.invert === true ? 200 - ramp : ramp) + (options.brightnessOffset ?? 0),
-      );
+      const value = Math.min(255, (options.invert === true ? 200 - ramp : ramp) + (options.brightnessOffset ?? 0));
       const offset = (row * width + column) * 3;
       pixels[offset] = value;
       pixels[offset + 1] = value;
@@ -47,9 +40,7 @@ describe("computePerceptualHash", () => {
     // dHash compares each pixel to its NEIGHBOUR, so a uniform exposure change leaves
     // every gradient intact. An average-hash would drift here, which is why it is not used.
     const original = await computePerceptualHash(await gradientImage(64, 64));
-    const brighter = await computePerceptualHash(
-      await gradientImage(64, 64, { brightnessOffset: 40 }),
-    );
+    const brighter = await computePerceptualHash(await gradientImage(64, 64, { brightnessOffset: 40 }));
     expect(perceptualHashDistance(original, brighter)).toBeLessThanOrEqual(4);
   });
 
@@ -81,9 +72,7 @@ describe("perceptualHashDistance", () => {
   });
 
   it("throws on non-hex input", () => {
-    expect(() => perceptualHashDistance("zzzzzzzzzzzzzzzz", "0f0f0f0f0f0f0f0f")).toThrow(
-      /lowercase hex/,
-    );
+    expect(() => perceptualHashDistance("zzzzzzzzzzzzzzzz", "0f0f0f0f0f0f0f0f")).toThrow(/lowercase hex/);
   });
 });
 

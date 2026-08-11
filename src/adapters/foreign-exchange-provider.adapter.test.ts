@@ -6,9 +6,8 @@ stubServerEnvironment();
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
-const { convertAtFixedPointRate, FakeForeignExchangeProviderAdapter } = await import(
-  "#src/adapters/foreign-exchange-provider.adapter.js"
-);
+const { convertAtFixedPointRate, FakeForeignExchangeProviderAdapter } =
+  await import("#src/adapters/foreign-exchange-provider.adapter.js");
 
 /**
  * §4.7 forbids floating point for money and exchange rates. These tests exist to pin the

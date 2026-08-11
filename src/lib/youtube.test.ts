@@ -104,9 +104,9 @@ describe("extractYoutubeVideoId — rejected shapes", () => {
 
 describe("sanitizeYoutubeThumbnailUrl", () => {
   it("accepts YouTube's own https thumbnail hosts", () => {
-    expect(
-      sanitizeYoutubeThumbnailUrl(`https://i.ytimg.com/vi/${VALID_VIDEO_ID}/hqdefault.jpg`),
-    ).toBe(`https://i.ytimg.com/vi/${VALID_VIDEO_ID}/hqdefault.jpg`);
+    expect(sanitizeYoutubeThumbnailUrl(`https://i.ytimg.com/vi/${VALID_VIDEO_ID}/hqdefault.jpg`)).toBe(
+      `https://i.ytimg.com/vi/${VALID_VIDEO_ID}/hqdefault.jpg`,
+    );
     expect(sanitizeYoutubeThumbnailUrl(`https://img.youtube.com/vi/${VALID_VIDEO_ID}/0.jpg`)).toBe(
       `https://img.youtube.com/vi/${VALID_VIDEO_ID}/0.jpg`,
     );
@@ -163,9 +163,7 @@ describe("verifyYoutubeVideo", () => {
     expect(requestedUrl.origin).toBe("https://www.youtube.com");
     expect(requestedUrl.pathname).toBe("/oembed");
     expect(requestedUrl.searchParams.get("format")).toBe("json");
-    expect(requestedUrl.searchParams.get("url")).toBe(
-      `https://www.youtube.com/watch?v=${VALID_VIDEO_ID}`,
-    );
+    expect(requestedUrl.searchParams.get("url")).toBe(`https://www.youtube.com/watch?v=${VALID_VIDEO_ID}`);
   });
 
   it("returns the title and thumbnail on 200", async () => {
@@ -188,9 +186,7 @@ describe("verifyYoutubeVideo", () => {
   });
 
   it("drops a thumbnail URL that is not an allowlisted https host", async () => {
-    const { fetchImplementation } = stubFetch(() =>
-      jsonResponse({ title: "x", thumbnail_url: "javascript:alert(1)" }),
-    );
+    const { fetchImplementation } = stubFetch(() => jsonResponse({ title: "x", thumbnail_url: "javascript:alert(1)" }));
 
     const result = await verifyYoutubeVideo(VALID_VIDEO_ID, { fetchImplementation });
 
@@ -228,9 +224,7 @@ describe("verifyYoutubeVideo", () => {
   });
 
   it("maps a 200 with an unparseable body to YOUTUBE_VERIFY_FAILED", async () => {
-    const { fetchImplementation } = stubFetch(
-      () => new Response("<html>not json</html>", { status: 200 }),
-    );
+    const { fetchImplementation } = stubFetch(() => new Response("<html>not json</html>", { status: 200 }));
 
     const result = await verifyYoutubeVideo(VALID_VIDEO_ID, { fetchImplementation });
 

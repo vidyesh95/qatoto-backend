@@ -37,10 +37,7 @@ function facts(overrides: Partial<Facts> = {}): Facts {
   };
 }
 
-function requirement(
-  completeness: ReturnType<typeof projectListingCompleteness>,
-  key: string,
-) {
+function requirement(completeness: ReturnType<typeof projectListingCompleteness>, key: string) {
   return completeness.requirements.find((entry) => entry.key === key);
 }
 
@@ -105,9 +102,7 @@ describe("projectListingCompleteness", () => {
   });
 
   it("requires a sample price once the policy charges for samples", () => {
-    const completeness = projectListingCompleteness(
-      facts({ samplePolicy: "paid", samplePriceInCents: null }),
-    );
+    const completeness = projectListingCompleteness(facts({ samplePolicy: "paid", samplePriceInCents: null }));
 
     expect(completeness.isComplete).toBe(false);
     expect(collectMissingListingFields(completeness)).toEqual(["samplePriceInCents"]);

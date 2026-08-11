@@ -16,7 +16,6 @@
  * that no certificate document reference appears anywhere in a public body.
  */
 import "dotenv/config";
-
 import { config } from "#src/config/index.js";
 import { pool } from "#src/db/index.js";
 

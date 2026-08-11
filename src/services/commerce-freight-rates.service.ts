@@ -11,12 +11,12 @@ import {
   commerceProviderProfile,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
 import { recordPlatformAction } from "#src/services/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
 } from "#src/services/platform-role.service.js";
-import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -887,10 +887,7 @@ export async function createCustomsDwellEstimate(
       : eq(commerceCustomsDwellEstimate.originCountryCode, input.originCountryCode),
     input.commodityScopeCategoryId === null
       ? isNull(commerceCustomsDwellEstimate.commodityScopeCategoryId)
-      : eq(
-          commerceCustomsDwellEstimate.commodityScopeCategoryId,
-          input.commodityScopeCategoryId,
-        ),
+      : eq(commerceCustomsDwellEstimate.commodityScopeCategoryId, input.commodityScopeCategoryId),
   );
 
   const outcome = await recordPlatformAction<CreateDwellEstimateOutcome>(

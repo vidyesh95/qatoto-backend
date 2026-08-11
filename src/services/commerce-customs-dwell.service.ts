@@ -23,11 +23,7 @@ import { commerceCustomsDwellEstimate } from "#src/db/schema.js";
  */
 
 /** Which narrowings the matched row actually used. On the wire so a client can see the fit. */
-export type CustomsDwellScope =
-  | "origin_and_commodity"
-  | "origin_only"
-  | "commodity_only"
-  | "any";
+export type CustomsDwellScope = "origin_and_commodity" | "origin_only" | "commodity_only" | "any";
 
 export type CustomsDwellResolution =
   | { readonly status: "not_applicable"; readonly reason: "domestic_lane" }

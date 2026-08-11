@@ -63,20 +63,14 @@ describe("month bounds", () => {
 describe("zonedDayStartInstant", () => {
   it("returns the UTC instant a day begins in a fixed-offset zone", () => {
     // Nairobi is UTC+3 year round, so 1 April begins at 21:00Z on 31 March.
-    expect(zonedDayStartInstant("2026-04-01", "Africa/Nairobi").toISOString()).toBe(
-      "2026-03-31T21:00:00.000Z",
-    );
+    expect(zonedDayStartInstant("2026-04-01", "Africa/Nairobi").toISOString()).toBe("2026-03-31T21:00:00.000Z");
   });
 
   it("uses the offset in force ON THAT DAY, not the one at naive UTC midnight", () => {
     // New York is UTC-5 in January and UTC-4 in July. A single-pass implementation gets
     // one of these wrong, and the error is a whole hour of accrual at a month boundary.
-    expect(zonedDayStartInstant("2026-01-01", "America/New_York").toISOString()).toBe(
-      "2026-01-01T05:00:00.000Z",
-    );
-    expect(zonedDayStartInstant("2026-07-01", "America/New_York").toISOString()).toBe(
-      "2026-07-01T04:00:00.000Z",
-    );
+    expect(zonedDayStartInstant("2026-01-01", "America/New_York").toISOString()).toBe("2026-01-01T05:00:00.000Z");
+    expect(zonedDayStartInstant("2026-07-01", "America/New_York").toISOString()).toBe("2026-07-01T04:00:00.000Z");
   });
 
   it("survives a period that spans a DST transition", () => {

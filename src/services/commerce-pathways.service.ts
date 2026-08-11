@@ -538,7 +538,10 @@ export async function replacePathwayImage(
 
   const uploaded = await uploadStorePathwayImage(pathwayId, imageSlot, normalized.value.buffer);
   if (!uploaded.success) {
-    return { success: false, error: { type: "IMAGE_STORAGE_FAILED", storageError: uploaded.error } };
+    return {
+      success: false,
+      error: { type: "IMAGE_STORAGE_FAILED", storageError: uploaded.error },
+    };
   }
 
   const occurredAt = new Date();

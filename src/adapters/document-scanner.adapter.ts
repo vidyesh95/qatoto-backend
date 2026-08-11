@@ -62,9 +62,7 @@ export interface DocumentScanResult {
 
 export interface DocumentScannerAdapter {
   readonly scannerName: DocumentScannerName;
-  scanDocument(
-    input: ScanDocumentInput,
-  ): Promise<Result<DocumentScanResult, DocumentScannerError>>;
+  scanDocument(input: ScanDocumentInput): Promise<Result<DocumentScanResult, DocumentScannerError>>;
 }
 
 /**
@@ -73,9 +71,10 @@ export interface DocumentScannerAdapter {
  * real engine is required to detect, which makes an end-to-end quarantine path testable
  * without anyone handling actual malware.
  */
-const EICAR_SIGNATURE = ["X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-", "ANTIVIRUS-TEST-FILE!$H+H*"].join(
-  "",
-);
+const EICAR_SIGNATURE = [
+  "X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-",
+  "ANTIVIRUS-TEST-FILE!$H+H*",
+].join("");
 
 /**
  * Deterministic fake.

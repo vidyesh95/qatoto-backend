@@ -43,10 +43,7 @@ function createPseudoRandomSequence(seed: number): (bound: number) => number {
   };
 }
 
-function isInsideAnyBox(
-  boxes: readonly BoundingBoxMicrodegrees[],
-  point: GeoPointMicrodegrees,
-): boolean {
+function isInsideAnyBox(boxes: readonly BoundingBoxMicrodegrees[], point: GeoPointMicrodegrees): boolean {
   const normalizedLongitude = normalizeLongitudeMicrodegrees(point.longitudeMicrodegrees);
   return boxes.some(
     (box) =>
@@ -156,9 +153,7 @@ describe("normalizeLongitudeMicrodegrees", () => {
   it("throws on a non-integer longitude rather than letting a float through", () => {
     expect(() => normalizeLongitudeMicrodegrees(1.5)).toThrow(/must be a safe integer/);
     expect(() => normalizeLongitudeMicrodegrees(Number.NaN)).toThrow(/must be a safe integer/);
-    expect(() => normalizeLongitudeMicrodegrees(Number.POSITIVE_INFINITY)).toThrow(
-      /must be a safe integer/,
-    );
+    expect(() => normalizeLongitudeMicrodegrees(Number.POSITIVE_INFINITY)).toThrow(/must be a safe integer/);
   });
 });
 
@@ -308,17 +303,13 @@ describe("squaredDistanceScaled", () => {
 
     // 200_000 microdegrees x 11132 x 10000 = 22_264_000_000_000, i.e. 22_264_000 mm
     // = 22.264 km. 22264^2 = 495_685_696.
-    expect(squaredDistanceScaled(eastOfLine, westOfLine)).toBe(
-      495_685_696_000_000_000_000_000_000n,
-    );
+    expect(squaredDistanceScaled(eastOfLine, westOfLine)).toBe(495_685_696_000_000_000_000_000_000n);
     expect(squaredDistanceScaled(eastOfLine, westOfLine)).toBe(22_264_000_000_000n ** 2n);
 
     // The bug it replaces: 359.8 degrees would be ~40,053 km, whose square is more
     // than three million times larger.
     const goingTheLongWay = (359_800_000n * 11_132n * 10_000n) ** 2n;
-    expect(squaredDistanceScaled(eastOfLine, westOfLine) * 1_000_000n).toBeLessThan(
-      goingTheLongWay,
-    );
+    expect(squaredDistanceScaled(eastOfLine, westOfLine) * 1_000_000n).toBeLessThan(goingTheLongWay);
   });
 
   it("exceeds Number.MAX_SAFE_INTEGER in the SINGLE OPERAND, before squaring", () => {
@@ -340,15 +331,15 @@ describe("squaredDistanceScaled", () => {
   });
 
   it("throws on a non-integer coordinate on either point", () => {
-    expect(() =>
-      squaredDistanceScaled({ latitudeMicrodegrees: 0.5, longitudeMicrodegrees: 0 }, MUMBAI),
-    ).toThrow(/must be a safe integer/);
-    expect(() =>
-      squaredDistanceScaled(MUMBAI, { latitudeMicrodegrees: 0.5, longitudeMicrodegrees: 0 }),
-    ).toThrow(/must be a safe integer/);
-    expect(() =>
-      squaredDistanceScaled(MUMBAI, { latitudeMicrodegrees: 0, longitudeMicrodegrees: 0.5 }),
-    ).toThrow(/must be a safe integer/);
+    expect(() => squaredDistanceScaled({ latitudeMicrodegrees: 0.5, longitudeMicrodegrees: 0 }, MUMBAI)).toThrow(
+      /must be a safe integer/,
+    );
+    expect(() => squaredDistanceScaled(MUMBAI, { latitudeMicrodegrees: 0.5, longitudeMicrodegrees: 0 })).toThrow(
+      /must be a safe integer/,
+    );
+    expect(() => squaredDistanceScaled(MUMBAI, { latitudeMicrodegrees: 0, longitudeMicrodegrees: 0.5 })).toThrow(
+      /must be a safe integer/,
+    );
   });
 });
 
@@ -425,9 +416,7 @@ describe("isWithinRadius — known city pairs", () => {
       };
       const radiusMillimetres = 1_000_000 + nextPseudoRandom(50_000_000);
 
-      expect(isWithinRadius(anchor, other, radiusMillimetres)).toBe(
-        isWithinRadius(other, anchor, radiusMillimetres),
-      );
+      expect(isWithinRadius(anchor, other, radiusMillimetres)).toBe(isWithinRadius(other, anchor, radiusMillimetres));
       expect(squaredDistanceScaled(anchor, other)).toBe(squaredDistanceScaled(other, anchor));
     }
   });
@@ -457,28 +446,19 @@ describe("boundingBoxMicrodegrees", () => {
     // pole and in the half-circle-collapse case and rejected everywhere else, so whether
     // the guard ran depended on the latitude of the point being guarded.
     expect(() =>
-      boundingBoxMicrodegrees(
-        { latitudeMicrodegrees: 90_000_000, longitudeMicrodegrees: 1.5 },
-        25_000_000,
-      ),
+      boundingBoxMicrodegrees({ latitudeMicrodegrees: 90_000_000, longitudeMicrodegrees: 1.5 }, 25_000_000),
     ).toThrow(/must be a safe integer/);
     expect(() =>
-      boundingBoxMicrodegrees(
-        { latitudeMicrodegrees: -90_000_000, longitudeMicrodegrees: 1.5 },
-        25_000_000,
-      ),
+      boundingBoxMicrodegrees({ latitudeMicrodegrees: -90_000_000, longitudeMicrodegrees: 1.5 }, 25_000_000),
     ).toThrow(/must be a safe integer/);
     // The collapse branch: at 89N a 2000 km radius pads past a half circle.
     expect(() =>
-      boundingBoxMicrodegrees(
-        { latitudeMicrodegrees: 89_000_000, longitudeMicrodegrees: 1.5 },
-        2_000_000_000,
-      ),
+      boundingBoxMicrodegrees({ latitudeMicrodegrees: 89_000_000, longitudeMicrodegrees: 1.5 }, 2_000_000_000),
     ).toThrow(/must be a safe integer/);
     // And the ordinary branch, which always rejected — pinned so the three cannot drift.
-    expect(() =>
-      boundingBoxMicrodegrees({ latitudeMicrodegrees: 0, longitudeMicrodegrees: 1.5 }, 25_000_000),
-    ).toThrow(/must be a safe integer/);
+    expect(() => boundingBoxMicrodegrees({ latitudeMicrodegrees: 0, longitudeMicrodegrees: 1.5 }, 25_000_000)).toThrow(
+      /must be a safe integer/,
+    );
   });
 
   it("splits into TWO ranges when the box crosses the antimeridian eastward", () => {
@@ -491,9 +471,7 @@ describe("boundingBoxMicrodegrees", () => {
     expect(boxes.at(0)?.maxLongitudeMicrodegrees).toBe(180_000_000);
     expect(boxes.at(1)?.minLongitudeMicrodegrees).toBe(-180_000_000);
     // The far bank of the line must be inside one of them.
-    expect(
-      isInsideAnyBox(boxes, { latitudeMicrodegrees: 0, longitudeMicrodegrees: -179_900_000 }),
-    ).toBe(true);
+    expect(isInsideAnyBox(boxes, { latitudeMicrodegrees: 0, longitudeMicrodegrees: -179_900_000 })).toBe(true);
   });
 
   it("splits into TWO ranges when the box crosses the antimeridian westward", () => {
@@ -503,9 +481,7 @@ describe("boundingBoxMicrodegrees", () => {
     };
     const boxes = boundingBoxMicrodegrees(nearTheLine, 25_000_000);
     expect(boxes.length).toBe(2);
-    expect(
-      isInsideAnyBox(boxes, { latitudeMicrodegrees: 0, longitudeMicrodegrees: 179_900_000 }),
-    ).toBe(true);
+    expect(isInsideAnyBox(boxes, { latitudeMicrodegrees: 0, longitudeMicrodegrees: 179_900_000 })).toBe(true);
   });
 
   it("emits the full longitude range at the poles instead of dividing by zero", () => {
@@ -521,10 +497,7 @@ describe("boundingBoxMicrodegrees", () => {
   });
 
   it("clamps latitude to the poles rather than emitting an impossible latitude", () => {
-    const boxes = boundingBoxMicrodegrees(
-      { latitudeMicrodegrees: 90_000_000, longitudeMicrodegrees: 0 },
-      25_000_000,
-    );
+    const boxes = boundingBoxMicrodegrees({ latitudeMicrodegrees: 90_000_000, longitudeMicrodegrees: 0 }, 25_000_000);
     expect(boxes.at(0)?.maxLatitudeMicrodegrees).toBe(90_000_000);
 
     const southernBoxes = boundingBoxMicrodegrees(
@@ -548,9 +521,9 @@ describe("boundingBoxMicrodegrees", () => {
 
   it("throws on a negative radius or a non-integer centre", () => {
     expect(() => boundingBoxMicrodegrees(MUMBAI, -1)).toThrow(/non-negative safe integer/);
-    expect(() =>
-      boundingBoxMicrodegrees({ latitudeMicrodegrees: 0.5, longitudeMicrodegrees: 0 }, 1_000),
-    ).toThrow(/must be a safe integer/);
+    expect(() => boundingBoxMicrodegrees({ latitudeMicrodegrees: 0.5, longitudeMicrodegrees: 0 }, 1_000)).toThrow(
+      /must be a safe integer/,
+    );
   });
 
   // -------------------------------------------------------------------------------
@@ -724,12 +697,12 @@ describe("meanCentroidMicrodegrees", () => {
   });
 
   it("throws on a non-integer coordinate", () => {
-    expect(() =>
-      meanCentroidMicrodegrees([{ latitudeMicrodegrees: 0.5, longitudeMicrodegrees: 0 }]),
-    ).toThrow(/must be a safe integer/);
-    expect(() =>
-      meanCentroidMicrodegrees([{ latitudeMicrodegrees: 0, longitudeMicrodegrees: 0.5 }]),
-    ).toThrow(/must be a safe integer/);
+    expect(() => meanCentroidMicrodegrees([{ latitudeMicrodegrees: 0.5, longitudeMicrodegrees: 0 }])).toThrow(
+      /must be a safe integer/,
+    );
+    expect(() => meanCentroidMicrodegrees([{ latitudeMicrodegrees: 0, longitudeMicrodegrees: 0.5 }])).toThrow(
+      /must be a safe integer/,
+    );
   });
 
   it("does not mutate the caller's array", () => {

@@ -1,17 +1,15 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
 import * as commerceTradeDocumentService from "#src/services/commerce-trade-document.service.js";
 import type { CommerceTradeDocumentError } from "#src/services/commerce-trade-document.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const EmptyObjectSchema = z.object({}).strict();
 
-const DocumentIdParamsSchema = z
-  .object({ documentId: z.string().trim().min(1).max(200) })
-  .strict();
+const DocumentIdParamsSchema = z.object({ documentId: z.string().trim().min(1).max(200) }).strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

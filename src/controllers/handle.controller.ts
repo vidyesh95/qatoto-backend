@@ -1,12 +1,12 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
-import * as handleService from "#src/services/handle.service.js";
-import type { ApiResponse } from "#src/types/index.js";
 import {
   respondFieldRefusal,
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
+import * as handleService from "#src/services/handle.service.js";
+import type { ApiResponse } from "#src/types/index.js";
 
 /**
  * Body for PATCH /users/me/handle. The raw handle is accepted as a loosely

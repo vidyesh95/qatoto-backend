@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import {
   CreateContentReportSchema,
   DecideContentReportSchema,
@@ -12,7 +13,6 @@ import * as commerceContentReportsService from "#src/services/commerce-content-r
 import type { CommerceContentReportsError } from "#src/services/commerce-content-reports.service.js";
 import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const EmptyObjectSchema = z.object({}).strict();
 

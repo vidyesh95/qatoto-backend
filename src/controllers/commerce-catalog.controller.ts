@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import {
   ProductIdParamsSchema,
   RelationIdParamsSchema,
@@ -10,7 +11,6 @@ import type { CommerceOrganizationMemberRole } from "#src/services/commerce-orga
 import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import type { CommerceProductRelationError } from "#src/services/commerce-product-relations.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const EmptyObjectSchema = z.object({}).strict();
 const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);

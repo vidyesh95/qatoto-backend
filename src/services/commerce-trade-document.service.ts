@@ -23,8 +23,8 @@ import {
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
 import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -117,7 +117,8 @@ export async function uploadTradeDocument(input: {
     return {
       success: false,
       error: {
-        type: uploaded.error.type === "NOT_CONFIGURED" ? "STORAGE_NOT_CONFIGURED" : "STORAGE_FAILED",
+        type:
+          uploaded.error.type === "NOT_CONFIGURED" ? "STORAGE_NOT_CONFIGURED" : "STORAGE_FAILED",
       },
     };
   }

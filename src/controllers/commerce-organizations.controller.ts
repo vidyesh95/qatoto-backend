@@ -1,12 +1,12 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
 import * as commerceOrganizationsService from "#src/services/commerce-organizations.service.js";
 import type { CommerceOrganizationsError } from "#src/services/commerce-organizations.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 export const CommerceOrganizationIdSchema = z.string().trim().min(1).max(200);
 const OrganizationIdSchema = z.object({ organizationId: CommerceOrganizationIdSchema }).strict();

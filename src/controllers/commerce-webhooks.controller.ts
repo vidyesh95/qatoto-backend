@@ -30,9 +30,7 @@ import type { ApiResponse } from "#src/types/index.js";
  *      it. An unauthenticated caller must not be able to probe this backend for order ids.
  */
 
-const ProviderIdParamsSchema = z
-  .object({ providerId: z.string().trim().min(1).max(200) })
-  .strict();
+const ProviderIdParamsSchema = z.object({ providerId: z.string().trim().min(1).max(200) }).strict();
 
 const EmptyObjectSchema = z.object({}).strict();
 
@@ -127,11 +125,7 @@ export async function receiveEscrowWebhook(req: Request, res: Response): Promise
     headers[headerName] = Array.isArray(headerValue) ? headerValue[0] : headerValue;
   }
 
-  const parsedWebhook = adapterResolved.value.parseWebhook(
-    rawBody,
-    headers,
-    secretResolved.value,
-  );
+  const parsedWebhook = adapterResolved.value.parseWebhook(rawBody, headers, secretResolved.value);
   if (!parsedWebhook.success) {
     const isSignatureFailure = parsedWebhook.error.type === "SIGNATURE_INVALID";
     logger.warn("escrow webhook rejected", {

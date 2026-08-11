@@ -573,9 +573,7 @@ async function smokeTradeDocuments(buyer: Actor, seller: Actor): Promise<void> {
    */
   record(
     "A30 · an upload is accepted with 202 and lands pending_scan",
-    uploaded.status === 202 &&
-      documentId !== "" &&
-      dataOf(uploaded)["state"] === "pending_scan",
+    uploaded.status === 202 && documentId !== "" && dataOf(uploaded)["state"] === "pending_scan",
     `status=${String(uploaded.status)} state=${String(dataOf(uploaded)["state"])}`,
   );
 

@@ -9,11 +9,12 @@ import {
   commerceRfq,
   product,
 } from "#src/db/schema.js";
-import { resolveShippingOriginCountryCode } from "#src/services/commerce-delivery-estimate.service.js";
+import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
 import {
   resolveCustomsDwell,
   type CustomsDwellResolution,
 } from "#src/services/commerce-customs-dwell.service.js";
+import { resolveShippingOriginCountryCode } from "#src/services/commerce-delivery-estimate.service.js";
 import {
   planFreightJourney,
   type FreightJourneyLegSelection,
@@ -22,7 +23,6 @@ import {
 import { FREIGHT_MODE_ORDER } from "#src/services/commerce-freight-rating.service.js";
 import type { ConsignmentMeasurement } from "#src/services/commerce-freight-rating.service.js";
 import type { CommerceOrdersError } from "#src/services/commerce-orders.service.js";
-import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -281,7 +281,8 @@ export function projectFreight(input: {
     (journey) => journey.primaryMode === input.requestedMode,
   );
   const chosen = inMode.toSorted(
-    (left, right) => left.totalInCents - right.totalInCents || left.currency.localeCompare(right.currency),
+    (left, right) =>
+      left.totalInCents - right.totalInCents || left.currency.localeCompare(right.currency),
   )[0];
 
   if (!chosen) {
@@ -490,9 +491,7 @@ async function resolveDestination(order: {
   return { countryCode: null, locality: null, source: "unresolved" };
 }
 
-async function loadCommodityCategoryIds(
-  productIds: readonly string[],
-): Promise<readonly string[]> {
+async function loadCommodityCategoryIds(productIds: readonly string[]): Promise<readonly string[]> {
   if (productIds.length === 0) {
     return [];
   }
@@ -536,7 +535,8 @@ export async function projectPrepareArrivalWindow(input: {
     .filter((days): days is number => days !== null);
 
   // The slowest line, matching `latestPromisedDeliveryAt`: an order ships when its last line does.
-  const daysMax = maximums.length === input.lines.length && maximums.length > 0 ? Math.max(...maximums) : null;
+  const daysMax =
+    maximums.length === input.lines.length && maximums.length > 0 ? Math.max(...maximums) : null;
 
   const manufacturing: ManufacturingComponentProjection = !hasPhysicalGoods
     ? { status: "not_applicable", reason: "no_physical_goods_on_order" }

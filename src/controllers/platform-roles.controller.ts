@@ -2,10 +2,10 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { firstParam, optionalBody } from "#src/controllers/project-error-response.js";
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import * as platformRolesService from "#src/services/platform-roles-admin.service.js";
 import type { PlatformRoleAdminError } from "#src/services/platform-roles-admin.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * Staff role administration (§4a Layer 3).

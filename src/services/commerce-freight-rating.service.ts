@@ -331,10 +331,7 @@ export function selectRateBreak(
  * ROUNDED UP. Rounding a freight charge down publishes a number the forwarder will not
  * honour, and the platform would then own the difference.
  */
-export function priceRatedBreak(
-  selected: FreightRateBreak,
-  chargeableWeightGrams: number,
-): number {
+export function priceRatedBreak(selected: FreightRateBreak, chargeableWeightGrams: number): number {
   const weightedInCents = Math.ceil(
     (chargeableWeightGrams * selected.unitPriceInCents) / BILLABLE_WEIGHT_UNIT_GRAMS,
   );

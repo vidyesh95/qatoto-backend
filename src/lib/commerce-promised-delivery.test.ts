@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  derivePromisedDeliveryAt,
-  latestPromisedDeliveryAt,
-} from "#src/lib/commerce-promised-delivery.js";
+import { derivePromisedDeliveryAt, latestPromisedDeliveryAt } from "#src/lib/commerce-promised-delivery.js";
 
 const ORDERED_AT = new Date("2026-08-07T12:00:00.000Z");
 
@@ -15,9 +12,7 @@ describe("derivePromisedDeliveryAt (A13)", () => {
   });
 
   it("treats a same-day lead time as the ordering instant", () => {
-    expect(derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: 0 })).toEqual(
-      ORDERED_AT,
-    );
+    expect(derivePromisedDeliveryAt({ orderedAt: ORDERED_AT, leadTimeMaxDays: 0 })).toEqual(ORDERED_AT);
   });
 
   /**

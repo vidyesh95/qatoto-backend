@@ -511,9 +511,7 @@ async function projectAnswers(
       createdAt: row.createdAt,
       helpfulCount: row.helpfulCount,
       viewer:
-        viewerOrganizationId === null
-          ? null
-          : { hasVotedHelpful: votedAnswerIds.has(row.id) },
+        viewerOrganizationId === null ? null : { hasVotedHelpful: votedAnswerIds.has(row.id) },
       author: organization
         ? {
             organizationId: organization.organizationId,

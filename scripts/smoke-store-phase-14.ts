@@ -413,11 +413,9 @@ async function smokeNegotiation(buyer: Actor, seller: Actor): Promise<Negotiatio
     `status ${String(selfAccepted.status)}`,
   );
 
-  const stranger = await callApi(
-    "GET",
-    `/commerce/threads/${threadId}/settlement-agreements`,
-    { actor: seller },
-  );
+  const stranger = await callApi("GET", `/commerce/threads/${threadId}/settlement-agreements`, {
+    actor: seller,
+  });
   record(
     "the counterparty can read the thread's agreements",
     stranger.status === 200,
@@ -455,11 +453,11 @@ async function smokeNegotiation(buyer: Actor, seller: Actor): Promise<Negotiatio
     `status ${String(supersededResponse.status)}`,
   );
 
-  const accepted = await callApi(
-    "POST",
-    `/commerce/settlement-agreements/${counterId}/responses`,
-    { actor: buyer, idempotencyPrefix: "accept", body: { response: "accept" } },
-  );
+  const accepted = await callApi("POST", `/commerce/settlement-agreements/${counterId}/responses`, {
+    actor: buyer,
+    idempotencyPrefix: "accept",
+    body: { response: "accept" },
+  });
   record(
     "the counterparty accepts, and the agreement binds",
     accepted.status === 200 && stringField(dataOf(accepted), "state") === "accepted",
@@ -548,7 +546,9 @@ async function smokeEscrowCheckout(
   record(
     "an escrow session and its milestones exist for the order",
     session !== undefined && session.milestone_count === 2,
-    session ? `state ${session.state}, ${String(session.milestone_count)} milestone(s)` : "no session",
+    session
+      ? `state ${session.state}, ${String(session.milestone_count)} milestone(s)`
+      : "no session",
   );
 
   const consumed = await db.execute<{ value: number }>(sql`
@@ -892,9 +892,7 @@ async function main(): Promise<void> {
     console.log(`${outcome.passed ? "  ok  " : "  FAIL"}  ${outcome.label} — ${outcome.detail}`);
     if (!outcome.passed) failures += 1;
   }
-  console.log(
-    `\n${String(outcomes.length - failures)}/${String(outcomes.length)} checks passed.`,
-  );
+  console.log(`\n${String(outcomes.length - failures)}/${String(outcomes.length)} checks passed.`);
   if (failures > 0) process.exitCode = 1;
 }
 

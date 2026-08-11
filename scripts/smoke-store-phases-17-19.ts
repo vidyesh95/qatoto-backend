@@ -657,7 +657,11 @@ async function main(): Promise<void> {
   const moderateAsNonStaff = await callApi(
     "POST",
     `/community/admin/forum/threads/${threadId}/moderate`,
-    { actor: buyer, body: { decision: "publish", reasonNote: "self-approval" }, idempotencyPrefix: "mod" },
+    {
+      actor: buyer,
+      body: { decision: "publish", reasonNote: "self-approval" },
+      idempotencyPrefix: "mod",
+    },
   );
   record(
     "18 · an author cannot publish their own thread",
@@ -685,7 +689,8 @@ async function main(): Promise<void> {
   const queueItems = arrayField(dataOf(queue), "items");
   record(
     "18 · the moderator sees the queued thread",
-    queue.status === 200 && queueItems.some((item) => stringField(asRecord(item), "id") === threadId),
+    queue.status === 200 &&
+      queueItems.some((item) => stringField(asRecord(item), "id") === threadId),
     `${String(queue.status)}, ${String(queueItems.length)} queued`,
   );
 
@@ -710,7 +715,9 @@ async function main(): Promise<void> {
 
   const reply = await callApi("POST", `/community/forum/threads/${threadId}/replies`, {
     actor: seller,
-    body: { body: "Ten working days is normal for a seating sample; a month usually means tooling." },
+    body: {
+      body: "Ten working days is normal for a seating sample; a month usually means tooling.",
+    },
     idempotencyPrefix: "reply",
   });
   const replyId = stringField(dataOf(reply), "id");
@@ -776,7 +783,11 @@ async function main(): Promise<void> {
     body: { decision: "lock", reasonNote: "Answered; closing to new replies." },
     idempotencyPrefix: "lock",
   });
-  record("18 · a moderator locks it", locked.status === 200, `state=${String(dataOf(locked)["state"])}`);
+  record(
+    "18 · a moderator locks it",
+    locked.status === 200,
+    `state=${String(dataOf(locked)["state"])}`,
+  );
 
   const replyToLocked = await callApi("POST", `/community/forum/threads/${threadId}/replies`, {
     actor: seller,
@@ -1004,9 +1015,7 @@ async function main(): Promise<void> {
 
   const directoryAfter = await callApi("GET", "/store/cofounder-profiles?limit=50");
   const directoryProfiles = arrayField(dataOf(directoryAfter), "items");
-  const listed = directoryProfiles.find(
-    (item) => stringField(asRecord(item), "id") === profileId,
-  );
+  const listed = directoryProfiles.find((item) => stringField(asRecord(item), "id") === profileId);
   record(
     "19 · and the public read carries it, still with NULL capital and equity",
     listed !== undefined &&

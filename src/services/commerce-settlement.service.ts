@@ -8,7 +8,10 @@ import {
   commerceSettlementAgreementMilestone,
   commerceThreadParticipant,
 } from "#src/db/schema.js";
-import { listActiveProviders, type ActiveProvider } from "#src/services/commerce-connector.service.js";
+import {
+  listActiveProviders,
+  type ActiveProvider,
+} from "#src/services/commerce-connector.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -41,7 +44,11 @@ import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type SettlementAgreementRow = typeof commerceSettlementAgreement.$inferSelect;
-export type SettlementRail = "internal_custody" | "direct_offline" | "direct_processor" | "external_escrow";
+export type SettlementRail =
+  | "internal_custody"
+  | "direct_offline"
+  | "direct_processor"
+  | "external_escrow";
 
 export type CommerceSettlementError =
   | { type: "NOT_FOUND" }
@@ -207,7 +214,10 @@ export async function proposeSettlementAgreement(
   if (input.milestones.length === 0) {
     return {
       success: false,
-      error: { type: "VALIDATION_FAILED", message: "A settlement plan needs at least one milestone." },
+      error: {
+        type: "VALIDATION_FAILED",
+        message: "A settlement plan needs at least one milestone.",
+      },
     };
   }
 
@@ -238,7 +248,11 @@ export async function proposeSettlementAgreement(
   }
 
   return db.transaction(async (transaction) => {
-    const participates = await assertThreadParticipant(transaction, input.threadId, actor.organizationId);
+    const participates = await assertThreadParticipant(
+      transaction,
+      input.threadId,
+      actor.organizationId,
+    );
     if (!participates) return { success: false, error: { type: "FORBIDDEN" } };
 
     const [provider] = await transaction
@@ -372,7 +386,10 @@ export async function respondToSettlementAgreement(
         .update(commerceSettlementAgreement)
         .set({ state: "expired", updatedAt: new Date() })
         .where(eq(commerceSettlementAgreement.id, agreement.id));
-      return { success: false, error: { type: "AGREEMENT_EXPIRED", expiredAt: agreement.expiresAt } };
+      return {
+        success: false,
+        error: { type: "AGREEMENT_EXPIRED", expiredAt: agreement.expiresAt },
+      };
     }
 
     const now = new Date();

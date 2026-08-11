@@ -85,7 +85,10 @@ const CHECKS: readonly Check[] = [
            GROUP BY order_id
           HAVING sum(signed_amount_in_cents) <> 0
         ) AS unbalanced`);
-      return { ok: bad === 0, detail: `${String(bad)} order(s) whose memo accounts do not net to zero` };
+      return {
+        ok: bad === 0,
+        detail: `${String(bad)} order(s) whose memo accounts do not net to zero`,
+      };
     },
   },
   {
@@ -96,7 +99,10 @@ const CHECKS: readonly Check[] = [
         SELECT count(*)::int AS value FROM commerce_journal_account
          WHERE is_memorandum <> (kind::text IN ('settlement_funding_memo', 'settlement_custody_memo',
                                                'settlement_released_memo', 'settlement_refunded_memo'))`);
-      return { ok: bad === 0, detail: `${String(bad)} account(s) with a mislabelled memorandum flag` };
+      return {
+        ok: bad === 0,
+        detail: `${String(bad)} account(s) with a mislabelled memorandum flag`,
+      };
     },
   },
   {
@@ -119,7 +125,10 @@ const CHECKS: readonly Check[] = [
             OR (o.settlement_rail = 'external_escrow'
                   AND line.account_kind::text IN ('buyer_clearing', 'order_held',
                         'seller_payable', 'platform_fee', 'refunds_payable'))`);
-      return { ok: bad === 0, detail: `${String(bad)} line(s) on a rail that forbids their account` };
+      return {
+        ok: bad === 0,
+        detail: `${String(bad)} line(s) on a rail that forbids their account`,
+      };
     },
   },
   {
@@ -157,7 +166,10 @@ const CHECKS: readonly Check[] = [
            GROUP BY s.id, s.total_in_cents
           HAVING sum(m.amount_in_cents) <> s.total_in_cents
         ) AS mismatched`);
-      return { ok: bad === 0, detail: `${String(bad)} session(s) whose milestones do not sum to the total` };
+      return {
+        ok: bad === 0,
+        detail: `${String(bad)} session(s) whose milestones do not sum to the total`,
+      };
     },
   },
   {
@@ -172,7 +184,10 @@ const CHECKS: readonly Check[] = [
            GROUP BY a.id, a.total_in_cents
           HAVING sum(m.amount_in_cents) <> a.total_in_cents
         ) AS mismatched`);
-      return { ok: bad === 0, detail: `${String(bad)} agreement(s) whose plan does not sum to the total` };
+      return {
+        ok: bad === 0,
+        detail: `${String(bad)} agreement(s) whose plan does not sum to the total`,
+      };
     },
   },
   {
@@ -198,7 +213,10 @@ const CHECKS: readonly Check[] = [
            GROUP BY thread_id, buyer_organization_id, seller_organization_id
           HAVING count(*) > 1
         ) AS duplicated`);
-      return { ok: bad === 0, detail: `${String(bad)} party pair(s) holding two accepted agreements` };
+      return {
+        ok: bad === 0,
+        detail: `${String(bad)} party pair(s) holding two accepted agreements`,
+      };
     },
   },
   {
@@ -264,7 +282,10 @@ const CHECKS: readonly Check[] = [
          WHERE (credential_ref IS NOT NULL AND credential_ref !~ '^[A-Z][A-Z0-9_]{2,80}$')
             OR (webhook_signing_secret_ref IS NOT NULL
                   AND webhook_signing_secret_ref !~ '^[A-Z][A-Z0-9_]{2,80}$')`);
-      return { ok: bad === 0, detail: `${String(bad)} provider row(s) whose ref is not an env var name` };
+      return {
+        ok: bad === 0,
+        detail: `${String(bad)} provider row(s) whose ref is not an env var name`,
+      };
     },
   },
 
@@ -312,7 +333,10 @@ const CHECKS: readonly Check[] = [
         `INSERT INTO commerce_journal_account (id, order_id, kind, currency, is_memorandum)
          VALUES ('verify_probe_flag', '${order.id}', 'order_held', '${order.currency}', true)`,
       );
-      return { ok: refused, detail: refused ? "refused" : "ACCEPTED a mislabelled memorandum flag" };
+      return {
+        ok: refused,
+        detail: refused ? "refused" : "ACCEPTED a mislabelled memorandum flag",
+      };
     },
   },
   {
@@ -324,7 +348,10 @@ const CHECKS: readonly Check[] = [
       const refused = await probeRefusal(
         `UPDATE commerce_order SET settlement_rail = 'external_escrow' WHERE id = '${order.id}'`,
       );
-      return { ok: refused, detail: refused ? "refused" : "ACCEPTED a rail change on a live order" };
+      return {
+        ok: refused,
+        detail: refused ? "refused" : "ACCEPTED a rail change on a live order",
+      };
     },
   },
 ];

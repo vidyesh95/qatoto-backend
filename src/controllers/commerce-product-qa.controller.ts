@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import {
   AnswerProductQuestionSchema,
   AskProductQuestionSchema,
@@ -11,15 +12,14 @@ import {
   ProductQuestionListParamsSchema,
   ProductQuestionListQuerySchema,
 } from "#src/schemas/commerce-product-qa.schemas.js";
+import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductQaService from "#src/services/commerce-product-qa.service.js";
 import type { CommerceProductQaError } from "#src/services/commerce-product-qa.service.js";
-import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import {
   resolveEligibleProductRefById,
   resolveEligibleProductRefBySlug,
 } from "#src/services/store-catalog.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const EmptyObjectSchema = z.object({}).strict();
 
@@ -117,7 +117,9 @@ function mapQaError(res: Response, error: CommerceProductQaError): void {
  * no account, and a signed-in visitor with no active commerce organization, both get
  * `null` — neither can vote, so neither is told anything about a vote.
  */
-async function resolveQaViewer(req: Request): Promise<commerceProductQaService.ProductQaViewerContext> {
+async function resolveQaViewer(
+  req: Request,
+): Promise<commerceProductQaService.ProductQaViewerContext> {
   if (!req.user || !req.authSession?.activeOrganizationId) {
     return commerceProductQaService.ANONYMOUS_QA_VIEWER;
   }

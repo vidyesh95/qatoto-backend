@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import {
   StoreOrganizationReviewParamsSchema,
   StoreProductReviewParamsSchema,
@@ -18,7 +19,6 @@ import * as storePathwaysService from "#src/services/store-pathways.service.js";
 import * as storeReviewsService from "#src/services/store-reviews.service.js";
 import * as storeSearchService from "#src/services/store-search.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const CursorPageQuerySchema = z
   .object({

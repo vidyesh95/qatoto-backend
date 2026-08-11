@@ -86,9 +86,7 @@ export interface InsuranceProviderAdapter {
     input: RequestInsuranceQuoteInput,
   ): Promise<Result<InsuranceQuoteResult, InsuranceProviderError>>;
   bindPolicy(input: BindPolicyInput): Promise<Result<PolicyResult, InsuranceProviderError>>;
-  retrievePolicy(
-    providerPolicyRef: string,
-  ): Promise<Result<PolicyResult, InsuranceProviderError>>;
+  retrievePolicy(providerPolicyRef: string): Promise<Result<PolicyResult, InsuranceProviderError>>;
   cancelPolicy(providerPolicyRef: string): Promise<Result<PolicyResult, InsuranceProviderError>>;
 }
 

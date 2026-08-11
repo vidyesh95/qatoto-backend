@@ -1,10 +1,10 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import * as platformAuditService from "#src/services/platform-audit.service.js";
 import type { PlatformAuditError } from "#src/services/platform-audit.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 /**
  * The platform moderation log (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 2).

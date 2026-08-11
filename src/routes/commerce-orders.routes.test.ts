@@ -236,9 +236,7 @@ describe("commerce order routes", () => {
       value: { clockStartAt: null, arrivalWindow: null, missingComponents: [] },
     });
 
-    const response = await request(app)
-      .get("/commerce/orders/order-1/arrival-window")
-      .query({ mode: "sea" });
+    const response = await request(app).get("/commerce/orders/order-1/arrival-window").query({ mode: "sea" });
 
     expect(response.status).toBe(200);
     expect(arrivalWindowStubs.getOrderArrivalWindow).toHaveBeenCalledWith(
@@ -249,9 +247,7 @@ describe("commerce order routes", () => {
   });
 
   it("refuses a mode outside the shipment leg enum with 422", async () => {
-    const response = await request(app)
-      .get("/commerce/orders/order-1/arrival-window")
-      .query({ mode: "truck" });
+    const response = await request(app).get("/commerce/orders/order-1/arrival-window").query({ mode: "truck" });
 
     expect(response.status).toBe(422);
     expect(arrivalWindowStubs.getOrderArrivalWindow).not.toHaveBeenCalled();
@@ -272,9 +268,7 @@ describe("commerce order routes", () => {
       error: { type: "NOT_FOUND" },
     });
 
-    const response = await request(app).get(
-      "/commerce/orders/order-owned-by-another-tenant/arrival-window",
-    );
+    const response = await request(app).get("/commerce/orders/order-owned-by-another-tenant/arrival-window");
 
     expect(response.status).toBe(404);
   });

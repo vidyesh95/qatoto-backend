@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import {
-  buildValidationFailureBody,
-  fieldRefusal,
-} from "#src/controllers/project-error-response.js";
+import { buildValidationFailureBody, fieldRefusal } from "#src/controllers/project-error-response.js";
 
 /**
  * The 422 envelope, pinned.

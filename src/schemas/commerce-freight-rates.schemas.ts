@@ -35,9 +35,7 @@ export const FreightModeSchema = z.enum(FREIGHT_MODES);
 export type FreightMode = (typeof FREIGHT_MODES)[number];
 
 export const RateCardIdParamsSchema = z.object({ rateCardId: IdentifierSchema }).strict();
-export const DwellEstimateIdParamsSchema = z
-  .object({ dwellEstimateId: IdentifierSchema })
-  .strict();
+export const DwellEstimateIdParamsSchema = z.object({ dwellEstimateId: IdentifierSchema }).strict();
 
 /**
  * One weight/volume band.
@@ -177,7 +175,5 @@ export type CreateCustomsDwellEstimateBody = z.infer<typeof CreateCustomsDwellEs
  * The dwell table has no `state`, so retiring one IS closing its window. Narrowing only, for
  * the card's reason: these days feed a buyer's arrival window.
  */
-export const UpdateCustomsDwellEstimateSchema = z
-  .object({ validUntil: z.iso.datetime() })
-  .strict();
+export const UpdateCustomsDwellEstimateSchema = z.object({ validUntil: z.iso.datetime() }).strict();
 export type UpdateCustomsDwellEstimateBody = z.infer<typeof UpdateCustomsDwellEstimateSchema>;

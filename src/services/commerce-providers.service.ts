@@ -1172,9 +1172,7 @@ export async function listPublicProviders(input: {
  * forwarder has no factory photos, and an empty object would invite the UI to render an
  * empty "About the factory" panel.
  */
-export async function getPublicProviderByOrganizationSlug(
-  organizationSlug: string,
-): Promise<
+export async function getPublicProviderByOrganizationSlug(organizationSlug: string): Promise<
   Result<
     {
       readonly provider: PublicProviderCard;

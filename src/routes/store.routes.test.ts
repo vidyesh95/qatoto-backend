@@ -279,9 +279,7 @@ describe("public store routes", () => {
       value: { items: [], page: { nextCursor: null, hasMore: false } },
     });
 
-    const response = await request(app)
-      .get("/store/search")
-      .query({ documentKind: "organization" });
+    const response = await request(app).get("/store/search").query({ documentKind: "organization" });
 
     expect(response.status).toBe(200);
     expect(searchStubs.searchStoreDocuments).toHaveBeenCalledWith(
@@ -510,7 +508,12 @@ describe("public store routes", () => {
       contracting: { party: "provider" },
       origin: { countryCode: "IN", locality: null },
       destination: { countryCode: "DE", locality: null },
-      consignment: { billableWeightGrams: 24_000, volumeCubicCm: 48_000, packageCount: 2, hasIncompletePackageData: false },
+      consignment: {
+        billableWeightGrams: 24_000,
+        volumeCubicCm: 48_000,
+        packageCount: 2,
+        hasIncompletePackageData: false,
+      },
       legs: [],
       journeys: [],
       unpriceableReasons: [{ kind: "leg_uncovered", legSequence: 1, reasons: ["no_active_rate_card"] }],
@@ -544,7 +547,12 @@ describe("public store routes", () => {
     freightJourneyStubs.planFreightJourney.mockResolvedValue({
       origin: { countryCode: "IN", locality: null },
       destination: { countryCode: "DE", locality: null },
-      consignment: { billableWeightGrams: 24_000, volumeCubicCm: 48_000, packageCount: 2, hasIncompletePackageData: false },
+      consignment: {
+        billableWeightGrams: 24_000,
+        volumeCubicCm: 48_000,
+        packageCount: 2,
+        hasIncompletePackageData: false,
+      },
       legs: [
         {
           sequence: 0,

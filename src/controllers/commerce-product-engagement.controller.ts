@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { computeClientSubnetHash } from "#src/lib/client-subnet.js";
 import { MAXIMUM_VIEW_DWELL_SECONDS } from "#src/lib/commerce-view-clamp.js";
 import * as commerceProductEngagementService from "#src/services/commerce-product-engagement.service.js";
@@ -8,7 +9,6 @@ import type { ProductEngagementKind } from "#src/services/commerce-product-engag
 import * as commerceProductViewService from "#src/services/commerce-product-view.service.js";
 import { resolveEligibleProductRefBySlug } from "#src/services/store-catalog.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 
 const EmptyObjectSchema = z.object({}).strict();
 

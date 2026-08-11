@@ -72,7 +72,8 @@ export async function uploadCustomizationAsset(input: {
     return {
       success: false,
       error: {
-        type: uploaded.error.type === "NOT_CONFIGURED" ? "STORAGE_NOT_CONFIGURED" : "STORAGE_FAILED",
+        type:
+          uploaded.error.type === "NOT_CONFIGURED" ? "STORAGE_NOT_CONFIGURED" : "STORAGE_FAILED",
       },
     };
   }

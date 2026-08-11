@@ -9,9 +9,9 @@ import {
   communityCofounderProfileSector,
   communityModerationAction,
 } from "#src/db/schema.js";
-import { isIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { isIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
@@ -300,10 +300,7 @@ export async function listCofounderProfiles(
           .from(communityCofounderProfileContribution)
           .where(
             and(
-              eq(
-                communityCofounderProfileContribution.profileId,
-                communityCofounderProfile.id,
-              ),
+              eq(communityCofounderProfileContribution.profileId, communityCofounderProfile.id),
               eq(communityCofounderProfileContribution.contributionKind, contributionKind),
             ),
           ),
@@ -833,7 +830,9 @@ export async function moderateCofounderProfile(input: {
       .set({
         state: input.decision === "publish" ? "published" : "draft",
         publishedAt:
-          input.decision === "publish" ? (existing.publishedAt ?? occurredAt) : existing.publishedAt,
+          input.decision === "publish"
+            ? (existing.publishedAt ?? occurredAt)
+            : existing.publishedAt,
         moderatedByUserId: input.moderatorUserId,
         moderatedAt: occurredAt,
         decisionReason: input.reasonNote,

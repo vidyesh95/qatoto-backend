@@ -166,7 +166,10 @@ const CHECKS: readonly Check[] = [
         SELECT count(*)::int AS value
           FROM information_schema.columns
          WHERE table_name = 'community_forum_thread' AND column_name = 'excerpt'`);
-      return { ok: found === 0, detail: found === 0 ? "absent, as designed" : "PRESENT — stale by construction" };
+      return {
+        ok: found === 0,
+        detail: found === 0 ? "absent, as designed" : "PRESENT — stale by construction",
+      };
     },
   },
   {
@@ -179,7 +182,10 @@ const CHECKS: readonly Check[] = [
         VALUES ('verify-probe-thread', 'verify-probe-thread', 'sourcing',
                 'A probe title long enough', 'A probe body long enough to pass the length check.',
                 'open', 'some-reply-id', now())`);
-      return { ok: refused, detail: refused ? "refused" : "ACCEPTED an open thread with an answer" };
+      return {
+        ok: refused,
+        detail: refused ? "refused" : "ACCEPTED an open thread with an answer",
+      };
     },
   },
   {

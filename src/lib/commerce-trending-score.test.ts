@@ -78,15 +78,11 @@ describe("scoreCommerceTrendingCandidate", () => {
       throw new Error("both candidates should score");
     }
 
-    expect(withoutRate.breakdown.sellerTrustPoints).toBeLessThan(
-      withRate.breakdown.sellerTrustPoints,
-    );
+    expect(withoutRate.breakdown.sellerTrustPoints).toBeLessThan(withRate.breakdown.sellerTrustPoints);
     // Standing survives: an unproven but verified seller is not at zero.
     expect(withoutRate.breakdown.sellerTrustPoints).toBe(5);
     // And nothing else moved to compensate.
-    expect(withoutRate.breakdown.qualifiedVelocityPoints).toBe(
-      withRate.breakdown.qualifiedVelocityPoints,
-    );
+    expect(withoutRate.breakdown.qualifiedVelocityPoints).toBe(withRate.breakdown.qualifiedVelocityPoints);
   });
 
   it("gives an unverified seller with no measured rate no trust points at all", () => {
@@ -114,16 +110,11 @@ describe("scoreCommerceTrendingCandidate", () => {
     const fresh = scoreCommerceTrendingCandidate({ ...HEALTHY, demandAgeDays: 1 });
     const stale = scoreCommerceTrendingCandidate({ ...HEALTHY, demandAgeDays: 13 });
     if (fresh.status !== "scored" || stale.status !== "scored") throw new Error("should score");
-    expect(fresh.breakdown.demandFreshnessPoints).toBeGreaterThan(
-      stale.breakdown.demandFreshnessPoints,
-    );
+    expect(fresh.breakdown.demandFreshnessPoints).toBeGreaterThan(stale.breakdown.demandFreshnessPoints);
   });
 
   it("keeps its component budgets summing to 100", () => {
-    const total = Object.values(COMMERCE_TRENDING_COMPONENT_BUDGETS).reduce(
-      (sum, budget) => sum + budget,
-      0,
-    );
+    const total = Object.values(COMMERCE_TRENDING_COMPONENT_BUDGETS).reduce((sum, budget) => sum + budget, 0);
     expect(total).toBe(100);
   });
 
@@ -346,9 +337,7 @@ describe("robust statistics", () => {
   });
 
   it("raises the threshold above the floor for a genuinely busy product", () => {
-    const baseline = [
-      400, 420, 380, 410, 430, 390, 405, 415, 425, 395, 408, 412, 418, 402, 399, 421,
-    ];
+    const baseline = [400, 420, 380, 410, 430, 390, 405, 415, 425, 395, 408, 412, 418, 402, 399, 421];
     const threshold = computeSpikeThreshold({ baselineValues: baseline, minimumFloor: 100 });
     expect(threshold.status).toBe("measured");
     expect(threshold.threshold).toBeGreaterThan(400);
