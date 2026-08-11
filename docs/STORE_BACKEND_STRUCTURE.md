@@ -466,7 +466,7 @@ exists to order things users can actually see.
 **A pending request does not block the listing.** The seller publishes immediately, the product parks
 in `misc`, and `product.pendingCategoryRequestId` points back at the request. That column is the
 **only** link, and it is what makes approval surgical: the verdict rehomes the products belonging to
-_this_ request and leaves genuine `misc` listings alone. Repointing by `WHERE category_id = misc`
+*this* request and leaves genuine `misc` listings alone. Repointing by `WHERE category_id = misc`
 would sweep up unrelated sellers' products, so no code path may do it.
 
 Five rules the shipped surface enforces, each of which a future edit will be tempted to relax:
@@ -481,7 +481,7 @@ Five rules the shipped surface enforces, each of which a future edit will be tem
   slug is a public URL identity — linked and indexed the moment the category is published — and a
   category that needs a different one is a new category.
 - **The moderator chooses the slug, not the requester.** It exists only on the approve arm of the
-  verdict, which is a discriminated union: a rejection _requires_ a note, an approval does not.
+  verdict, which is a discriminated union: a rejection *requires* a note, an approval does not.
 - **Route order is load-bearing.** Express matches in declaration order, so the literal
   `/admin/categories/reorder` must precede `/admin/categories/:categoryId` or every reorder 404s with
   `"reorder"` captured as a category id.
@@ -993,7 +993,6 @@ rejection would return to the queue forever.
 
 **No cofounder route takes a `:userId`.** The viewer posts about themselves and `/mine` is the only
 addressing an owner gets.
-
 
 ### 6.8 Lane rate cards and the arrival window — **SHIPPED (Phase 20, `0106`–`0109`)**
 
@@ -1988,7 +1987,7 @@ basis finds out at invoice time. The MOQ pair is both-or-neither: a bare `500` i
 500 pieces and 500 cartons are different businesses.
 
 `exportMarkets[]` — **and this one needs a decision before a column.** "ISO country codes this factory
-has actually shipped to" is a _derived_ claim, computable from settled order delivery addresses. If it
+has actually shipped to" is a *derived* claim, computable from settled order delivery addresses. If it
 is instead seller-declared it must be labelled declared, per A13's rule that a derived stat and a
 declared stat are visibly different on the wire — which is why the storefront carries `declaredProfile`
 and `measuredMetrics` and nothing else. Pick one and put it in the matching member. An empty array is
@@ -2203,7 +2202,7 @@ response body must be unable to support.
 
 1. **A stated capital range is self-reported and unverified.** Nobody checked. No field, label,
    derived value or aggregate may imply "committed", "funded", "raised", "escrowed" or "available",
-   and the projection labels the figure as declared _in the row_, not in a tooltip a renderer can drop.
+   and the projection labels the figure as declared *in the row*, not in a tooltip a renderer can drop.
    A number that looks audited is worse than no number.
 2. **A profile is not an offer and Qatoto is not a broker.** Listing yourself is not soliciting
    investment; reading a profile is not receiving advice. There is no "invest" affordance, no "matched"
@@ -2241,14 +2240,14 @@ response body must be unable to support.
 **The near-miss, and why it stays a near-miss.** `talent_profile` is already user-scoped with
 availability, visibility, skills and a compensation ask, and it is genuinely close. **Do not extend
 it.** The R&D talent directory reads that table, and a cofounder row landing in "people open to work
-on your project" is a different claim about a different person's intent. Reuse its _shape_ — and
+on your project" is a different claim about a different person's intent. Reuse its *shape* — and
 `talent_profile_skill`'s tag-table pattern for `sectors` — not its rows.
 
 Three projection rules:
 
 - **`capitalRange` is both-or-neither, and the whole object is nullable rather than its fields.** Half
   a range is not "a floor with no ceiling", it is an unanswerable question. `null` means they did not
-  say; it is not zero, and a renderer must show an absence. A blank field is _omitted_ from the create
+  say; it is not zero, and a renderer must show an absence. A blank field is *omitted* from the create
   body, never sent as `0` — `0` for a capital minimum publishes an offer of nothing, and `0` basis
   points publishes an expectation of no stake, which nobody means.
 - **`not_looking` stays visible in the directory** rather than being filtered out. A profile is also a
@@ -2342,7 +2341,7 @@ from. That shipped, and it stands.
 What it cannot express is a **choice**. The mock sheet decomposes the journey into an
 international leg and an inland leg and lets the buyer pick a mode per leg, with a price and a
 duration behind each option. Coverage does not carry either number per mode — it says a provider
-_serves_ this lane, not what it _charges_ or how long it _takes_ by sea versus by air. So the
+*serves* this lane, not what it *charges* or how long it *takes* by sea versus by air. So the
 sheet sums local floats today, which is the client establishing a price, which §0 forbids.
 
 The missing input is not an endpoint. It is **data nobody has bought**: forwarders sell lane
@@ -2399,7 +2398,7 @@ Nothing models this today. `customs_broker` exists as a `commerce_provider_kind`
 offerings carry lead times, but "clearance on this lane for this commodity takes 3–10 days" is
 stored nowhere, and an offering's lead time is the broker's own turnaround, not the port's.
 
-**A domestic lane has no customs leg at all.** That is an _absent_ component, not a zero-day one,
+**A domestic lane has no customs leg at all.** That is an *absent* component, not a zero-day one,
 and §19.4's projection must be able to say which — see the two-facts rule below.
 
 ### 19.4 The arrival window
@@ -2451,7 +2450,7 @@ the client always has something honest to render when `arrivalWindow` is `null` 
 15–25 days after order · shipping and clearance not yet estimated" — rather than an empty state.
 
 **No arrival window before an order exists.** With no clock start there is no calendar, so a
-product page shows _durations_ only. This is why the PDP and the order page differ, and it is not
+product page shows *durations* only. This is why the PDP and the order page differ, and it is not
 an inconsistency.
 
 ### 19.5 Public API
@@ -2469,7 +2468,7 @@ an inconsistency.
 
 - **A rate card produces a range with its provenance, never a single day.** `sourceForwarderName`
   and `validUntil` travel with every option; an expired card is not a price.
-- **An uncovered lane returns an empty `options[]`, never a zero**, and an uncovered _leg_ makes
+- **An uncovered lane returns an empty `options[]`, never a zero**, and an uncovered *leg* makes
   the whole journey unpriceable rather than cheaper. A15's and A16's rule, unchanged.
 - **Partial data yields a partial answer, never an extrapolated whole one.** §19.2, §19.3 and
   §19.4 are three expressions of this one rule: report the components you have, name the ones you
@@ -2494,10 +2493,9 @@ an inconsistency.
 `src/components/home/store/sheets/delivery-sheet.tsx` was **held at `TRANSPORT: mock` against this
 section** — the one store sheet deliberately left unwired. §19.2–§19.4 are now built, so it can be
 wired; with no rate cards loaded it must render the named absences (`unavailableReasons`,
-`unpriceableReasons`, `missingComponents`) rather than a zero or a date. `sections/delivery-cost.tsx` wires against the _existing_ A16 estimate and
+`unpriceableReasons`, `missingComponents`) rather than a zero or a date. `sections/delivery-cost.tsx` wires against the *existing* A16 estimate and
 degrades to the manufacturing lead time plus "shipping to be arranged" when the estimate array is
 empty; it must not render a date or a zero.
-
 
 ### 19.8 Where §19 was silent, and what was chosen
 
@@ -2505,7 +2503,7 @@ empty; it must not render a date or a zero.
 each is recorded here rather than only in a comment, because the next reader of this document is
 usually the person deciding whether to change one.
 
-**Pricing and band selection**
+#### Pricing and band selection
 
 - **Freight bills on chargeable weight, `max(actual, volumetric)`** (`0109`, §19.9). The divisor is
   a **required per-card column** — never a platform constant, because it varies by forwarder as well
@@ -2534,7 +2532,7 @@ usually the person deciding whether to change one.
 - **Prices round UP.** Rounding a freight charge down publishes a number the forwarder will not
   honour, and the platform would own the difference.
 
-**Cards and the read predicate**
+#### Cards and the read predicate
 
 - **`currency` was added to §19.5's option shape.** A `priceInCents` with no currency is
   unrenderable, and a list mixing USD and EUR is the collapse A16 refused.
@@ -2554,7 +2552,7 @@ usually the person deciding whether to change one.
   is plural and §19.1's estimate is per-currency, so a bare-lane key would make a second
   forwarder's card unstorable.
 
-**Legs and journeys**
+#### Legs and journeys
 
 - **`journeys[]` was added beyond §19.5's `legs[]`.** §19.6 forbids the client summing legs, which
   `legs[]` alone cannot satisfy.
@@ -2566,7 +2564,7 @@ usually the person deciding whether to change one.
 - **A journey is never summed across currencies**, and an uncovered leg empties `journeys[]`
   entirely rather than pricing the international leg alone.
 
-**Customs dwell**
+#### Customs dwell
 
 - **Precedence is origin-scoped > commodity-scoped > any**, ties broken by latest `validFrom` then
   `id` so two admins cannot make the endpoint flap.
@@ -2576,7 +2574,7 @@ usually the person deciding whether to change one.
 - **Overlap between two CLOSED windows is a service-level 409**, not a constraint: `now()` is not
   IMMUTABLE, and a real exclusion would need `btree_gist` for one table.
 
-**The arrival window**
+#### The arrival window
 
 - **Every component is a discriminated union**, not a nullable object. §19.4 demands the
   distinction for customs; it is applied uniformly so the emission rule reads once.
@@ -2603,7 +2601,6 @@ usually the person deciding whether to change one.
   `buyerAddressSnapshot` is never parsed — reading geography back out of formatted prose is how a
   comma inside a locality becomes a wrong country.
 
-
 ### 19.9 Measured against Alibaba — what matches, what is stricter, and what is missing
 
 §19.4 justifies the null window by citing Alibaba's degradation. That citation is accurate for the
@@ -2611,7 +2608,7 @@ usually the person deciding whether to change one.
 uniformly, and the differences are recorded here so nobody re-derives them from an argument that was
 only ever made about one decision.
 
-**Behaves as Alibaba does**
+#### Behaves as Alibaba does
 
 | This backend | Alibaba |
 | ------------ | ------- |
@@ -2622,8 +2619,10 @@ only ever made about one decision.
 | A weight-band ladder with a per-unit rate and a minimum charge | Same — the standard forwarder tariff shape |
 | Provenance and an expiry on every quoted number | Same — Alibaba's quotes carry a validity |
 
-**Deliberately stricter than Alibaba.** Each is defensible, and each has a visible cost. None is a
-bug; all four are open to being revisited as product decisions.
+#### Deliberately stricter than Alibaba
+
+Each is defensible, and each has a visible cost. None is a bug; all four are open to being revisited
+as product decisions.
 
 - **Below the smallest band yields no option at all.** Alibaba, and every real forwarder, applies the
   band's **minimum charge** to an undersized shipment — that is what a minimum charge is for. §19.6's
@@ -2642,7 +2641,7 @@ bug; all four are open to being revisited as product decisions.
   clearance into the estimate or sells DDP. Here the backend is **more** transparent than Alibaba,
   not less, which is the intended direction.
 
-**The one genuine gap — `chargeable weight` — is now CLOSED (`0109`)**
+#### The one genuine gap — `chargeable weight` — is now CLOSED (`0109`)
 
 Air and ocean freight bill on **`max(actual gross weight, volumetric weight)`**, and every forwarder
 — Alibaba's included — quotes that way. Phase 20 shipped rating on actual gross weight alone, using
@@ -2881,7 +2880,7 @@ constraint keeps reviewer attribution and `moderator_curated` in lockstep in bot
 **Shipped since:** the nightly `derive-product-relations` co-occurrence job (§15.9, Phase 9) now
 writes `derived_cooccurrence` rows, which nothing produced when the source kind first shipped.
 
-**Still absent:** ranking and recommendation _selection_ (Phase 10+).
+**Still absent:** ranking and recommendation *selection* (Phase 10+).
 
 ---
 
@@ -3034,7 +3033,7 @@ photos, four freight-access rows, visit policy, two stakeholders) and
 `sheets/verified-capabilities-sheet.tsx` (four capabilities, five certifications).
 
 **What existed:** `commerce_organization` — **16 columns**, none of them profile depth.
-`commerce_provider_profile` exists but is keyed to _service providers_; a manufacturer selling
+`commerce_provider_profile` exists but is keyed to *service providers*; a manufacturer selling
 products had no profile row at all. Of the six mock stats:
 
 | Stat                                   | Before Phase 12                                                                                                                                                    |
@@ -3590,7 +3589,7 @@ remains the detail.
 uploads in this backend were verification evidence, customization assets and A21's image multiparts,
 none of which a buyer composing an RFQ can use — so `documentIds` was a field that existed and could
 not be filled, and `/store/rfqs/new` shipped with no attachment step at all. On a sourcing request
-that is a real loss: the drawing _is_ the requirement.
+that is a real loss: the drawing *is* the requirement.
 
 **Both halves shipped together, because either alone is useless.** The RFQ read projects
 `encryptedDocumentId` and mints no URL, so an upload without a download would have left the composer
