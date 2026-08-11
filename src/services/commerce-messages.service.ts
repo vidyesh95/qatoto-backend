@@ -440,6 +440,229 @@ export async function createOrGetThread(input: {
 /**
  * Cursor-paginated messages for a thread the caller's organization participates in.
  */
+/**
+ * The four kinds this service can resolve parties for, as a value the SQL can filter on.
+ *
+ * Derived from the same list `projectThread` re-checks, and kept beside it deliberately: a
+ * fifth kind added to the type without being added here would silently vanish from every
+ * inbox, which is a harder bug to notice than a thread that 404s.
+ */
+const SERVED_THREAD_RESOURCE_KINDS: readonly CommerceThreadResourceKind[] = [
+  "rfq",
+  "quote",
+  "product_inquiry",
+  "manufacturing_inquiry",
+];
+
+/** A26-style preview cap: enough to recognise a conversation, not enough to read it. */
+const THREAD_PREVIEW_CHARACTERS = 160;
+
+/**
+ * Narrows the database enum to the kinds this service can resolve parties for.
+ *
+ * The inbox query already filters on `SERVED_THREAD_RESOURCE_KINDS`, so this can only fail if
+ * the SQL and the list disagree — which is a programmer error, and §3.3 says a programmer
+ * error throws. It is a guard rather than a fallback because a fallback would relabel an
+ * unservable thread as an RFQ and put it in somebody's inbox under the wrong name.
+ */
+function isServedThreadResourceKind(
+  resourceKind: (typeof commerceThread.$inferSelect)["resourceKind"],
+): resourceKind is CommerceThreadResourceKind {
+  return SERVED_THREAD_RESOURCE_KINDS.some((servedKind) => servedKind === resourceKind);
+}
+
+export interface CommerceThreadInboxEntry extends CommerceThreadProjection {
+  /**
+   * NULL for a thread nobody has written into yet — `createOrGetThread` mints the thread
+   * before the first message, so an empty one is a normal state rather than a defect.
+   */
+  readonly lastMessage: {
+    readonly id: string;
+    readonly authorOrganizationId: string;
+    readonly bodyPreview: string;
+    readonly createdAt: Date;
+  } | null;
+}
+
+/**
+ * The caller's thread inbox (Appendix A38).
+ *
+ * WHY THIS ROUTE HAD TO EXIST. `POST /commerce/threads` returned a `threadId` and nothing
+ * else ever yielded one, so every thread the frontend could reach was a thread it had just
+ * created in the same session. Reload the page and the conversation was unreachable. The same
+ * absence made §14's settlement agreements unreachable, because
+ * `GET|POST /commerce/threads/:threadId/settlement-agreements` are keyed on an id no list
+ * produced — one missing read, two dead features.
+ *
+ * SCOPED BY PARTICIPATION, NOT BY AUTHORSHIP. `commerce_thread_participant` is the same table
+ * `assertThreadParticipant` reads, so an organization sees exactly the threads it is allowed
+ * to open and the inbox cannot disagree with the detail read.
+ *
+ * ORDERED BY ACTIVITY, keyed on `updatedAt` then `id` — §7's rule that a keyset order must end
+ * in a unique column so equal timestamps cannot skip a row.
+ */
+export async function listThreadsForOrganization(input: {
+  readonly organizationId: string;
+  readonly resourceKind?: CommerceThreadResourceKind | undefined;
+  readonly cursor?: string | undefined;
+  readonly limit?: number | undefined;
+}): Promise<
+  Result<
+    {
+      readonly items: readonly CommerceThreadInboxEntry[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    CommerceMessagesError
+  >
+> {
+  const pageLimit = input.limit ?? 20;
+  if (!Number.isInteger(pageLimit) || pageLimit < 1 || pageLimit > 100) {
+    return {
+      success: false,
+      error: { type: "VALIDATION_FAILED", message: "limit must be an integer between 1 and 100." },
+    };
+  }
+
+  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "VALIDATION_FAILED", message: "Invalid cursor." } };
+  }
+
+  const cursorPredicate =
+    decodedCursor === null
+      ? undefined
+      : or(
+          lt(commerceThread.updatedAt, new Date(decodedCursor.sortKey)),
+          and(
+            eq(commerceThread.updatedAt, new Date(decodedCursor.sortKey)),
+            gt(commerceThread.id, decodedCursor.id),
+          ),
+        );
+
+  const threadRows = await db
+    .select({
+      id: commerceThread.id,
+      resourceKind: commerceThread.resourceKind,
+      resourceId: commerceThread.resourceId,
+      createdByOrganizationId: commerceThread.createdByOrganizationId,
+      createdByMemberId: commerceThread.createdByMemberId,
+      createdAt: commerceThread.createdAt,
+      updatedAt: commerceThread.updatedAt,
+    })
+    .from(commerceThreadParticipant)
+    .innerJoin(commerceThread, eq(commerceThread.id, commerceThreadParticipant.threadId))
+    .where(
+      and(
+        eq(commerceThreadParticipant.organizationId, input.organizationId),
+        // The same narrowing `projectThread` applies. A kind with no party resolver behind it
+        // must not appear in an inbox that promises every row is openable. The caller's
+        // optional filter narrows WITHIN this set and can never widen past it.
+        input.resourceKind === undefined
+          ? inArray(commerceThread.resourceKind, [...SERVED_THREAD_RESOURCE_KINDS])
+          : eq(commerceThread.resourceKind, input.resourceKind),
+        cursorPredicate,
+      ),
+    )
+    .orderBy(desc(commerceThread.updatedAt), asc(commerceThread.id))
+    .limit(pageLimit + 1);
+
+  const hasMore = threadRows.length > pageLimit;
+  const pageRows = threadRows.slice(0, pageLimit);
+  const threadIds = pageRows.map((row) => row.id);
+
+  if (threadIds.length === 0) {
+    return { success: true, value: { items: [], page: { nextCursor: null, hasMore: false } } };
+  }
+
+  /**
+   * Participants and last messages in one batch each, so the query count per page is constant
+   * rather than proportional to page size — the shape `loadReviewChildren` established.
+   */
+  const [participantRows, lastMessageRows] = await Promise.all([
+    db
+      .select({
+        threadId: commerceThreadParticipant.threadId,
+        organizationId: commerceThreadParticipant.organizationId,
+        participantRole: commerceThreadParticipant.participantRole,
+      })
+      .from(commerceThreadParticipant)
+      .where(inArray(commerceThreadParticipant.threadId, threadIds))
+      .orderBy(asc(commerceThreadParticipant.organizationId)),
+    // DISTINCT ON is the one thing the query builder cannot express here, and a correlated
+    // subquery per thread would reintroduce the N+1 the batch exists to avoid.
+    db.execute<{
+      thread_id: string;
+      id: string;
+      author_organization_id: string;
+      body_text: string;
+      created_at: Date;
+    }>(sql`
+      SELECT DISTINCT ON (thread_id)
+             thread_id, id, author_organization_id, body_text, created_at
+        FROM commerce_message
+       WHERE thread_id IN (${sql.join(
+         threadIds.map((threadId) => sql`${threadId}`),
+         sql`, `,
+       )})
+       ORDER BY thread_id, created_at DESC, id ASC
+    `),
+  ]);
+
+  const participantsByThreadId = new Map<
+    string,
+    {
+      readonly organizationId: string;
+      readonly participantRole: "buyer" | "provider" | "moderator";
+    }[]
+  >();
+  for (const participant of participantRows) {
+    const existing = participantsByThreadId.get(participant.threadId) ?? [];
+    existing.push({
+      organizationId: participant.organizationId,
+      participantRole: participant.participantRole,
+    });
+    participantsByThreadId.set(participant.threadId, existing);
+  }
+
+  const lastMessageByThreadId = new Map<string, CommerceThreadInboxEntry["lastMessage"]>();
+  for (const message of lastMessageRows.rows) {
+    lastMessageByThreadId.set(message.thread_id, {
+      id: message.id,
+      authorOrganizationId: message.author_organization_id,
+      bodyPreview: message.body_text.slice(0, THREAD_PREVIEW_CHARACTERS),
+      // A raw row is a driver value, so the timestamp arrives however the parser gave it.
+      createdAt: new Date(message.created_at),
+    });
+  }
+
+  const items = pageRows.map((row) => {
+    if (!isServedThreadResourceKind(row.resourceKind)) {
+      throw new Error(
+        `Thread ${row.id} of kind ${row.resourceKind} passed the inbox filter, which excludes it.`,
+      );
+    }
+    return {
+      id: row.id,
+      resourceKind: row.resourceKind,
+      resourceId: row.resourceId,
+      createdByOrganizationId: row.createdByOrganizationId,
+      createdByMemberId: row.createdByMemberId,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      participants: participantsByThreadId.get(row.id) ?? [],
+      lastMessage: lastMessageByThreadId.get(row.id) ?? null,
+    };
+  });
+
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor =
+    hasMore && lastRow
+      ? encodeStoreCursor({ sortKey: lastRow.updatedAt.toISOString(), id: lastRow.id })
+      : null;
+
+  return { success: true, value: { items, page: { nextCursor, hasMore } } };
+}
+
 export async function listMessages(input: {
   readonly threadId: string;
   readonly organizationId: string;

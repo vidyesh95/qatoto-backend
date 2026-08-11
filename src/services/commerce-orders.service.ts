@@ -5,6 +5,7 @@ import {
   commerceOrder,
   commerceOrderProductLine,
   commerceOrderServiceLine,
+  commercePaymentIntent,
   commerceServiceEngagement,
   product,
 } from "#src/db/schema.js";
@@ -60,6 +61,21 @@ export interface OrderSummaryProjection {
    */
   readonly settlementRail: OrderRow["settlementRail"];
   readonly hasEscrowProtection: boolean;
+  /**
+   * A38. The payment intent this order can still be paid through, or NULL.
+   *
+   * WHY IT IS HERE. `POST /commerce/orders/:orderId/payment-intents` returned an id and
+   * `GET /commerce/payments/:paymentIntentId` consumed one, and nothing in between survived a
+   * page reload — so a buyer who navigated away from checkout could not pay their own order.
+   * There is no payment-intent list route and there does not need to be: an order has at most
+   * one live intent, so the order is the right place to carry it.
+   *
+   * THE ONE `commerce_payment_intent_active_order_uidx` ADMITS, which is what makes this a
+   * single id rather than an array. NULL means either nothing has been created yet or every
+   * attempt reached a terminal failure — in both cases the client's next move is to create
+   * one, so the two do not need distinguishing here.
+   */
+  readonly paymentIntentId: string | null;
 }
 
 export interface OrderListPage {
@@ -136,6 +152,21 @@ export interface OrderDetailProjection {
    */
   readonly settlementRail: OrderRow["settlementRail"];
   readonly hasEscrowProtection: boolean;
+  /**
+   * A38. The payment intent this order can still be paid through, or NULL.
+   *
+   * WHY IT IS HERE. `POST /commerce/orders/:orderId/payment-intents` returned an id and
+   * `GET /commerce/payments/:paymentIntentId` consumed one, and nothing in between survived a
+   * page reload — so a buyer who navigated away from checkout could not pay their own order.
+   * There is no payment-intent list route and there does not need to be: an order has at most
+   * one live intent, so the order is the right place to carry it.
+   *
+   * THE ONE `commerce_payment_intent_active_order_uidx` ADMITS, which is what makes this a
+   * single id rather than an array. NULL means either nothing has been created yet or every
+   * attempt reached a terminal failure — in both cases the client's next move is to create
+   * one, so the two do not need distinguishing here.
+   */
+  readonly paymentIntentId: string | null;
 }
 
 const DEFAULT_PAGE_LIMIT = 20;
@@ -157,7 +188,46 @@ async function appendAuditOrThrow(
   }
 }
 
-function summarizeOrder(order: OrderRow): OrderSummaryProjection {
+/**
+ * The states in which a payment intent is still the one to pay through (A38).
+ *
+ * MIRRORS `commerce_payment_intent_active_order_uidx`'s predicate exactly, and that is the
+ * point: the index is what guarantees at most one such row per order, so a list built from a
+ * different set of states could return two and the projection would have to pick arbitrarily.
+ * `failed` and `cancelled` are absent because a terminal attempt is not payable — the client's
+ * next move there is a fresh intent, not this one.
+ */
+const PAYABLE_PAYMENT_INTENT_STATES = [
+  "created",
+  "requires_action",
+  "processing",
+  "authorized",
+  "settled",
+  "partially_refunded",
+  "refunded",
+  "disputed",
+] as const;
+
+/** One query for a whole page of orders, rather than one per order. */
+async function loadLivePaymentIntentIdsByOrderId(
+  orderIds: readonly string[],
+): Promise<ReadonlyMap<string, string>> {
+  if (orderIds.length === 0) return new Map();
+
+  const rows = await db
+    .select({ orderId: commercePaymentIntent.orderId, id: commercePaymentIntent.id })
+    .from(commercePaymentIntent)
+    .where(
+      and(
+        inArray(commercePaymentIntent.orderId, [...orderIds]),
+        inArray(commercePaymentIntent.state, [...PAYABLE_PAYMENT_INTENT_STATES]),
+      ),
+    );
+
+  return new Map(rows.map((row) => [row.orderId, row.id]));
+}
+
+function summarizeOrder(order: OrderRow, paymentIntentId: string | null): OrderSummaryProjection {
   return {
     id: order.id,
     buyerOrganizationId: order.buyerOrganizationId,
@@ -172,6 +242,7 @@ function summarizeOrder(order: OrderRow): OrderSummaryProjection {
     settlementRail: order.settlementRail,
     // Derived, never stored twice: one fact cannot then disagree with itself.
     hasEscrowProtection: order.settlementRail === "external_escrow",
+    paymentIntentId,
     createdAt: order.createdAt,
   };
 }
@@ -209,19 +280,21 @@ function projectOrderServiceLine(line: ServiceLineRow): OrderServiceLineProjecti
 }
 
 async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjection> {
-  const [productLines, serviceLines, completionIndex] = await Promise.all([
-    db
-      .select()
-      .from(commerceOrderProductLine)
-      .where(eq(commerceOrderProductLine.orderId, order.id))
-      .orderBy(asc(commerceOrderProductLine.siblingOrder)),
-    db
-      .select()
-      .from(commerceOrderServiceLine)
-      .where(eq(commerceOrderServiceLine.orderId, order.id))
-      .orderBy(asc(commerceOrderServiceLine.siblingOrder)),
-    loadOrderCompletionIndex(order.id),
-  ]);
+  const [productLines, serviceLines, completionIndex, paymentIntentIdsByOrderId] =
+    await Promise.all([
+      db
+        .select()
+        .from(commerceOrderProductLine)
+        .where(eq(commerceOrderProductLine.orderId, order.id))
+        .orderBy(asc(commerceOrderProductLine.siblingOrder)),
+      db
+        .select()
+        .from(commerceOrderServiceLine)
+        .where(eq(commerceOrderServiceLine.orderId, order.id))
+        .orderBy(asc(commerceOrderServiceLine.siblingOrder)),
+      loadOrderCompletionIndex(order.id),
+      loadLivePaymentIntentIdsByOrderId([order.id]),
+    ]);
 
   return {
     id: order.id,
@@ -245,6 +318,7 @@ async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjectio
     settlementRail: order.settlementRail,
     // Derived, never stored twice: one fact cannot then disagree with itself.
     hasEscrowProtection: order.settlementRail === "external_escrow",
+    paymentIntentId: paymentIntentIdsByOrderId.get(order.id) ?? null,
     createdAt: order.createdAt,
     completionIds: completionIndex.completionIds,
     productLines: productLines.map((line) =>
@@ -292,10 +366,16 @@ async function listOrdersBy(
       ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.id })
       : null;
 
+  const paymentIntentIdsByOrderId = await loadLivePaymentIntentIdsByOrderId(
+    pageRows.map((row) => row.id),
+  );
+
   return {
     success: true,
     value: {
-      items: pageRows.map(summarizeOrder),
+      items: pageRows.map((row) =>
+        summarizeOrder(row, paymentIntentIdsByOrderId.get(row.id) ?? null),
+      ),
       page: { nextCursor, hasMore: nextCursor !== null },
     },
   };

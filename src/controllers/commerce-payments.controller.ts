@@ -13,6 +13,14 @@ const OrderIdParamsSchema = z.object({ orderId: z.string().trim().min(1).max(200
 const PaymentIntentIdParamsSchema = z
   .object({ paymentIntentId: z.string().trim().min(1).max(200) })
   .strict();
+const ListRefundsQuerySchema = z
+  .object({
+    orderId: z.string().trim().min(1).max(200).optional(),
+    cursor: z.string().trim().min(1).max(500).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
 const CreateRefundBodySchema = z
   .object({
     amountInCents: z.number().int().positive().optional(),
@@ -136,6 +144,13 @@ function mapPaymentsError(res: Response, error: CommercePaymentsError): void {
         data: { reason: error.reason },
       } satisfies ApiResponse);
       return;
+    case "INVALID_CURSOR":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Invalid cursor.",
+      } satisfies ApiResponse);
+      return;
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce payments error: ${JSON.stringify(exhaustiveCheck)}`);
@@ -201,6 +216,41 @@ export async function getPaymentIntent(req: Request, res: Response): Promise<voi
     status: "success",
     statusCode: 200,
     message: "Payment intent loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * GET /commerce/refunds — the read a refund never had (Appendix A38).
+ *
+ * `orderId` narrows to one order rather than being a separate route, because a refund inbox
+ * and an order's refund history are the same list with a different filter, and two routes
+ * would imply otherwise. Scoped to orders the caller is a party to, either side.
+ */
+export async function listRefunds(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+
+  const query = ListRefundsQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await commercePaymentsService.listRefunds(actor, {
+    orderId: query.data.orderId,
+    cursor: query.data.cursor,
+    limit: query.data.limit,
+  });
+  if (!result.success) {
+    mapPaymentsError(res, result.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Refunds listed.",
     data: result.value,
   } satisfies ApiResponse);
 }

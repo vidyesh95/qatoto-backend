@@ -30,6 +30,20 @@ commerceMessagesRouter.post(
   commerceMessagesController.createOrGetThread,
 );
 
+/**
+ * A38. DECLARED BEFORE `/threads/:threadId/messages` is unnecessary — different depth — but
+ * declared before the POST on the same path for readability: the read is what makes the write
+ * reachable on a second visit.
+ *
+ * No rate limiter, matching the messages read beside it: a list changes nothing and has no body.
+ */
+commerceMessagesRouter.get(
+  "/threads",
+  requireAuth,
+  requireProvisionedBuyerCommerceWorkspace,
+  commerceMessagesController.listThreads,
+);
+
 commerceMessagesRouter.get(
   "/threads/:threadId/messages",
   requireAuth,

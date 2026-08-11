@@ -25,6 +25,21 @@ const ListMessagesQuerySchema = z
   })
   .strict();
 
+/**
+ * A38. `resourceKind` narrows the inbox to one conversation family — the frontend's
+ * negotiations tab versus its pre-sales tab — and is the four kinds this service can resolve
+ * parties for, NOT the seven the column holds. `.strict()` therefore answers 422 for `order`
+ * rather than silently returning nothing, which is the difference between "we do not serve
+ * that yet" and "you have no order threads".
+ */
+const ListThreadsQuerySchema = z
+  .object({
+    resourceKind: z.enum(["rfq", "quote", "product_inquiry", "manufacturing_inquiry"]).optional(),
+    cursor: z.string().trim().min(1).max(500).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
 const AppendMessageBodySchema = z
   .object({
     bodyText: z.string().min(1).max(10_000),
@@ -132,6 +147,42 @@ export async function createOrGetThread(req: Request, res: Response): Promise<vo
     status: "success",
     statusCode: 200,
     message: "Commerce thread ready.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * GET /commerce/threads — the inbox (Appendix A38).
+ *
+ * The read that made messaging buildable. `POST /commerce/threads` returned a `threadId` and
+ * nothing else ever yielded one, so a reload lost every conversation. It also unblocks §14's
+ * settlement agreements, whose routes are keyed on the same id.
+ */
+export async function listThreads(req: Request, res: Response): Promise<void> {
+  const commerceContext = requireCommerceContext(req, res);
+  if (!commerceContext) return;
+
+  const parsedQuery = ListThreadsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendZodError(res, parsedQuery.error);
+    return;
+  }
+
+  const result = await commerceMessagesService.listThreadsForOrganization({
+    organizationId: commerceContext.organizationId,
+    resourceKind: parsedQuery.data.resourceKind,
+    cursor: parsedQuery.data.cursor,
+    limit: parsedQuery.data.limit,
+  });
+  if (!result.success) {
+    mapMessagesError(res, result.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Commerce threads listed.",
     data: result.value,
   } satisfies ApiResponse);
 }

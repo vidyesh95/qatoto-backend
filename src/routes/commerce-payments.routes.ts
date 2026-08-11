@@ -29,6 +29,20 @@ router.get(
   commercePaymentsController.getPaymentIntent,
 );
 
+/**
+ * A38. The read half of refunds. Declared before the create so the pair reads as a surface
+ * rather than a write with an afterthought — until Phase 21 there was only the write, and a
+ * requested refund was invisible to both parties from the moment it was requested.
+ *
+ * No `Idempotency-Key`: a retried list changes nothing and has no body to key on (§6.8's rule).
+ */
+router.get(
+  "/refunds",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commercePaymentsController.listRefunds,
+);
+
 router.post(
   "/orders/:orderId/refunds",
   requireAuth,

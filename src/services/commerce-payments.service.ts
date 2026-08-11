@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
 
 import {
   resolveCommercePaymentProvider,
@@ -21,6 +21,7 @@ import {
   commerceRefund,
 } from "#src/db/schema.js";
 import { sendJob, JOB_NAMES, idempotencyKeyFor } from "#src/lib/jobs.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import {
   evaluateBuyerQualification,
   type BuyerQualificationVerdict,
@@ -43,7 +44,9 @@ export type CommercePaymentsError =
   | { type: "CONFLICT"; message: string }
   | { type: "OVER_REFUND"; refundableInCents: number }
   | { type: "PROVIDER_UNAVAILABLE"; reason: string }
-  | { type: "PROVIDER_REJECTED"; reason: string };
+  | { type: "PROVIDER_REJECTED"; reason: string }
+  /** A38. The refund list is the first paginated read on this service. */
+  | { type: "INVALID_CURSOR" };
 
 export interface CommercePaymentActorContext {
   readonly organizationId: string;
@@ -435,6 +438,91 @@ export async function getPaymentIntent(
     return { success: false, error: { type: "NOT_FOUND" } };
   }
   return { success: true, value: projectPaymentIntent(intent) };
+}
+
+/**
+ * Every refund on an order the caller is a party to (Appendix A38).
+ *
+ * WHY THIS ROUTE HAD TO EXIST. `POST /commerce/orders/:orderId/refunds` was the entire refund
+ * surface — a buyer could request one and then nobody, on either side, could see that it had
+ * been requested, what state it reached, or why it failed. A refund is money moving and it was
+ * write-only.
+ *
+ * SCOPED THROUGH THE ORDER, NOT THE REFUND ROW. `commerce_refund` carries
+ * `buyerOrganizationId` and no counterparty, so filtering on it alone would hide every refund
+ * from the seller whose order it reverses. The join re-derives both parties the way
+ * `getPaymentIntent` authorizes both, and `orderId` narrows to one order when asked.
+ *
+ * NEWEST FIRST, keyed on `createdAt` then `id` — §7's rule that a keyset order ends in a
+ * unique column.
+ */
+export async function listRefunds(
+  actor: CommercePaymentActorContext,
+  input: {
+    readonly orderId?: string | undefined;
+    readonly cursor?: string | undefined;
+    readonly limit?: number | undefined;
+  },
+): Promise<
+  Result<
+    {
+      readonly items: readonly RefundProjection[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    CommercePaymentsError
+  >
+> {
+  const limit = input.limit ?? 20;
+  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
+  const cursorPredicate =
+    decodedCursor === null
+      ? undefined
+      : or(
+          lt(commerceRefund.createdAt, new Date(decodedCursor.sortKey)),
+          and(
+            eq(commerceRefund.createdAt, new Date(decodedCursor.sortKey)),
+            gt(commerceRefund.id, decodedCursor.id),
+          ),
+        );
+
+  const rows = await db
+    .select({ refund: commerceRefund })
+    .from(commerceRefund)
+    .innerJoin(commerceOrder, eq(commerceOrder.id, commerceRefund.orderId))
+    .where(
+      and(
+        or(
+          eq(commerceOrder.buyerOrganizationId, actor.organizationId),
+          eq(commerceOrder.counterpartyOrganizationId, actor.organizationId),
+        ),
+        input.orderId === undefined ? undefined : eq(commerceRefund.orderId, input.orderId),
+        cursorPredicate,
+      ),
+    )
+    .orderBy(desc(commerceRefund.createdAt), asc(commerceRefund.id))
+    .limit(limit + 1);
+
+  const pageRows = rows.slice(0, limit);
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor =
+    rows.length > limit && lastRow
+      ? encodeStoreCursor({
+          sortKey: lastRow.refund.createdAt.toISOString(),
+          id: lastRow.refund.id,
+        })
+      : null;
+
+  return {
+    success: true,
+    value: {
+      items: pageRows.map((row) => projectRefund(row.refund)),
+      page: { nextCursor, hasMore: nextCursor !== null },
+    },
+  };
 }
 
 async function sumActiveRefundsInCents(
