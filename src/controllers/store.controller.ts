@@ -213,7 +213,12 @@ export async function getCategory(req: Request, res: Response): Promise<void> {
       limit: page.data.limit,
       cursor: page.data.cursor,
     }),
-    storeCatalogService.getCategoryFacets(categoryResult.value.category.id),
+    /**
+     * A39. THE SLUG, not the id. The facets now read `store_search_document`, which is scoped
+     * by `category_slug` exactly as the search filters are — passing the id would mean two
+     * subtree walks keyed differently, which is the shape of the divergence this closed.
+     */
+    storeCatalogService.getCategoryFacets(categoryResult.value.category.slug),
   ]);
   if (!productsResult.success) {
     switch (productsResult.error.type) {
@@ -257,7 +262,12 @@ export async function search(req: Request, res: Response): Promise<void> {
     sendZodError(res, parsed.error);
     return;
   }
-  const result = await storeSearchService.searchStoreDocuments({
+  /**
+   * A39. ONE FILTER OBJECT, passed to both. `searchStoreDocuments` adds paging to it and
+   * `computeStoreSearchFacets` does not — building two would be how the counts and the results
+   * start describing different sets again.
+   */
+  const searchFilters = {
     query: parsed.data.query,
     categorySlug: parsed.data.category,
     sellerCountryCode: parsed.data.sellerCountryCode,
@@ -272,9 +282,16 @@ export async function search(req: Request, res: Response): Promise<void> {
     verificationState: parsed.data.verificationState,
     leadTimeMaxDays: parsed.data.leadTimeMaxDays,
     sort: parsed.data.sort ?? "relevance",
-    limit: parsed.data.limit,
-    cursor: parsed.data.cursor,
-  });
+  } as const;
+
+  const [result, facets] = await Promise.all([
+    storeSearchService.searchStoreDocuments({
+      ...searchFilters,
+      limit: parsed.data.limit,
+      cursor: parsed.data.cursor,
+    }),
+    storeSearchService.computeStoreSearchFacets(searchFilters),
+  ]);
   if (!result.success) {
     res.status(422).json({
       status: "error",
@@ -287,7 +304,8 @@ export async function search(req: Request, res: Response): Promise<void> {
     status: "success",
     statusCode: 200,
     message: "Search results.",
-    data: result.value,
+    // A39. Search had thirteen filters and no denominator until Phase 22.
+    data: { ...result.value, facets },
   } satisfies ApiResponse);
 }
 

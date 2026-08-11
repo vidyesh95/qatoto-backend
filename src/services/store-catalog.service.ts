@@ -620,104 +620,48 @@ export async function getCategoryBySlug(categorySlug: string): Promise<
   };
 }
 
-export async function getCategoryFacets(categoryId: string): Promise<StoreCategoryFacets> {
-  const subtreeIds = await listActiveCategorySubtreeIds(categoryId);
-  if (subtreeIds.length === 0) {
-    return {
-      sellerCountryCodes: [],
-      stockStates: [],
-      samplePolicies: [],
-      priceRangesInCents: { minInCents: null, maxInCents: null, count: 0 },
-    };
-  }
+/**
+ * The counts beside a category's filters (A25, A39).
+ *
+ * A THIN CALLER SINCE PHASE 22, and the body it replaced is the point. This used to aggregate
+ * over `product` with `publicProductEligibility` — a THIRD copy of the eligibility rule, hand
+ * written in raw SQL — and a fourth copy of `deriveStockState` as a CASE ladder over
+ * `p.stock_quantity`. That ladder was not variant-aware, while `mapProductCard` and the search
+ * document both are, so this function could report "In stock (12)" above twelve cards reading
+ * *Unavailable*. Same request, same products, two answers.
+ *
+ * `computeStoreSearchFacets` reads `store_search_document` — the table every filter already
+ * reads — so the counts and the results now come from one place by construction.
+ *
+ * TAKES A SLUG, not an id, because the search document is scoped by `category_slug`. Passing
+ * the id would have meant a second subtree walk keyed differently from the filter's, which is
+ * the shape of the bug this change removes.
+ */
+export async function getCategoryFacets(categorySlug: string): Promise<StoreCategoryFacets> {
+  /**
+   * DYNAMIC, because `store-search.service` imports `deriveStockState` from this module and a
+   * static import back would close the cycle. The same shape `transitionTradeState` and
+   * `updateOrganization` already use to reach the search service.
+   */
+  const { computeStoreSearchFacets } = await import("#src/services/store-search.service.js");
 
-  const categoryPredicate = inArray(product.categoryId, [...subtreeIds]);
-  const [countryRows, stockRows, sampleRows, priceRow] = await Promise.all([
-    db
-      .select({
-        value: commerceOrganization.countryCode,
-        count: sql<number>`count(*)::int`.mapWith(Number),
-      })
-      .from(product)
-      .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
-      .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
-      .where(and(publicProductEligibility, categoryPredicate))
-      .groupBy(commerceOrganization.countryCode)
-      .orderBy(desc(sql`count(*)`), asc(commerceOrganization.countryCode)),
-    db.execute<{ value: string; count: number }>(sql`
-      SELECT derived.stock_state AS value, count(*)::int AS count
-      FROM (
-        SELECT CASE
-          WHEN p.stock_quantity <= 0
-               AND p.lead_time_min_days IS NOT NULL
-               AND p.lead_time_max_days IS NOT NULL
-            THEN 'made_to_order'
-          WHEN p.stock_quantity <= 0 THEN 'unavailable'
-          WHEN p.stock_quantity <= 5 THEN 'low_stock'
-          ELSE 'in_stock'
-        END AS stock_state
-        FROM product AS p
-        INNER JOIN commerce_organization AS o ON o.id = p.seller_organization_id
-        INNER JOIN commerce_category AS c ON c.id = p.category_id
-        WHERE p.status = 'active'
-          AND p.moderation_state = 'approved'
-          AND p.public_slug IS NOT NULL
-          AND o.trade_state = 'active'
-          AND o.visibility = 'public'
-          AND c.state = 'active'
-          AND p.category_id IN (${sql.join(
-            subtreeIds.map((id) => sql`${id}`),
-            sql`, `,
-          )})
-      ) AS derived
-      GROUP BY derived.stock_state
-      ORDER BY count DESC, derived.stock_state ASC
-    `),
-    db
-      .select({
-        value: product.samplePolicy,
-        count: sql<number>`count(*)::int`.mapWith(Number),
-      })
-      .from(product)
-      .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
-      .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
-      .where(and(publicProductEligibility, categoryPredicate))
-      .groupBy(product.samplePolicy)
-      .orderBy(desc(sql`count(*)`), asc(product.samplePolicy)),
-    db
-      .select({
-        minInCents: sql<number | null>`min(${product.priceInCents})`.mapWith(Number),
-        maxInCents: sql<number | null>`max(${product.priceInCents})`.mapWith(Number),
-        count: sql<number>`count(*)::int`.mapWith(Number),
-      })
-      .from(product)
-      .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
-      .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
-      .where(and(publicProductEligibility, categoryPredicate)),
-  ]);
+  const facets = await computeStoreSearchFacets({
+    categorySlug,
+    // A category page lists PRODUCTS. Without this the counts would also describe the provider
+    // offerings and organizations that share the taxonomy, which the page never shows.
+    documentKind: "product",
+  });
 
-  const priceSummary = priceRow[0];
+  /**
+   * The category read keeps its four-facet wire shape. The five new dimensions
+   * `computeStoreSearchFacets` returns are served on `/store/search`, which is the read whose
+   * filters can act on them — publishing a count the caller cannot use is what A25 forbade.
+   */
   return {
-    sellerCountryCodes: countryRows.map((row) => ({
-      // Grouped over rows `publicProductEligibility` already constrained to
-      // `trade_state = 'active'`, so the CHECK guarantees a country. Typed nullable only
-      // because the column is.
-      value: tradingOrganizationCountryCode(row.value, "category facet: sellerCountryCodes"),
-      count: row.count,
-    })),
-    stockStates: stockRows.rows.map((row) => ({
-      value: row.value,
-      count: row.count,
-    })),
-    samplePolicies: sampleRows.map((row) => ({
-      value: row.value,
-      count: row.count,
-    })),
-    priceRangesInCents: {
-      minInCents: priceSummary?.count ? (priceSummary.minInCents ?? null) : null,
-      maxInCents: priceSummary?.count ? (priceSummary.maxInCents ?? null) : null,
-      count: priceSummary?.count ?? 0,
-    },
+    sellerCountryCodes: facets.sellerCountryCodes,
+    stockStates: facets.stockStates,
+    samplePolicies: facets.samplePolicies,
+    priceRangesInCents: facets.priceRangesInCents,
   };
 }
 

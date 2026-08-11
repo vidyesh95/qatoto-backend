@@ -1,4 +1,18 @@
-import { and, asc, desc, eq, gt, gte, inArray, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
+import type { PgColumn } from "drizzle-orm/pg-core";
 
 import { db } from "#src/db/index.js";
 import {
@@ -18,28 +32,17 @@ import { tradingOrganizationCountryCode } from "#src/lib/commerce-organization-c
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { escapeLikePattern } from "#src/lib/sql-pattern.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
-import { deriveStockState } from "#src/services/store-catalog.service.js";
+/**
+ * A39. `listActiveCategorySubtreeSlugs` is IMPORTED, not redeclared. This file carried a
+ * byte-identical private copy and called that one, so the facets and the filters could have
+ * been given different subtree rules by editing either. `deriveStockState` was already coming
+ * from here, so the edge costs nothing new.
+ */
+import {
+  deriveStockState,
+  listActiveCategorySubtreeSlugs,
+} from "#src/services/store-catalog.service.js";
 import type { Result } from "#src/types/index.js";
-
-async function listActiveCategorySubtreeSlugs(
-  rootCategorySlug: string,
-): Promise<readonly string[]> {
-  const result = await db.execute<{ slug: string }>(sql`
-    WITH RECURSIVE category_subtree AS (
-      SELECT id, slug
-      FROM commerce_category
-      WHERE slug = ${rootCategorySlug}
-        AND state = 'active'
-      UNION ALL
-      SELECT child.id, child.slug
-      FROM commerce_category AS child
-      INNER JOIN category_subtree AS parent ON parent.id = child.parent_category_id
-      WHERE child.state = 'active'
-    )
-    SELECT slug FROM category_subtree
-  `);
-  return result.rows.map((row) => row.slug);
-}
 
 async function enqueueRefresh(
   payload:
@@ -162,7 +165,16 @@ function decodeRelevanceSortKey(sortKey: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export async function searchStoreDocuments(input: {
+/**
+ * Everything that decides WHICH documents match — and nothing that decides their order or
+ * their page.
+ *
+ * A39. Extracted so `searchStoreDocuments` and `computeStoreSearchFacets` take one shape and
+ * share one predicate builder. A count computed from a different WHERE than the results is the
+ * exact defect Phase 22 exists to close, and the cheapest way to keep them honest is to make it
+ * impossible to write two.
+ */
+export interface StoreSearchFilterInput {
   readonly query?: string | undefined;
   readonly categorySlug?: string | undefined;
   readonly sellerCountryCode?: string | undefined;
@@ -187,9 +199,133 @@ export async function searchStoreDocuments(input: {
    * or it is not offered.
    */
   readonly sort?: "relevance" | "discovery" | undefined;
-  readonly limit: number;
-  readonly cursor?: string | undefined;
-}): Promise<
+}
+
+/**
+ * The filter a facet must NOT apply to itself (A39).
+ *
+ * Drill-down, blind to self: `stockStates` counts under every other applied filter but not
+ * under `stockState`, so a buyer who picked "In stock" still sees `low_stock (12)` beside it
+ * and can switch without clearing first. Amazon and Alibaba both behave this way. Counting a
+ * facet under its own filter collapses it to the one value already chosen, and the only route
+ * back is to remove the filter and lose the rest of the narrowing with it.
+ */
+type StoreSearchFacetDimension =
+  | "documentKind"
+  | "sellerCountryCode"
+  | "providerKind"
+  | "price"
+  | "stockState"
+  | "samplePolicy"
+  | "condition"
+  | "verificationState"
+  | "leadTimeMaxDays";
+
+/**
+ * THE one WHERE. Both the result query and every facet query are built from this.
+ *
+ * `categorySlug` is never omittable: it is the SCOPE of the read rather than a filter inside
+ * it, and a category facet counted across every other category would be describing a page the
+ * buyer is not on.
+ */
+function buildStoreSearchFilters(
+  input: StoreSearchFilterInput,
+  categorySlugs: readonly string[] | undefined,
+  omit?: StoreSearchFacetDimension,
+): readonly (SQL | undefined)[] {
+  return [
+    eq(storeSearchDocument.isEligible, true),
+    input.documentKind === undefined || omit === "documentKind"
+      ? undefined
+      : eq(storeSearchDocument.documentKind, input.documentKind),
+    categorySlugs === undefined
+      ? undefined
+      : inArray(storeSearchDocument.categorySlug, [...categorySlugs]),
+    input.sellerCountryCode === undefined || omit === "sellerCountryCode"
+      ? undefined
+      : eq(storeSearchDocument.organizationCountryCode, input.sellerCountryCode),
+    input.providerKind === undefined || omit === "providerKind"
+      ? undefined
+      : eq(storeSearchDocument.providerKind, input.providerKind),
+    input.minOrderQuantityMax === undefined
+      ? undefined
+      : sql`(${storeSearchDocument.minimumOrderQuantity} IS NULL
+            OR ${storeSearchDocument.minimumOrderQuantity} <= ${input.minOrderQuantityMax})`,
+    /**
+     * A25. The facet filters, all of them here rather than in the three sort branches,
+     * which share this array.
+     *
+     * A NULL FACET IS EXCLUDED, not admitted. `minOrderQuantityMax` above admits NULL
+     * because "no MOQ declared" genuinely satisfies "MOQ at most 50" — the buyer may
+     * order any quantity. These are different: a document with no `stock_state` is not
+     * a document that is in stock, and admitting it would put provider offerings and
+     * organizations into a stock filter that cannot describe them.
+     */
+    input.priceMinInCents === undefined || omit === "price"
+      ? undefined
+      : gte(storeSearchDocument.priceInCents, input.priceMinInCents),
+    input.priceMaxInCents === undefined || omit === "price"
+      ? undefined
+      : lte(storeSearchDocument.priceInCents, input.priceMaxInCents),
+    input.stockState === undefined || omit === "stockState"
+      ? undefined
+      : eq(storeSearchDocument.stockState, input.stockState),
+    input.samplePolicy === undefined || omit === "samplePolicy"
+      ? undefined
+      : eq(storeSearchDocument.samplePolicy, input.samplePolicy),
+    input.condition === undefined || omit === "condition"
+      ? undefined
+      : eq(storeSearchDocument.condition, input.condition),
+    input.verificationState === undefined || omit === "verificationState"
+      ? undefined
+      : eq(storeSearchDocument.providerVerificationState, input.verificationState),
+    input.leadTimeMaxDays === undefined || omit === "leadTimeMaxDays"
+      ? undefined
+      : lte(storeSearchDocument.leadTimeMaxDays, input.leadTimeMaxDays),
+  ];
+}
+
+/**
+ * Whether a document MATCHES THE WORDS TYPED — membership, never ranking.
+ *
+ * A39. THIS USED TO BE THREE DIFFERENT EXPRESSIONS, one per sort branch, and they did not
+ * agree: the discovery branch built its `ILIKE` pattern from the RAW query while the other two
+ * escaped it, so a query containing `%` or `_` matched a different set of documents depending
+ * on how the caller asked them to be ordered. A sort must not change what matches. One
+ * expression now, used by all three branches and by every facet count.
+ *
+ * The relevance branch additionally RANKS with `ts_rank_cd` over the same `tsQuery`; that stays
+ * in the branch, because ranking genuinely is the sort's business.
+ */
+function buildStoreSearchTextPredicate(input: {
+  readonly trimmedQuery: string;
+  readonly useRelevance: boolean;
+}): SQL | undefined {
+  if (input.trimmedQuery.length === 0) return undefined;
+
+  const likePattern = `%${escapeLikePattern(input.trimmedQuery)}%`;
+  if (!input.useRelevance) {
+    return sql`${storeSearchDocument.searchText} ILIKE ${likePattern}`;
+  }
+
+  /**
+   * Full-text where the query parses into something, `ILIKE` where it does not —
+   * `websearch_to_tsquery` yields an empty tsquery for input that is all stopwords or all
+   * punctuation, and an empty tsquery matches nothing at all.
+   */
+  const tsQuery = sql`websearch_to_tsquery('english', ${input.trimmedQuery})`;
+  return sql`(
+    (numnode(${tsQuery}) > 0 AND ${storeSearchDocument.searchDocument} @@ ${tsQuery})
+    OR (NOT (numnode(${tsQuery}) > 0) AND ${storeSearchDocument.searchText} ILIKE ${likePattern})
+  )`;
+}
+
+export async function searchStoreDocuments(
+  input: StoreSearchFilterInput & {
+    readonly limit: number;
+    readonly cursor?: string | undefined;
+  },
+): Promise<
   Result<
     {
       readonly items: readonly StoreSearchHit[];
@@ -223,54 +359,9 @@ export async function searchStoreDocuments(input: {
     };
   }
 
-  const baseFilters = [
-    eq(storeSearchDocument.isEligible, true),
-    input.documentKind === undefined
-      ? undefined
-      : eq(storeSearchDocument.documentKind, input.documentKind),
-    categorySlugs === undefined
-      ? undefined
-      : inArray(storeSearchDocument.categorySlug, [...categorySlugs]),
-    input.sellerCountryCode === undefined
-      ? undefined
-      : eq(storeSearchDocument.organizationCountryCode, input.sellerCountryCode),
-    input.providerKind === undefined
-      ? undefined
-      : eq(storeSearchDocument.providerKind, input.providerKind),
-    input.minOrderQuantityMax === undefined
-      ? undefined
-      : sql`(${storeSearchDocument.minimumOrderQuantity} IS NULL
-            OR ${storeSearchDocument.minimumOrderQuantity} <= ${input.minOrderQuantityMax})`,
-    /**
-     * A25. The facet filters, all of them here rather than in the three sort branches,
-     * which share this array.
-     *
-     * A NULL FACET IS EXCLUDED, not admitted. `minOrderQuantityMax` above admits NULL
-     * because "no MOQ declared" genuinely satisfies "MOQ at most 50" — the buyer may
-     * order any quantity. These are different: a document with no `stock_state` is not
-     * a document that is in stock, and admitting it would put provider offerings and
-     * organizations into a stock filter that cannot describe them.
-     */
-    input.priceMinInCents === undefined
-      ? undefined
-      : gte(storeSearchDocument.priceInCents, input.priceMinInCents),
-    input.priceMaxInCents === undefined
-      ? undefined
-      : lte(storeSearchDocument.priceInCents, input.priceMaxInCents),
-    input.stockState === undefined
-      ? undefined
-      : eq(storeSearchDocument.stockState, input.stockState),
-    input.samplePolicy === undefined
-      ? undefined
-      : eq(storeSearchDocument.samplePolicy, input.samplePolicy),
-    input.condition === undefined ? undefined : eq(storeSearchDocument.condition, input.condition),
-    input.verificationState === undefined
-      ? undefined
-      : eq(storeSearchDocument.providerVerificationState, input.verificationState),
-    input.leadTimeMaxDays === undefined
-      ? undefined
-      : lte(storeSearchDocument.leadTimeMaxDays, input.leadTimeMaxDays),
-  ];
+  // A39. The SAME builder every facet count uses — see `computeStoreSearchFacets`.
+  const baseFilters = buildStoreSearchFilters(input, categorySlugs);
+  const textPredicate = buildStoreSearchTextPredicate({ trimmedQuery, useRelevance });
 
   if (useDiscovery) {
     /*
@@ -318,15 +409,10 @@ export async function searchStoreDocuments(input: {
         discoveryScorePoints: storeSearchDocument.discoveryScorePoints,
       })
       .from(storeSearchDocument)
-      .where(
-        and(
-          ...baseFilters,
-          hasQuery
-            ? sql`${storeSearchDocument.searchText} ILIKE ${`%${trimmedQuery}%`}`
-            : undefined,
-          cursorPredicate,
-        ),
-      )
+      // A39. `textPredicate`, not a local `ILIKE` built from the RAW query — this branch used
+      // to skip `escapeLikePattern`, so a `%` or `_` in the query matched a different set of
+      // documents here than under either other sort.
+      .where(and(...baseFilters, textPredicate, cursorPredicate))
       .orderBy(
         sql`coalesce(${storeSearchDocument.discoveryScorePoints}, -1) DESC`,
         desc(storeSearchDocument.id),
@@ -392,10 +478,6 @@ export async function searchStoreDocuments(input: {
             ),
           );
 
-    const likeFilter = !hasQuery
-      ? undefined
-      : sql`${storeSearchDocument.searchText} ILIKE ${`%${escapeLikePattern(trimmedQuery)}%`}`;
-
     const rows = await db
       .select({
         documentKind: storeSearchDocument.documentKind,
@@ -419,7 +501,7 @@ export async function searchStoreDocuments(input: {
         id: storeSearchDocument.id,
       })
       .from(storeSearchDocument)
-      .where(and(...baseFilters, likeFilter, cursorPredicate))
+      .where(and(...baseFilters, textPredicate, cursorPredicate))
       .orderBy(asc(storeSearchDocument.title), asc(storeSearchDocument.id))
       .limit(input.limit + 1);
 
@@ -462,13 +544,13 @@ export async function searchStoreDocuments(input: {
     };
   }
 
+  /**
+   * A39. RANKING ONLY. Membership is `textPredicate`, built once above and shared with the
+   * other two sorts and with every facet count; this branch keeps its own `tsQuery` because
+   * `ts_rank_cd` needs one, and ordering genuinely is the sort's business.
+   */
   const tsQuery = sql`websearch_to_tsquery('english', ${trimmedQuery})`;
-  const likePattern = `%${escapeLikePattern(trimmedQuery)}%`;
   const hasUsableTsQuery = sql`numnode(${tsQuery}) > 0`;
-  const matchPredicate = sql`(
-    (${hasUsableTsQuery} AND ${storeSearchDocument.searchDocument} @@ ${tsQuery})
-    OR (NOT ${hasUsableTsQuery} AND ${storeSearchDocument.searchText} ILIKE ${likePattern})
-  )`;
   const rankExpression = sql`
     CASE
       WHEN ${hasUsableTsQuery}
@@ -513,7 +595,7 @@ export async function searchStoreDocuments(input: {
       relevanceScore: sql<number>`${rankExpression}`.mapWith(Number),
     })
     .from(storeSearchDocument)
-    .where(and(...baseFilters, matchPredicate, cursorPredicate))
+    .where(and(...baseFilters, textPredicate, cursorPredicate))
     .orderBy(desc(rankExpression), asc(storeSearchDocument.id))
     .limit(input.limit + 1);
 
@@ -555,6 +637,197 @@ export async function searchStoreDocuments(input: {
         relevanceScore: row.relevanceScore,
       })),
       page: { nextCursor, hasMore: nextCursor !== null },
+    },
+  };
+}
+
+export interface StoreSearchFacetBucket {
+  readonly value: string;
+  readonly count: number;
+}
+
+export interface StoreSearchFacets {
+  readonly sellerCountryCodes: readonly StoreSearchFacetBucket[];
+  readonly stockStates: readonly StoreSearchFacetBucket[];
+  readonly samplePolicies: readonly StoreSearchFacetBucket[];
+  readonly conditions: readonly StoreSearchFacetBucket[];
+  readonly verificationStates: readonly StoreSearchFacetBucket[];
+  readonly documentKinds: readonly StoreSearchFacetBucket[];
+  readonly providerKinds: readonly StoreSearchFacetBucket[];
+  /**
+   * BUCKETED, not a min/max pair like price. A lead time is chosen from ranges — "within a
+   * week", "within a month" — and a scalar min/max cannot be clicked.
+   */
+  readonly leadTimeMaxDays: readonly StoreSearchFacetBucket[];
+  readonly priceRangesInCents: {
+    readonly minInCents: number | null;
+    readonly maxInCents: number | null;
+    readonly count: number;
+  };
+}
+
+const EMPTY_STORE_SEARCH_FACETS: StoreSearchFacets = {
+  sellerCountryCodes: [],
+  stockStates: [],
+  samplePolicies: [],
+  conditions: [],
+  verificationStates: [],
+  documentKinds: [],
+  providerKinds: [],
+  leadTimeMaxDays: [],
+  priceRangesInCents: { minInCents: null, maxInCents: null, count: 0 },
+};
+
+/**
+ * The lead-time ranges a buyer actually picks from, in days.
+ *
+ * Upper bounds, matching the `leadTimeMaxDays` filter's `<=`: clicking "30" asks for everything
+ * that ships within 30 days, so the buckets NEST rather than partition. A document counted in
+ * "7" is also counted in "30", which is what makes each count the honest answer to "how many
+ * will I get if I click this".
+ */
+const LEAD_TIME_FACET_BUCKET_DAYS: readonly number[] = [7, 15, 30, 60, 90];
+
+/** One grouped count over a nullable column, ordered count-desc then value-asc. */
+async function countByColumn(
+  column: PgColumn,
+  filters: readonly (SQL | undefined)[],
+  textPredicate: SQL | undefined,
+): Promise<readonly StoreSearchFacetBucket[]> {
+  const rows = await db
+    .select({ value: column, count: sql<number>`count(*)::int`.mapWith(Number) })
+    .from(storeSearchDocument)
+    .where(and(...filters, textPredicate, isNotNull(column)))
+    .groupBy(column)
+    .orderBy(desc(sql`count(*)`), asc(column));
+
+  // `isNotNull` above makes the non-string case unreachable. Narrowed rather than asserted,
+  // per CLAUDE §2's ban on unchecked casts.
+  return rows.flatMap((row) =>
+    typeof row.value === "string" ? [{ value: row.value, count: row.count }] : [],
+  );
+}
+
+/**
+ * The counts beside the filters (Appendix A39).
+ *
+ * WHY THIS EXISTS. `getCategoryFacets` used to aggregate over `product` while every filter read
+ * `store_search_document`, so the two answered from different tables — and not merely in
+ * theory. The facet derived stock from the product row's `stock_quantity` while the card and
+ * the document both derive it from the ACTIVE VARIANT SUM, so a category page could render
+ * "In stock (12)" above twelve cards reading *Unavailable*. Same request, same products, two
+ * answers. Price diverged the same way.
+ *
+ * ONE `WHERE`, BUILT ONCE. Every count below is `buildStoreSearchFilters` — the same function
+ * `searchStoreDocuments` calls — so a count and its result set cannot disagree without the
+ * shared builder being wrong for both.
+ *
+ * DRILL-DOWN, BLIND TO SELF. Each facet omits its OWN filter and applies every other, which is
+ * what Amazon and Alibaba both do: after picking "In stock" the buyer still sees `low_stock (12)`
+ * and can switch in one click. That is why this is N grouped queries rather than one shared
+ * scan — the N differ from each other by exactly one predicate. Each hits a partial index this
+ * table already carries, and they run concurrently.
+ *
+ * ZERO-COUNT VALUES ARE ABSENT, not padded to zero. That is the behaviour the four original
+ * facets already had, so no wire shape changes; and neither a country code nor a price range
+ * has a closed value set, so padding could never have been uniform across facets anyway.
+ */
+export async function computeStoreSearchFacets(
+  input: StoreSearchFilterInput,
+): Promise<StoreSearchFacets> {
+  const trimmedQuery = input.query?.trim() ?? "";
+  const useRelevance =
+    input.sort !== "discovery" &&
+    trimmedQuery.length > 0 &&
+    (input.sort === undefined || input.sort === "relevance");
+
+  const categorySlugs =
+    input.categorySlug === undefined
+      ? undefined
+      : await listActiveCategorySubtreeSlugs(input.categorySlug);
+  if (
+    input.categorySlug !== undefined &&
+    (categorySlugs === undefined || categorySlugs.length === 0)
+  ) {
+    return EMPTY_STORE_SEARCH_FACETS;
+  }
+
+  const textPredicate = buildStoreSearchTextPredicate({ trimmedQuery, useRelevance });
+  const scopedFor = (omit: StoreSearchFacetDimension): readonly (SQL | undefined)[] =>
+    buildStoreSearchFilters(input, categorySlugs, omit);
+
+  const [
+    sellerCountryCodes,
+    stockStates,
+    samplePolicies,
+    conditions,
+    verificationStates,
+    documentKinds,
+    providerKinds,
+    leadTimeRows,
+    priceRow,
+  ] = await Promise.all([
+    countByColumn(
+      storeSearchDocument.organizationCountryCode,
+      scopedFor("sellerCountryCode"),
+      textPredicate,
+    ),
+    countByColumn(storeSearchDocument.stockState, scopedFor("stockState"), textPredicate),
+    countByColumn(storeSearchDocument.samplePolicy, scopedFor("samplePolicy"), textPredicate),
+    countByColumn(storeSearchDocument.condition, scopedFor("condition"), textPredicate),
+    countByColumn(
+      storeSearchDocument.providerVerificationState,
+      scopedFor("verificationState"),
+      textPredicate,
+    ),
+    countByColumn(storeSearchDocument.documentKind, scopedFor("documentKind"), textPredicate),
+    countByColumn(storeSearchDocument.providerKind, scopedFor("providerKind"), textPredicate),
+    /**
+     * One row, one `count(*) FILTER` per bucket — a single scan rather than five, because the
+     * buckets nest and re-scanning for each would read the same rows five times over.
+     */
+    db
+      .select({
+        counts: sql<Record<string, number>>`json_build_object(${sql.join(
+          LEAD_TIME_FACET_BUCKET_DAYS.flatMap((days) => [
+            sql`${String(days)}`,
+            sql`count(*) FILTER (WHERE ${storeSearchDocument.leadTimeMaxDays} <= ${days})::int`,
+          ]),
+          sql`, `,
+        )})`,
+      })
+      .from(storeSearchDocument)
+      .where(and(...scopedFor("leadTimeMaxDays"), textPredicate)),
+    db
+      .select({
+        minInCents: sql<number | null>`min(${storeSearchDocument.priceInCents})`.mapWith(Number),
+        maxInCents: sql<number | null>`max(${storeSearchDocument.priceInCents})`.mapWith(Number),
+        count: sql<number>`count(${storeSearchDocument.priceInCents})::int`.mapWith(Number),
+      })
+      .from(storeSearchDocument)
+      .where(and(...scopedFor("price"), textPredicate)),
+  ]);
+
+  const leadTimeCounts = leadTimeRows[0]?.counts ?? {};
+  const priceSummary = priceRow[0];
+
+  return {
+    sellerCountryCodes,
+    stockStates,
+    samplePolicies,
+    conditions,
+    verificationStates,
+    documentKinds,
+    providerKinds,
+    // A bucket nobody matched is dropped, like every other facet here.
+    leadTimeMaxDays: LEAD_TIME_FACET_BUCKET_DAYS.flatMap((days) => {
+      const count = leadTimeCounts[String(days)] ?? 0;
+      return count > 0 ? [{ value: String(days), count }] : [];
+    }),
+    priceRangesInCents: {
+      minInCents: priceSummary?.minInCents ?? null,
+      maxInCents: priceSummary?.maxInCents ?? null,
+      count: priceSummary?.count ?? 0,
     },
   };
 }

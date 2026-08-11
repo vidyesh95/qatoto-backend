@@ -22,6 +22,9 @@ const catalogStubs = vi.hoisted(() => ({
 
 const searchStubs = vi.hoisted(() => ({
   searchStoreDocuments: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  // A39. `/store/search` now answers counts beside its results, so every suite that mocks
+  // this module must provide it or the route resolves `undefined` as a function.
+  computeStoreSearchFacets: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
 const merchandisingStubs = vi.hoisted(() => ({
@@ -216,7 +219,9 @@ describe("public store routes", () => {
     expect(response.status).toBe(200);
     expect(response.body.data.facets.sellerCountryCodes[0].value).toBe("IN");
     expect(response.body.data.products.page.hasMore).toBe(false);
-    expect(catalogStubs.getCategoryFacets).toHaveBeenCalledWith("cat-1");
+    // A39. The SLUG, not the id — the facets read `store_search_document`, which is scoped by
+    // `category_slug` exactly as the search filters are.
+    expect(catalogStubs.getCategoryFacets).toHaveBeenCalledWith("electronics");
   });
 
   it("forwards sort=relevance to search", async () => {
@@ -292,6 +297,43 @@ describe("public store routes", () => {
 
     expect(response.status).toBe(422);
     expect(searchStubs.searchStoreDocuments).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A39. Search carried thirteen filters and published no counts at all, so a buyer could
+   * narrow but never see how many narrowing would leave.
+   */
+  it("answers facets beside the results, from the SAME filter object", async () => {
+    searchStubs.searchStoreDocuments.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+    searchStubs.computeStoreSearchFacets.mockResolvedValue({
+      sellerCountryCodes: [{ value: "IN", count: 4 }],
+      stockStates: [{ value: "in_stock", count: 3 }],
+      samplePolicies: [],
+      conditions: [{ value: "new", count: 4 }],
+      verificationStates: [],
+      documentKinds: [{ value: "product", count: 4 }],
+      providerKinds: [],
+      leadTimeMaxDays: [{ value: "30", count: 2 }],
+      priceRangesInCents: { minInCents: 1000, maxInCents: 50_000, count: 4 },
+    });
+
+    const response = await request(app).get("/store/search").query({ query: "chair", stockState: "in_stock" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.facets.conditions).toEqual([{ value: "new", count: 4 }]);
+
+    /**
+     * THE ASSERTION THIS TEST EXISTS FOR. Both calls receive the same filters — the counts
+     * describe the set the results were drawn from, not a different one. Paging is the only
+     * difference, and paging does not change what matched.
+     */
+    const searchArguments = searchStubs.searchStoreDocuments.mock.calls[0]?.[0];
+    const facetArguments = searchStubs.computeStoreSearchFacets.mock.calls[0]?.[0];
+    expect(facetArguments).toEqual(expect.objectContaining({ query: "chair", stockState: "in_stock" }));
+    expect(searchArguments).toEqual(expect.objectContaining(facetArguments as object));
   });
 
   /** A25. Without this a breadcrumb over a nested category costs one request per level. */

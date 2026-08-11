@@ -4882,7 +4882,21 @@ export const storeSearchDocument = pgTable(
       .on(table.isEligible, table.title, table.id)
       .where(sql`is_eligible`),
     index("store_search_document_organization_idx").on(table.organizationId, table.id),
+    /**
+     * Indexes `category_id`, which NO QUERY PATH READS — the filters and the Phase 22 facets
+     * both scope on `categorySlug`, because `listActiveCategorySubtreeSlugs` returns slugs.
+     * Kept for the FK and its `ON DELETE SET NULL`; see the partial sibling below for the one
+     * the reads actually use.
+     */
     index("store_search_document_category_idx").on(table.categoryId, table.id),
+    /**
+     * A39. The facet scan. Every facet query scopes by category slug and by eligibility, and
+     * grouping one category's rows is the hottest read on this table since Phase 22 moved the
+     * counts here. Partial on `is_eligible` like its three siblings below.
+     */
+    index("store_search_document_eligible_category_idx")
+      .on(table.isEligible, table.categorySlug, table.id)
+      .where(sql`is_eligible`),
     index("store_search_document_provider_kind_idx").on(table.providerKind, table.id),
     index("store_search_document_fts_idx").using("gin", table.searchDocument),
     index("store_search_document_stock_idx")
