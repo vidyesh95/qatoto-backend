@@ -54,5 +54,30 @@ declare namespace Express {
         | "viewer";
       readonly tradeState: "active";
     };
+    /**
+     * The caller's buyer workspace, attached by `requireProvisionedBuyerCommerceWorkspace`
+     * and possibly `pending` (§14, Appendix A37).
+     *
+     * A SEPARATE PROPERTY FROM `commerceOrganization`, NOT A WIDENING OF IT. That property's
+     * `tradeState: "active"` literal is the compile-time proof that a handler reading it is
+     * looking at an organization cleared to trade, and about thirty handlers rely on it —
+     * `checkout/confirm` among them. Widening it would admit a pending shell to all of them
+     * at once, which is precisely the gate §14 said must stay. Two properties means a
+     * handler that reaches for the wrong one fails to compile rather than failing quietly.
+     */
+    buyerCommerceWorkspace?: {
+      readonly organizationId: string;
+      readonly memberId: string;
+      readonly memberRole:
+        | "owner"
+        | "administrator"
+        | "buyer"
+        | "seller"
+        | "provider_operator"
+        | "finance"
+        | "support"
+        | "viewer";
+      readonly tradeState: "pending" | "active";
+    };
   }
 }

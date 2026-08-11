@@ -9,7 +9,15 @@ import {
   commerceCartWriteLimiter,
   commerceCheckoutWriteLimiter,
 } from "#src/middleware/rate-limit.js";
-import { requireActiveBuyerCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
+/**
+ * §14. Every route here but `checkout/confirm` runs on a PENDING buyer workspace. The
+ * confirm keeps `requireActiveBuyerCommerceOrganization` because that is one of the four
+ * places §14 said the trust gate still earns something — a cart is a draft, an order is not.
+ */
+import {
+  requireActiveBuyerCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
+} from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 
 const router = express.Router();
@@ -17,14 +25,14 @@ const router = express.Router();
 router.get(
   "/cart",
   requireAuth,
-  requireActiveBuyerCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
   commerceCartController.getCart,
 );
 
 router.put(
   "/cart/items/:productId",
   requireAuth,
-  requireActiveBuyerCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
   commerceCartWriteLimiter,
   compactBody,
   idempotency({ scope: "active_organization" }),
@@ -34,7 +42,7 @@ router.put(
 router.delete(
   "/cart/items/:productId",
   requireAuth,
-  requireActiveBuyerCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
   commerceCartWriteLimiter,
   compactBody,
   commerceCartController.removeCartItem,
@@ -48,7 +56,7 @@ router.delete(
 router.post(
   "/cart/from-pathway/:pathwaySlug",
   requireAuth,
-  requireActiveBuyerCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
   commerceCartWriteLimiter,
   compactBody,
   idempotency({ required: true, scope: "active_organization" }),
@@ -58,7 +66,7 @@ router.post(
 router.post(
   "/checkout/prepare",
   requireAuth,
-  requireActiveBuyerCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
   commerceCheckoutWriteLimiter,
   compactBody,
   idempotency({ required: true, scope: "active_organization" }),

@@ -45,7 +45,11 @@ function requireDocumentActor(
     } satisfies ApiResponse);
     return null;
   }
-  if (!req.commerceOrganization) {
+  // §14. Possibly-`pending` since Phase 21 — an attachment is worthless without the thread
+  // it rides in, and messaging is open to a pending workspace. Per-document ownership is
+  // still proven in the service.
+  const documentActor = req.buyerCommerceWorkspace ?? req.commerceOrganization;
+  if (!documentActor) {
     res.status(403).json({
       status: "error",
       statusCode: 403,
@@ -54,9 +58,9 @@ function requireDocumentActor(
     return null;
   }
   return {
-    organizationId: req.commerceOrganization.organizationId,
-    memberId: req.commerceOrganization.memberId,
-    memberRole: req.commerceOrganization.memberRole,
+    organizationId: documentActor.organizationId,
+    memberId: documentActor.memberId,
+    memberRole: documentActor.memberRole,
     actorUserId: req.user.id,
   };
 }

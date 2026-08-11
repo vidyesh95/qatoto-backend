@@ -216,7 +216,19 @@ export async function supersedeActiveCheckoutPrepares(
     );
 }
 
-async function assertOrganizationActive(
+/**
+ * Whether this organization may hold a cart.
+ *
+ * WIDENED IN PHASE 21 TO ADMIT `pending`, and the narrowing was the bug §14 named: a cart is
+ * a draft, and putting a buyer's first tap behind human verification is what made the
+ * signed-in buyer surface unreachable. `suspended` and `closed` are still refused, because
+ * those are a withdrawal of trust rather than an absence of it.
+ *
+ * THE CHECKOUT-SIDE TWIN IS DELIBERATELY NOT WIDENED. `commerce-checkout.service.ts` keeps
+ * requiring `active`, and that is what actually enforces §14's `checkout/confirm` gate
+ * inside the transaction that creates orders — not merely at the router door (§0).
+ */
+async function assertOrganizationCanHoldCart(
   transaction: DatabaseTransaction,
   organizationId: string,
 ): Promise<boolean> {
@@ -225,7 +237,10 @@ async function assertOrganizationActive(
     .from(commerceOrganization)
     .where(eq(commerceOrganization.id, organizationId))
     .limit(1);
-  return organizationRow !== undefined && organizationRow.tradeState === "active";
+  return (
+    organizationRow !== undefined &&
+    (organizationRow.tradeState === "active" || organizationRow.tradeState === "pending")
+  );
 }
 
 /**
@@ -498,8 +513,11 @@ export async function setCartItem(
   }
 
   const outcome = await db.transaction(async (transaction) => {
-    const organizationIsActive = await assertOrganizationActive(transaction, actor.organizationId);
-    if (!organizationIsActive) return { status: "org_inactive" as const };
+    const organizationCanHoldCart = await assertOrganizationCanHoldCart(
+      transaction,
+      actor.organizationId,
+    );
+    if (!organizationCanHoldCart) return { status: "org_inactive" as const };
 
     /**
      * EVERY REJECTION HAPPENS BEFORE THE FIRST WRITE, and that ordering is the point.
@@ -655,8 +673,11 @@ export async function removeCartItem(
   requestedVariantId: string | null = null,
 ): Promise<Result<CommerceCartProjection, CommerceCartError>> {
   const outcome = await db.transaction(async (transaction) => {
-    const organizationIsActive = await assertOrganizationActive(transaction, actor.organizationId);
-    if (!organizationIsActive) return { status: "org_inactive" as const };
+    const organizationCanHoldCart = await assertOrganizationCanHoldCart(
+      transaction,
+      actor.organizationId,
+    );
+    if (!organizationCanHoldCart) return { status: "org_inactive" as const };
 
     const [cart] = await transaction
       .select()

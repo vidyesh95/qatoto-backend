@@ -25,12 +25,25 @@ function attachOrganization(req: Request, _res: Response, next: NextFunction): v
   next();
 }
 
+// Phase 21 (§14). A SEPARATE property from `commerceOrganization`, deliberately, so a
+// handler cannot read an unactivated workspace as a trading one.
+function attachBuyerWorkspace(req: Request, _res: Response, next: NextFunction): void {
+  req.buyerCommerceWorkspace = {
+    organizationId: SELLER_ORGANIZATION_ID,
+    memberId: MEMBER_ID,
+    memberRole: "seller",
+    tradeState: "active",
+  };
+  next();
+}
+
 vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
   attachOptionalSellerCommerceOrganization: attachOrganization,
   requireActiveCommerceOrganization: attachOrganization,
   requireActiveBuyerCommerceOrganization: attachOrganization,
   requireActiveProviderCommerceOrganization: attachOrganization,
   requireActiveSellerCommerceOrganization: attachOrganization,
+  requireProvisionedBuyerCommerceWorkspace: attachBuyerWorkspace,
 }));
 
 const deliveryAddressStubs = vi.hoisted(() => ({

@@ -327,7 +327,15 @@ function requireBuyerCommerceContext(req: Request, res: Response) {
     } satisfies ApiResponse);
     return null;
   }
-  if (!req.commerceOrganization) {
+  /**
+   * §14. Drafting routes arrive with a possibly-`pending` `buyerCommerceWorkspace`;
+   * `/open`, `/invitations` and `/close` keep the active guard and arrive with
+   * `commerceOrganization`. Both share this context, and WHICH ONE A ROUTE GETS IS THE
+   * ROUTER'S DECISION — the broadcast gate is the middleware on those three routes, not a
+   * branch in here.
+   */
+  const buyerActor = req.commerceOrganization ?? req.buyerCommerceWorkspace;
+  if (!buyerActor) {
     res.status(403).json({
       status: "error",
       statusCode: 403,
@@ -337,9 +345,9 @@ function requireBuyerCommerceContext(req: Request, res: Response) {
   }
   return {
     actorUserId: req.user.id,
-    buyerOrganizationId: req.commerceOrganization.organizationId,
-    memberId: req.commerceOrganization.memberId,
-    memberRole: req.commerceOrganization.memberRole,
+    buyerOrganizationId: buyerActor.organizationId,
+    memberId: buyerActor.memberId,
+    memberRole: buyerActor.memberRole,
   };
 }
 

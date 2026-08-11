@@ -84,7 +84,17 @@ function requireCommerceActor(
   memberRole: CommerceOrganizationMemberRole;
   actorUserId: string;
 } | null {
-  if (!req.user || !req.commerceOrganization) {
+  /**
+   * §14. Reads `buyerCommerceWorkspace` since Phase 21, because every cart route now runs
+   * behind `requireProvisionedBuyerCommerceWorkspace` and the workspace may be `pending` —
+   * a signed-in buyer's first tap must fill a cart, not answer 403.
+   *
+   * `commerceOrganization` is the fallback and not the other way round, so a route that has
+   * been given the workspace guard keeps working if it is ever also given an active guard,
+   * and a route with neither still refuses.
+   */
+  const commerceActor = req.buyerCommerceWorkspace ?? req.commerceOrganization;
+  if (!req.user || !commerceActor) {
     res.status(401).json({
       status: "error",
       statusCode: 401,
@@ -93,9 +103,9 @@ function requireCommerceActor(
     return null;
   }
   return {
-    organizationId: req.commerceOrganization.organizationId,
-    memberId: req.commerceOrganization.memberId,
-    memberRole: req.commerceOrganization.memberRole,
+    organizationId: commerceActor.organizationId,
+    memberId: commerceActor.memberId,
+    memberRole: commerceActor.memberRole,
     actorUserId: req.user.id,
   };
 }

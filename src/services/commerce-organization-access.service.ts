@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { commerceOrganization, commerceOrganizationMember, session } from "#src/db/schema.js";
@@ -70,6 +70,27 @@ export function memberCanUpdateOrganizationVisibility(
 export type ActiveBuyerCommerceOrganizationAccessError =
   | { type: "ACTIVE_BUYER_ORGANIZATION_REQUIRED" }
   | { type: "ACTIVE_BUYER_MEMBERSHIP_REQUIRED" };
+
+/**
+ * The buyer's own organization, whether or not it has been cleared to trade (§14, A37).
+ *
+ * DELIBERATELY A SEPARATE TYPE FROM {@link ActiveCommerceOrganizationContext} rather than a
+ * widening of it. That type's `tradeState: "active"` literal is what makes a pending
+ * organization unrepresentable across the thirty-odd handlers that read
+ * `req.commerceOrganization`, and relaxing it there would admit a pending shell into every
+ * one of them at once — including `checkout/confirm`, which is exactly the gate §14 said
+ * must stay. Two types means a handler that reads the wrong one does not compile.
+ *
+ * §14 admits a `pending` shell to the taps IN FRONT of the trust gates — cart,
+ * `checkout/prepare`, RFQ drafting, inquiry, messaging, document upload — and nothing
+ * behind them.
+ */
+export interface ProvisionedBuyerCommerceWorkspaceContext {
+  readonly organizationId: string;
+  readonly memberId: string;
+  readonly memberRole: CommerceOrganizationMemberRole;
+  readonly tradeState: "pending" | "active";
+}
 
 export type ActiveProviderCommerceOrganizationAccessError =
   | { type: "ACTIVE_PROVIDER_ORGANIZATION_REQUIRED" }
@@ -315,6 +336,79 @@ export async function resolveActiveBuyerCommerceOrganization(input: {
       tradeState: selectedOrganization.tradeState,
     },
   };
+}
+
+/**
+ * The trade states a buyer workspace may occupy — everything except the two that are a
+ * withdrawal of trust rather than an absence of it.
+ *
+ * `suspended` and `closed` are excluded on purpose. A shell that has never been reviewed is
+ * not the same thing as one a moderator shut down, and auto-provisioning must not hand a
+ * suspended organization back its cart.
+ */
+const BUYER_WORKSPACE_TRADE_STATES = ["pending", "active"] as const;
+
+/**
+ * Finds the caller's buyer-capable memberships, admitting a `pending` organization.
+ *
+ * Pass `organizationId` to re-prove the session's pointer, or `null` to discover whether the
+ * caller has any workspace at all — which is the question auto-provisioning asks before it
+ * mints one.
+ */
+export async function findBuyerCommerceWorkspaces(
+  userId: string,
+  organizationId: string | null,
+  limit: number,
+): Promise<readonly ProvisionedBuyerCommerceWorkspaceContext[]> {
+  const workspaceFilter =
+    organizationId === null
+      ? and(
+          eq(commerceOrganizationMember.userId, userId),
+          eq(commerceOrganizationMember.state, "active"),
+          inArray(commerceOrganizationMember.role, [...BUYER_MEMBER_ROLES]),
+          inArray(commerceOrganization.tradeState, [...BUYER_WORKSPACE_TRADE_STATES]),
+        )
+      : and(
+          eq(commerceOrganizationMember.userId, userId),
+          eq(commerceOrganizationMember.organizationId, organizationId),
+          eq(commerceOrganizationMember.state, "active"),
+          inArray(commerceOrganizationMember.role, [...BUYER_MEMBER_ROLES]),
+          inArray(commerceOrganization.tradeState, [...BUYER_WORKSPACE_TRADE_STATES]),
+        );
+
+  const rows = await db
+    .select({
+      organizationId: commerceOrganization.id,
+      memberId: commerceOrganizationMember.id,
+      memberRole: commerceOrganizationMember.role,
+      tradeState: commerceOrganization.tradeState,
+    })
+    .from(commerceOrganizationMember)
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, commerceOrganizationMember.organizationId),
+    )
+    .where(workspaceFilter)
+    // Oldest first, so a caller who somehow holds two workspaces keeps landing in the same
+    // one rather than alternating between carts.
+    .orderBy(asc(commerceOrganization.createdAt), asc(commerceOrganization.id))
+    .limit(limit);
+
+  // The SQL already excludes `suspended` and `closed`; this narrows the type to match, and
+  // fails loudly rather than silently dropping a row if the two ever diverge.
+  return rows.map((row) => {
+    if (row.tradeState !== "pending" && row.tradeState !== "active") {
+      throw new Error(
+        `Buyer workspace query returned trade state ${row.tradeState}, which its own filter excludes.`,
+      );
+    }
+    return {
+      organizationId: row.organizationId,
+      memberId: row.memberId,
+      memberRole: row.memberRole,
+      tradeState: row.tradeState,
+    };
+  });
 }
 
 /**

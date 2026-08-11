@@ -36,7 +36,10 @@ function requireCommerceActor(
   memberRole: CommerceOrganizationMemberRole;
   actorUserId: string;
 } | null {
-  if (!req.user || !req.commerceOrganization) {
+  // §14. Possibly-`pending` since Phase 21 — see the router's header comment for why the
+  // organization requirement stayed while the activation requirement went.
+  const inquiryActor = req.buyerCommerceWorkspace ?? req.commerceOrganization;
+  if (!req.user || !inquiryActor) {
     res.status(401).json({
       status: "error",
       statusCode: 401,
@@ -45,9 +48,9 @@ function requireCommerceActor(
     return null;
   }
   return {
-    organizationId: req.commerceOrganization.organizationId,
-    memberId: req.commerceOrganization.memberId,
-    memberRole: req.commerceOrganization.memberRole,
+    organizationId: inquiryActor.organizationId,
+    memberId: inquiryActor.memberId,
+    memberRole: inquiryActor.memberRole,
     actorUserId: req.user.id,
   };
 }

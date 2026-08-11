@@ -5,7 +5,7 @@ import {
   commerceDocumentDownloadLimiter,
   commerceOrganizationEvidenceLimiter,
 } from "#src/middleware/rate-limit.js";
-import { requireActiveCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
+import { requireProvisionedBuyerCommerceWorkspace } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
 
@@ -16,9 +16,12 @@ import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-comme
  * a composer able to attach a file nobody, including its uploader, can open — the RFQ
  * read projects `encryptedDocumentId` and mints no URL of its own.
  *
- * `requireActiveCommerceOrganization` rather than the buyer variant: a seller returning a
- * marked-up drawing in a negotiation thread is the same act as the buyer sending the
- * original, and A27's message attachments are written by both sides.
+ * `requireProvisionedBuyerCommerceWorkspace` rather than a role-specific guard: a seller
+ * returning a marked-up drawing in a negotiation thread is the same act as the buyer sending
+ * the original, and A27's message attachments are written by both sides. Since Phase 21 it
+ * also admits a `pending` workspace (§14) — an attachment is worth nothing without the
+ * thread it rides in, and messaging is open to a pending shell. Ownership is unchanged:
+ * `downloadTradeDocument` still authorizes the caller against the specific document.
  *
  * NO IDEMPOTENCY on the upload, unlike verification evidence. Evidence is keyed to a
  * verification of a KIND, so a replay is a duplicate of something; a trade attachment is
@@ -32,7 +35,7 @@ const commerceDocumentsRouter = express.Router();
 commerceDocumentsRouter.post(
   "/documents",
   requireAuth,
-  requireActiveCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
   commerceOrganizationEvidenceLimiter,
   uploadCommerceVerificationEvidence,
   commerceDocumentsController.uploadTradeDocument,
@@ -41,7 +44,7 @@ commerceDocumentsRouter.post(
 commerceDocumentsRouter.get(
   "/documents/:documentId",
   requireAuth,
-  requireActiveCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
   commerceDocumentDownloadLimiter,
   commerceDocumentsController.downloadTradeDocument,
 );

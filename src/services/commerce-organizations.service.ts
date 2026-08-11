@@ -197,7 +197,12 @@ const LEGAL_MEMBER_STATE_TRANSITIONS: Readonly<Record<MemberState, readonly Memb
   left: [],
 };
 
-function normalizeLegalName(legalName: string): string {
+/**
+ * Exported since Phase 21 so the auto-provisioned buyer shell normalizes its name the same
+ * way an explicitly created organization does. Duplicate-review lookup joins on this column,
+ * and two normalizations would make a shell and its later self look like different companies.
+ */
+export function normalizeLegalName(legalName: string): string {
   return legalName.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
 }
 

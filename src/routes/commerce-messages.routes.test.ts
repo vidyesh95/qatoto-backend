@@ -62,6 +62,19 @@ vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
     };
     next();
   },
+  // Phase 21 (§14). Attaches `buyerCommerceWorkspace`, never `commerceOrganization` — the
+  // two are separate properties so a handler cannot read an unactivated workspace as a
+  // trading one. Mounted through app.ts, so every suite that mocks this module must
+  // provide it.
+  requireProvisionedBuyerCommerceWorkspace: (req: Request, _res: Response, next: NextFunction): void => {
+    req.buyerCommerceWorkspace = {
+      organizationId: ORGANIZATION_ID,
+      memberId: "member-messages",
+      memberRole: "buyer",
+      tradeState: "active",
+    };
+    next();
+  },
   requireActiveSellerCommerceOrganization: (req: Request, _res: Response, next: NextFunction): void => {
     req.commerceOrganization = {
       organizationId: ORGANIZATION_ID,

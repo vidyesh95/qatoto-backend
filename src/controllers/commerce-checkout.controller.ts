@@ -77,7 +77,16 @@ function requireCommerceActor(
   memberRole: CommerceOrganizationMemberRole;
   actorUserId: string;
 } | null {
-  if (!req.user || !req.commerceOrganization) {
+  /**
+   * §14. `prepareCheckout` runs on a possibly-`pending` workspace since Phase 21;
+   * `confirmCheckout` keeps `requireActiveBuyerCommerceOrganization` and therefore arrives
+   * with `commerceOrganization` instead. Both handlers share this actor, so it accepts
+   * either — the DIFFERENCE IS ENFORCED BY THE ROUTER, not here, and additionally by
+   * `assertOrganizationActive` inside the confirm transaction (§0: re-checked where the
+   * state transition happens, not only at the door).
+   */
+  const commerceActor = req.commerceOrganization ?? req.buyerCommerceWorkspace;
+  if (!req.user || !commerceActor) {
     res.status(401).json({
       status: "error",
       statusCode: 401,
@@ -86,9 +95,9 @@ function requireCommerceActor(
     return null;
   }
   return {
-    organizationId: req.commerceOrganization.organizationId,
-    memberId: req.commerceOrganization.memberId,
-    memberRole: req.commerceOrganization.memberRole,
+    organizationId: commerceActor.organizationId,
+    memberId: commerceActor.memberId,
+    memberRole: commerceActor.memberRole,
     actorUserId: req.user.id,
   };
 }

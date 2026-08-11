@@ -463,7 +463,10 @@ export async function submitPathway(req: Request, res: Response): Promise<void> 
  * purchase action, not an authoring one, so it runs on the buyer organization guard.
  */
 export async function seedCartFromPathway(req: Request, res: Response): Promise<void> {
-  if (!req.user || !req.commerceOrganization) {
+  // §14. Seeds a CART, so it runs on a possibly-`pending` workspace like every other cart
+  // route since Phase 21.
+  const buyerActor = req.buyerCommerceWorkspace ?? req.commerceOrganization;
+  if (!req.user || !buyerActor) {
     res.status(401).json({
       status: "error",
       statusCode: 401,
@@ -486,9 +489,9 @@ export async function seedCartFromPathway(req: Request, res: Response): Promise<
 
   const result = await commercePathwaysService.seedCartFromPathway(
     {
-      organizationId: req.commerceOrganization.organizationId,
-      memberId: req.commerceOrganization.memberId,
-      memberRole: req.commerceOrganization.memberRole,
+      organizationId: buyerActor.organizationId,
+      memberId: buyerActor.memberId,
+      memberRole: buyerActor.memberRole,
       actorUserId: req.user.id,
     },
     params.data.pathwaySlug,

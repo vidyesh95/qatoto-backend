@@ -1,6 +1,10 @@
 import type { NextFunction, Request, Response } from "express";
 
 import {
+  provisionBuyerCommerceWorkspace,
+  type BuyerCommerceWorkspaceError,
+} from "#src/services/commerce-buyer-workspace.service.js";
+import {
   resolveActiveBuyerCommerceOrganization,
   resolveActiveCommerceOrganization,
   resolveActiveProviderCommerceOrganization,
@@ -150,6 +154,51 @@ export async function requireActiveBuyerCommerceOrganization(
   next();
 }
 
+/**
+ * Buyer workspace guard: resolves the caller's own organization, creating one on first use.
+ *
+ * MOUNT THIS ONLY IN FRONT OF THE TAPS §14 NAMED. §14 decided a buyer organization is
+ * auto-provisioned rather than waited for, and named exactly where the trust gate still
+ * earns something — `checkout/confirm`, RFQ broadcast, seller listing, provider offerings.
+ * Those keep `requireActiveBuyerCommerceOrganization` and its siblings. This guard belongs
+ * on cart, `checkout/prepare`, RFQ drafting, product inquiry, messaging and document upload,
+ * where the previous behaviour was a 403 on a signed-in buyer's very first tap.
+ *
+ * It attaches `req.buyerCommerceWorkspace`, never `req.commerceOrganization` — see the
+ * comment on that property for why the two must not be merged.
+ */
+export async function requireProvisionedBuyerCommerceWorkspace(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (!req.user || !req.authSession) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const workspaceResult = await provisionBuyerCommerceWorkspace({
+    userId: req.user.id,
+    sessionId: req.authSession.id,
+    activeOrganizationId: req.authSession.activeOrganizationId,
+  });
+  if (!workspaceResult.success) {
+    res.status(403).json({
+      status: "error",
+      statusCode: 403,
+      message: buyerWorkspaceErrorMessage(workspaceResult.error),
+    } satisfies ApiResponse);
+    return;
+  }
+
+  req.buyerCommerceWorkspace = workspaceResult.value;
+  next();
+}
+
 /** Provider quote guard: active trade plus provider_operator/admin/owner membership. */
 export async function requireActiveProviderCommerceOrganization(
   req: Request,
@@ -206,6 +255,23 @@ function activeBuyerAccessErrorMessage(error: ActiveBuyerCommerceOrganizationAcc
       const exhaustiveError: never = error;
       void exhaustiveError;
       throw new Error("Unhandled active buyer organization access error.");
+    }
+  }
+}
+
+function buyerWorkspaceErrorMessage(error: BuyerCommerceWorkspaceError): string {
+  switch (error.type) {
+    case "BUYER_WORKSPACE_ACCESS_LOST":
+      // Deliberately the same sentence the other guards use. Distinguishing "your seat was
+      // revoked" from "you switched organizations mid-request" on the wire would tell a
+      // caller about membership changes they were not otherwise shown.
+      return "An active buyer organization membership is required.";
+    case "ACCOUNT_NOT_FOUND":
+      return "Please sign in.";
+    default: {
+      const exhaustiveError: never = error;
+      void exhaustiveError;
+      throw new Error("Unhandled buyer commerce workspace error.");
     }
   }
 }

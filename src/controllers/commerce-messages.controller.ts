@@ -53,7 +53,10 @@ function requireCommerceContext(
   readonly organizationId: string;
   readonly memberId: string;
 } | null {
-  if (!req.user || !req.commerceOrganization) {
+  // §14. Messaging runs on a possibly-`pending` workspace since Phase 21. Thread scoping is
+  // unchanged — `assertThreadParticipant` still proves membership of the specific thread.
+  const messagingActor = req.buyerCommerceWorkspace ?? req.commerceOrganization;
+  if (!req.user || !messagingActor) {
     res.status(401).json({
       status: "error",
       statusCode: 401,
@@ -64,8 +67,8 @@ function requireCommerceContext(
 
   return {
     userId: req.user.id,
-    organizationId: req.commerceOrganization.organizationId,
-    memberId: req.commerceOrganization.memberId,
+    organizationId: messagingActor.organizationId,
+    memberId: messagingActor.memberId,
   };
 }
 

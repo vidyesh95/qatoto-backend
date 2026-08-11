@@ -53,6 +53,24 @@ export interface IdempotencyOptions {
 }
 
 /**
+ * The organization this request is acting for, whichever guard proved it.
+ *
+ * Phase 21 introduced a second proven context: `requireProvisionedBuyerCommerceWorkspace`
+ * attaches `buyerCommerceWorkspace`, which may be a `pending` shell (§14, A37). Both
+ * contexts are re-proven from memberships on every request, so both are equally valid as an
+ * idempotency scope — the scope's job is to keep one organization's replay from colliding
+ * with another's, and it does not care whether that organization may yet trade.
+ *
+ * Reading only `commerceOrganization` here would 403 every swapped route the moment it
+ * carried an `Idempotency-Key`, which is most of the cart.
+ */
+function scopedOrganizationId(req: Request): string | null {
+  return (
+    req.commerceOrganization?.organizationId ?? req.buyerCommerceWorkspace?.organizationId ?? null
+  );
+}
+
+/**
  * SHA-256 over the canonicalized body plus the path.
  *
  * `JSON.stringify` with sorted keys rather than `canonicalizeDocument`: this hashes an
@@ -131,7 +149,8 @@ export function idempotency(options: IdempotencyOptions = {}) {
     }
 
     const userId = req.user.id;
-    if (options.scope === "active_organization" && !req.commerceOrganization) {
+    const scopeOrganizationId = scopedOrganizationId(req);
+    if (options.scope === "active_organization" && scopeOrganizationId === null) {
       res.status(403).json({
         status: "error",
         statusCode: 403,
@@ -141,8 +160,8 @@ export function idempotency(options: IdempotencyOptions = {}) {
     }
 
     const persistedIdempotencyKey =
-      options.scope === "active_organization" && req.commerceOrganization
-        ? organizationScopedIdempotencyKey(req.commerceOrganization.organizationId, idempotencyKey)
+      options.scope === "active_organization" && scopeOrganizationId !== null
+        ? organizationScopedIdempotencyKey(scopeOrganizationId, idempotencyKey)
         : idempotencyKey;
     const requestFingerprint = fingerprintRequest(req);
 

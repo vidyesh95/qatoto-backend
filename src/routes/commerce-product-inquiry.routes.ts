@@ -3,24 +3,26 @@ import express from "express";
 import * as commerceProductInquiryController from "#src/controllers/commerce-product-inquiry.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { commerceMessageWriteLimiter } from "#src/middleware/rate-limit.js";
-import {
-  requireActiveBuyerCommerceOrganization,
-  requireActiveCommerceOrganization,
-} from "#src/middleware/require-active-commerce-organization.js";
+import { requireProvisionedBuyerCommerceWorkspace } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 
 /**
  * Pre-sales product inquiries (STORE Appendix A14) — the backend behind "Chat now".
  *
- * REQUIRES AN ACTIVE BUYER ORGANIZATION, and that gate is deliberate: §4.11 derives
- * thread participants from organization memberships, and every alternative that
- * loosened it meant nullable authorship on `commerce_message`, a shipped table with a
- * shipped wire contract.
+ * REQUIRES A BUYER ORGANIZATION, and that requirement is deliberate: §4.11 derives thread
+ * participants from organization memberships, and every alternative that loosened it meant
+ * nullable authorship on `commerce_message`, a shipped table with a shipped wire contract.
  *
- * The buyer who cannot clear that bar is NOT dead-ended — A9's public question route
- * accepts any identified user, which is why it shipped first, and the product detail
- * read tells the client which of the two to offer via `contactAffordance` rather than
- * leaving it to guess.
+ * WHAT PHASE 21 CHANGED IS WHO CAN CLEAR IT, NOT THE REQUIREMENT. Until §14's
+ * auto-provisioning was built, "an organization exists" meant "staff have reviewed you", so
+ * this route answered 403 to every new buyer. It now runs on
+ * `requireProvisionedBuyerCommerceWorkspace`: the organization is still mandatory and still
+ * the source of authorship, and it is now minted on the spot rather than waited for.
+ *
+ * A14's `contactAffordance` keeps all three values, but §14 records the consequence:
+ * `ask_question` stops being the common case for a signed-in visitor, because a signed-in
+ * visitor now has an organization. A9's public question route still accepts any identified
+ * user and remains the answer for a visitor who is not signed in.
  *
  * Shares the message-write limiter with the thread routes on purpose: opening an
  * inquiry and sending into it are one action from the buyer's side, and splitting the
@@ -35,10 +37,16 @@ const commerceProductInquiryRouter = express.Router();
  * `json-body-budget.test.ts` fails the build for a cap that guards nothing, because a
  * declared limit that cannot apply is documentation of a rule that does not exist.
  */
+/**
+ * §14, consequence for A14. Opens on a possibly-`pending` workspace since Phase 21 — §14's
+ * own note says `ask_question` stops being the common case for a signed-in visitor "because
+ * a signed-in visitor now has an organization", which only holds if the inquiry itself does
+ * not demand an activated one.
+ */
 commerceProductInquiryRouter.post(
   "/products/:productId/inquiries",
   requireAuth,
-  requireActiveBuyerCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
   commerceMessageWriteLimiter,
   idempotency({ required: true, scope: "active_organization" }),
   commerceProductInquiryController.createOrGetProductInquiry,
@@ -49,13 +57,13 @@ commerceProductInquiryRouter.post(
  * seller on another, so `side` is a filter over rows the caller may already see rather
  * than a permission — two routes would imply otherwise.
  *
- * `requireActiveCommerceOrganization`, not the buyer variant: a seller reading its own
- * inquiry inbox is the other half of this feature.
+ * The same guard as the write, not a buyer-specific one: a seller reading its own inquiry
+ * inbox is the other half of this feature, and both sides may be a pending workspace.
  */
 commerceProductInquiryRouter.get(
   "/inquiries",
   requireAuth,
-  requireActiveCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
   commerceProductInquiryController.listProductInquiries,
 );
 

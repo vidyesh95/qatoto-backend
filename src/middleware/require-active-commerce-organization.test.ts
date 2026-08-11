@@ -4,14 +4,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveActiveCommerceOrganization = vi.fn<(...arguments_: readonly unknown[]) => Promise<unknown>>();
 const resolveActiveBuyerCommerceOrganization = vi.fn<(...arguments_: readonly unknown[]) => Promise<unknown>>();
+const provisionBuyerCommerceWorkspace = vi.fn<(...arguments_: readonly unknown[]) => Promise<unknown>>();
 
 vi.mock("#src/services/commerce-organization-access.service.js", () => ({
   resolveActiveCommerceOrganization,
   resolveActiveBuyerCommerceOrganization,
 }));
 
-const { requireActiveCommerceOrganization, requireActiveBuyerCommerceOrganization } =
-  await import("#src/middleware/require-active-commerce-organization.js");
+// Phase 21. Mocked rather than left real because the workspace service reaches `db`, and an
+// unmocked import of it pulls the whole env-validated config into a unit test.
+vi.mock("#src/services/commerce-buyer-workspace.service.js", () => ({
+  provisionBuyerCommerceWorkspace,
+}));
+
+const {
+  requireActiveCommerceOrganization,
+  requireActiveBuyerCommerceOrganization,
+  requireProvisionedBuyerCommerceWorkspace,
+} = await import("#src/middleware/require-active-commerce-organization.js");
 
 function buildProbeApp(): express.Express {
   const app = express();
