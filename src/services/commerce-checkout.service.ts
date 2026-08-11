@@ -363,6 +363,16 @@ async function assertOwnedDeliveryAddress(
   };
 }
 
+/**
+ * THE `checkout/confirm` GATE, and the reason it lives here rather than only on the router.
+ *
+ * §14 named `checkout/confirm` as one of the four places the trust gate still earns
+ * something, and §0's rule is that a state transition re-checks its own preconditions inside
+ * the transaction that performs it. A router guard can be bypassed by a future route that
+ * forgets it; this cannot.
+ *
+ * PREPARE DOES NOT USE THIS — see `assertOrganizationCanPrepareCheckout` below.
+ */
 async function assertOrganizationActive(
   transaction: DatabaseTransaction,
   organizationId: string,
@@ -373,6 +383,34 @@ async function assertOrganizationActive(
     .where(eq(commerceOrganization.id, organizationId))
     .limit(1);
   return organizationRow !== undefined && organizationRow.tradeState === "active";
+}
+
+/**
+ * Whether this organization may PRICE a checkout, which is a different question from whether
+ * it may place one.
+ *
+ * SPLIT FROM `assertOrganizationActive` IN PHASE 21, and the shared helper was the bug: §14
+ * put the gate at `confirm`, but both halves called the same strict check, so opening the
+ * router on `prepare` still answered 403 from inside the transaction. The smoke script caught
+ * it; nothing else would have, because prepare's 403 and confirm's 403 are the same string.
+ *
+ * A prepare reserves stock and returns authoritative totals. Neither is a promise to anyone
+ * outside the platform, and both are superseded by the next cart edit — so a pending
+ * workspace may do it, exactly as it may hold the cart the prepare reads.
+ */
+async function assertOrganizationCanPrepareCheckout(
+  transaction: DatabaseTransaction,
+  organizationId: string,
+): Promise<boolean> {
+  const [organizationRow] = await transaction
+    .select({ tradeState: commerceOrganization.tradeState })
+    .from(commerceOrganization)
+    .where(eq(commerceOrganization.id, organizationId))
+    .limit(1);
+  return (
+    organizationRow !== undefined &&
+    (organizationRow.tradeState === "active" || organizationRow.tradeState === "pending")
+  );
 }
 
 /**
@@ -615,11 +653,11 @@ export async function prepareCheckout(
 
   try {
     const outcome = await db.transaction(async (transaction) => {
-      const organizationIsActive = await assertOrganizationActive(
+      const organizationCanPrepare = await assertOrganizationCanPrepareCheckout(
         transaction,
         actor.organizationId,
       );
-      if (!organizationIsActive) return { status: "org_inactive" as const };
+      if (!organizationCanPrepare) return { status: "org_inactive" as const };
 
       const cart = await getOrCreateCartForUpdate(transaction, actor.organizationId);
       const lines = await transaction

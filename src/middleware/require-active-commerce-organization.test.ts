@@ -45,6 +45,16 @@ function buildProbeApp(): express.Express {
   app.get("/buyer-protected", requireActiveBuyerCommerceOrganization, (req, res) => {
     res.status(200).json(req.commerceOrganization);
   });
+  /**
+   * Answers BOTH properties so a test can prove which one was written. The separation is the
+   * whole point of A37 — a pending workspace must never arrive as `commerceOrganization`.
+   */
+  app.get("/workspace", requireProvisionedBuyerCommerceWorkspace, (req, res) => {
+    res.status(200).json({
+      buyerCommerceWorkspace: req.buyerCommerceWorkspace ?? null,
+      commerceOrganization: req.commerceOrganization ?? null,
+    });
+  });
   return app;
 }
 
@@ -132,6 +142,76 @@ describe("requireActiveBuyerCommerceOrganization", () => {
     const response = await request(buildProbeApp()).get("/buyer-protected");
 
     expect(response.status).toBe(403);
+    expect(response.body.message).toBe("An active buyer organization membership is required.");
+  });
+});
+
+describe("requireProvisionedBuyerCommerceWorkspace", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("attaches a PENDING workspace and never writes commerceOrganization", async () => {
+    provisionBuyerCommerceWorkspace.mockResolvedValue({
+      success: true,
+      value: {
+        organizationId: "organization-1",
+        memberId: "member-owner",
+        memberRole: "owner",
+        tradeState: "pending",
+      },
+    });
+
+    const response = await request(buildProbeApp()).get("/workspace");
+
+    expect(response.status).toBe(200);
+    expect(response.body.buyerCommerceWorkspace).toEqual({
+      organizationId: "organization-1",
+      memberId: "member-owner",
+      memberRole: "owner",
+      tradeState: "pending",
+    });
+    /**
+     * THE ASSERTION THIS SUITE EXISTS FOR. `commerceOrganization` carries the compile-time
+     * claim that its organization may trade, and about thirty handlers read it — including
+     * `checkout/confirm`. A pending shell leaking into it would open every one of §14's gates
+     * at once, and no type would catch it because both properties are optional.
+     */
+    expect(response.body.commerceOrganization).toBeNull();
+  });
+
+  it("passes the session pointer through so provisioning can re-prove it", async () => {
+    provisionBuyerCommerceWorkspace.mockResolvedValue({
+      success: true,
+      value: {
+        organizationId: "organization-1",
+        memberId: "member-owner",
+        memberRole: "owner",
+        tradeState: "active",
+      },
+    });
+
+    await request(buildProbeApp()).get("/workspace");
+
+    expect(provisionBuyerCommerceWorkspace).toHaveBeenCalledWith({
+      userId: "user-1",
+      sessionId: "session-1",
+      activeOrganizationId: "organization-1",
+    });
+  });
+
+  it("refuses with 403 when the caller lost access to their selected workspace", async () => {
+    provisionBuyerCommerceWorkspace.mockResolvedValue({
+      success: false,
+      error: { type: "BUYER_WORKSPACE_ACCESS_LOST" },
+    });
+
+    const response = await request(buildProbeApp()).get("/workspace");
+
+    expect(response.status).toBe(403);
+    // Deliberately indistinguishable from the other guards' refusal: telling a caller that
+    // their seat was revoked, rather than that they lack one, is a disclosure about a
+    // membership change they were not otherwise shown.
     expect(response.body.message).toBe("An active buyer organization membership is required.");
   });
 });

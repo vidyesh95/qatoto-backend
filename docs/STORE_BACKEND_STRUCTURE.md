@@ -4076,6 +4076,15 @@ there would hand a demoted member an empty cart and hide the demotion. Only a ca
 and no buyer-capable membership anywhere gets a new shell, so a seller who taps the cart lands in
 the organization they already own.
 
+**The smoke script found the one thing review would not have.** `prepareCheckout` and
+`confirmCheckout` shared a single `assertOrganizationActive`, so opening the router on
+`checkout/prepare` still answered `403` from inside the transaction. Nothing else would have
+caught it: prepare's 403 and confirm's 403 are the same string, and a reviewer reading the router
+diff sees the guard correctly swapped. `assertOrganizationCanPrepareCheckout` is now the prepare
+half — a prepare reserves stock and returns totals, neither of which is a promise to anybody
+outside the platform, and both are superseded by the next cart edit. The confirm half is unchanged
+and is still the in-transaction authority for §14's money gate.
+
 **Two things §14 did not anticipate, and both needed a column.**
 
 - **The server has no country to declare.** There is no geo middleware, and `user.locationLabel` is
