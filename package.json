@@ -21,6 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:shuffle": "vitest run --sequence.shuffle --maxWorkers=50%",
     "dev": "tsx watch --conditions=development src/index.ts",
     "dev:worker": "tsx watch --conditions=development src/worker.ts",
     "build": "tsc",
