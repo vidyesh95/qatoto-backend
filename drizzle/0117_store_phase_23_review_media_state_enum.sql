@@ -1,0 +1,25 @@
+-- ---------------------------------------------------------------------------
+-- Phase 23 — review media can be unavailable upstream (Appendix A40).
+--
+-- HAND-WRITTEN, like every store-phase migration since 0046.
+--
+-- ENUM-ONLY, and separate from 0118 for the house reason: a type must exist before another
+-- statement in the same `drizzle-kit migrate` transaction can declare a column of it.
+--
+-- TWO VALUES, AND A NEW TYPE RATHER THAN `commerce_ugc_visibility_state`. That enum's four
+-- values — visible, hidden_pending_review, hidden_by_moderator, removed_by_author — are all
+-- about WHO MODERATED, and its own doc comment forbids exactly this reuse:
+--
+--   "an automatic threshold hide is not a human decision — flattening them would make the
+--    moderation queue lie about who acted."
+--
+-- Nothing in that list says "the third-party host stopped serving this". Picking the closest
+-- would attribute a YouTube deletion to a moderator, which is the lie the comment names.
+--
+-- WHY NOT A BARE `unavailable_at` TIMESTAMP. It would carry the fact and nothing else. The
+-- moment a second reason to hide a media row exists — a takedown, a failed virus scan — a
+-- nullable timestamp cannot say which, and the migration to an enum happens then anyway with
+-- rows already in flight.
+-- ---------------------------------------------------------------------------
+
+CREATE TYPE "commerce_review_media_state" AS ENUM ('visible', 'unavailable_upstream');

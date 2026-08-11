@@ -375,7 +375,18 @@ async function loadReviewChildren(reviewIds: readonly string[]): Promise<{
         position: commerceReviewMedia.position,
       })
       .from(commerceReviewMedia)
-      .where(inArray(commerceReviewMedia.reviewId, [...reviewIds]))
+      .where(
+        and(
+          inArray(commerceReviewMedia.reviewId, [...reviewIds]),
+          /**
+           * A40. THE WHOLE POINT OF THE STATE COLUMN. Without this predicate a YouTube video
+           * its host has deleted keeps rendering a dead player on the review, which is the bug
+           * `commerce_review_media.state` exists to close. Backed by
+           * `commerce_review_media_visible_idx`.
+           */
+          eq(commerceReviewMedia.state, "visible"),
+        ),
+      )
       .orderBy(asc(commerceReviewMedia.reviewId), asc(commerceReviewMedia.position)),
     db
       .select({

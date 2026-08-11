@@ -138,6 +138,13 @@ export interface ReviewMediaProjection {
   readonly widthPx: number | null;
   readonly heightPx: number | null;
   readonly position: number;
+  /**
+   * A40. Projected to the AUTHOR, unlike the public read which filters unavailable rows out
+   * entirely. A buyer whose video died deserves to know that rather than finding an empty slot
+   * where they remember attaching something — and only they can replace it.
+   */
+  readonly state: "visible" | "unavailable_upstream";
+  readonly unavailableAt: Date | null;
 }
 
 export interface ReviewHelpfulVoteProjection {
@@ -1093,6 +1100,8 @@ function projectReviewMedia(media: typeof commerceReviewMedia.$inferSelect): Rev
     widthPx: media.widthPx,
     heightPx: media.heightPx,
     position: media.position,
+    state: media.state,
+    unavailableAt: media.unavailableAt,
   };
 }
 

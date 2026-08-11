@@ -1465,6 +1465,23 @@ export const commerceReviewVisibilityEnum = pgEnum("commerce_review_visibility",
 ]);
 
 /**
+ * Whether a review's media is still being served by whoever hosts it (A40).
+ *
+ * TWO VALUES, AND NOT `commerce_ugc_visibility_state`. That enum's four values are all about
+ * WHO MODERATED, and its own comment forbids this reuse: "an automatic threshold hide is not a
+ * human decision — flattening them would make the moderation queue lie about who acted." Nothing
+ * in that list says "YouTube stopped serving this", and picking the closest would attribute a
+ * third party's deletion to a moderator.
+ *
+ * Only a `youtube_video` row can reach the second value — a photo's bytes are on Cloudinary,
+ * which this platform controls. `commerce_review_media_upstream_kind_ck` enforces that.
+ */
+export const commerceReviewMediaStateEnum = pgEnum("commerce_review_media_state", [
+  "visible",
+  "unavailable_upstream",
+]);
+
+/**
  * Review media kind (STORE Appendix A8).
  *
  * `photo` bytes are uploaded, normalized by sharp and delivered from Cloudinary.
@@ -8531,10 +8548,47 @@ export const commerceReviewMedia = pgTable(
     widthPx: integer("width_px"),
     heightPx: integer("height_px"),
     position: integer("position").notNull(),
+    /**
+     * A40. Whether whoever hosts this still serves it.
+     *
+     * `attachReviewVideo` stores a well-formed YouTube id WITHOUT checking the video resolves,
+     * so a review rendered a dead player indefinitely — on the surface a buyer reads to decide
+     * whether to trust a seller. `revalidate-youtube-embeds` flips this nightly.
+     *
+     * HIDDEN, NOT DELETED: a buyer's testimony must not be erased because a third party removed
+     * a file, and a video that returns (unlisted → public) comes back with it. The row keeps its
+     * `position` for exactly that reason — see `commerce_review_media_position_uidx` below.
+     */
+    state: commerceReviewMediaStateEnum("state").default("visible").notNull(),
+    unavailableAt: timestamp("unavailable_at", { precision: 3 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
+    /**
+     * A40. A hidden row KEEPS ITS SLOT, so this index still spans every row rather than the
+     * visible ones. `repackReviewMediaPositions` is deliberately not run on a hide: repacking
+     * would free a sixth slot and quietly turn the six-item cap into "six visible" rather than
+     * "six attached", which is a rule nobody agreed to and one a caller could then exploit by
+     * attaching seven and letting one die.
+     */
     uniqueIndex("commerce_review_media_position_uidx").on(table.reviewId, table.position),
+    /** A40. The gallery reads only visible rows; an unavailable one has no business in it. */
+    index("commerce_review_media_visible_idx")
+      .on(table.reviewId, table.position)
+      .where(sql`state = 'visible'`),
+    /** A40. The two facts are one fact — neither is readable without the other. */
+    check(
+      "commerce_review_media_state_ck",
+      sql`(state = 'unavailable_upstream') = (unavailable_at IS NOT NULL)`,
+    ),
+    /**
+     * A40. A PHOTO CANNOT VANISH UPSTREAM — its bytes are on Cloudinary, which this platform
+     * controls. Only a third-party embed has a host that can stop serving it.
+     */
+    check(
+      "commerce_review_media_upstream_kind_ck",
+      sql`state = 'visible' OR media_kind = 'youtube_video'`,
+    ),
     check("commerce_review_media_position_ck", sql`position BETWEEN 0 AND 5`),
     /**
      * Kind-discriminated supply. A photo carries a URL and measured dimensions; a

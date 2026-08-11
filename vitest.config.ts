@@ -24,6 +24,17 @@ export default defineConfig({
      * misattributing, and the status assertions added alongside make it legible when it happens.
      */
     testTimeout: 20_000,
+    /**
+     * AND THE HOOKS, which carry a SEPARATE budget — 10 000 ms by default, untouched by
+     * `testTimeout`. Raising only the test budget left this half open, and it showed: after that
+     * change `src/app.test.ts` still failed roughly one run in ten, as a FAILED SUITE rather
+     * than a failed assertion, because nearly every route suite builds its app in `beforeAll`
+     * and that is the slowest thing any of them does.
+     *
+     * A suite-level failure is the more misleading of the two — it reports no assertion at all,
+     * so it reads as the file being broken rather than as the machine being busy.
+     */
+    hookTimeout: 20_000,
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],

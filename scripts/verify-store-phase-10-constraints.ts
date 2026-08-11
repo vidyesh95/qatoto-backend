@@ -263,6 +263,13 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
   // ---------------------------------------------------------------------------
   // Data invariants. These are what a denormalized counter and a cross-table rule
   // cost, and the reason this file is worth running.
+  //
+  // A40 AMENDED THE MEDIA HALF. `media_count` counts VISIBLE media since Phase 23, because
+  // `commerce_review_media.state` can now be `unavailable_upstream` — a YouTube video its host
+  // deleted, hidden rather than dropped so a buyer's testimony survives and a returning video
+  // can come back. Left as a bare `count(*)`, this assertion would fail the first night
+  // `revalidate-youtube-embeds` hides one, and the failure would name the counter rather than
+  // the rule that changed under it.
   // ---------------------------------------------------------------------------
 
   const driftedReviewCounters = await countQuery(
@@ -273,7 +280,8 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
                WHERE vote.review_id = review.id)
          OR review.media_count <> (
               SELECT count(*) FROM commerce_review_media AS media
-               WHERE media.review_id = review.id)`,
+               WHERE media.review_id = review.id
+                 AND media.state = 'visible')`,
   );
   outcomes.push({
     label: "review helpful_count and media_count agree with their rows",
