@@ -2,7 +2,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { signInAs } from "#src/test-support/auth-mock.js";
+import { signInAs, signOut } from "#src/test-support/auth-mock.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -55,6 +55,8 @@ const serviceStubs = vi.hoisted(() => ({
   replaceFreightRateBreaks: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   createCustomsDwellEstimate: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   retireCustomsDwellEstimate: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  listFreightRateCards: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  listCustomsDwellEstimates: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
 vi.mock("#src/services/commerce-freight-rates.service.js", () => serviceStubs);
@@ -379,5 +381,239 @@ describe("commerce customs dwell estimate admin routes", () => {
       .send({ validUntil: "2026-07-01T00:00:00.000Z" });
 
     expect(response.status).toBe(409);
+  });
+});
+
+/**
+ * §19.10. The two reads that make the writes reachable.
+ *
+ * The service is stubbed wholesale in this file, so what these prove is the BOUNDARY: which
+ * query shapes get through, what the parsed object looks like when it does, and that a refusal
+ * from the service lands on the right status. The keyset and the single-query band fetch are
+ * not exercised here and cannot be — there is no DB in this suite.
+ */
+describe("commerce freight rate card admin reads", () => {
+  let app: Express;
+
+  beforeAll(async () => {
+    app = await buildTestApp();
+    const freightRatesRouter = (await import("#src/routes/commerce-freight-rates.routes.js")).default;
+    app.use("/commerce", freightRatesRouter);
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    idempotencyCache.clear();
+    signInAs();
+  });
+
+  it("returns the §7 list envelope", async () => {
+    serviceStubs.listFreightRateCards.mockResolvedValue({
+      success: true,
+      value: {
+        items: [RATE_CARD_PROJECTION],
+        page: { nextCursor: null, hasMore: false },
+      },
+    });
+
+    const response = await request(app).get("/commerce/admin/freight-rate-cards");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.items[0].id).toBe("rate_card_1");
+    expect(response.body.data.page).toEqual({ nextCursor: null, hasMore: false });
+  });
+
+  it("passes every filter through verbatim, enum values snake_case and limit coerced", async () => {
+    serviceStubs.listFreightRateCards.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+
+    const response = await request(app).get(
+      "/commerce/admin/freight-rate-cards?state=superseded&mode=sea&originCountryCode=IN&limit=5",
+    );
+
+    expect(response.status).toBe(200);
+    /**
+     * The enum values reach the service as the database spells them. A camelCase alias
+     * anywhere in this path would be a third spelling of `commerce_freight_rate_card_state`
+     * needing translation in both directions forever.
+     */
+    expect(serviceStubs.listFreightRateCards).toHaveBeenCalledWith("user_test_caller", {
+      state: "superseded",
+      mode: "sea",
+      originCountryCode: "IN",
+      limit: 5,
+    });
+  });
+
+  it("refuses an unknown filter key with 422 AND names it, rather than answering unfiltered", async () => {
+    const response = await request(app).get(
+      "/commerce/admin/freight-rate-cards?transportMode=sea",
+    );
+
+    expect(response.status).toBe(422);
+    expect(JSON.stringify(response.body.errors.form)).toContain("transportMode");
+    expect(serviceStubs.listFreightRateCards).not.toHaveBeenCalled();
+  });
+
+  it("refuses `multimodal` — a leg mode has four members, not freight_transport_mode's five", async () => {
+    const response = await request(app).get("/commerce/admin/freight-rate-cards?mode=multimodal");
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.listFreightRateCards).not.toHaveBeenCalled();
+  });
+
+  it("refuses a page size past the ceiling every commerce list shares", async () => {
+    const response = await request(app).get("/commerce/admin/freight-rate-cards?limit=500");
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.listFreightRateCards).not.toHaveBeenCalled();
+  });
+
+  it("answers a malformed cursor with 422 naming the field, never a silent first page", async () => {
+    serviceStubs.listFreightRateCards.mockResolvedValue({
+      success: false,
+      error: { type: "INVALID_CURSOR" },
+    });
+
+    const response = await request(app).get("/commerce/admin/freight-rate-cards?cursor=nonsense");
+
+    expect(response.status).toBe(422);
+    expect(response.body.errors.cursor).toBeDefined();
+  });
+
+  it("answers a missing capability with 403, never 401 and never an empty page", async () => {
+    serviceStubs.listFreightRateCards.mockResolvedValue({
+      success: false,
+      error: { type: "PLATFORM_CAPABILITY_REQUIRED", capability: "moderate_commerce" },
+    });
+
+    const response = await request(app).get("/commerce/admin/freight-rate-cards");
+
+    expect(response.status).toBe(403);
+  });
+
+  it("answers an anonymous caller with 401 without reaching the service", async () => {
+    signOut();
+
+    const response = await request(app).get("/commerce/admin/freight-rate-cards");
+
+    expect(response.status).toBe(401);
+    expect(serviceStubs.listFreightRateCards).not.toHaveBeenCalled();
+  });
+});
+
+describe("commerce customs dwell estimate admin reads", () => {
+  let app: Express;
+
+  beforeAll(async () => {
+    app = await buildTestApp();
+    const freightRatesRouter = (await import("#src/routes/commerce-freight-rates.routes.js")).default;
+    app.use("/commerce", freightRatesRouter);
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    idempotencyCache.clear();
+    signInAs();
+  });
+
+  it("returns the §7 list envelope", async () => {
+    serviceStubs.listCustomsDwellEstimates.mockResolvedValue({
+      success: true,
+      value: {
+        items: [{ id: "dwell_1", destinationCountryCode: "DE", originCountryCode: null }],
+        page: { nextCursor: "2026-01-01T00:00:00.000Z_dwell_1", hasMore: true },
+      },
+    });
+
+    const response = await request(app).get("/commerce/admin/customs-dwell-estimates");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.page.hasMore).toBe(true);
+    expect(response.body.data.page.nextCursor).toBe("2026-01-01T00:00:00.000Z_dwell_1");
+  });
+
+  /**
+   * THE DISTINCTION THIS FILTER EXISTS FOR. `originCountryCode` is nullable on the row and NULL
+   * means "any origin" — the create body refuses omission and demands an explicit `null` for
+   * that reason. So the sentinel and the absent key must reach the service as different things,
+   * or the any-origin rows, which are the broadest claims the platform makes, become
+   * unfindable.
+   */
+  it("forwards the `any` sentinel as a value, distinct from the key being absent", async () => {
+    serviceStubs.listCustomsDwellEstimates.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+
+    await request(app).get("/commerce/admin/customs-dwell-estimates?originCountryCode=any");
+    expect(serviceStubs.listCustomsDwellEstimates).toHaveBeenLastCalledWith("user_test_caller", {
+      originCountryCode: "any",
+    });
+
+    await request(app).get("/commerce/admin/customs-dwell-estimates");
+    expect(serviceStubs.listCustomsDwellEstimates).toHaveBeenLastCalledWith("user_test_caller", {});
+
+    await request(app).get("/commerce/admin/customs-dwell-estimates?originCountryCode=IN");
+    expect(serviceStubs.listCustomsDwellEstimates).toHaveBeenLastCalledWith("user_test_caller", {
+      originCountryCode: "IN",
+    });
+  });
+
+  it("parses `openOnly` into a boolean rather than forwarding the string", async () => {
+    serviceStubs.listCustomsDwellEstimates.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+
+    const response = await request(app).get(
+      "/commerce/admin/customs-dwell-estimates?openOnly=true&destinationCountryCode=DE",
+    );
+
+    expect(response.status).toBe(200);
+    expect(serviceStubs.listCustomsDwellEstimates).toHaveBeenCalledWith("user_test_caller", {
+      openOnly: true,
+      destinationCountryCode: "DE",
+    });
+  });
+
+  it("refuses a lowercase country code, which the column's own check would also refuse", async () => {
+    const response = await request(app).get(
+      "/commerce/admin/customs-dwell-estimates?destinationCountryCode=de",
+    );
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.listCustomsDwellEstimates).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown filter key with 422", async () => {
+    const response = await request(app).get(
+      "/commerce/admin/customs-dwell-estimates?commodityScope=cat_1",
+    );
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.listCustomsDwellEstimates).not.toHaveBeenCalled();
+  });
+
+  it("answers a missing capability with 403, never 401", async () => {
+    serviceStubs.listCustomsDwellEstimates.mockResolvedValue({
+      success: false,
+      error: { type: "PLATFORM_CAPABILITY_REQUIRED", capability: "moderate_commerce" },
+    });
+
+    const response = await request(app).get("/commerce/admin/customs-dwell-estimates");
+
+    expect(response.status).toBe(403);
+  });
+
+  it("answers an anonymous caller with 401 without reaching the service", async () => {
+    signOut();
+
+    const response = await request(app).get("/commerce/admin/customs-dwell-estimates");
+
+    expect(response.status).toBe(401);
+    expect(serviceStubs.listCustomsDwellEstimates).not.toHaveBeenCalled();
   });
 });

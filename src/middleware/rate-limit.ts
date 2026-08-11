@@ -1494,6 +1494,24 @@ export const commerceFreightRateWriteLimiter = createLimiter({
 });
 
 /**
+ * The §19 reference-data ADMIN READS — the two `/commerce/admin` list routes (§19.10).
+ *
+ * SEPARATE FROM THE WRITE BUCKET, and not merely because the name would lie. A console
+ * paging a lane's history is a burst of reads that must not consume the allowance the
+ * operator needs to then FIX what the list showed them; sharing one bucket would let
+ * browsing lock out correcting.
+ *
+ * A LIMITER AT ALL, on a route the service already gates. `requirePlatformCapability` runs a
+ * database lookup BEFORE it refuses, so a signed-in non-staff caller can spend a query per
+ * request without ever passing the gate. The ceiling bounds that, not the moderator.
+ */
+export const commerceFreightRateReadLimiter = createLimiter({
+  namespace: "commerceFreightRateRead",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
  * `GET /commerce/orders/:orderId/arrival-window` (Store Phase 20, §19.4).
  *
  * Tighter than an ordinary order read because each call RATES A LANE — it scans rate cards

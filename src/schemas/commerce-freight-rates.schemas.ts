@@ -34,8 +34,90 @@ export const FREIGHT_MODES = ["air", "sea", "land", "rail"] as const;
 export const FreightModeSchema = z.enum(FREIGHT_MODES);
 export type FreightMode = (typeof FREIGHT_MODES)[number];
 
+/**
+ * Mirrors `commerce_freight_rate_card_state`, on the `FREIGHT_MODES` precedent directly above:
+ * the wire's spelling of an enum the database already owns, not a second enum.
+ *
+ * ON THE WIRE VERBATIM, snake_case, because that is what the column stores and what the
+ * projection's `state` already returns. A camelCase alias would be a third spelling of one
+ * concept and would have to be translated in both directions forever.
+ */
+export const FREIGHT_RATE_CARD_STATES = ["active", "superseded", "withdrawn"] as const;
+export const FreightRateCardStateSchema = z.enum(FREIGHT_RATE_CARD_STATES);
+export type FreightRateCardState = (typeof FREIGHT_RATE_CARD_STATES)[number];
+
 export const RateCardIdParamsSchema = z.object({ rateCardId: IdentifierSchema }).strict();
 export const DwellEstimateIdParamsSchema = z.object({ dwellEstimateId: IdentifierSchema }).strict();
+
+/**
+ * Shared page controls. Bounds match every other commerce list schema — `commerce-trust`,
+ * `commerce-content-reports`, `commerce-fulfillment` — so one page size behaves the same
+ * everywhere. The service supplies the default; absent here means "unspecified", not 20.
+ */
+const PageLimitSchema = z.coerce.number().int().min(1).max(50).optional();
+const PageCursorSchema = z.string().trim().min(1).max(500).optional();
+
+/**
+ * `GET /commerce/admin/freight-rate-cards` (§19.10).
+ *
+ * EVERY FILTER OPTIONAL, and `state` among them. The rating read's predicate is the WINDOW
+ * plus `state <> 'withdrawn'`, so a live option may legitimately come from a `superseded`
+ * card — narrowing to `active` by default would hide rows that are still pricing lanes. The
+ * console filters by asking the server, never by dropping rows it was sent.
+ */
+export const ListFreightRateCardsQuerySchema = z
+  .object({
+    originCountryCode: CountryCodeSchema.optional(),
+    destinationCountryCode: CountryCodeSchema.optional(),
+    /** `FreightModeSchema` — FOUR members. `freight_transport_mode`'s fifth, `multimodal`, is
+     * not a leg mode and no rate card can carry it. */
+    mode: FreightModeSchema.optional(),
+    providerOrganizationId: IdentifierSchema.optional(),
+    state: FreightRateCardStateSchema.optional(),
+    limit: PageLimitSchema,
+    cursor: PageCursorSchema,
+  })
+  .strict();
+export type ListFreightRateCardsQuery = z.infer<typeof ListFreightRateCardsQuerySchema>;
+
+/**
+ * The literal that asks for the rows scoped to ANY origin / ANY commodity — the ones stored
+ * as NULL (§19.3).
+ *
+ * A SENTINEL RATHER THAN AN ABSENCE, because absence already means something else here. The
+ * create body refuses omission and demands an explicit `null` for exactly this reason; a
+ * filter that could not tell "scoped to any origin" from "not filtering by origin" would
+ * make the any-origin rows — the broadest and most consequential ones — unfindable.
+ *
+ * Cannot collide with a real value: `CountryCodeSchema` is `^[A-Z]{2}$`, so lowercase `any`
+ * is not a country code, and the column's own check constraint enforces the same shape.
+ */
+export const ANY_SCOPE_FILTER = "any";
+const AnyOriginFilterSchema = z.union([z.literal(ANY_SCOPE_FILTER), CountryCodeSchema]).optional();
+const AnyCommodityFilterSchema = z
+  .union([z.literal(ANY_SCOPE_FILTER), IdentifierSchema])
+  .optional();
+
+/**
+ * `GET /commerce/admin/customs-dwell-estimates` (§19.10).
+ *
+ * `openOnly` narrows to the rows whose window is still open — `validUntil IS NULL`. The table
+ * has no `state`, so that is what "not retired" means here.
+ */
+export const ListCustomsDwellEstimatesQuerySchema = z
+  .object({
+    destinationCountryCode: CountryCodeSchema.optional(),
+    originCountryCode: AnyOriginFilterSchema,
+    commodityScopeCategoryId: AnyCommodityFilterSchema,
+    openOnly: z
+      .enum(["true", "false"])
+      .transform((value) => value === "true")
+      .optional(),
+    limit: PageLimitSchema,
+    cursor: PageCursorSchema,
+  })
+  .strict();
+export type ListCustomsDwellEstimatesQuery = z.infer<typeof ListCustomsDwellEstimatesQuerySchema>;
 
 /**
  * One weight/volume band.

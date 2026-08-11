@@ -12,6 +12,8 @@ import {
   CreateCustomsDwellEstimateSchema,
   CreateFreightRateCardSchema,
   DwellEstimateIdParamsSchema,
+  ListCustomsDwellEstimatesQuerySchema,
+  ListFreightRateCardsQuerySchema,
   RateCardIdParamsSchema,
   ReplaceFreightRateBreaksSchema,
   UpdateCustomsDwellEstimateSchema,
@@ -35,6 +37,80 @@ import type { ApiResponse } from "#src/types/index.js";
 
 function parseOptionalInstant(value: string | undefined, fallback: Date): Date {
   return value === undefined ? fallback : new Date(value);
+}
+
+/**
+ * §19.10's two reads.
+ *
+ * `safeParse(req.query)` AGAINST A `.strict()` SCHEMA, so an invented filter key is a 422 that
+ * names it rather than a page silently unfiltered. That matters more here than on most lists:
+ * a console that thinks it asked for one lane and was answered with every lane will read the
+ * wrong price off the top row.
+ *
+ * `data` IS THE SERVICE VALUE VERBATIM — `{ items, page }`, not wrapped a second time. §7 fixes
+ * the list envelope, and the writes above wrap because their payload is a single entity plus a
+ * consequence, which is a different shape.
+ */
+export async function listFreightRateCards(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const query = ListFreightRateCardsQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    respondValidationFailed(res, query.error);
+    return;
+  }
+
+  const listResult = await commerceFreightRatesService.listFreightRateCards(
+    req.user.id,
+    query.data,
+  );
+
+  if (!listResult.success) {
+    respondCommerceFreightRateError(res, listResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Freight lane rate cards loaded",
+    data: listResult.value,
+  };
+  res.status(200).json(response);
+}
+
+export async function listCustomsDwellEstimates(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const query = ListCustomsDwellEstimatesQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    respondValidationFailed(res, query.error);
+    return;
+  }
+
+  const listResult = await commerceFreightRatesService.listCustomsDwellEstimates(
+    req.user.id,
+    query.data,
+  );
+
+  if (!listResult.success) {
+    respondCommerceFreightRateError(res, listResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Customs dwell estimates loaded",
+    data: listResult.value,
+  };
+  res.status(200).json(response);
 }
 
 export async function createFreightRateCard(req: Request, res: Response): Promise<void> {

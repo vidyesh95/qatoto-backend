@@ -102,6 +102,17 @@ export function mapCommerceFreightRateErrorToResponse(
         `A successor cannot begin before the card it replaces, which begins at ${error.predecessorValidFrom.toISOString()}.`,
       );
 
+    /**
+     * §19.10's reads. 422 naming `cursor` rather than a silent first page: a client that
+     * quietly restarts a list renders duplicates and reports them as a backend fault, and the
+     * console cannot fix a cursor it was never told was bad.
+     */
+    case "INVALID_CURSOR":
+      return fieldRefusal(
+        "cursor",
+        "That page cursor is not one this endpoint issued. Start from the first page.",
+      );
+
     case "COMMERCE_FREIGHT_RATE_BREAK_FLOOR_DUPLICATED":
       return fieldRefusal(
         "breaks",

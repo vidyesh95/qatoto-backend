@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, lt, or, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -11,7 +11,12 @@ import {
   commerceProviderProfile,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import {
+  ANY_SCOPE_FILTER,
+  type FreightMode,
+  type FreightRateCardState,
+} from "#src/schemas/commerce-freight-rates.schemas.js";
 import { recordPlatformAction } from "#src/services/platform-audit.service.js";
 import {
   requirePlatformCapability,
@@ -20,10 +25,17 @@ import {
 import type { Result } from "#src/types/index.js";
 
 /**
- * The §19 reference data's WRITE half — lane rate cards, their weight bands, and customs
- * dwell estimates. Every function here is staff-only and audited.
+ * The §19 reference data — lane rate cards, their weight bands, and customs dwell estimates.
+ * Every function here is staff-only; every WRITE is additionally audited.
  *
- * THE ONE RULE THAT SHAPES ALL OF IT: a number that has been quotable is never rewritten.
+ * THE READS AT THE FOOT OF THIS FILE ARE THE OPERATOR'S, NOT THE BUYER'S (§19.10), and they
+ * belong here rather than beside the rating read for the reason the whole file exists: they
+ * answer "what reference rows are there", which is a question about this table, while the
+ * rating read answers "what does this lane cost", which is a question about a shipment. They
+ * are NOT audited — reading reference data decides nothing, and an audit chain that records
+ * page views buries the decisions it exists to preserve.
+ *
+ * THE ONE RULE THAT SHAPES THE WRITES: a number that has been quotable is never rewritten.
  * A card feeds a buyer-facing range whose provenance §19.6 puts on the wire, so editing
  * `unitPriceInCents` under an unchanged `sourceForwarderName` would be a claim that
  * forwarder never made. The edit path is a NEW card, which supersedes its predecessor in one
@@ -74,7 +86,15 @@ export type CommerceFreightRateError =
     }
   | { type: "COMMERCE_CUSTOMS_DWELL_ALREADY_CLOSED"; dwellEstimateId: string; validUntil: Date }
   | { type: "COMMERCE_CUSTOMS_DWELL_WINDOW_EMPTY"; validFrom: Date; validUntil: Date }
-  | { type: "COMMERCE_CUSTOMS_DWELL_WINDOW_WIDENED"; currentValidUntil: Date };
+  | { type: "COMMERCE_CUSTOMS_DWELL_WINDOW_WIDENED"; currentValidUntil: Date }
+  /**
+   * §19.10's reads. UNPREFIXED, unlike every member above it, and that is the repo's spelling
+   * rather than an oversight — a dozen other error unions carry `INVALID_CURSOR` verbatim
+   * because a malformed cursor is a transport fault, not a fact about freight. Answered `422`
+   * naming `cursor`, never a silent first page: a client that silently restarts a list shows
+   * duplicates and reports it as a backend bug.
+   */
+  | { type: "INVALID_CURSOR" };
 
 // ---------------------------------------------------------------------------
 // Views
@@ -104,6 +124,17 @@ export interface AdminFreightRateCard {
   readonly volumetricDivisorCm3PerKg: number;
   readonly state: "active" | "superseded" | "withdrawn";
   readonly supersededByRateCardId: string | null;
+  /**
+   * §19.10. Whether the two `/breaks` routes would succeed against this card RIGHT NOW —
+   * `assertCardAcceptsBreakWrites` evaluated at projection time, not a second opinion about it.
+   *
+   * IT IS ON THE SHARED PROJECTION, so the six writes answer with it too. `validFrom` is
+   * optional on create and the controller defaults it to now, so a card keyed in without an
+   * explicit future `validFrom` is in force the instant it exists and can NEVER accept a band
+   * write. A console deriving this itself would own a copy of the deciding predicate and drift
+   * from the server's across clock skew — enabling a control the very next request refuses.
+   */
+  readonly bandsEditable: boolean;
   readonly breaks: readonly AdminFreightRateBreak[];
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -152,6 +183,37 @@ export interface CreateFreightRateCardInput {
 export type UpdateFreightRateCardInput =
   | { readonly intent: "shorten_window"; readonly validUntil: Date }
   | { readonly intent: "withdraw"; readonly reasonNote: string };
+
+/**
+ * §19.10's filters. Every field optional — an absent filter is "do not narrow on this", which
+ * is not the same as any value the field could take.
+ */
+export interface ListFreightRateCardsInput {
+  readonly originCountryCode?: string | undefined;
+  readonly destinationCountryCode?: string | undefined;
+  readonly mode?: FreightMode | undefined;
+  readonly providerOrganizationId?: string | undefined;
+  readonly state?: FreightRateCardState | undefined;
+  readonly limit?: number | undefined;
+  readonly cursor?: string | undefined;
+}
+
+export interface ListCustomsDwellEstimatesInput {
+  readonly destinationCountryCode?: string | undefined;
+  /** `"any"` selects the rows stored as NULL — "scoped to any origin" (§19.3). */
+  readonly originCountryCode?: string | undefined;
+  /** `"any"` selects the rows stored as NULL — "scoped to any commodity". */
+  readonly commodityScopeCategoryId?: string | undefined;
+  readonly openOnly?: boolean | undefined;
+  readonly limit?: number | undefined;
+  readonly cursor?: string | undefined;
+}
+
+/** §7's list envelope, one shape for both reads. */
+export interface AdminReferencePage<TItem> {
+  readonly items: readonly TItem[];
+  readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+}
 
 export interface CreateCustomsDwellEstimateInput {
   readonly destinationCountryCode: string;
@@ -202,6 +264,41 @@ interface ReplaceBreaksOutcome {
   readonly insertedBreaks: readonly RateBreakRow[];
 }
 
+/**
+ * Both break verbs share this gate, and `projectRateCard` reports its verdict as
+ * `bandsEditable` — ONE function, so a list can never advertise a control the write refuses.
+ *
+ * A LIVE CARD'S BANDS ARE FROZEN. Breaks form a ladder, so no insertion is monotone —
+ * adding a band below the top reprices weights its neighbours covered, and adding one above
+ * the top reprices the weights that band used to catch. There is no safe append to a card
+ * that has already quoted somebody. A live card is corrected by POSTing a new one, which
+ * supersedes; this path exists so a card STAGED for next Monday can be fixed on Thursday.
+ *
+ * DECLARED HERE, ABOVE THE PROJECTIONS, rather than beside the two verbs that enforce it:
+ * the projection is now its second caller and a function must precede the code that reads it
+ * in a file this long.
+ */
+function assertCardAcceptsBreakWrites(
+  row: RateCardRow,
+  now: Date,
+): CommerceFreightRateError | null {
+  if (row.state !== "active") {
+    return {
+      type: "COMMERCE_FREIGHT_RATE_CARD_NOT_ACTIVE",
+      rateCardId: row.id,
+      state: row.state,
+    };
+  }
+  if (row.validFrom <= now) {
+    return {
+      type: "COMMERCE_FREIGHT_RATE_CARD_IN_FORCE",
+      rateCardId: row.id,
+      validFrom: row.validFrom,
+    };
+  }
+  return null;
+}
+
 function projectBreak(row: RateBreakRow): AdminFreightRateBreak {
   return {
     id: row.id,
@@ -215,9 +312,16 @@ function projectBreak(row: RateBreakRow): AdminFreightRateBreak {
   };
 }
 
+/**
+ * `now` IS A PARAMETER, not a `new Date()` taken here. Every caller already minted the
+ * instant it made its decision against, and a projection that read the clock a second time
+ * could report `bandsEditable: true` on the very card the gate had just refused a millisecond
+ * earlier — the exact disagreement this field exists to prevent.
+ */
 function projectRateCard(
   row: RateCardRow,
   breakRows: readonly RateBreakRow[],
+  now: Date,
 ): AdminFreightRateCard {
   return {
     id: row.id,
@@ -232,6 +336,7 @@ function projectRateCard(
     volumetricDivisorCm3PerKg: row.volumetricDivisorCm3PerKg,
     state: row.state,
     supersededByRateCardId: row.supersededByRateCardId,
+    bandsEditable: assertCardAcceptsBreakWrites(row, now) === null,
     breaks: breakRows.map(projectBreak).toSorted((left, right) => left.position - right.position),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -485,7 +590,10 @@ export async function createFreightRateCard(
   return {
     success: true,
     value: {
-      rateCard: projectRateCard(outcome.insertedCard, outcome.insertedBreaks),
+      // The reply's `bandsEditable` is the caller's answer to "can I still fix this?", and it
+      // is `false` for any card created without an explicit future `validFrom` — the default
+      // the controller supplies puts the card in force immediately.
+      rateCard: projectRateCard(outcome.insertedCard, outcome.insertedBreaks, new Date()),
       supersededRateCardId: outcome.incumbent?.id ?? null,
     },
   };
@@ -608,42 +716,15 @@ export async function updateFreightRateCard(
     };
   }
 
-  return { success: true, value: projectRateCard(updatedRow, await loadBreaksForCard(rateCardId)) };
+  return {
+    success: true,
+    value: projectRateCard(updatedRow, await loadBreaksForCard(rateCardId), new Date()),
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Breaks
 // ---------------------------------------------------------------------------
-
-/**
- * Both break verbs share this gate.
- *
- * A LIVE CARD'S BANDS ARE FROZEN. Breaks form a ladder, so no insertion is monotone —
- * adding a band below the top reprices weights its neighbours covered, and adding one above
- * the top reprices the weights that band used to catch. There is no safe append to a card
- * that has already quoted somebody. A live card is corrected by POSTing a new one, which
- * supersedes; this path exists so a card STAGED for next Monday can be fixed on Thursday.
- */
-function assertCardAcceptsBreakWrites(
-  row: RateCardRow,
-  now: Date,
-): CommerceFreightRateError | null {
-  if (row.state !== "active") {
-    return {
-      type: "COMMERCE_FREIGHT_RATE_CARD_NOT_ACTIVE",
-      rateCardId: row.id,
-      state: row.state,
-    };
-  }
-  if (row.validFrom <= now) {
-    return {
-      type: "COMMERCE_FREIGHT_RATE_CARD_IN_FORCE",
-      rateCardId: row.id,
-      validFrom: row.validFrom,
-    };
-  }
-  return null;
-}
 
 export async function appendFreightRateBreak(
   actorUserId: string,
@@ -668,7 +749,11 @@ export async function appendFreightRateBreak(
     };
   }
 
-  const gateError = assertCardAcceptsBreakWrites(existing, new Date());
+  // ONE INSTANT for the gate and for the reply's `bandsEditable`. Two `new Date()`s could
+  // straddle `validFrom` and answer "your bands are editable" to the request that just edited
+  // them for the last time.
+  const now = new Date();
+  const gateError = assertCardAcceptsBreakWrites(existing, now);
   if (gateError) {
     return { success: false, error: gateError };
   }
@@ -739,7 +824,10 @@ export async function appendFreightRateBreak(
     throw error;
   }
 
-  return { success: true, value: projectRateCard(existing, await loadBreaksForCard(rateCardId)) };
+  return {
+    success: true,
+    value: projectRateCard(existing, await loadBreaksForCard(rateCardId), now),
+  };
 }
 
 export async function replaceFreightRateBreaks(
@@ -765,7 +853,9 @@ export async function replaceFreightRateBreaks(
     };
   }
 
-  const gateError = assertCardAcceptsBreakWrites(existing, new Date());
+  // One instant for the gate and the reply, for `appendFreightRateBreak`'s reason.
+  const now = new Date();
+  const gateError = assertCardAcceptsBreakWrites(existing, now);
   if (gateError) {
     return { success: false, error: gateError };
   }
@@ -823,7 +913,7 @@ export async function replaceFreightRateBreaks(
     }),
   );
 
-  return { success: true, value: projectRateCard(existing, replaced.insertedBreaks) };
+  return { success: true, value: projectRateCard(existing, replaced.insertedBreaks, now) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1097,4 +1187,236 @@ export async function retireCustomsDwellEstimate(
   }
 
   return { success: true, value: projectDwellEstimate(retiredRow) };
+}
+
+// ---------------------------------------------------------------------------
+// The operator's reads (§19.10)
+// ---------------------------------------------------------------------------
+
+/** `commerce-trust.service.ts`'s figure, so one page size means one thing platform-wide. */
+const DEFAULT_PAGE_LIMIT = 20;
+
+/**
+ * BOTH READS ORDER ON `(validFrom DESC, id ASC)`, and the keyset is written out at each of the
+ * two call sites rather than shared through a helper — a helper would have to be generic over
+ * two tables' columns to buy four lines, which `commerce-trust`, `commerce-fulfillment` and
+ * `commerce-content-reports` each already declined to do.
+ *
+ * `validFrom` RATHER THAN `createdAt`, which is what most lists in this repo order on. A rate
+ * card's subject is the day its prices START APPLYING, and a card keyed in on Friday for next
+ * quarter belongs where an operator looks for next quarter — not at the top because it was
+ * typed most recently. `createdAt` would sort the console by data-entry order, which is a fact
+ * about the admin rather than about the tariff.
+ *
+ * ID LAST AND ASCENDING while the instant descends. Two rows can share a `validFrom` — the
+ * supersession path sets a successor's `validFrom` to the incumbent's `validUntil`, and nothing
+ * stops two lanes being staged for one midnight — so the tiebreak must be total, or the page
+ * boundary silently drops whichever row loses the tie.
+ */
+
+/**
+ * `GET /commerce/admin/freight-rate-cards` — what this platform currently prices, and with what.
+ *
+ * THE READ THAT MAKES THE WRITES REACHABLE. Four of §6.8's six writes take a `rateCardId` or a
+ * `dwellEstimateId` that no other route yields, so before this existed the lifecycle half of
+ * the admin surface — shorten, withdraw, fix the bands — could not be called at all.
+ *
+ * IT IS ALSO THE ONLY WAY TO SEE A SUPERSESSION COMING. `createFreightRateCard` closes the
+ * incumbent inside its own transaction and reports `supersededRateCardId` solely in the reply
+ * to the request that did it; an operator without this list overwrites a live price and learns
+ * a price existed only afterwards. §19.6 requires a missing component to be NAMED rather than
+ * defaulted, and a console that cannot name the card it is about to replace breaks that rule
+ * one level up — at the price list instead of the price.
+ */
+export async function listFreightRateCards(
+  actorUserId: string,
+  input: ListFreightRateCardsInput,
+): Promise<Result<AdminReferencePage<AdminFreightRateCard>, CommerceFreightRateError>> {
+  // CAPABILITY FIRST, before a single filter value is read — the same first statement as all
+  // six writes, and for the identical reason: reversed, the 403/404 difference would make this
+  // route an oracle for which provider organizations and lanes exist.
+  const capabilityResult = await requirePlatformCapability(actorUserId, "moderate_commerce");
+  if (!capabilityResult.success) {
+    return { success: false, error: capabilityResult.error };
+  }
+
+  const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
+
+  let cursorPredicate: SQL | undefined;
+  if (input.cursor !== undefined) {
+    const decodedCursor = decodeTimestampStoreCursor(input.cursor);
+    if (!decodedCursor) {
+      return { success: false, error: { type: "INVALID_CURSOR" } };
+    }
+    cursorPredicate = or(
+      lt(commerceFreightRateCard.validFrom, decodedCursor.sortKey),
+      and(
+        eq(commerceFreightRateCard.validFrom, decodedCursor.sortKey),
+        gt(commerceFreightRateCard.id, decodedCursor.id),
+      ),
+    );
+  }
+
+  const cardRows = await db
+    .select()
+    .from(commerceFreightRateCard)
+    .where(
+      and(
+        input.originCountryCode === undefined
+          ? undefined
+          : eq(commerceFreightRateCard.originCountryCode, input.originCountryCode),
+        input.destinationCountryCode === undefined
+          ? undefined
+          : eq(commerceFreightRateCard.destinationCountryCode, input.destinationCountryCode),
+        input.mode === undefined ? undefined : eq(commerceFreightRateCard.mode, input.mode),
+        input.providerOrganizationId === undefined
+          ? undefined
+          : eq(commerceFreightRateCard.providerOrganizationId, input.providerOrganizationId),
+        input.state === undefined ? undefined : eq(commerceFreightRateCard.state, input.state),
+        cursorPredicate,
+      ),
+    )
+    .orderBy(desc(commerceFreightRateCard.validFrom), asc(commerceFreightRateCard.id))
+    .limit(limit + 1);
+
+  const hasMore = cardRows.length > limit;
+  const pageRows = hasMore ? cardRows.slice(0, limit) : cardRows;
+
+  /**
+   * ONE QUERY FOR EVERY BAND ON THE PAGE, not `loadBreaksForCard` per row. A card carries up
+   * to twenty bands and a page up to fifty cards, so the per-row shape is fifty round trips
+   * to save a `Map` — and the write paths that call `loadBreaksForCard` hold exactly one card,
+   * which is why it stays.
+   */
+  const pageCardIds = pageRows.map((row) => row.id);
+  const breakRowsByCardId = new Map<string, RateBreakRow[]>();
+  if (pageCardIds.length > 0) {
+    const allBreakRows = await db
+      .select()
+      .from(commerceFreightRateBreak)
+      .where(inArray(commerceFreightRateBreak.rateCardId, pageCardIds))
+      .orderBy(asc(commerceFreightRateBreak.rateCardId), asc(commerceFreightRateBreak.position));
+
+    for (const breakRow of allBreakRows) {
+      const existingBands = breakRowsByCardId.get(breakRow.rateCardId);
+      if (existingBands) {
+        existingBands.push(breakRow);
+      } else {
+        breakRowsByCardId.set(breakRow.rateCardId, [breakRow]);
+      }
+    }
+  }
+
+  // ONE INSTANT for the whole page, so two cards staged either side of the same second cannot
+  // disagree about what "editable now" meant within a single response.
+  const now = new Date();
+  const lastRow = pageRows.at(-1);
+
+  return {
+    success: true,
+    value: {
+      items: pageRows.map((row) =>
+        projectRateCard(row, breakRowsByCardId.get(row.id) ?? [], now),
+      ),
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({ sortKey: lastRow.validFrom.toISOString(), id: lastRow.id })
+            : null,
+        hasMore,
+      },
+    },
+  };
+}
+
+/**
+ * `GET /commerce/admin/customs-dwell-estimates` — what this platform believes about borders.
+ *
+ * `originCountryCode` AND `commodityScopeCategoryId` ARE NULLABLE ON THE ROW AND MEAN "ANY".
+ * The create body refuses omission and demands an explicit `null` for that reason, and this
+ * filter inherits the distinction: the literal `"any"` selects the NULL rows, a real value
+ * selects that value, and an absent key narrows on nothing. Collapsing the first and third
+ * would leave the any-origin rows — the broadest claims the platform makes — unfindable.
+ */
+export async function listCustomsDwellEstimates(
+  actorUserId: string,
+  input: ListCustomsDwellEstimatesInput,
+): Promise<Result<AdminReferencePage<AdminCustomsDwellEstimate>, CommerceFreightRateError>> {
+  const capabilityResult = await requirePlatformCapability(actorUserId, "moderate_commerce");
+  if (!capabilityResult.success) {
+    return { success: false, error: capabilityResult.error };
+  }
+
+  const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
+
+  let cursorPredicate: SQL | undefined;
+  if (input.cursor !== undefined) {
+    const decodedCursor = decodeTimestampStoreCursor(input.cursor);
+    if (!decodedCursor) {
+      return { success: false, error: { type: "INVALID_CURSOR" } };
+    }
+    cursorPredicate = or(
+      lt(commerceCustomsDwellEstimate.validFrom, decodedCursor.sortKey),
+      and(
+        eq(commerceCustomsDwellEstimate.validFrom, decodedCursor.sortKey),
+        gt(commerceCustomsDwellEstimate.id, decodedCursor.id),
+      ),
+    );
+  }
+
+  const originPredicate =
+    input.originCountryCode === undefined
+      ? undefined
+      : input.originCountryCode === ANY_SCOPE_FILTER
+        ? isNull(commerceCustomsDwellEstimate.originCountryCode)
+        : eq(commerceCustomsDwellEstimate.originCountryCode, input.originCountryCode);
+
+  const commodityPredicate =
+    input.commodityScopeCategoryId === undefined
+      ? undefined
+      : input.commodityScopeCategoryId === ANY_SCOPE_FILTER
+        ? isNull(commerceCustomsDwellEstimate.commodityScopeCategoryId)
+        : eq(
+            commerceCustomsDwellEstimate.commodityScopeCategoryId,
+            input.commodityScopeCategoryId,
+          );
+
+  const dwellRows = await db
+    .select()
+    .from(commerceCustomsDwellEstimate)
+    .where(
+      and(
+        input.destinationCountryCode === undefined
+          ? undefined
+          : eq(
+              commerceCustomsDwellEstimate.destinationCountryCode,
+              input.destinationCountryCode,
+            ),
+        originPredicate,
+        commodityPredicate,
+        // The table has no `state`, so an open window IS an unretired estimate.
+        input.openOnly === true ? isNull(commerceCustomsDwellEstimate.validUntil) : undefined,
+        cursorPredicate,
+      ),
+    )
+    .orderBy(desc(commerceCustomsDwellEstimate.validFrom), asc(commerceCustomsDwellEstimate.id))
+    .limit(limit + 1);
+
+  const hasMore = dwellRows.length > limit;
+  const pageRows = hasMore ? dwellRows.slice(0, limit) : dwellRows;
+  const lastRow = pageRows.at(-1);
+
+  return {
+    success: true,
+    value: {
+      items: pageRows.map(projectDwellEstimate),
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({ sortKey: lastRow.validFrom.toISOString(), id: lastRow.id })
+            : null,
+        hasMore,
+      },
+    },
+  };
 }
