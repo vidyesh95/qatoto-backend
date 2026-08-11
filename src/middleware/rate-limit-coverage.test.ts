@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 
@@ -111,6 +111,41 @@ const MOUNTED_ROUTERS: readonly {
 /** A write. GETs are excluded — §7's bounds are about writes and expensive reads. */
 const MUTATING_METHODS = new Set(["post", "put", "patch", "delete"]);
 
+/** A mount paired with its loaded module, resolved ONCE in `beforeAll`. */
+interface LoadedMount {
+  readonly mount: (typeof MOUNTED_ROUTERS)[number];
+  readonly routerModule: Record<string, unknown>;
+}
+
+/**
+ * LOADED IN A HOOK, NOT IN A TEST BODY, and that is the whole point.
+ *
+ * Both route-coverage cases below used to `await import()` every entry of MOUNTED_ROUTERS
+ * inside themselves — the same ~40 modules, twice. Vite transforms each one on first sight,
+ * and that cost is billed against the default 5 s `testTimeout`, so the file passed only when
+ * an earlier file had already warmed the transform cache and timed out at
+ * `Test timed out in 5000ms` when it had not: alone it measured 4481 ms of a 5000 ms budget,
+ * and `--sequence.shuffle` (which runs it early, cold) killed it outright.
+ *
+ * This is SETUP, so it belongs where setup goes. A hook gets the 10 s `hookTimeout`, and the
+ * loop now runs once rather than per case. Kept at file scope deliberately: the router graph
+ * pulls in `rate-limit.js`, so the store-coverage cases above stop paying transform cost
+ * inside a test body too.
+ */
+let loadedMounts: readonly LoadedMount[];
+let declaredRouteChains: typeof import("#src/docs/route-inventory.js").declaredRouteChains;
+
+beforeAll(async () => {
+  ({ declaredRouteChains } = await import("#src/docs/route-inventory.js"));
+
+  loadedMounts = await Promise.all(
+    MOUNTED_ROUTERS.map(async (mount) => {
+      const routerModule: Record<string, unknown> = await import(mount.specifier);
+      return { mount, routerModule };
+    }),
+  );
+});
+
 /**
  * Mutating routes that carry NO limiter today — a SNAPSHOT OF EXISTING DEBT, not a
  * blessing.
@@ -213,18 +248,15 @@ describe("rate-limit store coverage, in production", () => {
 });
 
 describe("rate-limit route coverage", () => {
-  it("puts a limiter on every mutating route, or names it as known debt", async () => {
+  it("puts a limiter on every mutating route, or names it as known debt", () => {
     // §7 claims this file "enforces coverage and will fail the build otherwise". Until
     // this case existed that was false: the assertions above count exported limiters
     // against store registrations and never look at a route, so a POST with no limiter
     // passed cleanly. This is the case that makes the claim true.
-    const { declaredRouteChains } = await import("#src/docs/route-inventory.js");
-
     const uncovered: string[] = [];
     let mutatingRouteCount = 0;
 
-    for (const mount of MOUNTED_ROUTERS) {
-      const routerModule: Record<string, unknown> = await import(mount.specifier);
+    for (const { mount, routerModule } of loadedMounts) {
       for (const chain of declaredRouteChains(mount.mountPath, routerModule[mount.exportName])) {
         if (!MUTATING_METHODS.has(chain.method)) continue;
         mutatingRouteCount += 1;
@@ -241,14 +273,11 @@ describe("rate-limit route coverage", () => {
     expect(uncovered.toSorted()).toEqual([...ROUTES_WITHOUT_A_LIMITER].toSorted());
   });
 
-  it("keeps the debt list honest — no entry for a route that now has one", async () => {
+  it("keeps the debt list honest — no entry for a route that now has one", () => {
     // The other direction: an allowlist that outlives its route, or outlives the missing
     // limiter, is a line that quietly re-permits the next gap at that path.
-    const { declaredRouteChains } = await import("#src/docs/route-inventory.js");
-
     const declared = new Set<string>();
-    for (const mount of MOUNTED_ROUTERS) {
-      const routerModule: Record<string, unknown> = await import(mount.specifier);
+    for (const { mount, routerModule } of loadedMounts) {
       for (const chain of declaredRouteChains(mount.mountPath, routerModule[mount.exportName])) {
         if (!chain.handlers.some(isLimiter)) {
           declared.add(`${chain.method.toUpperCase()} ${chain.path}`);
