@@ -783,19 +783,24 @@ export async function computeStoreSearchFacets(
     countByColumn(storeSearchDocument.documentKind, scopedFor("documentKind"), textPredicate),
     countByColumn(storeSearchDocument.providerKind, scopedFor("providerKind"), textPredicate),
     /**
-     * One row, one `count(*) FILTER` per bucket — a single scan rather than five, because the
-     * buckets nest and re-scanning for each would read the same rows five times over.
+     * ONE ROW, one `count(*) FILTER` per bucket — a single scan rather than one per bucket,
+     * because the buckets NEST and re-scanning for each would read the same rows five times.
+     *
+     * Aliased columns rather than `json_build_object`: the bucket bounds go into the query as
+     * bound parameters, and Postgres cannot infer a type for one sitting in `json_build_object`'s
+     * key position. An alias sidesteps the question entirely.
      */
     db
-      .select({
-        counts: sql<Record<string, number>>`json_build_object(${sql.join(
-          LEAD_TIME_FACET_BUCKET_DAYS.flatMap((days) => [
-            sql`${String(days)}`,
-            sql`count(*) FILTER (WHERE ${storeSearchDocument.leadTimeMaxDays} <= ${days})::int`,
+      .select(
+        Object.fromEntries(
+          LEAD_TIME_FACET_BUCKET_DAYS.map((days) => [
+            `days${String(days)}`,
+            sql<number>`count(*) FILTER (WHERE ${storeSearchDocument.leadTimeMaxDays} <= ${days})::int`.mapWith(
+              Number,
+            ),
           ]),
-          sql`, `,
-        )})`,
-      })
+        ),
+      )
       .from(storeSearchDocument)
       .where(and(...scopedFor("leadTimeMaxDays"), textPredicate)),
     db
@@ -808,7 +813,7 @@ export async function computeStoreSearchFacets(
       .where(and(...scopedFor("price"), textPredicate)),
   ]);
 
-  const leadTimeCounts = leadTimeRows[0]?.counts ?? {};
+  const leadTimeCounts = leadTimeRows[0] ?? {};
   const priceSummary = priceRow[0];
 
   return {
@@ -819,10 +824,10 @@ export async function computeStoreSearchFacets(
     verificationStates,
     documentKinds,
     providerKinds,
-    // A bucket nobody matched is dropped, like every other facet here.
     leadTimeMaxDays: LEAD_TIME_FACET_BUCKET_DAYS.flatMap((days) => {
-      const count = leadTimeCounts[String(days)] ?? 0;
-      return count > 0 ? [{ value: String(days), count }] : [];
+      const count = leadTimeCounts[`days${String(days)}`];
+      // A bucket nobody matched is dropped, like every other facet here.
+      return typeof count === "number" && count > 0 ? [{ value: String(days), count }] : [];
     }),
     priceRangesInCents: {
       minInCents: priceSummary?.minInCents ?? null,

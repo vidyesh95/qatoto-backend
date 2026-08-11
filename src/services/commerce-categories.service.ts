@@ -1019,7 +1019,17 @@ export async function decideCommerceCategoryRequest(
     async (
       tx,
     ): Promise<
-      | { readonly status: "decided"; readonly categoryId: string | null; readonly slug: string }
+      | {
+          readonly status: "decided";
+          readonly categoryId: string | null;
+          readonly slug: string;
+          /**
+           * A39. Every listing whose `categoryId` this verdict moved, carried out so the
+           * search documents can be refreshed after commit — `category_slug` is a
+           * denormalized copy that both the filters and the facet counts scope on.
+           */
+          readonly movedProductIds: readonly string[];
+        }
       | { readonly status: "not_found" }
       | { readonly status: "already_decided"; readonly state: "approved" | "rejected" }
       | { readonly status: "assignment_invalid"; readonly productId: string }
@@ -1122,6 +1132,25 @@ export async function decideCommerceCategoryRequest(
         assignedProductIds.add(assignment.productId);
       }
 
+      /**
+       * A39. Collected before the blanket move, because the move CLEARS the predicate that
+       * identifies them — after it runs there is no way to ask which listings it touched.
+       *
+       * Every product whose `categoryId` this verdict changes needs its search document
+       * refreshed. `store_search_document.category_slug` is a denormalized copy, and both the
+       * search filters AND (since Phase 22) the facet counts scope on it, so a listing left
+       * with the old slug is missing from its new category's results and counted under its
+       * old one. `verify-store-phase-22-constraints` found three such rows in this very
+       * database, which is how this was noticed.
+       */
+      const movedProductRows =
+        mintedCategoryId === null
+          ? []
+          : await tx
+              .select({ id: product.id })
+              .from(product)
+              .where(eq(product.pendingCategoryRequestId, requestId));
+
       // The blanket move. On approval the remaining waiting listings go to the new
       // category; on rejection they stay in `misc` and only lose the link.
       await tx
@@ -1143,7 +1172,13 @@ export async function decideCommerceCategoryRequest(
         })
         .where(eq(commerceCategoryRequest.id, requestId));
 
-      return { status: "decided", categoryId: mintedCategoryId, slug: auditSlug };
+      return {
+        status: "decided",
+        categoryId: mintedCategoryId,
+        slug: auditSlug,
+        // A39. Both halves: the explicitly named assignments and the blanket move.
+        movedProductIds: [...assignedProductIds, ...movedProductRows.map((row) => row.id)],
+      };
     },
     (result) =>
       result.status !== "decided"
@@ -1203,6 +1238,23 @@ export async function decideCommerceCategoryRequest(
       const exhaustiveOutcome: never = outcome;
       return exhaustiveOutcome;
     }
+  }
+
+  /**
+   * A39. AFTER COMMIT, and the only category write that needs this.
+   *
+   * `updateCommerceCategory` cannot move a listing — it edits the category, and a category
+   * cannot be retired while it holds one (`assertRetirable`) — and §6.5 makes a slug immutable.
+   * This verdict is therefore the single path that changes which category a product belongs to,
+   * and `store_search_document.category_slug` is a denormalized copy of that.
+   *
+   * Dynamic import: `store-search.service` reaches this module's siblings, and this is the
+   * shape `updateOrganization` and `getCategoryFacets` already use to reach it.
+   */
+  if (outcome.movedProductIds.length > 0) {
+    const { enqueueProductSearchDocumentRefresh } =
+      await import("#src/services/store-search.service.js");
+    await Promise.all(outcome.movedProductIds.map(enqueueProductSearchDocumentRefresh));
   }
 
   const [requestRow] = await db
