@@ -33,6 +33,26 @@ export const CreateReviewSchema = z
 
 export type CreateReviewInput = z.infer<typeof CreateReviewSchema>;
 
+/**
+ * A38. The one edit an author gets, within 30 days.
+ *
+ * `rating` AND `body` ARE BOTH REQUIRED, not a partial patch. There is exactly one edit, so a
+ * caller sending only `body` would spend it and silently keep a rating they may have meant to
+ * change — a partial shape here would be a trap rather than a convenience.
+ *
+ * NO `scores`. The per-axis scores are their own rows, they were optional at creation, and
+ * accepting them here would make an omitted `scores` ambiguous between "leave them" and "clear
+ * them" on the one write that cannot be repeated.
+ */
+export const EditOwnReviewSchema = z
+  .object({
+    rating: z.number().int().min(1).max(5),
+    body: z.string().trim().min(1).max(4000),
+  })
+  .strict();
+
+export type EditOwnReviewInput = z.infer<typeof EditOwnReviewSchema>;
+
 export const ReviewIdParamsSchema = z
   .object({
     reviewId: z.string().trim().min(1).max(200),

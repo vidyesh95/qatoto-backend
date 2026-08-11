@@ -11,6 +11,7 @@ import {
   CreateReviewSchema,
   DecideDisputeSchema,
   DisputeIdParamsSchema,
+  EditOwnReviewSchema,
   ListBuyerCompletionsQuerySchema,
   ListDisputesQuerySchema,
   OrderIdParamsSchema,
@@ -298,6 +299,47 @@ export async function createReview(req: Request, res: Response): Promise<void> {
     status: "success",
     statusCode: 201,
     message: "Review created.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * PATCH /commerce/reviews/:reviewId — the author's one correction (Appendix A38).
+ *
+ * A review was permanent until Phase 21, so a mistyped rating stood forever. It is now editable
+ * ONCE within 30 days, which is Alibaba's rule; the edit clears the review's helpful votes so a
+ * rewritten review cannot carry endorsements earned by what it used to say, and stamps
+ * `editedAt`, which the public read projects.
+ *
+ * THERE IS NO MATCHING DELETE, deliberately. Removal goes through `POST /commerce/reports`
+ * (A12) and a moderator's decision, so "pay me and I'll take the 1-star down" is not a
+ * transaction a buyer can complete alone.
+ */
+export async function editOwnReview(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ReviewIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = EditOwnReviewSchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commerceTrustService.editOwnReview(actor, params.data.reviewId, body.data);
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Review updated.",
     data: result.value,
   } satisfies ApiResponse);
 }

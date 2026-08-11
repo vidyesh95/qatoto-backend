@@ -569,6 +569,14 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "engagement_deliverables_normalized",
     "completion_issued",
     "review_created",
+    /**
+     * A38. An edit changes a published rating, which a seller's storefront is scored on. A
+     * moderator reading a content report needs to know whether the text is the text the buyer
+     * originally posted, and `edited_at` says only that it changed — not from what.
+     */
+    "review_edited",
+    /** A38's seller half. Its own kind so the audit list can filter by who acted. */
+    "review_reply_edited",
     "dispute_opened",
     "dispute_decided",
     /**
@@ -8365,6 +8373,19 @@ export const commerceReview = pgTable(
      */
     helpfulCount: integer("helpful_count").default(0).notNull(),
     mediaCount: integer("media_count").default(0).notNull(),
+    /**
+     * A38. When the author last edited, and — because there is exactly ONE edit — also whether
+     * the edit has been spent. NULL means never edited.
+     *
+     * NOT `updatedAt`, which carries `$onUpdate` and therefore moves on every helpful vote and
+     * every photo attach above. It cannot say "the text changed" and it cannot say "the one
+     * edit is used", which are the only two questions the edit window asks.
+     *
+     * One edit within 30 days is Alibaba's rule. Amazon allows unlimited edits and deletion at
+     * any time, and funds an anti-manipulation team to absorb the consequences; on five-figure
+     * B2B orders an unbounded delete is an extortion lever, so the bound lives here.
+     */
+    editedAt: timestamp("edited_at", { precision: 3 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -8609,6 +8630,19 @@ export const commerceReviewReply = pgTable(
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
     body: text("body").notNull(),
+    /**
+     * A38. The mirror of `commerce_review.editedAt`, and the seller's half of the same bound.
+     *
+     * This reply was unlimited-edit and unlimited-delete until Phase 21 — the inverse abuse of
+     * the buyer side: post something conciliatory in public, then swap or remove it once the
+     * buyer relents. Alibaba caps a supplier's reply at one modification within 30 days and
+     * this matches it.
+     *
+     * An explicit column even though `updatedAt` would currently serve, because nothing else
+     * writes this row TODAY. That is an accident of the present schema rather than a guarantee,
+     * and the first counter added here would silently break the flag.
+     */
+    editedAt: timestamp("edited_at", { precision: 3 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()

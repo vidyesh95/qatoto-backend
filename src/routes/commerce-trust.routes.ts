@@ -45,6 +45,27 @@ router.post(
 );
 
 /**
+ * A38. The author's one correction, within 30 days — Alibaba's rule.
+ *
+ * DECLARED BEFORE the `/reviews/:reviewId/...` routes below only for readability; PATCH shares
+ * a verb with none of them. There is NO matching DELETE, and that absence is the design:
+ * removal goes through A12's content report and a moderator's decision, so a seller cannot buy
+ * a rating's withdrawal from the buyer who left it.
+ *
+ * `requireActiveBuyerCommerceOrganization`, matching review creation — the same organization
+ * that wrote it is the only one that may correct it.
+ */
+router.patch(
+  "/reviews/:reviewId",
+  requireAuth,
+  requireActiveBuyerCommerceOrganization,
+  commerceReviewWriteLimiter,
+  compactBody,
+  idempotency({ required: true, scope: "active_organization" }),
+  commerceTrustController.editOwnReview,
+);
+
+/**
  * Appendix A8 — review depth.
  *
  * ROUTE ORDER: `/reviews/:reviewId/media/:mediaId` is declared after

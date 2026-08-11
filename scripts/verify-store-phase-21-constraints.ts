@@ -250,6 +250,71 @@ const CHECKS: readonly Check[] = [
       };
     },
   },
+  /**
+   * A38's edit window is TRANSACTIONAL LOGIC, not a CHECK, so these assert its consequences on
+   * live data rather than its refusals. That gap is deliberate and worth naming: every test
+   * suite in this repo mocks `#src/db/index.js`, so there is no database-backed harness the
+   * one-edit-in-thirty-days rule could be exercised against. These are what would catch it
+   * having drifted.
+   */
+  {
+    name: "A38 · edited_at exists on both review tables",
+    why: "The one-edit flag and the public 'edited' badge are the same column. Absent, an edit either cannot be recorded or cannot be bounded.",
+    async run() {
+      const [reviewHas, replyHas] = await Promise.all([
+        columnIsNullable("commerce_review", "edited_at"),
+        columnIsNullable("commerce_review_reply", "edited_at"),
+      ]);
+      return {
+        ok: reviewHas && replyHas,
+        detail: `commerce_review ${reviewHas ? "ok" : "MISSING"}, commerce_review_reply ${replyHas ? "ok" : "MISSING"}`,
+      };
+    },
+  },
+  {
+    name: "A38 · no review or reply was edited before it was created",
+    why: "A backwards stamp means the window arithmetic is reading the wrong timestamp, which would make every window check meaningless in the same direction.",
+    async run() {
+      const backwards = await scalar(sql`
+        SELECT (
+          (SELECT count(*) FROM commerce_review WHERE edited_at IS NOT NULL AND edited_at < created_at)
+        + (SELECT count(*) FROM commerce_review_reply WHERE edited_at IS NOT NULL AND edited_at < created_at)
+        )::int AS value`);
+      return { ok: backwards === 0, detail: `${String(backwards)} row(s) edited before creation` };
+    },
+  },
+  {
+    name: "A38 · no review or reply was edited outside its 30-day window",
+    why: "THE ANTI-EXTORTION BOUND, checked against what actually happened rather than against what the service intends. A row edited on day 40 means the window check was bypassed or removed.",
+    async run() {
+      const late = await scalar(sql`
+        SELECT (
+          (SELECT count(*) FROM commerce_review
+            WHERE edited_at IS NOT NULL AND edited_at > created_at + interval '30 days')
+        + (SELECT count(*) FROM commerce_review_reply
+            WHERE edited_at IS NOT NULL AND edited_at > created_at + interval '30 days')
+        )::int AS value`);
+      return { ok: late === 0, detail: `${String(late)} row(s) edited after the window closed` };
+    },
+  },
+  {
+    name: "A38 · every edited review has zero helpful votes recorded against it",
+    why: "VOTE LAUNDERING, closed. An edit clears the counter and deletes the vote rows; a surviving vote on an edited review means endorsements earned by the old text carried into the new one.",
+    async run() {
+      const laundered = await scalar(sql`
+        SELECT count(*)::int AS value
+          FROM commerce_review review
+         WHERE review.edited_at IS NOT NULL
+           AND EXISTS (
+                 SELECT 1 FROM commerce_review_vote vote
+                  WHERE vote.review_id = review.id
+                    AND vote.created_at < review.edited_at)`);
+      return {
+        ok: laundered === 0,
+        detail: `${String(laundered)} edited review(s) carrying pre-edit votes`,
+      };
+    },
+  },
   {
     name: "A37 · the owner index exists by name",
     why: "The refusal probes prove SOMETHING refused. This proves it was the index 0111 created, rather than an unrelated constraint that happens to fire on the same statement.",

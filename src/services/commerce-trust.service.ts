@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, desc, eq, gt, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -121,6 +121,11 @@ export interface ReviewProjection {
   readonly helpfulCount: number;
   readonly mediaCount: number;
   readonly scores: readonly ReviewScoreEntry[];
+  /**
+   * A38. NULL until the author spends their one edit. PROJECTED PUBLICLY on purpose — a
+   * rewritten review that does not say it was rewritten is the manipulation, not the edit.
+   */
+  readonly editedAt: Date | null;
   readonly createdAt: Date;
 }
 
@@ -261,6 +266,7 @@ function projectReview(
     helpfulCount: review.helpfulCount,
     mediaCount: review.mediaCount,
     scores: scores.toSorted((left, right) => left.axis.localeCompare(right.axis)),
+    editedAt: review.editedAt,
     createdAt: review.createdAt,
   };
 }
@@ -1210,6 +1216,146 @@ export async function attachReviewVideo(
  * fails, which renders as a broken image forever. An orphaned asset after a
  * successful commit is invisible and reclaimable; a broken URL is neither.
  */
+/**
+ * A38. How long an author has to correct their own review, and how many times.
+ *
+ * ONE EDIT, THIRTY DAYS — Alibaba's rule, checked rather than assumed. Amazon allows unlimited
+ * edits and deletion at any time and funds an enforcement team to absorb the consequences; on
+ * five-figure B2B orders that combination is an extortion lever, so the bound is in the model.
+ */
+const REVIEW_EDIT_WINDOW_DAYS = 30;
+
+/**
+ * Edit a review the caller wrote (Appendix A38).
+ *
+ * FOUR THINGS HAPPEN TOGETHER, and each one closes a distinct abuse:
+ *
+ *   * the update predicate carries `editedAt IS NULL` and the window, so two concurrent
+ *     submissions cannot both spend the one edit — the second updates zero rows;
+ *   * `helpfulCount` resets to zero and the votes are deleted, which is what stops VOTE
+ *     LAUNDERING: a review that earned two hundred endorsements as praise must not carry that
+ *     social proof into a rewritten complaint. Amazon does the same;
+ *   * `editedAt` is stamped and projected publicly, because a rewrite that does not announce
+ *     itself is the manipulation rather than the correction;
+ *   * scores are left alone. They are their own rows with their own axes, and silently
+ *     dropping them on a body edit would lose data the author did not touch.
+ *
+ * NO AGGREGATE RE-ROLL IS NEEDED, and that is worth stating because it looks like an omission.
+ * `commerce-trust-metrics.service.ts` computes `averageRating` with `avg()` at read time and
+ * nothing denormalizes a rating anywhere in the schema, so a changed rating is already correct
+ * on the next read.
+ *
+ * THERE IS NO AUTHOR DELETE, deliberately — see the migration. Removal goes through A12's
+ * content report, so a seller must convince a moderator rather than the buyer.
+ */
+export async function editOwnReview(
+  actor: CommerceTrustActorContext,
+  reviewId: string,
+  input: { readonly rating: number; readonly body: string },
+): Promise<Result<ReviewProjection, CommerceTrustError>> {
+  if (!memberCanOperateBuyer(actor.memberRole)) {
+    return { success: false, error: { type: "FORBIDDEN" } };
+  }
+
+  const outcome = await db.transaction(async (transaction) => {
+    const review = await loadOwnVisibleReview(transaction, reviewId, actor.organizationId, true);
+    if (!review) return { status: "not_found" as const };
+
+    if (review.editedAt !== null) return { status: "edit_already_used" as const };
+
+    const windowClosesAt = new Date(
+      review.createdAt.getTime() + REVIEW_EDIT_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const editedAt = new Date();
+    if (editedAt >= windowClosesAt) {
+      return { status: "edit_window_closed" as const, windowClosedAt: windowClosesAt };
+    }
+
+    /**
+     * The predicate restates both conditions even though they were just checked under the row
+     * lock. The lock makes that redundant TODAY; restating it means a future caller that
+     * forgets the lock still cannot spend one edit twice.
+     */
+    const [updated] = await transaction
+      .update(commerceReview)
+      .set({
+        rating: input.rating,
+        body: input.body,
+        editedAt,
+        helpfulCount: 0,
+      })
+      .where(
+        and(
+          eq(commerceReview.id, review.id),
+          isNull(commerceReview.editedAt),
+          gt(
+            commerceReview.createdAt,
+            new Date(editedAt.getTime() - REVIEW_EDIT_WINDOW_DAYS * 24 * 60 * 60 * 1000),
+          ),
+        ),
+      )
+      .returning();
+    if (!updated) return { status: "edit_already_used" as const };
+
+    // Vote laundering, closed. `verify-store-phase-10-constraints` asserts `helpfulCount`
+    // against `count(*)` over this table, so the counter and the rows must move together.
+    await transaction.delete(commerceReviewVote).where(eq(commerceReviewVote.reviewId, review.id));
+
+    const scores = await transaction
+      .select()
+      .from(commerceReviewScore)
+      .where(eq(commerceReviewScore.reviewId, review.id));
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: actor.organizationId,
+      eventKind: "review_edited",
+      actorUserId: actor.actorUserId,
+      actorMemberRoleSnapshot: actor.memberRole,
+      targetEntityType: "commerce_review",
+      targetEntityId: review.id,
+      payload: {
+        previousRating: String(review.rating),
+        rating: String(input.rating),
+        helpfulVotesCleared: String(review.helpfulCount),
+      },
+      occurredAt: editedAt,
+    });
+
+    return {
+      status: "edited" as const,
+      review: updated,
+      scores: scores.map((score) => ({ axis: score.axis, score: score.score })),
+    };
+  });
+
+  switch (outcome.status) {
+    case "edited":
+      return { success: true, value: projectReview(outcome.review, outcome.scores) };
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "edit_already_used":
+      return {
+        success: false,
+        error: {
+          type: "CONFLICT",
+          message: "A review may be edited once, and this one has already been edited.",
+        },
+      };
+    case "edit_window_closed":
+      return {
+        success: false,
+        error: {
+          type: "CONFLICT",
+          message: `A review may be edited within ${String(REVIEW_EDIT_WINDOW_DAYS)} days of being posted.`,
+        },
+      };
+    default: {
+      const exhaustiveOutcome: never = outcome;
+      throw new Error(`Unhandled review edit outcome: ${JSON.stringify(exhaustiveOutcome)}`);
+    }
+  }
+}
+
 export async function detachReviewMedia(
   actor: CommerceTrustActorContext,
   reviewId: string,
@@ -1436,6 +1582,31 @@ export async function upsertReviewReply(
       .for("update");
     if (!review) return { status: "not_found" as const };
 
+    /**
+     * A38. THE SELLER'S HALF OF THE EDIT BOUND, and until Phase 21 there was none: this route
+     * was an unlimited upsert with no window, so a conciliatory public reply could be swapped
+     * the moment the buyer relented. That is the mirror of the buyer-side abuse the review edit
+     * closes, and Alibaba caps a supplier's reply the same way — once, within 30 days.
+     *
+     * A FIRST reply is always allowed, however old the review. The bound is on CHANGING what
+     * was published, not on answering late.
+     */
+    const [existingReply] = await transaction
+      .select()
+      .from(commerceReviewReply)
+      .where(eq(commerceReviewReply.reviewId, review.id))
+      .limit(1)
+      .for("update");
+
+    const now = new Date();
+    if (existingReply) {
+      if (existingReply.editedAt !== null) return { status: "edit_already_used" as const };
+      const windowClosesAt = new Date(
+        existingReply.createdAt.getTime() + REVIEW_EDIT_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+      );
+      if (now >= windowClosesAt) return { status: "edit_window_closed" as const };
+    }
+
     const [reply] = await transaction
       .insert(commerceReviewReply)
       .values({
@@ -1449,39 +1620,65 @@ export async function upsertReviewReply(
         set: {
           body: input.body,
           responderMemberId: actor.memberId,
-          updatedAt: new Date(),
+          editedAt: now,
+          updatedAt: now,
         },
+        // Restates the check above, so a caller that skips the lock still cannot spend the one
+        // edit twice.
+        setWhere: isNull(commerceReviewReply.editedAt),
       })
       .returning();
-    if (!reply) return { status: "not_found" as const };
+    if (!reply) return { status: "edit_already_used" as const };
 
     await appendAuditOrThrow(transaction, {
       organizationId: actor.organizationId,
-      eventKind: "review_reply_published",
+      eventKind: existingReply ? "review_reply_edited" : "review_reply_published",
       actorUserId: actor.actorUserId,
       actorMemberRoleSnapshot: actor.memberRole,
       targetEntityType: "commerce_review_reply",
       targetEntityId: reply.reviewId,
       payload: { reviewId: review.id },
-      occurredAt: new Date(),
+      occurredAt: now,
     });
 
     return { status: "saved" as const, reply };
   });
 
-  if (outcome.status === "not_found") {
-    return { success: false, error: { type: "NOT_FOUND" } };
+  switch (outcome.status) {
+    case "saved":
+      return {
+        success: true,
+        value: {
+          reviewId: outcome.reply.reviewId,
+          responderOrganizationId: outcome.reply.responderOrganizationId,
+          body: outcome.reply.body,
+          createdAt: outcome.reply.createdAt,
+          updatedAt: outcome.reply.updatedAt,
+        },
+      };
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "edit_already_used":
+      return {
+        success: false,
+        error: {
+          type: "CONFLICT",
+          message: "A reply may be revised once, and this one has already been revised.",
+        },
+      };
+    case "edit_window_closed":
+      return {
+        success: false,
+        error: {
+          type: "CONFLICT",
+          message: `A reply may be revised within ${String(REVIEW_EDIT_WINDOW_DAYS)} days of being posted.`,
+        },
+      };
+    default: {
+      const exhaustiveOutcome: never = outcome;
+      throw new Error(`Unhandled review reply outcome: ${JSON.stringify(exhaustiveOutcome)}`);
+    }
   }
-  return {
-    success: true,
-    value: {
-      reviewId: outcome.reply.reviewId,
-      responderOrganizationId: outcome.reply.responderOrganizationId,
-      body: outcome.reply.body,
-      createdAt: outcome.reply.createdAt,
-      updatedAt: outcome.reply.updatedAt,
-    },
-  };
 }
 
 /** Withdraw the reply (Appendix A8). Idempotent: withdrawing twice is not an error. */
@@ -1507,6 +1704,31 @@ export async function deleteReviewReply(
       .limit(1);
     if (!review) return { status: "not_found" as const };
 
+    /**
+     * A38. BOUNDED TO THE SAME 30 DAYS AS THE REVISION, because withdrawing a reply and
+     * rewriting one are the same act from the buyer's side: what the public saw is no longer
+     * what the public sees. An unbounded delete would leave the swap open through the door the
+     * revision cap just closed.
+     *
+     * The route is not removed, unlike the review's absent author delete — a seller withdrawing
+     * their own words takes nothing away from anybody, whereas a buyer withdrawing a rating
+     * takes away the record a seller is scored on.
+     */
+    const [existingReply] = await transaction
+      .select()
+      .from(commerceReviewReply)
+      .where(eq(commerceReviewReply.reviewId, review.id))
+      .limit(1)
+      .for("update");
+
+    // Idempotent as before: withdrawing a reply that is not there is not an error.
+    if (existingReply) {
+      const windowClosesAt = new Date(
+        existingReply.createdAt.getTime() + REVIEW_EDIT_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+      );
+      if (new Date() >= windowClosesAt) return { status: "window_closed" as const };
+    }
+
     const removed = await transaction
       .delete(commerceReviewReply)
       .where(eq(commerceReviewReply.reviewId, review.id))
@@ -1528,8 +1750,24 @@ export async function deleteReviewReply(
     return { status: "removed" as const };
   });
 
-  if (outcome.status === "not_found") {
-    return { success: false, error: { type: "NOT_FOUND" } };
+  switch (outcome.status) {
+    case "removed":
+      return { success: true, value: { reviewId } };
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "window_closed":
+      return {
+        success: false,
+        error: {
+          type: "CONFLICT",
+          message: `A reply may be withdrawn within ${String(REVIEW_EDIT_WINDOW_DAYS)} days of being posted.`,
+        },
+      };
+    default: {
+      const exhaustiveOutcome: never = outcome;
+      throw new Error(
+        `Unhandled review reply withdrawal outcome: ${JSON.stringify(exhaustiveOutcome)}`,
+      );
+    }
   }
-  return { success: true, value: { reviewId } };
 }

@@ -111,6 +111,7 @@ vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
 
 const serviceStubs = vi.hoisted(() => ({
   createReview: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  editOwnReview: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   openDispute: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   listDisputesForModerator: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   decideDispute: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
@@ -571,5 +572,158 @@ describe("commerce trust routes", () => {
       expect(response.status).toBe(401);
       expect(serviceStubs.getDisputeForParticipant).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * A38 — the author's one review edit.
+ *
+ * WHAT THIS FILE CAN AND CANNOT PROVE. These are ROUTE tests: the service is stubbed, so they
+ * assert the guard chain, the `.strict()` body, the idempotency requirement, and the mapping of
+ * each refusal onto a status code. The WINDOW ITSELF — one edit, thirty days, votes cleared —
+ * is transactional logic in `commerce-trust.service.ts` and is not covered here, because every
+ * suite in this repo mocks `#src/db/index.js` and there is no database-backed harness to run it
+ * against. `verify-store-phase-21-constraints` checks the invariant against live data instead.
+ */
+describe("commerce review edit routes (A38)", () => {
+  let app: Express;
+
+  beforeAll(async () => {
+    app = await buildTestApp();
+    const trustRouter = (await import("#src/routes/commerce-trust.routes.js")).default;
+    app.use("/commerce", trustRouter);
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    idempotencyCache.clear();
+    signInAs();
+  });
+
+  it("requires Idempotency-Key, because one edit is all there is", async () => {
+    const response = await request(app)
+      .patch("/commerce/reviews/review_1")
+      .send({ rating: 4, body: "Revised after a replacement arrived" });
+
+    expect(response.status).toBe(400);
+    expect(serviceStubs.editOwnReview).not.toHaveBeenCalled();
+  });
+
+  it("rejects a partial edit that omits the rating with 422", async () => {
+    const response = await request(app)
+      .patch("/commerce/reviews/review_1")
+      .set("Idempotency-Key", "review-edit-partial")
+      .send({ body: "Only the text" });
+
+    expect(response.status).toBe(422);
+    // The one edit must not be spendable by a body that silently keeps the old rating.
+    expect(serviceStubs.editOwnReview).not.toHaveBeenCalled();
+  });
+
+  it("rejects `scores` on an edit with 422", async () => {
+    const response = await request(app)
+      .patch("/commerce/reviews/review_1")
+      .set("Idempotency-Key", "review-edit-scores")
+      .send({ rating: 4, body: "Revised", scores: { quality: 3 } });
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.editOwnReview).not.toHaveBeenCalled();
+  });
+
+  it("maps a spent edit to 409", async () => {
+    serviceStubs.editOwnReview.mockResolvedValue({
+      success: false,
+      error: {
+        type: "CONFLICT",
+        message: "A review may be edited once, and this one has already been edited.",
+      },
+    });
+
+    const response = await request(app)
+      .patch("/commerce/reviews/review_1")
+      .set("Idempotency-Key", "review-edit-twice")
+      .send({ rating: 2, body: "Second edit" });
+
+    expect(response.status).toBe(409);
+  });
+
+  it("maps a closed window to 409", async () => {
+    serviceStubs.editOwnReview.mockResolvedValue({
+      success: false,
+      error: {
+        type: "CONFLICT",
+        message: "A review may be edited within 30 days of being posted.",
+      },
+    });
+
+    const response = await request(app)
+      .patch("/commerce/reviews/review_1")
+      .set("Idempotency-Key", "review-edit-late")
+      .send({ rating: 1, body: "Edited on day 40" });
+
+    expect(response.status).toBe(409);
+  });
+
+  it("maps a review the caller did not write to 404, never 403", async () => {
+    serviceStubs.editOwnReview.mockResolvedValue({
+      success: false,
+      error: { type: "NOT_FOUND" },
+    });
+
+    const response = await request(app)
+      .patch("/commerce/reviews/review_someone_elses")
+      .set("Idempotency-Key", "review-edit-foreign")
+      .send({ rating: 1, body: "Not mine" });
+
+    // 404 rather than 403: distinguishing the two would make the route an oracle for which
+    // review ids exist — the rule A28 states for disputes.
+    expect(response.status).toBe(404);
+  });
+
+  it("edits with the buyer organization actor and projects editedAt", async () => {
+    serviceStubs.editOwnReview.mockResolvedValue({
+      success: true,
+      value: {
+        id: "review_1",
+        completionId: "cmpl_1",
+        subjectOrganizationId: "commerce_org_seller",
+        productId: "prd_1",
+        rating: 4,
+        body: "Revised after a replacement arrived",
+        visibility: "visible",
+        helpfulCount: 0,
+        mediaCount: 0,
+        scores: [],
+        editedAt: "2026-08-11T00:00:00.000Z",
+        createdAt: "2026-08-06T00:00:00.000Z",
+      },
+    });
+
+    const response = await request(app)
+      .patch("/commerce/reviews/review_1")
+      .set("Idempotency-Key", "review-edit-ok")
+      .send({ rating: 4, body: "Revised after a replacement arrived" });
+
+    expect(response.status).toBe(200);
+    // Projected publicly: a rewrite that does not announce itself is the manipulation.
+    expect(response.body.data.editedAt).toBe("2026-08-11T00:00:00.000Z");
+    // Zeroed by the edit, so endorsements earned by the old text do not carry.
+    expect(response.body.data.helpfulCount).toBe(0);
+    expect(serviceStubs.editOwnReview).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
+      "review_1",
+      { rating: 4, body: "Revised after a replacement arrived" },
+    );
+  });
+
+  it("offers no author DELETE — removal goes through A12 moderation", async () => {
+    const response = await request(app)
+      .delete("/commerce/reviews/review_1")
+      .set("Idempotency-Key", "review-delete-attempt");
+
+    // 404 from the router, because no such route is declared. This is the anti-extortion
+    // decision asserted rather than merely commented: an author cannot withdraw a rating a
+    // seller might otherwise pay them to remove.
+    expect(response.status).toBe(404);
   });
 });
