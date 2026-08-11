@@ -89,8 +89,12 @@ export type ListFreightRateCardsQuery = z.infer<typeof ListFreightRateCardsQuery
  * filter that could not tell "scoped to any origin" from "not filtering by origin" would
  * make the any-origin rows — the broadest and most consequential ones — unfindable.
  *
- * Cannot collide with a real value: `CountryCodeSchema` is `^[A-Z]{2}$`, so lowercase `any`
- * is not a country code, and the column's own check constraint enforces the same shape.
+ * IT CANNOT COLLIDE WITH A REAL VALUE, and the two halves rest on different grounds.
+ * `CountryCodeSchema` is `^[A-Z]{2}$` and the column carries the same check constraint, so
+ * lowercase `any` is structurally not a country code. `commerceCategory.id` is a `randomUUID()`
+ * — the default and every seeded row — so no category is named `any`; that half is a fact about
+ * the data rather than a constraint, and a category id assigned by hand as the literal `any`
+ * would become unfilterable. Nothing in this repo assigns one.
  */
 export const ANY_SCOPE_FILTER = "any";
 const AnyOriginFilterSchema = z.union([z.literal(ANY_SCOPE_FILTER), CountryCodeSchema]).optional();

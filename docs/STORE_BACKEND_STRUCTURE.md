@@ -1007,8 +1007,8 @@ land in the same change as the routes.
 | PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Replace the whole ordered set; same guard. Idempotency-Key                                                  |
 | POST        | `/commerce/admin/customs-dwell-estimates`                      | Record a dwell figure; closes the open-ended row on that scope. Idempotency-Key                             |
 | PATCH       | `/commerce/admin/customs-dwell-estimates/:dwellEstimateId`     | Retire it by closing its window. Idempotency-Key                                                            |
-| GET         | `/commerce/admin/freight-rate-cards`                           | §19.10. Filters `originCountryCode` · `destinationCountryCode` · `mode` · `providerOrganizationId` · `state`; rows are the write projection, `breaks` and `bandsEditable` included |
-| GET         | `/commerce/admin/customs-dwell-estimates`                      | §19.10. Filters `destinationCountryCode` · `originCountryCode` · `commodityScopeCategoryId` · `openOnly`; `any` selects the NULL-scoped rows |
+| GET         | `/commerce/admin/freight-rate-cards`                           | §19.10. Filters lane, `mode`, provider, `state`; rows are the write projection plus `bandsEditable`         |
+| GET         | `/commerce/admin/customs-dwell-estimates`                      | §19.10. Same gate. `any` selects the NULL-scoped rows; `openOnly` narrows to open windows                   |
 | GET         | `/commerce/orders/:orderId/arrival-window`                     | §19.4's projection. Optional `?mode=`; order membership required, `404` otherwise                           |
 
 All six writes **and both admin reads** are gated on `moderate_commerce` **checked in-service**,
