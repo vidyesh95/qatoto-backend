@@ -4,6 +4,7 @@ import { z } from "zod";
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { ACCEPTED_IMAGE_FORMATS_SENTENCE, describeUnsupportedImageFormat } from "#src/lib/image.js";
 import {
+  AddDisputeNoteSchema,
   AttachReviewPhotoFieldsSchema,
   AttachReviewVideoSchema,
   CompletionIdParamsSchema,
@@ -429,6 +430,45 @@ export async function getDispute(req: Request, res: Response): Promise<void> {
     status: "success",
     statusCode: 200,
     message: "Dispute loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * POST /commerce/disputes/:disputeId/notes — a party speaks in its own dispute (A40).
+ *
+ * `note_added` has existed as an event kind since `0052` with no writer, and A28's participant
+ * read already renders it. Both parties may add one while the dispute is open; a non-party gets
+ * `404` rather than `403`, so the route cannot be used to discover dispute ids.
+ *
+ * Answers the whole updated timeline, matching `GET /disputes/:disputeId`, so the response and a
+ * refresh cannot disagree.
+ */
+export async function addDisputeNote(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = DisputeIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = AddDisputeNoteSchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commerceTrustService.addDisputeNote(actor, params.data.disputeId, body.data);
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(201).json({
+    status: "success",
+    statusCode: 201,
+    message: "Dispute note added.",
     data: result.value,
   } satisfies ApiResponse);
 }

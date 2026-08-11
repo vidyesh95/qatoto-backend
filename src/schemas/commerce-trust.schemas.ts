@@ -142,6 +142,19 @@ export const DisputeIdParamsSchema = z
   })
   .strict();
 
+/**
+ * A40. One field, matching `commerce_dispute_event_note_ck`'s 1..4000 bound exactly, and the
+ * same shape `DecideDisputeSchema.note` already uses — a party's note and a moderator's are the
+ * same kind of text on the same column, so they get the same rule.
+ */
+export const AddDisputeNoteSchema = z
+  .object({
+    note: z.string().trim().min(1).max(4000),
+  })
+  .strict();
+
+export type AddDisputeNoteInput = z.infer<typeof AddDisputeNoteSchema>;
+
 export const ListDisputesQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).optional(),

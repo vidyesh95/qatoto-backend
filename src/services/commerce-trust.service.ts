@@ -536,7 +536,9 @@ export async function openDispute(
 
     await transaction.insert(commerceDisputeEvent).values({
       disputeId: inserted.id,
-      sequence: 0,
+      // Zero by construction — the dispute row was inserted three statements ago — but taken
+      // from the same helper the other two writers use, so there is one rule and not two.
+      sequence: await nextDisputeEventSequence(transaction, inserted.id),
       eventKind: "opened",
       actorUserId: actor.actorUserId,
       note: input.summary,
@@ -664,6 +666,134 @@ export async function listDisputesForModerator(
  * may read one, and the counterparty being told a dispute exists against them is the
  * entire point of telling them.
  */
+/**
+ * Is this organization a party to this dispute? (A28's rule, A40's helper.)
+ *
+ * EXTRACTED so the read and the note write cannot answer it differently. It was inline in
+ * `getDisputeForParticipant` and correct there; a second copy in the writer is how the two
+ * eventually disagree about who may speak in a dispute they can both read.
+ *
+ * BOTH SIDES, unlike `evaluateDisputeOpeningRelationship`, which 403s a party who is not the
+ * buyer because only a buyer may OPEN a dispute. A counterparty who cannot answer an accusation
+ * is the reason a timeline exists at all.
+ */
+/**
+ * The next position on a dispute's timeline.
+ *
+ * `MAX(sequence) + 1`, NOT `count(*)`. The two agree today only because the table is append-only
+ * by trigger (`0052`) and every existing writer starts at zero — so a count happens to equal the
+ * highest sequence plus one. A40 adds a third writer, and a rule that holds by coincidence across
+ * three call sites is one somebody eventually breaks.
+ *
+ * MUST BE CALLED UNDER THE DISPUTE ROW LOCK. Every caller already takes `FOR UPDATE` on
+ * `commerce_dispute` before reaching here, which is what makes read-then-insert safe;
+ * `commerce_dispute_event_sequence_uidx` is the backstop if one ever forgets.
+ */
+async function nextDisputeEventSequence(
+  transaction: DatabaseTransaction,
+  disputeId: string,
+): Promise<number> {
+  const [highest] = await transaction
+    .select({ sequence: sql<number | null>`max(${commerceDisputeEvent.sequence})` })
+    .from(commerceDisputeEvent)
+    .where(eq(commerceDisputeEvent.disputeId, disputeId));
+  return highest?.sequence === null || highest?.sequence === undefined ? 0 : highest.sequence + 1;
+}
+
+export function isDisputeParty(
+  dispute: { readonly buyerOrganizationId: string; readonly counterpartyOrganizationId: string },
+  organizationId: string,
+): boolean {
+  return (
+    dispute.buyerOrganizationId === organizationId ||
+    dispute.counterpartyOrganizationId === organizationId
+  );
+}
+
+/**
+ * Add a note to a dispute's timeline (Appendix A40).
+ *
+ * `commerce_dispute_event_kind` has carried `note_added` since `0052` with NO WRITER. A28 then
+ * shipped the participant read, which projects the timeline with `note` included and filters on
+ * no `eventKind` — so a note has had somewhere to appear ever since, and nothing to put there. A
+ * buyer could open a dispute over a six-figure order and then say nothing further, and the seller
+ * could read the accusation and not answer it.
+ *
+ * BOTH PARTIES, WHILE IT IS OPEN.
+ *
+ * - Both, because both can already read it, and a counterparty who cannot respond makes the
+ *   timeline a one-sided record of a two-sided disagreement.
+ * - Open only, because `decideDispute` has already restored the order's `priorOrderState` by the
+ *   time a dispute is `closed` or `dismissed`. There is nothing left to argue about, and an
+ *   append-only table means a note added afterwards could never be withdrawn.
+ * - A NON-PARTY GETS `NOT_FOUND`, never `FORBIDDEN` — A28's rule, so the route cannot be used to
+ *   discover which dispute ids exist.
+ *
+ * The row is immutable once written (`commerce_dispute_event_append_only`, `0052:134-139`), which
+ * is the point: a timeline somebody can edit afterwards is not evidence.
+ */
+export async function addDisputeNote(
+  actor: CommerceTrustActorContext,
+  disputeId: string,
+  input: { readonly note: string },
+): Promise<Result<DisputeDetailProjection, CommerceTrustError>> {
+  const outcome = await db.transaction(async (transaction) => {
+    /**
+     * `FOR UPDATE` for the same reason `decideDispute` takes it: `nextDisputeEventSequence`
+     * reads the highest sequence and then inserts, and two concurrent notes without the lock
+     * would both read the same number and one would lose to the unique index.
+     */
+    const [dispute] = await transaction
+      .select()
+      .from(commerceDispute)
+      .where(eq(commerceDispute.id, disputeId))
+      .limit(1)
+      .for("update");
+
+    if (!dispute || !isDisputeParty(dispute, actor.organizationId)) {
+      return { status: "not_found" as const };
+    }
+    if (dispute.state !== "open") {
+      return { status: "already_decided" as const, state: dispute.state };
+    }
+
+    await transaction.insert(commerceDisputeEvent).values({
+      disputeId: dispute.id,
+      sequence: await nextDisputeEventSequence(transaction, dispute.id),
+      eventKind: "note_added",
+      actorUserId: actor.actorUserId,
+      note: input.note,
+      occurredAt: new Date(),
+    });
+
+    return { status: "added" as const };
+  });
+
+  switch (outcome.status) {
+    case "added":
+      /**
+       * Answers the WHOLE timeline rather than the one note. A party adding a note wants to see
+       * the conversation it joined, and re-reading through the participant read means the
+       * response cannot disagree with what a refresh would show.
+       */
+      return getDisputeForParticipant(actor, disputeId);
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "already_decided":
+      return {
+        success: false,
+        error: {
+          type: "INVALID_STATE",
+          message: `This dispute was already ${outcome.state} and can no longer be added to.`,
+        },
+      };
+    default: {
+      const exhaustiveOutcome: never = outcome;
+      throw new Error(`Unhandled dispute note outcome: ${JSON.stringify(exhaustiveOutcome)}`);
+    }
+  }
+}
+
 export async function getDisputeForParticipant(
   actor: CommerceTrustActorContext,
   disputeId: string,
@@ -674,11 +804,7 @@ export async function getDisputeForParticipant(
     .where(eq(commerceDispute.id, disputeId))
     .limit(1);
 
-  if (
-    !dispute ||
-    (dispute.buyerOrganizationId !== actor.organizationId &&
-      dispute.counterpartyOrganizationId !== actor.organizationId)
-  ) {
+  if (!dispute || !isDisputeParty(dispute, actor.organizationId)) {
     return { success: false, error: { type: "NOT_FOUND" } };
   }
 
@@ -845,13 +971,9 @@ export async function decideDispute(
       throw new Error("Locked open dispute vanished while recording its decision.");
     }
 
-    const [eventCount] = await transaction
-      .select({ count: sql<number>`count(*)::int` })
-      .from(commerceDisputeEvent)
-      .where(eq(commerceDisputeEvent.disputeId, dispute.id));
     await transaction.insert(commerceDisputeEvent).values({
       disputeId: dispute.id,
-      sequence: eventCount?.count ?? 0,
+      sequence: await nextDisputeEventSequence(transaction, dispute.id),
       eventKind: input.decision,
       actorUserId: moderatorUserId,
       note: input.note ?? null,

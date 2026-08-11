@@ -113,6 +113,7 @@ const serviceStubs = vi.hoisted(() => ({
   createReview: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   editOwnReview: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   openDispute: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  addDisputeNote: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   listDisputesForModerator: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   decideDispute: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getDisputeForParticipant: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
@@ -725,5 +726,125 @@ describe("commerce review edit routes (A38)", () => {
     // decision asserted rather than merely commented: an author cannot withdraw a rating a
     // seller might otherwise pay them to remove.
     expect(response.status).toBe(404);
+  });
+});
+
+/**
+ * A40 — a party speaks in its own dispute.
+ *
+ * `commerce_dispute_event_kind` has carried `note_added` since `0052` with no writer, and A28's
+ * participant read has rendered the timeline since Phase 15. These are ROUTE tests: the service
+ * is stubbed, so they pin the guard chain, the `.strict()` body, the required idempotency key
+ * and the mapping of each refusal. The party check and the open-state guard are transactional
+ * and live in the service; `verify-store-phase-23-constraints` and the Phase 23 smoke cover them.
+ */
+describe("commerce dispute note routes (A40)", () => {
+  let app: Express;
+
+  beforeAll(async () => {
+    app = await buildTestApp();
+    const trustRouter = (await import("#src/routes/commerce-trust.routes.js")).default;
+    app.use("/commerce", trustRouter);
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    idempotencyCache.clear();
+    signInAs();
+  });
+
+  it("requires an Idempotency-Key, because the timeline is append-only", async () => {
+    const response = await request(app)
+      .post("/commerce/disputes/dispute_1/notes")
+      .send({ note: "The replacement arrived damaged as well." });
+
+    expect(response.status).toBe(400);
+    expect(serviceStubs.addDisputeNote).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty note with 422 rather than appending a blank event", async () => {
+    const response = await request(app)
+      .post("/commerce/disputes/dispute_1/notes")
+      .set("Idempotency-Key", "dispute-note-empty")
+      .send({ note: "   " });
+
+    expect(response.status).toBe(422);
+    expect(serviceStubs.addDisputeNote).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown body key with 422", async () => {
+    const response = await request(app)
+      .post("/commerce/disputes/dispute_1/notes")
+      .set("Idempotency-Key", "dispute-note-unknown-key")
+      .send({ note: "Adding context.", eventKind: "closed" });
+
+    // `.strict()`, so a caller cannot smuggle in the event kind and close a dispute by writing
+    // a note — the kind is server-owned.
+    expect(response.status).toBe(422);
+    expect(serviceStubs.addDisputeNote).not.toHaveBeenCalled();
+  });
+
+  it("maps a decided dispute to 409", async () => {
+    serviceStubs.addDisputeNote.mockResolvedValue({
+      success: false,
+      error: {
+        type: "INVALID_STATE",
+        message: "This dispute was already closed and can no longer be added to.",
+      },
+    });
+
+    const response = await request(app)
+      .post("/commerce/disputes/dispute_1/notes")
+      .set("Idempotency-Key", "dispute-note-late")
+      .send({ note: "One more thing." });
+
+    expect(response.status).toBe(409);
+  });
+
+  it("maps a dispute the caller is not a party to onto 404, never 403", async () => {
+    serviceStubs.addDisputeNote.mockResolvedValue({
+      success: false,
+      error: { type: "NOT_FOUND" },
+    });
+
+    const response = await request(app)
+      .post("/commerce/disputes/dispute_someone_elses/notes")
+      .set("Idempotency-Key", "dispute-note-foreign")
+      .send({ note: "Not mine." });
+
+    // A28's rule: distinguishing "no such dispute" from "not yours" would make the route an
+    // oracle for which dispute ids exist.
+    expect(response.status).toBe(404);
+  });
+
+  it("answers 201 with the whole updated timeline", async () => {
+    serviceStubs.addDisputeNote.mockResolvedValue({
+      success: true,
+      value: {
+        id: "dispute_1",
+        orderId: "order_1",
+        state: "open",
+        timeline: [
+          { sequence: 0, eventKind: "opened", note: "Wrong item.", occurredAt: "2026-08-01" },
+          { sequence: 1, eventKind: "note_added", note: "Photos attached.", occurredAt: "2026-08-02" },
+        ],
+      },
+    });
+
+    const response = await request(app)
+      .post("/commerce/disputes/dispute_1/notes")
+      .set("Idempotency-Key", "dispute-note-ok")
+      .send({ note: "Photos attached." });
+
+    expect(response.status).toBe(201);
+    // The WHOLE timeline, not the one note: a party adding a note wants the conversation it
+    // joined, and the response must not disagree with what a refresh shows.
+    expect(response.body.data.timeline).toHaveLength(2);
+    expect(response.body.data.timeline[1].eventKind).toBe("note_added");
+    expect(serviceStubs.addDisputeNote).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
+      "dispute_1",
+      { note: "Photos attached." },
+    );
   });
 });

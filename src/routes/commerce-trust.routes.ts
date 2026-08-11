@@ -192,6 +192,29 @@ router.get(
   commerceTrustController.getDispute,
 );
 
+/**
+ * A40. The write A28's read has been waiting for. `commerce_dispute_event_kind` has carried
+ * `note_added` since `0052` with no writer, so a buyer could open a dispute over a six-figure
+ * order and then say nothing further, and the seller could read the accusation and not answer it.
+ *
+ * Same guard as the two reads above — both parties may add, because both may read, and a
+ * counterparty who cannot respond makes the timeline a one-sided record of a two-sided
+ * disagreement. `requireActiveCommerceOrganization` rather than the buyer variant for exactly
+ * that reason; `openDispute` above keeps its own because only a buyer may OPEN one.
+ *
+ * Idempotency is `required`, matching every other dispute write: a retried note on a flaky
+ * connection must not append the same paragraph twice to an append-only table.
+ */
+router.post(
+  "/disputes/:disputeId/notes",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceDisputeWriteLimiter,
+  compactBody,
+  idempotency({ required: true, scope: "active_organization" }),
+  commerceTrustController.addDisputeNote,
+);
+
 router.get(
   "/admin/disputes",
   requireAuth,
