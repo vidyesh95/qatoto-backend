@@ -201,6 +201,33 @@ describe("commerce quote routes", () => {
     expect(serviceStubs.appendRevision).not.toHaveBeenCalled();
   });
 
+  /**
+   * A40. `incoterm` was `z.string().max(20)` and accepted anything — and
+   * `commerce_prevent_submitted_quote_revision_mutation` then froze the bad value on the
+   * revision permanently, so it could not even be corrected afterwards.
+   */
+  it("refuses an incoterm that is not one the ICC publishes", async () => {
+    const response = await request(app)
+      .post("/commerce/quotes/quote-1/revisions")
+      .set("Idempotency-Key", "revision-bad-incoterm")
+      .send({
+        currency: "USD",
+        validityDeadlineAt: "2026-09-01T00:00:00.000Z",
+        taxInCents: 0,
+        serviceFeeInCents: 0,
+        shippingInCents: 0,
+        discountInCents: 0,
+        incoterm: "BANANA",
+        productLines: [],
+        serviceLines: [],
+      });
+
+    // 422 rather than a silent drop: an incoterm is a commercial term the seller meant to
+    // state, and discarding it would ship an order whose delivery terms nobody agreed.
+    expect(response.status).toBe(422);
+    expect(serviceStubs.appendRevision).not.toHaveBeenCalled();
+  });
+
   it("accepts a revision when serviceDetail matches provider kind shape", async () => {
     serviceStubs.appendRevision.mockResolvedValue({
       success: true,

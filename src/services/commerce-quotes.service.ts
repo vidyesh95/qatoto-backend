@@ -60,6 +60,11 @@ import type { Result } from "#src/types/index.js";
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type QuoteRow = typeof commerceQuote.$inferSelect;
 type RevisionRow = typeof commerceQuoteRevision.$inferSelect;
+/**
+ * A40. Derived from the column rather than restated, so adding an Incoterm to the enum reaches
+ * the service, the projections and the Zod schema without anybody editing three lists.
+ */
+export type CommerceIncoterm = NonNullable<RevisionRow["incoterm"]>;
 type OrderRow = typeof commerceOrder.$inferSelect;
 type QuoteDeliverablePlanRow = typeof commerceQuoteServiceDeliverablePlan.$inferSelect;
 type QuoteServiceLineRow = typeof commerceQuoteServiceLine.$inferSelect;
@@ -231,7 +236,7 @@ export interface AppendRevisionInput {
   readonly shippingInCents: number;
   readonly discountInCents: number;
   readonly paymentTerms?: string;
-  readonly incoterm?: string;
+  readonly incoterm?: CommerceIncoterm;
   readonly notes?: string;
   readonly productLines: readonly QuoteProductLineInput[];
   readonly serviceLines: readonly QuoteServiceLineInput[];
@@ -297,7 +302,7 @@ export interface QuoteDetailProjection {
   readonly latestRevision:
     | (QuoteRevisionMoneyProjection & {
         readonly paymentTerms: string | null;
-        readonly incoterm: string | null;
+        readonly incoterm: CommerceIncoterm | null;
         readonly notes: string | null;
         readonly productLines: readonly {
           readonly id: string;
@@ -351,7 +356,7 @@ export interface OrderProjection {
   readonly discountInCents: number;
   readonly totalInCents: number;
   readonly paymentTermsSnapshot: string | null;
-  readonly incotermSnapshot: string | null;
+  readonly incotermSnapshot: CommerceIncoterm | null;
   readonly buyerLegalNameSnapshot: string;
   readonly counterpartyLegalNameSnapshot: string;
   readonly createdAt: Date;

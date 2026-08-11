@@ -221,7 +221,17 @@ export const AppendQuoteRevisionSchema = z
     shippingInCents: NonNegativeCentsSchema,
     discountInCents: NonNegativeCentsSchema,
     paymentTerms: z.string().trim().max(2000).optional(),
-    incoterm: z.string().trim().min(1).max(20).optional(),
+    /**
+     * A40. Incoterms 2020, the eleven the ICC publishes. Was `z.string().max(20)`, which
+     * accepted `BANANA` — and `commerce_prevent_submitted_quote_revision_mutation` then froze
+     * it on the revision forever, so the bad value could not even be corrected afterwards.
+     *
+     * A `422` naming the field is the right answer for a term nobody trades under. Silently
+     * dropping it would lose a commercial term the seller meant to state.
+     */
+    incoterm: z
+      .enum(["EXW", "FCA", "CPT", "CIP", "DAP", "DPU", "DDP", "FAS", "FOB", "CFR", "CIF"])
+      .optional(),
     notes: z.string().trim().max(10_000).optional(),
     productLines: z.array(QuoteProductLineSchema).max(200),
     serviceLines: z.array(QuoteServiceLineSchema).max(200),

@@ -1270,6 +1270,34 @@ export const commerceRfqInvitationStateEnum = pgEnum("commerce_rfq_invitation_st
   "expired",
 ]);
 
+/**
+ * Incoterms 2020 (A40) — the delivery term a quote states, in the ICC's own two groups.
+ *
+ * NOT A TRANSPORT MODE, and deliberately not folded into one. `freight_transport_mode` and
+ * `commerce_shipment_leg_mode` say HOW goods move; an Incoterm says where risk and cost pass
+ * between seller and buyer. §19.2's rule against minting a parallel mode enum is the same
+ * instinct pointing the other way here: these are two concepts and one enum cannot hold both.
+ *
+ * VOCABULARY ONLY. Nothing branches on the value. §19.9's Incoterm CONCEPT — the modelling that
+ * would let a priced international leg survive an uncovered inland one — remains open, and this
+ * enum neither delivers nor blocks it.
+ */
+export const commerceIncotermEnum = pgEnum("commerce_incoterm", [
+  // Any mode or modes of transport.
+  "EXW",
+  "FCA",
+  "CPT",
+  "CIP",
+  "DAP",
+  "DPU",
+  "DDP",
+  // Sea and inland waterway transport only.
+  "FAS",
+  "FOB",
+  "CFR",
+  "CIF",
+]);
+
 export const commerceQuoteStatusEnum = pgEnum("commerce_quote_status", [
   "draft",
   "submitted",
@@ -5628,7 +5656,15 @@ export const commerceQuoteRevision = pgTable(
     discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
     totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
     paymentTerms: text("payment_terms"),
-    incoterm: text("incoterm"),
+    /**
+     * A40. An enum since Phase 23; `text` with a 1..20 length check before that, which accepted
+     * `BANANA` and let `commerce_prevent_submitted_quote_revision_mutation` freeze it forever.
+     *
+     * VOCABULARY ONLY. Nothing branches on the value — §19.9's Incoterm CONCEPT, the one that
+     * would let an uncovered inland leg stop making a whole journey unpriceable, is a different
+     * and larger piece of work and stays open.
+     */
+    incoterm: commerceIncotermEnum("incoterm"),
     notes: text("notes"),
     createdByMemberId: text("created_by_member_id")
       .notNull()
@@ -5650,8 +5686,9 @@ export const commerceQuoteRevision = pgTable(
     ),
     check(
       "commerce_quote_revision_text_ck",
+      // A40. The `incoterm` length clause was dropped in `0116`: an enum cannot be 21
+      // characters long, and a constraint that cannot fail reads as a rule still to satisfy.
       sql`(payment_terms IS NULL OR char_length(payment_terms) <= 2000)
-          AND (incoterm IS NULL OR char_length(incoterm) BETWEEN 1 AND 20)
           AND (notes IS NULL OR char_length(notes) <= 10000)`,
     ),
   ],
@@ -5909,7 +5946,11 @@ export const commerceOrder = pgTable(
     discountInCents: bigint("discount_in_cents", { mode: "number" }).default(0).notNull(),
     totalInCents: bigint("total_in_cents", { mode: "number" }).notNull(),
     paymentTermsSnapshot: text("payment_terms_snapshot"),
-    incotermSnapshot: text("incoterm_snapshot"),
+    /**
+     * A40. The same enum as the revision it is copied from. It was `text` with NO check at all
+     * — less constrained than its own source — until Phase 23.
+     */
+    incotermSnapshot: commerceIncotermEnum("incoterm_snapshot"),
     buyerLegalNameSnapshot: text("buyer_legal_name_snapshot").notNull(),
     counterpartyLegalNameSnapshot: text("counterparty_legal_name_snapshot").notNull(),
     /**
