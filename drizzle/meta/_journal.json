@@ -771,6 +771,20 @@
       "when": 1786105894394,
       "tag": "0109_store_phase_20_chargeable_weight",
       "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1786105899394,
+      "tag": "0110_store_phase_21_enums",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1786105904394,
+      "tag": "0111_store_phase_21_buyer_workspace",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,10 @@ import {
   productImage,
   productPricingTier,
 } from "#src/db/schema.js";
+import {
+  tradingOrganizationCountryCode,
+  withTradingOrganizationCountryCode,
+} from "#src/lib/commerce-organization-country.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import {
@@ -695,7 +699,10 @@ export async function getCategoryFacets(categoryId: string): Promise<StoreCatego
   const priceSummary = priceRow[0];
   return {
     sellerCountryCodes: countryRows.map((row) => ({
-      value: row.value,
+      // Grouped over rows `publicProductEligibility` already constrained to
+      // `trade_state = 'active'`, so the CHECK guarantees a country. Typed nullable only
+      // because the column is.
+      value: tradingOrganizationCountryCode(row.value, "category facet: sellerCountryCodes"),
       count: row.count,
     })),
     stockStates: stockRows.rows.map((row) => ({
@@ -968,7 +975,13 @@ export async function listEligibleProducts(input: {
   ]);
   const items = pageRows.map((row) =>
     mapProductCard(
-      row,
+      {
+        ...row,
+        organizationCountryCode: tradingOrganizationCountryCode(
+          row.organizationCountryCode,
+          row.organizationId,
+        ),
+      },
       imageMap.get(row.id) ?? null,
       moqMap.get(row.id) ?? null,
       productReviewMetrics.get(row.id) ?? EMPTY_REVIEW_METRICS,
@@ -1055,7 +1068,18 @@ export async function resolveEligibleOrganizationCardsByIds(
       ),
     );
 
-  const byId = new Map(rows.map((row) => [row.organizationId, toSellerProjection(row)]));
+  const byId = new Map(
+    rows.map((row) => [
+      row.organizationId,
+      toSellerProjection({
+        ...row,
+        organizationCountryCode: tradingOrganizationCountryCode(
+          row.organizationCountryCode,
+          row.organizationId,
+        ),
+      }),
+    ]),
+  );
   return organizationIds.flatMap((organizationId) => {
     const card = byId.get(organizationId);
     return card === undefined ? [] : [card];
@@ -1300,7 +1324,13 @@ export async function getPublicProductBySlug(
   });
 
   const card = mapProductCard(
-    row,
+    {
+      ...row,
+      organizationCountryCode: tradingOrganizationCountryCode(
+        row.organizationCountryCode,
+        row.organizationId,
+      ),
+    },
     sharedImages[0]?.url ?? variants[0]?.images[0]?.url ?? null,
     moqMap.get(row.id) ??
       (sharedPricingTiers.length > 0
@@ -1390,7 +1420,7 @@ export async function getPublicOrganizationStorefront(input: {
   return {
     success: true,
     value: {
-      ...organizationRow,
+      ...withTradingOrganizationCountryCode(organizationRow, organizationRow.organizationId),
       declaredProfile: declaredProfiles.get(organizationRow.organizationId) ?? null,
       measuredMetrics:
         measuredMetrics.get(organizationRow.organizationId) ?? EMPTY_MEASURED_METRICS,

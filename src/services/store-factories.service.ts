@@ -12,6 +12,7 @@ import {
   commerceSellerProfile,
   storeSearchDocument,
 } from "#src/db/schema.js";
+import { withTradingOrganizationCountryCode } from "#src/lib/commerce-organization-country.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import {
   loadSellerDeclaredProfiles,
@@ -464,7 +465,12 @@ export async function listFactories(
 
   return {
     success: true,
-    value: { items: await buildCards(pageRows), page: { nextCursor, hasMore } },
+    value: {
+      items: await buildCards(
+        pageRows.map((row) => withTradingOrganizationCountryCode(row, row.organizationId)),
+      ),
+      page: { nextCursor, hasMore },
+    },
   };
 }
 
@@ -529,7 +535,7 @@ export async function getFactoryBySlug(
   if (!row) return { success: false, error: { type: "NOT_FOUND" } };
 
   const [cards, declaredProfiles, certificationRows, auditRows, exportMarkets] = await Promise.all([
-    buildCards([row]),
+    buildCards([withTradingOrganizationCountryCode(row, row.organizationId)]),
     loadSellerDeclaredProfiles([row.organizationId]),
     db
       .select()

@@ -1,0 +1,29 @@
+-- ---------------------------------------------------------------------------
+-- Phase 21 enums — the buyer workspace's vocabulary (STORE_BACKEND_STRUCTURE.md §14, A37).
+--
+-- HAND-WRITTEN, like every store-phase migration since 0046.
+--
+-- ENUM-ONLY, for the usual reason: 0111 writes a partial index predicate naming
+-- 'auto_provisioned' as a literal, and `drizzle-kit migrate` runs every pending migration
+-- in ONE transaction, where a value added by `ALTER TYPE ... ADD VALUE` cannot yet be used
+-- as a literal. `CREATE TYPE` does not carry that restriction, but the split is kept
+-- because the next reader should not have to know which of the two cases they are in.
+--
+-- NO NEW AUDIT KIND. `commerce_organization_audit_event_kind` already carries
+-- 'organization_created', and an auto-provisioned shell IS an organization creation — the
+-- distinction rides in the entry's payload and, from 0111, in a column. A second kind would
+-- make every existing audit reader remember to accept both.
+-- ---------------------------------------------------------------------------
+
+-- WHY THIS EXISTS RATHER THAN AN `is_auto_provisioned` BOOLEAN. Every organization starts
+-- `trade_state = 'pending'`, so from Phase 21 onward a pending row is either a buyer shell
+-- the server minted on a first tap or a real applicant asking to be reviewed. Those are two
+-- different things wearing one state, and the moderation queue has to tell them apart or it
+-- drowns in shells. A boolean would answer "was it minted?"; this answers "whose assertion
+-- is this row?", which is the question the queue is actually asking.
+--
+-- THE TRANSITION IS ONE-WAY IN PRACTICE, and deliberately not enforced as such: supplying
+-- real legal details flips 'auto_provisioned' to 'self_declared', because that write IS the
+-- act of asking to be reviewed. Nothing flips it back, but a CHECK forbidding the reverse
+-- would also forbid a moderator undoing a mistake.
+CREATE TYPE "commerce_organization_provisioning_origin" AS ENUM ('self_declared', 'auto_provisioned');

@@ -14,6 +14,7 @@ import {
   productPricingTier,
   storeSearchDocument,
 } from "#src/db/schema.js";
+import { tradingOrganizationCountryCode } from "#src/lib/commerce-organization-country.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { escapeLikePattern } from "#src/lib/sql-pattern.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
@@ -347,7 +348,10 @@ export async function searchStoreDocuments(input: {
           summary: row.summary,
           organizationSlug: row.organizationSlug,
           organizationDisplayName: row.organizationDisplayName,
-          organizationCountryCode: row.organizationCountryCode,
+          organizationCountryCode: tradingOrganizationCountryCode(
+            row.organizationCountryCode,
+            row.entityId,
+          ),
           categorySlug: row.categorySlug,
           providerKind: row.providerKind,
           priceInCents: row.priceInCents,
@@ -437,7 +441,10 @@ export async function searchStoreDocuments(input: {
           summary: row.summary,
           organizationSlug: row.organizationSlug,
           organizationDisplayName: row.organizationDisplayName,
-          organizationCountryCode: row.organizationCountryCode,
+          organizationCountryCode: tradingOrganizationCountryCode(
+            row.organizationCountryCode,
+            row.entityId,
+          ),
           categorySlug: row.categorySlug,
           providerKind: row.providerKind,
           priceInCents: row.priceInCents,
@@ -531,7 +538,10 @@ export async function searchStoreDocuments(input: {
         summary: row.summary,
         organizationSlug: row.organizationSlug,
         organizationDisplayName: row.organizationDisplayName,
-        organizationCountryCode: row.organizationCountryCode,
+        organizationCountryCode: tradingOrganizationCountryCode(
+          row.organizationCountryCode,
+          row.entityId,
+        ),
         categorySlug: row.categorySlug,
         providerKind: row.providerKind,
         priceInCents: row.priceInCents,

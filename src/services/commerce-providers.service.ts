@@ -20,6 +20,10 @@ import {
   testingCertificationOfferingDetail,
   warehouseOfferingDetail,
 } from "#src/db/schema.js";
+import {
+  tradingOrganizationCountryCode,
+  withTradingOrganizationCountryCode,
+} from "#src/lib/commerce-organization-country.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor, slugifyPublicTitle } from "#src/lib/store-cursor.js";
 import { memberCanOperateProvider } from "#src/services/commerce-organization-access.service.js";
@@ -1151,7 +1155,9 @@ export async function listPublicProviders(input: {
           .limit(input.limit + 1);
 
   const pageRows = rows.slice(0, input.limit);
-  const items = await attachPublicProviderTrustMetrics(pageRows);
+  const items = await attachPublicProviderTrustMetrics(
+    pageRows.map((row) => withTradingOrganizationCountryCode(row, row.organizationId)),
+  );
   const lastRow = pageRows[pageRows.length - 1];
   const nextCursor =
     rows.length > input.limit && lastRow
@@ -1194,7 +1200,9 @@ export async function getPublicProviderByOrganizationSlug(organizationSlug: stri
     .limit(1);
   if (!provider) return { success: false, error: { type: "NOT_FOUND" } };
 
-  const [enrichedProvider] = await attachPublicProviderTrustMetrics([provider]);
+  const [enrichedProvider] = await attachPublicProviderTrustMetrics([
+    withTradingOrganizationCountryCode(provider, provider.organizationId),
+  ]);
   if (!enrichedProvider) return { success: false, error: { type: "NOT_FOUND" } };
 
   const offerings = await db
@@ -1298,7 +1306,7 @@ export async function getPublicServiceOfferingBySlug(offeringSlug: string): Prom
       organizationId: row.organizationId,
       slug: row.slug,
       displayName: row.displayName,
-      countryCode: row.countryCode,
+      countryCode: tradingOrganizationCountryCode(row.countryCode, row.organizationId),
       logoUrl: row.logoUrl,
       publicSummary: row.publicSummary,
       verificationState: row.verificationState,
@@ -1364,7 +1372,7 @@ export async function resolveEligiblePublicOfferingsByIds(offeringIds: readonly 
       organizationId: row.organizationId,
       slug: row.slug,
       displayName: row.displayName,
-      countryCode: row.countryCode,
+      countryCode: tradingOrganizationCountryCode(row.countryCode, row.organizationId),
       logoUrl: row.logoUrl,
       publicSummary: row.publicSummary,
       verificationState: row.verificationState,

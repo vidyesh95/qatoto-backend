@@ -384,6 +384,25 @@ export const commerceOrganizationVisibilityEnum = pgEnum("commerce_organization_
   "public",
 ]);
 
+/**
+ * Whose assertion this organization row is (§14, Appendix A37).
+ *
+ * Every organization starts `pending`, so from Phase 21 a pending row is either a buyer
+ * shell the server minted on a first tap or a real applicant asking to be reviewed. Those
+ * are two different things wearing one state, and a moderation queue that cannot separate
+ * them drowns in shells.
+ *
+ * NOT an `isAutoProvisioned` boolean: a boolean answers "was it minted?", and the question
+ * the queue asks is "is there a person behind this claim yet?". Supplying real legal details
+ * flips `auto_provisioned` to `self_declared`, because that write IS the act of asking to be
+ * reviewed. Nothing flips it back, and that is convention rather than a CHECK — a constraint
+ * forbidding the reverse would also forbid a moderator undoing a mistake.
+ */
+export const commerceOrganizationProvisioningOriginEnum = pgEnum(
+  "commerce_organization_provisioning_origin",
+  ["self_declared", "auto_provisioned"],
+);
+
 export const commerceOrganizationMemberRoleEnum = pgEnum("commerce_organization_member_role", [
   "owner",
   "administrator",
@@ -1785,7 +1804,30 @@ export const commerceOrganization = pgTable(
     organizationType: commerceOrganizationTypeEnum("organization_type").notNull(),
     tradeState: commerceOrganizationTradeStateEnum("trade_state").default("pending").notNull(),
     visibility: commerceOrganizationVisibilityEnum("visibility").default("private").notNull(),
-    countryCode: text("country_code").notNull(),
+    /**
+     * A37. Defaults to `self_declared` so every row that predates Phase 21 keeps the
+     * meaning it was created with — each came through the explicit `POST`, which is a
+     * person asserting a company.
+     */
+    provisioningOrigin: commerceOrganizationProvisioningOriginEnum("provisioning_origin")
+      .default("self_declared")
+      .notNull(),
+    /**
+     * NULLABLE since Phase 21, and only while `tradeState = 'pending'` — see
+     * `commerce_organization_country_pending_ck`.
+     *
+     * A country is a FACT, and the server does not have one when it auto-provisions a
+     * buyer shell (§14): there is no geo middleware, and `user.locationLabel` is a
+     * free-text self-set place whose own comment forbids exactly this use. Alibaba
+     * collects a self-declared country at registration; this backend does not, because
+     * §0's rule is that a missing component is NAMED rather than defaulted — the same
+     * rule §19.4 applies to an uncovered freight lane. Activation is where the country
+     * gets established, and it is already a moderator review.
+     *
+     * Nothing public can observe the NULL: every public read filters
+     * `tradeState = 'active'`, which the CHECK makes impossible to reach without one.
+     */
+    countryCode: text("country_code"),
     registrationNumberEncrypted: text("registration_number_encrypted"),
     taxIdentifierEncrypted: text("tax_identifier_encrypted"),
     logoUrl: text("logo_url"),
@@ -1825,7 +1867,31 @@ export const commerceOrganization = pgTable(
           AND char_length(display_name) BETWEEN 1 AND 200
           AND (summary IS NULL OR char_length(summary) <= 4000)`,
     ),
-    check("commerce_organization_country_ck", sql`country_code ~ '^[A-Z]{2}$'`),
+    check(
+      "commerce_organization_country_ck",
+      sql`country_code IS NULL OR country_code ~ '^[A-Z]{2}$'`,
+    ),
+    /**
+     * The `NOT NULL` Phase 21 dropped, restated where it is actually true. An
+     * organization that trades has a country; one that has never traded need not have
+     * declared one yet. It lives here rather than only in `transitionTradeState` because
+     * §0's posture is that a rule which must survive request replay belongs in the
+     * backend, and the cheapest backend is the one a second writer cannot bypass.
+     */
+    check(
+      "commerce_organization_country_pending_ck",
+      sql`trade_state = 'pending' OR country_code IS NOT NULL`,
+    ),
+    /**
+     * One auto-provisioned shell per user — the concurrency guard for two simultaneous
+     * first taps, not a rule about how many organizations a person may own. The partial
+     * predicate is what keeps it narrow: explicitly created organizations are
+     * `self_declared` and fall outside the index entirely. A unique violation here is
+     * expected traffic, not an error; the loser re-reads and returns the winner's row.
+     */
+    uniqueIndex("commerce_organization_auto_provisioned_owner_uidx")
+      .on(table.createdByUserId)
+      .where(sql`provisioning_origin = 'auto_provisioned'`),
     check(
       "commerce_organization_url_ck",
       sql`(logo_url IS NULL OR (char_length(logo_url) <= 2048 AND logo_url LIKE 'https://%'))
@@ -4729,7 +4795,19 @@ export const storeSearchDocument = pgTable(
       .references(() => commerceOrganization.id, { onDelete: "cascade" }),
     organizationSlug: text("organization_slug").notNull(),
     organizationDisplayName: text("organization_display_name").notNull(),
-    organizationCountryCode: text("organization_country_code").notNull(),
+    /**
+     * NULLABLE since Phase 21, mirroring `commerce_organization.countryCode`.
+     *
+     * A document is written for EVERY organization, not only eligible ones — that is what
+     * `isEligible` is for, and it is why a suspended catalog stops steering supplier search
+     * without its documents being deleted. An auto-provisioned buyer shell therefore gets a
+     * document with no country to copy, and an ineligible document with a NULL country
+     * simply fails to match the country filter, which is the right answer.
+     *
+     * Every ELIGIBLE document still has one — see
+     * `store_search_document_eligible_country_ck`.
+     */
+    organizationCountryCode: text("organization_country_code"),
     categoryId: text("category_id").references(() => commerceCategory.id, {
       onDelete: "set null",
     }),
@@ -4818,7 +4896,21 @@ export const storeSearchDocument = pgTable(
       sql`public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
           AND organization_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
     ),
-    check("store_search_document_country_ck", sql`organization_country_code ~ '^[A-Z]{2}$'`),
+    check(
+      "store_search_document_country_ck",
+      sql`organization_country_code IS NULL OR organization_country_code ~ '^[A-Z]{2}$'`,
+    ),
+    /**
+     * An eligible document is a public one, and a public row with no country would be a
+     * hole in the facet counts rather than a missing filter match. The organization-side
+     * `commerce_organization_country_pending_ck` already makes this unreachable; this
+     * restates it on the search table so a future writer bypassing the refresh path cannot
+     * open the hole quietly.
+     */
+    check(
+      "store_search_document_eligible_country_ck",
+      sql`is_eligible = false OR organization_country_code IS NOT NULL`,
+    ),
     check(
       "store_search_document_lead_time_ck",
       sql`lead_time_max_days IS NULL OR lead_time_max_days BETWEEN 0 AND 3650`,

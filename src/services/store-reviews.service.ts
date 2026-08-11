@@ -9,6 +9,7 @@ import {
   commerceReviewScore,
   commerceReviewVote,
 } from "#src/db/schema.js";
+import { withTradingOrganizationCountryCode } from "#src/lib/commerce-organization-country.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import type { StoreReviewListQuery } from "#src/schemas/store-reviews.schemas.js";
 import {
@@ -333,7 +334,7 @@ async function loadPublicOrganizationCards(
     );
 
   for (const row of rows) {
-    cards.set(row.organizationId, row);
+    cards.set(row.organizationId, withTradingOrganizationCountryCode(row, row.organizationId));
   }
   return cards;
 }
