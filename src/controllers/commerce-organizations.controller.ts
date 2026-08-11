@@ -89,6 +89,19 @@ export const UpdateCommerceOrganizationSchema = z
      * still sending it into a loud 422 rather than a silently ignored field.
      */
     visibility: z.enum(["private", "public"]).optional(),
+    /**
+     * A37. Added in Phase 21, and without it an auto-provisioned buyer shell is a dead end:
+     * it is minted with no country (§14), `commerce_organization_country_pending_ck` will
+     * not let it reach `active` without one, and no other route could set it.
+     *
+     * NOT NULLABLE, unlike `summary`. A shell may never have declared a country; an
+     * organization that has declared one may not un-declare it, because the row may already
+     * be trading and the CHECK would refuse the write anyway.
+     */
+    countryCode: z
+      .string()
+      .regex(/^[A-Z]{2}$/)
+      .optional(),
   })
   .strict()
   .refine((patch) => Object.keys(patch).length > 0, "At least one field is required.");
@@ -228,6 +241,18 @@ function respondCommerceError(res: Response, error: CommerceOrganizationsError):
         status: "error",
         statusCode: 422,
         message: describeLogoRejection(error.imageError),
+      } satisfies ApiResponse);
+      return;
+    /**
+     * A37. 422 rather than 409: the request is well-formed and the trade state is not in
+     * conflict with anything — the organization is simply missing a fact that activation
+     * requires. An auto-provisioned buyer shell is the only row that can reach this.
+     */
+    case "COUNTRY_REQUIRED_FOR_ACTIVATION":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Set this organization's country before activating trade.",
       } satisfies ApiResponse);
       return;
     case "IMAGE_STORAGE_FAILED":

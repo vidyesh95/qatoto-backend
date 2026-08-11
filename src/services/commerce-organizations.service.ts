@@ -73,6 +73,13 @@ export type CommerceOrganizationsError =
    * and a message string is not something a UI can switch on.
    */
   | { type: "ADDRESS_LIMIT_REACHED"; addressKind: string; limit: number }
+  /**
+   * A37. Its own tag for A15's reason: a moderator's Activate button needs to branch on
+   * "this shell has no country yet" and put the cursor in that field, which a `CONFLICT`
+   * message string cannot drive. Reachable only for an auto-provisioned workspace, since
+   * every explicitly created organization supplied one.
+   */
+  | { type: "COUNTRY_REQUIRED_FOR_ACTIVATION" }
   /** `0091`. Same two tags `CommerceSellerProfileError` uses for hosted imagery. */
   | { type: "IMAGE_REJECTED"; imageError: ImageValidationError }
   | { type: "IMAGE_STORAGE_FAILED"; storageError: CloudinaryError }
@@ -92,6 +99,13 @@ type TradeStateTransitionOutcome =
   | { readonly status: "not_found" }
   | { readonly status: "self_review" }
   | { readonly status: "illegal_transition"; readonly currentTradeState: TradeState }
+  /**
+   * Phase 21. An auto-provisioned shell carries no country (§14, A37), and
+   * `commerce_organization_country_pending_ck` refuses to let it reach `active` without
+   * one. Returned as an outcome rather than left to the CHECK because a moderator pressing
+   * Activate deserves to be told what is missing, not handed a constraint name.
+   */
+  | { readonly status: "country_required" }
   | { readonly status: "race_conflict" };
 
 export interface CreateOrganizationInput {
@@ -112,6 +126,11 @@ export interface UpdateOrganizationInput {
   readonly websiteUrl?: string | null;
   readonly logoUrl?: string | null;
   readonly visibility?: "private" | "public";
+  /**
+   * A37. The field that completes an auto-provisioned shell. Not nullable — see the Zod
+   * schema for why an organization may never un-declare a country.
+   */
+  readonly countryCode?: string;
 }
 
 /**
@@ -216,7 +235,19 @@ function publicOrganization(organization: Organization) {
     organizationType: organization.organizationType,
     tradeState: organization.tradeState,
     visibility: organization.visibility,
+    /**
+     * A37. NULL on an auto-provisioned shell that has not declared one yet, and the client
+     * is expected to render that as an unanswered question rather than a blank field —
+     * `provisioningOrigin` beside it says which of the two it is looking at.
+     */
     countryCode: organization.countryCode,
+    /**
+     * A37. Projected so the buyer's own organization list can tell a shell the server
+     * minted from a company somebody described. Safe on this read: it appears only on
+     * `/organizations/mine` and the authorized detail reads, never on a public storefront,
+     * where it would advertise which sellers had not finished their profile.
+     */
+    provisioningOrigin: organization.provisioningOrigin,
     logoUrl: organization.logoUrl,
     websiteUrl: organization.websiteUrl,
     createdAt: organization.createdAt,
@@ -473,11 +504,27 @@ export async function updateOrganization(
     }
   }
 
+  /**
+   * A37. Declaring a country is the act that turns a server-minted shell into somebody's
+   * claim about a business, so it is also what retires `auto_provisioned`. Once the row is
+   * `self_declared` it leaves the partial unique index, and the same person may be
+   * auto-provisioned again later if they ever end up with no workspace — which is correct,
+   * because the shell they completed is now a real organization rather than a placeholder.
+   *
+   * Written as `undefined` when the patch does not touch the country, so the `set` below
+   * leaves the column alone rather than rewriting it on every unrelated edit.
+   */
+  const retiresProvisioningShell = patch.countryCode !== undefined;
+
   const updated = await db.transaction(async (transaction) => {
     const occurredAt = new Date();
     const [organization] = await transaction
       .update(commerceOrganization)
-      .set({ ...patch, updatedAt: occurredAt })
+      .set({
+        ...patch,
+        provisioningOrigin: retiresProvisioningShell ? "self_declared" : undefined,
+        updatedAt: occurredAt,
+      })
       .where(eq(commerceOrganization.id, organizationId))
       .returning();
     if (!organization) return null;
@@ -488,7 +535,10 @@ export async function updateOrganization(
       actorMemberRoleSnapshot: access.value.role,
       targetEntityType: "commerce_organization",
       targetEntityId: organizationId,
-      payload: { changedFields: Object.keys(patch).toSorted() },
+      payload: {
+        changedFields: Object.keys(patch).toSorted(),
+        ...(retiresProvisioningShell ? { provisioningOrigin: "self_declared" } : {}),
+      },
       occurredAt,
     });
     return publicOrganization(organization);
@@ -1437,6 +1487,13 @@ export async function transitionTradeState(input: {
       if (!LEGAL_TRADE_STATE_TRANSITIONS[existing.tradeState].includes(input.tradeState)) {
         return { status: "illegal_transition", currentTradeState: existing.tradeState };
       }
+      // A37. Activation is where a country stops being absent and becomes established, so
+      // this is the one transition that cannot proceed without it. Checked here so the
+      // moderator gets a reason; `commerce_organization_country_pending_ck` remains the
+      // authority, and would refuse the UPDATE anyway.
+      if (input.tradeState === "active" && existing.countryCode === null) {
+        return { status: "country_required" };
+      }
 
       const occurredAt = new Date();
       const leavingActive =
@@ -1496,6 +1553,8 @@ export async function transitionTradeState(input: {
           message: `Cannot transition trade state from ${outcome.currentTradeState} to ${input.tradeState}.`,
         },
       };
+    case "country_required":
+      return { success: false, error: { type: "COUNTRY_REQUIRED_FOR_ACTIVATION" } };
     case "race_conflict":
       return {
         success: false,

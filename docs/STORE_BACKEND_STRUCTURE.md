@@ -804,7 +804,7 @@ organization member IDs, moderation notes, and storage object keys.
 | ------ | ----------------------------------------------------------- | --------------------------------------- |
 | POST   | `/commerce/organizations`                                   | Create pending organization; idempotent |
 | GET    | `/commerce/organizations/mine`                              | Membership-scoped organizations         |
-| PATCH  | `/commerce/organizations/:organizationId`                   | Authorized profile update               |
+| PATCH  | `/commerce/organizations/:organizationId`                   | Authorized profile update; `countryCode` completes an A37 shell |
 | POST   | `/commerce/organizations/:organizationId/members`           | Invite member                           |
 | PATCH  | `/commerce/organizations/:organizationId/members/:memberId` | Role/state update                       |
 | POST   | `/commerce/providers/:organizationId/profile`               | Create provider profile                 |
@@ -815,6 +815,18 @@ organization member IDs, moderation notes, and storage object keys.
 
 Moderation routes live under the existing platform capability model and are not granted by an
 organization role.
+
+**Which guard each authenticated route carries changed in Phase 21, and A35's rule applies to that
+too.** The routes below now run on `requireProvisionedBuyerCommerceWorkspace`, which admits a
+`pending` workspace and mints one on first use (§14, A37): `GET|PUT|DELETE /commerce/cart*`,
+`POST /commerce/cart/from-pathway/:pathwaySlug`, `POST /commerce/checkout/prepare`,
+`POST /commerce/rfqs`, `PATCH /commerce/rfqs/:rfqId`, `GET /commerce/rfqs/mine`,
+`POST /commerce/products/:productId/inquiries`, `GET /commerce/inquiries`,
+`POST /commerce/threads`, `GET|POST /commerce/threads/:threadId/messages`, and both
+`/commerce/documents` routes. **Everything else is unchanged**, including the four gates §14 named:
+`POST /commerce/checkout/confirm`, `POST /commerce/rfqs/:rfqId/open`,
+`POST /commerce/rfqs/:rfqId/invitations`, every seller listing write and every provider offering
+write.
 
 ### 6.2 RFQs and quotes
 
@@ -1601,9 +1613,24 @@ The following require legal, provider, or product decisions before implementatio
   a buyer's first action that needs one, create a pending `commerce_organization` with the caller as
   `owner`, and let address CRUD and cart operate inside it. Trust gates stay exactly where they
   earn something — `checkout/confirm`, RFQ broadcast, seller listing, provider offerings — rather
-  than in front of a single tap. This is what Alibaba does at signup. **Consequence for A14:**
+  than in front of a single tap.
+  **This is NOT what Alibaba does, and the earlier claim that it was should not be cited.** On
+  Alibaba a buyer IS a user account; the organization-shaped entity exists only on the supplier
+  side, where it is verified. Qatoto mints a shell because §4.11 derives thread participants and
+  order parties from memberships, so a buyer with no organization has no addressable identity —
+  which is what the two sentences above already say. The shell is the price of that earlier
+  modelling choice, not an imitation of anybody. What Alibaba's signup does support is the
+  narrower point that **a buyer should not wait on human review to browse, message and fill a
+  cart**, and that is the part this decision keeps.
+  **Consequence for A14:**
   `contactAffordance` keeps all three values, but `ask_question` stops being the common case for a
   signed-in visitor, because a signed-in visitor now has an organization.
+  **BUILT in Phase 21 (`0110`–`0111`).** `requireProvisionedBuyerCommerceWorkspace` mints the shell
+  on the taps in front of the gates; all four named gates are unchanged, and the two in-transaction
+  checks behind them — `assertOrganizationActive` in the checkout service and the trade-state read
+  inside `openRfq` — were deliberately left strict. Two things §14 did not anticipate are recorded
+  in **Appendix A37**: the shell has no country to declare, and a pending row minted by the server
+  is indistinguishable from a pending row somebody applied with.
 - **DECIDED: lane rate cards are funded, and they are an input, not a booking.** A16 chose a
   coverage-derived estimate with no date and no money and recorded `shippingInCents: 0` as the
   decision rather than the gap; that stands. What is funded is the missing input —
@@ -4021,3 +4048,64 @@ estimated" — exactly what §19.4 designed the `null` window to make expressibl
 *Technical:* **closed.** Chargeable weight shipped in `0109` — every option now prices on
 `max(actual, volumetric)` under the forwarder's own divisor and reports which basis won. Everything
 remaining in §19.9's divergence list is a deliberate choice, not a defect.
+
+---
+
+### A37. The buyer surface was unreachable without a staff decision — **SHIPPED (Phase 21, `0110`–`0111`)**
+
+**Needed by:** every signed-in buyer screen. Not one component — the whole surface.
+
+**What was wrong.** §14 marked buyer-organization auto-provisioning **DECIDED** and it was never
+built. The only application-code `INSERT` into `commerce_organization` was the explicit
+`POST /commerce/organizations` (`commerce-organizations.service.ts:294`), it wrote
+`tradeState: 'pending'`, and the only `pending → active` writer was `transitionTradeState`, gated
+on `moderate_commerce`. Meanwhile cart, checkout, RFQ, quotes, inquiry and messaging all required
+`active`. **A signed-in buyer's first cart tap answered `403` and stayed `403` until staff activated
+an organization by hand.** Phase 15's rollout had already recorded the same fact from the other
+side — "the smoke script's first run 403'd everywhere because it never activated an organization" —
+and it was read as a fixture problem rather than a product one.
+
+**What exists now.** `requireProvisionedBuyerCommerceWorkspace` resolves the caller's workspace and
+mints a `pending` shell only when they have none. It is mounted on cart, `checkout/prepare`, RFQ
+drafting, product inquiry, messaging and document upload. §14's four gates are untouched, and so are
+the two in-transaction checks that actually enforce them.
+
+**Where the branch order is the design.** A session pointer is re-proven, never trusted. A pointer
+that no longer resolves is an **access loss, not a provisioning trigger** — minting a fresh shell
+there would hand a demoted member an empty cart and hide the demotion. Only a caller with no pointer
+and no buyer-capable membership anywhere gets a new shell, so a seller who taps the cart lands in
+the organization they already own.
+
+**Two things §14 did not anticipate, and both needed a column.**
+
+- **The server has no country to declare.** There is no geo middleware, and `user.locationLabel` is
+  a free-text self-set place whose own comment forbids this use by name. §0's rule is that a missing
+  component is **named, never defaulted**, so `country_code` became nullable and
+  `commerce_organization_country_pending_ck` confines the absence to `pending` rows. Activation —
+  already a moderator review — is where the country gets established, and `transitionTradeState`
+  returns `COUNTRY_REQUIRED_FOR_ACTIVATION` rather than letting the CHECK answer with a constraint
+  name. `PATCH /commerce/organizations/:organizationId` gained `countryCode` for the same reason:
+  without it the shell was a dead end nothing could ever activate.
+- **A minted shell and a real applicant were the same row.** Both are `pending`, so a moderation
+  queue could not separate them and would drown in shells. `provisioning_origin`
+  (`self_declared | auto_provisioned`) is the separator. Declaring a country flips it to
+  `self_declared`, because that write **is** the act of asking to be reviewed.
+
+**The nullability was the interesting part of the diff.** It surfaced 15 public projections that had
+been reading `countryCode` as non-null. Every one sits behind a `trade_state = 'active'` filter, so
+`tradingOrganizationCountryCode` states that invariant once and throws if a query ever loses its
+filter — rather than widening wire contracts to admit an absence the database forbids.
+`store_search_document` mirrors both the nullability and, via
+`store_search_document_eligible_country_ck`, the guarantee that an eligible row still has one.
+
+**A separate type, deliberately.** `ProvisionedBuyerCommerceWorkspaceContext` and
+`req.buyerCommerceWorkspace` are new rather than a widening of `ActiveCommerceOrganizationContext`
+and `req.commerceOrganization`. That type's `tradeState: "active"` literal is the compile-time proof
+about thirty handlers depend on, `checkout/confirm` among them; relaxing it would have admitted a
+pending shell to all of them at once. Two types means reading the wrong one does not compile.
+
+**Not closed by this entry.** `GET /commerce/organizations/mine` returns
+`{ organization, membership }[]` while the frontend parses `string[]`, and the parse **fails closed
+as an empty list rather than an error** (A35). Auto-provisioning now mints the organization
+correctly and that client still renders "no organization". It is a frontend fix and it is the last
+thing between this entry and an observably working buyer surface.
