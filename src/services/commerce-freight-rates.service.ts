@@ -1386,7 +1386,9 @@ export async function listCustomsDwellEstimates(
           : eq(commerceCustomsDwellEstimate.destinationCountryCode, input.destinationCountryCode),
         originPredicate,
         commodityPredicate,
-        // The table has no `state`, so an open window IS an unretired estimate.
+        // The table has no `state`, so an open window IS an unretired estimate. `=== true`
+        // rather than a truthiness check: `false` narrows nothing, exactly as omitting the key
+        // does, which is the `reviewable` filter's shape in `commerce-completion.service.ts`.
         input.openOnly === true ? isNull(commerceCustomsDwellEstimate.validUntil) : undefined,
         cursorPredicate,
       ),

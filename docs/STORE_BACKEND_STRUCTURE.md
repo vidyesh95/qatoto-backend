@@ -2816,7 +2816,11 @@ display rule the console derives.
 Filters: `destinationCountryCode`, `originCountryCode`, `commodityScopeCategoryId`, `openOnly`,
 `limit`, `cursor`. Rows are the existing `AdminCustomsDwellEstimate` projection. Same envelope, same
 `(validFrom DESC, id ASC)` order. `openOnly=true` means `validUntil IS NULL` — the table has no
-`state`, so an open window *is* an unretired estimate.
+`state`, so an open window *is* an unretired estimate. **`openOnly=false` narrows nothing** and is
+identical to omitting the key; it is not a request for the retired rows. That is the `reviewable`
+shape used elsewhere in commerce, and it is what unticking a checkbox means — a `false` that meant
+"closed only" would leave no spelling for "show me everything". Retired-only, if ever wanted, wants
+its own key.
 
 `originCountryCode` and `commodityScopeCategoryId` are **nullable on the row and mean "any"** — the
 create body already refuses omission and requires an explicit `null` for exactly this reason. A filter

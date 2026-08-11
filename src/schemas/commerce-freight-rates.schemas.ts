@@ -107,6 +107,12 @@ const AnyCommodityFilterSchema = z
  *
  * `openOnly` narrows to the rows whose window is still open — `validUntil IS NULL`. The table
  * has no `state`, so that is what "not retired" means here.
+ *
+ * `openOnly=false` NARROWS NOTHING — it is identical to omitting the key, NOT a request for the
+ * closed rows. This is the `reviewable` shape from `commerce-completion.service.ts`, and it is
+ * what an operator unticking a checkbox means. A `false` that meant "closed only" would make
+ * this a tri-state under a name that says otherwise, and there would then be no spelling left
+ * for "show me everything". If retired-only is ever wanted, it wants its own key.
  */
 export const ListCustomsDwellEstimatesQuerySchema = z
   .object({

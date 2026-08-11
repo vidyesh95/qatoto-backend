@@ -577,6 +577,26 @@ describe("commerce customs dwell estimate admin reads", () => {
     });
   });
 
+  /**
+   * `openOnly=false` REACHES THE SERVICE AS `false`, which narrows nothing — the same result as
+   * omitting the key, and NOT a request for the retired rows. Pinned because the two spellings
+   * agreeing is a decision rather than an accident: a `false` that meant "closed only" would
+   * leave no spelling for "show me everything".
+   */
+  it("treats `openOnly=false` as no narrowing, not as a request for retired rows", async () => {
+    serviceStubs.listCustomsDwellEstimates.mockResolvedValue({
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+
+    const response = await request(app).get("/commerce/admin/customs-dwell-estimates?openOnly=false");
+
+    expect(response.status).toBe(200);
+    expect(serviceStubs.listCustomsDwellEstimates).toHaveBeenCalledWith("user_test_caller", {
+      openOnly: false,
+    });
+  });
+
   it("refuses a lowercase country code, which the column's own check would also refuse", async () => {
     const response = await request(app).get("/commerce/admin/customs-dwell-estimates?destinationCountryCode=de");
 
