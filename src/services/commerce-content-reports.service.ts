@@ -24,6 +24,7 @@ import {
 } from "#src/services/commerce-product-qa.service.js";
 import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/services/platform-role.service.js";
+import { enqueueProductSearchDocumentRefresh } from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -215,6 +216,28 @@ async function loadTargetOwner(
   }
 }
 
+/**
+ * Re-derives the search document after a moderation decision that moved a product.
+ *
+ * CALLED AFTER THE TRANSACTION COMMITS, at every site that calls `setTargetVisibility`. The
+ * refresh reads the product row back and recomputes `is_eligible`; running it inside the
+ * transaction would read the pre-moderation state and write the eligibility the decision was
+ * meant to change.
+ *
+ * A NO-OP FOR EVERY OTHER TARGET KIND, and deliberately not a `switch` with four empty arms:
+ * reviews, questions, answers and organizations are not search documents of their own. An
+ * organization's own hide path lives in `commerce-organizations.service`, which already calls
+ * `refreshOrganizationSearchEligibility` — see the `case "organization"` note below for why
+ * this service does not write that row at all.
+ */
+async function enqueueModeratedTargetSearchRefresh(
+  targetKind: CommerceContentTargetKind,
+  targetId: string,
+): Promise<void> {
+  if (targetKind !== "product") return;
+  await enqueueProductSearchDocumentRefresh(targetId);
+}
+
 /** Applies or lifts the visibility flag that actually removes content from the wire. */
 async function setTargetVisibility(
   transaction: DatabaseTransaction,
@@ -278,8 +301,22 @@ async function setTargetVisibility(
       return;
     }
     case "product":
-      // `suspended` is already excluded by `publicProductEligibility`, so this removes
-      // the listing from every public read with no new filter anywhere.
+      /**
+       * `suspended` is excluded by `publicProductEligibility`, so this removes the listing
+       * from every read that evaluates that predicate LIVE — the catalog, the storefront,
+       * the facets.
+       *
+       * IT IS NOT ENOUGH ON ITS OWN, and this comment used to say it was. `/store/search`
+       * reads `store_search_document`, whose `is_eligible` is a boolean FROZEN AT WRITE
+       * TIME (`store-search.service.ts:677-683`) — nothing re-evaluates it when a product
+       * row changes underneath. So a moderator-hidden listing stayed findable in search
+       * indefinitely, which is the one place a hidden listing most obviously must not be.
+       *
+       * The refresh is enqueued by `enqueueModeratedTargetSearchRefresh` AFTER the caller's
+       * transaction commits, not here: a job that reads the row before this transaction
+       * lands would recompute eligibility from the pre-moderation state and helpfully undo
+       * the hide.
+       */
       await transaction
         .update(product)
         .set({ moderationState: hidden ? "suspended" : "approved" })
@@ -345,6 +382,10 @@ export async function createContentReport(
     const report = inserted[0];
     if (!report) return { status: "already_reported" as const };
 
+    // Carried out of the transaction so the search refresh below runs only when the
+    // threshold actually fired, and only after this commit lands.
+    let autoHidden = false;
+
     if (AUTO_HIDEABLE_TARGET_KINDS.includes(body.targetKind)) {
       const targetPredicate = buildTargetPredicate(body.targetKind, body.targetId);
       const [distinctReporters] = await transaction
@@ -366,11 +407,21 @@ export async function createContentReport(
           actionSource: "automatic",
           reasonNote: `Automatically hidden after ${String(AUTOMATIC_HIDE_REPORTER_THRESHOLD)} distinct open reports.`,
         });
+        autoHidden = true;
       }
     }
 
-    return { status: "reported" as const, report };
+    return { status: "reported" as const, report, autoHidden };
   });
+
+  /**
+   * AFTER COMMIT, and only when the threshold actually fired. The automatic hide is the one
+   * moderation path with no human in it, so it is also the one most likely to leave a hidden
+   * listing in search unnoticed.
+   */
+  if (outcome.status === "reported" && outcome.autoHidden) {
+    await enqueueModeratedTargetSearchRefresh(body.targetKind, body.targetId);
+  }
 
   switch (outcome.status) {
     case "not_found":
@@ -585,8 +636,23 @@ export async function decideContentReport(
       .from(commerceContentReport)
       .where(eq(commerceContentReport.id, report.id))
       .limit(1);
-    return { status: "decided" as const, report: updated ?? report };
+    return {
+      status: "decided" as const,
+      report: updated ?? report,
+      targetKind: report.targetKind,
+      targetId,
+    };
   });
+
+  /**
+   * AFTER COMMIT, on BOTH decisions. A dismissal un-suspends a product that an automatic hide
+   * had already taken down, so the restoring half needs the refresh every bit as much as the
+   * hiding half — a listing stuck out of search after it was cleared is the same defect
+   * pointing the other way.
+   */
+  if (outcome.status === "decided") {
+    await enqueueModeratedTargetSearchRefresh(outcome.targetKind, outcome.targetId);
+  }
 
   switch (outcome.status) {
     case "not_found":
@@ -661,6 +727,12 @@ export async function restoreContent(
     if (!action) return { status: "not_found" as const };
     return { status: "restored" as const, action };
   });
+
+  // AFTER COMMIT. A restore that never reaches the search document leaves a cleared listing
+  // invisible to search while the catalog shows it — the hide bug, inverted.
+  if (outcome.status === "restored") {
+    await enqueueModeratedTargetSearchRefresh(input.targetKind, input.targetId);
+  }
 
   switch (outcome.status) {
     case "not_found":
