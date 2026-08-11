@@ -999,15 +999,15 @@ addressing an owner gets.
 Per A35's rule: a route that ships without a row here is invisible to the next reader, so the rows
 land in the same change as the routes.
 
-| Method      | Route                                                          | Result                                                                          |
-| ----------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Method      | Route                                                          | Result                                                                                                      |
+| ----------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | POST        | `/commerce/admin/freight-rate-cards`                           | Create a lane card **with its bands and its volumetric divisor**; supersedes the incumbent. Idempotency-Key |
-| PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId`               | `shorten_window` or `withdraw` — narrowing only. Idempotency-Key                 |
-| POST        | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Append one band; refused once the card is in force. Idempotency-Key              |
-| PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Replace the whole ordered set; same guard. Idempotency-Key                       |
-| POST        | `/commerce/admin/customs-dwell-estimates`                      | Record a dwell figure; closes the open-ended row on that scope. Idempotency-Key  |
-| PATCH       | `/commerce/admin/customs-dwell-estimates/:dwellEstimateId`     | Retire it by closing its window. Idempotency-Key                                 |
-| GET         | `/commerce/orders/:orderId/arrival-window`                     | §19.4's projection. Optional `?mode=`; order membership required, `404` otherwise |
+| PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId`               | `shorten_window` or `withdraw` — narrowing only. Idempotency-Key                                            |
+| POST        | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Append one band; refused once the card is in force. Idempotency-Key                                         |
+| PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Replace the whole ordered set; same guard. Idempotency-Key                                                  |
+| POST        | `/commerce/admin/customs-dwell-estimates`                      | Record a dwell figure; closes the open-ended row on that scope. Idempotency-Key                             |
+| PATCH       | `/commerce/admin/customs-dwell-estimates/:dwellEstimateId`     | Retire it by closing its window. Idempotency-Key                                                            |
+| GET         | `/commerce/orders/:orderId/arrival-window`                     | §19.4's projection. Optional `?mode=`; order membership required, `404` otherwise                           |
 
 All six writes are gated on `moderate_commerce` **checked in-service**, before any id is read, so
 neither the capability nor a card id is probeable from the route table. Every one carries a required
