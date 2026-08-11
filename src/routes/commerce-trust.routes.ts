@@ -14,6 +14,7 @@ import {
 import {
   requireActiveBuyerCommerceOrganization,
   requireActiveCommerceOrganization,
+  requireActiveSellerCommerceOrganization,
 } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadProductImage } from "#src/middleware/upload-product-image.js";
@@ -184,6 +185,23 @@ router.post(
   compactBody,
   idempotency({ required: true, scope: "user" }),
   commerceTrustController.decideDispute,
+);
+
+/**
+ * A38. The seller's review inbox, and the read the reply routes above never had.
+ *
+ * `PUT|DELETE /reviews/:reviewId/reply` took an id only the PUBLIC per-product and
+ * per-organization reads produced, so finding a review awaiting an answer meant paging every
+ * review of every listing from the browser. `?unreplied=true` is that search, done server-side.
+ *
+ * `requireActiveSellerCommerceOrganization`, not the generic guard the reply writes carry: this
+ * list is defined by being the SUBJECT of the reviews, and reviews are left about sellers.
+ */
+router.get(
+  "/seller/reviews",
+  requireAuth,
+  requireActiveSellerCommerceOrganization,
+  commerceTrustController.listSellerReviewInbox,
 );
 
 export default router;

@@ -11,6 +11,7 @@ import {
   ProductQuestionIdParamsSchema,
   ProductQuestionListParamsSchema,
   ProductQuestionListQuerySchema,
+  SellerQuestionInboxQuerySchema,
 } from "#src/schemas/commerce-product-qa.schemas.js";
 import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductQaService from "#src/services/commerce-product-qa.service.js";
@@ -318,6 +319,47 @@ export async function retractProductAnswer(req: Request, res: Response): Promise
     status: "success",
     statusCode: 200,
     message: "Answer withdrawn.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * GET /commerce/seller/questions — the seller's cross-listing question queue (A38).
+ *
+ * A9 shipped the answer write and only public per-product reads, so a seller could answer any
+ * question they were shown and had no way to find one. The viewer context is passed through so
+ * a seller's own helpful votes render on their own queue, exactly as on the public read.
+ */
+export async function listSellerQuestionInbox(req: Request, res: Response): Promise<void> {
+  const sellerOrganization = req.commerceOrganization;
+  if (!sellerOrganization) {
+    res.status(403).json({
+      status: "error",
+      statusCode: 403,
+      message: "An active seller organization membership is required.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const query = SellerQuestionInboxQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await commerceProductQaService.listSellerQuestionInbox(
+    sellerOrganization.organizationId,
+    query.data,
+    await resolveQaViewer(req),
+  );
+  if (!result.success) {
+    mapQaError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Seller question inbox.",
     data: result.value,
   } satisfies ApiResponse);
 }

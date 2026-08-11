@@ -654,6 +654,130 @@ export async function listProductQuestions(
   };
 }
 
+export interface SellerQuestionInboxItem extends ProductQuestionProjection {
+  /** Which listing it was asked on — the inbox spans every product this seller owns. */
+  readonly product: {
+    readonly id: string;
+    readonly title: string;
+    readonly publicSlug: string | null;
+  };
+}
+
+export interface SellerQuestionInboxPage {
+  readonly items: readonly SellerQuestionInboxItem[];
+  readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+}
+
+/**
+ * Every question asked on this seller's listings (Appendix A38).
+ *
+ * WHY THIS ROUTE HAD TO EXIST. A9 shipped `POST /commerce/questions/:questionId/answers` and the
+ * only reads were PUBLIC and PER-PRODUCT — `GET /store/products/:productSlug/questions`. A seller
+ * with two hundred listings could answer any question they were shown and had no way to find one:
+ * the only route to a `questionId` was to walk their own catalogue product by product, from the
+ * browser, on the public read.
+ *
+ * `unansweredOnly` IS THE POINT OF THE ROUTE. `hasSellerAnswer` is a maintained column on
+ * `commerce_product_question`, kept in step by `refreshQuestionAnswerSummary`, so the filter is a
+ * plain indexed predicate rather than a correlated EXISTS.
+ *
+ * OLDEST FIRST, unlike the other Phase 21 inboxes. This is a work queue rather than a feed, and
+ * newest-first is how the oldest unanswered question stays unanswered forever. It also matches
+ * the public list's keyset direction, so both reads paginate the same way.
+ *
+ * SCOPED BY LISTING OWNERSHIP, through `product.sellerOrganizationId`. `visibilityState` stays
+ * `visible`: a moderator-hidden question is hidden from its seller too, because answering one
+ * would republish it underneath the moderation decision.
+ */
+export async function listSellerQuestionInbox(
+  sellerOrganizationId: string,
+  query: {
+    readonly unansweredOnly?: boolean | undefined;
+    readonly cursor?: string | undefined;
+    readonly limit: number;
+  },
+  viewer: ProductQaViewerContext = ANONYMOUS_QA_VIEWER,
+): Promise<Result<SellerQuestionInboxPage, CommerceProductQaError>> {
+  const filters: SQL[] = [
+    eq(product.sellerOrganizationId, sellerOrganizationId),
+    eq(commerceProductQuestion.visibilityState, "visible"),
+  ];
+
+  if (query.unansweredOnly === true) {
+    filters.push(eq(commerceProductQuestion.hasSellerAnswer, false));
+  }
+
+  if (query.cursor !== undefined) {
+    const cursor = decodeTimestampStoreCursor(query.cursor);
+    if (!cursor) return { success: false, error: { type: "INVALID_CURSOR" } };
+    const keyset = or(
+      gt(commerceProductQuestion.createdAt, cursor.sortKey),
+      and(
+        eq(commerceProductQuestion.createdAt, cursor.sortKey),
+        gt(commerceProductQuestion.id, cursor.id),
+      ),
+    );
+    if (keyset) filters.push(keyset);
+  }
+
+  const rows = await db
+    .select({
+      question: commerceProductQuestion,
+      productId: product.id,
+      productTitle: product.title,
+      productPublicSlug: product.publicSlug,
+    })
+    .from(commerceProductQuestion)
+    .innerJoin(product, eq(product.id, commerceProductQuestion.productId))
+    .where(and(...filters))
+    .orderBy(asc(commerceProductQuestion.createdAt), asc(commerceProductQuestion.id))
+    .limit(query.limit + 1);
+
+  const hasMore = rows.length > query.limit;
+  const pageRows = hasMore ? rows.slice(0, query.limit) : rows;
+  const lastRow = pageRows.at(-1);
+
+  // `projectQuestions` fans out askers and top answers in one batch each, so reusing it keeps
+  // the query count constant rather than proportional to page size.
+  const projected = await projectQuestions(
+    pageRows.map((row) => row.question),
+    true,
+    viewer,
+  );
+  const productByQuestionId = new Map(
+    pageRows.map((row) => [
+      row.question.id,
+      { id: row.productId, title: row.productTitle, publicSlug: row.productPublicSlug },
+    ]),
+  );
+
+  const items = projected.map((question) => {
+    const listing = productByQuestionId.get(question.id);
+    if (!listing) {
+      // The inner join produced the row, so its product cannot be missing here.
+      throw new Error(`Question ${question.id} lost its product between query and projection.`);
+    }
+    return { ...question, product: listing };
+  });
+
+  return {
+    success: true,
+    value: {
+      items,
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({
+                sortKey: lastRow.question.createdAt.toISOString(),
+                id: lastRow.question.id,
+              })
+            : null,
+        hasMore: hasMore && lastRow !== undefined,
+      },
+    },
+  };
+}
+
 /** Every visible answer to one question, oldest first, keyset-paginated. */
 export async function listProductQuestionAnswers(
   input: { readonly productId: string; readonly questionId: string },

@@ -19,6 +19,18 @@ export const StoreReviewListQuerySchema = z
       .enum(["true", "false"])
       .transform((rawValue) => rawValue === "true")
       .optional(),
+    /**
+     * A38. Reviews the subject organization has not replied to.
+     *
+     * ON THE SHARED SCHEMA rather than a seller-only one, because it is a legitimate filter on
+     * either read and duplicating the query object to withhold one boolean would mean two
+     * `.strict()` shapes drifting apart. The SCOPE is what separates the seller's inbox from the
+     * public list, not the filter set.
+     */
+    unreplied: z
+      .enum(["true", "false"])
+      .transform((rawValue) => rawValue === "true")
+      .optional(),
     limit: z.coerce.number().int().min(1).max(24).default(12),
     cursor: z.string().trim().min(1).max(500).optional(),
   })

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, lt, or, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -446,6 +446,28 @@ async function assembleReviewPage(
   if (query.hasMedia === false) {
     filters.push(eq(commerceReview.mediaCount, 0));
   }
+  /**
+   * A38. `commerce_review_reply` has `reviewId` as its PRIMARY KEY — "one reply per review" is
+   * unrepresentable rather than merely rejected — so this is a primary-key existence check and
+   * needs no index of its own. Written as NOT EXISTS rather than a left join so the filter
+   * cannot multiply rows if that key ever stops being unique.
+   */
+  if (query.unreplied === true) {
+    filters.push(
+      sql`NOT EXISTS (
+        SELECT 1 FROM commerce_review_reply
+         WHERE commerce_review_reply.review_id = ${commerceReview.id}
+      )`,
+    );
+  }
+  if (query.unreplied === false) {
+    filters.push(
+      sql`EXISTS (
+        SELECT 1 FROM commerce_review_reply
+         WHERE commerce_review_reply.review_id = ${commerceReview.id}
+      )`,
+    );
+  }
 
   if (query.cursor !== undefined) {
     const decoded = decodeReviewCursor(query.sort, query.cursor);
@@ -601,6 +623,45 @@ export async function listProductReviews(
  * because a service-engagement completion has no product, so those reviews are
  * unreachable from any product and would otherwise be write-only forever.
  */
+/**
+ * The seller's own review inbox (Appendix A38).
+ *
+ * WHY IT IS NOT `listOrganizationReviews`. That read resolves a public SLUG and requires the
+ * organization to be `visibility = 'public'` and `tradeState = 'active'`, which is right for a
+ * storefront and wrong here: a seller must be able to read and answer reviews about themselves
+ * while their organization is private, suspended, or mid-review. Scoping on the caller's own id
+ * skips the slug lookup entirely, so there is nothing to be refused by.
+ *
+ * `unreplied=true` IS THE POINT OF THE ROUTE. Until Phase 21 the reply write
+ * (`PUT /commerce/reviews/:reviewId/reply`) took an id that only the public per-product and
+ * per-organization reads produced — so finding a review awaiting an answer meant paging every
+ * review of every listing, from the browser, and checking each for a reply.
+ *
+ * The summary is the seller's real one, computed over every visible review rather than the
+ * filtered page — a count that moved when you ticked "unreplied" would be a different fact
+ * wearing the same name.
+ */
+export async function listSellerReviewInbox(
+  sellerOrganizationId: string,
+  query: StoreReviewListQuery,
+  viewer: StoreReviewViewerContext = ANONYMOUS_REVIEW_VIEWER,
+): Promise<Result<StoreReviewListPage, StoreCatalogError>> {
+  const [summaries, scoreAverages] = await Promise.all([
+    loadOrganizationReviewSummaries([sellerOrganizationId]),
+    loadOrganizationReviewScoreAverages([sellerOrganizationId]),
+  ]);
+
+  return assembleReviewPage(
+    eq(commerceReview.subjectOrganizationId, sellerOrganizationId),
+    query,
+    {
+      ...(summaries.get(sellerOrganizationId) ?? EMPTY_REVIEW_SUMMARY),
+      scoreAverages: scoreAverages.get(sellerOrganizationId) ?? EMPTY_REVIEW_SCORE_AVERAGES,
+    },
+    viewer,
+  );
+}
+
 export async function listOrganizationReviews(
   organizationSlug: string,
   query: StoreReviewListQuery,

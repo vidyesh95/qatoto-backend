@@ -18,6 +18,7 @@ import {
   ReviewMediaParamsSchema,
   UpsertReviewReplySchema,
 } from "#src/schemas/commerce-trust.schemas.js";
+import { StoreReviewListQuerySchema } from "#src/schemas/store-reviews.schemas.js";
 import * as commerceCompletionService from "#src/services/commerce-completion.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commerceTrustService from "#src/services/commerce-trust.service.js";
@@ -25,6 +26,7 @@ import type {
   CommerceReviewMediaError,
   CommerceTrustError,
 } from "#src/services/commerce-trust.service.js";
+import * as storeReviewsService from "#src/services/store-reviews.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 const EmptyObjectSchema = z.object({}).strict();
@@ -660,6 +662,62 @@ export async function deleteReviewReply(req: Request, res: Response): Promise<vo
     status: "success",
     statusCode: 200,
     message: "Reply withdrawn.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * GET /commerce/seller/reviews — the seller's own review inbox (Appendix A38).
+ *
+ * `PUT|DELETE /commerce/reviews/:reviewId/reply` shipped in Phase 10 and took an id that only
+ * the PUBLIC per-product and per-organization reads produced. Finding a review awaiting an
+ * answer therefore meant paging every review of every listing from the browser and checking
+ * each one for a reply — `?unreplied=true` is that query, answered server-side.
+ *
+ * Not `listOrganizationReviews`: that read resolves a public slug and requires the organization
+ * to be public and active, which is right for a storefront and wrong for a seller reading
+ * reviews about themselves while their organization is private or suspended.
+ *
+ * The viewer context is the caller's own organization, so their own helpful votes render here
+ * exactly as they do on the public read.
+ */
+export async function listSellerReviewInbox(req: Request, res: Response): Promise<void> {
+  const sellerOrganization = req.commerceOrganization;
+  if (!sellerOrganization) {
+    res.status(403).json({
+      status: "error",
+      statusCode: 403,
+      message: "An active seller organization membership is required.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const query = StoreReviewListQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await storeReviewsService.listSellerReviewInbox(
+    sellerOrganization.organizationId,
+    query.data,
+    { organizationId: sellerOrganization.organizationId },
+  );
+  if (!result.success) {
+    // The only reachable failure is a malformed cursor: the scope is the caller's own id, so
+    // there is no organization lookup left to answer NOT_FOUND.
+    res.status(result.error.type === "INVALID_CURSOR" ? 422 : 404).json({
+      status: "error",
+      statusCode: result.error.type === "INVALID_CURSOR" ? 422 : 404,
+      message: result.error.type === "INVALID_CURSOR" ? "Invalid cursor." : "Not found.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Seller review inbox.",
     data: result.value,
   } satisfies ApiResponse);
 }

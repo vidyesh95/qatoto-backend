@@ -8,7 +8,10 @@ import {
   commerceProductQuestionLimiter,
   commerceReviewVoteLimiter,
 } from "#src/middleware/rate-limit.js";
-import { requireActiveCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
+import {
+  requireActiveCommerceOrganization,
+  requireActiveSellerCommerceOrganization,
+} from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 
@@ -97,6 +100,23 @@ commerceProductQaRouter.delete(
   requireActiveCommerceOrganization,
   commerceReviewVoteLimiter,
   commerceProductQaController.clearAnswerHelpfulVote,
+);
+
+/**
+ * A38. The seller's cross-listing question queue — the first GET on this router.
+ *
+ * A9 shipped the answer write and only PUBLIC, PER-PRODUCT reads, so the only route to a
+ * `questionId` was to walk one's own catalogue product by product from the browser. A seller
+ * with two hundred listings could answer a question and could not find one.
+ *
+ * `requireActiveSellerCommerceOrganization`, not the generic guard: this list is defined by
+ * listing ownership, and only a seller organization owns listings.
+ */
+commerceProductQaRouter.get(
+  "/seller/questions",
+  requireAuth,
+  requireActiveSellerCommerceOrganization,
+  commerceProductQaController.listSellerQuestionInbox,
 );
 
 export default commerceProductQaRouter;

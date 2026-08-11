@@ -63,3 +63,27 @@ export const ProductQuestionListQuerySchema = z
   .strict();
 
 export type ProductQuestionListQuery = z.infer<typeof ProductQuestionListQuerySchema>;
+
+/**
+ * A38. The seller's cross-listing question queue.
+ *
+ * A HIGHER `limit` CAP THAN THE PUBLIC LIST'S 24: this is a work queue somebody is clearing,
+ * not a product page carousel, and the same cap would make a seller with two hundred listings
+ * page through their backlog twelve at a time.
+ *
+ * `unansweredOnly` is `z.coerce.boolean()`-free on purpose — that coerces "false" to `true`,
+ * which is the wrong answer for every caller who spells the default out. The literal enum makes
+ * a typo a 422 rather than a silently inverted filter.
+ */
+export const SellerQuestionInboxQuerySchema = z
+  .object({
+    unansweredOnly: z
+      .enum(["true", "false"])
+      .transform((value) => value === "true")
+      .optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    cursor: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+export type SellerQuestionInboxQuery = z.infer<typeof SellerQuestionInboxQuerySchema>;
