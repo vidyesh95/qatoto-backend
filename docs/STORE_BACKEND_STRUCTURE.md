@@ -897,6 +897,19 @@ started, not that payment, booking, testing, or settlement succeeded.
 | GET    | `/commerce/provider/shipments`                            | Cross-order logistics queue — A29                        |
 | POST   | `/commerce/documents`                                     | Upload a trade attachment; 202, `pending_scan` — A30     |
 | GET    | `/commerce/documents/:documentId`                         | Decrypt and stream an authorized attachment — A30        |
+| GET    | `/commerce/threads`                                       | Thread inbox; `?resourceKind=`. Frees settlement — A38   |
+| GET    | `/commerce/refunds`                                       | Refunds on the caller's orders; `?orderId=` — A38        |
+| GET    | `/commerce/documents`                                     | The caller's own trade attachments, metadata only — A38  |
+| GET    | `/commerce/shipments`                                     | The buyer's inbound queue; A29's twin — A38              |
+| GET    | `/commerce/provider/quotes`                               | A provider's own bids, drafts included — A38             |
+| GET    | `/commerce/seller/questions`                              | Cross-listing question queue; `?unansweredOnly=` — A38   |
+| GET    | `/commerce/seller/reviews`                                | The seller's review inbox; `?unreplied=` — A38           |
+| PATCH  | `/commerce/reviews/:reviewId`                             | The author's ONE edit, within 30 days. No DELETE — A38   |
+
+**`paymentIntentId` joined both order projections** rather than becoming a list route. An order
+carries at most one live intent — `commerce_payment_intent_active_order_uidx` is what makes that
+true — so the order is where the id belongs, and `POST /orders/:orderId/payment-intents` finally
+has a reader that survives a page reload.
 
 ### 6.5 Category taxonomy administration — **SHIPPED (Phase 16, `0098`)**
 
@@ -4118,3 +4131,91 @@ pending shell to all of them at once. Two types means reading the wrong one does
 as an empty list rather than an error** (A35). Auto-provisioning now mints the organization
 correctly and that client still renders "no organization". It is a frontend fix and it is the last
 thing between this entry and an observably working buyer surface.
+
+---
+
+### A38. A write keyed on an id no list route yielded — **SHIPPED (Phase 21, `0112`–`0113`)**
+
+**Needed by:** the messaging surface, the attachment picker, the refund panel, the provider's bid
+list, the seller's Q&A and review queues — and §14's settlement agreements, which were unreachable
+for a reason that had nothing to do with settlement.
+
+**What was wrong, and it was ONE defect wearing nine faces.** A22, A28 and A29 each closed an
+instance of it in Phase 15 without the shape being named: **a write or detail route keyed on an id
+that no list route ever produced.** Every such route works exactly once — in the session that
+minted the id — and is unreachable after a reload. The failure presents as an empty screen rather
+than an error, which is why it kept surviving review.
+
+| Closed | The id nobody could obtain |
+| --- | --- |
+| `GET /commerce/threads` | `POST /commerce/threads` returned a `threadId` and nothing else yielded one. **This also closed §14's settlement agreements**, whose `GET\|POST /threads/:threadId/settlement-agreements` take the same id — one missing read, two dead features. |
+| `paymentIntentId` on the order projections | `POST /orders/:orderId/payment-intents` minted one and `GET /payments/:paymentIntentId` consumed one. Reload the order and the buyer could not pay it. |
+| `GET /commerce/refunds` | Refunds were POST-only. A buyer could request one and neither party could see that they had. |
+| `GET /commerce/provider/quotes` | `/rfqs/:rfqId/quotes` is RFQ-scoped and `/provider/rfqs` lists the WORK — an RFQ leaves that queue when it closes, taking any quote on it out of reach. |
+| `GET /commerce/documents` | A30 shipped upload and download. `documentIds` and `encryptedDocumentIds` could only be filled with an id minted in the same session. |
+| `GET /commerce/shipments` | A29 shipped the provider half and left the buyer the workaround A29 had rejected for the provider. |
+| `GET /commerce/seller/questions` | A9 shipped the answer write and only public per-product reads. A seller with two hundred listings could answer a question and could not find one. |
+| `GET /commerce/seller/reviews` | The reply write took an id only the public reads produced. |
+| `PATCH /commerce/reviews/:reviewId` | A review was permanent; a mistyped rating stood forever. |
+
+**Where a filter carries the feature.** `?unansweredOnly=` and `?unreplied=` are not conveniences —
+they are the whole point of their routes. Both resolve against facts the schema already maintains:
+`commerce_product_question.hasSellerAnswer` is a column `refreshQuestionAnswerSummary` keeps in
+step, and `commerce_review_reply.reviewId` is a PRIMARY KEY, so "unreplied" is a key lookup rather
+than a scan.
+
+**Two scoping decisions worth restating, because the obvious version of each is wrong.**
+`GET /commerce/refunds` scopes through the ORDER, not the refund row: `commerce_refund` carries
+`buyerOrganizationId` and no counterparty, so the obvious filter would have hidden every refund
+from the seller whose order it reverses. `GET /commerce/documents` lists OWN UPLOADS only, not
+everything `organizationMayReadDocument` admits — enumerating documents shared through a thread
+would turn an attachment picker into a cross-organization file browser.
+
+---
+
+#### A38's second half: what a published rating may become
+
+The audit that produced this entry called a permanent review a defect and asked for edit and
+delete. **Both platforms were checked before deciding, and the answer changed the design.**
+
+| | Amazon | Alibaba | Here |
+| --- | --- | --- | --- |
+| Buyer edit | Anytime, unlimited | Once, within 30 days | **Once, within 30 days** |
+| Buyer delete | Anytime | Not offered | **Not offered** |
+| Seller reply edit | — | Once, within 30 days | **Once, within 30 days** |
+| Helpful votes on edit | Reset | — | **Reset, and the rows deleted** |
+
+Amazon is permissive and funds an anti-manipulation enforcement arm to absorb the consequences.
+Alibaba bounds the problem in the data model instead. **This platform has no enforcement arm, so
+it takes Alibaba's shape and goes one step further.**
+
+**The strongest control was already built and is left untouched.** `commerce_review` is keyed on
+`completionId` with `commerce_review_completion_reviewer_uidx` — one review per completed order per
+buyer organization, and no review without a real completion. Incentivized and unverified reviews
+are structurally impossible, which neither platform achieves as cleanly. Every vector below is
+about mutation AFTER publication.
+
+| Vector | Closed by |
+| --- | --- |
+| **Extortion** — "pay me or the 1-star stays"; on five-figure orders this is a business model | No author delete. Removal goes through A12's content report, so a seller must convince a MODERATOR rather than the buyer |
+| **Vote laundering** — a review earns endorsements as praise, is rewritten as a complaint, and keeps the social proof | `helpfulCount` zeroed and `commerce_review_vote` rows deleted on edit |
+| **Aggregate oscillation** — flipping 5↔1 on a seller with few reviews | One edit, ever |
+| **Retaliation timing** — waiting for the repeat order to ship, then rewriting the old review | 30 days from `createdAt` |
+| **Reply swap** — a conciliatory public reply removed once the buyer relents | The same window and cap on `PUT\|DELETE /reviews/:reviewId/reply`, which had neither |
+
+**`editedAt` is projected publicly, and that is the point.** A rewrite that does not announce
+itself is the manipulation rather than the correction. It doubles as the has-spent-the-one-edit
+flag, which is why it is a column and not `updatedAt` — `updatedAt` carries `$onUpdate` and moves
+on every helpful vote and every photo attach, so it can answer neither question.
+
+**No aggregate re-roll happens on a rating change, and that is not an omission.**
+`commerce-trust-metrics.service.ts` computes `averageRating` with `avg()` at read time and nothing
+in the schema denormalizes a rating, so a changed rating is already correct on the next read.
+
+**What is NOT tested, stated rather than implied.** The window is transactional logic, not a
+CHECK, and every test suite in this repo mocks `#src/db/index.js` — there is no database-backed
+harness to exercise one-edit-in-thirty-days against. The route tests cover the guard chain, the
+`.strict()` body and each refusal's status code, including an assertion that no author `DELETE`
+route exists. `verify-store-phase-21-constraints` adds four live-data invariants — nothing edited
+before creation, nothing edited past day 30, no edited review carrying pre-edit votes — which are
+what would catch the rule having drifted.
