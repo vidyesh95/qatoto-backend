@@ -36,11 +36,12 @@ import { requireAuth } from "#src/middleware/require-auth.js";
  * VALUE is read. A route-level guard would make the capability probeable from the route table,
  * and a filter-first service would make each read an existence oracle for lanes and providers.
  *
- * ROUTE ORDER: `/admin/freight-rate-cards` is the collection itself, so it cannot be shadowed
- * by `:rateCardId` — Express matches the segment count first, and the two disagree. `/breaks`
- * sits one level BELOW `:rateCardId`, not beside it. A future literal at the same depth —
- * `/admin/freight-rate-cards/lookup` — MUST still be declared above the `:rateCardId` routes
- * or it is dead.
+ * ROUTE ORDER: the two reads are the COLLECTIONS, one segment shorter than `:rateCardId`, so
+ * no ordering between them and the writes can matter — a pattern of a different length never
+ * matches, whatever position it is declared in. `/breaks` sits one level BELOW `:rateCardId`,
+ * not beside it. The hazard is unchanged and still live: a future literal at the SAME depth —
+ * `/admin/freight-rate-cards/lookup` — MUST be declared above the `:rateCardId` routes, because
+ * there Express's first-declared-wins order is the only thing separating them.
  *
  * `Idempotency-Key` IS REQUIRED ON EVERY WRITE AND ON NO READ. A retried create is a duplicate
  * price list that would supersede the card the first attempt just minted, leaving the lane

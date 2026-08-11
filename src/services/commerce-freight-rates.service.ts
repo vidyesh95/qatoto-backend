@@ -1315,9 +1315,7 @@ export async function listFreightRateCards(
   return {
     success: true,
     value: {
-      items: pageRows.map((row) =>
-        projectRateCard(row, breakRowsByCardId.get(row.id) ?? [], now),
-      ),
+      items: pageRows.map((row) => projectRateCard(row, breakRowsByCardId.get(row.id) ?? [], now)),
       page: {
         nextCursor:
           hasMore && lastRow
@@ -1376,10 +1374,7 @@ export async function listCustomsDwellEstimates(
       ? undefined
       : input.commodityScopeCategoryId === ANY_SCOPE_FILTER
         ? isNull(commerceCustomsDwellEstimate.commodityScopeCategoryId)
-        : eq(
-            commerceCustomsDwellEstimate.commodityScopeCategoryId,
-            input.commodityScopeCategoryId,
-          );
+        : eq(commerceCustomsDwellEstimate.commodityScopeCategoryId, input.commodityScopeCategoryId);
 
   const dwellRows = await db
     .select()
@@ -1388,10 +1383,7 @@ export async function listCustomsDwellEstimates(
       and(
         input.destinationCountryCode === undefined
           ? undefined
-          : eq(
-              commerceCustomsDwellEstimate.destinationCountryCode,
-              input.destinationCountryCode,
-            ),
+          : eq(commerceCustomsDwellEstimate.destinationCountryCode, input.destinationCountryCode),
         originPredicate,
         commodityPredicate,
         // The table has no `state`, so an open window IS an unretired estimate.

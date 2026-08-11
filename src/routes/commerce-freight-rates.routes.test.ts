@@ -448,9 +448,7 @@ describe("commerce freight rate card admin reads", () => {
   });
 
   it("refuses an unknown filter key with 422 AND names it, rather than answering unfiltered", async () => {
-    const response = await request(app).get(
-      "/commerce/admin/freight-rate-cards?transportMode=sea",
-    );
+    const response = await request(app).get("/commerce/admin/freight-rate-cards?transportMode=sea");
 
     expect(response.status).toBe(422);
     expect(JSON.stringify(response.body.errors.form)).toContain("transportMode");
@@ -580,18 +578,14 @@ describe("commerce customs dwell estimate admin reads", () => {
   });
 
   it("refuses a lowercase country code, which the column's own check would also refuse", async () => {
-    const response = await request(app).get(
-      "/commerce/admin/customs-dwell-estimates?destinationCountryCode=de",
-    );
+    const response = await request(app).get("/commerce/admin/customs-dwell-estimates?destinationCountryCode=de");
 
     expect(response.status).toBe(422);
     expect(serviceStubs.listCustomsDwellEstimates).not.toHaveBeenCalled();
   });
 
   it("refuses an unknown filter key with 422", async () => {
-    const response = await request(app).get(
-      "/commerce/admin/customs-dwell-estimates?commodityScope=cat_1",
-    );
+    const response = await request(app).get("/commerce/admin/customs-dwell-estimates?commodityScope=cat_1");
 
     expect(response.status).toBe(422);
     expect(serviceStubs.listCustomsDwellEstimates).not.toHaveBeenCalled();

@@ -994,7 +994,7 @@ rejection would return to the queue forever.
 **No cofounder route takes a `:userId`.** The viewer posts about themselves and `/mine` is the only
 addressing an owner gets.
 
-### 6.8 Lane rate cards and the arrival window — **SHIPPED (Phase 20, `0106`–`0109`)**
+### 6.8 Lane rate cards and the arrival window — **SHIPPED (Phase 20, `0106`–`0109`); admin reads added later, no migration**
 
 Per A35's rule: a route that ships without a row here is invisible to the next reader, so the rows
 land in the same change as the routes.
@@ -1007,12 +1007,21 @@ land in the same change as the routes.
 | PATCH       | `/commerce/admin/freight-rate-cards/:rateCardId/breaks`        | Replace the whole ordered set; same guard. Idempotency-Key                                                  |
 | POST        | `/commerce/admin/customs-dwell-estimates`                      | Record a dwell figure; closes the open-ended row on that scope. Idempotency-Key                             |
 | PATCH       | `/commerce/admin/customs-dwell-estimates/:dwellEstimateId`     | Retire it by closing its window. Idempotency-Key                                                            |
+| GET         | `/commerce/admin/freight-rate-cards`                           | §19.10. Filters `originCountryCode` · `destinationCountryCode` · `mode` · `providerOrganizationId` · `state`; rows are the write projection, `breaks` and `bandsEditable` included |
+| GET         | `/commerce/admin/customs-dwell-estimates`                      | §19.10. Filters `destinationCountryCode` · `originCountryCode` · `commodityScopeCategoryId` · `openOnly`; `any` selects the NULL-scoped rows |
 | GET         | `/commerce/orders/:orderId/arrival-window`                     | §19.4's projection. Optional `?mode=`; order membership required, `404` otherwise                           |
 
-All six writes are gated on `moderate_commerce` **checked in-service**, before any id is read, so
-neither the capability nor a card id is probeable from the route table. Every one carries a required
-`Idempotency-Key` scoped to the **user**: a moderator acts for the platform and may not belong to any
-commerce organization, and a retried create would supersede the card the first attempt just minted.
+All six writes **and both admin reads** are gated on `moderate_commerce` **checked in-service**,
+before any id or filter value is read, so neither the capability nor a card id is probeable from the
+route table. Every write carries a required `Idempotency-Key` scoped to the **user**: a moderator acts
+for the platform and may not belong to any commerce organization, and a retried create would supersede
+the card the first attempt just minted. **The reads carry none** — a retried list changes nothing and
+has no body to key on.
+
+The reads landed after the phase, without a migration, and they are the reason four of the six writes
+became callable at all: `PATCH /:rateCardId`, both `/breaks` verbs and
+`PATCH /customs-dwell-estimates/:dwellEstimateId` each take an id no other route yielded. §19.10 is
+the argument.
 
 Freight prices on every one of these reads live inside `providerQuote`, and an unrateable lane
 carries `quotableProviders` (§19.9b). Two existing reads were **extended, never replaced**:
@@ -2461,6 +2470,8 @@ an inconsistency.
 | GET           | `/commerce/orders/:orderId/arrival-window`                     | §19.4 projection. Order membership required; 404 to a non-party, per §7                                                                                                                                                                                                          |
 | POST \| PATCH | `/commerce/admin/freight-rate-cards` (+ `/:rateCardId/breaks`) | `moderate_commerce`, checked in-service. Idempotency-Key                                                                                                                                                                                                                         |
 | POST \| PATCH | `/commerce/admin/customs-dwell-estimates`                      | `moderate_commerce`. Idempotency-Key                                                                                                                                                                                                                                             |
+| GET           | `/commerce/admin/freight-rate-cards`                           | §19.10. `moderate_commerce`, same in-service check, no Idempotency-Key. Cursor-paged per §7; rows are the write projection, `bandsEditable` and `breaks` included                                                                                                                |
+| GET           | `/commerce/admin/customs-dwell-estimates`                      | §19.10. Same gate. `originCountryCode=any` selects the NULL-scoped rows; an absent key filters on nothing                                                                                                                                                                        |
 
 `checkout/prepare` gains the §19.4 projection alongside its existing `deliveryEstimates`.
 
@@ -2728,6 +2739,147 @@ renderers learn to ignore.
 `subjectToRemeasurement` is always `true` and is on the wire anyway: forwarders re-weigh and
 re-measure at pickup and bill the result, so a rate computed from a seller's declaration is the
 provider's estimate against that declaration and never a fixed charge.
+
+---
+
+### 19.10 The two admin reads — **SHIPPED, no migration**
+
+Phase 20 shipped six admin writes and no admin read. `commerce-freight-rates.routes.ts` declared six
+handlers and zero `router.get`, and its header stated the position outright: *"THE READS ARE NOT HERE
+AND WILL NOT BE"* — §19.5 extended the buyer-facing reads instead.
+
+That position was right about the **buyer's** reads and wrong about the **operator's**. This section
+is why, and what shipped.
+
+#### Why an operator's read is not the same ask as a buyer's
+
+**`POST` supersedes a live card silently.** The partial unique
+`commerce_freight_rate_card_active_uidx` on
+`(provider, origin, destination, mode, currency) WHERE state = 'active'` closes the incumbent, and the
+response's `supersededRateCardId` is **the only place that is ever mentioned**. An operator who could
+not list current coverage therefore replaced a live price without ever being told one existed — and
+the one signal that it happened arrived after the fact, in the reply to the request that did it.
+
+`commerce_customs_dwell_estimate_live_uidx` does the same for dwell, reported once as
+`closedDwellEstimateId`.
+
+This was not a convenience gap. §19.6's whole discipline is that a missing component is **named** and
+never defaulted; a console that cannot name what it is about to overwrite is the same failure moved
+one level up, from the price to the price list.
+
+#### What their absence cost
+
+Four of the six writes take an id the client had no route to discover:
+
+| Write                                  | State before these reads                                               |
+| -------------------------------------- | ---------------------------------------------------------------------- |
+| `POST /freight-rate-cards`             | Reachable. Needs no prior id                                           |
+| `POST /freight-rate-cards/:id/breaks`  | Unreachable — and see the staging rule below, which narrows it further |
+| `PATCH /freight-rate-cards/:id/breaks` | Unreachable — same                                                     |
+| `PATCH /freight-rate-cards/:id`        | Unreachable. Yesterday's card could not be shortened or withdrawn      |
+| `POST /customs-dwell-estimates`        | Reachable. Needs no prior id                                           |
+| `PATCH /customs-dwell-estimates/:id`   | Unreachable. An estimate could not be retired                          |
+
+So the console was buildable only as two create forms, and the lifecycle half of the surface — the
+half that corrects a mistake — could not be built at all. That is why no client code was written for
+it: a control wired to an id the operator has no way to obtain is unverified code, and this repo's own
+audit exists to catch exactly that.
+
+#### `GET /commerce/admin/freight-rate-cards`
+
+Filters, all optional, camelCase keys: `originCountryCode`, `destinationCountryCode`, `mode`,
+`providerOrganizationId`, `state`, `limit`, `cursor`. Enum values are sent **snake_case verbatim** —
+`state` is `commerce_freight_rate_card_state` (`active` · `superseded` · `withdrawn`) and `mode` is
+`commerce_shipment_leg_mode`, which has **four** members (`air` · `sea` · `land` · `rail`), not the
+five of `freight_transport_mode`. A `.strict()` query schema means an unknown key is a `422` naming
+it, so the console must not invent one — and must not read a `422` as "the filter is unsupported,
+render everything".
+
+Each row is the **existing `AdminFreightRateCard` projection** from `commerce-freight-rates.service.ts`
+— the same object the six writes already answer with, `breaks` included and ordered by `position`. One
+spelling per concept, in both directions of the exchange; a read-only variant of the shape would be a
+second vocabulary to keep in sync.
+
+Response: `{ items, page: { nextCursor, hasMore } }`, per §7. Order on `(validFrom DESC, id ASC)`.
+`validFrom` rather than `createdAt`, which is what most lists here order on: a card's subject is the
+day its prices start applying, so a card keyed in on Friday for next quarter belongs where an operator
+looks for next quarter, not at the top because it was typed most recently. `id` last and ascending,
+because two cards genuinely can share an instant — supersession sets a successor's `validFrom` to the
+incumbent's `validUntil` — and a partial tiebreak drops whichever row loses it.
+
+**Do not filter by `state` on the client.** The rating read's predicate is window-based, so a live
+option may legitimately come from a `superseded` card; `state` is a filter the server applies, not a
+display rule the console derives.
+
+#### `GET /commerce/admin/customs-dwell-estimates`
+
+Filters: `destinationCountryCode`, `originCountryCode`, `commodityScopeCategoryId`, `openOnly`,
+`limit`, `cursor`. Rows are the existing `AdminCustomsDwellEstimate` projection. Same envelope, same
+`(validFrom DESC, id ASC)` order. `openOnly=true` means `validUntil IS NULL` — the table has no
+`state`, so an open window *is* an unretired estimate.
+
+`originCountryCode` and `commodityScopeCategoryId` are **nullable on the row and mean "any"** — the
+create body already refuses omission and requires an explicit `null` for exactly this reason. A filter
+that could not distinguish "scoped to any origin" from "not filtering by origin" would make the
+any-origin rows unfindable, and those are the broadest claims the platform makes. So the two get
+separate spellings: **the literal `any`** selects the NULL rows, a real code selects that code, and an
+absent key narrows on nothing. `any` cannot collide with a real value — country codes are `^[A-Z]{2}$`
+by column check as well as by schema.
+
+Both reads take the same in-service `moderate_commerce` check as the writes, before any filter value
+is read, for the reason §6.8 gives: a route-level guard makes the capability probeable from the route
+table, and a filter-first service makes the read an oracle for which lanes and providers exist.
+Neither takes an `Idempotency-Key` — a retried list changes nothing and has no body to key on. They
+share a **separate** limiter from the writes, so paging a lane's history cannot spend the allowance the
+operator then needs to fix what the page showed them.
+
+#### The staging rule, which was written down nowhere else
+
+`validFrom` is **optional on create and the controller defaults it to `new Date()`**, while
+`assertCardAcceptsBreakWrites` refuses with `409 COMMERCE_FREIGHT_RATE_CARD_IN_FORCE` whenever
+`validFrom <= now`. A card created without a `validFrom` is therefore in force the instant it exists,
+and the two `/breaks` routes **can never succeed against it**.
+
+The band-editing routes are reachable only on a card **staged** with a future `validFrom`. A console
+built without knowing this ships two permanently-dead buttons, and an operator using one reads a
+correct `409` as a broken page.
+
+#### The design question this raised, and how it was settled
+
+The two requirements above pull against each other. Rows must be the *existing* projection — no
+read-only variant, one vocabulary. But a list that cannot distinguish a staged card from one in force
+hides the only property that decides which controls apply.
+
+**Settled by putting `bandsEditable: boolean` on the shared projection**, computed as
+`assertCardAcceptsBreakWrites(row, now) === null` — the same function the `409` comes from, not a
+second opinion about it. Both directions of the exchange keep one shape, because the field is on the
+shape both use: the six writes answer with it too.
+
+The alternative — the console deriving `state === 'active' && validFrom > now` — was rejected. It puts
+the deciding predicate in two codebases, and near `validFrom` the two disagree across ordinary clock
+skew: the console enables a button and the very next request refuses it. §1.1's rule is that the
+backend is the sole source of truth for anything gating a state transition, and "may these bands be
+edited" is exactly that.
+
+Two smaller consequences of the same reasoning:
+
+- **`now` is a parameter of `projectRateCard`, not a clock read inside it**, and a list page computes
+  one instant for every row. Two reads of the clock could straddle a `validFrom` and answer
+  "editable" to the request that had just been refused.
+- **The page fetches every band in one query**, keyed by the page's card ids, rather than calling
+  `loadBreaksForCard` per row. Fifty cards at twenty bands is fifty round trips to save a `Map`. The
+  per-card helper stays, because the write paths hold exactly one card.
+
+#### What was deliberately not done
+
+**No index.** Both are platform reference tables, staff-read only, at tens to low hundreds of rows,
+where a scan and sort cost nothing; migrations here are hand-written, so an index is real cost against
+no measurable gain. If `commerce_freight_rate_card` ever passes a few thousand rows,
+`(valid_from DESC, id)` on each table is the change.
+
+**No service-level test.** The route suite stubs the service wholesale, so what it proves is the
+boundary — which query shapes get through, what the parsed object looks like, which refusal maps to
+which status. The keyset and the single-query band fetch are exercised only against a real database.
 
 ---
 
