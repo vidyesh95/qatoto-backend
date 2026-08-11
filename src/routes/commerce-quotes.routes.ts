@@ -43,6 +43,23 @@ router.post(
   commerceQuotesController.submitRevision,
 );
 
+/**
+ * A38. The provider's own bids across every RFQ, and the twin of `GET /commerce/provider/rfqs`.
+ *
+ * `requireActiveProviderCommerceOrganization`, matching the write routes above rather than the
+ * RFQ-scoped read below: this list is defined by authorship, and only a provider organization
+ * can author a quote.
+ *
+ * A LITERAL PATH SEGMENT beside no `:param` route of the same depth, so ordering is not load
+ * bearing here — `/quotes/:quoteId` is `/quotes` + one segment and cannot capture `/provider`.
+ */
+router.get(
+  "/provider/quotes",
+  requireAuth,
+  requireActiveProviderCommerceOrganization,
+  commerceQuotesController.listProviderQuotes,
+);
+
 router.get(
   "/rfqs/:rfqId/quotes",
   requireAuth,

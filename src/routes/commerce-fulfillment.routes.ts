@@ -43,6 +43,23 @@ router.get(
   commerceFulfillmentController.listCounterpartyShipments,
 );
 
+/**
+ * A38. The buyer half A29 left out, and the same argument applies unchanged from the other
+ * side of the order: a buyer waiting on twelve shipments across nine orders had no route that
+ * listed them either.
+ *
+ * DECLARED BEFORE `/shipments/:shipmentId` below. Both are `/shipments` + at most one segment,
+ * and while Express prefers the exact path regardless,
+ * `commerce-phase-21-reads.routes.order.test.ts` asserts the ordering so a future insert cannot
+ * make `/shipments` read as an id.
+ */
+router.get(
+  "/shipments",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentController.listBuyerShipments,
+);
+
 router.get(
   "/shipments/:shipmentId",
   requireAuth,

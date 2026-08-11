@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -22,6 +22,7 @@ import {
   downloadPrivateCommerceDocument,
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
@@ -58,7 +59,9 @@ export type CommerceTradeDocumentError =
    * over, so distinguishing "no such document" from "not yours" would make the route an
    * oracle for which documents exist.
    */
-  | { type: "NOT_FOUND" };
+  | { type: "NOT_FOUND" }
+  /** A38. The attachment picker's list is the first paginated read on this service. */
+  | { type: "INVALID_CURSOR" };
 
 export interface UploadedTradeDocument {
   readonly encryptedDocumentId: string;
@@ -250,6 +253,112 @@ async function organizationMayReadDocument(input: {
  * and a `quarantined` one failed; neither is a thing to hand anybody, including its own
  * uploader.
  */
+export interface TradeDocumentListItem {
+  readonly documentId: string;
+  readonly mediaType: string;
+  readonly fileByteSize: number;
+  /** NULL when the stored name cannot be decrypted — the same fallback the download takes. */
+  readonly fileName: string | null;
+  readonly createdAt: Date;
+}
+
+/**
+ * The caller's own uploaded trade attachments (Appendix A38).
+ *
+ * WHY THIS ROUTE HAD TO EXIST. `POST /commerce/documents` minted an id and
+ * `GET /commerce/documents/:documentId` streamed one back, and nothing enumerated them — so
+ * `documentIds` on an RFQ and `encryptedDocumentIds` on a message were fields the frontend
+ * could only fill with an id it had just uploaded in the same session. An attachment picker
+ * had no backing list.
+ *
+ * THE FILTER MIRRORS `assertOwnedDocuments` EXACTLY — own organization, `state = 'available'` —
+ * and that is the point. A list that offered a `pending_scan` id would be a picker whose every
+ * fresh upload is rejected on attach, which is worse than no picker.
+ *
+ * OWN UPLOADS ONLY, not everything the caller may read. `organizationMayReadDocument` also
+ * admits documents shared through a thread or an RFQ, and those are reachable by their id from
+ * the message or RFQ that carries them. Enumerating them here would turn a picker into a
+ * cross-organization file browser.
+ */
+export async function listTradeDocuments(
+  actor: CommerceTradeDocumentActorContext,
+  input: {
+    readonly cursor?: string | undefined;
+    readonly limit?: number | undefined;
+  },
+): Promise<
+  Result<
+    {
+      readonly items: readonly TradeDocumentListItem[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    CommerceTradeDocumentError
+  >
+> {
+  const limit = input.limit ?? 20;
+  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
+  const cursorPredicate =
+    decodedCursor === null
+      ? undefined
+      : or(
+          lt(commerceEncryptedDocument.createdAt, new Date(decodedCursor.sortKey)),
+          and(
+            eq(commerceEncryptedDocument.createdAt, new Date(decodedCursor.sortKey)),
+            gt(commerceEncryptedDocument.id, decodedCursor.id),
+          ),
+        );
+
+  const rows = await db
+    .select({
+      id: commerceEncryptedDocument.id,
+      mediaType: commerceEncryptedDocument.mediaType,
+      fileByteSize: commerceEncryptedDocument.fileByteSize,
+      originalFileNameEncrypted: commerceEncryptedDocument.originalFileNameEncrypted,
+      createdAt: commerceEncryptedDocument.createdAt,
+    })
+    .from(commerceEncryptedDocument)
+    .where(
+      and(
+        eq(commerceEncryptedDocument.organizationId, actor.organizationId),
+        eq(commerceEncryptedDocument.documentKind, "trade_attachment"),
+        eq(commerceEncryptedDocument.state, "available"),
+        cursorPredicate,
+      ),
+    )
+    .orderBy(desc(commerceEncryptedDocument.createdAt), asc(commerceEncryptedDocument.id))
+    .limit(limit + 1);
+
+  const pageRows = rows.slice(0, limit);
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor =
+    rows.length > limit && lastRow
+      ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.id })
+      : null;
+
+  const items = pageRows.map((row) => {
+    const decryptedFileName =
+      row.originalFileNameEncrypted === null
+        ? null
+        : decryptCommercePii(row.originalFileNameEncrypted);
+    return {
+      documentId: row.id,
+      mediaType: row.mediaType,
+      fileByteSize: row.fileByteSize,
+      // NULL rather than the id the download falls back to: a picker showing an opaque uuid
+      // as a file name is worse than showing none, and the client can label it itself.
+      fileName:
+        decryptedFileName !== null && decryptedFileName.success ? decryptedFileName.value : null,
+      createdAt: row.createdAt,
+    };
+  });
+
+  return { success: true, value: { items, page: { nextCursor, hasMore: nextCursor !== null } } };
+}
+
 export async function downloadTradeDocument(
   actor: CommerceTradeDocumentActorContext,
   documentId: string,

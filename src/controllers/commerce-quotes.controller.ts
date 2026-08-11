@@ -11,6 +11,20 @@ const EmptyObjectSchema = z.object({}).strict();
 const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
 
 const RfqIdParamsSchema = z.object({ rfqId: z.string().trim().min(1).max(200) }).strict();
+
+/**
+ * A38. `status` is the full `commerce_quote_status` enum, `draft` included — this is the
+ * provider's own work and the only list that yields a draft's id.
+ */
+const ListProviderQuotesQuerySchema = z
+  .object({
+    status: z
+      .enum(["draft", "submitted", "superseded", "accepted", "declined", "withdrawn", "expired"])
+      .optional(),
+    cursor: z.string().trim().min(1).max(500).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
 const QuoteIdParamsSchema = z.object({ quoteId: z.string().trim().min(1).max(200) }).strict();
 const QuoteRevisionParamsSchema = z
   .object({
@@ -395,6 +409,13 @@ function mapQuotesError(res: Response, error: CommerceQuotesError): void {
         data: { reason: error.reason },
       } satisfies ApiResponse);
       return;
+    case "INVALID_CURSOR":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Invalid cursor.",
+      } satisfies ApiResponse);
+      return;
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce quotes error: ${JSON.stringify(exhaustiveCheck)}`);
@@ -489,6 +510,40 @@ export async function submitRevision(req: Request, res: Response): Promise<void>
     status: "success",
     statusCode: 200,
     message: "Quote revision submitted.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * GET /commerce/provider/quotes — a provider's own bids, across every RFQ (Appendix A38).
+ *
+ * The twin of `GET /commerce/provider/rfqs`, which lists the WORK. An RFQ leaves that queue
+ * when it closes and takes any quote on it out of reach, so before this the only way to
+ * enumerate one's own bids was to fan out per RFQ from the browser.
+ */
+export async function listProviderQuotes(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+
+  const query = ListProviderQuotesQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await commerceQuotesService.listProviderQuotes(actor, {
+    status: query.data.status,
+    cursor: query.data.cursor,
+    limit: query.data.limit,
+  });
+  if (!result.success) {
+    mapQuotesError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Provider quotes listed.",
     data: result.value,
   } satisfies ApiResponse);
 }

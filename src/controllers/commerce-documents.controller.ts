@@ -11,6 +11,13 @@ const EmptyObjectSchema = z.object({}).strict();
 
 const DocumentIdParamsSchema = z.object({ documentId: z.string().trim().min(1).max(200) }).strict();
 
+const ListTradeDocumentsQuerySchema = z
+  .object({
+    cursor: z.string().trim().min(1).max(500).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
 function sendZodError(res: Response, error: z.ZodError): void {
   /**
    * Delegates to the ONE shared responder (§0).
@@ -90,6 +97,13 @@ function mapTradeDocumentError(res: Response, error: CommerceTradeDocumentError)
         message: "Document storage is unavailable.",
       } satisfies ApiResponse);
       return;
+    case "INVALID_CURSOR":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Invalid cursor.",
+      } satisfies ApiResponse);
+      return;
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled trade document error: ${JSON.stringify(exhaustiveCheck)}`);
@@ -151,6 +165,40 @@ export async function uploadTradeDocument(req: Request, res: Response): Promise<
     status: "success",
     statusCode: 202,
     message: "Document uploaded and awaiting scanning.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * A38. The caller's own trade attachments — the list behind an attachment picker.
+ *
+ * A30 shipped the upload and the download and nothing that enumerated them, so `documentIds`
+ * on an RFQ and `encryptedDocumentIds` on a message could only be filled with an id the client
+ * had just minted in the same session. METADATA ONLY: no bytes, no storage key, no ciphertext.
+ */
+export async function listTradeDocuments(req: Request, res: Response): Promise<void> {
+  const actor = requireDocumentActor(req, res);
+  if (!actor) return;
+
+  const query = ListTradeDocumentsQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await commerceTradeDocumentService.listTradeDocuments(actor, {
+    cursor: query.data.cursor,
+    limit: query.data.limit,
+  });
+  if (!result.success) {
+    mapTradeDocumentError(res, result.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Trade documents listed.",
     data: result.value,
   } satisfies ApiResponse);
 }

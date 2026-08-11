@@ -825,6 +825,21 @@ export async function listCounterpartyShipments(
 }
 
 /**
+ * A38. The buyer's twin of A29's queue — every shipment inbound to them, across every order.
+ *
+ * The one line `listShipmentsBy`'s own comment predicted. A29 shipped the provider half and
+ * the buyer was left with the workaround A29 rejected for the provider: list your orders, then
+ * fetch each one's shipments, which is one request per order and cannot even be correct when
+ * the client holds a single page of orders.
+ */
+export async function listBuyerShipments(
+  actor: CommerceFulfillmentActorContext,
+  input: ListShipmentsInput,
+): Promise<Result<ShipmentQueuePage, CommerceFulfillmentError>> {
+  return listShipmentsBy(eq(commerceOrder.buyerOrganizationId, actor.organizationId), input);
+}
+
+/**
  * Guarded transition matrix. The provider drives the working states forward; the buyer's
  * only lever is completing (or reopening) work sitting in `awaiting_buyer`. Terminal states
  * (`completed`, `cancelled`, `disputed`) have no outgoing entry — `disputed` is reserved for

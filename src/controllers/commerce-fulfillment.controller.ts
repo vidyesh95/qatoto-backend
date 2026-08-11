@@ -397,6 +397,35 @@ export async function listCounterpartyShipments(req: Request, res: Response): Pr
   } satisfies ApiResponse);
 }
 
+/**
+ * A38. The buyer's twin of A29's queue — every shipment inbound to them, across every order.
+ *
+ * Same query shape and same page contract as the provider half, because it is the same list
+ * read from the other side of the order.
+ */
+export async function listBuyerShipments(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+
+  const parsedQuery = ListShipmentsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendZodError(res, parsedQuery.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentService.listBuyerShipments(actor, parsedQuery.data);
+  if (!result.success) {
+    mapFulfillmentError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Shipments loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
 export async function transitionServiceEngagement(req: Request, res: Response): Promise<void> {
   const actor = requireCommerceActor(req, res);
   if (!actor) return;

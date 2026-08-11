@@ -41,6 +41,23 @@ commerceDocumentsRouter.post(
   commerceDocumentsController.uploadTradeDocument,
 );
 
+/**
+ * A38. DECLARED BEFORE `/documents/:documentId`, and here that ordering IS load bearing —
+ * both are `/documents` + at most one segment, so a later `/documents` would be fine but a
+ * `:documentId` route declared first would capture nothing of the bare path. Express matches
+ * the exact path first either way; the order is kept explicit so a future insert cannot break
+ * it silently.
+ *
+ * The download limiter does NOT apply: this returns metadata, never bytes, so it is not the
+ * expensive read that limiter exists to bound.
+ */
+commerceDocumentsRouter.get(
+  "/documents",
+  requireAuth,
+  requireProvisionedBuyerCommerceWorkspace,
+  commerceDocumentsController.listTradeDocuments,
+);
+
 commerceDocumentsRouter.get(
   "/documents/:documentId",
   requireAuth,

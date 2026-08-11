@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -43,6 +43,7 @@ import {
   latestPromisedDeliveryAt,
 } from "#src/lib/commerce-promised-delivery.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import {
   createEscrowSessionForOrder,
   scheduleEscrowCommands,
@@ -85,7 +86,9 @@ export type CommerceQuotesError =
    */
   | { type: "SETTLEMENT_UNAVAILABLE"; reason: string }
   | { type: "VALIDATION_FAILED"; message: string }
-  | { type: "CONFLICT"; message: string };
+  | { type: "CONFLICT"; message: string }
+  /** A38. The provider quote queue is the first paginated read on this service. */
+  | { type: "INVALID_CURSOR" };
 
 export interface QuoteActorContext {
   readonly organizationId: string;
@@ -1205,6 +1208,134 @@ async function loadLatestSubmittedRevision(quoteId: string): Promise<RevisionRow
   return submitted.reduce((latest, candidate) =>
     candidate.revisionNumber > latest.revisionNumber ? candidate : latest,
   );
+}
+
+/**
+ * One row of a provider's cross-RFQ quote queue (Appendix A38).
+ *
+ * DELIBERATELY LIGHTER THAN `QuoteComparisonItem`. That shape carries every product and
+ * service line because a buyer comparing three bids on one RFQ is reading the lines. A
+ * provider scanning fifty quotes across fifty RFQs is reading status and money, and building
+ * the line summaries would mean two extra queries per row for data the screen does not show.
+ */
+export interface ProviderQuoteQueueItem {
+  readonly quoteId: string;
+  readonly status: QuoteRow["status"];
+  readonly rfq: {
+    readonly id: string;
+    readonly title: string;
+    readonly state: typeof commerceRfq.$inferSelect.state;
+    readonly buyerOrganizationId: string;
+  };
+  readonly latestSubmittedRevision: QuoteRevisionMoneyProjection | null;
+  readonly latestRevisionNumber: number;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+/**
+ * Every quote this provider has authored, across every RFQ (Appendix A38).
+ *
+ * WHY THIS ROUTE HAD TO EXIST. `GET /commerce/rfqs/:rfqId/quotes` is RFQ-scoped, so a provider
+ * could only see a quote by first knowing which RFQ it belonged to. `GET /commerce/provider/rfqs`
+ * lists the WORK, not the BIDS — an RFQ leaves that queue when it closes, taking any quote on it
+ * out of reach. The only way to enumerate one's own bids was to fan out per RFQ from the browser.
+ *
+ * DRAFTS INCLUDED, unlike the buyer's comparison view. A draft is the provider's own unfinished
+ * work and hiding it here would lose it entirely — this is the only list that yields its id.
+ *
+ * Ordered newest-updated first, keyed on `updatedAt` then `id`, which is what
+ * `commerce_quote_provider_status_idx` was already built to serve.
+ */
+export async function listProviderQuotes(
+  actor: QuoteActorContext,
+  input: {
+    readonly status?: QuoteRow["status"] | undefined;
+    readonly cursor?: string | undefined;
+    readonly limit?: number | undefined;
+  },
+): Promise<
+  Result<
+    {
+      readonly items: readonly ProviderQuoteQueueItem[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    CommerceQuotesError
+  >
+> {
+  const limit = input.limit ?? 20;
+  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
+  const cursorPredicate =
+    decodedCursor === null
+      ? undefined
+      : or(
+          lt(commerceQuote.updatedAt, new Date(decodedCursor.sortKey)),
+          and(
+            eq(commerceQuote.updatedAt, new Date(decodedCursor.sortKey)),
+            gt(commerceQuote.id, decodedCursor.id),
+          ),
+        );
+
+  const rows = await db
+    .select({
+      quote: commerceQuote,
+      rfqId: commerceRfq.id,
+      rfqTitle: commerceRfq.title,
+      rfqState: commerceRfq.state,
+      rfqBuyerOrganizationId: commerceRfq.buyerOrganizationId,
+    })
+    .from(commerceQuote)
+    .innerJoin(commerceRfq, eq(commerceRfq.id, commerceQuote.rfqId))
+    .where(
+      and(
+        // Authorship IS the authorization here. A quote belongs to exactly one provider
+        // organization, so there is no second party to admit.
+        eq(commerceQuote.providerOrganizationId, actor.organizationId),
+        input.status === undefined ? undefined : eq(commerceQuote.status, input.status),
+        cursorPredicate,
+      ),
+    )
+    .orderBy(desc(commerceQuote.updatedAt), asc(commerceQuote.id))
+    .limit(limit + 1);
+
+  const pageRows = rows.slice(0, limit);
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor =
+    rows.length > limit && lastRow
+      ? encodeStoreCursor({
+          sortKey: lastRow.quote.updatedAt.toISOString(),
+          id: lastRow.quote.id,
+        })
+      : null;
+
+  const latestRevisions = await Promise.all(
+    pageRows.map(async (row) => loadLatestSubmittedRevision(row.quote.id)),
+  );
+
+  const items = pageRows.map((row, rowIndex) => {
+    const latestSubmitted = latestRevisions[rowIndex] ?? null;
+    return {
+      quoteId: row.quote.id,
+      status: row.quote.status,
+      rfq: {
+        id: row.rfqId,
+        title: row.rfqTitle,
+        state: row.rfqState,
+        buyerOrganizationId: row.rfqBuyerOrganizationId,
+      },
+      latestSubmittedRevision:
+        latestSubmitted === null ? null : projectRevisionMoney(latestSubmitted),
+      latestRevisionNumber: row.quote.latestRevisionNumber,
+      createdAt: row.quote.createdAt,
+      updatedAt: row.quote.updatedAt,
+    };
+  });
+
+  return { success: true, value: { items, page: { nextCursor, hasMore: nextCursor !== null } } };
 }
 
 /**
