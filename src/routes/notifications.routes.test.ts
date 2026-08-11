@@ -70,8 +70,17 @@ describe("notification routes", () => {
   it("passes the session user id and the parsed cursor through", async () => {
     listNotifications.mockResolvedValue(EMPTY_PAGE);
 
-    await request(app).get("/notifications?cursor=1773479700123_notification_1&limit=5");
+    const response = await request(app).get("/notifications?cursor=1773479700123_notification_1&limit=5");
 
+    /**
+     * ASSERTED FIRST, and it was missing. Without it EVERY short-circuit — a 401 from
+     * `requireAuth`, a 422 from the query schema — surfaced as "spy not called with…", which
+     * names the wrong cause. This test was the one that flaked under `--sequence.shuffle`, and
+     * it took two investigations to establish that the answer had simply been a 401, because
+     * the assertion never said so. See `vitest.config.ts`'s `testTimeout` note for the
+     * mechanism.
+     */
+    expect(response.status).toBe(200);
     expect(listNotifications).toHaveBeenCalledWith(TEST_SESSION_USER.id, {
       cursor: "1773479700123_notification_1",
       limit: 5,

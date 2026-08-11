@@ -546,15 +546,20 @@ describe("commerce customs dwell estimate admin reads", () => {
       value: { items: [], page: { nextCursor: null, hasMore: false } },
     });
 
-    await request(app).get("/commerce/admin/customs-dwell-estimates?originCountryCode=any");
+    // Each status is asserted so a 401 or 422 short-circuit names itself rather than surfacing
+    // as an uncalled spy — see `vitest.config.ts`'s `testTimeout` note.
+    const withSentinel = await request(app).get("/commerce/admin/customs-dwell-estimates?originCountryCode=any");
+    expect(withSentinel.status).toBe(200);
     expect(serviceStubs.listCustomsDwellEstimates).toHaveBeenLastCalledWith("user_test_caller", {
       originCountryCode: "any",
     });
 
-    await request(app).get("/commerce/admin/customs-dwell-estimates");
+    const withoutKey = await request(app).get("/commerce/admin/customs-dwell-estimates");
+    expect(withoutKey.status).toBe(200);
     expect(serviceStubs.listCustomsDwellEstimates).toHaveBeenLastCalledWith("user_test_caller", {});
 
-    await request(app).get("/commerce/admin/customs-dwell-estimates?originCountryCode=IN");
+    const withCountry = await request(app).get("/commerce/admin/customs-dwell-estimates?originCountryCode=IN");
+    expect(withCountry.status).toBe(200);
     expect(serviceStubs.listCustomsDwellEstimates).toHaveBeenLastCalledWith("user_test_caller", {
       originCountryCode: "IN",
     });

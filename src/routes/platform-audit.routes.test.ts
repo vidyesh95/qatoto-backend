@@ -73,8 +73,11 @@ describe("platform audit routes", () => {
       value: { rows: [], total: 0, nextSequence: null },
     });
 
-    await request(app).get("/admin/audit-trail?fromSequence=12&eventKind=cluster_merge_approved");
+    const response = await request(app).get("/admin/audit-trail?fromSequence=12&eventKind=cluster_merge_approved");
 
+    // Asserted so a 401 or 422 short-circuit names itself rather than surfacing as an
+    // uncalled spy — see `vitest.config.ts`'s `testTimeout` note.
+    expect(response.status).toBe(200);
     expect(listPlatformAuditTrail).toHaveBeenCalledWith(TEST_SESSION_USER.id, {
       fromSequence: 12,
       eventKind: "cluster_merge_approved",
