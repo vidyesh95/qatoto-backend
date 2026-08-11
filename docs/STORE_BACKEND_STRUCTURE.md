@@ -1159,6 +1159,18 @@ Search documents contain only public eligible fields. Product/category/provider 
 refresh jobs after commit. Search may initially use PostgreSQL full-text/trigram indexes; an
 external search engine is an adapter added only when measured scale requires it.
 
+**A FILTER AND ITS COUNT ARE ONE QUERY (A39).** Both are built from `buildStoreSearchFilters` and
+both read `store_search_document`. Written separately they will eventually disagree, and the
+disagreement is invisible in review because each half is correct on its own — that is exactly how a
+category page came to print a stock count its own cards contradicted.
+
+**"Enqueue after commit" is the whole contract, and three writers had forgotten it.** Moderation
+hide/restore, and the category-request verdict that reassigns listings, both changed a row the
+document mirrors and enqueued nothing. `is_eligible` and `category_slug` are frozen copies: a writer
+that changes what they mirror and does not enqueue leaves the catalog and search disagreeing, and
+only the catalog looks right. `verify-store-phase-22-constraints` asserts the invariant rather than
+the call sites, so the next writer to forget is caught by data rather than by review.
+
 Home rails are server-defined:
 
 - curated placements reference eligible entities and have start/end windows;
@@ -3667,9 +3679,11 @@ is **variant-aware**, matching `mapProductCard`, because a card and a filter now
 column and disagreeing would be the worse bug.
 
 **Rule, still binding:** a filter and its facet are one concept and ship together. Publishing a
-count the caller cannot act on is worse than publishing neither. **Still open:**
-`getCategoryFacets` aggregates over `product` while the filters read `store_search_document`, so the
-two can drift — see `docs/STORE_PHASE_15_ROLLOUT.md`.
+count the caller cannot act on is worse than publishing neither. **The half this entry left open —
+`getCategoryFacets` aggregating over `product` while the filters read `store_search_document` — is
+CLOSED in Phase 22; see A39.** It was not the drift risk this entry described but a live
+disagreement, and A39 also closes the same rule pointing the other way: six filters that had no
+count at all.
 
 ---
 
@@ -4219,3 +4233,83 @@ harness to exercise one-edit-in-thirty-days against. The route tests cover the g
 route exists. `verify-store-phase-21-constraints` adds four live-data invariants — nothing edited
 before creation, nothing edited past day 30, no edited review carrying pre-edit votes — which are
 what would catch the rule having drifted.
+
+---
+
+### A39. The counts and the results came from different tables — **SHIPPED (Phase 22, `0114`)**
+
+**Needed by:** every filtered browse surface. A25 shipped the filters and left this open in its own
+closing paragraph; `docs/STORE_PHASE_15_ROLLOUT.md` called moving the facets onto the search
+document "the natural next edit". It was.
+
+**What was wrong, and it was not the drift risk A25 described.** `getCategoryFacets` aggregated
+over `product`; every filter read `store_search_document`. The two had already diverged:
+
+- **Stock.** `mapProductCard` derives stock from the ACTIVE VARIANT SUM (`store-catalog.service.ts`),
+  and A25 made the document's `stock_state` variant-aware for exactly that reason. The facet's raw
+  SQL read `p.stock_quantity` alone. So a category page could render **"In stock (12)" above twelve
+  cards reading *Unavailable*** — same request, same products, two answers.
+- **Price.** The facet published `product.price_in_cents`; the document stores
+  `min(active variant price) ?? product.priceInCents`. A variant-priced listing was counted at a
+  price no buyer could filter to.
+- **Eligibility was written three times** — a Drizzle predicate, a six-clause hand copy in raw SQL
+  inside the facet query, and the denormalized `is_eligible` boolean — and `deriveStockState` four
+  times, counting the facet's CASE ladder.
+
+**And the rule was broken in the other direction too.** `/store/search` carried thirteen filters and
+published **no facets at all**, so a buyer could narrow and never learn how many narrowing would
+leave. Meanwhile the category page published four counts and `listEligibleProducts` could filter on
+**none** of them.
+
+**What exists now.** `computeStoreSearchFacets` reads `store_search_document` and shares
+`buildStoreSearchFilters` with `searchStoreDocuments` — one builder, so a count and its result set
+cannot disagree without being wrong for both. `getCategoryFacets` is a thin caller taking a SLUG
+(the document is scoped by `category_slug`, exactly as the filters are), and its 4087 characters of
+duplicated eligibility and stock logic are deleted. `/store/search` answers `facets`; five
+dimensions have a count for the first time.
+
+**Drill-down, each facet blind to its own filter.** A facet counts under every OTHER applied filter
+and not its own, so a buyer who picked "In stock" still sees `low_stock (12)` beside it and can
+switch in one click. Amazon and Alibaba both behave this way. Counting a facet under its own filter
+collapses it to the value already chosen and the only way back is to clear it, losing every other
+narrowing with it. That is why this is N grouped queries rather than one scan — they differ from
+each other by exactly one predicate, and each hits a partial index this table already carried.
+**Zero-count values stay absent rather than padded**, which is what the four original facets did:
+neither a country code nor a price range has a closed value set, so padding could never be uniform.
+
+**Three defects found while doing it, each its own commit.**
+
+- **A moderator-hidden listing stayed findable in search.** `is_eligible` is frozen at write time
+  and `commerce-content-reports.service.ts` enqueued no refresh — the file had no `enqueue` in it.
+  Its own comment asserted the opposite ("removes the listing from every public read with no new
+  filter anywhere"), true of every read that evaluates `publicProductEligibility` live and false of
+  the one place a hidden listing most obviously must not be. Fixed on all three paths — automatic
+  threshold hide, moderator decision, restore — each after its transaction commits, because a
+  refresh inside it would read the pre-moderation row and undo the hide.
+- **A category verdict did not move the listing in search.** `decideCommerceCategoryRequest`
+  reassigns products and enqueued nothing, so a moved listing was missing from its new category's
+  results while still counted under its old one. **The verifier found this on its first run**, on
+  three rows in the development database.
+- **A sort changed what matched.** The three sort branches built three different text predicates and
+  the discovery branch skipped `escapeLikePattern`, so a query containing `%` or `_` matched a
+  different set of documents depending on how the caller asked them to be ordered. One expression
+  now, shared with every facet count.
+
+**Two duplications removed.** `listActiveCategorySubtreeSlugs` existed twice, byte for byte, and
+search called its private copy — so the facets and the filters could have been given different
+subtree rules by editing either. And `store_search_document_category_idx` indexes `category_id`,
+which **no query path reads**; `0114` adds the partial `(is_eligible, category_slug, id)` the reads
+actually use, and the old index stays only for the FK.
+
+**Rule, now binding both ways:** a filter and its count are one query. If they can be written
+separately they will eventually disagree, and the disagreement is invisible in review because each
+half is correct on its own.
+
+**How it is checked, since nothing checked either half before.**
+`verify-store-phase-22-constraints` asserts the document against live data — stock and price against
+the variant sum, no eligible document for a product the catalog would hide, and the reverse. The
+rule is restated in SQL rather than imported, because a verifier that calls the implementation only
+proves the implementation equals itself. `smoke-store-phase-22` asserts the phase itself over HTTP:
+**every facet count equals the number of results returned when that value is applied as a filter**,
+across every dimension, plus drill-down blind-to-self and the category page agreeing with the same
+query on search.

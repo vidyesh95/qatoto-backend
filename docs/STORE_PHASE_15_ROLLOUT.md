@@ -168,12 +168,14 @@ check that passes only because it asked for nothing is worse than no check.
 
 ## Still open
 
-- **`getCategoryFacets` and `/store/search` now compute from different tables.** The facets
-  aggregate over `product`; the filters read `store_search_document`. The counts and the
-  `WHERE` can therefore drift, and the raw `db.execute` inside `getCategoryFacets` restates
-  the eligibility predicate by hand (`store-catalog.service.ts:560-565`), which is a second
-  copy of a rule that already exists twice. Moving the facets onto the search document
-  would close both, and is the natural next edit.
+- ~~**`getCategoryFacets` and `/store/search` now compute from different tables.**~~
+  **CLOSED in Phase 22 (`0114`) — see Appendix A39.** It was the natural next edit, and the
+  counts and the `WHERE` had not merely drifted: the facet's stock CASE ladder was not
+  variant-aware while the card and the document both were, so a category page could print
+  "In stock (12)" above twelve cards reading *Unavailable*. `computeStoreSearchFacets` now
+  serves both reads from `store_search_document` and shares one filter builder with the
+  search itself; the hand-copied eligibility predicate and the fourth copy of
+  `deriveStockState` are gone.
 - **A26 stays deferred.** Variants are a flat list, not attribute axes. The flat list is
   the right shape until a category actually sells on two dimensions, and building axes
   early means migrating every row that reaches an order-line snapshot for a UI nothing has
