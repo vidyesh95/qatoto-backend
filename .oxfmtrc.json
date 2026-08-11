@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["dist", "node_modules", ".agent", ".agents"],
+  "ignorePatterns": ["dist", "node_modules", ".agent", ".agents", "docs"],
   "printWidth": 100,
   "tabWidth": 2,
   "semi": true,
