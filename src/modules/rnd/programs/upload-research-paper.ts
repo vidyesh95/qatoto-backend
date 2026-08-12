@@ -1,5 +1,5 @@
-import { MAX_PAPER_BYTES } from "#src/lib/pdf.js";
 import { createSingleFileUpload } from "#src/middleware/upload.js";
+import { MAX_PAPER_BYTES } from "#src/modules/rnd/pdf.js";
 
 /**
  * Multipart parser for the single `paper` field of
@@ -19,7 +19,7 @@ import { createSingleFileUpload } from "#src/middleware/upload.js";
  * assembled; `validatePdfBytes` reads the actual bytes afterwards, and that is the
  * check that decides. Both run, in that order.
  *
- * The size cap is imported from `src/lib/pdf.ts` rather than restated, because two
+ * The size cap is imported from `src/modules/rnd/pdf.ts` rather than restated, because two
  * copies of a limit are two limits that eventually disagree — and the disagreement
  * surfaces as a confusing 422 after a successful 25 MB transfer.
  */

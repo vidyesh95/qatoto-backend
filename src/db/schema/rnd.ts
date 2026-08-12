@@ -2951,7 +2951,7 @@ export const workshopFile = pgTable(
     fileName: text("file_name").notNull(),
     fileKind: workshopFileKindEnum("file_kind").default("other").notNull(),
     source: workshopFileSourceEnum("source").default("external_link").notNull(),
-    // The NORMALIZED url — credentials and fragment stripped by src/lib/external-link.ts,
+    // The NORMALIZED url — credentials and fragment stripped by src/modules/rnd/external-link.ts,
     // host allowlisted. The client's raw string is never stored and never echoed.
     externalUrl: text("external_url"),
     // Derived from externalUrl by the server, stored so a client can badge the source

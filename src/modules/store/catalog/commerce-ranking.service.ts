@@ -11,26 +11,26 @@ import {
   commerceRankingEnforcementEvent,
   product,
 } from "#src/db/schema.js";
+import { utcDayStringOf } from "#src/lib/utc-day.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import {
   resolveCategoryPrior,
   smoothRateTowardPrior,
   type CategoryPriorCandidate,
-} from "#src/lib/commerce-category-prior.js";
+} from "#src/modules/store/commerce-category-prior.js";
 import {
   enforcementMultiplierBasisPoints,
   evaluateFraudGuard,
   type RankingEnforcementAction,
-} from "#src/lib/commerce-fraud-guard.js";
+} from "#src/modules/store/commerce-fraud-guard.js";
 import {
   applyMultipliers,
   computeNegativeRatePenalty,
   computeOrderValueMultiplier,
   computeSubnetConcentrationPenalty,
   NEUTRAL_MULTIPLIER_BASIS_POINTS,
-} from "#src/lib/commerce-ranking-multipliers.js";
-import { computeSpikeThreshold } from "#src/lib/commerce-robust-statistics.js";
-import { utcDayStringOf } from "#src/lib/utc-day.js";
-import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
+} from "#src/modules/store/commerce-ranking-multipliers.js";
+import { computeSpikeThreshold } from "#src/modules/store/commerce-robust-statistics.js";
 import {
   COMMERCE_TRENDING_ALGORITHM_VERSION,
   explorationOrderKey,

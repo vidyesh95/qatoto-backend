@@ -6,12 +6,12 @@ import {
   researchProgramBranchClaim,
   researchProgramPaper,
 } from "#src/db/schema.js";
+import type { ResearchProgramBranchStatus } from "#src/modules/rnd/programs/research-program-branches.service.js";
 import {
   jaccardBasisPoints,
   normalizeToTokenSet,
   TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS,
-} from "#src/lib/text-similarity.js";
-import type { ResearchProgramBranchStatus } from "#src/modules/rnd/programs/research-program-branches.service.js";
+} from "#src/modules/rnd/text-similarity.js";
 
 /**
  * The two DERIVED signals on the §10 research map
@@ -30,7 +30,7 @@ import type { ResearchProgramBranchStatus } from "#src/modules/rnd/programs/rese
  *
  * WHY JACCARD OVER TOKEN SETS, AND NOT EMBEDDINGS. There is no vector store, no pgvector and
  * no embedding call anywhere in this backend, and adding one to compute a nightly integer
- * would be a large new dependency for a small job. `src/lib/text-similarity.ts` already
+ * would be a large new dependency for a small job. `src/modules/rnd/text-similarity.ts` already
  * exists for §6's problem clustering, is integer-only in basis points, and its header
  * explains at length why a float score from `pg_trgm` was rejected: a Postgres upgrade would
  * silently re-score curated history. The same argument applies here — a branch flipping from

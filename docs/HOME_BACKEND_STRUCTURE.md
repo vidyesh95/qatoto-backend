@@ -31,7 +31,7 @@ who edits the beacon payload in DevTools must not be able to promote their own v
 **Rule 2 — Scoring is integer-only and deterministic.** No floats, no `Math.exp`, no
 `Math.random()`, no `Date.now()` outside the tick layer. Two runs over the same data produce
 bit-identical scores, which is what makes a ranking bug reproducible instead of folklore. This
-copies `src/lib/opportunity-score.ts` exactly and for exactly the same reason.
+copies `src/modules/rnd/opportunity-score.ts` exactly and for exactly the same reason.
 
 **Rule 3 — There is one feed ranking route.** `GET /feed/videos` returns one ranked page.
 Recommended and Explore are a **frontend slice** of that page (frontend §5), not two response
@@ -316,7 +316,7 @@ not to need.
 
 ## 4. Ranking
 
-Three new pure modules beside `src/lib/opportunity-score.ts`: `feed-score.ts`, `trending-score.ts`,
+Three new pure modules beside `src/modules/rnd/opportunity-score.ts`: `feed-score.ts`, `trending-score.ts`,
 `affinity-score.ts`. Same shape as the existing scorers — exported component budgets, a
 module-load assertion that they sum to 100, step ladders instead of curves, integers throughout.
 

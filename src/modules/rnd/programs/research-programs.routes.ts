@@ -242,7 +242,7 @@ router.get(
  *
  * NO JSON BODY PARSER in this chain, and that is deliberate: `uploadResearchPaperFile` is
  * the parser, and a JSON parser ahead of it would consume the stream. Its 25 MB cap is
- * imported from `src/lib/pdf.ts` so the two cannot disagree.
+ * imported from `src/modules/rnd/pdf.ts` so the two cannot disagree.
  *
  * No `idempotency()` middleware — the content-addressed storage key plus the partial unique
  * index on `contentSha256` make a retried upload converge on the same object, which is

@@ -8,7 +8,7 @@ import {
   linkedProjectScarcityPoints,
   OPPORTUNITY_SCORE_COMPONENT_BUDGETS,
   recencyBucketPoints,
-} from "#src/lib/opportunity-score.js";
+} from "#src/modules/rnd/opportunity-score.js";
 
 interface LadderBoundaryCase {
   readonly input: number;

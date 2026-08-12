@@ -116,7 +116,7 @@ const ExtractedClaimSchema = z
 
 const EvidenceLinkSchema = z
   .object({
-    // Host-allowlisted downstream by src/lib/external-link.ts. A model can hallucinate a
+    // Host-allowlisted downstream by src/modules/rnd/external-link.ts. A model can hallucinate a
     // URL as easily as a member can mistype one, so this string gets no more trust than
     // a request body's would.
     externalUrl: z.string().min(1).max(2_048),

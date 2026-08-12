@@ -46,7 +46,6 @@ import {
   user,
 } from "#src/db/schema.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
-import { normalizeToTokenSet } from "#src/lib/text-similarity.js";
 import {
   countOverlappingGroups,
   decideBranchStatus,
@@ -63,6 +62,7 @@ import * as participantsService from "#src/modules/rnd/programs/research-program
 import * as postsService from "#src/modules/rnd/programs/research-program-posts.service.js";
 import { recomputeProgramStats } from "#src/modules/rnd/programs/research-program-stats.service.js";
 import * as programsService from "#src/modules/rnd/programs/research-programs.service.js";
+import { normalizeToTokenSet } from "#src/modules/rnd/text-similarity.js";
 
 const SMOKE_PREFIX = "smoke-rnd-program";
 

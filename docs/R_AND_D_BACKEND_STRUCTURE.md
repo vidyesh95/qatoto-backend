@@ -2917,7 +2917,7 @@ a §10 convenience:
   first non-image byte storage in the codebase. Cloudinary could not serve it — all five of its
   upload families hardcode `resource_type: "image"` and `src/lib/image.ts` answers NOT_AN_IMAGE
   for a PDF. The bucket is PRIVATE and downloads are 5-minute presigned URLs, which is what keeps
-  `GET …/papers/:paperId/download` authorizable and rate-limitable. `src/lib/pdf.ts` validates by
+  `GET …/papers/:paperId/download` authorizable and rate-limitable. `src/modules/rnd/pdf.ts` validates by
   magic bytes rather than by adding a parser, on the same reasoning
   `receipt-forensics.ts` gives for hand-reading EXIF.
 - **A reaction primitive, threaded content, and a user-facing content report.** None existed.
@@ -3047,7 +3047,7 @@ code change.
 `compensation.controller.ts` / `compensation-error-response.ts`, three services
 (`compensation-agreements`, `compensation-periods`, `compensation-payments`), two jobs
 (`close-compensation-period` and `recompute-compensation-draft`, each with a daily tick),
-`src/lib/compensation-period.ts` and migrations 0017–0019.
+`src/modules/rnd/compensation-period.ts` and migrations 0017–0019.
 
 `requireIdentifiedUser` on every write (§4a); every project-scoped route re-checks membership in
 the service and fails `404` (§4a).

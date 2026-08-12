@@ -4,8 +4,8 @@ import {
   resolveCategoryPrior,
   smoothRateTowardPrior,
   DEFAULT_FLOOR_RATE_BASIS_POINTS,
-} from "#src/lib/commerce-category-prior.js";
-import { evaluateFraudGuard } from "#src/lib/commerce-fraud-guard.js";
+} from "#src/modules/store/commerce-category-prior.js";
+import { evaluateFraudGuard } from "#src/modules/store/commerce-fraud-guard.js";
 import {
   applyMultipliers,
   computeNegativeRatePenalty,
@@ -13,8 +13,8 @@ import {
   computeSubnetConcentrationPenalty,
   NEUTRAL_MULTIPLIER_BASIS_POINTS,
   SUBNET_PENALTY_FLOOR_BASIS_POINTS,
-} from "#src/lib/commerce-ranking-multipliers.js";
-import { computeSpikeThreshold, percentileOf } from "#src/lib/commerce-robust-statistics.js";
+} from "#src/modules/store/commerce-ranking-multipliers.js";
+import { computeSpikeThreshold, percentileOf } from "#src/modules/store/commerce-robust-statistics.js";
 import {
   COMMERCE_TRENDING_COMPONENT_BUDGETS,
   explorationOrderKey,

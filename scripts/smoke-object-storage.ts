@@ -38,7 +38,7 @@ import {
   presignPaperDownload,
   uploadResearchPaper,
 } from "#src/lib/object-storage.js";
-import { isPdfValidationError, validatePdfBytes } from "#src/lib/pdf.js";
+import { isPdfValidationError, validatePdfBytes } from "#src/modules/rnd/pdf.js";
 
 interface Assertion {
   readonly label: string;

@@ -9,14 +9,18 @@ import {
   dailyLogExtractedClaim,
   dailyLogTranscriptSegment,
 } from "#src/db/schema.js";
-import { parseExternalLink, extractExternalId } from "#src/lib/external-link.js";
-import { analyzeDailyLog, type DailyLogAnalysis, type GeminiError } from "#src/lib/gemini.js";
 import {
   JOB_NAMES,
   JOB_PAYLOAD_SCHEMAS,
   PermanentJobError,
   parseJobPayload,
 } from "#src/lib/jobs.js";
+import { parseExternalLink, extractExternalId } from "#src/modules/rnd/external-link.js";
+import {
+  analyzeDailyLog,
+  type DailyLogAnalysis,
+  type GeminiError,
+} from "#src/modules/rnd/gemini.js";
 
 /**
  * The daily-log analysis job (R_AND_D_BACKEND_STRUCTURE.md §8, §4e).

@@ -41,7 +41,7 @@ import { eq, sql } from "drizzle-orm";
 import { config } from "#src/config/index.js";
 import { db, pool } from "#src/db/index.js";
 import { commerceExternalProvider, commerceOrder } from "#src/db/schema.js";
-import { signWebhookPayload } from "#src/lib/webhook-signature.js";
+import { signWebhookPayload } from "#src/modules/store/webhook-signature.js";
 
 const BASE_URL = `http://localhost:${String(config.PORT)}`;
 const REQUEST_ORIGIN = config.FRONTEND_URL;

@@ -19,6 +19,8 @@ import {
   canonicalizeDocument,
   type CanonicalValue,
 } from "#src/lib/canonical-hash.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
 import {
   coveredDaysInPeriod,
   daysInPeriod,
@@ -29,9 +31,7 @@ import {
   type PeriodBounds,
   periodWindow,
   proratedRetainerCents,
-} from "#src/lib/compensation-period.js";
-import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
+} from "#src/modules/rnd/compensation-period.js";
 import { listAgreementsOverlapping } from "#src/modules/rnd/compensation/compensation-agreements.service.js";
 import {
   advanceStatementChainHead,

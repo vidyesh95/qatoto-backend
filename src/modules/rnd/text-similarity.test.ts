@@ -6,7 +6,7 @@ import {
   jaccardBasisPoints,
   normalizeToTokenSet,
   TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS,
-} from "#src/lib/text-similarity.js";
+} from "#src/modules/rnd/text-similarity.js";
 
 describe("normalizeToTokenSet", () => {
   it("folds case without a locale dependency", () => {

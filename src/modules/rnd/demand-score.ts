@@ -8,7 +8,7 @@
  * surfaces: never client-supplied, never accepted in a body, never computed on read. This
  * module is the only place the number is allowed to come from.
  *
- * The ladder machinery here is a deliberate mirror of `#src/lib/opportunity-score.js` —
+ * The ladder machinery here is a deliberate mirror of `#src/modules/rnd/opportunity-score.js` —
  * same rung shape, same two scan directions, same module-load well-formedness assertions,
  * same terminal-zero totality argument. The two modules score overlapping evidence for two
  * different surfaces (the Opportunity Map and the Knowledge Hub). If they saturated or

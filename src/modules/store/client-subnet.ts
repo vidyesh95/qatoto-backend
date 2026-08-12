@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { config } from "#src/config/index.js";
-import { deriveClientNetworkBlock } from "#src/lib/network-block.js";
+import { deriveClientNetworkBlock } from "#src/modules/store/network-block.js";
 
 /**
  * A salted, coarse network key for the subnet concentration guard (STORE Phase 13,
@@ -75,4 +75,4 @@ export function computeClientSubnetHash(clientIp: string | undefined): string | 
  * Re-exported from `network-block.ts`, which holds the parsing so a test can exercise it
  * without this module's `config` dependency.
  */
-export { deriveClientNetworkBlock } from "#src/lib/network-block.js";
+export { deriveClientNetworkBlock } from "#src/modules/store/network-block.js";

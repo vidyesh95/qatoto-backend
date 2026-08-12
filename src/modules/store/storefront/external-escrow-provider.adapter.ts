@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { config } from "#src/config/index.js";
-import { verifyWebhookSignature } from "#src/lib/webhook-signature.js";
+import { verifyWebhookSignature } from "#src/modules/store/webhook-signature.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -508,7 +508,7 @@ interface EscrowSignatureInput {
 /**
  * Adapts the shared verifier's tagged errors into this adapter's own error union.
  *
- * The comparison itself lives in `src/lib/webhook-signature.ts` so that five connectors
+ * The comparison itself lives in `src/modules/store/webhook-signature.ts` so that five connectors
  * cannot end up with five subtly different implementations of the one check that decides
  * whether an unauthenticated request is believed.
  */

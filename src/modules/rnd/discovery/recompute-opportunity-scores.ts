@@ -10,7 +10,7 @@ import {
 import { truncateToUtcDayStart, wholeDaysBetweenUtcDayStarts } from "#src/lib/as-of.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { basisPointsOf } from "#src/lib/money.js";
-import { computeOpportunityScorePoints } from "#src/lib/opportunity-score.js";
+import { computeOpportunityScorePoints } from "#src/modules/rnd/opportunity-score.js";
 
 /**
  * The nightly Civic Pulse ranking (R_AND_D_BACKEND_STRUCTURE.md §6, §4e).
@@ -24,7 +24,7 @@ import { computeOpportunityScorePoints } from "#src/lib/opportunity-score.js";
  * re-run three hours later sees rows the first run did not, and "byte-identical on replay"
  * becomes false immediately — which would make the whole determinism argument decorative.
  *
- * The scoring arithmetic itself lives in src/lib/opportunity-score.ts, which is pure and
+ * The scoring arithmetic itself lives in src/modules/rnd/opportunity-score.ts, which is pure and
  * unit-tested without a database. This file only gathers inputs and persists outputs.
  */
 

@@ -5,11 +5,6 @@ import { problemCluster, problemSubmission } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
 import {
-  jaccardBasisPoints,
-  normalizeToTokenSet,
-  TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS,
-} from "#src/lib/text-similarity.js";
-import {
   boundingBoxMicrodegrees,
   isWithinRadius,
   meanCentroidMicrodegrees,
@@ -17,6 +12,11 @@ import {
   type GeoPointMicrodegrees,
 } from "#src/modules/rnd/geo.js";
 import { resolveLocation } from "#src/modules/rnd/geocoding.js";
+import {
+  jaccardBasisPoints,
+  normalizeToTokenSet,
+  TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS,
+} from "#src/modules/rnd/text-similarity.js";
 
 /**
  * Attaches one problem submission to a cluster, geocoding it first

@@ -134,7 +134,7 @@ function describeCause(thrown: unknown): string {
 /**
  * Stores a paper's bytes and returns the key they live at.
  *
- * The buffer MUST already have been validated by `src/lib/pdf.ts` and hashed by the
+ * The buffer MUST already have been validated by `src/modules/rnd/pdf.ts` and hashed by the
  * caller (§1) — this layer trusts it, in the same way `uploadUserAvatar` trusts an
  * already re-encoded image.
  *

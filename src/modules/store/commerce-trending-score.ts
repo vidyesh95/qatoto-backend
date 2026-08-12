@@ -36,10 +36,6 @@
  */
 
 import {
-  applyMultipliers,
-  type AppliedMultipliers,
-} from "#src/lib/commerce-ranking-multipliers.js";
-import {
   assertBudgetsSumTo,
   assertLadderIsWellFormed,
   assertNonNegativeIntegerInput,
@@ -47,6 +43,10 @@ import {
   pointsForAtMostLadder,
   type ScoreLadderRung,
 } from "#src/lib/score-ladder.js";
+import {
+  applyMultipliers,
+  type AppliedMultipliers,
+} from "#src/modules/store/commerce-ranking-multipliers.js";
 
 export const COMMERCE_TRENDING_MAXIMUM_POINTS = 100;
 

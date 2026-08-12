@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractExternalId, parseExternalLink, type ParsedExternalLink } from "#src/lib/external-link.js";
+import { extractExternalId, parseExternalLink, type ParsedExternalLink } from "#src/modules/rnd/external-link.js";
 
 /**
  * A linked file has no bytes to scan and no size to measure, so the HOST is the entire

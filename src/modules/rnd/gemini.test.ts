@@ -5,7 +5,7 @@ import {
   DAILY_LOG_ANALYSIS_PROMPT_VERSION,
   type AnalyzeDailyLogInput,
   type FetchImplementation,
-} from "#src/lib/gemini.js";
+} from "#src/modules/rnd/gemini.js";
 
 /**
  * Every outcome is exercised with an injected `fetch`, so the suite needs no key, no

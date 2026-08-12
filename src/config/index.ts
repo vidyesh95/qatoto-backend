@@ -241,7 +241,7 @@ const envSchema = z.object({
   // is it ever a fabricated chip.
   GEMINI_API_KEY: z.string().min(1).optional(),
   // A THINKING model (the API reports `thinking: true` for it), which is why
-  // src/lib/gemini.ts pins `thinkingConfig.thinkingLevel` rather than leaving the default:
+  // src/modules/rnd/gemini.ts pins `thinkingConfig.thinkingLevel` rather than leaving the default:
   // transcription and claim extraction are mechanical, and unbounded reasoning spends
   // latency and free-tier quota on a task with nothing to reason about.
   GEMINI_MODEL: z.string().min(1).default("gemini-3.5-flash-lite"),
@@ -254,7 +254,7 @@ const envSchema = z.object({
   GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(180_000),
   // `maxOutputTokens` is a CAP, NOT A RESERVATION — an unused ceiling costs nothing, and
   // the model's own limit is 65_536. Under-sizing it is what costs: a truncated response
-  // comes back as `finishReason: MAX_TOKENS`, which src/lib/gemini.ts classifies PERMANENT,
+  // comes back as `finishReason: MAX_TOKENS`, which src/modules/rnd/gemini.ts classifies PERMANENT,
   // so an 8k budget turns every long daily log into a dead-lettered `failed` analysis
   // rather than a retry. A 400-segment transcript plus chips and claims sits well inside
   // this.

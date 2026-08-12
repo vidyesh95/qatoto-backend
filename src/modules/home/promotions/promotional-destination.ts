@@ -6,7 +6,7 @@
  * (CLAUDE.md §1.1): parse it, refuse the dangerous shapes structurally, normalize it, and
  * store the normalized form rather than what was typed.
  *
- * WHY NOT `parseExternalLink` FROM src/lib/external-link.ts. Same shape, deliberately
+ * WHY NOT `parseExternalLink` FROM src/modules/rnd/external-link.ts. Same shape, deliberately
  * different policy. That module is a sixteen-host ALLOWLIST for workshop evidence (drive,
  * github, figma, …) and would reject every advertiser on earth. Here the external arm has
  * to accept an arbitrary third-party host, so the protection has to come from the scheme,

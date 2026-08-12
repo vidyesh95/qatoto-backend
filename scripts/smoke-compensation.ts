@@ -54,8 +54,12 @@ import {
   sliceLedgerEntry,
   user,
 } from "#src/db/schema.js";
-import { monthBoundsAt, nextMonthBounds, periodWindow } from "#src/lib/compensation-period.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
+import {
+  monthBoundsAt,
+  nextMonthBounds,
+  periodWindow,
+} from "#src/modules/rnd/compensation-period.js";
 import {
   acceptCashAgreement,
   proposeCashAgreement,

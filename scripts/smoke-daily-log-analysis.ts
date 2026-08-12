@@ -3,7 +3,7 @@
  * REAL database (R_AND_D_BACKEND_STRUCTURE.md §8 "Analysis: one Gemini call", §9.7, §17).
  *
  * WHY THIS EXISTS. Every other proof in this repo stops short of the model.
- * `src/lib/gemini.test.ts` injects `fetch`, so it proves the parsing and the failure
+ * `src/modules/rnd/gemini.test.ts` injects `fetch`, so it proves the parsing and the failure
  * classification and nothing about the provider. `pnpm db:smoke-workshop` submits a log and
  * asserts only that a receipt is not a verdict. `pnpm db:smoke-proof-of-effort` writes its
  * own `daily_log_extracted_claim` rows by hand — `generatedByModel = 'smoke'` — because §9's
@@ -57,15 +57,15 @@ import {
   user,
   verificationStep,
 } from "#src/db/schema.js";
-import { parseExternalLink } from "#src/lib/external-link.js";
-import { DAILY_LOG_ANALYSIS_PROMPT_VERSION } from "#src/lib/gemini.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
+import { parseExternalLink } from "#src/modules/rnd/external-link.js";
 import {
   acceptFairMarketRate,
   lockFairMarketRate,
   proposeFairMarketRate,
   RATE_LOCK_ACKNOWLEDGEMENT,
 } from "#src/modules/rnd/funding/fair-market-rate.service.js";
+import { DAILY_LOG_ANALYSIS_PROMPT_VERSION } from "#src/modules/rnd/gemini.js";
 import {
   finalizeClaimVerdict,
   overrideVerificationStep,

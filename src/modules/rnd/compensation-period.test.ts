@@ -13,7 +13,7 @@ import {
   periodWindow,
   proratedRetainerCents,
   zonedDayStartInstant,
-} from "#src/lib/compensation-period.js";
+} from "#src/modules/rnd/compensation-period.js";
 
 /**
  * R_AND_D_BACKEND_STRUCTURE.md §7A.4 and §17 step 5b.

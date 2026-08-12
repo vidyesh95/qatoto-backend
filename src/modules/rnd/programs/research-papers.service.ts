@@ -11,8 +11,12 @@ import {
   uploadResearchPaper,
   type ObjectStorageError,
 } from "#src/lib/object-storage.js";
-import { isPdfValidationError, validatePdfBytes, type PdfValidationError } from "#src/lib/pdf.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import {
+  isPdfValidationError,
+  validatePdfBytes,
+  type PdfValidationError,
+} from "#src/modules/rnd/pdf.js";
 import {
   PROGRAM_AUTHOR_COLUMNS,
   toProgramAuthorView,

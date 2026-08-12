@@ -4,7 +4,7 @@ import {
   DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
   signWebhookPayload,
   verifyWebhookSignature,
-} from "#src/lib/webhook-signature.js";
+} from "#src/modules/store/webhook-signature.js";
 
 const SIGNING_SECRET = "connector_signing_secret";
 const FIXED_NOW_MS = 1_775_000_000_000;
