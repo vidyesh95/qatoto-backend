@@ -19,7 +19,7 @@ import {
   applyCategoryDecision,
   findCategoryStatusById,
   type ResearchCategoryView,
-} from "#src/services/research-categories.service.js";
+} from "#src/modules/rnd/programs/research-categories.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

@@ -40,10 +40,10 @@ import {
   researchProgramBranch,
   user,
 } from "#src/db/schema.js";
-import { recomputeBranchSignalsForProgram } from "#src/services/research-branch-signals.service.js";
-import { slugifyPaperCategoryLabel } from "#src/services/research-paper-categories.service.js";
-import { recomputeProgramStats } from "#src/services/research-program-stats.service.js";
-import { slugifyProgramTitle } from "#src/services/research-programs.service.js";
+import { recomputeBranchSignalsForProgram } from "#src/modules/rnd/programs/research-branch-signals.service.js";
+import { slugifyPaperCategoryLabel } from "#src/modules/rnd/programs/research-paper-categories.service.js";
+import { recomputeProgramStats } from "#src/modules/rnd/programs/research-program-stats.service.js";
+import { slugifyProgramTitle } from "#src/modules/rnd/programs/research-programs.service.js";
 
 /** The five categories the §10 formal track opens with. */
 const PAPER_CATEGORY_LABELS: readonly string[] = [

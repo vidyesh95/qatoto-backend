@@ -2,7 +2,7 @@ import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.j
 import {
   listProgramIdsForRecompute,
   recomputeProgramStats,
-} from "#src/services/research-program-stats.service.js";
+} from "#src/modules/rnd/programs/research-program-stats.service.js";
 
 /**
  * `recompute-program-stats` — the §10 hero tiles.

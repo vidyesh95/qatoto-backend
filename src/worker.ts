@@ -13,7 +13,6 @@ import { handleDispatchConnectorCommand } from "#src/jobs/dispatch-connector-com
 import { handleExpireCommerceQuotes } from "#src/jobs/expire-commerce-quotes.js";
 import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
 import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
-import { handleRecomputeBranchSignals } from "#src/jobs/recompute-branch-signals.js";
 import { handleRecomputeCommerceCategoryDemand } from "#src/jobs/recompute-commerce-category-demand.js";
 import { handleRecomputeCommerceProductTrending } from "#src/jobs/recompute-commerce-product-trending.js";
 import { handleRecomputeCompensationDraft } from "#src/jobs/recompute-compensation-draft.js";
@@ -23,7 +22,6 @@ import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapsh
 import { handleRecomputeInvestorConfidence } from "#src/jobs/recompute-investor-confidence.js";
 import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
 import { handleRecomputePlatformCategoryPopularity } from "#src/jobs/recompute-platform-category-popularity.js";
-import { handleRecomputeProgramStats } from "#src/jobs/recompute-program-stats.js";
 import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-videos.js";
 import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
 import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
@@ -82,6 +80,8 @@ import {
   type JobName,
 } from "#src/lib/jobs.js";
 import { handleDeliverNotification } from "#src/modules/platform/notifications/deliver-notification.js";
+import { handleRecomputeBranchSignals } from "#src/modules/rnd/programs/recompute-branch-signals.js";
+import { handleRecomputeProgramStats } from "#src/modules/rnd/programs/recompute-program-stats.js";
 
 /**
  * The background worker process (R_AND_D_BACKEND_STRUCTURE.md §4e).

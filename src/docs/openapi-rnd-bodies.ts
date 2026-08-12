@@ -96,7 +96,7 @@ import {
   UpdateBranchSchema,
   UpdateParticipationSchema,
   UpdateProgramSchema,
-} from "#src/schemas/research-programs.schemas.js";
+} from "#src/modules/rnd/programs/research-programs.schemas.js";
 import {
   CreateProjectSchema,
   LinkMarketInsightSchema,

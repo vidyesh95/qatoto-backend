@@ -22,10 +22,10 @@ import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js"
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
-import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
+import researchCatalogRouter from "#src/modules/rnd/programs/research-catalog.routes.js";
 import researchProgramsRouter, {
   researchPaperCategoryRouter,
-} from "#src/routes/research-programs.routes.js";
+} from "#src/modules/rnd/programs/research-programs.routes.js";
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/modules/rnd/projects/research-projects.routes.js";

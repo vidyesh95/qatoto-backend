@@ -1,17 +1,26 @@
 import type { Request, Response } from "express";
 
-import { respondResearchProgramError } from "#src/controllers/research-program-error-response.js";
 import { decodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
 import {
   requirePlatformCapability,
   type PlatformStaffContext,
 } from "#src/modules/platform/roles/platform-role.service.js";
+import * as categoriesService from "#src/modules/rnd/programs/research-paper-categories.service.js";
+import * as papersService from "#src/modules/rnd/programs/research-papers.service.js";
 import {
-  firstParam,
-  optionalBody,
-  respondUnauthenticated,
-  respondValidationFailed,
-} from "#src/modules/rnd/projects/project-error-response.js";
+  findParticipant,
+  hasAnyPlatformRole,
+  requireProgramOwner,
+  requireProgramVisible,
+  requireProgramWritable,
+  type ProgramContext,
+} from "#src/modules/rnd/programs/research-program-access.service.js";
+import * as branchesService from "#src/modules/rnd/programs/research-program-branches.service.js";
+import { respondResearchProgramError } from "#src/modules/rnd/programs/research-program-error-response.js";
+import * as moderationService from "#src/modules/rnd/programs/research-program-moderation.service.js";
+import * as opportunitiesService from "#src/modules/rnd/programs/research-program-opportunities.service.js";
+import * as participantsService from "#src/modules/rnd/programs/research-program-participants.service.js";
+import * as postsService from "#src/modules/rnd/programs/research-program-posts.service.js";
 import {
   AttachPaperFileSchema,
   CreateBranchSchema,
@@ -40,23 +49,14 @@ import {
   UpdateBranchSchema,
   UpdateParticipationSchema,
   UpdateProgramSchema,
-} from "#src/schemas/research-programs.schemas.js";
-import * as categoriesService from "#src/services/research-paper-categories.service.js";
-import * as papersService from "#src/services/research-papers.service.js";
+} from "#src/modules/rnd/programs/research-programs.schemas.js";
+import * as programsService from "#src/modules/rnd/programs/research-programs.service.js";
 import {
-  findParticipant,
-  hasAnyPlatformRole,
-  requireProgramOwner,
-  requireProgramVisible,
-  requireProgramWritable,
-  type ProgramContext,
-} from "#src/services/research-program-access.service.js";
-import * as branchesService from "#src/services/research-program-branches.service.js";
-import * as moderationService from "#src/services/research-program-moderation.service.js";
-import * as opportunitiesService from "#src/services/research-program-opportunities.service.js";
-import * as participantsService from "#src/services/research-program-participants.service.js";
-import * as postsService from "#src/services/research-program-posts.service.js";
-import * as programsService from "#src/services/research-programs.service.js";
+  firstParam,
+  optionalBody,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /**

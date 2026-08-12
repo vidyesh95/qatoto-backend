@@ -59,7 +59,11 @@ const MOUNTED_ROUTERS: readonly {
     specifier: "#src/modules/rnd/projects/research-projects.routes.js",
     exportName: "default",
   },
-  { mountPath: "/research-programs", specifier: "#src/routes/research-programs.routes.js", exportName: "default" },
+  {
+    mountPath: "/research-programs",
+    specifier: "#src/modules/rnd/programs/research-programs.routes.js",
+    exportName: "default",
+  },
   { mountPath: "/discovery", specifier: "#src/routes/discovery.routes.js", exportName: "default" },
   { mountPath: "/suppliers", specifier: "#src/routes/suppliers.routes.js", exportName: "default" },
   {

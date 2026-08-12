@@ -180,7 +180,7 @@ describe("per-route body caps", () => {
       // §10's research-paper PDF upload — the first NON-IMAGE multipart route in the
       // codebase. Its bytes are bounded by multer's 25 MB cap (imported from
       // `src/lib/pdf.ts` so the two cannot disagree), not by a JSON byte budget.
-      import("#src/middleware/upload-research-paper.js"),
+      import("#src/modules/rnd/programs/upload-research-paper.js"),
       // Commerce verification evidence is multipart and bounded by its upload middleware,
       // not by the JSON parser's per-route budget.
       import("#src/middleware/upload-commerce-verification-evidence.js"),

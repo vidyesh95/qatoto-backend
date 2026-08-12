@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as programsController from "#src/controllers/research-programs.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
@@ -20,7 +19,8 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
-import { uploadResearchPaperFile } from "#src/middleware/upload-research-paper.js";
+import * as programsController from "#src/modules/rnd/programs/research-programs.controller.js";
+import { uploadResearchPaperFile } from "#src/modules/rnd/programs/upload-research-paper.js";
 
 const router = express.Router();
 

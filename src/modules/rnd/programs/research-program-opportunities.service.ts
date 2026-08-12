@@ -2,7 +2,7 @@ import { and, asc, desc, eq } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { researchProgramBranch, researchProgramProductOpportunity } from "#src/db/schema.js";
-import type { ProgramAccessError } from "#src/services/research-program-access.service.js";
+import type { ProgramAccessError } from "#src/modules/rnd/programs/research-program-access.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

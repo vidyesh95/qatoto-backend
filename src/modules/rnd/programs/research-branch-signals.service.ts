@@ -11,7 +11,7 @@ import {
   normalizeToTokenSet,
   TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS,
 } from "#src/lib/text-similarity.js";
-import type { ResearchProgramBranchStatus } from "#src/services/research-program-branches.service.js";
+import type { ResearchProgramBranchStatus } from "#src/modules/rnd/programs/research-program-branches.service.js";
 
 /**
  * The two DERIVED signals on the §10 research map

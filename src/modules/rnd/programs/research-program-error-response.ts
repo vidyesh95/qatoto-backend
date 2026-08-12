@@ -1,15 +1,15 @@
 import type { Response } from "express";
 
 import type { PlatformAccessError } from "#src/modules/platform/roles/platform-role.service.js";
-import type { ResearchPaperCategoryError } from "#src/services/research-paper-categories.service.js";
-import type { ResearchPaperError } from "#src/services/research-papers.service.js";
-import type { ProgramNotWritableError } from "#src/services/research-program-access.service.js";
-import type { ResearchProgramBranchError } from "#src/services/research-program-branches.service.js";
-import type { ResearchProgramModerationError } from "#src/services/research-program-moderation.service.js";
-import type { ResearchProgramOpportunityError } from "#src/services/research-program-opportunities.service.js";
-import type { ResearchParticipantError } from "#src/services/research-program-participants.service.js";
-import type { ResearchProgramPostError } from "#src/services/research-program-posts.service.js";
-import type { ResearchProgramError } from "#src/services/research-programs.service.js";
+import type { ResearchPaperCategoryError } from "#src/modules/rnd/programs/research-paper-categories.service.js";
+import type { ResearchPaperError } from "#src/modules/rnd/programs/research-papers.service.js";
+import type { ProgramNotWritableError } from "#src/modules/rnd/programs/research-program-access.service.js";
+import type { ResearchProgramBranchError } from "#src/modules/rnd/programs/research-program-branches.service.js";
+import type { ResearchProgramModerationError } from "#src/modules/rnd/programs/research-program-moderation.service.js";
+import type { ResearchProgramOpportunityError } from "#src/modules/rnd/programs/research-program-opportunities.service.js";
+import type { ResearchParticipantError } from "#src/modules/rnd/programs/research-program-participants.service.js";
+import type { ResearchProgramPostError } from "#src/modules/rnd/programs/research-program-posts.service.js";
+import type { ResearchProgramError } from "#src/modules/rnd/programs/research-programs.service.js";
 
 /**
  * The one place a §10 domain error becomes an HTTP status

@@ -1,6 +1,6 @@
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { recomputeBranchSignalsForProgram } from "#src/services/research-branch-signals.service.js";
-import { listProgramIdsForRecompute } from "#src/services/research-program-stats.service.js";
+import { recomputeBranchSignalsForProgram } from "#src/modules/rnd/programs/research-branch-signals.service.js";
+import { listProgramIdsForRecompute } from "#src/modules/rnd/programs/research-program-stats.service.js";
 
 /**
  * `recompute-branch-signals` — the two fields no request body may carry.

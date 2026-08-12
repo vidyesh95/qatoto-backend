@@ -6,14 +6,14 @@ import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
   countBranchesByStatus,
   countOverlapFlaggedBranches,
-} from "#src/services/research-branch-signals.service.js";
-import { countProgramPapersByStatus } from "#src/services/research-papers.service.js";
-import { countProgramBranches } from "#src/services/research-program-branches.service.js";
+} from "#src/modules/rnd/programs/research-branch-signals.service.js";
+import { countProgramPapersByStatus } from "#src/modules/rnd/programs/research-papers.service.js";
+import { countProgramBranches } from "#src/modules/rnd/programs/research-program-branches.service.js";
 import {
   countProgramParticipants,
   sumProgramEffortMinutes,
-} from "#src/services/research-program-participants.service.js";
-import { countProgramPosts } from "#src/services/research-programs.service.js";
+} from "#src/modules/rnd/programs/research-program-participants.service.js";
+import { countProgramPosts } from "#src/modules/rnd/programs/research-programs.service.js";
 
 /**
  * The four §10 hero tiles, computed nightly

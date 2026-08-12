@@ -20,7 +20,7 @@
  * MODERATION question, which is why every paper lands `queued` and a human approves it
  * before it is listed publicly. Validation is not review.
  *
- * The multipart layer (`src/middleware/upload-research-paper.ts`) checks the declared
+ * The multipart layer (`src/modules/rnd/programs/upload-research-paper.ts`) checks the declared
  * mimetype and the size cap; that is a client's claim about its own upload. This module
  * checks the bytes. Both run, in that order, for the same reason §1 re-validates
  * everything a client sends.

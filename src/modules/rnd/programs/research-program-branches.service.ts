@@ -9,7 +9,7 @@ import { db } from "#src/db/index.js";
 import { researchProgramBranch, researchProgramBranchClaim } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { escapeLikePattern } from "#src/lib/sql-pattern.js";
-import type { ProgramAccessError } from "#src/services/research-program-access.service.js";
+import type { ProgramAccessError } from "#src/modules/rnd/programs/research-program-access.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

@@ -13,7 +13,7 @@ import {
   toProgramAuthorView,
   type ProgramAccessError,
   type ProgramAuthorView,
-} from "#src/services/research-program-access.service.js";
+} from "#src/modules/rnd/programs/research-program-access.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

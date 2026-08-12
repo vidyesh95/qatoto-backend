@@ -2929,7 +2929,7 @@ a §10 convenience:
 
 **THE TWO DERIVED SIGNALS ARE THE POINT OF THE SURFACE**, and `recompute-branch-signals` is their
 only writer. The rule is integer-only and lives in
-`src/services/research-branch-signals.service.ts`:
+`src/modules/rnd/programs/research-branch-signals.service.ts`:
 
 ```
 overlappingGroupCount = other branches in the programme scoring >= 3000 bp Jaccard on

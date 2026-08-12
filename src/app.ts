@@ -24,6 +24,10 @@ import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
 import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
+import researchCatalogRouter from "#src/modules/rnd/programs/research-catalog.routes.js";
+import researchProgramsRouter, {
+  researchPaperCategoryRouter,
+} from "#src/modules/rnd/programs/research-programs.routes.js";
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/modules/rnd/projects/research-projects.routes.js";
@@ -65,10 +69,6 @@ import productsRouter from "#src/routes/products.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
-import researchCatalogRouter from "#src/routes/research-catalog.routes.js";
-import researchProgramsRouter, {
-  researchPaperCategoryRouter,
-} from "#src/routes/research-programs.routes.js";
 import storeRouter from "#src/routes/store.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
 import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.js";

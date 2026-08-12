@@ -51,18 +51,18 @@ import {
   countOverlappingGroups,
   decideBranchStatus,
   recomputeBranchSignalsForProgram,
-} from "#src/services/research-branch-signals.service.js";
-import * as papersService from "#src/services/research-papers.service.js";
+} from "#src/modules/rnd/programs/research-branch-signals.service.js";
+import * as papersService from "#src/modules/rnd/programs/research-papers.service.js";
 import {
   requireProgramVisible,
   requireProgramWritable,
-} from "#src/services/research-program-access.service.js";
-import * as branchesService from "#src/services/research-program-branches.service.js";
-import * as moderationService from "#src/services/research-program-moderation.service.js";
-import * as participantsService from "#src/services/research-program-participants.service.js";
-import * as postsService from "#src/services/research-program-posts.service.js";
-import { recomputeProgramStats } from "#src/services/research-program-stats.service.js";
-import * as programsService from "#src/services/research-programs.service.js";
+} from "#src/modules/rnd/programs/research-program-access.service.js";
+import * as branchesService from "#src/modules/rnd/programs/research-program-branches.service.js";
+import * as moderationService from "#src/modules/rnd/programs/research-program-moderation.service.js";
+import * as participantsService from "#src/modules/rnd/programs/research-program-participants.service.js";
+import * as postsService from "#src/modules/rnd/programs/research-program-posts.service.js";
+import { recomputeProgramStats } from "#src/modules/rnd/programs/research-program-stats.service.js";
+import * as programsService from "#src/modules/rnd/programs/research-programs.service.js";
 
 const SMOKE_PREFIX = "smoke-rnd-program";
 

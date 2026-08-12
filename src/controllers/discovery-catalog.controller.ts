@@ -6,6 +6,7 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/discovery-error-response.js";
+import * as categoriesService from "#src/modules/rnd/programs/research-categories.service.js";
 import {
   CreateCategorySchema,
   ListCategoriesQuerySchema,
@@ -15,7 +16,6 @@ import {
   MarketInsightIdParamSchema,
 } from "#src/schemas/discovery-catalog.schemas.js";
 import * as catalogService from "#src/services/discovery-catalog.service.js";
-import * as categoriesService from "#src/services/research-categories.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /**
