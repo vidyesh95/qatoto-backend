@@ -1206,6 +1206,147 @@ async function revalidatePrepareLinePricing(
   return null;
 }
 
+/**
+ * Write one seller's order lines, spend the sample credits it used, decrement stock, and
+ * audit the whole thing.
+ *
+ * SPLIT OUT OF THE PER-SELLER LOOP AS THE HALF THAT DECIDES NOTHING. Everything above it in
+ * that loop can still refuse — a missing seller, an unavailable settlement rail, an escrow
+ * session that would not open — and each refusal rolls the transaction back. By this point
+ * the order row exists and the outcome is settled; what is left is writing it down. Keeping
+ * the two apart puts every refusal path in one place instead of interleaving them with two
+ * hundred lines of inserts.
+ *
+ * THE CUSTOMIZATION SELECTIONS ARE COPIED, NOT REFERENCED — slotKeySnapshot and
+ * labelSnapshot included — because a seller editing an option after the fact must not
+ * change what an order says was bought.
+ *
+ * Stock is decremented with a relative `stockQuantity - n` expression rather than a value
+ * read and written back, so two concurrent confirmations cannot lose one another's
+ * decrement.
+ */
+async function writeSellerOrderLines(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly order: OrderRow;
+    readonly sellerGroup: SellerOrderGroup;
+    readonly prepare: PrepareRow;
+    readonly checkoutGroup: typeof commerceCheckoutGroup.$inferSelect;
+    readonly consumedCredits: readonly { readonly id: string }[];
+    readonly linePromisedDeliveryDates: readonly (Date | null)[];
+    readonly actor: CommerceCartActorContext;
+    readonly now: Date;
+  },
+): Promise<void> {
+  const {
+    order,
+    sellerGroup,
+    prepare,
+    checkoutGroup,
+    consumedCredits,
+    linePromisedDeliveryDates,
+    actor,
+    now,
+  } = input;
+
+  await consumeSampleCredits(transaction, {
+    creditIds: consumedCredits.map((credit) => credit.id),
+    consumedByOrderId: order.id,
+    buyerOrganizationId: actor.organizationId,
+    actorUserId: actor.actorUserId,
+    occurredAt: now,
+  });
+
+  for (const [index, line] of sellerGroup.lines.entries()) {
+    const [orderLine] = await transaction
+      .insert(commerceOrderProductLine)
+      .values({
+        orderId: order.id,
+        productId: line.productId,
+        variantId: line.variantId,
+        variantNameSnapshot: line.variantNameSnapshot,
+        titleSnapshot: line.titleSnapshot,
+        specificationSnapshot: line.specificationSnapshot,
+        isSample: line.isSample,
+        quantityOrdered: line.quantity,
+        quantityReserved: line.isMadeToOrder ? 0 : line.quantity,
+        unitPriceInCents: line.unitPriceInCents,
+        lineTotalInCents: line.lineTotalInCents,
+        promisedDeliveryAt: linePromisedDeliveryDates[index] ?? null,
+        /**
+         * Phase 20, §19.4. Carried VERBATIM from the prepare line, like every other
+         * snapshot column here. The maximum is not copied alongside it: it is already
+         * recoverable from `promisedDeliveryAt` minus the order's `createdAt`, and that
+         * derivation works on orders placed before this column existed.
+         */
+        leadTimeMinDaysSnapshot: line.leadTimeMinDaysSnapshot,
+        siblingOrder: index,
+      })
+      .returning({ id: commerceOrderProductLine.id });
+    if (!orderLine) throw new Error("Order product line insert returned no row.");
+
+    /**
+     * A18. The last hop of the snapshot chain. Copied verbatim from the prepare
+     * line — including `slotKeySnapshot` and `labelSnapshot` — because a seller
+     * renaming a slot after the sale must not change what the order says the
+     * buyer agreed to.
+     */
+    const prepareCustomizations = await transaction
+      .select()
+      .from(commerceCheckoutPrepareLineCustomization)
+      .where(eq(commerceCheckoutPrepareLineCustomization.prepareProductLineId, line.id));
+    if (prepareCustomizations.length > 0) {
+      await transaction.insert(commerceOrderLineCustomization).values(
+        prepareCustomizations.map((selection) => ({
+          orderProductLineId: orderLine.id,
+          customizationOptionId: selection.customizationOptionId,
+          encryptedDocumentId: selection.encryptedDocumentId,
+          choiceValue: selection.choiceValue,
+          slotKeySnapshot: selection.slotKeySnapshot,
+          labelSnapshot: selection.labelSnapshot,
+        })),
+      );
+    }
+
+    if (!line.isMadeToOrder) {
+      /**
+       * A1: stock is drawn from whichever row owns it. Decrementing the
+       * product when a variant was bought would take units from a pool the
+       * buyer never bought out of, and leave the sold variant sellable.
+       */
+      if (line.variantId === null) {
+        await transaction
+          .update(product)
+          .set({ stockQuantity: sql`${product.stockQuantity} - ${line.quantity}` })
+          .where(eq(product.id, line.productId));
+      } else {
+        await transaction
+          .update(commerceProductVariant)
+          .set({
+            stockQuantity: sql`${commerceProductVariant.stockQuantity} - ${line.quantity}`,
+          })
+          .where(eq(commerceProductVariant.id, line.variantId));
+      }
+    }
+  }
+
+  await appendAuditOrThrow(transaction, {
+    organizationId: actor.organizationId,
+    eventKind: "order_created_from_checkout",
+    actorUserId: actor.actorUserId,
+    actorMemberRoleSnapshot: actor.memberRole,
+    targetEntityType: "commerce_order",
+    targetEntityId: order.id,
+    payload: {
+      orderId: order.id,
+      checkoutGroupId: checkoutGroup.id,
+      prepareId: prepare.id,
+      totalInCents: String(order.totalInCents),
+    },
+    occurredAt: now,
+  });
+}
+
 export async function confirmCheckout(
   actor: CommerceCartActorContext,
   input: ConfirmCheckoutInput,
@@ -1471,101 +1612,15 @@ export async function confirmCheckout(
           );
         }
 
-        await consumeSampleCredits(transaction, {
-          creditIds: consumedCredits.map((credit) => credit.id),
-          consumedByOrderId: order.id,
-          buyerOrganizationId: actor.organizationId,
-          actorUserId: actor.actorUserId,
-          occurredAt: now,
-        });
-
-        for (const [index, line] of sellerGroup.lines.entries()) {
-          const [orderLine] = await transaction
-            .insert(commerceOrderProductLine)
-            .values({
-              orderId: order.id,
-              productId: line.productId,
-              variantId: line.variantId,
-              variantNameSnapshot: line.variantNameSnapshot,
-              titleSnapshot: line.titleSnapshot,
-              specificationSnapshot: line.specificationSnapshot,
-              isSample: line.isSample,
-              quantityOrdered: line.quantity,
-              quantityReserved: line.isMadeToOrder ? 0 : line.quantity,
-              unitPriceInCents: line.unitPriceInCents,
-              lineTotalInCents: line.lineTotalInCents,
-              promisedDeliveryAt: linePromisedDeliveryDates[index] ?? null,
-              /**
-               * Phase 20, §19.4. Carried VERBATIM from the prepare line, like every other
-               * snapshot column here. The maximum is not copied alongside it: it is already
-               * recoverable from `promisedDeliveryAt` minus the order's `createdAt`, and that
-               * derivation works on orders placed before this column existed.
-               */
-              leadTimeMinDaysSnapshot: line.leadTimeMinDaysSnapshot,
-              siblingOrder: index,
-            })
-            .returning({ id: commerceOrderProductLine.id });
-          if (!orderLine) throw new Error("Order product line insert returned no row.");
-
-          /**
-           * A18. The last hop of the snapshot chain. Copied verbatim from the prepare
-           * line — including `slotKeySnapshot` and `labelSnapshot` — because a seller
-           * renaming a slot after the sale must not change what the order says the
-           * buyer agreed to.
-           */
-          const prepareCustomizations = await transaction
-            .select()
-            .from(commerceCheckoutPrepareLineCustomization)
-            .where(eq(commerceCheckoutPrepareLineCustomization.prepareProductLineId, line.id));
-          if (prepareCustomizations.length > 0) {
-            await transaction.insert(commerceOrderLineCustomization).values(
-              prepareCustomizations.map((selection) => ({
-                orderProductLineId: orderLine.id,
-                customizationOptionId: selection.customizationOptionId,
-                encryptedDocumentId: selection.encryptedDocumentId,
-                choiceValue: selection.choiceValue,
-                slotKeySnapshot: selection.slotKeySnapshot,
-                labelSnapshot: selection.labelSnapshot,
-              })),
-            );
-          }
-
-          if (!line.isMadeToOrder) {
-            /**
-             * A1: stock is drawn from whichever row owns it. Decrementing the
-             * product when a variant was bought would take units from a pool the
-             * buyer never bought out of, and leave the sold variant sellable.
-             */
-            if (line.variantId === null) {
-              await transaction
-                .update(product)
-                .set({ stockQuantity: sql`${product.stockQuantity} - ${line.quantity}` })
-                .where(eq(product.id, line.productId));
-            } else {
-              await transaction
-                .update(commerceProductVariant)
-                .set({
-                  stockQuantity: sql`${commerceProductVariant.stockQuantity} - ${line.quantity}`,
-                })
-                .where(eq(commerceProductVariant.id, line.variantId));
-            }
-          }
-        }
-
-        await appendAuditOrThrow(transaction, {
-          organizationId: actor.organizationId,
-          eventKind: "order_created_from_checkout",
-          actorUserId: actor.actorUserId,
-          actorMemberRoleSnapshot: actor.memberRole,
-          targetEntityType: "commerce_order",
-          targetEntityId: order.id,
-          payload: {
-            orderId: order.id,
-            checkoutGroupId: checkoutGroup.id,
-            prepareId: prepare.id,
-            totalInCents: String(order.totalInCents),
-          },
-          occurredAt: now,
+        await writeSellerOrderLines(transaction, {
+          order,
+          sellerGroup,
+          prepare,
+          checkoutGroup,
+          consumedCredits,
+          linePromisedDeliveryDates,
+          actor,
+          now,
         });
       }
 
