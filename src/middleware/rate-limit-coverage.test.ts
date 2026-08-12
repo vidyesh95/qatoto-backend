@@ -41,9 +41,9 @@ const MOUNTED_ROUTERS: readonly {
   readonly specifier: string;
   readonly exportName: string;
 }[] = [
-  { mountPath: "/", specifier: "#src/routes/auth.routes.js", exportName: "default" },
-  { mountPath: "/users", specifier: "#src/routes/users.routes.js", exportName: "default" },
-  { mountPath: "/handles", specifier: "#src/routes/handles.routes.js", exportName: "default" },
+  { mountPath: "/", specifier: "#src/modules/auth/session/auth.routes.js", exportName: "default" },
+  { mountPath: "/users", specifier: "#src/modules/auth/users/users.routes.js", exportName: "default" },
+  { mountPath: "/handles", specifier: "#src/modules/auth/handles/handles.routes.js", exportName: "default" },
   { mountPath: "/products", specifier: "#src/routes/products.routes.js", exportName: "default" },
   { mountPath: "/promotions", specifier: "#src/modules/home/promotions/promotions.routes.js", exportName: "default" },
   { mountPath: "/spotlight", specifier: "#src/modules/home/spotlight/spotlight.routes.js", exportName: "default" },

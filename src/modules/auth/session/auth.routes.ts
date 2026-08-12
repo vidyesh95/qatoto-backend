@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as authController from "#src/controllers/auth.controller.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
   otpRequestEmailLimiter,
@@ -8,6 +7,7 @@ import {
   signupCompleteIpLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as authController from "#src/modules/auth/session/auth.controller.js";
 
 const router = express.Router();
 

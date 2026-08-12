@@ -4,12 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // users.service.ts imports the db pool, Cloudinary, and sharp at module scope,
 // which pull in the config env parser. getUsers only calls getAllUsers, so stub
 // the whole service rather than requiring a configured test environment.
-vi.mock("#src/services/users.service.js", () => ({
-  getAllUsers: vi.fn<typeof import("#src/services/users.service.js").getAllUsers>(),
+vi.mock("#src/modules/auth/users/users.service.js", () => ({
+  getAllUsers: vi.fn<typeof import("#src/modules/auth/users/users.service.js").getAllUsers>(),
 }));
 
-const usersService = await import("#src/services/users.service.js");
-const { getUsers } = await import("#src/controllers/users.controller.js");
+const usersService = await import("#src/modules/auth/users/users.service.js");
+const { getUsers } = await import("#src/modules/auth/users/users.controller.js");
 
 const getAllUsersMock = vi.mocked(usersService.getAllUsers);
 

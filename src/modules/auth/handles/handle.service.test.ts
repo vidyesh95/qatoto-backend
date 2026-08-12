@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // out entirely rather than requiring a test environment.
 vi.mock("#src/db/index.js", () => ({ db: {} }));
 
-const { normalizeHandle, validateHandle } = await import("#src/services/handle.service.js");
+const { normalizeHandle, validateHandle } = await import("#src/modules/auth/handles/handle.service.js");
 
 const HANDLE_LENGTH_ERROR = {
   success: false,

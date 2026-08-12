@@ -172,7 +172,7 @@ describe("per-route body caps", () => {
     const inventory = await import("#src/docs/route-inventory.js");
     const rnd = await import("#src/docs/openapi-rnd.js");
     const uploads = await Promise.all([
-      import("#src/middleware/upload-avatar.js"),
+      import("#src/modules/auth/users/upload-avatar.js"),
       import("#src/middleware/upload-product-image.js"),
       import("#src/middleware/upload-project-cover.js"),
       import("#src/modules/studio/videos/upload-video-thumbnail.js"),

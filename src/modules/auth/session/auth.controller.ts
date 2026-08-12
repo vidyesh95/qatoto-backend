@@ -8,7 +8,7 @@ import { respondValidationFailed } from "#src/controllers/project-error-response
 import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { auth, sendSignupOtp } from "#src/lib/auth.js";
-import { CompleteSignupSchema, StartSignupSchema } from "#src/schemas/auth.schemas.js";
+import { CompleteSignupSchema, StartSignupSchema } from "#src/modules/auth/session/auth.schemas.js";
 import type { ApiResponse, Result } from "#src/types/index.js";
 
 /**

@@ -9,11 +9,11 @@ import {
   talentProfileSkill,
   user,
 } from "#src/db/schema.js";
+import { normalizeHandle } from "#src/modules/auth/handles/handle.service.js";
 import {
   DISCOVERY_REGION_REF_COLUMNS,
   type DiscoveryRegionRef,
 } from "#src/services/discovery-catalog.service.js";
-import { normalizeHandle } from "#src/services/handle.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

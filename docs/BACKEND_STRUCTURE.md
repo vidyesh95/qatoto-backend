@@ -116,7 +116,7 @@ that canonical email (`allowDifferentEmails: true`) and remain one user. See §5
 | Anonymous        | **`anonymous` plugin**                         | Pre-auth guest sessions that can later upgrade to a real account.                                  |
 | Avatar storage   | **Cloudinary** (`src/lib/cloudinary.ts`)       | One deterministic asset per user (`qatoto/avatars/<userId>`). Creds optional → `NOT_CONFIGURED`.   |
 | Image processing | **sharp** (`src/lib/image.ts`)                 | Decodes uploads to prove they're real images, bounds dimensions, re-encodes to webp + strips EXIF. |
-| File uploads     | **multer** (`src/middleware/upload-avatar.ts`) | In-memory multipart parse for the `photo` field, 5 MB cap, first-pass mimetype gate.               |
+| File uploads     | **multer** (`src/modules/auth/users/upload-avatar.ts`) | In-memory multipart parse for the `photo` field, 5 MB cap, first-pass mimetype gate.               |
 | Email delivery   | **Brevo** (`src/lib/email.ts`)                 | Real transactional email. In dev the OTP is **also** `console.log`'d so you can test offline.      |
 | Validation       | **zod**                                        | Env parsing (`src/config/index.ts`), provider payloads (`oauth-profile.ts`), request bodies.       |
 | Security headers | **helmet**                                     | Sensible default response headers.                                                                 |
@@ -293,7 +293,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { anonymous, emailOTP, multiSession } from "better-auth/plugins";
 import { fetchGitHubPrimaryEmail, readGoogleProfileFromIdToken } from "#src/lib/oauth-profile.js";
-import { assignPlaceholderHandle } from "#src/services/handle.service.js";
+import { assignPlaceholderHandle } from "#src/modules/auth/handles/handle.service.js";
 
 export const auth = betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
@@ -304,7 +304,7 @@ export const auth = betterAuth({
     // Expose handle on the session so session.user.handle drives menu/avatar display
     // (the frontend mirrors it via inferAdditionalFields). input:false → the handle is
     // NEVER client-writable through Better Auth's own update/signup paths; it is owned
-    // solely by PATCH /users/me/handle (src/services/handle.service.ts).
+    // solely by PATCH /users/me/handle (src/modules/auth/handles/handle.service.ts).
     user: {
         additionalFields: {
             handle: { type: "string", required: false, input: false },
@@ -597,7 +597,7 @@ You don't write these — enabling the config above creates them.
 | `POST /api/auth/sign-out`                        | — (reads cookie)                                         | Ends the **active** session (multiSession: clears all its cookies on full sign-out).              |
 | `GET  /api/auth/get-session`                     | — (reads cookie)                                         | The real "am I logged in?" check. Returns session + user (incl. `handle`), or null.               |
 
-### 5e. The signup endpoints YOU write — `src/controllers/auth.controller.ts`
+### 5e. The signup endpoints YOU write — `src/modules/auth/session/auth.controller.ts`
 
 OTP-gated signup, account created at the end so a half-finished signup leaves no row.
 Both are **public** (no session yet) and validated with Zod `.strict()` (`422` on failure).
@@ -652,7 +652,7 @@ call as the OTP. So there is no "verified-but-passwordless" state.
 > `pnpm db:cleanup-orphans` (dry run) → `pnpm db:cleanup-orphans -- --delete`
 > (see [scripts/cleanup-orphan-signups.ts](../scripts/cleanup-orphan-signups.ts)).
 
-### 5f. The profile endpoints YOU write — `src/controllers/users.controller.ts`
+### 5f. The profile endpoints YOU write — `src/modules/auth/users/users.controller.ts`
 
 Display name, profile photo, and linked accounts. All `/users/me*` routes are
 session-guarded by `requireAuth`; the user id comes from `req.user`, never the body, so
@@ -705,7 +705,7 @@ seeded.
    per user — replacing a photo can't orphan the old one; no extra DB column needed. Returns
    the `secure_url`, which the service stores in `user.image`.
 
-### 5g. The handle endpoints YOU write — `src/controllers/handle.controller.ts` + `handle.service.ts`
+### 5g. The handle endpoints YOU write — `src/modules/auth/handles/handle.controller.ts` + `handle.service.ts`
 
 The handle is a unique, user-visible username. It is **server-owned** (`input:false` on
 the session field) and governed by a **two-tier** design:

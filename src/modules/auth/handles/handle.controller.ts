@@ -4,8 +4,11 @@ import {
   respondFieldRefusal,
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
-import { AvailabilityQuerySchema, UpdateMyHandleSchema } from "#src/schemas/handle.schemas.js";
-import * as handleService from "#src/services/handle.service.js";
+import {
+  AvailabilityQuerySchema,
+  UpdateMyHandleSchema,
+} from "#src/modules/auth/handles/handle.schemas.js";
+import * as handleService from "#src/modules/auth/handles/handle.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

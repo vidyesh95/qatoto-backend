@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("#src/db/index.js", () => ({ db: {} }));
 vi.mock("#src/lib/auth.js", () => ({ auth: {}, sendSignupOtp: vi.fn<() => Promise<void>>() }));
 
-const { getCurrentUser } = await import("#src/controllers/auth.controller.js");
+const { getCurrentUser } = await import("#src/modules/auth/session/auth.controller.js");
 
 const AUTHENTICATED_USER = {
   id: "usr_test123",

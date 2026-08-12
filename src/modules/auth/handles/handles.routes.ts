@@ -1,8 +1,8 @@
 import express from "express";
 
-import * as handleController from "#src/controllers/handle.controller.js";
 import { handleAvailabilityLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as handleController from "#src/modules/auth/handles/handle.controller.js";
 
 const router = express.Router();
 

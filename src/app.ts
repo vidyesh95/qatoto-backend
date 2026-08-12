@@ -11,6 +11,9 @@ import { parseJsonBodyOnce } from "#src/middleware/json-body.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import { requestLog } from "#src/middleware/request-log.js";
+import handlesRouter from "#src/modules/auth/handles/handles.routes.js";
+import authRouter from "#src/modules/auth/session/auth.routes.js";
+import usersRouter from "#src/modules/auth/users/users.routes.js";
 import engagementRouter, {
   commentRouter,
   creatorRouter,
@@ -22,7 +25,6 @@ import notificationsRouter from "#src/modules/platform/notifications/notificatio
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
 import videosRouter from "#src/modules/studio/videos/videos.routes.js";
-import authRouter from "#src/routes/auth.routes.js";
 import commerceCartRouter from "#src/routes/commerce-cart.routes.js";
 import commerceCatalogRouter from "#src/routes/commerce-catalog.routes.js";
 import commerceCategoriesRouter from "#src/routes/commerce-categories.routes.js";
@@ -53,7 +55,6 @@ import compensationRouter, { governanceRouter } from "#src/routes/compensation.r
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
-import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";
 import platformAuditRouter from "#src/routes/platform-audit.routes.js";
 import platformRolesRouter from "#src/routes/platform-roles.routes.js";
@@ -70,7 +71,6 @@ import researchProjectsRouter, {
 } from "#src/routes/research-projects.routes.js";
 import storeRouter from "#src/routes/store.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
-import usersRouter from "#src/routes/users.routes.js";
 import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.js";
 
 const app = express();

@@ -212,7 +212,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { anonymous, emailOTP } from "better-auth/plugins";
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
-import { assignPlaceholderHandle } from "#src/services/handle.service.js";
+import { assignPlaceholderHandle } from "#src/modules/auth/handles/handle.service.js";
 
 export const auth = betterAuth({
     database: drizzleAdapter(db, { provider: "pg" }),
@@ -386,7 +386,7 @@ You don't write these — the §5b config creates them.
 | `POST /api/auth/sign-out`                        | — (reads cookie)                  | Ends the session, clears the cookie.                                                              |
 | `GET  /api/auth/get-session`                     | — (reads cookie)                  | The real "am I logged in?" check. Returns session + user (incl. `handle`), or null.               |
 
-### 7b. The signup endpoints YOU write — `src/controllers/auth.controller.ts`
+### 7b. The signup endpoints YOU write — `src/modules/auth/session/auth.controller.ts`
 
 Account creation is deferred to the very end so a half-finished signup never leaves a
 row. Both public; bodies validated with Zod `.strict()` (`422` on failure).

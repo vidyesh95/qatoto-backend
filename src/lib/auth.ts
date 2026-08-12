@@ -12,7 +12,7 @@ import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
 import { fetchGitHubPrimaryEmail, readGoogleProfileFromIdToken } from "#src/lib/oauth-profile.js";
-import { assignPlaceholderHandle } from "#src/services/handle.service.js";
+import { assignPlaceholderHandle } from "#src/modules/auth/handles/handle.service.js";
 
 /**
  * Build and send the OTP email for any flow (signup sign-in OTP or forget-password).
@@ -69,7 +69,7 @@ export const auth = betterAuth({
     // menu/avatar display (the frontend mirrors this via inferAdditionalFields).
     // input:false — the handle is NEVER client-writable through Better Auth's own
     // update/signup paths; it is owned solely by PATCH /users/me/handle, which
-    // runs the rate-limit + reservation transaction (src/services/handle.service.ts).
+    // runs the rate-limit + reservation transaction (src/modules/auth/handles/handle.service.ts).
     additionalFields: {
       handle: { type: "string", required: false, input: false },
     },

@@ -3,7 +3,7 @@
  *
  * A reservation is parked for 14 days when a user changes away from a handle, so
  * they can revert and nobody else can grab it in the meantime (see
- * src/services/handle.service.ts). Once `expires_at < NOW()` the hold is dead:
+ * src/modules/auth/handles/handle.service.ts). Once `expires_at < NOW()` the hold is dead:
  * lazy reads already treat it as available and the set transaction overwrites it,
  * so this sweep is purely housekeeping to keep the table small.
  *
@@ -12,7 +12,7 @@
  */
 import "dotenv/config";
 import { pool } from "#src/db/index.js";
-import { purgeExpiredHandleReservations } from "#src/services/handle.service.js";
+import { purgeExpiredHandleReservations } from "#src/modules/auth/handles/handle.service.js";
 
 async function main(): Promise<void> {
   const removedCount = await purgeExpiredHandleReservations();

@@ -1,10 +1,10 @@
 import express from "express";
 
-import * as handleController from "#src/controllers/handle.controller.js";
-import * as usersController from "#src/controllers/users.controller.js";
 import { longFormBody } from "#src/middleware/json-body.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadAvatarPhoto } from "#src/middleware/upload-avatar.js";
+import * as handleController from "#src/modules/auth/handles/handle.controller.js";
+import { uploadAvatarPhoto } from "#src/modules/auth/users/upload-avatar.js";
+import * as usersController from "#src/modules/auth/users/users.controller.js";
 
 const router = express.Router();
 

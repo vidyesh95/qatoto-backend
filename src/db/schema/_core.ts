@@ -48,7 +48,7 @@ export const user = pgTable(
     // Rate-limit bookkeeping: how many changes the user has made inside the CURRENT
     // 14-day window, and when that window opened. A change consumes one; at
     // MAX_HANDLE_CHANGES_PER_WINDOW the user is locked until windowStartedAt + 14d.
-    // See src/services/handle.service.ts (computeRateLimitWindow). The server is the
+    // See src/modules/auth/handles/handle.service.ts (computeRateLimitWindow). The server is the
     // sole authority for this (CLAUDE.md §1.1) — the client only previews the lock.
     handleChangeCount: integer("handle_change_count").default(0).notNull(),
     handleWindowStartedAt: timestamp("handle_window_started_at"),

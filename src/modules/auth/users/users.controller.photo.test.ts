@@ -1,18 +1,18 @@
 import type { Request, Response } from "express";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DeleteUserPhotoError, UpdateUserPhotoError } from "#src/services/users.service.js";
+import type { DeleteUserPhotoError, UpdateUserPhotoError } from "#src/modules/auth/users/users.service.js";
 
 // The service pulls in the db pool, Cloudinary, and sharp at module scope. Stub
 // the whole module so the photo handlers can be exercised without a configured
 // environment; only the two photo mutations are needed here.
-vi.mock("#src/services/users.service.js", () => ({
-  updateUserPhoto: vi.fn<typeof import("#src/services/users.service.js").updateUserPhoto>(),
-  deleteUserPhoto: vi.fn<typeof import("#src/services/users.service.js").deleteUserPhoto>(),
+vi.mock("#src/modules/auth/users/users.service.js", () => ({
+  updateUserPhoto: vi.fn<typeof import("#src/modules/auth/users/users.service.js").updateUserPhoto>(),
+  deleteUserPhoto: vi.fn<typeof import("#src/modules/auth/users/users.service.js").deleteUserPhoto>(),
 }));
 
-const usersService = await import("#src/services/users.service.js");
-const { updateMyPhoto, deleteMyPhoto } = await import("#src/controllers/users.controller.js");
+const usersService = await import("#src/modules/auth/users/users.service.js");
+const { updateMyPhoto, deleteMyPhoto } = await import("#src/modules/auth/users/users.controller.js");
 
 const updateUserPhotoMock = vi.mocked(usersService.updateUserPhoto);
 const deleteUserPhotoMock = vi.mocked(usersService.deleteUserPhoto);

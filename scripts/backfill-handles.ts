@@ -16,7 +16,7 @@ import { isNull } from "drizzle-orm";
 
 import { db, pool } from "#src/db/index.js";
 import { user } from "#src/db/schema.js";
-import { assignPlaceholderHandle } from "#src/services/handle.service.js";
+import { assignPlaceholderHandle } from "#src/modules/auth/handles/handle.service.js";
 
 async function main(): Promise<void> {
   const shouldApply = process.argv.includes("--apply");
