@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { signInAs, signOut } from "#src/test-support/auth-mock.js";
+import { resetRateLimiters } from "#src/test-support/rate-limit-reset.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -146,10 +147,11 @@ describe("commerce trust routes", () => {
     app.use("/commerce", trustRouter);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     signInAs();
+    await resetRateLimiters();
   });
 
   /**
@@ -595,10 +597,11 @@ describe("commerce review edit routes (A38)", () => {
     app.use("/commerce", trustRouter);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     signInAs();
+    await resetRateLimiters();
   });
 
   it("requires Idempotency-Key, because one edit is all there is", async () => {
@@ -747,10 +750,11 @@ describe("commerce dispute note routes (A40)", () => {
     app.use("/commerce", trustRouter);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     signInAs();
+    await resetRateLimiters();
   });
 
   it("requires an Idempotency-Key, because the timeline is append-only", async () => {

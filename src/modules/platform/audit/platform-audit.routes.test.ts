@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { signInAs, signOut, TEST_SESSION_USER } from "#src/test-support/auth-mock.js";
+import { resetRateLimiters } from "#src/test-support/rate-limit-reset.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -44,9 +45,10 @@ describe("platform audit routes", () => {
     app = await buildTestApp();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     signInAs();
+    await resetRateLimiters();
   });
 
   it("answers 401 for a signed-out caller", async () => {

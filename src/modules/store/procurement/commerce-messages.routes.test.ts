@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { signInAs, signOut } from "#src/test-support/auth-mock.js";
+import { resetRateLimiters } from "#src/test-support/rate-limit-reset.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -119,10 +120,11 @@ describe("commerce message routes", () => {
     app = await buildTestApp();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     signInAs();
+    await resetRateLimiters();
   });
 
   it("rejects unknown keys on thread create with 422", async () => {

@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { signInAs } from "#src/test-support/auth-mock.js";
+import { resetRateLimiters } from "#src/test-support/rate-limit-reset.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -131,11 +132,12 @@ describe("commerce quote routes", () => {
     app.use("/commerce", quotesRouter);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     activeRole.value = "provider";
     signInAs();
+    await resetRateLimiters();
   });
 
   it("requires Idempotency-Key and expectedRevision on accept", async () => {

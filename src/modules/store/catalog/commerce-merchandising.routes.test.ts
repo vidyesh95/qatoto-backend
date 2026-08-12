@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { signInAs } from "#src/test-support/auth-mock.js";
+import { resetRateLimiters } from "#src/test-support/rate-limit-reset.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -127,11 +128,12 @@ describe("commerce guided pathway routes", () => {
     app.use("/commerce", cartRouter);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     organizationAttachment.attach = true;
     signInAs();
+    await resetRateLimiters();
   });
 
   it("requires an Idempotency-Key to create a pathway", async () => {

@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { signInAs, signOut } from "#src/test-support/auth-mock.js";
+import { resetRateLimiters } from "#src/test-support/rate-limit-reset.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -104,10 +105,11 @@ describe("commerce freight rate card admin routes", () => {
     app.use("/commerce", freightRatesRouter);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     signInAs();
+    await resetRateLimiters();
   });
 
   it("requires an Idempotency-Key to create a rate card", async () => {
@@ -304,10 +306,11 @@ describe("commerce customs dwell estimate admin routes", () => {
     app.use("/commerce", freightRatesRouter);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     signInAs();
+    await resetRateLimiters();
   });
 
   it("refuses a domestic lane: an absent customs leg is not a zero-day one", async () => {
@@ -404,10 +407,11 @@ describe("commerce freight rate card admin reads", () => {
     app.use("/commerce", freightRatesRouter);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     signInAs();
+    await resetRateLimiters();
   });
 
   it("returns the §7 list envelope", async () => {
@@ -515,10 +519,11 @@ describe("commerce customs dwell estimate admin reads", () => {
     app.use("/commerce", freightRatesRouter);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyCache.clear();
     signInAs();
+    await resetRateLimiters();
   });
 
   it("returns the §7 list envelope", async () => {

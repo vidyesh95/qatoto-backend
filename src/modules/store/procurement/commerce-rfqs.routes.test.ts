@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { signInAs, signOut, TEST_SESSION_USER } from "#src/test-support/auth-mock.js";
+import { resetRateLimiters } from "#src/test-support/rate-limit-reset.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -173,10 +174,11 @@ describe("commerce RFQ routes", () => {
     app = await buildTestApp();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     idempotencyResponses.clear();
     signInAs();
+    await resetRateLimiters();
   });
 
   it("returns 422 on bad create body", async () => {

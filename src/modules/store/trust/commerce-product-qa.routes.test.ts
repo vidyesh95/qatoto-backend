@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { signInAs, signOut } from "#src/test-support/auth-mock.js";
+import { resetRateLimiters } from "#src/test-support/rate-limit-reset.js";
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
 import { buildTestApp } from "#src/test-support/test-app.js";
 
@@ -74,13 +75,14 @@ describe("product Q&A vote routes (A24)", () => {
     app = await buildTestApp();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     signInAs();
     catalogStubs.resolveEligibleProductRefBySlug.mockResolvedValue({
       id: "prd_1",
       sellerOrganizationId: "org_seller",
     });
+    await resetRateLimiters();
   });
 
   /**
