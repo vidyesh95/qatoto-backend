@@ -1045,6 +1045,137 @@ function projectEngagement(engagement: EngagementRow) {
   };
 }
 
+/**
+ * Claim the command receipt, lock the engagement and its order, and run every refusal that
+ * can be decided before the command itself is interpreted.
+ *
+ * NINE REFUSALS LIVE HERE, and reading them as one ladder is the point: the receipt claim
+ * (which is also where a replay is answered), the engagement and order lookups, the
+ * buyer/provider authorization, the order-state gate, the optimistic version check, and the
+ * legacy-snapshot gate. Every one happens before the command switch decides anything, so no
+ * state transition is reachable without having passed all nine.
+ *
+ * ONLY THE ENGAGEMENT ESCAPES. The claim, the order and the two authorization flags decide
+ * rather than act, so the switch below cannot accidentally depend on how the decision was
+ * made.
+ *
+ * THE MUTABLE FIELDS THE SWITCH WRITES — nextState, the four timestamps, the two contract
+ * columns and the normalization flag — used to be declared in the MIDDLE of this ladder,
+ * between the authorization check and the version check. They are initialized from the
+ * engagement and nothing in the ladder read them, so they now sit with the switch that
+ * assigns them. That is what made the ladder contiguous enough to lift.
+ *
+ * Takes the caller's transaction and never opens one: a lock taken in a different
+ * transaction from the write it guards is not a lock.
+ */
+async function lockEngagementForCommand(
+  transaction: DatabaseTransaction,
+  actor: CommerceFulfillmentActorContext,
+  engagementId: string,
+  idempotency: FulfillmentIdempotencyContext,
+  command: ServiceEngagementCommand,
+) {
+  const claim = await claimCommandReceipt(transaction, actor, idempotency);
+  if (!claim.success) return { status: "error" as const, error: claim.error };
+
+  const [engagementIdentity] = await transaction
+    .select({
+      id: commerceServiceEngagement.id,
+      orderId: commerceServiceEngagement.orderId,
+    })
+    .from(commerceServiceEngagement)
+    .where(eq(commerceServiceEngagement.id, engagementId))
+    .limit(1);
+  if (!engagementIdentity) return { status: "not_found" as const };
+
+  const [lockedOrder] = await transaction
+    .select({ id: commerceOrder.id, state: commerceOrder.state })
+    .from(commerceOrder)
+    .where(eq(commerceOrder.id, engagementIdentity.orderId))
+    .for("update");
+  if (!lockedOrder) return { status: "not_found" as const };
+
+  const [engagement] = await transaction
+    .select()
+    .from(commerceServiceEngagement)
+    .where(eq(commerceServiceEngagement.id, engagementId))
+    .for("update");
+  if (!engagement) return { status: "not_found" as const };
+
+  const isBuyer = engagement.buyerOrganizationId === actor.organizationId;
+  const isProvider = engagement.providerOrganizationId === actor.organizationId;
+  if (!isBuyer && !isProvider) return { status: "not_found" as const };
+
+  const providerCommands = new Set([
+    "initialize",
+    "normalize_deliverables",
+    "schedule",
+    "start",
+    "request_buyer_action",
+    "submit_deliverable",
+    "complete",
+    "cancel",
+  ]);
+  const buyerCommands = new Set([
+    "accept_deliverable",
+    "reject_deliverable",
+    "waive_deliverable",
+    "complete",
+    "cancel",
+  ]);
+
+  const authorizedAsProvider =
+    isProvider &&
+    providerCommands.has(command.command) &&
+    memberCanOperateProvider(actor.memberRole);
+  const authorizedAsBuyer =
+    isBuyer && buyerCommands.has(command.command) && memberCanOperateBuyer(actor.memberRole);
+  if (!authorizedAsProvider && !authorizedAsBuyer) {
+    return { status: "forbidden" as const };
+  }
+
+  if (claim.value.status === "replay") {
+    return {
+      status: "replay" as const,
+      body: parseCommandReplayBody(claim.value.responseBody),
+    };
+  }
+
+  if (!canExecuteServiceEngagementCommandForOrderState(lockedOrder.state, command.command)) {
+    return {
+      status: "invalid_state" as const,
+      currentState: lockedOrder.state,
+      command: command.command,
+    };
+  }
+
+  if (
+    engagement.state === "completed" ||
+    engagement.state === "cancelled" ||
+    engagement.state === "disputed"
+  ) {
+    return {
+      status: "invalid_state" as const,
+      currentState: engagement.state,
+      command: command.command,
+    };
+  }
+
+  if (engagement.version !== command.expectedVersion) {
+    return { status: "version_conflict" as const, currentVersion: engagement.version };
+  }
+
+  if (
+    engagement.executionContractState === "legacy_missing_snapshot" &&
+    command.command !== "initialize" &&
+    command.command !== "cancel"
+  ) {
+    return { status: "contract_missing" as const };
+  }
+
+  return { status: "locked" as const, engagement };
+}
+
 export async function executeServiceEngagementCommand(
   actor: CommerceFulfillmentActorContext,
   engagementId: string,
@@ -1052,36 +1183,15 @@ export async function executeServiceEngagementCommand(
   command: ServiceEngagementCommand,
 ): Promise<Result<unknown, CommercePhase6Error>> {
   const outcome = await db.transaction(async (transaction) => {
-    const claim = await claimCommandReceipt(transaction, actor, idempotency);
-    if (!claim.success) return { status: "error" as const, error: claim.error };
-
-    const [engagementIdentity] = await transaction
-      .select({
-        id: commerceServiceEngagement.id,
-        orderId: commerceServiceEngagement.orderId,
-      })
-      .from(commerceServiceEngagement)
-      .where(eq(commerceServiceEngagement.id, engagementId))
-      .limit(1);
-    if (!engagementIdentity) return { status: "not_found" as const };
-
-    const [lockedOrder] = await transaction
-      .select({ id: commerceOrder.id, state: commerceOrder.state })
-      .from(commerceOrder)
-      .where(eq(commerceOrder.id, engagementIdentity.orderId))
-      .for("update");
-    if (!lockedOrder) return { status: "not_found" as const };
-
-    const [engagement] = await transaction
-      .select()
-      .from(commerceServiceEngagement)
-      .where(eq(commerceServiceEngagement.id, engagementId))
-      .for("update");
-    if (!engagement) return { status: "not_found" as const };
-
-    const isBuyer = engagement.buyerOrganizationId === actor.organizationId;
-    const isProvider = engagement.providerOrganizationId === actor.organizationId;
-    if (!isBuyer && !isProvider) return { status: "not_found" as const };
+    const gate = await lockEngagementForCommand(
+      transaction,
+      actor,
+      engagementId,
+      idempotency,
+      command,
+    );
+    if (gate.status !== "locked") return gate;
+    const { engagement } = gate;
 
     const now = new Date();
     let nextState: EngagementState = engagement.state;
@@ -1092,73 +1202,6 @@ export async function executeServiceEngagementCommand(
     let executionContractState = engagement.executionContractState;
     let executionContractProvenance = engagement.executionContractProvenance;
     let requiresDeliverableNormalization = engagement.requiresDeliverableNormalization;
-
-    const providerCommands = new Set([
-      "initialize",
-      "normalize_deliverables",
-      "schedule",
-      "start",
-      "request_buyer_action",
-      "submit_deliverable",
-      "complete",
-      "cancel",
-    ]);
-    const buyerCommands = new Set([
-      "accept_deliverable",
-      "reject_deliverable",
-      "waive_deliverable",
-      "complete",
-      "cancel",
-    ]);
-
-    const authorizedAsProvider =
-      isProvider &&
-      providerCommands.has(command.command) &&
-      memberCanOperateProvider(actor.memberRole);
-    const authorizedAsBuyer =
-      isBuyer && buyerCommands.has(command.command) && memberCanOperateBuyer(actor.memberRole);
-    if (!authorizedAsProvider && !authorizedAsBuyer) {
-      return { status: "forbidden" as const };
-    }
-
-    if (claim.value.status === "replay") {
-      return {
-        status: "replay" as const,
-        body: parseCommandReplayBody(claim.value.responseBody),
-      };
-    }
-
-    if (!canExecuteServiceEngagementCommandForOrderState(lockedOrder.state, command.command)) {
-      return {
-        status: "invalid_state" as const,
-        currentState: lockedOrder.state,
-        command: command.command,
-      };
-    }
-
-    if (
-      engagement.state === "completed" ||
-      engagement.state === "cancelled" ||
-      engagement.state === "disputed"
-    ) {
-      return {
-        status: "invalid_state" as const,
-        currentState: engagement.state,
-        command: command.command,
-      };
-    }
-
-    if (engagement.version !== command.expectedVersion) {
-      return { status: "version_conflict" as const, currentVersion: engagement.version };
-    }
-
-    if (
-      engagement.executionContractState === "legacy_missing_snapshot" &&
-      command.command !== "initialize" &&
-      command.command !== "cancel"
-    ) {
-      return { status: "contract_missing" as const };
-    }
 
     switch (command.command) {
       case "initialize": {
