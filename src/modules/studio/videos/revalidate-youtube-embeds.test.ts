@@ -61,7 +61,7 @@ vi.mock("#src/db/index.js", () => ({
   },
 }));
 
-const { handleRevalidateYoutubeEmbeds } = await import("#src/jobs/revalidate-youtube-embeds.js");
+const { handleRevalidateYoutubeEmbeds } = await import("#src/modules/studio/videos/revalidate-youtube-embeds.js");
 
 const AS_OF = { asOf: "2026-08-11T00:00:00.000Z" };
 

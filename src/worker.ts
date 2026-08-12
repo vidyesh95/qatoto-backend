@@ -5,12 +5,6 @@ import type { Job } from "pg-boss";
 import { config } from "#src/config/index.js";
 import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
-import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
-import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-videos.js";
-import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
-import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
-import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
-import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
 import {
   handleCloseCompensationPeriodTick,
   handleRecomputeCompensationDraftTick,
@@ -40,7 +34,6 @@ import {
   handleReconcileConnectorStateTick,
   handleSweepPendingDocumentScansTick,
 } from "#src/jobs/scheduled-ticks.js";
-import { handleVerifyYoutubeVideo } from "#src/jobs/verify-youtube-video.js";
 import {
   createPgBossDbAdapter,
   JOB_NAMES,
@@ -48,6 +41,8 @@ import {
   stopSendOnlyBoss,
   type JobName,
 } from "#src/lib/jobs.js";
+import { handlePruneEngagementData } from "#src/modules/home/engagement/prune-engagement-data.js";
+import { handleRecomputeUserAffinities } from "#src/modules/home/engagement/recompute-user-affinities.js";
 import { handleDeliverNotification } from "#src/modules/platform/notifications/deliver-notification.js";
 import { handleCloseCompensationPeriod } from "#src/modules/rnd/compensation/close-compensation-period.js";
 import { handleRecomputeCompensationDraft } from "#src/modules/rnd/compensation/recompute-compensation-draft.js";
@@ -82,6 +77,11 @@ import { handleReconcileCommercePayments } from "#src/modules/store/orders/recon
 import { handleReleaseExpiredInventoryReservations } from "#src/modules/store/orders/release-expired-inventory-reservations.js";
 import { handleExpireCommerceQuotes } from "#src/modules/store/procurement/expire-commerce-quotes.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/modules/store/storefront/dispatch-commerce-webhook-event.js";
+import { handleRecomputeTrendingVideos } from "#src/modules/studio/videos/recompute-trending-videos.js";
+import { handleRecomputeVideoDurations } from "#src/modules/studio/videos/recompute-video-durations.js";
+import { handleRecomputeVideoQualityScores } from "#src/modules/studio/videos/recompute-video-quality-scores.js";
+import { handleRevalidateYoutubeEmbeds } from "#src/modules/studio/videos/revalidate-youtube-embeds.js";
+import { handleVerifyYoutubeVideo } from "#src/modules/studio/videos/verify-youtube-video.js";
 
 /**
  * The background worker process (R_AND_D_BACKEND_STRUCTURE.md §4e).
