@@ -653,101 +653,23 @@ export async function prepareCheckout(
 
   try {
     const outcome = await db.transaction(async (transaction) => {
-      const organizationCanPrepare = await assertOrganizationCanPrepareCheckout(
-        transaction,
-        actor.organizationId,
-      );
-      if (!organizationCanPrepare) return { status: "org_inactive" as const };
-
-      const cart = await getOrCreateCartForUpdate(transaction, actor.organizationId);
-      const lines = await transaction
-        .select()
-        .from(commerceCartProductLine)
-        .where(eq(commerceCartProductLine.cartId, cart.id))
-        .orderBy(asc(commerceCartProductLine.createdAt), asc(commerceCartProductLine.id))
-        .for("update");
-      if (lines.length === 0) return { status: "empty_cart" as const };
-
-      let deliveryAddressId: string | null = null;
-      let deliveryAddressSnapshot: string | null = null;
-      let deliveryCountryCode: string | null = null;
-      if (input.deliveryAddressId !== undefined) {
-        const owned = await assertOwnedDeliveryAddress(
-          transaction,
-          actor.organizationId,
-          input.deliveryAddressId,
-        );
-        if (owned.status === "not_owned") return { status: "address_not_owned" as const };
-        if (owned.status === "wrong_kind") {
-          return { status: "address_wrong_kind" as const, addressKind: owned.addressKind };
-        }
-        deliveryAddressId = owned.id;
-        deliveryAddressSnapshot = owned.snapshot;
-        deliveryCountryCode = owned.countryCode;
-      }
+      const gate = await lockCartForPreparation(transaction, actor, input);
+      if (gate.status !== "locked") return gate;
+      const { cart, lines, deliveryAddressId, deliveryAddressSnapshot, deliveryCountryCode } = gate;
 
       const now = new Date();
       await supersedeActiveCheckoutPrepares(transaction, cart.id, now);
 
-      const productIds = lines.map((line) => line.productId);
-      const heldQuantityByScope = await loadHeldQuantitiesByProduct(transaction, productIds, now);
-
-      const pricedLines: (PricedProductLine & { readonly siblingOrder: number })[] = [];
-      const selectionsBySiblingOrder = new Map<number, readonly ResolvedCustomizationSelection[]>();
-      for (const line of lines) {
-        const priced = await loadPurchasableProductForCheckout(
-          transaction,
-          line.productId,
-          line.quantity,
-          heldQuantityByScope.get(inventoryScopeKey(line.productId, line.variantId)) ?? 0,
-          line.variantId,
-          line.isSample,
-        );
-        if (!priced.success) {
-          return {
-            status: "pricing_failed" as const,
-            productId: line.productId,
-            error: priced.error,
-          };
-        }
-        /**
-         * A18. VALIDATED HERE, BEFORE THE FIRST INSERT, for the same reason the cart path
-         * validates before its write: returning a failure status from inside
-         * `db.transaction` commits everything that ran before it — only a throw rolls
-         * back. Checked after the prepare row existed, a refused checkout left behind an
-         * active prepare holding inventory reservations.
-         *
-         * `requireRequiredOptions` is TRUE here and false in the cart: a buyer may build a
-         * cart before uploading artwork, but must not confirm an order missing a slot the
-         * seller declared required.
-         */
-        const storedSelections = await transaction
-          .select()
-          .from(commerceCartLineCustomization)
-          .where(eq(commerceCartLineCustomization.cartProductLineId, line.id));
-
-        const revalidated = await resolveCustomizationSelections(transaction, {
-          productId: line.productId,
-          buyerOrganizationId: actor.organizationId,
-          quantity: line.quantity,
-          selections: storedSelections.map((selection) => ({
-            slotKey: selection.slotKeySnapshot,
-            encryptedDocumentId: selection.encryptedDocumentId ?? undefined,
-            choiceValue: selection.choiceValue ?? undefined,
-          })),
-          requireRequiredOptions: true,
-        });
-        if (!revalidated.success) {
-          return {
-            status: "customization_rejected" as const,
-            productId: line.productId,
-            customizationError: revalidated.error,
-          };
-        }
-        selectionsBySiblingOrder.set(pricedLines.length, revalidated.value);
-
-        pricedLines.push({ ...priced.value, siblingOrder: pricedLines.length });
-      }
+      // Prices and customization slots are both re-derived under the cart lock, and both
+      // refuse BEFORE the prepare row exists — see the helper on why that ordering is load
+      // bearing rather than stylistic.
+      const priced = await priceCartLinesForPrepare(transaction, {
+        actor,
+        lines,
+        now,
+      });
+      if (priced.status !== "priced") return priced;
+      const { pricedLines, selectionsBySiblingOrder } = priced;
 
       const expiresAt = new Date(now.getTime() + config.COMMERCE_CHECKOUT_PREPARE_TTL_MS);
       const [prepare] = await transaction
@@ -988,6 +910,140 @@ function groupPrepareLinesBySellerAndCurrency(
  * atomically creates one checkout group and one order per (seller, currency) pair,
  * decrements stock, consumes the held reservations, and clears the confirmed cart lines.
  */
+/**
+ * Lock the cart and settle everything that can refuse a prepare before one is written.
+ *
+ * The `FOR UPDATE` on the cart lines is what stops a cart being edited underneath a
+ * prepare that is pricing it. It is taken here, in the caller's transaction, and this
+ * function never opens one of its own.
+ */
+async function lockCartForPreparation(
+  transaction: DatabaseTransaction,
+  actor: CommerceCartActorContext,
+  input: PrepareCheckoutInput,
+) {
+  const organizationCanPrepare = await assertOrganizationCanPrepareCheckout(
+    transaction,
+    actor.organizationId,
+  );
+  if (!organizationCanPrepare) return { status: "org_inactive" as const };
+
+  const cart = await getOrCreateCartForUpdate(transaction, actor.organizationId);
+  const lines = await transaction
+    .select()
+    .from(commerceCartProductLine)
+    .where(eq(commerceCartProductLine.cartId, cart.id))
+    .orderBy(asc(commerceCartProductLine.createdAt), asc(commerceCartProductLine.id))
+    .for("update");
+  if (lines.length === 0) return { status: "empty_cart" as const };
+
+  let deliveryAddressId: string | null = null;
+  let deliveryAddressSnapshot: string | null = null;
+  let deliveryCountryCode: string | null = null;
+  if (input.deliveryAddressId !== undefined) {
+    const owned = await assertOwnedDeliveryAddress(
+      transaction,
+      actor.organizationId,
+      input.deliveryAddressId,
+    );
+    if (owned.status === "not_owned") return { status: "address_not_owned" as const };
+    if (owned.status === "wrong_kind") {
+      return { status: "address_wrong_kind" as const, addressKind: owned.addressKind };
+    }
+    deliveryAddressId = owned.id;
+    deliveryAddressSnapshot = owned.snapshot;
+    deliveryCountryCode = owned.countryCode;
+  }
+
+  return {
+    status: "locked" as const,
+    cart,
+    lines,
+    deliveryAddressId,
+    deliveryAddressSnapshot,
+    deliveryCountryCode,
+  };
+}
+
+/**
+ * Price every cart line and revalidate its customization slots, before anything is written.
+ *
+ * THE ORDERING IS LOAD BEARING, NOT STYLISTIC (A18). Returning a failure status from inside
+ * `db.transaction` COMMITS everything that ran before it — only a throw rolls back. When
+ * this ran after the prepare row was inserted, a refused checkout left an active prepare
+ * behind, holding inventory reservations for an order that would never exist. Both refusals
+ * therefore have to happen while nothing has been written yet, which is exactly what
+ * pulling them into their own function makes checkable.
+ *
+ * `requireRequiredOptions` is TRUE here and false on the cart path, deliberately: a buyer
+ * may build a cart before uploading artwork, but must not prepare a checkout that is
+ * missing a slot the seller declared required.
+ *
+ * Held quantities are read once for every product rather than per line, so two lines of the
+ * same product see the same figure instead of the second one reading the first one's hold.
+ */
+async function priceCartLinesForPrepare(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly actor: CommerceCartActorContext;
+    readonly lines: readonly (typeof commerceCartProductLine.$inferSelect)[];
+    readonly now: Date;
+  },
+) {
+  const productIds = input.lines.map((line) => line.productId);
+  const heldQuantityByScope = await loadHeldQuantitiesByProduct(transaction, productIds, input.now);
+
+  const pricedLines: (PricedProductLine & { readonly siblingOrder: number })[] = [];
+  const selectionsBySiblingOrder = new Map<number, readonly ResolvedCustomizationSelection[]>();
+
+  for (const line of input.lines) {
+    const priced = await loadPurchasableProductForCheckout(
+      transaction,
+      line.productId,
+      line.quantity,
+      heldQuantityByScope.get(inventoryScopeKey(line.productId, line.variantId)) ?? 0,
+      line.variantId,
+      line.isSample,
+    );
+    if (!priced.success) {
+      return {
+        status: "pricing_failed" as const,
+        productId: line.productId,
+        error: priced.error,
+      };
+    }
+
+    const storedSelections = await transaction
+      .select()
+      .from(commerceCartLineCustomization)
+      .where(eq(commerceCartLineCustomization.cartProductLineId, line.id));
+
+    const revalidated = await resolveCustomizationSelections(transaction, {
+      productId: line.productId,
+      buyerOrganizationId: input.actor.organizationId,
+      quantity: line.quantity,
+      selections: storedSelections.map((selection) => ({
+        slotKey: selection.slotKeySnapshot,
+        encryptedDocumentId: selection.encryptedDocumentId ?? undefined,
+        choiceValue: selection.choiceValue ?? undefined,
+      })),
+      requireRequiredOptions: true,
+    });
+    if (!revalidated.success) {
+      return {
+        status: "customization_rejected" as const,
+        productId: line.productId,
+        customizationError: revalidated.error,
+      };
+    }
+    selectionsBySiblingOrder.set(pricedLines.length, revalidated.value);
+
+    pricedLines.push({ ...priced.value, siblingOrder: pricedLines.length });
+  }
+
+  return { status: "priced" as const, pricedLines, selectionsBySiblingOrder };
+}
+
 /**
  * Lock the prepare row and settle everything that can refuse a confirmation before any
  * order exists.
