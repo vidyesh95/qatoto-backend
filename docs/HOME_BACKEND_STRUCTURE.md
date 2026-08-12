@@ -207,7 +207,7 @@ export const videoShareChannelEnum = pgEnum("video_share_channel", [
 // SHIPPED AS: not created. `feedMode` backs a QUERY PARAMETER and no column stores it, so a
 // pgEnum here would be a Postgres type nothing can be assigned to — and a migration nobody can
 // reverse cheaply. It lives as a TypeScript `as const` array, `FEED_MODES` in
-// src/services/feed.service.ts, with the same snake_case labels so the wire contract is unchanged.
+// src/modules/home/feed/feed.service.ts, with the same snake_case labels so the wire contract is unchanged.
 ```
 
 ### 3.2 `viewerFingerprint` — identifying an anonymous viewer without storing them
@@ -506,7 +506,7 @@ operational fact about the catalog, not something a client should branch on.
 
 ## 5. Routes
 
-### 5.1 Feed — `src/routes/feed.routes.ts`, `attachOptionalUser`
+### 5.1 Feed — `src/modules/home/feed/feed.routes.ts`, `attachOptionalUser`
 
 | Method | Path               | Limiter                 | Returns                                                                           |
 | ------ | ------------------ | ----------------------- | --------------------------------------------------------------------------------- |
@@ -557,7 +557,7 @@ twenty-five requests.
 > `false` on a trust signal is a claim the platform cannot support, so the key is absent rather
 > than present and meaningless. Same call on `GET /feed/watch/:videoId`.
 
-### 5.2 Engagement — `src/routes/engagement.routes.ts`
+### 5.2 Engagement — `src/modules/home/engagement/engagement.routes.ts`
 
 | Method             | Path                              | Auth                   | Limiter                |
 | ------------------ | --------------------------------- | ---------------------- | ---------------------- |

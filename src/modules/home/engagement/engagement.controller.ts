@@ -1,14 +1,15 @@
 import type { Request, Response } from "express";
 
+import { logger } from "#src/lib/logger.js";
+import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
+import * as subscriptionsService from "#src/modules/home/engagement/creator-subscriptions.service.js";
 import {
   firstParam,
   optionalBody,
   respondEngagementError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/engagement-error-response.js";
-import { logger } from "#src/lib/logger.js";
-import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
+} from "#src/modules/home/engagement/engagement-error-response.js";
 import {
   CommentIdParamSchema,
   CreateCommentSchema,
@@ -19,10 +20,9 @@ import {
   ReportPlaybackErrorSchema,
   UpdateCommentSchema,
   VideoIdParamSchema,
-} from "#src/schemas/engagement.schemas.js";
-import * as subscriptionsService from "#src/services/creator-subscriptions.service.js";
-import * as commentsService from "#src/services/video-comments.service.js";
-import * as engagementService from "#src/services/video-engagement.service.js";
+} from "#src/modules/home/engagement/engagement.schemas.js";
+import * as commentsService from "#src/modules/home/engagement/video-comments.service.js";
+import * as engagementService from "#src/modules/home/engagement/video-engagement.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

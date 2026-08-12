@@ -62,7 +62,7 @@ function segmentCount(path: string): number {
 
 describe("the /videos prefix, shared by two routers", () => {
   it("declares nothing single-segment on the engagement router", async () => {
-    const engagementRouter = (await import("#src/routes/engagement.routes.js")).default;
+    const engagementRouter = (await import("#src/modules/home/engagement/engagement.routes.js")).default;
 
     const shadowedRoutes = declaredRoutes(engagementRouter).filter((route) => segmentCount(route.path) < 2);
 
@@ -73,7 +73,7 @@ describe("the /videos prefix, shared by two routers", () => {
   });
 
   it("shares no (method, path) pair with the studio router", async () => {
-    const engagementRouter = (await import("#src/routes/engagement.routes.js")).default;
+    const engagementRouter = (await import("#src/modules/home/engagement/engagement.routes.js")).default;
     const videosRouter = (await import("#src/modules/studio/videos/videos.routes.js")).default;
 
     const studioKeys = new Set(
@@ -88,10 +88,10 @@ describe("the /videos prefix, shared by two routers", () => {
   });
 
   it("keeps the public watch payload off the /videos prefix entirely", async () => {
-    const feedRouter = (await import("#src/routes/feed.routes.js")).default;
-    const engagementPaths = declaredRoutes((await import("#src/routes/engagement.routes.js")).default).map(
-      (route) => route.path,
-    );
+    const feedRouter = (await import("#src/modules/home/feed/feed.routes.js")).default;
+    const engagementPaths = declaredRoutes(
+      (await import("#src/modules/home/engagement/engagement.routes.js")).default,
+    ).map((route) => route.path);
 
     expect(declaredRoutes(feedRouter).map((route) => route.path)).toContain("/watch/:videoId");
     expect(engagementPaths).not.toContain("/:videoId");

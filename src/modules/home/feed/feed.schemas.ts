@@ -15,7 +15,7 @@
 import { z } from "zod";
 
 import { RANK_SEED_LENGTH } from "#src/lib/rank-seed.js";
-import { FEED_MODES } from "#src/services/feed.service.js";
+import { FEED_MODES } from "#src/modules/home/feed/feed.service.js";
 
 /** `video.id` is `randomUUID()`, so this is a statement about the column, not a guess. */
 export const WatchVideoIdParamSchema = z.object({ videoId: z.uuid() }).strict();

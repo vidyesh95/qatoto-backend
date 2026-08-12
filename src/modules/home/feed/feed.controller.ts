@@ -7,26 +7,26 @@
  */
 import type { Request, Response } from "express";
 
+import { logger } from "#src/lib/logger.js";
+import { isWellFormedRankSeed, mintRankSeed } from "#src/lib/rank-seed.js";
+import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
 import {
   firstParam,
   respondEngagementError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/engagement-error-response.js";
-import { logger } from "#src/lib/logger.js";
-import { isWellFormedRankSeed, mintRankSeed } from "#src/lib/rank-seed.js";
-import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
-import * as contentCategoriesService from "#src/modules/studio/content-categories.service.js";
+} from "#src/modules/home/engagement/engagement-error-response.js";
+import * as videoWatchService from "#src/modules/home/engagement/video-watch.service.js";
 import {
   ListFeedVideosQuerySchema,
   SearchVideosQuerySchema,
   WatchVideoIdParamSchema,
-} from "#src/schemas/feed.schemas.js";
+} from "#src/modules/home/feed/feed.schemas.js";
 import {
   listFeedVideos as listFeedVideosService,
   searchVideos as searchVideosService,
-} from "#src/services/feed.service.js";
-import * as videoWatchService from "#src/services/video-watch.service.js";
+} from "#src/modules/home/feed/feed.service.js";
+import * as contentCategoriesService from "#src/modules/studio/content-categories.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /**

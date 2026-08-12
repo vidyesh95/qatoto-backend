@@ -1,8 +1,8 @@
 import express from "express";
 
-import * as feedController from "#src/controllers/feed.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { feedReadLimiter } from "#src/middleware/rate-limit.js";
+import * as feedController from "#src/modules/home/feed/feed.controller.js";
 
 const router = express.Router();
 

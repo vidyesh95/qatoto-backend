@@ -11,6 +11,11 @@ import { parseJsonBodyOnce } from "#src/middleware/json-body.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import { requestLog } from "#src/middleware/request-log.js";
+import engagementRouter, {
+  commentRouter,
+  creatorRouter,
+} from "#src/modules/home/engagement/engagement.routes.js";
+import feedRouter from "#src/modules/home/feed/feed.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
@@ -45,8 +50,6 @@ import communityForumRouter from "#src/routes/community-forum.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
-import engagementRouter, { commentRouter, creatorRouter } from "#src/routes/engagement.routes.js";
-import feedRouter from "#src/routes/feed.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
 import handlesRouter from "#src/routes/handles.routes.js";
 import indexRouter from "#src/routes/index.js";

@@ -39,6 +39,7 @@ import {
   type YoutubeSourceError,
   type YoutubeVideoFacts,
 } from "#src/lib/youtube.js";
+import { ensureVideoStatsRows } from "#src/modules/home/engagement/video-engagement.service.js";
 import {
   DEFAULT_CONTENT_CATEGORY_SLUG,
   findUnavailableCategoryIds,
@@ -48,7 +49,6 @@ import type {
   CreateVideoInput,
   UpdateVideoInput,
 } from "#src/modules/studio/videos/videos.schemas.js";
-import { ensureVideoStatsRows } from "#src/services/video-engagement.service.js";
 
 /**
  * HOME_BACKEND_STRUCTURE.md §2: at most three categories per video.

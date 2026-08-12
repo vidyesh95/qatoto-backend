@@ -58,7 +58,7 @@ export function utcTimestamp(instant: Date): SQL {
  * valid `datetime` attribute either.
  *
  * PREFER THE QUERY BUILDER when the choice exists — `latestSnapshotAsOf` in
- * `src/services/feed.service.ts` documents that call. This function is for the raw queries
+ * `src/modules/home/feed/feed.service.ts` documents that call. This function is for the raw queries
  * that cannot be expressed that way.
  *
  * Accepting `Date` as well as `string` is deliberate: if drizzle ever stops overriding the

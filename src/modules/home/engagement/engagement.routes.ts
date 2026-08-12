@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as engagementController from "#src/controllers/engagement.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
@@ -19,6 +18,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as engagementController from "#src/modules/home/engagement/engagement.controller.js";
 
 /**
  * The viewer-side engagement surface (HOME_BACKEND_STRUCTURE.md §5.2).

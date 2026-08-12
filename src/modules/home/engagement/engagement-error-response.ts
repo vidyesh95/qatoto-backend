@@ -1,9 +1,9 @@
 import type { Response } from "express";
 
-import type { CreatorSubscriptionError } from "#src/services/creator-subscriptions.service.js";
-import type { VideoCommentError } from "#src/services/video-comments.service.js";
-import type { VideoEngagementError } from "#src/services/video-engagement.service.js";
-import type { VideoWatchError } from "#src/services/video-watch.service.js";
+import type { CreatorSubscriptionError } from "#src/modules/home/engagement/creator-subscriptions.service.js";
+import type { VideoCommentError } from "#src/modules/home/engagement/video-comments.service.js";
+import type { VideoEngagementError } from "#src/modules/home/engagement/video-engagement.service.js";
+import type { VideoWatchError } from "#src/modules/home/engagement/video-watch.service.js";
 
 /**
  * Error mapping for the home-feed engagement controllers
