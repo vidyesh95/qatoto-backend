@@ -988,6 +988,168 @@ function groupPrepareLinesBySellerAndCurrency(
  * atomically creates one checkout group and one order per (seller, currency) pair,
  * decrements stock, consumes the held reservations, and clears the confirmed cart lines.
  */
+/**
+ * Lock the prepare row and settle everything that can refuse a confirmation before any
+ * order exists.
+ *
+ * WHY THE EXPIRY SWEEP IS IN HERE AND WRITES. `prepare_expired` is not a read-only
+ * refusal: an expired prepare must also release the inventory it was holding, or the stock
+ * stays reserved for a checkout that can never complete until the sweeper job next runs.
+ * It is a refusal WITH a side effect, and burying that inside six hundred lines is how it
+ * stops being obvious that the two must happen together.
+ *
+ * `deliveryAddressId` and `deliveryAddressSnapshot` were `let` bindings reassigned in
+ * place. They are returned instead, because the only reason to reassign them was that the
+ * override arrived mid-function — nothing after this point writes them.
+ *
+ * Takes the caller's `transaction` and never opens one: the `FOR UPDATE` on the prepare row
+ * is what serialises two confirmations of the same cart.
+ */
+async function lockPrepareForConfirmation(
+  transaction: DatabaseTransaction,
+  actor: CommerceCartActorContext,
+  input: ConfirmCheckoutInput,
+) {
+  const organizationIsActive = await assertOrganizationActive(transaction, actor.organizationId);
+  if (!organizationIsActive) return { status: "org_inactive" as const };
+
+  const [prepare] = await transaction
+    .select()
+    .from(commerceCheckoutPrepare)
+    .where(eq(commerceCheckoutPrepare.id, input.prepareId))
+    .for("update");
+  if (!prepare || prepare.buyerOrganizationId !== actor.organizationId) {
+    return { status: "not_found" as const };
+  }
+
+  const now = new Date();
+  if (prepare.state === "active" && prepare.expiresAt.getTime() <= now.getTime()) {
+    await transaction
+      .update(commerceCheckoutPrepare)
+      .set({ state: "expired", updatedAt: now })
+      .where(eq(commerceCheckoutPrepare.id, prepare.id));
+    await transaction
+      .update(commerceInventoryReservation)
+      .set({ state: "expired", releasedAt: now })
+      .where(
+        and(
+          eq(commerceInventoryReservation.checkoutPrepareId, prepare.id),
+          eq(commerceInventoryReservation.state, "held"),
+        ),
+      );
+    return { status: "prepare_expired" as const };
+  }
+  if (prepare.state !== "active") {
+    return { status: "prepare_not_active" as const };
+  }
+
+  let deliveryAddressId = prepare.deliveryAddressId;
+  let deliveryAddressSnapshot = prepare.deliveryAddressSnapshot;
+  if (input.deliveryAddressId !== undefined) {
+    const owned = await assertOwnedDeliveryAddress(
+      transaction,
+      actor.organizationId,
+      input.deliveryAddressId,
+    );
+    if (owned.status === "not_owned") return { status: "address_not_owned" as const };
+    if (owned.status === "wrong_kind") {
+      return { status: "address_wrong_kind" as const, addressKind: owned.addressKind };
+    }
+    deliveryAddressId = owned.id;
+    deliveryAddressSnapshot = owned.snapshot;
+  }
+
+  const prepareLines = await transaction
+    .select()
+    .from(commerceCheckoutPrepareProductLine)
+    .where(eq(commerceCheckoutPrepareProductLine.prepareId, prepare.id))
+    .orderBy(asc(commerceCheckoutPrepareProductLine.siblingOrder));
+  if (prepareLines.length === 0) {
+    return { status: "empty_cart" as const };
+  }
+
+  return {
+    status: "locked" as const,
+    prepare,
+    now,
+    deliveryAddressId,
+    deliveryAddressSnapshot,
+    prepareLines,
+  };
+}
+
+/**
+ * Re-derive every line's price under the lock and refuse if it moved.
+ *
+ * THE WHOLE POINT IS THAT THE PREPARE'S PRICE IS A QUOTE, NOT A PROMISE (CLAUDE.md §1.1).
+ * The client sends a prepare id and nothing else about money; the price it was shown could
+ * be minutes old, and the seller may have repriced since. Every line is recomputed here
+ * from the product row and compared against what the prepare recorded — a mismatch is a
+ * refusal carrying both numbers, so the buyer is told what changed rather than being
+ * charged the new price silently.
+ *
+ * The `FOR UPDATE` sweep over all product ids happens first and in one statement, so the
+ * locks are taken in a single deterministic order. Locking them one at a time inside the
+ * loop would let two concurrent confirmations of overlapping carts deadlock.
+ *
+ * Held quantities EXCLUDE this prepare's own reservation — its stock is already set aside,
+ * and counting it again would refuse a checkout for competing with itself.
+ *
+ * Returns `null` when every line still prices as recorded.
+ */
+async function revalidatePrepareLinePricing(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly prepare: PrepareRow;
+    readonly prepareLines: readonly PrepareProductLineRow[];
+    readonly now: Date;
+  },
+) {
+  const productIds = input.prepareLines.map((line) => line.productId);
+  await transaction
+    .select({ id: product.id })
+    .from(product)
+    .where(inArray(product.id, productIds))
+    .for("update");
+
+  const heldQuantityExcludingSelf = await loadHeldQuantitiesByProduct(
+    transaction,
+    productIds,
+    input.now,
+    input.prepare.id,
+  );
+
+  for (const prepareLine of input.prepareLines) {
+    const revalidated = await loadPurchasableProductForCheckout(
+      transaction,
+      prepareLine.productId,
+      prepareLine.quantity,
+      heldQuantityExcludingSelf.get(
+        inventoryScopeKey(prepareLine.productId, prepareLine.variantId),
+      ) ?? 0,
+      prepareLine.variantId,
+      prepareLine.isSample,
+    );
+    if (!revalidated.success) {
+      return {
+        status: "pricing_failed" as const,
+        productId: prepareLine.productId,
+        error: revalidated.error,
+      };
+    }
+    if (revalidated.value.unitPriceInCents !== prepareLine.unitPriceInCents) {
+      return {
+        status: "price_changed" as const,
+        productId: prepareLine.productId,
+        previousUnitPriceInCents: prepareLine.unitPriceInCents,
+        currentUnitPriceInCents: revalidated.value.unitPriceInCents,
+      };
+    }
+  }
+
+  return null;
+}
+
 export async function confirmCheckout(
   actor: CommerceCartActorContext,
   input: ConfirmCheckoutInput,
@@ -1003,108 +1165,19 @@ export async function confirmCheckout(
 
   try {
     const outcome = await db.transaction(async (transaction) => {
-      const organizationIsActive = await assertOrganizationActive(
-        transaction,
-        actor.organizationId,
-      );
-      if (!organizationIsActive) return { status: "org_inactive" as const };
+      // Everything refusable before an order exists. Anything other than `locked` is
+      // already a final outcome and passes straight through to the switch below.
+      const gate = await lockPrepareForConfirmation(transaction, actor, input);
+      if (gate.status !== "locked") return gate;
+      const { prepare, now, deliveryAddressId, deliveryAddressSnapshot, prepareLines } = gate;
 
-      const [prepare] = await transaction
-        .select()
-        .from(commerceCheckoutPrepare)
-        .where(eq(commerceCheckoutPrepare.id, input.prepareId))
-        .for("update");
-      if (!prepare || prepare.buyerOrganizationId !== actor.organizationId) {
-        return { status: "not_found" as const };
-      }
-
-      const now = new Date();
-      if (prepare.state === "active" && prepare.expiresAt.getTime() <= now.getTime()) {
-        await transaction
-          .update(commerceCheckoutPrepare)
-          .set({ state: "expired", updatedAt: now })
-          .where(eq(commerceCheckoutPrepare.id, prepare.id));
-        await transaction
-          .update(commerceInventoryReservation)
-          .set({ state: "expired", releasedAt: now })
-          .where(
-            and(
-              eq(commerceInventoryReservation.checkoutPrepareId, prepare.id),
-              eq(commerceInventoryReservation.state, "held"),
-            ),
-          );
-        return { status: "prepare_expired" as const };
-      }
-      if (prepare.state !== "active") {
-        return { status: "prepare_not_active" as const };
-      }
-
-      let deliveryAddressId = prepare.deliveryAddressId;
-      let deliveryAddressSnapshot = prepare.deliveryAddressSnapshot;
-      if (input.deliveryAddressId !== undefined) {
-        const owned = await assertOwnedDeliveryAddress(
-          transaction,
-          actor.organizationId,
-          input.deliveryAddressId,
-        );
-        if (owned.status === "not_owned") return { status: "address_not_owned" as const };
-        if (owned.status === "wrong_kind") {
-          return { status: "address_wrong_kind" as const, addressKind: owned.addressKind };
-        }
-        deliveryAddressId = owned.id;
-        deliveryAddressSnapshot = owned.snapshot;
-      }
-
-      const prepareLines = await transaction
-        .select()
-        .from(commerceCheckoutPrepareProductLine)
-        .where(eq(commerceCheckoutPrepareProductLine.prepareId, prepare.id))
-        .orderBy(asc(commerceCheckoutPrepareProductLine.siblingOrder));
-      if (prepareLines.length === 0) {
-        return { status: "empty_cart" as const };
-      }
-
-      const productIds = prepareLines.map((line) => line.productId);
-      await transaction
-        .select({ id: product.id })
-        .from(product)
-        .where(inArray(product.id, productIds))
-        .for("update");
-
-      const heldQuantityExcludingSelf = await loadHeldQuantitiesByProduct(
-        transaction,
-        productIds,
+      // The prepare's prices are a quote, not a promise — re-derive them under the lock.
+      const repriced = await revalidatePrepareLinePricing(transaction, {
+        prepare,
+        prepareLines,
         now,
-        prepare.id,
-      );
-
-      for (const prepareLine of prepareLines) {
-        const revalidated = await loadPurchasableProductForCheckout(
-          transaction,
-          prepareLine.productId,
-          prepareLine.quantity,
-          heldQuantityExcludingSelf.get(
-            inventoryScopeKey(prepareLine.productId, prepareLine.variantId),
-          ) ?? 0,
-          prepareLine.variantId,
-          prepareLine.isSample,
-        );
-        if (!revalidated.success) {
-          return {
-            status: "pricing_failed" as const,
-            productId: prepareLine.productId,
-            error: revalidated.error,
-          };
-        }
-        if (revalidated.value.unitPriceInCents !== prepareLine.unitPriceInCents) {
-          return {
-            status: "price_changed" as const,
-            productId: prepareLine.productId,
-            previousUnitPriceInCents: prepareLine.unitPriceInCents,
-            currentUnitPriceInCents: revalidated.value.unitPriceInCents,
-          };
-        }
-      }
+      });
+      if (repriced) return repriced;
 
       const sellerGroups = groupPrepareLinesBySellerAndCurrency(prepareLines);
 
