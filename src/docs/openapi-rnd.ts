@@ -12,7 +12,7 @@ import {
   describeUnrepresentableConstraints,
   type UnrepresentableConstraint,
 } from "#src/docs/zod-to-openapi.js";
-import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
+import compensationRouter, { governanceRouter } from "#src/modules/rnd/compensation/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/modules/rnd/funding/funding.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";

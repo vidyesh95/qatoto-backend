@@ -3,7 +3,10 @@ import { asc, eq } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { researchProject } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { draftPeriodLines, listOpenPeriods } from "#src/services/compensation-periods.service.js";
+import {
+  draftPeriodLines,
+  listOpenPeriods,
+} from "#src/modules/rnd/compensation/compensation-periods.service.js";
 
 /**
  * The nightly statement redraw (R_AND_D_BACKEND_STRUCTURE.md §7A.5, §4e).

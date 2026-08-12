@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 
+import * as compensationService from "#src/modules/rnd/compensation/compensation.service.js";
 import { respondFundingError } from "#src/modules/rnd/funding/funding-error-response.js";
 // NOTHING FROM escrow-releases, escrow-settlement OR escrow.service IS IMPORTED HERE ANY
 // MORE (§7A.6, §11g). The nine escrow routes are retired; the services and their tables
@@ -24,7 +25,6 @@ import {
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
 import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
-import * as compensationService from "#src/services/compensation.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 interface FundingCaller {

@@ -9,7 +9,7 @@ import {
   projectMember,
   researchProject,
 } from "#src/db/schema.js";
-import { GROSS_ONLY_NOTICE } from "#src/services/compensation-periods.service.js";
+import { GROSS_ONLY_NOTICE } from "#src/modules/rnd/compensation/compensation-periods.service.js";
 
 /**
  * The cross-project governance aggregate (R_AND_D_BACKEND_STRUCTURE.md §11h, Appendix B3).

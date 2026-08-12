@@ -1,13 +1,9 @@
 import type { Request, Response } from "express";
 
-import { respondCompensationError } from "#src/controllers/compensation-error-response.js";
-import {
-  firstParam,
-  optionalBody,
-  respondUnauthenticated,
-  respondValidationFailed,
-} from "#src/modules/rnd/projects/project-error-response.js";
-import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
+import * as agreementsService from "#src/modules/rnd/compensation/compensation-agreements.service.js";
+import { respondCompensationError } from "#src/modules/rnd/compensation/compensation-error-response.js";
+import * as paymentsService from "#src/modules/rnd/compensation/compensation-payments.service.js";
+import * as periodsService from "#src/modules/rnd/compensation/compensation-periods.service.js";
 import {
   AgreementQuerySchema,
   CountersignPeriodSchema,
@@ -20,11 +16,15 @@ import {
   RecordPaymentSchema,
   SupersedePeriodSchema,
   WithdrawAgreementSchema,
-} from "#src/schemas/compensation.schemas.js";
-import * as agreementsService from "#src/services/compensation-agreements.service.js";
-import * as paymentsService from "#src/services/compensation-payments.service.js";
-import * as periodsService from "#src/services/compensation-periods.service.js";
-import * as governanceService from "#src/services/governance-summary.service.js";
+} from "#src/modules/rnd/compensation/compensation.schemas.js";
+import * as governanceService from "#src/modules/rnd/compensation/governance-summary.service.js";
+import {
+  firstParam,
+  optionalBody,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/rnd/projects/project-error-response.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 interface CompensationCaller {

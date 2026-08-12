@@ -1,8 +1,8 @@
 import type { Response } from "express";
 
-import type { CompensationAgreementError } from "#src/services/compensation-agreements.service.js";
-import type { CompensationPaymentError } from "#src/services/compensation-payments.service.js";
-import type { CompensationPeriodError } from "#src/services/compensation-periods.service.js";
+import type { CompensationAgreementError } from "#src/modules/rnd/compensation/compensation-agreements.service.js";
+import type { CompensationPaymentError } from "#src/modules/rnd/compensation/compensation-payments.service.js";
+import type { CompensationPeriodError } from "#src/modules/rnd/compensation/compensation-periods.service.js";
 
 /**
  * The §7A error mapper (R_AND_D_BACKEND_STRUCTURE.md §7A, §11g, §13).

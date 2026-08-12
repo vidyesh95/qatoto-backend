@@ -6,10 +6,10 @@ import { containsPaymentInstrument } from "#src/lib/payment-instrument.js";
 // The controller imports its services, which pull in the db pool at module scope. Stub the
 // modules so the schemas can be parsed without a configured environment — nothing here
 // calls a handler. Same arrangement as funding.controller.schemas.test.ts.
-vi.mock("#src/services/compensation-agreements.service.js", () => ({}));
-vi.mock("#src/services/compensation-payments.service.js", () => ({}));
-vi.mock("#src/services/compensation-periods.service.js", () => ({}));
-vi.mock("#src/services/governance-summary.service.js", () => ({}));
+vi.mock("#src/modules/rnd/compensation/compensation-agreements.service.js", () => ({}));
+vi.mock("#src/modules/rnd/compensation/compensation-payments.service.js", () => ({}));
+vi.mock("#src/modules/rnd/compensation/compensation-periods.service.js", () => ({}));
+vi.mock("#src/modules/rnd/compensation/governance-summary.service.js", () => ({}));
 vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({}));
 
 const {
@@ -23,7 +23,7 @@ const {
   RecordPaymentSchema,
   SupersedePeriodSchema,
   WithdrawAgreementSchema,
-} = await import("#src/schemas/compensation.schemas.js");
+} = await import("#src/modules/rnd/compensation/compensation.schemas.js");
 
 /**
  * R_AND_D_BACKEND_STRUCTURE.md §7A's rejected-keys list, §13 and §17 steps 4 and 5c.

@@ -8,7 +8,7 @@ import {
   projectOpenRole,
   user,
 } from "#src/db/schema.js";
-import { listProjectPayments } from "#src/services/compensation-payments.service.js";
+import { listProjectPayments } from "#src/modules/rnd/compensation/compensation-payments.service.js";
 
 /**
  * `GET …/compensation` (R_AND_D_BACKEND_STRUCTURE.md §7, §11c).

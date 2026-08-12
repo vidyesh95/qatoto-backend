@@ -8,7 +8,7 @@ import {
   RecordPaymentSchema,
   SupersedePeriodSchema,
   WithdrawAgreementSchema,
-} from "#src/schemas/compensation.schemas.js";
+} from "#src/modules/rnd/compensation/compensation.schemas.js";
 import {
   CreateDailyLogSchema,
   SubmitDailyLogSchema,

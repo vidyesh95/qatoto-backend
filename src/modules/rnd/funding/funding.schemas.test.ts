@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 // The controller imports its services, which pull in the db pool at module scope. Stub the
 // modules so the schemas can be parsed without a configured environment — nothing here
 // calls a handler. Same arrangement as workshop.controller.schemas.test.ts.
-vi.mock("#src/services/compensation.service.js", () => ({}));
+vi.mock("#src/modules/rnd/compensation/compensation.service.js", () => ({}));
 vi.mock("#src/modules/rnd/funding/escrow-releases.service.js", () => ({}));
 vi.mock("#src/modules/rnd/funding/escrow-settlement.service.js", () => ({}));
 vi.mock("#src/modules/rnd/funding/escrow.service.js", () => ({}));

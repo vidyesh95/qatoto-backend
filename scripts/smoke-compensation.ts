@@ -59,8 +59,11 @@ import { stopSendOnlyBoss } from "#src/lib/jobs.js";
 import {
   acceptCashAgreement,
   proposeCashAgreement,
-} from "#src/services/compensation-agreements.service.js";
-import { confirmPayment, recordPayment } from "#src/services/compensation-payments.service.js";
+} from "#src/modules/rnd/compensation/compensation-agreements.service.js";
+import {
+  confirmPayment,
+  recordPayment,
+} from "#src/modules/rnd/compensation/compensation-payments.service.js";
 import {
   countersignPeriod,
   draftPeriodLines,
@@ -70,7 +73,7 @@ import {
   getPeriod,
   supersedePeriod,
   verifyStatementChain,
-} from "#src/services/compensation-periods.service.js";
+} from "#src/modules/rnd/compensation/compensation-periods.service.js";
 
 let failureCount = 0;
 

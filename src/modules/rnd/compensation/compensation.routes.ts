@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as compensationController from "#src/controllers/compensation.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
@@ -12,6 +11,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as compensationController from "#src/modules/rnd/compensation/compensation.controller.js";
 
 /**
  * Compensation statements (R_AND_D_BACKEND_STRUCTURE.md §7A, §11g).
