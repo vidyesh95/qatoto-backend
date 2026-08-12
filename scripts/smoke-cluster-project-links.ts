@@ -42,7 +42,7 @@ import {
 import {
   linkProjectToCluster,
   unlinkProjectFromCluster,
-} from "#src/services/problem-clusters.service.js";
+} from "#src/modules/rnd/discovery/problem-clusters.service.js";
 
 const P = "smoke-cluster-links";
 const assertions: { label: string; passed: boolean; detail: string }[] = [];

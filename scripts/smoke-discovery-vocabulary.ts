@@ -34,7 +34,7 @@ import {
 import {
   deleteDiscoveryRegion,
   deleteDiscoverySkill,
-} from "#src/services/discovery-vocabulary.service.js";
+} from "#src/modules/rnd/discovery/discovery-vocabulary.service.js";
 
 const out: { p: boolean; l: string; d: string }[] = [];
 const rec = (l: string, p: boolean, d: string) => {

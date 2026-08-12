@@ -29,9 +29,9 @@ import {
   researchCategory,
   user,
 } from "#src/db/schema.js";
-import { handleGeocodeAndClusterSubmission } from "#src/jobs/geocode-and-cluster-submission.js";
-import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
 import { truncateToUtcDayStart } from "#src/lib/as-of.js";
+import { handleGeocodeAndClusterSubmission } from "#src/modules/rnd/discovery/geocode-and-cluster-submission.js";
+import { handleRecomputeOpportunityScores } from "#src/modules/rnd/discovery/recompute-opportunity-scores.js";
 
 const SMOKE_PREFIX = "smoke-discovery";
 

@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 // The controller imports its service, which pulls in the db pool at module scope. Stub it
 // so the schemas parse without a configured environment — nothing here calls a handler.
-vi.mock("#src/services/market-insights.service.js", () => ({}));
+vi.mock("#src/modules/rnd/discovery/market-insights.service.js", () => ({}));
 
 const { CreateMarketInsightSchema, ListMarketInsightsAdminQuerySchema, UpdateMarketInsightSchema } =
-  await import("#src/schemas/market-insights.schemas.js");
+  await import("#src/modules/rnd/discovery/market-insights.schemas.js");
 
 /**
  * §11j.4's authoring bodies (§0, §13).

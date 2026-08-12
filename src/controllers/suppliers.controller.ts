@@ -1,12 +1,13 @@
 import type { Request, Response } from "express";
 
+import { respondGoToMarketError } from "#src/controllers/go-to-market-error-response.js";
 import {
   firstParam,
   respondDiscoveryError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/discovery-error-response.js";
-import { respondGoToMarketError } from "#src/controllers/go-to-market-error-response.js";
+} from "#src/modules/rnd/discovery/discovery-error-response.js";
+import * as readinessService from "#src/modules/rnd/discovery/launch-readiness.service.js";
 import { respondProjectError } from "#src/modules/rnd/projects/project-error-response.js";
 import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import {
@@ -18,7 +19,6 @@ import {
   UpdateSupplierEngagementSchema,
   UpdateSupplierSchema,
 } from "#src/schemas/suppliers.schemas.js";
-import * as readinessService from "#src/services/launch-readiness.service.js";
 import * as engagementsService from "#src/services/supplier-engagements.service.js";
 import * as suppliersService from "#src/services/suppliers.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";

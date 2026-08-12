@@ -1,21 +1,21 @@
 import type { Request, Response } from "express";
 
 import {
-  firstParam,
-  respondDiscoveryError,
-  respondUnauthenticated,
-  respondValidationFailed,
-} from "#src/controllers/discovery-error-response.js";
-import * as categoriesService from "#src/modules/rnd/programs/research-categories.service.js";
-import {
   CreateCategorySchema,
   ListCategoriesQuerySchema,
   ListDemandSignalsQuerySchema,
   ListMarketInsightsQuerySchema,
   ListRegionsQuerySchema,
   MarketInsightIdParamSchema,
-} from "#src/schemas/discovery-catalog.schemas.js";
-import * as catalogService from "#src/services/discovery-catalog.service.js";
+} from "#src/modules/rnd/discovery/discovery-catalog.schemas.js";
+import * as catalogService from "#src/modules/rnd/discovery/discovery-catalog.service.js";
+import {
+  firstParam,
+  respondDiscoveryError,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/rnd/discovery/discovery-error-response.js";
+import * as categoriesService from "#src/modules/rnd/programs/research-categories.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /**

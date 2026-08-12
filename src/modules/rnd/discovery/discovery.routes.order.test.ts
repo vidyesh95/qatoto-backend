@@ -121,7 +121,7 @@ describe("discovery router declaration order", () => {
   ])(
     "declares $literal before $parameterised, or $breaks silently resolves as a lookup",
     async ({ literal, parameterised }) => {
-      const router = (await import("#src/routes/discovery.routes.js")).default;
+      const router = (await import("#src/modules/rnd/discovery/discovery.routes.js")).default;
       const paths = declaredPaths(router);
 
       const literalIndex = paths.indexOf(literal);
@@ -140,7 +140,7 @@ describe("discovery router declaration order", () => {
    * shape that swallows a future `/market-insights/<literal>`.
    */
   it("declares no route that swallows a later one", async () => {
-    const router = (await import("#src/routes/discovery.routes.js")).default;
+    const router = (await import("#src/modules/rnd/discovery/discovery.routes.js")).default;
     const routes = declaredRoutes(router);
 
     const collisions = routes.flatMap((earlier, index) =>
@@ -154,7 +154,7 @@ describe("discovery router declaration order", () => {
   });
 
   it("declares the market-insight detail read", async () => {
-    const paths = declaredPaths((await import("#src/routes/discovery.routes.js")).default);
+    const paths = declaredPaths((await import("#src/modules/rnd/discovery/discovery.routes.js")).default);
     expect(paths).toContain("/market-insights/:insightId");
   });
 });

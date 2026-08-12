@@ -13,7 +13,7 @@ import { normalizeHandle } from "#src/modules/auth/handles/handle.service.js";
 import {
   DISCOVERY_REGION_REF_COLUMNS,
   type DiscoveryRegionRef,
-} from "#src/services/discovery-catalog.service.js";
+} from "#src/modules/rnd/discovery/discovery-catalog.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

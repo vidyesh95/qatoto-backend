@@ -4,6 +4,7 @@ import { config } from "#src/config/index.js";
 import { decodeDateCursor } from "#src/lib/date-cursor.js";
 import { exchangeCodeForToken, fetchViewerLogin } from "#src/lib/github-integration.js";
 import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
+import * as suggestionsService from "#src/modules/rnd/discovery/optimization-suggestions.service.js";
 import * as snapshotService from "#src/modules/rnd/funding/equity-snapshot.service.js";
 import * as rateService from "#src/modules/rnd/funding/fair-market-rate.service.js";
 import * as bakeService from "#src/modules/rnd/funding/pie-bake.service.js";
@@ -46,7 +47,6 @@ import {
   SubmitClaimSchema,
   UploadReceiptSchema,
 } from "#src/modules/rnd/proof-of-effort/proof-of-effort.schemas.js";
-import * as suggestionsService from "#src/services/optimization-suggestions.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 interface ProofOfEffortCaller {

@@ -14,17 +14,17 @@ import {
   SubmitDailyLogSchema,
   UpdateDailyLogSchema,
 } from "#src/modules/rnd/workshop/daily-logs.schemas.js";
-import { CreateCategorySchema } from "#src/schemas/discovery-catalog.schemas.js";
+import { CreateCategorySchema } from "#src/modules/rnd/discovery/discovery-catalog.schemas.js";
 import {
   DecideCategorySchema,
   DecideMergeProposalSchema,
-} from "#src/schemas/discovery-moderation.schemas.js";
+} from "#src/modules/rnd/discovery/discovery-moderation.schemas.js";
 import {
   CreateDiscoveryRegionSchema,
   CreateDiscoverySkillSchema,
   UpdateDiscoveryRegionSchema,
   UpdateDiscoverySkillSchema,
-} from "#src/schemas/discovery-vocabulary.schemas.js";
+} from "#src/modules/rnd/discovery/discovery-vocabulary.schemas.js";
 import {
   CreateFundingRoundSchema,
   CreatePledgeSchema,
@@ -36,7 +36,7 @@ import {
 import {
   CreateMarketInsightSchema,
   UpdateMarketInsightSchema,
-} from "#src/schemas/market-insights.schemas.js";
+} from "#src/modules/rnd/discovery/market-insights.schemas.js";
 import { MarkNotificationsReadSchema } from "#src/modules/platform/notifications/notifications.schemas.js";
 import {
   CountersignPlatformRoleSchema,
@@ -45,7 +45,7 @@ import {
 import {
   CreateClusterProjectLinkSchema,
   CreateProblemReportSchema,
-} from "#src/schemas/problem-clusters.schemas.js";
+} from "#src/modules/rnd/discovery/problem-clusters.schemas.js";
 import {
   CreateApplicationSchema,
   CreateInviteSchema,
@@ -111,7 +111,7 @@ import {
   UpdateSupplierEngagementSchema,
   UpdateSupplierSchema,
 } from "#src/schemas/suppliers.schemas.js";
-import { TalentProfileSchema } from "#src/schemas/talent-profiles.schemas.js";
+import { TalentProfileSchema } from "#src/modules/rnd/discovery/talent-profiles.schemas.js";
 import {
   AddFileLinkSchema,
   CreateColumnSchema,

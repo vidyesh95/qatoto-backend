@@ -17,7 +17,7 @@ import {
   DISCOVERY_REGION_REF_COLUMNS,
   type DiscoveryCategoryRef,
   type DiscoveryRegionRef,
-} from "#src/services/discovery-catalog.service.js";
+} from "#src/modules/rnd/discovery/discovery-catalog.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

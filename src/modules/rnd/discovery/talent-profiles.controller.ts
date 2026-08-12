@@ -5,12 +5,12 @@ import {
   respondDiscoveryError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/discovery-error-response.js";
+} from "#src/modules/rnd/discovery/discovery-error-response.js";
 import {
   ListTalentQuerySchema,
   TalentProfileSchema,
-} from "#src/schemas/talent-profiles.schemas.js";
-import * as talentService from "#src/services/talent-profiles.service.js";
+} from "#src/modules/rnd/discovery/talent-profiles.schemas.js";
+import * as talentService from "#src/modules/rnd/discovery/talent-profiles.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /**

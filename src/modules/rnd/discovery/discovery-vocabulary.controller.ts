@@ -5,14 +5,14 @@ import {
   respondDiscoveryError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/discovery-error-response.js";
+} from "#src/modules/rnd/discovery/discovery-error-response.js";
 import {
   CreateDiscoveryRegionSchema,
   CreateDiscoverySkillSchema,
   UpdateDiscoveryRegionSchema,
   UpdateDiscoverySkillSchema,
-} from "#src/schemas/discovery-vocabulary.schemas.js";
-import * as vocabularyService from "#src/services/discovery-vocabulary.service.js";
+} from "#src/modules/rnd/discovery/discovery-vocabulary.schemas.js";
+import * as vocabularyService from "#src/modules/rnd/discovery/discovery-vocabulary.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /** GET /discovery/admin/skills — the full vocabulary, retired entries included (§11j.4). */

@@ -5,13 +5,13 @@ import {
   respondDiscoveryError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/discovery-error-response.js";
+} from "#src/modules/rnd/discovery/discovery-error-response.js";
 import {
   CreateMarketInsightSchema,
   ListMarketInsightsAdminQuerySchema,
   UpdateMarketInsightSchema,
-} from "#src/schemas/market-insights.schemas.js";
-import * as insightsService from "#src/services/market-insights.service.js";
+} from "#src/modules/rnd/discovery/market-insights.schemas.js";
+import * as insightsService from "#src/modules/rnd/discovery/market-insights.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** GET /discovery/admin/market-insights — moderator; drafts included (§11j.4). */

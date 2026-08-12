@@ -1,11 +1,11 @@
 import express from "express";
 
-import * as catalogController from "#src/controllers/discovery-catalog.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import { categoryCreateLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as catalogController from "#src/modules/rnd/discovery/discovery-catalog.controller.js";
 import * as rolesController from "#src/modules/rnd/projects/project-roles.controller.js";
 
 const router = express.Router();

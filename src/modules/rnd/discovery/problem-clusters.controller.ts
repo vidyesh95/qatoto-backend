@@ -1,12 +1,12 @@
 import type { Request, Response } from "express";
 
+import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import {
   firstParam,
   respondDiscoveryError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/discovery-error-response.js";
-import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
+} from "#src/modules/rnd/discovery/discovery-error-response.js";
 import {
   ClusterIdParamSchema,
   CreateClusterProjectLinkSchema,
@@ -14,8 +14,8 @@ import {
   ListMyProblemReportsQuerySchema,
   ListProblemClustersQuerySchema,
   SubmissionIdParamSchema,
-} from "#src/schemas/problem-clusters.schemas.js";
-import * as clustersService from "#src/services/problem-clusters.service.js";
+} from "#src/modules/rnd/discovery/problem-clusters.schemas.js";
+import * as clustersService from "#src/modules/rnd/discovery/problem-clusters.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** GET /discovery/problem-clusters — the map and the landing teaser. */

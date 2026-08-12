@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 // modules so the schemas can be parsed without a configured environment — nothing here
 // calls a handler. Same arrangement as compensation.controller.schemas.test.ts.
 vi.mock("#src/services/suppliers.service.js", () => ({}));
-vi.mock("#src/services/launch-readiness.service.js", () => ({}));
+vi.mock("#src/modules/rnd/discovery/launch-readiness.service.js", () => ({}));
 vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({}));
 vi.mock("#src/services/supplier-engagements.service.js", () => ({}));
 

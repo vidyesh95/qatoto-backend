@@ -1,11 +1,5 @@
 import express from "express";
 
-import * as catalogController from "#src/controllers/discovery-catalog.controller.js";
-import * as moderationController from "#src/controllers/discovery-moderation.controller.js";
-import * as vocabularyController from "#src/controllers/discovery-vocabulary.controller.js";
-import * as marketInsightsController from "#src/controllers/market-insights.controller.js";
-import * as clustersController from "#src/controllers/problem-clusters.controller.js";
-import * as talentController from "#src/controllers/talent-profiles.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
@@ -16,6 +10,12 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as catalogController from "#src/modules/rnd/discovery/discovery-catalog.controller.js";
+import * as moderationController from "#src/modules/rnd/discovery/discovery-moderation.controller.js";
+import * as vocabularyController from "#src/modules/rnd/discovery/discovery-vocabulary.controller.js";
+import * as marketInsightsController from "#src/modules/rnd/discovery/market-insights.controller.js";
+import * as clustersController from "#src/modules/rnd/discovery/problem-clusters.controller.js";
+import * as talentController from "#src/modules/rnd/discovery/talent-profiles.controller.js";
 
 /**
  * Discovery — problem clusters, taxonomy, knowledge hub, talent directory

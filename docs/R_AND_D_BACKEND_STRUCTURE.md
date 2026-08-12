@@ -3328,7 +3328,7 @@ the write:
 **✅ All 13 verbs shipped.** `GET /applications/mine` and `/invites/mine` are root-mounted on a new
 `applicationInboxRouter` exported from `research-projects.routes.ts`. The two detail reads below are
 the only dual-standing reads in the domain: maintainer first, and failing that the row's own
-counterparty column. Note `src/routes/discovery.routes.order.test.ts`, which pins the declaration
+counterparty column. Note `src/modules/rnd/discovery/discovery.routes.order.test.ts`, which pins the declaration
 order the two new `/discovery` params depend on — misplace either and `/talent/me` or
 `/problem-reports/mine` silently resolves as a lookup.
 
@@ -3419,7 +3419,7 @@ surfaced. Both were the **read** halves of dead ends §11j closed the write half
 feature — each was the second half of one already agreed.
 
 Compiled the same way §11j was: by reading `src/modules/rnd/projects/research-projects.service.ts`,
-`src/db/schema.ts` and `src/services/discovery-moderation.service.ts`, not by reading §11j.
+`src/db/schema.ts` and `src/modules/rnd/discovery/discovery-moderation.service.ts`, not by reading §11j.
 
 **Two things the build found that this section did not predict**, both recorded here rather than
 absorbed silently:

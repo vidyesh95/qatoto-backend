@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The service imports the db pool, which pulls in the config env parser; the jobs module
 // pulls in pg-boss. Both are stubbed so these tests exercise the CONTROLLER only.
-type ClustersService = typeof import("#src/services/problem-clusters.service.js");
+type ClustersService = typeof import("#src/modules/rnd/discovery/problem-clusters.service.js");
 
-vi.mock("#src/services/problem-clusters.service.js", () => ({
+vi.mock("#src/modules/rnd/discovery/problem-clusters.service.js", () => ({
   listProblemClusters: vi.fn<ClustersService["listProblemClusters"]>(),
   findProblemCluster: vi.fn<ClustersService["findProblemCluster"]>(),
   createProblemSubmission: vi.fn<ClustersService["createProblemSubmission"]>(),
@@ -19,10 +19,11 @@ vi.mock("#src/lib/jobs.js", () => ({
   idempotencyKeyFor: { geocodeAndClusterSubmission: (id: string) => `geocode:${id}` },
 }));
 
-const clustersService = await import("#src/services/problem-clusters.service.js");
+const clustersService = await import("#src/modules/rnd/discovery/problem-clusters.service.js");
 const jobs = await import("#src/lib/jobs.js");
-const { createProblemReport, listProblemClusters } = await import("#src/controllers/problem-clusters.controller.js");
-const { CreateProblemReportSchema } = await import("#src/schemas/problem-clusters.schemas.js");
+const { createProblemReport, listProblemClusters } =
+  await import("#src/modules/rnd/discovery/problem-clusters.controller.js");
+const { CreateProblemReportSchema } = await import("#src/modules/rnd/discovery/problem-clusters.schemas.js");
 
 const checkCategoryUsableMock = vi.mocked(clustersService.checkCategoryUsable);
 const createProblemSubmissionMock = vi.mocked(clustersService.createProblemSubmission);

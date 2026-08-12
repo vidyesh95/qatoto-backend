@@ -43,12 +43,12 @@ import {
   researchProject,
   user,
 } from "#src/db/schema.js";
+import { deleteMarketInsight } from "#src/modules/rnd/discovery/market-insights.service.js";
 import {
   linkMarketInsightToProject,
   unlinkMarketInsightFromProject,
 } from "#src/modules/rnd/projects/project-insight-links.service.js";
 import { findResearchProjectBySlug } from "#src/modules/rnd/projects/research-projects.service.js";
-import { deleteMarketInsight } from "#src/services/market-insights.service.js";
 
 const P = "smoke-insight-links";
 const assertions: { label: string; passed: boolean; detail: string }[] = [];

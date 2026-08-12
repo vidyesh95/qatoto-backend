@@ -5,13 +5,13 @@ import {
   respondDiscoveryError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/discovery-error-response.js";
+} from "#src/modules/rnd/discovery/discovery-error-response.js";
 import {
   DecideCategorySchema,
   DecideMergeProposalSchema,
   ListMergeProposalsQuerySchema,
-} from "#src/schemas/discovery-moderation.schemas.js";
-import * as moderationService from "#src/services/discovery-moderation.service.js";
+} from "#src/modules/rnd/discovery/discovery-moderation.schemas.js";
+import * as moderationService from "#src/modules/rnd/discovery/discovery-moderation.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** POST /discovery/admin/categories/:categoryId/decide */
