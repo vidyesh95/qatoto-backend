@@ -1457,6 +1457,272 @@ async function claimPaymentOutboxRow(outboxId: string) {
  * Drains one outbox row: call the provider adapter, persist the webhook event, then apply
  * the normalized result. Idempotent under outbox and webhook uniqueness constraints.
  */
+/** The `claimed` variant of what `claimPaymentOutboxRow` hands back. */
+type ClaimedPaymentOutbox = Extract<
+  Awaited<ReturnType<typeof claimPaymentOutboxRow>>,
+  { readonly status: "claimed" }
+>;
+
+/** The provider adapter, once `resolveCommercePaymentProvider` has succeeded. */
+type ResolvedPaymentAdapter = Extract<
+  ReturnType<typeof resolveCommercePaymentProvider>,
+  { readonly success: true }
+>["value"];
+
+/**
+ * Send the intent to the provider, record the webhook it implies, and apply the result.
+ *
+ * THE PROVIDER CALL DELIBERATELY SITS OUTSIDE A TRANSACTION. It is a network round trip;
+ * the write before it (the claim) and the write after it (the settlement) each get their
+ * own. A failure here throws, and the caller's catch turns it into an outbox retry rather
+ * than a lost payment.
+ *
+ * The settled/settled short-circuit at the top is the replay path: a webhook may have
+ * already applied this transfer, in which case the row is completed without calling the
+ * provider a second time.
+ */
+async function submitPaymentIntentToProvider(
+  adapter: ResolvedPaymentAdapter,
+  claim: ClaimedPaymentOutbox,
+  now: Date,
+): Promise<Result<{ readonly processed: boolean }, CommercePaymentsError>> {
+  if (claim.transfer.state === "settled" && claim.intent.state === "settled") {
+    await db
+      .update(commercePaymentOutbox)
+      .set({ state: "completed", processedAt: now, updatedAt: now })
+      .where(eq(commercePaymentOutbox.id, claim.outbox.id));
+    return { success: true, value: { processed: true } };
+  }
+
+  await db
+    .update(commerceProviderTransfer)
+    .set({
+      state: "submitted",
+      submittedAt: claim.transfer.submittedAt ?? now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(commerceProviderTransfer.id, claim.transfer.id),
+        eq(commerceProviderTransfer.state, "created"),
+      ),
+    );
+
+  await db
+    .update(commercePaymentIntent)
+    .set({ state: "processing", updatedAt: now })
+    .where(
+      and(
+        eq(commercePaymentIntent.id, claim.intent.id),
+        inArray(commercePaymentIntent.state, ["created", "requires_action", "processing"]),
+      ),
+    );
+
+  const adapterResult = await adapter.createPaymentIntent({
+    idempotencyKey: claim.transfer.idempotencyKey,
+    amountInCents: claim.intent.amountInCents,
+    currency: claim.intent.currency,
+    orderId: claim.order.id,
+    paymentIntentId: claim.intent.id,
+  });
+
+  if (!adapterResult.success) {
+    throw new Error(`provider_${adapterResult.error.type}`);
+  }
+
+  const mappedState = mapNormalizedPaymentState(adapterResult.value.state);
+  const providerEventId = `evt_payment_${mappedState}_${claim.transfer.id}`;
+
+  await db.transaction(async (transaction) => {
+    const webhook = await recordWebhookEvent(transaction, {
+      provider: adapter.providerName,
+      providerEventId,
+      eventType: `payment_intent.${mappedState}`,
+      paymentIntentId: claim.intent.id,
+      transferId: claim.transfer.id,
+      refundId: null,
+      orderId: claim.order.id,
+      payload: {
+        paymentIntentId: claim.intent.id,
+        transferId: claim.transfer.id,
+        providerPaymentRef: adapterResult.value.providerPaymentRef,
+        state: mappedState,
+        failureReason: adapterResult.value.failureReason,
+      },
+    });
+
+    if (!webhook.deduplicated) {
+      if (mappedState === "settled" || mappedState === "authorized") {
+        await applyPaymentSettlement(
+          transaction,
+          claim.intent,
+          claim.transfer,
+          claim.order,
+          adapterResult.value.providerPaymentRef,
+          now,
+        );
+      } else if (mappedState === "failed" || mappedState === "cancelled") {
+        await applyPaymentFailure(
+          transaction,
+          claim.intent,
+          claim.transfer,
+          claim.order,
+          adapterResult.value.failureReason ?? mappedState,
+          now,
+        );
+      } else {
+        await transaction
+          .update(commercePaymentIntent)
+          .set({
+            state: mappedState,
+            providerPaymentRef: adapterResult.value.providerPaymentRef,
+            updatedAt: now,
+          })
+          .where(eq(commercePaymentIntent.id, claim.intent.id));
+        await transaction
+          .update(commerceProviderTransfer)
+          .set({
+            providerTransferRef: `xfer_${adapterResult.value.providerPaymentRef}`,
+            updatedAt: now,
+          })
+          .where(eq(commerceProviderTransfer.id, claim.transfer.id));
+      }
+    }
+
+    await markWebhookProcessed(transaction, webhook.eventId, null);
+    await transaction
+      .update(commercePaymentOutbox)
+      .set({ state: "completed", processedAt: now, lastError: null, updatedAt: now })
+      .where(eq(commercePaymentOutbox.id, claim.outbox.id));
+  });
+
+  return { success: true, value: { processed: true } };
+}
+
+/**
+ * The refund half of the same shape: call the provider, record the webhook, apply the
+ * result. Kept separate from the intent path rather than merged behind a flag — the two
+ * write different tables and carry different provider event ids, and a shared body would
+ * be a switch on the kind at every step.
+ */
+async function submitRefundToProvider(
+  adapter: ResolvedPaymentAdapter,
+  claim: ClaimedPaymentOutbox,
+  now: Date,
+): Promise<Result<{ readonly processed: boolean }, CommercePaymentsError>> {
+  if (!claim.refund) {
+    throw new Error("processCommercePaymentOutboxRow: refund outbox missing refund row");
+  }
+  if (!claim.intent.providerPaymentRef) {
+    throw new Error("processCommercePaymentOutboxRow: refund requires provider payment ref");
+  }
+
+  if (claim.transfer.state === "settled" && claim.refund.state === "settled") {
+    await db
+      .update(commercePaymentOutbox)
+      .set({ state: "completed", processedAt: now, updatedAt: now })
+      .where(eq(commercePaymentOutbox.id, claim.outbox.id));
+    return { success: true, value: { processed: true } };
+  }
+
+  await db
+    .update(commerceProviderTransfer)
+    .set({
+      state: "submitted",
+      submittedAt: claim.transfer.submittedAt ?? now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(commerceProviderTransfer.id, claim.transfer.id),
+        eq(commerceProviderTransfer.state, "created"),
+      ),
+    );
+  await db
+    .update(commerceRefund)
+    .set({ state: "processing", updatedAt: now })
+    .where(
+      and(
+        eq(commerceRefund.id, claim.refund.id),
+        inArray(commerceRefund.state, ["created", "processing"]),
+      ),
+    );
+
+  const adapterResult = await adapter.createRefund({
+    idempotencyKey: claim.transfer.idempotencyKey,
+    amountInCents: claim.refund.amountInCents,
+    currency: claim.refund.currency,
+    providerPaymentRef: claim.intent.providerPaymentRef,
+    refundId: claim.refund.id,
+    paymentIntentId: claim.intent.id,
+  });
+  if (!adapterResult.success) {
+    throw new Error(`provider_${adapterResult.error.type}`);
+  }
+
+  const mappedState = mapNormalizedRefundState(adapterResult.value.state);
+  const providerEventId = `evt_refund_${mappedState}_${claim.transfer.id}`;
+
+  await db.transaction(async (transaction) => {
+    const webhook = await recordWebhookEvent(transaction, {
+      provider: adapter.providerName,
+      providerEventId,
+      eventType: `refund.${mappedState}`,
+      paymentIntentId: claim.intent.id,
+      transferId: claim.transfer.id,
+      refundId: claim.refund?.id ?? null,
+      orderId: claim.order.id,
+      payload: {
+        refundId: claim.refund?.id ?? null,
+        transferId: claim.transfer.id,
+        providerRefundRef: adapterResult.value.providerRefundRef,
+        state: mappedState,
+        failureReason: adapterResult.value.failureReason,
+      },
+    });
+
+    if (!webhook.deduplicated && claim.refund) {
+      if (mappedState === "settled") {
+        await applyRefundSettlement(
+          transaction,
+          claim.intent,
+          claim.refund,
+          claim.transfer,
+          claim.order,
+          adapterResult.value.providerRefundRef,
+          now,
+        );
+      } else if (mappedState === "failed" || mappedState === "cancelled") {
+        await applyRefundFailure(
+          transaction,
+          claim.refund,
+          claim.transfer,
+          claim.order,
+          adapterResult.value.failureReason ?? mappedState,
+          now,
+        );
+      } else {
+        await transaction
+          .update(commerceRefund)
+          .set({
+            state: mappedState,
+            providerRefundRef: adapterResult.value.providerRefundRef,
+            updatedAt: now,
+          })
+          .where(eq(commerceRefund.id, claim.refund.id));
+      }
+    }
+
+    await markWebhookProcessed(transaction, webhook.eventId, null);
+    await transaction
+      .update(commercePaymentOutbox)
+      .set({ state: "completed", processedAt: now, lastError: null, updatedAt: now })
+      .where(eq(commercePaymentOutbox.id, claim.outbox.id));
+  });
+
+  return { success: true, value: { processed: true } };
+}
+
 export async function processCommercePaymentOutboxRow(
   outboxId: string,
 ): Promise<Result<{ readonly processed: boolean }, CommercePaymentsError>> {
@@ -1476,231 +1742,11 @@ export async function processCommercePaymentOutboxRow(
 
   try {
     if (claim.outbox.kind === "submit_payment_intent") {
-      if (claim.transfer.state === "settled" && claim.intent.state === "settled") {
-        await db
-          .update(commercePaymentOutbox)
-          .set({ state: "completed", processedAt: now, updatedAt: now })
-          .where(eq(commercePaymentOutbox.id, claim.outbox.id));
-        return { success: true, value: { processed: true } };
-      }
-
-      await db
-        .update(commerceProviderTransfer)
-        .set({
-          state: "submitted",
-          submittedAt: claim.transfer.submittedAt ?? now,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(commerceProviderTransfer.id, claim.transfer.id),
-            eq(commerceProviderTransfer.state, "created"),
-          ),
-        );
-
-      await db
-        .update(commercePaymentIntent)
-        .set({ state: "processing", updatedAt: now })
-        .where(
-          and(
-            eq(commercePaymentIntent.id, claim.intent.id),
-            inArray(commercePaymentIntent.state, ["created", "requires_action", "processing"]),
-          ),
-        );
-
-      const adapterResult = await adapter.createPaymentIntent({
-        idempotencyKey: claim.transfer.idempotencyKey,
-        amountInCents: claim.intent.amountInCents,
-        currency: claim.intent.currency,
-        orderId: claim.order.id,
-        paymentIntentId: claim.intent.id,
-      });
-
-      if (!adapterResult.success) {
-        throw new Error(`provider_${adapterResult.error.type}`);
-      }
-
-      const mappedState = mapNormalizedPaymentState(adapterResult.value.state);
-      const providerEventId = `evt_payment_${mappedState}_${claim.transfer.id}`;
-
-      await db.transaction(async (transaction) => {
-        const webhook = await recordWebhookEvent(transaction, {
-          provider: adapter.providerName,
-          providerEventId,
-          eventType: `payment_intent.${mappedState}`,
-          paymentIntentId: claim.intent.id,
-          transferId: claim.transfer.id,
-          refundId: null,
-          orderId: claim.order.id,
-          payload: {
-            paymentIntentId: claim.intent.id,
-            transferId: claim.transfer.id,
-            providerPaymentRef: adapterResult.value.providerPaymentRef,
-            state: mappedState,
-            failureReason: adapterResult.value.failureReason,
-          },
-        });
-
-        if (!webhook.deduplicated) {
-          if (mappedState === "settled" || mappedState === "authorized") {
-            await applyPaymentSettlement(
-              transaction,
-              claim.intent,
-              claim.transfer,
-              claim.order,
-              adapterResult.value.providerPaymentRef,
-              now,
-            );
-          } else if (mappedState === "failed" || mappedState === "cancelled") {
-            await applyPaymentFailure(
-              transaction,
-              claim.intent,
-              claim.transfer,
-              claim.order,
-              adapterResult.value.failureReason ?? mappedState,
-              now,
-            );
-          } else {
-            await transaction
-              .update(commercePaymentIntent)
-              .set({
-                state: mappedState,
-                providerPaymentRef: adapterResult.value.providerPaymentRef,
-                updatedAt: now,
-              })
-              .where(eq(commercePaymentIntent.id, claim.intent.id));
-            await transaction
-              .update(commerceProviderTransfer)
-              .set({
-                providerTransferRef: `xfer_${adapterResult.value.providerPaymentRef}`,
-                updatedAt: now,
-              })
-              .where(eq(commerceProviderTransfer.id, claim.transfer.id));
-          }
-        }
-
-        await markWebhookProcessed(transaction, webhook.eventId, null);
-        await transaction
-          .update(commercePaymentOutbox)
-          .set({ state: "completed", processedAt: now, lastError: null, updatedAt: now })
-          .where(eq(commercePaymentOutbox.id, claim.outbox.id));
-      });
-
-      return { success: true, value: { processed: true } };
+      return await submitPaymentIntentToProvider(adapter, claim, now);
     }
 
     if (claim.outbox.kind === "submit_refund") {
-      if (!claim.refund) {
-        throw new Error("processCommercePaymentOutboxRow: refund outbox missing refund row");
-      }
-      if (!claim.intent.providerPaymentRef) {
-        throw new Error("processCommercePaymentOutboxRow: refund requires provider payment ref");
-      }
-
-      if (claim.transfer.state === "settled" && claim.refund.state === "settled") {
-        await db
-          .update(commercePaymentOutbox)
-          .set({ state: "completed", processedAt: now, updatedAt: now })
-          .where(eq(commercePaymentOutbox.id, claim.outbox.id));
-        return { success: true, value: { processed: true } };
-      }
-
-      await db
-        .update(commerceProviderTransfer)
-        .set({
-          state: "submitted",
-          submittedAt: claim.transfer.submittedAt ?? now,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(commerceProviderTransfer.id, claim.transfer.id),
-            eq(commerceProviderTransfer.state, "created"),
-          ),
-        );
-      await db
-        .update(commerceRefund)
-        .set({ state: "processing", updatedAt: now })
-        .where(
-          and(
-            eq(commerceRefund.id, claim.refund.id),
-            inArray(commerceRefund.state, ["created", "processing"]),
-          ),
-        );
-
-      const adapterResult = await adapter.createRefund({
-        idempotencyKey: claim.transfer.idempotencyKey,
-        amountInCents: claim.refund.amountInCents,
-        currency: claim.refund.currency,
-        providerPaymentRef: claim.intent.providerPaymentRef,
-        refundId: claim.refund.id,
-        paymentIntentId: claim.intent.id,
-      });
-      if (!adapterResult.success) {
-        throw new Error(`provider_${adapterResult.error.type}`);
-      }
-
-      const mappedState = mapNormalizedRefundState(adapterResult.value.state);
-      const providerEventId = `evt_refund_${mappedState}_${claim.transfer.id}`;
-
-      await db.transaction(async (transaction) => {
-        const webhook = await recordWebhookEvent(transaction, {
-          provider: adapter.providerName,
-          providerEventId,
-          eventType: `refund.${mappedState}`,
-          paymentIntentId: claim.intent.id,
-          transferId: claim.transfer.id,
-          refundId: claim.refund?.id ?? null,
-          orderId: claim.order.id,
-          payload: {
-            refundId: claim.refund?.id ?? null,
-            transferId: claim.transfer.id,
-            providerRefundRef: adapterResult.value.providerRefundRef,
-            state: mappedState,
-            failureReason: adapterResult.value.failureReason,
-          },
-        });
-
-        if (!webhook.deduplicated && claim.refund) {
-          if (mappedState === "settled") {
-            await applyRefundSettlement(
-              transaction,
-              claim.intent,
-              claim.refund,
-              claim.transfer,
-              claim.order,
-              adapterResult.value.providerRefundRef,
-              now,
-            );
-          } else if (mappedState === "failed" || mappedState === "cancelled") {
-            await applyRefundFailure(
-              transaction,
-              claim.refund,
-              claim.transfer,
-              claim.order,
-              adapterResult.value.failureReason ?? mappedState,
-              now,
-            );
-          } else {
-            await transaction
-              .update(commerceRefund)
-              .set({
-                state: mappedState,
-                providerRefundRef: adapterResult.value.providerRefundRef,
-                updatedAt: now,
-              })
-              .where(eq(commerceRefund.id, claim.refund.id));
-          }
-        }
-
-        await markWebhookProcessed(transaction, webhook.eventId, null);
-        await transaction
-          .update(commercePaymentOutbox)
-          .set({ state: "completed", processedAt: now, lastError: null, updatedAt: now })
-          .where(eq(commercePaymentOutbox.id, claim.outbox.id));
-      });
-
-      return { success: true, value: { processed: true } };
+      return await submitRefundToProvider(adapter, claim, now);
     }
 
     const exhaustiveKind: never = claim.outbox.kind;
