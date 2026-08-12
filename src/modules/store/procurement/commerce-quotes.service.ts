@@ -1949,6 +1949,234 @@ async function reserveStockAndWriteProductLines(
   return null;
 }
 
+/**
+ * Read the accepted revision's lines and derive the dates the order will promise.
+ *
+ * THE PROMISE COMES FROM THE REVISION, NOT FROM THE PRODUCT. A seller may have changed a
+ * lead time since quoting; the buyer accepted the numbers in the revision, and those are
+ * what the order commits to. Re-deriving from the product row here would silently move a
+ * date the buyer agreed to.
+ *
+ * The deliverable plans are indexed by service line up front so the write pass does not
+ * issue one query per line.
+ */
+async function loadAcceptedQuoteLines(
+  transaction: DatabaseTransaction,
+  quote: QuoteRow,
+  revision: RevisionRow,
+  now: Date,
+) {
+  const productLines = await transaction
+    .select({
+      quoteLine: commerceQuoteProductLine,
+      productId: commerceRfqProductLine.productId,
+    })
+    .from(commerceQuoteProductLine)
+    .innerJoin(
+      commerceRfqProductLine,
+      eq(commerceRfqProductLine.id, commerceQuoteProductLine.rfqProductLineId),
+    )
+    .where(eq(commerceQuoteProductLine.revisionId, revision.id));
+
+  const serviceLines = await transaction
+    .select()
+    .from(commerceQuoteServiceLine)
+    .where(eq(commerceQuoteServiceLine.revisionId, revision.id));
+  const contractedDeliverablePlans =
+    serviceLines.length === 0
+      ? []
+      : await transaction
+          .select()
+          .from(commerceQuoteServiceDeliverablePlan)
+          .where(
+            inArray(
+              commerceQuoteServiceDeliverablePlan.quoteServiceLineId,
+              serviceLines.map((serviceLine) => serviceLine.id),
+            ),
+          )
+          .orderBy(
+            asc(commerceQuoteServiceDeliverablePlan.quoteServiceLineId),
+            asc(commerceQuoteServiceDeliverablePlan.sequence),
+          );
+  const contractedDeliverablePlansByServiceLineId = new Map<string, QuoteDeliverablePlanRow[]>();
+  for (const contractedDeliverablePlan of contractedDeliverablePlans) {
+    const existingPlans =
+      contractedDeliverablePlansByServiceLineId.get(contractedDeliverablePlan.quoteServiceLineId) ??
+      [];
+    existingPlans.push(contractedDeliverablePlan);
+    contractedDeliverablePlansByServiceLineId.set(
+      contractedDeliverablePlan.quoteServiceLineId,
+      existingPlans,
+    );
+  }
+
+  /**
+   * A13. A quote-originated order derives its promise from the lead time the PROVIDER
+   * PUT IN THE REVISION the buyer accepted — `commerce_quote_product_line.leadTimeDays`,
+   * which has existed since Phase 3 and had no reader.
+   *
+   * That is a stronger promise than the direct-checkout one: a quote lead time is a
+   * negotiated term on an immutable revision, not a catalogue advertisement. Same
+   * column on the order either way, because what the metric measures is identical —
+   * what the counterparty committed to before it knew the outcome.
+   */
+  const linePromisedDeliveryDates = productLines.map((line) =>
+    derivePromisedDeliveryAt({
+      orderedAt: now,
+      leadTimeMaxDays: line.quoteLine.leadTimeDays,
+    }),
+  );
+  const orderPromisedDeliveryAt = latestPromisedDeliveryAt(linePromisedDeliveryDates);
+
+  return {
+    productLines,
+    serviceLines,
+    contractedDeliverablePlansByServiceLineId,
+    linePromisedDeliveryDates,
+    orderPromisedDeliveryAt,
+  };
+}
+
+/**
+ * Copy each quoted service line onto the order, with the deliverable plan it was priced
+ * against.
+ *
+ * WHAT IS BEING COPIED AND WHY IT IS A COPY. The order line is a SNAPSHOT of what the
+ * provider offered at the revision the buyer accepted — a later edit to the provider's
+ * offering must not change what an accepted order says it bought. Same reason the product
+ * lines carry a title and specification snapshot rather than a product id alone.
+ *
+ * A service line with no contracted plan falls back to the deliverable snapshot the quote
+ * carried, which is how a provider who quoted prose rather than a structured plan still
+ * produces an order line that says what was bought.
+ */
+async function writeOrderServiceLines(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly order: OrderRow;
+    readonly serviceLines: readonly QuoteServiceLineRow[];
+    readonly contractedDeliverablePlansByServiceLineId: ReadonlyMap<
+      string,
+      readonly QuoteDeliverablePlanRow[]
+    >;
+    readonly quote: QuoteRow;
+    readonly rfq: typeof commerceRfq.$inferSelect;
+    readonly actor: QuoteActorContext;
+    readonly now: Date;
+  },
+): Promise<void> {
+  const { order, serviceLines, contractedDeliverablePlansByServiceLineId, quote, rfq, actor, now } =
+    input;
+
+  for (const line of serviceLines) {
+    const [orderServiceLine] = await transaction
+      .insert(commerceOrderServiceLine)
+      .values({
+        orderId: order.id,
+        providerKind: line.providerKind,
+        titleSnapshot: line.titleSnapshot,
+        scopeSnapshot: line.scopeSnapshot,
+        feeInCents: line.feeInCents,
+        siblingOrder: line.siblingOrder,
+        sourceQuoteServiceLineId: line.id,
+      })
+      .returning();
+    if (!orderServiceLine) {
+      throw new Error("Order service line insert returned no row.");
+    }
+
+    const contractedDeliverablePlansForLine =
+      contractedDeliverablePlansByServiceLineId.get(line.id) ?? [];
+    const requiresDeliverableNormalization =
+      contractedDeliverablePlansForLine.length === 0 &&
+      line.deliverableSnapshot !== null &&
+      line.deliverableSnapshot.trim().length > 0;
+
+    const [engagement] = await transaction
+      .insert(commerceServiceEngagement)
+      .values({
+        buyerOrganizationId: rfq.buyerOrganizationId,
+        providerOrganizationId: quote.providerOrganizationId,
+        orderId: order.id,
+        orderServiceLineId: orderServiceLine.id,
+        providerKind: line.providerKind,
+        state: "awaiting_provider",
+        executionContractState: "legacy_missing_snapshot",
+        requiresDeliverableNormalization,
+        version: 0,
+        titleSnapshot: line.titleSnapshot,
+        scopeSnapshot: line.scopeSnapshot,
+      })
+      .returning();
+    if (!engagement) {
+      throw new Error("Service engagement insert returned no row.");
+    }
+
+    const hasTypedSnapshot = await copyAcceptedQuoteDetailToEngagement(
+      transaction,
+      engagement.id,
+      line.id,
+      line.providerKind,
+    );
+    if (hasTypedSnapshot) {
+      await transaction
+        .update(commerceServiceEngagement)
+        .set({
+          executionContractState: "ready",
+          executionContractProvenance: "accepted_quote",
+          updatedAt: now,
+        })
+        .where(eq(commerceServiceEngagement.id, engagement.id));
+    }
+
+    for (const contractedDeliverablePlan of contractedDeliverablePlansForLine) {
+      await transaction.insert(commerceEngagementDeliverable).values({
+        engagementId: engagement.id,
+        sequence: contractedDeliverablePlan.sequence,
+        title: contractedDeliverablePlan.title,
+        isRequired: contractedDeliverablePlan.isRequired,
+        state: "planned",
+        dueAt: contractedDeliverablePlan.dueAt,
+        createdByMemberId: actor.memberId,
+      });
+    }
+
+    await transaction.insert(commerceServiceEngagementEvent).values({
+      engagementId: engagement.id,
+      sequence: 0,
+      previousState: null,
+      nextState: "awaiting_provider",
+      commandKind: "created_from_accepted_quote",
+      note: null,
+      occurredAt: now,
+      createdByMemberId: actor.memberId,
+    });
+
+    await transaction.insert(commerceOrderServiceLink).values({
+      engagementId: engagement.id,
+      orderId: order.id,
+      orderServiceLineId: orderServiceLine.id,
+    });
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: actor.organizationId,
+      eventKind: "service_engagement_created",
+      actorUserId: actor.actorUserId,
+      actorMemberRoleSnapshot: actor.memberRole,
+      targetEntityType: "commerce_service_engagement",
+      targetEntityId: engagement.id,
+      payload: {
+        engagementId: engagement.id,
+        orderId: order.id,
+        orderServiceLineId: orderServiceLine.id,
+        providerKind: line.providerKind,
+        executionContractState: hasTypedSnapshot ? "ready" : "legacy_missing_snapshot",
+      },
+      occurredAt: now,
+    });
+  }
+}
+
 export async function acceptQuote(
   actor: QuoteActorContext,
   quoteId: string,
@@ -1971,71 +2199,13 @@ export async function acceptQuote(
       if (gate.status !== "locked") return gate;
       const { quote, rfq, buyerOrg, revision, providerOrg, now } = gate;
 
-      const productLines = await transaction
-        .select({
-          quoteLine: commerceQuoteProductLine,
-          productId: commerceRfqProductLine.productId,
-        })
-        .from(commerceQuoteProductLine)
-        .innerJoin(
-          commerceRfqProductLine,
-          eq(commerceRfqProductLine.id, commerceQuoteProductLine.rfqProductLineId),
-        )
-        .where(eq(commerceQuoteProductLine.revisionId, revision.id));
-
-      const serviceLines = await transaction
-        .select()
-        .from(commerceQuoteServiceLine)
-        .where(eq(commerceQuoteServiceLine.revisionId, revision.id));
-      const contractedDeliverablePlans =
-        serviceLines.length === 0
-          ? []
-          : await transaction
-              .select()
-              .from(commerceQuoteServiceDeliverablePlan)
-              .where(
-                inArray(
-                  commerceQuoteServiceDeliverablePlan.quoteServiceLineId,
-                  serviceLines.map((serviceLine) => serviceLine.id),
-                ),
-              )
-              .orderBy(
-                asc(commerceQuoteServiceDeliverablePlan.quoteServiceLineId),
-                asc(commerceQuoteServiceDeliverablePlan.sequence),
-              );
-      const contractedDeliverablePlansByServiceLineId = new Map<
-        string,
-        QuoteDeliverablePlanRow[]
-      >();
-      for (const contractedDeliverablePlan of contractedDeliverablePlans) {
-        const existingPlans =
-          contractedDeliverablePlansByServiceLineId.get(
-            contractedDeliverablePlan.quoteServiceLineId,
-          ) ?? [];
-        existingPlans.push(contractedDeliverablePlan);
-        contractedDeliverablePlansByServiceLineId.set(
-          contractedDeliverablePlan.quoteServiceLineId,
-          existingPlans,
-        );
-      }
-
-      /**
-       * A13. A quote-originated order derives its promise from the lead time the PROVIDER
-       * PUT IN THE REVISION the buyer accepted — `commerce_quote_product_line.leadTimeDays`,
-       * which has existed since Phase 3 and had no reader.
-       *
-       * That is a stronger promise than the direct-checkout one: a quote lead time is a
-       * negotiated term on an immutable revision, not a catalogue advertisement. Same
-       * column on the order either way, because what the metric measures is identical —
-       * what the counterparty committed to before it knew the outcome.
-       */
-      const linePromisedDeliveryDates = productLines.map((line) =>
-        derivePromisedDeliveryAt({
-          orderedAt: now,
-          leadTimeMaxDays: line.quoteLine.leadTimeDays,
-        }),
-      );
-      const orderPromisedDeliveryAt = latestPromisedDeliveryAt(linePromisedDeliveryDates);
+      const {
+        productLines,
+        serviceLines,
+        contractedDeliverablePlansByServiceLineId,
+        linePromisedDeliveryDates,
+        orderPromisedDeliveryAt,
+      } = await loadAcceptedQuoteLines(transaction, quote, revision, now);
 
       /**
        * STORE Phase 14. Resolved BEFORE the insert, because `settlement_rail` belongs to
@@ -2132,113 +2302,15 @@ export async function acceptQuote(
       });
       if (reservation) return reservation;
 
-      for (const line of serviceLines) {
-        const [orderServiceLine] = await transaction
-          .insert(commerceOrderServiceLine)
-          .values({
-            orderId: order.id,
-            providerKind: line.providerKind,
-            titleSnapshot: line.titleSnapshot,
-            scopeSnapshot: line.scopeSnapshot,
-            feeInCents: line.feeInCents,
-            siblingOrder: line.siblingOrder,
-            sourceQuoteServiceLineId: line.id,
-          })
-          .returning();
-        if (!orderServiceLine) {
-          throw new Error("Order service line insert returned no row.");
-        }
-
-        const contractedDeliverablePlansForLine =
-          contractedDeliverablePlansByServiceLineId.get(line.id) ?? [];
-        const requiresDeliverableNormalization =
-          contractedDeliverablePlansForLine.length === 0 &&
-          line.deliverableSnapshot !== null &&
-          line.deliverableSnapshot.trim().length > 0;
-
-        const [engagement] = await transaction
-          .insert(commerceServiceEngagement)
-          .values({
-            buyerOrganizationId: rfq.buyerOrganizationId,
-            providerOrganizationId: quote.providerOrganizationId,
-            orderId: order.id,
-            orderServiceLineId: orderServiceLine.id,
-            providerKind: line.providerKind,
-            state: "awaiting_provider",
-            executionContractState: "legacy_missing_snapshot",
-            requiresDeliverableNormalization,
-            version: 0,
-            titleSnapshot: line.titleSnapshot,
-            scopeSnapshot: line.scopeSnapshot,
-          })
-          .returning();
-        if (!engagement) {
-          throw new Error("Service engagement insert returned no row.");
-        }
-
-        const hasTypedSnapshot = await copyAcceptedQuoteDetailToEngagement(
-          transaction,
-          engagement.id,
-          line.id,
-          line.providerKind,
-        );
-        if (hasTypedSnapshot) {
-          await transaction
-            .update(commerceServiceEngagement)
-            .set({
-              executionContractState: "ready",
-              executionContractProvenance: "accepted_quote",
-              updatedAt: now,
-            })
-            .where(eq(commerceServiceEngagement.id, engagement.id));
-        }
-
-        for (const contractedDeliverablePlan of contractedDeliverablePlansForLine) {
-          await transaction.insert(commerceEngagementDeliverable).values({
-            engagementId: engagement.id,
-            sequence: contractedDeliverablePlan.sequence,
-            title: contractedDeliverablePlan.title,
-            isRequired: contractedDeliverablePlan.isRequired,
-            state: "planned",
-            dueAt: contractedDeliverablePlan.dueAt,
-            createdByMemberId: actor.memberId,
-          });
-        }
-
-        await transaction.insert(commerceServiceEngagementEvent).values({
-          engagementId: engagement.id,
-          sequence: 0,
-          previousState: null,
-          nextState: "awaiting_provider",
-          commandKind: "created_from_accepted_quote",
-          note: null,
-          occurredAt: now,
-          createdByMemberId: actor.memberId,
-        });
-
-        await transaction.insert(commerceOrderServiceLink).values({
-          engagementId: engagement.id,
-          orderId: order.id,
-          orderServiceLineId: orderServiceLine.id,
-        });
-
-        await appendAuditOrThrow(transaction, {
-          organizationId: actor.organizationId,
-          eventKind: "service_engagement_created",
-          actorUserId: actor.actorUserId,
-          actorMemberRoleSnapshot: actor.memberRole,
-          targetEntityType: "commerce_service_engagement",
-          targetEntityId: engagement.id,
-          payload: {
-            engagementId: engagement.id,
-            orderId: order.id,
-            orderServiceLineId: orderServiceLine.id,
-            providerKind: line.providerKind,
-            executionContractState: hasTypedSnapshot ? "ready" : "legacy_missing_snapshot",
-          },
-          occurredAt: now,
-        });
-      }
+      await writeOrderServiceLines(transaction, {
+        order,
+        serviceLines,
+        contractedDeliverablePlansByServiceLineId,
+        quote,
+        rfq,
+        actor,
+        now,
+      });
 
       await transaction
         .update(commerceQuote)
