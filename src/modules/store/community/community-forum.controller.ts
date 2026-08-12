@@ -23,8 +23,8 @@ import {
   ModerateForumReplySchema,
   ModerateForumThreadSchema,
   SetAcceptedReplySchema,
-} from "#src/schemas/community-forum.schemas.js";
-import * as communityForumService from "#src/services/community-forum.service.js";
+} from "#src/modules/store/community/community-forum.schemas.js";
+import * as communityForumService from "#src/modules/store/community/community-forum.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

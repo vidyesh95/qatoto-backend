@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as communityForumController from "#src/controllers/community-forum.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
@@ -12,6 +11,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as communityForumController from "#src/modules/store/community/community-forum.controller.js";
 
 /**
  * The business forum's WRITE surface (STORE_BACKEND_STRUCTURE.md §17).

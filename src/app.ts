@@ -50,6 +50,8 @@ import commerceMerchandisingRouter from "#src/modules/store/catalog/commerce-mer
 import commerceProductEngagementRouter from "#src/modules/store/catalog/commerce-product-engagement.routes.js";
 import commerceRankingRouter from "#src/modules/store/catalog/commerce-ranking.routes.js";
 import productsRouter from "#src/modules/store/catalog/products.routes.js";
+import communityCofounderRouter from "#src/modules/store/community/community-cofounder.routes.js";
+import communityForumRouter from "#src/modules/store/community/community-forum.routes.js";
 import commerceDocumentsRouter from "#src/modules/store/fulfillment/commerce-documents.routes.js";
 import commerceFreightRatesRouter from "#src/modules/store/fulfillment/commerce-freight-rates.routes.js";
 import commerceFulfillmentRouter from "#src/modules/store/fulfillment/commerce-fulfillment.routes.js";
@@ -72,8 +74,6 @@ import seriesRouter from "#src/modules/studio/series/series.routes.js";
 import videosRouter from "#src/modules/studio/videos/videos.routes.js";
 import commerceFactoriesRouter from "#src/routes/commerce-factories.routes.js";
 import commerceWebhooksRouter from "#src/routes/commerce-webhooks.routes.js";
-import communityCofounderRouter from "#src/routes/community-cofounder.routes.js";
-import communityForumRouter from "#src/routes/community-forum.routes.js";
 import indexRouter from "#src/routes/index.js";
 import storeRouter from "#src/routes/store.routes.js";
 

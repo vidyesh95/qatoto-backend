@@ -15,8 +15,8 @@ import {
   SetEngagementStateSchema,
   WriteCofounderProfileSchema,
   type WriteCofounderProfileInput,
-} from "#src/schemas/community-cofounder.schemas.js";
-import * as communityCofounderService from "#src/services/community-cofounder.service.js";
+} from "#src/modules/store/community/community-cofounder.schemas.js";
+import * as communityCofounderService from "#src/modules/store/community/community-cofounder.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**
