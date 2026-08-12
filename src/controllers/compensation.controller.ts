@@ -6,7 +6,8 @@ import {
   optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   AgreementQuerySchema,
   CountersignPeriodSchema,
@@ -24,7 +25,6 @@ import * as agreementsService from "#src/services/compensation-agreements.servic
 import * as paymentsService from "#src/services/compensation-payments.service.js";
 import * as periodsService from "#src/services/compensation-periods.service.js";
 import * as governanceService from "#src/services/governance-summary.service.js";
-import * as membershipService from "#src/services/project-membership.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 interface CompensationCaller {

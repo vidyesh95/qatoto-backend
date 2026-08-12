@@ -1,7 +1,5 @@
 import type { Request, Response } from "express";
 
-import { firstParam, optionalBody } from "#src/controllers/project-error-response.js";
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import * as platformRolesService from "#src/modules/platform/roles/platform-roles-admin.service.js";
 import type { PlatformRoleAdminError } from "#src/modules/platform/roles/platform-roles-admin.service.js";
 import {
@@ -9,6 +7,8 @@ import {
   LookupUserQuerySchema,
   ProposePlatformRoleSchema,
 } from "#src/modules/platform/roles/platform-roles.schemas.js";
+import { firstParam, optionalBody } from "#src/modules/rnd/projects/project-error-response.js";
+import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function respondPlatformRoleError(res: Response, error: PlatformRoleAdminError): void {

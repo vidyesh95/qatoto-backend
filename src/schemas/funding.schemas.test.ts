@@ -11,7 +11,7 @@ vi.mock("#src/services/funding-rounds.service.js", () => ({}));
 vi.mock("#src/services/investor-confidence.service.js", () => ({}));
 vi.mock("#src/services/milestones.service.js", () => ({}));
 vi.mock("#src/modules/platform/roles/platform-role.service.js", () => ({}));
-vi.mock("#src/services/project-membership.service.js", () => ({}));
+vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({}));
 
 const {
   CreateFundingRoundSchema,

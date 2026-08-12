@@ -29,7 +29,7 @@ import {
   type ProjectAccessError,
   type ProjectStatsView,
   type ProjectTeamMemberView,
-} from "#src/services/project-membership.service.js";
+} from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /** Project covers are re-encoded to AVIF and downscaled into this box. */

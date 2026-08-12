@@ -42,7 +42,7 @@ export {
   optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
 
 /** Every domain error the four discovery controllers can surface. */
 export type DiscoveryDomainError =

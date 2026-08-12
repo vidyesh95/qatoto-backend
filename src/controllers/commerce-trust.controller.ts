@@ -1,8 +1,8 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { ACCEPTED_IMAGE_FORMATS_SENTENCE, describeUnsupportedImageFormat } from "#src/lib/image.js";
+import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import {
   AddDisputeNoteSchema,
   AttachReviewPhotoFieldsSchema,

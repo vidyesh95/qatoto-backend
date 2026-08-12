@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
 
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import { UpdateMyProfileSchema } from "#src/modules/auth/users/users.schemas.js";
 import * as usersService from "#src/modules/auth/users/users.service.js";
+import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

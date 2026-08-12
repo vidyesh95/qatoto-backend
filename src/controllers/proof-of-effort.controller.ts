@@ -1,16 +1,18 @@
 import type { Request, Response } from "express";
 
 import { config } from "#src/config/index.js";
+import { respondProofOfEffortError } from "#src/controllers/proof-of-effort-error-response.js";
+import { decodeDateCursor } from "#src/lib/date-cursor.js";
+import { exchangeCodeForToken, fetchViewerLogin } from "#src/lib/github-integration.js";
+import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
+import * as auditService from "#src/modules/rnd/projects/project-audit.service.js";
 import {
   firstParam,
   optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
-import { respondProofOfEffortError } from "#src/controllers/proof-of-effort-error-response.js";
-import { decodeDateCursor } from "#src/lib/date-cursor.js";
-import { exchangeCodeForToken, fetchViewerLogin } from "#src/lib/github-integration.js";
-import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   AuditTrailQuerySchema,
   AuthorizeIntegrationSchema,
@@ -43,8 +45,6 @@ import * as integrationService from "#src/services/integration-consent.service.j
 import * as suggestionsService from "#src/services/optimization-suggestions.service.js";
 import * as receiptsService from "#src/services/physical-receipts.service.js";
 import * as bakeService from "#src/services/pie-bake.service.js";
-import * as auditService from "#src/services/project-audit.service.js";
-import * as membershipService from "#src/services/project-membership.service.js";
 import * as allocationService from "#src/services/slice-allocation.service.js";
 import * as ledgerService from "#src/services/slice-ledger.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";

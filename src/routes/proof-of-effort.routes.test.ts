@@ -35,7 +35,7 @@ vi.mock("#src/db/index.js", async () => (await import("#src/test-support/databas
 vi.mock("#src/lib/auth.js", async () => (await import("#src/test-support/auth-mock.js")).authModuleMock());
 
 const requireProjectRole = vi.fn<(...args: readonly unknown[]) => unknown>();
-vi.mock("#src/services/project-membership.service.js", () => ({
+vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({
   requireProjectRole: (...args: readonly unknown[]) => requireProjectRole(...args),
   PROJECT_ROLE_RANK: { founder: 4, admin: 3, maintainer: 2, contributor: 1 },
 }));

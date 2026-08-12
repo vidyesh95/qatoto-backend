@@ -1,12 +1,12 @@
 import type { Request, Response } from "express";
 
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import {
   ListNotificationsQuerySchema,
   MarkNotificationsReadSchema,
 } from "#src/modules/platform/notifications/notifications.schemas.js";
 import * as notificationsService from "#src/modules/platform/notifications/notifications.service.js";
 import type { NotificationError } from "#src/modules/platform/notifications/notifications.service.js";
+import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function respondNotificationError(res: Response, error: NotificationError): void {

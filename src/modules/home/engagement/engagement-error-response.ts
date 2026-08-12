@@ -48,7 +48,7 @@ export {
   optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
 
 /**
  * `VIDEO_NOT_FOUND` is declared once and imported by the other three unions, so

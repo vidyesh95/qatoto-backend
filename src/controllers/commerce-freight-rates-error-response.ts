@@ -1,6 +1,6 @@
 import type { Response } from "express";
 
-import { fieldRefusal } from "#src/controllers/project-error-response.js";
+import { fieldRefusal } from "#src/modules/rnd/projects/project-error-response.js";
 import type { CommerceFreightRateError } from "#src/services/commerce-freight-rates.service.js";
 
 /**
@@ -36,7 +36,7 @@ export {
   optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
 
 interface CommerceFreightRateErrorResponse {
   readonly statusCode: number;

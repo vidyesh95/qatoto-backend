@@ -1,17 +1,17 @@
 import type { Request, Response } from "express";
 
-import {
-  firstParam,
-  optionalBody,
-  respondUnauthenticated,
-  respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
 import { respondResearchProgramError } from "#src/controllers/research-program-error-response.js";
 import { decodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
 import {
   requirePlatformCapability,
   type PlatformStaffContext,
 } from "#src/modules/platform/roles/platform-role.service.js";
+import {
+  firstParam,
+  optionalBody,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/rnd/projects/project-error-response.js";
 import {
   AttachPaperFileSchema,
   CreateBranchSchema,

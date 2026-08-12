@@ -52,13 +52,13 @@ import {
   user,
 } from "#src/db/schema.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
+import { verifyAuditChain } from "#src/modules/rnd/projects/project-audit.service.js";
 import {
   cancelPledge,
   createPledge,
   getFundingRound,
   listRoundBackers,
 } from "#src/services/funding-rounds.service.js";
-import { verifyAuditChain } from "#src/services/project-audit.service.js";
 
 let failureCount = 0;
 

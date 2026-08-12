@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
 
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { ListPlatformAuditQuerySchema } from "#src/modules/platform/audit/platform-audit.schemas.js";
 import * as platformAuditService from "#src/modules/platform/audit/platform-audit.service.js";
 import type { PlatformAuditError } from "#src/modules/platform/audit/platform-audit.service.js";
+import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function respondPlatformAuditError(res: Response, error: PlatformAuditError): void {

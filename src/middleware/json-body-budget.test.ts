@@ -174,7 +174,7 @@ describe("per-route body caps", () => {
     const uploads = await Promise.all([
       import("#src/modules/auth/users/upload-avatar.js"),
       import("#src/middleware/upload-product-image.js"),
-      import("#src/middleware/upload-project-cover.js"),
+      import("#src/modules/rnd/projects/upload-project-cover.js"),
       import("#src/modules/studio/videos/upload-video-thumbnail.js"),
       import("#src/middleware/upload-physical-receipt.js"),
       // §10's research-paper PDF upload — the first NON-IMAGE multipart route in the

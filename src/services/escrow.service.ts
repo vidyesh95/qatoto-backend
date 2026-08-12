@@ -19,8 +19,8 @@ import {
   appendAuditEntry,
   ESCROW_GENESIS_PREVIOUS_HASH,
   type ProjectAuditEventKind,
-} from "#src/services/project-audit.service.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+} from "#src/modules/rnd/projects/project-audit.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

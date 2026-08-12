@@ -2,12 +2,12 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
-import type { ProjectApplicationError } from "#src/services/project-applications.service.js";
-import type { ProjectInsightLinkError } from "#src/services/project-insight-links.service.js";
-import type { ProjectMemberError } from "#src/services/project-membership.service.js";
-import type { ProjectRoleError } from "#src/services/project-roles.service.js";
+import type { ProjectApplicationError } from "#src/modules/rnd/projects/project-applications.service.js";
+import type { ProjectInsightLinkError } from "#src/modules/rnd/projects/project-insight-links.service.js";
+import type { ProjectMemberError } from "#src/modules/rnd/projects/project-membership.service.js";
+import type { ProjectRoleError } from "#src/modules/rnd/projects/project-roles.service.js";
+import type { ResearchProjectError } from "#src/modules/rnd/projects/research-projects.service.js";
 import type { ResearchCategoryError } from "#src/services/research-categories.service.js";
-import type { ResearchProjectError } from "#src/services/research-projects.service.js";
 
 /**
  * Shared response helpers for the R&D controllers.

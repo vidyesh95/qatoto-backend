@@ -4,11 +4,11 @@ import { APIError } from "better-auth/api";
 import { and, eq } from "drizzle-orm";
 import type { Request, Response } from "express";
 
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { auth, sendSignupOtp } from "#src/lib/auth.js";
 import { CompleteSignupSchema, StartSignupSchema } from "#src/modules/auth/session/auth.schemas.js";
+import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse, Result } from "#src/types/index.js";
 
 /**

@@ -5,7 +5,8 @@ import {
   firstParam,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   CreateFundingRoundSchema,
   CreatePledgeSchema,
@@ -24,7 +25,6 @@ import * as compensationService from "#src/services/compensation.service.js";
 import * as roundsService from "#src/services/funding-rounds.service.js";
 import * as confidenceService from "#src/services/investor-confidence.service.js";
 import * as milestonesService from "#src/services/milestones.service.js";
-import * as membershipService from "#src/services/project-membership.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 interface FundingCaller {

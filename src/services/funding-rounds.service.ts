@@ -10,11 +10,11 @@ import { isForeignKeyViolation } from "#src/lib/pg-errors.js";
 // entry, no posting, no provider transfer, no job. If a future edit needs one of those
 // imports back, the change it is part of is a custody decision taken with counsel, not a
 // refactor.
-import { appendAuditEntry } from "#src/services/project-audit.service.js";
+import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import type {
   ProjectAccessError,
   ProjectMemberContext,
-} from "#src/services/project-membership.service.js";
+} from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

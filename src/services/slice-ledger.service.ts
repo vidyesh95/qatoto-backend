@@ -6,7 +6,7 @@ import { computeSlicesAwarded } from "#src/lib/slice-math.js";
 import {
   appendAuditEntry,
   allocateLedgerSequenceNumber,
-} from "#src/services/project-audit.service.js";
+} from "#src/modules/rnd/projects/project-audit.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

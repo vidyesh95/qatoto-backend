@@ -17,7 +17,7 @@ import { MAX_SPOTLIGHT_SLOTS } from "#src/modules/home/spotlight/spotlight.servi
 export {
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
 
 export function mapSpotlightErrorToResponse(error: SpotlightError): {
   readonly statusCode: number;

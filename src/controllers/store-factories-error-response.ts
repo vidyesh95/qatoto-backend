@@ -30,7 +30,7 @@ export {
   optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
 
 export function mapStoreFactoriesErrorToResponse(error: StoreFactoriesError): {
   readonly statusCode: number;

@@ -28,7 +28,7 @@ import researchProgramsRouter, {
 } from "#src/routes/research-programs.routes.js";
 import researchProjectsRouter, {
   applicationInboxRouter,
-} from "#src/routes/research-projects.routes.js";
+} from "#src/modules/rnd/projects/research-projects.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
 import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.js";

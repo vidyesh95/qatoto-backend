@@ -6,7 +6,9 @@ import {
   respondProjectError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
+import * as insightLinksService from "#src/modules/rnd/projects/project-insight-links.service.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   CreateProjectSchema,
   InsightIdParamSchema,
@@ -16,10 +18,8 @@ import {
   UpdateMemberSchema,
   UpdateProjectSchema,
   UpdateProjectStageSchema,
-} from "#src/schemas/research-projects.schemas.js";
-import * as insightLinksService from "#src/services/project-insight-links.service.js";
-import * as membershipService from "#src/services/project-membership.service.js";
-import * as projectsService from "#src/services/research-projects.service.js";
+} from "#src/modules/rnd/projects/research-projects.schemas.js";
+import * as projectsService from "#src/modules/rnd/projects/research-projects.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** POST /research-projects */

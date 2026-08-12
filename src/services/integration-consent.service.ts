@@ -10,8 +10,8 @@ import {
   isTokenEncryptionConfigured,
   TOKEN_KEY_VERSION,
 } from "#src/lib/token-encryption.js";
-import { appendAuditEntry } from "#src/services/project-audit.service.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

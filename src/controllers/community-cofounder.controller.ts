@@ -5,7 +5,7 @@ import {
   firstParam,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
 import {
   CofounderProfileIdParamsSchema,
   CofounderProfileSlugParamsSchema,

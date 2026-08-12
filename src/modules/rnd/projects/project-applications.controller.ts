@@ -1,21 +1,21 @@
 import type { Request, Response } from "express";
 
 import {
-  firstParam,
-  optionalBody,
-  respondProjectError,
-  respondUnauthenticated,
-  respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
-import {
   CreateApplicationSchema,
   CreateInviteSchema,
   DecisionNoteSchema,
   ListApplicationsQuerySchema,
   ListInvitesQuerySchema,
-} from "#src/schemas/project-applications.schemas.js";
-import * as applicationsService from "#src/services/project-applications.service.js";
-import * as membershipService from "#src/services/project-membership.service.js";
+} from "#src/modules/rnd/projects/project-applications.schemas.js";
+import * as applicationsService from "#src/modules/rnd/projects/project-applications.service.js";
+import {
+  firstParam,
+  optionalBody,
+  respondProjectError,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/rnd/projects/project-error-response.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 async function requireRoleOrRespond(

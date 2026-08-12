@@ -7,7 +7,8 @@ import {
   respondValidationFailed,
 } from "#src/controllers/discovery-error-response.js";
 import { respondGoToMarketError } from "#src/controllers/go-to-market-error-response.js";
-import { respondProjectError } from "#src/controllers/project-error-response.js";
+import { respondProjectError } from "#src/modules/rnd/projects/project-error-response.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   CreateSupplierEngagementSchema,
   CreateSupplierSchema,
@@ -18,7 +19,6 @@ import {
   UpdateSupplierSchema,
 } from "#src/schemas/suppliers.schemas.js";
 import * as readinessService from "#src/services/launch-readiness.service.js";
-import * as membershipService from "#src/services/project-membership.service.js";
 import * as engagementsService from "#src/services/supplier-engagements.service.js";
 import * as suppliersService from "#src/services/suppliers.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";

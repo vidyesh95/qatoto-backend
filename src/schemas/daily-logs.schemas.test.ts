@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 // modules so the schemas can be parsed without a configured environment — nothing here
 // calls a handler.
 vi.mock("#src/services/daily-logs.service.js", () => ({}));
-vi.mock("#src/services/project-membership.service.js", () => ({}));
+vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({}));
 
 const { ListDailyLogFeedQuerySchema } = await import("#src/schemas/daily-logs.schemas.js");
 

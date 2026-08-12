@@ -1,14 +1,14 @@
 import type { Request, Response } from "express";
 
 import {
-  respondFieldRefusal,
-  respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
-import {
   AvailabilityQuerySchema,
   UpdateMyHandleSchema,
 } from "#src/modules/auth/handles/handle.schemas.js";
 import * as handleService from "#src/modules/auth/handles/handle.service.js";
+import {
+  respondFieldRefusal,
+  respondValidationFailed,
+} from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

@@ -11,8 +11,8 @@ import {
 import { containsPaymentInstrument } from "#src/lib/payment-instrument.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
-import { appendAuditEntry } from "#src/services/project-audit.service.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

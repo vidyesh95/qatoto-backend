@@ -4,7 +4,7 @@ import { db } from "#src/db/index.js";
 import { workshopFile } from "#src/db/schema.js";
 import { parseExternalLink, type ExternalLinkError } from "#src/lib/external-link.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

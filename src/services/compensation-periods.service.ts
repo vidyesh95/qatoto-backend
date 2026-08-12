@@ -32,18 +32,18 @@ import {
 } from "#src/lib/compensation-period.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
-import { listAgreementsOverlapping } from "#src/services/compensation-agreements.service.js";
 import {
   advanceStatementChainHead,
   allocateCompensationSequenceNumber,
   appendAuditEntry,
   readStatementChainSlot,
   STATEMENT_GENESIS_PREVIOUS_HASH,
-} from "#src/services/project-audit.service.js";
+} from "#src/modules/rnd/projects/project-audit.service.js";
 import {
   type ProjectAccessError,
   resolveSecondSignatoryStanding,
-} from "#src/services/project-membership.service.js";
+} from "#src/modules/rnd/projects/project-membership.service.js";
+import { listAgreementsOverlapping } from "#src/services/compensation-agreements.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

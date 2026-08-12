@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
+import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import {
   CreateProductSchema,
   EmptyBodySchema,

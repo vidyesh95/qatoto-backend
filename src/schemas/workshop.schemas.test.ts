@@ -7,7 +7,7 @@ vi.mock("#src/services/workshop-board.service.js", () => ({}));
 vi.mock("#src/services/workshop-chat.service.js", () => ({}));
 vi.mock("#src/services/workshop-files.service.js", () => ({}));
 vi.mock("#src/services/daily-logs.service.js", () => ({}));
-vi.mock("#src/services/project-membership.service.js", () => ({}));
+vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({}));
 
 const {
   AddFileLinkSchema,

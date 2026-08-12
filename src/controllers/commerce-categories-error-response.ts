@@ -46,7 +46,7 @@ export {
   optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
 
 /**
  * Maps a commerce-category error to its HTTP shape. Does NOT touch `res` — a pure function,

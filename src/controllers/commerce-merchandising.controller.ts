@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
-import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
+import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import {
   CreatePathwaySchema,
   ModeratePathwaySchema,

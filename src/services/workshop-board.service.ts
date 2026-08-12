@@ -4,7 +4,7 @@ import { db } from "#src/db/index.js";
 import { projectMember, workshopBoardColumn, workshopTask } from "#src/db/schema.js";
 import { initialRanks, rankBetween } from "#src/lib/lexorank.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

@@ -25,7 +25,7 @@ import {
   type FetchImplementation,
   type YoutubeSourceError,
 } from "#src/lib/youtube.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

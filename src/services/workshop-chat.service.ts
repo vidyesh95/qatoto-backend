@@ -3,7 +3,7 @@ import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { workshopChatMessage, workshopChatReadState } from "#src/db/schema.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

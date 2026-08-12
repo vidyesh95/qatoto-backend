@@ -9,7 +9,7 @@ import {
   canonicalizeDocument,
   type CanonicalValue,
 } from "#src/lib/canonical-hash.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

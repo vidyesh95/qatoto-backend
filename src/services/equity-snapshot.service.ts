@@ -10,7 +10,7 @@ import {
 import { apportionLargestRemainder, BASIS_POINTS_TOTAL } from "#src/lib/money.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
 import { SLICE_DENOMINATOR, timeSliceNumerator } from "#src/lib/slice-math.js";
-import { appendAuditEntry } from "#src/services/project-audit.service.js";
+import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import {
   findLatestLedgerSequenceNumber,
   sumSlicesByMember,

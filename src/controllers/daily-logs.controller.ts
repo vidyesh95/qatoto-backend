@@ -1,12 +1,13 @@
 import type { Request, Response } from "express";
 
+import { respondWorkshopError } from "#src/controllers/workshop-error-response.js";
 import {
   firstParam,
   respondProjectError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
-import { respondWorkshopError } from "#src/controllers/workshop-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   CreateDailyLogSchema,
   ListDailyLogFeedQuerySchema,
@@ -15,7 +16,6 @@ import {
   UpdateDailyLogSchema,
 } from "#src/schemas/daily-logs.schemas.js";
 import * as logsService from "#src/services/daily-logs.service.js";
-import * as membershipService from "#src/services/project-membership.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 interface DailyLogCaller {

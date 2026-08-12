@@ -48,7 +48,7 @@ export {
   respondFieldRefusal,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
 
 /**
  * Every domain error the studio controllers can surface.

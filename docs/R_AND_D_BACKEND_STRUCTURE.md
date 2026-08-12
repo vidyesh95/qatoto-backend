@@ -508,7 +508,7 @@ not invent one, because a middleware cannot return a `Result` and so cannot part
 controller's exhaustive error switch (CLAUDE.md §3.2/§3.3). Authorization is a **service helper**:
 
 ```ts
-// src/services/project-membership.service.ts — NEW. The single authorization entry point
+// src/modules/rnd/projects/project-membership.service.ts — NEW. The single authorization entry point
 // for every project-scoped route in §5–§9.
 export async function requireProjectRole(
     projectId: string,
@@ -2711,7 +2711,7 @@ enforces `requireProjectRole` (§4a), and every mutation touching money/equity/e
 **Two structural facts about that sentence, which earlier drafts left implied and wrong:**
 
 - **`requireProjectRole` is NOT middleware.** It is a service function —
-  `src/services/project-membership.service.ts:114` — called **inside** the controller. That is
+  `src/modules/rnd/projects/project-membership.service.ts:114` — called **inside** the controller. That is
   deliberate and it is §3.3: middleware can only `next(err)` or write a response, whereas the
   authorization check has three outcomes a controller needs to distinguish (no such project, not a
   member, insufficient role) and must collapse them into one `404` **after** deciding, not before.
@@ -2719,7 +2719,7 @@ enforces `requireProjectRole` (§4a), and every mutation touching money/equity/e
   answer with one indistinguishable refusal. Read the route tables below as
   `requireAuth` + an in-controller membership gate, not as a middleware chain.
 - **`src/middleware/validate.ts` is dead code**, imported by zero files. Boundary parsing in this
-  domain is controller-inline `safeParse` (§3.1), as `src/controllers/project-error-response.ts:52`
+  domain is controller-inline `safeParse` (§3.1), as `src/modules/rnd/projects/project-error-response.ts:52`
   records. Do not wire it up to "be consistent" — the inline form is the convention here.
 
 ### Implementation status, per subsection
@@ -3418,7 +3418,7 @@ surfaced. Both were the **read** halves of dead ends §11j closed the write half
 ([§11j.1](#11j1-write-path-dead-ends--read-the-three-of-these-first)), and neither was a new
 feature — each was the second half of one already agreed.
 
-Compiled the same way §11j was: by reading `src/services/research-projects.service.ts`,
+Compiled the same way §11j was: by reading `src/modules/rnd/projects/research-projects.service.ts`,
 `src/db/schema.ts` and `src/services/discovery-moderation.service.ts`, not by reading §11j.
 
 **Two things the build found that this section did not predict**, both recorded here rather than

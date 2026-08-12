@@ -50,11 +50,11 @@ import {
   CreateApplicationSchema,
   CreateInviteSchema,
   DecisionNoteSchema,
-} from "#src/schemas/project-applications.schemas.js";
+} from "#src/modules/rnd/projects/project-applications.schemas.js";
 import {
   CreateOpenRoleSchema,
   UpdateOpenRoleSchema,
-} from "#src/schemas/project-roles.schemas.js";
+} from "#src/modules/rnd/projects/project-roles.schemas.js";
 import {
   CreatePromotionalSlideSchema,
   ReorderPromotionalSlidesSchema,
@@ -103,7 +103,7 @@ import {
   UpdateMemberSchema,
   UpdateProjectSchema,
   UpdateProjectStageSchema,
-} from "#src/schemas/research-projects.schemas.js";
+} from "#src/modules/rnd/projects/research-projects.schemas.js";
 import { ReplaceSpotlightSlotsSchema } from "#src/modules/home/spotlight/spotlight.schemas.js";
 import {
   CreateSupplierEngagementSchema,

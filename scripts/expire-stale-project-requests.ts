@@ -17,7 +17,7 @@
  */
 import "dotenv/config";
 import { pool } from "#src/db/index.js";
-import { expireStaleRequests } from "#src/services/project-applications.service.js";
+import { expireStaleRequests } from "#src/modules/rnd/projects/project-applications.service.js";
 
 async function main(): Promise<void> {
   const { applications, invites } = await expireStaleRequests();

@@ -5,14 +5,14 @@ import {
   respondProjectError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   CreateOpenRoleSchema,
   ListOpenRolesQuerySchema,
   UpdateOpenRoleSchema,
-} from "#src/schemas/project-roles.schemas.js";
-import * as membershipService from "#src/services/project-membership.service.js";
-import * as rolesService from "#src/services/project-roles.service.js";
+} from "#src/modules/rnd/projects/project-roles.schemas.js";
+import * as rolesService from "#src/modules/rnd/projects/project-roles.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 async function requireRoleOrRespond(

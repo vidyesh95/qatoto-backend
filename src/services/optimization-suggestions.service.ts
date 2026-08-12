@@ -2,7 +2,7 @@ import { and, asc, desc, eq } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { optimizationSuggestion, optimizationSuggestionEvidence } from "#src/db/schema.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

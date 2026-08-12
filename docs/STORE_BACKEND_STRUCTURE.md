@@ -1128,7 +1128,7 @@ rejected server-owned field arrives, so a responder that forwards only per-field
 `422` with an empty object for precisely the hostile-payload case §0 exists for.
 
 **One responder owns all of this**: `respondValidationFailed` in
-`src/controllers/project-error-response.ts`, which delegates to the pure `buildValidationFailureBody`
+`src/modules/rnd/projects/project-error-response.ts`, which delegates to the pure `buildValidationFailureBody`
 so the envelope can be asserted as a value — pinned by `project-error-response.test.ts`. Controllers
 either call the responder or wrap it; none rebuilds the body.
 

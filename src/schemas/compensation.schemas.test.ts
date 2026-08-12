@@ -10,7 +10,7 @@ vi.mock("#src/services/compensation-agreements.service.js", () => ({}));
 vi.mock("#src/services/compensation-payments.service.js", () => ({}));
 vi.mock("#src/services/compensation-periods.service.js", () => ({}));
 vi.mock("#src/services/governance-summary.service.js", () => ({}));
-vi.mock("#src/services/project-membership.service.js", () => ({}));
+vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({}));
 
 const {
   AgreementQuerySchema,

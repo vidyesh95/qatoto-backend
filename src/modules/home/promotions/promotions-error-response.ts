@@ -39,7 +39,7 @@ export {
   optionalBody,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/project-error-response.js";
+} from "#src/modules/rnd/projects/project-error-response.js";
 
 /**
  * Why one specific destination was refused. Every message names the actual mistake — an

@@ -17,7 +17,7 @@ import {
   perceptualHashDistance,
   readReceiptExif,
 } from "#src/lib/receipt-forensics.js";
-import type { ProjectAccessError } from "#src/services/project-membership.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
