@@ -1732,8 +1732,12 @@ export const idempotencyKeyFor = {
   expireCommerceQuotes: (asOfIso: string): string => `${JOB_NAMES.expireCommerceQuotes}:${asOfIso}`,
   releaseExpiredInventoryReservations: (asOfIso: string): string =>
     `${JOB_NAMES.releaseExpiredInventoryReservations}:${asOfIso}`,
-  dispatchCommerceWebhookEvent: (outboxId: string): string =>
-    `${JOB_NAMES.dispatchCommerceWebhookEvent}:${outboxId}`,
+  /**
+   * A41. SCOPED TO THE ATTEMPT, because this key becomes pg-boss's job id: keyed on the outbox row
+   * alone, a retry deduplicates against the send that already failed and never runs at all.
+   */
+  dispatchCommerceWebhookEvent: (outboxId: string, attemptCount: number): string =>
+    `${JOB_NAMES.dispatchCommerceWebhookEvent}:${outboxId}:${String(attemptCount)}`,
   // Keyed on the row, not the attempt: a re-enqueue from the reconciler must collapse into
   // the dispatch that is already queued rather than doubling it.
   dispatchConnectorCommand: (outboxId: string): string =>

@@ -253,11 +253,24 @@ function mapNormalizedRefundState(state: NormalizedRefundState): RefundRow["stat
   }
 }
 
-async function enqueueOutboxDispatch(outboxId: string): Promise<void> {
+/**
+ * Queues one dispatch of an outbox row, KEYED ON THE ATTEMPT and not on the row alone (A41).
+ *
+ * `sendJob` turns the idempotency key into pg-boss's job id, so a key of `<outboxId>` deduplicates
+ * against every send that row has ever made — INCLUDING ONE THAT ALREADY COMPLETED. A row whose
+ * dispatch failed could therefore never be dispatched again: the reconciler re-enqueued it every
+ * hour, pg-boss dropped the send as a duplicate, and the comment below promising that "the
+ * scheduled reconciler will pick up pending outbox rows" was not true.
+ *
+ * `attemptCount` is incremented under the row lock when a dispatch claims it, so each attempt gets
+ * its own job id while two enqueues of the SAME attempt — a create racing a reconcile — still
+ * collapse into one, which is what the key is for.
+ */
+async function enqueueOutboxDispatch(outboxId: string, attemptCount: number): Promise<void> {
   const enqueueResult = await sendJob(
     JOB_NAMES.dispatchCommerceWebhookEvent,
     { outboxId },
-    { idempotencyKey: idempotencyKeyFor.dispatchCommerceWebhookEvent(outboxId) },
+    { idempotencyKey: idempotencyKeyFor.dispatchCommerceWebhookEvent(outboxId, attemptCount) },
   );
   if (!enqueueResult.success) {
     // The scheduled reconciler will pick up pending outbox rows; do not roll back the
@@ -441,7 +454,8 @@ export async function createPaymentIntent(
     case "conflict":
       return { success: false, error: { type: "CONFLICT", message: created.message } };
     case "created":
-      await enqueueOutboxDispatch(created.outboxId);
+      // A freshly created row has never been attempted, so attempt zero is its first key.
+      await enqueueOutboxDispatch(created.outboxId, 0);
       return {
         success: true,
         value: { paymentIntent: projectPaymentIntent(created.intent), accepted: true },
@@ -760,7 +774,8 @@ export async function createRefund(
         error: { type: "OVER_REFUND", refundableInCents: created.refundableInCents },
       };
     case "created":
-      await enqueueOutboxDispatch(created.outboxId);
+      // A freshly created row has never been attempted, so attempt zero is its first key.
+      await enqueueOutboxDispatch(created.outboxId, 0);
       return { success: true, value: projectRefund(created.refund) };
     default: {
       const exhaustiveCheck: never = created;
@@ -1705,7 +1720,7 @@ export async function reconcileCommercePayments(asOf: Date): Promise<{
   readonly transfersChecked: number;
 }> {
   const pendingOutbox = await db
-    .select({ id: commercePaymentOutbox.id })
+    .select({ id: commercePaymentOutbox.id, attemptCount: commercePaymentOutbox.attemptCount })
     .from(commercePaymentOutbox)
     .where(
       and(
@@ -1719,7 +1734,7 @@ export async function reconcileCommercePayments(asOf: Date): Promise<{
 
   let outboxDispatched = 0;
   for (const row of pendingOutbox) {
-    await enqueueOutboxDispatch(row.id);
+    await enqueueOutboxDispatch(row.id, row.attemptCount);
     outboxDispatched += 1;
   }
 
@@ -1753,12 +1768,15 @@ export async function reconcileCommercePayments(asOf: Date): Promise<{
           (retrieved.value.state === "settled" || retrieved.value.state === "authorized")
         ) {
           const [outbox] = await db
-            .select({ id: commercePaymentOutbox.id })
+            .select({
+              id: commercePaymentOutbox.id,
+              attemptCount: commercePaymentOutbox.attemptCount,
+            })
             .from(commercePaymentOutbox)
             .where(eq(commercePaymentOutbox.transferId, transfer.id))
             .limit(1);
           if (outbox) {
-            await enqueueOutboxDispatch(outbox.id);
+            await enqueueOutboxDispatch(outbox.id, outbox.attemptCount);
           }
         }
       }
