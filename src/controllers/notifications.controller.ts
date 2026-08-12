@@ -1,41 +1,13 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import {
+  ListNotificationsQuerySchema,
+  MarkNotificationsReadSchema,
+} from "#src/schemas/notifications.schemas.js";
 import * as notificationsService from "#src/services/notifications.service.js";
 import type { NotificationError } from "#src/services/notifications.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * The caller's notification inbox (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 1).
- *
- * ROOT-MOUNTED AND CALLER-SCOPED, for the same reason `/applications/mine` and
- * `/invites/mine` are: a person's inbox belongs to a person, not to a project, and someone
- * arriving from an email holds no slug. The recipient is `req.user.id` in the WHERE clause
- * — there is no `?userId=` on any route here and there must never be one (§0).
- *
- * THE MAPPER IS LOCAL AND TINY. Two variants, both of which mean "that row is not yours or
- * does not exist"; a shared mapper would drag in four domains' unions to answer one 404.
- */
-
-/**
- * `limit` is capped in the schema AND again in the service. The duplication is deliberate:
- * the schema protects the HTTP surface and the service protects every other caller of it,
- * including a future job.
- */
-export const ListNotificationsQuerySchema = z
-  .object({
-    cursor: z.string().trim().min(1).max(200).optional(),
-    limit: z.coerce.number().int().min(1).max(50).default(20),
-  })
-  .strict();
-
-/**
- * THROUGH an id, never a list of ids. A client that has scrolled past a row has seen
- * everything above it, and a list grows with the backlog while racing anything that arrived
- * meanwhile. `throughMessageId` is what the workshop chat read state already calls this.
- */
-export const MarkNotificationsReadSchema = z.object({ throughNotificationId: z.uuid() }).strict();
 
 function respondNotificationError(res: Response, error: NotificationError): void {
   switch (error.type) {

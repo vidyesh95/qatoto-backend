@@ -180,3 +180,5 @@ export const ListBuyerCompletionsQuerySchema = z
       .optional(),
   })
   .strict();
+
+export const EmptyObjectSchema = z.object({}).strict();

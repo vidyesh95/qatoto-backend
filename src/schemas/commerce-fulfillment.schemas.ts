@@ -470,3 +470,51 @@ export const ServiceEngagementCommandSchema = z.discriminatedUnion("command", [
 ]);
 
 export type ServiceEngagementCommand = z.infer<typeof ServiceEngagementCommandSchema>;
+
+export const EmptyObjectSchema = z.object({}).strict();
+
+export const OrderIdParamsSchema = z
+  .object({ orderId: z.string().trim().min(1).max(200) })
+  .strict();
+
+export const ShipmentIdParamsSchema = z
+  .object({ shipmentId: z.string().trim().min(1).max(200) })
+  .strict();
+
+export const LegIdParamsSchema = z.object({ legId: z.string().trim().min(1).max(200) }).strict();
+
+export const EngagementIdParamsSchema = z
+  .object({ engagementId: z.string().trim().min(1).max(200) })
+  .strict();
+
+export const ListQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+    cursor: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+export const ListServiceEngagementsQuerySchema = ListQuerySchema.extend({
+  role: z.enum(["buyer", "provider"]).optional(),
+}).strict();
+
+export const ListShipmentsQuerySchema = ListQuerySchema.extend({
+  state: z.enum(["planned", "in_transit", "delivered", "cancelled"]).optional(),
+  estimatedArrivalFrom: z.coerce.date().optional(),
+  estimatedArrivalTo: z.coerce.date().optional(),
+}).strict();
+
+export const AppendShipmentEventSchema = z
+  .object({
+    eventKind: z.enum(["picked_up", "in_transit", "delivered", "exception", "cancelled"]),
+    occurredAt: z.iso.datetime().optional(),
+    description: z.string().trim().min(1).max(2000).optional(),
+  })
+  .strict();
+
+export const TransitionServiceEngagementSchema = z
+  .object({
+    targetState: z.enum(["scheduled", "in_progress", "awaiting_buyer", "completed", "cancelled"]),
+    note: z.string().trim().min(1).max(2000).optional(),
+  })
+  .strict();

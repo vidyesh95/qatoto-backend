@@ -2,47 +2,15 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import {
+  ConfirmCheckoutSchema,
+  EmptyObjectSchema,
+  PrepareCheckoutSchema,
+} from "#src/schemas/commerce-checkout.schemas.js";
 import * as commerceCheckoutService from "#src/services/commerce-checkout.service.js";
 import type { CommerceCheckoutError } from "#src/services/commerce-checkout.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
-
-export const PrepareCheckoutSchema = z
-  .object({
-    deliveryAddressId: z.string().trim().min(1).max(200).optional(),
-  })
-  .strict();
-
-export const ConfirmCheckoutSchema = z
-  .object({
-    prepareId: z.string().trim().min(1).max(200),
-    deliveryAddressId: z.string().trim().min(1).max(200).optional(),
-    /**
-     * STORE Phase 14. Which agreed escrow terms apply to which seller.
-     *
-     * OMITTING IT IS THE DEFAULT AND NOT AN ERROR — the order settles without escrow, and
-     * the buyer carries the counterparty risk. Naming an agreement here does not establish
-     * one: the service revalidates it against the accepted, unconsumed set under a row lock
-     * and refuses the confirm outright if it has lapsed (§0).
-     *
-     * Capped at twenty because a checkout produces one order per counterparty and a cart
-     * spanning more sellers than that is not a negotiation anyone conducted.
-     */
-    settlementAgreements: z
-      .array(
-        z
-          .object({
-            sellerOrganizationId: z.string().trim().min(1).max(200),
-            agreementId: z.string().trim().min(1).max(200),
-          })
-          .strict(),
-      )
-      .max(20)
-      .optional(),
-  })
-  .strict();
 
 const IDEMPOTENCY_HEADER = "idempotency-key";
 

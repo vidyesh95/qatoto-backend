@@ -1,57 +1,10 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import { ListPlatformAuditQuerySchema } from "#src/schemas/platform-audit.schemas.js";
 import * as platformAuditService from "#src/services/platform-audit.service.js";
 import type { PlatformAuditError } from "#src/services/platform-audit.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * The platform moderation log (R_AND_D_BACKEND_STRUCTURE.md §11l.2 item 2).
- *
- * THE CAPABILITY CHECK LIVES IN THE SERVICE, before any id is read — the same shape every
- * `/discovery/admin/*` route uses, and the reason its `403` is not an id oracle (§4a Layer
- * 3). It is not middleware for the reason `discovery-moderation.controller.ts` states:
- * middleware cannot return a `Result` and so cannot participate in the exhaustive switch
- * that maps domain errors to statuses.
- */
-
-const PLATFORM_AUDIT_EVENT_KINDS = [
-  "taxonomy_category_approved",
-  "taxonomy_category_rejected",
-  "cluster_merge_approved",
-  "cluster_merge_rejected",
-  "discovery_skill_created",
-  "discovery_skill_updated",
-  "discovery_skill_deleted",
-  "discovery_region_created",
-  "discovery_region_updated",
-  "discovery_region_deleted",
-  "market_insight_created",
-  "market_insight_updated",
-  "market_insight_deleted",
-  "market_insight_published",
-  "market_insight_unpublished",
-  "supplier_created",
-  "supplier_updated",
-  "content_review_approved",
-  "content_review_rejected",
-  "platform_role_granted",
-  "platform_role_revoked",
-] as const;
-
-/**
- * `fromSequence`, not `page`. The sequence is gapless and monotonic by construction, so it
- * is a better cursor than any timestamp — and an append-only log is exactly the shape where
- * OFFSET drifts under concurrent writes (§4c rule 4).
- */
-export const ListPlatformAuditQuerySchema = z
-  .object({
-    fromSequence: z.coerce.number().int().min(1).optional(),
-    eventKind: z.enum(PLATFORM_AUDIT_EVENT_KINDS).optional(),
-    limit: z.coerce.number().int().min(1).max(200).default(50),
-  })
-  .strict();
 
 function respondPlatformAuditError(res: Response, error: PlatformAuditError): void {
   switch (error.type) {

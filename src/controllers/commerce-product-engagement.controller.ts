@@ -3,41 +3,16 @@ import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { computeClientSubnetHash } from "#src/lib/client-subnet.js";
-import { MAXIMUM_VIEW_DWELL_SECONDS } from "#src/lib/commerce-view-clamp.js";
+import {
+  EmptyObjectSchema,
+  ProductSlugParamsSchema,
+  ProductViewBeaconBodySchema,
+} from "#src/schemas/commerce-product-engagement.schemas.js";
 import * as commerceProductEngagementService from "#src/services/commerce-product-engagement.service.js";
 import type { ProductEngagementKind } from "#src/services/commerce-product-engagement.service.js";
 import * as commerceProductViewService from "#src/services/commerce-product-view.service.js";
 import { resolveEligibleProductRefBySlug } from "#src/services/store-catalog.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
-
-/**
- * The view beacon's body (STORE Phase 13).
- *
- * `dwellSeconds` is a CLAIM and is treated as one — `clampViewDwellSeconds` bounds it by
- * wall time before it reaches a column. The ceiling here is only a parse-level sanity
- * bound so an absurd number is a 422 rather than something the clamp has to reason about.
- *
- * `viewSource` is also client-supplied and is safe to accept only because nothing gates on
- * it: it selects no rate, no weight and no eligibility, and exists so an operator triaging
- * a spike can ask which surface it arrived through. Omitting it yields `unknown`, which is
- * an honest answer rather than an error.
- */
-const ProductViewBeaconBodySchema = z
-  .object({
-    dwellSeconds: z.number().int().min(0).max(MAXIMUM_VIEW_DWELL_SECONDS),
-    viewSource: z
-      .enum(["product_detail", "search", "rail", "pathway", "companion", "unknown"])
-      .default("unknown"),
-  })
-  .strict();
-
-const ProductSlugParamsSchema = z
-  .object({
-    productSlug: z.string().trim().min(1).max(200),
-  })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**
@@ -136,8 +111,11 @@ function buildToggleHandler(
 }
 
 export const setProductSaved = buildToggleHandler("saved", "set");
+
 export const clearProductSaved = buildToggleHandler("saved", "clear");
+
 export const setProductBookmarked = buildToggleHandler("bookmarked", "set");
+
 export const clearProductBookmarked = buildToggleHandler("bookmarked", "clear");
 
 /**

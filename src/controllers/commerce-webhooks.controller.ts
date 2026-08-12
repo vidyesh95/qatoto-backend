@@ -1,38 +1,17 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import { resolveExternalEscrowProvider } from "#src/adapters/external-escrow-provider.adapter.js";
 import { logger } from "#src/lib/logger.js";
+import {
+  EmptyObjectSchema,
+  ProviderIdParamsSchema,
+} from "#src/schemas/commerce-webhooks.schemas.js";
 import {
   loadProviderById,
   resolveWebhookSigningSecret,
 } from "#src/services/commerce-connector.service.js";
 import { applyNormalizedEscrowEvent } from "#src/services/commerce-escrow.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * Inbound connector webhooks (STORE Phase 14).
- *
- * THIS IS THE FIRST ROUTE IN THIS BACKEND WITH NO SESSION. Nothing about the caller is
- * known until its signature verifies, so four rules govern it and none is optional:
- *
- *   1. THE BODY IS RAW BYTES. `app.ts` mounts `express.raw` on `/webhooks/*` ahead of the
- *      JSON parser, because the digest must be computed over exactly what arrived.
- *      `JSON.stringify(req.body)` reorders keys and drops whitespace, so a body that
- *      round-tripped through the JSON parser can never match the sender's signature.
- *   2. THE SIGNATURE IS THE AUTHENTICATION. It is verified before the payload is even
- *      parsed, let alone acted on.
- *   3. A REPLAY IS A NO-OP THAT STILL ANSWERS 200. Deduplication happens against the
- *      inbox's unique `(provider_id, provider_event_id)` index. Answering 4xx to a
- *      duplicate would make a well-behaved provider retry something already done.
- *   4. FAILURES ARE OPAQUE. The provider learns whether we accepted the delivery and
- *      nothing else — not whether the session exists, not which organizations are party to
- *      it. An unauthenticated caller must not be able to probe this backend for order ids.
- */
-
-const ProviderIdParamsSchema = z.object({ providerId: z.string().trim().min(1).max(200) }).strict();
-
-const EmptyObjectSchema = z.object({}).strict();
 
 /**
  * Answers 202, not 200, and deliberately.

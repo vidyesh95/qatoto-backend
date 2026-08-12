@@ -3,37 +3,13 @@ import { timingSafeEqual } from "node:crypto";
 import { APIError } from "better-auth/api";
 import { and, eq } from "drizzle-orm";
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { auth, sendSignupOtp } from "#src/lib/auth.js";
+import { CompleteSignupSchema, StartSignupSchema } from "#src/schemas/auth.schemas.js";
 import type { ApiResponse, Result } from "#src/types/index.js";
-
-/**
- * Body for POST /signup/start. `.strict()` rejects unknown keys.
- */
-const StartSignupSchema = z
-  .object({
-    // Lowercase so the stored/looked-up address is canonical. citext makes the DB
-    // comparison case-insensitive anyway (src/db/schema.ts); this keeps the value
-    // itself clean across the credential signup path.
-    email: z.email("A valid email is required.").transform((value) => value.toLowerCase()),
-  })
-  .strict();
-
-/**
- * Body for POST /signup/complete. `.strict()` rejects unknown keys.
- */
-const CompleteSignupSchema = z
-  .object({
-    email: z.email("A valid email is required.").transform((value) => value.toLowerCase()),
-    otp: z.string().min(1, "Verification code is required."),
-    password: z.string().min(8, "Password must be at least 8 characters."),
-    name: z.string().min(1).optional(),
-  })
-  .strict();
 
 /**
  * Constant-time string equality. Length mismatch short-circuits to false (the
@@ -137,7 +113,9 @@ export async function completeSignup(req: Request, res: Response): Promise<void>
  * only in `respondSignup`.
  */
 type SignupSuccess = { readonly message: string; readonly setCookies: readonly string[] };
+
 type SignupFailure = { readonly statusCode: 401 | 409; readonly message: string };
+
 type SignupOutcome = Result<SignupSuccess, SignupFailure>;
 
 /**

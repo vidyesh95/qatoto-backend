@@ -2,7 +2,13 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
-import { FreightModeSchema } from "#src/schemas/commerce-freight-rates.schemas.js";
+import {
+  ArrivalWindowQuerySchema,
+  EmptyObjectSchema,
+  EmptyRequestBodySchema,
+  ListQuerySchema,
+  OrderIdParamsSchema,
+} from "#src/schemas/commerce-orders.schemas.js";
 import * as commerceArrivalWindowService from "#src/services/commerce-arrival-window.service.js";
 import * as commerceDeliveryAddressService from "#src/services/commerce-delivery-address.service.js";
 import type { CommerceDeliveryAddressError } from "#src/services/commerce-delivery-address.service.js";
@@ -10,26 +16,6 @@ import * as commerceOrdersService from "#src/services/commerce-orders.service.js
 import type { CommerceOrdersError } from "#src/services/commerce-orders.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
-const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
-const OrderIdParamsSchema = z.object({ orderId: z.string().trim().min(1).max(200) }).strict();
-/**
- * §19.4's mode selection, and the whole of it.
- *
- * OPTIONAL, AND NOTHING IS AUTO-SELECTED WHEN IT IS ABSENT. Omitting it is a legitimate state
- * the projection reports — `freight: unknown / mode_not_selected`, with the covered modes
- * listed — rather than a prompt for the server to guess. Picking the cheapest would publish
- * the slowest window as though the buyer had chosen it.
- */
-const ArrivalWindowQuerySchema = z.object({ mode: FreightModeSchema.optional() }).strict();
-
-const ListQuerySchema = z
-  .object({
-    limit: z.coerce.number().int().min(1).max(50).optional(),
-    cursor: z.string().trim().min(1).max(500).optional(),
-  })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

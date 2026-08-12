@@ -23,7 +23,7 @@ const {
   RecordPaymentSchema,
   SupersedePeriodSchema,
   WithdrawAgreementSchema,
-} = await import("#src/controllers/compensation.controller.js");
+} = await import("#src/schemas/compensation.schemas.js");
 
 /**
  * R_AND_D_BACKEND_STRUCTURE.md §7A's rejected-keys list, §13 and §17 steps 4 and 5c.

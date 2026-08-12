@@ -20,7 +20,7 @@ const {
   MilestoneVarianceSchema,
   UpdateFundingRoundSchema,
   UpdateMilestoneSchema,
-} = await import("#src/controllers/funding.controller.js");
+} = await import("#src/schemas/funding.schemas.js");
 
 /**
  * The §7 boundary (R_AND_D_BACKEND_STRUCTURE.md §7, §13, §17 steps 4 and 8).

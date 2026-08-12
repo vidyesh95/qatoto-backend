@@ -55,3 +55,7 @@ export const ProductSlugParamsSchema = z
   .strict();
 
 export type ReplaceProductRelationsInput = z.infer<typeof ReplaceProductRelationsSchema>;
+
+export const EmptyObjectSchema = z.object({}).strict();
+
+export const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);

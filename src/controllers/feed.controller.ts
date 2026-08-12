@@ -5,9 +5,7 @@
  * ranked page that Recommended, Explore and Spotlight are all slices of — lands here in
  * phase 3.
  */
-
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   firstParam,
@@ -16,11 +14,15 @@ import {
   respondValidationFailed,
 } from "#src/controllers/engagement-error-response.js";
 import { logger } from "#src/lib/logger.js";
-import { isWellFormedRankSeed, mintRankSeed, RANK_SEED_LENGTH } from "#src/lib/rank-seed.js";
+import { isWellFormedRankSeed, mintRankSeed } from "#src/lib/rank-seed.js";
 import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
+import {
+  ListFeedVideosQuerySchema,
+  SearchVideosQuerySchema,
+  WatchVideoIdParamSchema,
+} from "#src/schemas/feed.schemas.js";
 import * as contentCategoriesService from "#src/services/content-categories.service.js";
 import {
-  FEED_MODES,
   listFeedVideos as listFeedVideosService,
   searchVideos as searchVideosService,
 } from "#src/services/feed.service.js";
@@ -50,9 +52,6 @@ export async function listFeedCategories(_req: Request, res: Response): Promise<
   };
   res.status(200).json(response);
 }
-
-/** `video.id` is `randomUUID()`, so this is a statement about the column, not a guess. */
-export const WatchVideoIdParamSchema = z.object({ videoId: z.uuid() }).strict();
 
 /**
  * `GET /feed/watch/:videoId` — the public watch payload (§5.2).
@@ -97,32 +96,6 @@ export async function getWatchPayload(req: Request, res: Response): Promise<void
   };
   res.status(200).json(response);
 }
-
-/** The chip and tile slugs are kebab-case, server-generated, and validated at creation. */
-const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-/**
- * `GET /feed/videos` — §5.1's query contract.
- *
- * `.strict()`, `z.coerce` with `.default()`, snake_case enum values that byte-match the
- * wire contract (`?mode=new_to_you`, never `new-to-you`).
- *
- * `page` is capped at 200 and `limit` at 50 because offset pagination gets more expensive
- * the deeper it goes, and nothing on the homepage asks for row 10,000.
- */
-export const ListFeedVideosQuerySchema = z
-  .object({
-    mode: z.enum(FEED_MODES).default("all"),
-    categorySlug: z.string().regex(SLUG_PATTERN).max(64).optional(),
-    page: z.coerce.number().int().min(1).max(200).default(1),
-    limit: z.coerce.number().int().min(1).max(50).default(24),
-    /**
-     * Echoed from a previous response so page 2 ranks against the same seed as page 1.
-     * Absent on a first request; minted server-side and returned.
-     */
-    rankSeed: z.string().length(RANK_SEED_LENGTH).optional(),
-  })
-  .strict();
 
 /**
  * `GET /feed/videos` — the one ranked page the whole homepage reads (Rule 3).
@@ -214,29 +187,6 @@ export async function listFeedVideos(req: Request, res: Response): Promise<void>
   };
   res.status(200).json(response);
 }
-
-/**
- * `GET /feed/search` — the query contract for relevance search.
- *
- * `query` IS REQUIRED AND CANNOT BE EMPTY. A blank search is not a search: it would ask the
- * database to rank the entire catalogue by a tsquery that matches nothing, and the client
- * already knows not to send it — an empty box renders a prompt, not a request. `.trim()`
- * first, so `?query=%20` is a 422 rather than a scan.
- *
- * 120 characters is well past any real query and short enough that `websearch_to_tsquery`
- * cannot be handed a novel to parse.
- *
- * `page` and `limit` share `ListFeedVideosQuerySchema`'s bounds for the same reason it has
- * them: offset pagination gets more expensive the deeper it goes, and nothing on a search
- * results page asks for row 10,000.
- */
-export const SearchVideosQuerySchema = z
-  .object({
-    query: z.string().trim().min(1).max(120),
-    page: z.coerce.number().int().min(1).max(200).default(1),
-    limit: z.coerce.number().int().min(1).max(50).default(24),
-  })
-  .strict();
 
 /**
  * `GET /feed/search` — videos matching a typed query, most relevant first.

@@ -2,32 +2,13 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import {
+  EmptyObjectSchema,
+  ModerateRankingBodySchema,
+  ProductIdParamsSchema,
+} from "#src/schemas/commerce-ranking.schemas.js";
 import * as commerceRankingService from "#src/services/commerce-ranking.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * The ranking engine's two authenticated surfaces (STORE Phase 13, stage 5).
- *
- * A seller reading its own product's standing, and a moderator deciding an appeal. There is
- * deliberately no route that exposes the component breakdown or the category statistics:
- * publishing those would hand anyone with a seller account a specification of what to forge.
- */
-
-const EmptyObjectSchema = z.object({}).strict();
-
-const ProductIdParamsSchema = z.object({ productId: z.string().trim().min(1).max(200) }).strict();
-
-/**
- * `none` is a legal action and is how an appeal is GRANTED — it lifts a suppression while
- * leaving the decision, its author and its reason in the event log. Deleting the row instead
- * would erase the fact that a suppression ever happened.
- */
-const ModerateRankingBodySchema = z
-  .object({
-    action: z.enum(["none", "weight_reduced", "capped", "quarantined", "review_queued"]),
-    reason: z.string().trim().min(3).max(1000),
-  })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

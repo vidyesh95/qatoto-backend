@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   firstParam,
@@ -7,68 +6,17 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/discovery-error-response.js";
+import {
+  CreateCategorySchema,
+  ListCategoriesQuerySchema,
+  ListDemandSignalsQuerySchema,
+  ListMarketInsightsQuerySchema,
+  ListRegionsQuerySchema,
+  MarketInsightIdParamSchema,
+} from "#src/schemas/discovery-catalog.schemas.js";
 import * as catalogService from "#src/services/discovery-catalog.service.js";
 import * as categoriesService from "#src/services/research-categories.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
-
-/**
- * The knowledge hub and the shared taxonomy (R_AND_D_BACKEND_STRUCTURE.md §11b).
- *
- * THIS CONTROLLER IS CANONICAL FOR CATEGORIES. `research-categories.controller.ts` used to
- * own them and carried a scope note saying so: "When §6 lands, POST /discovery/categories
- * becomes canonical and this becomes a thin alias or is deleted. They must never be two
- * implementations over one table." That file is now deleted, and
- * `/research-categories` aliases these handlers at the ROUTE layer — controllers importing
- * controllers would invert the routes → controllers → services layering.
- */
-
-/**
- * `status` is ABSENT by construction. A user-minted category always lands `pending`, and
- * `.strict()` turns an attempt to self-approve into a 422 rather than letting the spam
- * gate be bypassed by adding one key. `pinIconKey` is absent for the same reason — a
- * minter must not choose their own map iconography.
- */
-export const CreateCategorySchema = z.object({ label: z.string().trim().min(1).max(80) }).strict();
-
-export const ListCategoriesQuerySchema = z
-  .object({ status: z.enum(["approved", "pending", "rejected"]).default("approved") })
-  .strict();
-
-export const ListRegionsQuerySchema = z
-  .object({ countryCode: z.string().trim().length(2).toUpperCase().optional() })
-  .strict();
-
-const MARKET_INSIGHT_STAT_KINDS = [
-  "percent_change",
-  "percent_level",
-  "absolute_count",
-  "multiplier",
-] as const;
-
-export const ListMarketInsightsQuerySchema = z
-  .object({
-    region: z.string().trim().min(1).max(60).optional(),
-    category: z.string().trim().min(1).max(60).optional(),
-    statKind: z.enum(MARKET_INSIGHT_STAT_KINDS).optional(),
-    page: z.coerce.number().int().min(1).max(500).default(1),
-    limit: z.coerce.number().int().min(1).max(50).default(20),
-  })
-  .strict();
-
-/**
- * Same precedent as `ClusterIdParamSchema`: a malformed id 422s before any query runs, so a
- * scan is never started on a value that cannot match a row.
- */
-export const MarketInsightIdParamSchema = z.object({ insightId: z.uuid() }).strict();
-
-export const ListDemandSignalsQuerySchema = z
-  .object({
-    region: z.string().trim().min(1).max(60).optional(),
-    category: z.string().trim().min(1).max(60).optional(),
-    page: z.coerce.number().int().min(1).max(500).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-  })
-  .strict();
 
 /**
  * GET /discovery/categories (and its /research-categories alias).

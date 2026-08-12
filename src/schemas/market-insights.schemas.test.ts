@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("#src/services/market-insights.service.js", () => ({}));
 
 const { CreateMarketInsightSchema, ListMarketInsightsAdminQuerySchema, UpdateMarketInsightSchema } =
-  await import("#src/controllers/market-insights.controller.js");
+  await import("#src/schemas/market-insights.schemas.js");
 
 /**
  * §11j.4's authoring bodies (§0, §13).

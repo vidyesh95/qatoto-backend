@@ -7,6 +7,17 @@ import {
   ServiceEngagementCommandSchema,
   ShipmentLegCommandSchema,
 } from "#src/schemas/commerce-fulfillment.schemas.js";
+import {
+  AppendShipmentEventSchema,
+  EmptyObjectSchema,
+  EngagementIdParamsSchema,
+  LegIdParamsSchema,
+  ListServiceEngagementsQuerySchema,
+  ListShipmentsQuerySchema,
+  OrderIdParamsSchema,
+  ShipmentIdParamsSchema,
+  TransitionServiceEngagementSchema,
+} from "#src/schemas/commerce-fulfillment.schemas.js";
 import * as commerceFulfillmentPhase6Service from "#src/services/commerce-fulfillment-phase6.service.js";
 import type { CommercePhase6Error } from "#src/services/commerce-fulfillment-phase6.service.js";
 import * as commerceFulfillmentService from "#src/services/commerce-fulfillment.service.js";
@@ -14,54 +25,7 @@ import type { CommerceFulfillmentError } from "#src/services/commerce-fulfillmen
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
-const EmptyObjectSchema = z.object({}).strict();
-const OrderIdParamsSchema = z.object({ orderId: z.string().trim().min(1).max(200) }).strict();
-const ShipmentIdParamsSchema = z.object({ shipmentId: z.string().trim().min(1).max(200) }).strict();
-const LegIdParamsSchema = z.object({ legId: z.string().trim().min(1).max(200) }).strict();
-const EngagementIdParamsSchema = z
-  .object({ engagementId: z.string().trim().min(1).max(200) })
-  .strict();
-
-const ListQuerySchema = z
-  .object({
-    limit: z.coerce.number().int().min(1).max(50).optional(),
-    cursor: z.string().trim().min(1).max(500).optional(),
-  })
-  .strict();
-
-const ListServiceEngagementsQuerySchema = ListQuerySchema.extend({
-  role: z.enum(["buyer", "provider"]).optional(),
-}).strict();
-
-/**
- * A29. The logistics queue's filters.
- *
- * The two ETA bounds are strict ISO instants rather than dates, because the value they
- * filter (`commerce_shipment_leg.estimated_arrival_at`) is an instant — accepting a bare
- * `2026-08-08` would silently mean midnight UTC and quietly exclude the whole day.
- */
-const ListShipmentsQuerySchema = ListQuerySchema.extend({
-  state: z.enum(["planned", "in_transit", "delivered", "cancelled"]).optional(),
-  estimatedArrivalFrom: z.coerce.date().optional(),
-  estimatedArrivalTo: z.coerce.date().optional(),
-}).strict();
-
 export const CreateShipmentSchema = CreateShipmentWithLegsSchema;
-
-export const AppendShipmentEventSchema = z
-  .object({
-    eventKind: z.enum(["picked_up", "in_transit", "delivered", "exception", "cancelled"]),
-    occurredAt: z.iso.datetime().optional(),
-    description: z.string().trim().min(1).max(2000).optional(),
-  })
-  .strict();
-
-export const TransitionServiceEngagementSchema = z
-  .object({
-    targetState: z.enum(["scheduled", "in_progress", "awaiting_buyer", "completed", "cancelled"]),
-    note: z.string().trim().min(1).max(2000).optional(),
-  })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   firstParam,
@@ -7,97 +6,14 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/discovery-error-response.js";
+import {
+  CreateDiscoveryRegionSchema,
+  CreateDiscoverySkillSchema,
+  UpdateDiscoveryRegionSchema,
+  UpdateDiscoverySkillSchema,
+} from "#src/schemas/discovery-vocabulary.schemas.js";
 import * as vocabularyService from "#src/services/discovery-vocabulary.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * The controlled-vocabulary admin surface — `/discovery/admin/skills` and `/regions`
- * (R_AND_D_BACKEND_STRUCTURE.md §6, §11j.4).
- *
- * ---------------------------------------------------------------------------
- * THE FIELDS THAT EXIST IN NO SCHEMA HERE, and are therefore 422s (§0, §13):
- *
- *   id · createdAt · isVerified (on a skill — job-written, and a badge a request could set
- *   would mean nothing) · slug on either PATCH · kind, countryCode and parentRegionId on the
- *   region PATCH.
- *
- * `slug` IS FROZEN ON BOTH PATCHES. It is the `?skill=` / `?region=` filter key matched by
- * equality — the structural fix §6 made — and clients have stored it in saved searches and
- * links. Renaming it silently breaks every one, which is the same reason `supplier.slug` and
- * a published `research_project.slug` are frozen.
- *
- * THE REGION PATCH ACCEPTS `displayLabel` AND NOTHING ELSE. `kind` and `countryCode` are
- * inputs to two cross-field CHECKs, so a partial edit re-creates the 23514-as-500 trap; and
- * `parentRegionId` is self-referential, so a re-parent is the one operation on this table
- * that could build a cycle. Freezing them makes both questions unrepresentable rather than
- * requiring a validation pass on every write.
- * ---------------------------------------------------------------------------
- */
-
-const SlugSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(80)
-  .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "Must be a lowercase, hyphen-separated slug");
-
-const DisplayLabelSchema = z.string().trim().min(1).max(80);
-
-export const CreateDiscoverySkillSchema = z
-  .object({
-    slug: SlugSchema,
-    displayLabel: DisplayLabelSchema,
-    categoryId: z.string().trim().min(1).max(64).optional(),
-  })
-  .strict();
-
-/** `isActive: false` is RETIREMENT — the row survives and profiles citing it keep rendering. */
-export const UpdateDiscoverySkillSchema = z
-  .object({
-    displayLabel: DisplayLabelSchema.optional(),
-    categoryId: z.string().trim().min(1).max(64).nullable().optional(),
-    isActive: z.boolean().optional(),
-  })
-  .strict();
-
-/**
- * `global` IS DELIBERATELY ABSENT from this enum.
- *
- * `discovery_region_root_ck` enforces `kind = 'global' ⇔ parent IS NULL`, but it does NOT
- * make `global` unique — so the schema's own assumption, "exactly one root, and it is the
- * global row", is enforced by nothing. Leaving the branch off the wire makes a second root
- * unrepresentable, which costs no query and no migration.
- *
- * The discriminated union carries both region CHECKs as types: `countryCode` exists only on
- * the `country` branch (so `.strict()` refuses it on a macro region and it is required on a
- * country), and `parentRegionId` is required on both (so neither can be a root).
- */
-export const CreateDiscoveryRegionSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("country"),
-      slug: SlugSchema,
-      displayLabel: DisplayLabelSchema,
-      countryCode: z
-        .string()
-        .trim()
-        .toUpperCase()
-        .regex(/^[A-Z]{2}$/, "Must be a two-letter ISO country code"),
-      parentRegionId: z.string().trim().min(1).max(64),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("macro_region"),
-      slug: SlugSchema,
-      displayLabel: DisplayLabelSchema,
-      parentRegionId: z.string().trim().min(1).max(64),
-    })
-    .strict(),
-]);
-
-/** A region's identity is not editable; only how it is displayed. */
-export const UpdateDiscoveryRegionSchema = z.object({ displayLabel: DisplayLabelSchema }).strict();
 
 /** GET /discovery/admin/skills — the full vocabulary, retired entries included (§11j.4). */
 export async function listSkills(req: Request, res: Response): Promise<void> {

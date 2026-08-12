@@ -186,3 +186,14 @@ export type ReplacePathwaySlotsInput = z.infer<typeof ReplacePathwaySlotsSchema>
 export type ReplacePathwaySlotCandidatesInput = z.infer<typeof ReplacePathwaySlotCandidatesSchema>;
 export type ModeratePathwayInput = z.infer<typeof ModeratePathwaySchema>;
 export type SeedCartFromPathwayInput = z.infer<typeof SeedCartFromPathwaySchema>;
+
+export const EmptyObjectSchema = z.object({}).strict();
+
+export const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
+
+export const PageQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    cursor: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();

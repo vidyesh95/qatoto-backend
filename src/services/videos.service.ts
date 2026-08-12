@@ -2,7 +2,6 @@ import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { fromDrizzle } from "pg-boss";
 
 import { config } from "#src/config/index.js";
-import type { CreateVideoInput, UpdateVideoInput } from "#src/controllers/videos.controller.js";
 import { db } from "#src/db/index.js";
 import {
   animeEpisode,
@@ -40,6 +39,7 @@ import {
   type YoutubeSourceError,
   type YoutubeVideoFacts,
 } from "#src/lib/youtube.js";
+import type { CreateVideoInput, UpdateVideoInput } from "#src/schemas/videos.schemas.js";
 import {
   DEFAULT_CONTENT_CATEGORY_SLUG,
   findUnavailableCategoryIds,

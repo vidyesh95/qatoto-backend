@@ -2,50 +2,15 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import {
+  AppendMessageBodySchema,
+  CreateThreadBodySchema,
+  ListMessagesQuerySchema,
+  ListThreadsQuerySchema,
+  ThreadParamsSchema,
+} from "#src/schemas/commerce-messages.schemas.js";
 import * as commerceMessagesService from "#src/services/commerce-messages.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const CreateThreadBodySchema = z
-  .object({
-    resourceKind: z.enum(["rfq", "quote"]),
-    resourceId: z.string().trim().min(1).max(200),
-  })
-  .strict();
-
-const ThreadParamsSchema = z
-  .object({
-    threadId: z.string().trim().min(1).max(200),
-  })
-  .strict();
-
-const ListMessagesQuerySchema = z
-  .object({
-    cursor: z.string().trim().min(1).max(500).optional(),
-    limit: z.coerce.number().int().min(1).max(100).optional(),
-  })
-  .strict();
-
-/**
- * A38. `resourceKind` narrows the inbox to one conversation family — the frontend's
- * negotiations tab versus its pre-sales tab — and is the four kinds this service can resolve
- * parties for, NOT the seven the column holds. `.strict()` therefore answers 422 for `order`
- * rather than silently returning nothing, which is the difference between "we do not serve
- * that yet" and "you have no order threads".
- */
-const ListThreadsQuerySchema = z
-  .object({
-    resourceKind: z.enum(["rfq", "quote", "product_inquiry", "manufacturing_inquiry"]).optional(),
-    cursor: z.string().trim().min(1).max(500).optional(),
-    limit: z.coerce.number().int().min(1).max(100).optional(),
-  })
-  .strict();
-
-const AppendMessageBodySchema = z
-  .object({
-    bodyText: z.string().min(1).max(10_000),
-    encryptedDocumentIds: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
-  })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

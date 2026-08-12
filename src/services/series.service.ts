@@ -1,5 +1,8 @@
 import { and, asc, count, countDistinct, desc, eq } from "drizzle-orm";
 
+import { db } from "#src/db/index.js";
+import { animeEpisode, animeSeason, animeSeries } from "#src/db/schema.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import type {
   CreateEpisodeInput,
   CreateSeasonInput,
@@ -7,10 +10,7 @@ import type {
   UpdateEpisodeInput,
   UpdateSeasonInput,
   UpdateSeriesInput,
-} from "#src/controllers/series.controller.js";
-import { db } from "#src/db/index.js";
-import { animeEpisode, animeSeason, animeSeries } from "#src/db/schema.js";
-import { isUniqueViolation } from "#src/lib/pg-errors.js";
+} from "#src/schemas/series.schemas.js";
 import type { Result } from "#src/types/index.js";
 
 /**

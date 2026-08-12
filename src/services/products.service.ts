@@ -2,10 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
-import type {
-  CreateProductInput,
-  UpdateProductInput,
-} from "#src/controllers/products.controller.js";
 import { db } from "#src/db/index.js";
 import {
   commerceCategory,
@@ -30,6 +26,7 @@ import {
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
 import { slugifyPublicTitle } from "#src/lib/store-cursor.js";
+import type { CreateProductInput, UpdateProductInput } from "#src/schemas/products.schemas.js";
 import { ensureCommerceProductStatsRow } from "#src/services/commerce-product-engagement.service.js";
 import { enqueueProductSearchDocumentRefresh } from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";

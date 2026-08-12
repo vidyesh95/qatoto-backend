@@ -9,12 +9,11 @@ import {
   ReportIdParamsSchema,
   RestoreContentSchema,
 } from "#src/schemas/commerce-content-reports.schemas.js";
+import { EmptyObjectSchema } from "#src/schemas/commerce-content-reports.schemas.js";
 import * as commerceContentReportsService from "#src/services/commerce-content-reports.service.js";
 import type { CommerceContentReportsError } from "#src/services/commerce-content-reports.service.js";
 import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

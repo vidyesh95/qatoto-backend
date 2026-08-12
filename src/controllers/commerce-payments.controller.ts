@@ -2,31 +2,18 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import {
+  CreateRefundBodySchema,
+  EmptyObjectSchema,
+  EmptyRequestBodySchema,
+  ListRefundsQuerySchema,
+  OrderIdParamsSchema,
+  PaymentIntentIdParamsSchema,
+} from "#src/schemas/commerce-payments.schemas.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commercePaymentsService from "#src/services/commerce-payments.service.js";
 import type { CommercePaymentsError } from "#src/services/commerce-payments.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
-const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
-const OrderIdParamsSchema = z.object({ orderId: z.string().trim().min(1).max(200) }).strict();
-const PaymentIntentIdParamsSchema = z
-  .object({ paymentIntentId: z.string().trim().min(1).max(200) })
-  .strict();
-const ListRefundsQuerySchema = z
-  .object({
-    orderId: z.string().trim().min(1).max(200).optional(),
-    cursor: z.string().trim().min(1).max(500).optional(),
-    limit: z.coerce.number().int().min(1).max(100).optional(),
-  })
-  .strict();
-
-const CreateRefundBodySchema = z
-  .object({
-    amountInCents: z.number().int().positive().optional(),
-    reason: z.string().trim().min(1).max(1000).optional(),
-  })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

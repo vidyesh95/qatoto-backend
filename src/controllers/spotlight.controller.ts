@@ -1,31 +1,13 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   respondSpotlightError,
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/spotlight-error-response.js";
+import { ReplaceSpotlightSlotsSchema } from "#src/schemas/spotlight.schemas.js";
 import * as spotlightService from "#src/services/spotlight.service.js";
-import { MAX_SPOTLIGHT_SLOTS } from "#src/services/spotlight.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * The home-page Spotlight rail — up to three admin-picked catalogue videos.
- *
- * ONE PUBLIC READ AND TWO ADMIN ROUTES. The public read takes no session. Admin routes
- * are gated by `manage_promotions` inside the service, before any id is read.
- */
-
-/**
- * The whole ordered set. Empty clears the rail. Max three; uniqueness is enforced in the
- * service so the Zod message stays about shape, not catalogue membership.
- */
-export const ReplaceSpotlightSlotsSchema = z
-  .object({
-    videoIds: z.array(z.string().min(1).max(64)).max(MAX_SPOTLIGHT_SLOTS),
-  })
-  .strict();
 
 /** `GET /spotlight/videos` — PUBLIC. Live, eligible slots only, already ordered. */
 export async function listActiveSpotlightVideos(_req: Request, res: Response): Promise<void> {

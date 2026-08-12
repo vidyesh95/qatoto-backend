@@ -21,8 +21,8 @@ vi.mock("#src/lib/jobs.js", () => ({
 
 const clustersService = await import("#src/services/problem-clusters.service.js");
 const jobs = await import("#src/lib/jobs.js");
-const { CreateProblemReportSchema, createProblemReport, listProblemClusters } =
-  await import("#src/controllers/problem-clusters.controller.js");
+const { createProblemReport, listProblemClusters } = await import("#src/controllers/problem-clusters.controller.js");
+const { CreateProblemReportSchema } = await import("#src/schemas/problem-clusters.schemas.js");
 
 const checkCategoryUsableMock = vi.mocked(clustersService.checkCategoryUsable);
 const createProblemSubmissionMock = vi.mocked(clustersService.createProblemSubmission);

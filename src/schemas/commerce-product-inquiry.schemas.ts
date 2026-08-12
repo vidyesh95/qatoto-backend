@@ -28,3 +28,5 @@ export const ListProductInquiriesQuerySchema = z
   .strict();
 
 export type ListProductInquiriesQuery = z.infer<typeof ListProductInquiriesQuerySchema>;
+
+export const EmptyObjectSchema = z.object({}).strict();

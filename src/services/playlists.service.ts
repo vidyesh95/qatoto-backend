@@ -1,11 +1,8 @@
 import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
 
-import type {
-  CreatePlaylistInput,
-  UpdatePlaylistInput,
-} from "#src/controllers/playlists.controller.js";
 import { db } from "#src/db/index.js";
 import { playlist, playlistItem, video } from "#src/db/schema.js";
+import type { CreatePlaylistInput, UpdatePlaylistInput } from "#src/schemas/playlists.schemas.js";
 import type { Result } from "#src/types/index.js";
 
 /**

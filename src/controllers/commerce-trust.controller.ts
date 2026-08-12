@@ -20,6 +20,7 @@ import {
   ReviewMediaParamsSchema,
   UpsertReviewReplySchema,
 } from "#src/schemas/commerce-trust.schemas.js";
+import { EmptyObjectSchema } from "#src/schemas/commerce-trust.schemas.js";
 import { StoreReviewListQuerySchema } from "#src/schemas/store-reviews.schemas.js";
 import * as commerceCompletionService from "#src/services/commerce-completion.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
@@ -30,8 +31,6 @@ import type {
 } from "#src/services/commerce-trust.service.js";
 import * as storeReviewsService from "#src/services/store-reviews.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**
@@ -534,10 +533,6 @@ export async function decideDispute(req: Request, res: Response): Promise<void> 
     data: result.value,
   } satisfies ApiResponse);
 }
-
-// ---------------------------------------------------------------------------
-// Appendix A8 — review depth handlers.
-// ---------------------------------------------------------------------------
 
 export async function attachReviewPhoto(req: Request, res: Response): Promise<void> {
   const actor = requireCommerceActor(req, res);

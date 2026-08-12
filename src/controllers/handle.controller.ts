@@ -1,23 +1,12 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   respondFieldRefusal,
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
+import { AvailabilityQuerySchema, UpdateMyHandleSchema } from "#src/schemas/handle.schemas.js";
 import * as handleService from "#src/services/handle.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * Body for PATCH /users/me/handle. The raw handle is accepted as a loosely
- * bounded string here — the service is the authority that normalizes (trim, strip
- * "@", lowercase) and regex-validates it (CLAUDE.md §1.1). `.strict()` rejects
- * unknown keys; the 100-char ceiling just caps abuse before normalization.
- */
-const UpdateMyHandleSchema = z.object({ handle: z.string().max(100) }).strict();
-
-/** Query for GET /handles/availability. */
-const AvailabilityQuerySchema = z.object({ handle: z.string().max(100) });
 
 /**
  * Human date like "Jul 9" for the rate-limit message. Stable UTC formatting so

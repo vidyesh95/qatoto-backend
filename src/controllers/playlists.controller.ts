@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   firstParam,
@@ -7,58 +6,14 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/studio-error-response.js";
+import {
+  CreatePlaylistSchema,
+  ListMyPlaylistsQuerySchema,
+  ReplacePlaylistVideosSchema,
+  UpdatePlaylistSchema,
+} from "#src/schemas/playlists.schemas.js";
 import * as playlistsService from "#src/services/playlists.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
-
-/** Creator playlist endpoints (docs/STUDIO_BACKEND_STRUCTURE.md §6). */
-
-/**
- * Declared once and WITHOUT defaults, so the update schema can be `.partial()`d safely —
- * `.partial()` does not strip `.default()`, and a PATCH that silently re-asserts a
- * default is how a rename ends up resetting a playlist's visibility. Same reasoning as
- * videos.controller.ts and products.controller.ts.
- */
-const playlistFieldShapes = {
-  title: z.string().trim().min(1).max(150),
-  description: z.string().trim().max(5000),
-  visibility: z.enum(["public", "unlisted", "private"]),
-  defaultVideoOrder: z.enum([
-    "date_published_newest",
-    "date_published_oldest",
-    "date_added_newest",
-    "date_added_oldest",
-    "manual",
-  ]),
-  language: z.string().trim().max(60),
-};
-
-const CreatePlaylistSchema = z
-  .object(playlistFieldShapes)
-  .partial()
-  .extend({
-    title: playlistFieldShapes.title,
-    // Private by default: a playlist created mid-edit should not be publicly listed
-    // before the creator has decided it is ready.
-    visibility: playlistFieldShapes.visibility.default("private"),
-    defaultVideoOrder: playlistFieldShapes.defaultVideoOrder.default("date_published_newest"),
-  })
-  .strict();
-
-const UpdatePlaylistSchema = z.object(playlistFieldShapes).partial().strict();
-
-const ReplacePlaylistVideosSchema = z
-  .object({ videoIds: z.array(z.string().min(1).max(64)).max(500) })
-  .strict();
-
-const ListMyPlaylistsQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-  })
-  .strict();
-
-export type CreatePlaylistInput = z.infer<typeof CreatePlaylistSchema>;
-export type UpdatePlaylistInput = z.infer<typeof UpdatePlaylistSchema>;
 
 /** POST /playlists */
 export async function createPlaylist(req: Request, res: Response): Promise<void> {

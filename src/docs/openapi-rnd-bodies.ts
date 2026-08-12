@@ -8,23 +8,23 @@ import {
   RecordPaymentSchema,
   SupersedePeriodSchema,
   WithdrawAgreementSchema,
-} from "#src/controllers/compensation.controller.js";
+} from "#src/schemas/compensation.schemas.js";
 import {
   CreateDailyLogSchema,
   SubmitDailyLogSchema,
   UpdateDailyLogSchema,
-} from "#src/controllers/daily-logs.controller.js";
-import { CreateCategorySchema } from "#src/controllers/discovery-catalog.controller.js";
+} from "#src/schemas/daily-logs.schemas.js";
+import { CreateCategorySchema } from "#src/schemas/discovery-catalog.schemas.js";
 import {
   DecideCategorySchema,
   DecideMergeProposalSchema,
-} from "#src/controllers/discovery-moderation.controller.js";
+} from "#src/schemas/discovery-moderation.schemas.js";
 import {
   CreateDiscoveryRegionSchema,
   CreateDiscoverySkillSchema,
   UpdateDiscoveryRegionSchema,
   UpdateDiscoverySkillSchema,
-} from "#src/controllers/discovery-vocabulary.controller.js";
+} from "#src/schemas/discovery-vocabulary.schemas.js";
 import {
   CreateFundingRoundSchema,
   CreatePledgeSchema,
@@ -32,34 +32,34 @@ import {
   MilestoneVarianceSchema,
   UpdateFundingRoundSchema,
   UpdateMilestoneSchema,
-} from "#src/controllers/funding.controller.js";
+} from "#src/schemas/funding.schemas.js";
 import {
   CreateMarketInsightSchema,
   UpdateMarketInsightSchema,
-} from "#src/controllers/market-insights.controller.js";
-import { MarkNotificationsReadSchema } from "#src/controllers/notifications.controller.js";
+} from "#src/schemas/market-insights.schemas.js";
+import { MarkNotificationsReadSchema } from "#src/schemas/notifications.schemas.js";
 import {
   CountersignPlatformRoleSchema,
   ProposePlatformRoleSchema,
-} from "#src/controllers/platform-roles.controller.js";
+} from "#src/schemas/platform-roles.schemas.js";
 import {
   CreateClusterProjectLinkSchema,
   CreateProblemReportSchema,
-} from "#src/controllers/problem-clusters.controller.js";
+} from "#src/schemas/problem-clusters.schemas.js";
 import {
   CreateApplicationSchema,
   CreateInviteSchema,
   DecisionNoteSchema,
-} from "#src/controllers/project-applications.controller.js";
+} from "#src/schemas/project-applications.schemas.js";
 import {
   CreateOpenRoleSchema,
   UpdateOpenRoleSchema,
-} from "#src/controllers/project-roles.controller.js";
+} from "#src/schemas/project-roles.schemas.js";
 import {
   CreatePromotionalSlideSchema,
   ReorderPromotionalSlidesSchema,
   UpdatePromotionalSlideSchema,
-} from "#src/controllers/promotions.controller.js";
+} from "#src/schemas/promotions.schemas.js";
 import {
   AuthorizeIntegrationSchema,
   BakePieSchema,
@@ -74,7 +74,7 @@ import {
   ReverifySchema,
   SubmitClaimSchema,
   UploadReceiptSchema,
-} from "#src/controllers/proof-of-effort.controller.js";
+} from "#src/schemas/proof-of-effort.schemas.js";
 import {
   AttachPaperFileSchema,
   CreateBranchSchema,
@@ -96,22 +96,22 @@ import {
   UpdateBranchSchema,
   UpdateParticipationSchema,
   UpdateProgramSchema,
-} from "#src/controllers/research-programs.controller.js";
+} from "#src/schemas/research-programs.schemas.js";
 import {
   CreateProjectSchema,
   LinkMarketInsightSchema,
   UpdateMemberSchema,
   UpdateProjectSchema,
   UpdateProjectStageSchema,
-} from "#src/controllers/research-projects.controller.js";
-import { ReplaceSpotlightSlotsSchema } from "#src/controllers/spotlight.controller.js";
+} from "#src/schemas/research-projects.schemas.js";
+import { ReplaceSpotlightSlotsSchema } from "#src/schemas/spotlight.schemas.js";
 import {
   CreateSupplierEngagementSchema,
   CreateSupplierSchema,
   UpdateSupplierEngagementSchema,
   UpdateSupplierSchema,
-} from "#src/controllers/suppliers.controller.js";
-import { TalentProfileSchema } from "#src/controllers/talent-profiles.controller.js";
+} from "#src/schemas/suppliers.schemas.js";
+import { TalentProfileSchema } from "#src/schemas/talent-profiles.schemas.js";
 import {
   AddFileLinkSchema,
   CreateColumnSchema,
@@ -123,7 +123,7 @@ import {
   UpdateColumnSchema,
   UpdateFileLinkSchema,
   UpdateTaskSchema,
-} from "#src/controllers/workshop.controller.js";
+} from "#src/schemas/workshop.schemas.js";
 
 /**
  * Which Zod schema each R&D route parses its body with (§11l.2 item 8).

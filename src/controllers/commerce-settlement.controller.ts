@@ -2,78 +2,20 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import {
+  AgreementIdParamsSchema,
+  EligibleProvidersQuerySchema,
+  EmptyObjectSchema,
+  ProposeAgreementBodySchema,
+  RespondBodySchema,
+  ThreadIdParamsSchema,
+} from "#src/schemas/commerce-settlement.schemas.js";
 import * as commerceSettlementService from "#src/services/commerce-settlement.service.js";
 import type {
   CommerceSettlementError,
   SettlementActorContext,
 } from "#src/services/commerce-settlement.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * HTTP mapping for negotiated settlement agreements (STORE Phase 14).
- *
- * No domain decision lives here. In particular the PROPOSER is taken from the authenticated
- * organization context and is deliberately absent from every schema below — a body naming
- * its own proposer would let one party fabricate an offer in the other's name, which is
- * exactly what §0 says a hostile client will try.
- */
-
-const EmptyObjectSchema = z.object({}).strict();
-
-const IdentifierSchema = z.string().trim().min(1).max(200);
-
-const ThreadIdParamsSchema = z.object({ threadId: IdentifierSchema }).strict();
-const AgreementIdParamsSchema = z.object({ agreementId: IdentifierSchema }).strict();
-
-const CurrencySchema = z
-  .string()
-  .trim()
-  .regex(/^[A-Z]{3}$/, "Currency must be an ISO-4217 alpha-3 code");
-
-/**
- * A milestone plan is capped at twenty. An escrow with a hundred tranches is not a payment
- * schedule anyone administers; it is a way to make a release queue unreviewable.
- */
-const MilestoneSchema = z
-  .object({
-    sequence: z.number().int().positive().max(20),
-    milestoneKind: z.enum(["deposit", "shipment", "inspection", "delivery", "final"]),
-    amountInCents: z.number().int().positive(),
-    releaseConditionNote: z.string().trim().min(1).max(2000).nullable().default(null),
-  })
-  .strict();
-
-const ProposeAgreementBodySchema = z
-  .object({
-    buyerOrganizationId: IdentifierSchema,
-    sellerOrganizationId: IdentifierSchema,
-    externalProviderId: IdentifierSchema,
-    escrowFeeBearer: z.enum(["buyer", "seller", "split"]),
-    currency: CurrencySchema,
-    totalInCents: z.number().int().positive(),
-    expiresAt: z.coerce.date(),
-    milestones: z.array(MilestoneSchema).min(1).max(20),
-  })
-  .strict();
-
-const RespondBodySchema = z
-  .object({ response: z.enum(["accept", "decline", "withdraw"]) })
-  .strict();
-
-const EligibleProvidersQuerySchema = z
-  .object({
-    buyerCountryCode: z
-      .string()
-      .trim()
-      .regex(/^[A-Z]{2}$/),
-    sellerCountryCode: z
-      .string()
-      .trim()
-      .regex(/^[A-Z]{2}$/),
-    currency: CurrencySchema,
-    totalInCents: z.coerce.number().int().positive(),
-  })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

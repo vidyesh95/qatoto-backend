@@ -15,7 +15,7 @@ const {
   ListSuppliersQuerySchema,
   UpdateSupplierEngagementSchema,
   UpdateSupplierSchema,
-} = await import("#src/controllers/suppliers.controller.js");
+} = await import("#src/schemas/suppliers.schemas.js");
 
 /**
  * R_AND_D_BACKEND_STRUCTURE.md §11i's rejected-keys list, §0 and §13.

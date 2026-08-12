@@ -20,10 +20,10 @@ const {
   ReorderColumnsSchema,
   UpdateFileLinkSchema,
   UpdateTaskSchema,
-} = await import("#src/controllers/workshop.controller.js");
+} = await import("#src/schemas/workshop.schemas.js");
 
 const { CreateDailyLogSchema, SubmitDailyLogSchema, UpdateDailyLogSchema } =
-  await import("#src/controllers/daily-logs.controller.js");
+  await import("#src/schemas/daily-logs.schemas.js");
 
 /**
  * THE ZERO-TRUST SWEEP FOR §8 (R_AND_D_BACKEND_STRUCTURE.md §13, step 7 of §17).

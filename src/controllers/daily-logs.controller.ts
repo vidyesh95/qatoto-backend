@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   firstParam,
@@ -8,94 +7,16 @@ import {
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
 import { respondWorkshopError } from "#src/controllers/workshop-error-response.js";
+import {
+  CreateDailyLogSchema,
+  ListDailyLogFeedQuerySchema,
+  ListDailyLogsQuerySchema,
+  SubmitDailyLogSchema,
+  UpdateDailyLogSchema,
+} from "#src/schemas/daily-logs.schemas.js";
 import * as logsService from "#src/services/daily-logs.service.js";
 import * as membershipService from "#src/services/project-membership.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * Daily logs (R_AND_D_BACKEND_STRUCTURE.md §8, §11d).
- *
- * THE FIELDS THAT DO NOT EXIST IN ANY SCHEMA HERE, and are therefore 422s rather than
- * silent overwrites (§13). Every one of them is server-owned or §9-owned:
- *   authorMemberId · authorUserId · status · submittedAt · videoSource · youtubeVideoId ·
- *   youtubeThumbnailUrl · videoVerifiedAt · analysisStatus · analysisModelName ·
- *   analysisPromptVersion · effortVerificationStatus · isEffortVerified ·
- *   aiSummaryChips · transcriptSegments · extractedClaims · extractedMinutes ·
- *   dailyLogStreakDays · id · createdAt
- *
- * A member sends a `youtubeUrl`, and the server derives every video fact from it — that
- * is the difference between "the client tells us which video" and "the client tells us
- * what the video is".
- *
- * SUBMIT RETURNS 202 AND A RECEIPT, NEVER A VERDICT. The analysis runs in a worker, so
- * the response carries `analysisStatus` and an `effortVerificationStatus` that is always
- * `not_run` in this phase. A UI that renders "verified" from this response is wrong (§14
- * lists the async states the frontend still needs).
- */
-
-const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
-
-/**
- * `youtubeUrl` is NOT wrapped in `z.url()`.
- *
- * src/lib/youtube.ts accepts a bare 11-character id and a schemeless link, both of which
- * the frontend's mirrored parser accepts too — and `z.url()` would reject them here after
- * the browser showed a green checkmark. The parse that matters happens in the service,
- * against a hostname allowlist.
- */
-const YoutubeUrlSchema = z.string().trim().min(1).max(2_048);
-
-export const CreateDailyLogSchema = z
-  .object({
-    logDate: IsoDateSchema,
-    narrative: z.string().trim().max(10_000).optional(),
-    youtubeUrl: YoutubeUrlSchema.optional(),
-  })
-  .strict();
-
-export const UpdateDailyLogSchema = z
-  .object({
-    logDate: IsoDateSchema.optional(),
-    narrative: z.string().trim().max(10_000).optional(),
-    // Explicit null detaches the video; absent leaves it alone. The two must stay
-    // distinguishable or a narrative-only PATCH silently drops a member's video.
-    youtubeUrl: YoutubeUrlSchema.nullable().optional(),
-  })
-  .strict();
-
-/**
- * The one client-supplied string this endpoint accepts.
- *
- * It is an opaque dedup token, not a value the server owns: a retried submit on a flaky
- * mobile connection must return the first receipt rather than file a second log (§14).
- */
-export const SubmitDailyLogSchema = z
-  .object({ idempotencyKey: z.string().trim().min(8).max(128) })
-  .strict();
-
-export const ListDailyLogsQuerySchema = z
-  .object({ limit: z.coerce.number().int().min(1).max(100).optional() })
-  .strict();
-
-/**
- * The CROSS-PROJECT feed's query (§11h, Appendix B2).
- *
- * THE KEY THAT IS ABSENT IS THE POINT: there is no `projectIds`, no `userId`, and no
- * `includeAllProjects`. `.strict()` refuses all three with a 422 rather than letting one
- * become an authorization input (§0). The membership set is derived from `project_member`
- * inside the service; `projectSlug` can only NARROW the caller's own set.
- *
- * `chipKind` is the four-value `AiSummaryChipKind`, enumerated here so an unknown chip is
- * a 422 rather than an empty page a client would read as "no blockers this week".
- */
-export const ListDailyLogFeedQuerySchema = z
-  .object({
-    projectSlug: z.string().trim().min(1).max(120).optional(),
-    chipKind: z.enum(["blocker", "progress", "velocity", "suggestion"]).optional(),
-    cursor: z.string().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(50).optional(),
-  })
-  .strict();
 
 interface DailyLogCaller {
   readonly context: membershipService.ProjectMemberContext;

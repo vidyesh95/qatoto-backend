@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   firstParam,
@@ -7,97 +6,17 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/studio-error-response.js";
+import {
+  CreateEpisodeSchema,
+  CreateSeasonSchema,
+  CreateSeriesSchema,
+  ListMySeriesQuerySchema,
+  UpdateEpisodeSchema,
+  UpdateSeasonSchema,
+  UpdateSeriesSchema,
+} from "#src/schemas/series.schemas.js";
 import * as seriesService from "#src/services/series.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
-
-/**
- * Anime catalog endpoints (docs/STUDIO_BACKEND_STRUCTURE.md §6).
- *
- * Every schema below is declared from a defaults-free shape map and made partial for the
- * PATCH variant, because `.partial()` does not strip `.default()` — the same trap
- * documented at length in videos.controller.ts.
- */
-
-const HttpUrlSchema = z
-  .url({ protocol: /^https?$/ })
-  .max(2048)
-  .transform((rawUrl) => new URL(rawUrl).toString());
-
-const seriesFieldShapes = {
-  title: z.string().trim().min(1).max(200),
-  description: z.string().trim().max(5000),
-  posterUrl: HttpUrlSchema,
-  genreTags: z.array(z.string().trim().min(1).max(40)).max(20),
-  status: z.enum(["ongoing", "completed", "hiatus"]),
-};
-
-const CreateSeriesSchema = z
-  .object(seriesFieldShapes)
-  .partial()
-  .extend({
-    title: seriesFieldShapes.title,
-    genreTags: seriesFieldShapes.genreTags.default([]),
-    status: seriesFieldShapes.status.default("ongoing"),
-  })
-  .strict();
-
-const UpdateSeriesSchema = z.object(seriesFieldShapes).partial().strict();
-
-const seasonFieldShapes = {
-  seasonLabel: z.string().trim().min(1).max(60),
-  position: z.number().int().min(0).max(500),
-};
-
-const CreateSeasonSchema = z
-  .object(seasonFieldShapes)
-  .partial()
-  .extend({ seasonLabel: seasonFieldShapes.seasonLabel })
-  .strict();
-
-const UpdateSeasonSchema = z.object(seasonFieldShapes).partial().strict();
-
-/**
- * `videoId` is deliberately absent. Linking an episode to an upload happens in the upload
- * flow, where the caller's ownership of the VIDEO is proven; accepting it here would let
- * a series owner attach a stranger's video to their catalog.
- */
-const episodeFieldShapes = {
-  episodeNumber: z.number().int().min(0),
-  episodeTitle: z.string().trim().min(1).max(200),
-  isPremium: z.boolean(),
-  releaseScheduleDay: z.string().trim().max(20),
-  releaseScheduleTime: z.string().trim().max(10),
-  premiereDate: z.coerce.date(),
-  audioMode: z.enum(["subbed", "dubbed"]),
-  audioLanguage: z.string().trim().max(60),
-  ageRating: z.string().trim().max(20),
-};
-
-const CreateEpisodeSchema = z
-  .object(episodeFieldShapes)
-  .partial()
-  .extend({
-    episodeNumber: episodeFieldShapes.episodeNumber,
-    episodeTitle: episodeFieldShapes.episodeTitle,
-    isPremium: episodeFieldShapes.isPremium.default(false),
-  })
-  .strict();
-
-const UpdateEpisodeSchema = z.object(episodeFieldShapes).partial().strict();
-
-const ListMySeriesQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-  })
-  .strict();
-
-export type CreateSeriesInput = z.infer<typeof CreateSeriesSchema>;
-export type UpdateSeriesInput = z.infer<typeof UpdateSeriesSchema>;
-export type CreateSeasonInput = z.infer<typeof CreateSeasonSchema>;
-export type UpdateSeasonInput = z.infer<typeof UpdateSeasonSchema>;
-export type CreateEpisodeInput = z.infer<typeof CreateEpisodeSchema>;
-export type UpdateEpisodeInput = z.infer<typeof UpdateEpisodeSchema>;
 
 /** Reads the nested path ids that prove the ownership chain. */
 function pathIds(req: Request): {

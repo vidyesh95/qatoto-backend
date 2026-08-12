@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("#src/services/daily-logs.service.js", () => ({}));
 vi.mock("#src/services/project-membership.service.js", () => ({}));
 
-const { ListDailyLogFeedQuerySchema } = await import("#src/controllers/daily-logs.controller.js");
+const { ListDailyLogFeedQuerySchema } = await import("#src/schemas/daily-logs.schemas.js");
 
 /**
  * The cross-project feed's query (§11h, Appendix B2), asserted against §0 and §13.

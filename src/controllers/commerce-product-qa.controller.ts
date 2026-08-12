@@ -13,6 +13,7 @@ import {
   ProductQuestionListQuerySchema,
   SellerQuestionInboxQuerySchema,
 } from "#src/schemas/commerce-product-qa.schemas.js";
+import { EmptyObjectSchema } from "#src/schemas/commerce-product-qa.schemas.js";
 import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductQaService from "#src/services/commerce-product-qa.service.js";
 import type { CommerceProductQaError } from "#src/services/commerce-product-qa.service.js";
@@ -21,8 +22,6 @@ import {
   resolveEligibleProductRefBySlug,
 } from "#src/services/store-catalog.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

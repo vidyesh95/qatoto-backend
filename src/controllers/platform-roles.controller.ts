@@ -1,41 +1,15 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import { firstParam, optionalBody } from "#src/controllers/project-error-response.js";
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import {
+  CountersignPlatformRoleSchema,
+  LookupUserQuerySchema,
+  ProposePlatformRoleSchema,
+} from "#src/schemas/platform-roles.schemas.js";
 import * as platformRolesService from "#src/services/platform-roles-admin.service.js";
 import type { PlatformRoleAdminError } from "#src/services/platform-roles-admin.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * Staff role administration (§4a Layer 3).
- *
- * THE CAPABILITY CHECK LIVES IN THE SERVICE, before any email is read — the shape every
- * staff route here uses, and the reason a `403` from these routes is not an oracle for
- * whether an account exists.
- *
- * `whoami` is the exception and deliberately so: it needs no capability because it reports
- * only on the caller, and a caller learning their own staff status learns nothing they could
- * not already get by calling a staff route and reading the status code.
- */
-
-/** The assignable roles, plus `null` to revoke. */
-export const ProposePlatformRoleSchema = z
-  .object({
-    email: z.string().trim().email().max(320),
-    /**
-     * `null` REVOKES. Nullable rather than a `"none"` sentinel because JSON has a spelling
-     * for absence and the column is genuinely nullable — the script's `--role=none` exists
-     * only because a shell argument cannot be null.
-     */
-    role: z.enum(["moderator", "auditor", "admin"]).nullable(),
-    note: z.string().trim().max(2_000).default(""),
-  })
-  .strict();
-
-export const CountersignPlatformRoleSchema = z
-  .object({ note: z.string().trim().max(2_000).default("") })
-  .strict();
 
 function respondPlatformRoleError(res: Response, error: PlatformRoleAdminError): void {
   switch (error.type) {
@@ -149,10 +123,6 @@ export async function getOwnStaffContext(req: Request, res: Response): Promise<v
     data: selfView,
   } satisfies ApiResponse);
 }
-
-export const LookupUserQuerySchema = z
-  .object({ email: z.string().trim().email().max(320) })
-  .strict();
 
 /** `GET /admin/platform-roles/lookup?email=` — ONE account, exact match. */
 export async function lookupUserForRoleGrant(req: Request, res: Response): Promise<void> {

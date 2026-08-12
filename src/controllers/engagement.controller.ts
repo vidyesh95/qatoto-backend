@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   firstParam,
@@ -10,148 +9,21 @@ import {
 } from "#src/controllers/engagement-error-response.js";
 import { logger } from "#src/lib/logger.js";
 import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
+import {
+  CommentIdParamSchema,
+  CreateCommentSchema,
+  CreatorIdParamSchema,
+  ListVideoCommentsQuerySchema,
+  RecordShareSchema,
+  RecordViewBeaconSchema,
+  ReportPlaybackErrorSchema,
+  UpdateCommentSchema,
+  VideoIdParamSchema,
+} from "#src/schemas/engagement.schemas.js";
 import * as subscriptionsService from "#src/services/creator-subscriptions.service.js";
 import * as commentsService from "#src/services/video-comments.service.js";
 import * as engagementService from "#src/services/video-engagement.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * The viewer-side write surface — HOME_BACKEND_STRUCTURE.md §5.2.
- *
- * Schemas live in this file and are exported for tests, the convention
- * videos.controller.ts sets. Every one is `.strict()`, so a client sending a key the
- * server owns gets a 422 rather than having it silently dropped.
- */
-
-// ---------------------------------------------------------------------------
-// Param schemas
-// ---------------------------------------------------------------------------
-
-/**
- * `video.id` and `video_comment.id` are both `randomUUID()`, so `z.uuid()` is a true
- * statement about the column rather than a guess.
- *
- * A DEPARTURE from videos.controller.ts, which passes the raw param to the service and
- * lets a garbage id come back as VIDEO_NOT_FOUND. Here a malformed id 422s before any
- * query runs, and that leaks nothing: uuid-ness is client-checkable, so the 422 says
- * only "that is not a uuid", never "that uuid does not exist".
- */
-export const VideoIdParamSchema = z.object({ videoId: z.uuid() }).strict();
-export const CommentIdParamSchema = z.object({ commentId: z.uuid() }).strict();
-
-/**
- * NOT `z.uuid()`. `user.id` carries no `$defaultFn` (schema.ts:48) — Better Auth mints
- * it and its ids are not uuids. Asserting the format here would 422 every real creator.
- */
-export const CreatorIdParamSchema = z
-  .object({ creatorId: z.string().trim().min(1).max(64) })
-  .strict();
-
-// ---------------------------------------------------------------------------
-// Body and query schemas
-// ---------------------------------------------------------------------------
-
-/** Byte-identical to `videoFeedSourceEnum`'s labels. snake_case on the wire (§5.4). */
-export const FEED_SOURCES = [
-  "feed_recommended",
-  "feed_explore",
-  "feed_spotlight",
-  "feed_filtered",
-  "search",
-  "channel",
-  "direct",
-] as const;
-
-/** 12 hours — §3.3's bound, restated at the boundary so the service never sees worse. */
-const MAXIMUM_VIDEO_SECONDS = 43_200;
-
-/**
- * SECONDS ARRIVE AS FLOATS AND LEAVE AS INTEGERS.
- *
- * The YouTube IFrame API's `getCurrentTime()` returns a float, so `z.number().int()`
- * would 422 every honest beacon on the platform. Rule 2 bans floats in SCORING, not on
- * the wire — so the boundary PARSES rather than validates (CLAUDE.md §2.1): floor it
- * here, and every downstream clamp only ever sees integers.
- *
- * The bounds double as the NaN/Infinity guard — every one of those fails a comparison.
- */
-const WatchSecondsSchema = z
-  .number()
-  .min(0)
-  .max(MAXIMUM_VIDEO_SECONDS)
-  .transform((seconds) => Math.floor(seconds));
-
-export const RecordViewBeaconSchema = z
-  .object({
-    positionSeconds: WatchSecondsSchema,
-    // Floored at 1 so it can never be a zero denominator. Pinned on the FIRST beacon
-    // in the service; later disagreeing values are ignored, not rejected.
-    reportedDurationSeconds: z
-      .number()
-      .min(1)
-      .max(MAXIMUM_VIDEO_SECONDS)
-      .transform((seconds) => Math.floor(seconds)),
-    feedSource: z.enum(FEED_SOURCES),
-  })
-  .strict();
-
-/**
- * The IFrame API's `onError` codes, as a CLOSED SET.
- *
- * Not `z.number().int()`: §8.2 acts only on 100/101/150, and an open integer column is
- * a column of client-chosen junk that the three-fingerprint rule would then be counting.
- */
-export const ReportPlaybackErrorSchema = z
-  .object({
-    errorCode: z.union([
-      z.literal(2),
-      z.literal(5),
-      z.literal(100),
-      z.literal(101),
-      z.literal(150),
-    ]),
-  })
-  .strict();
-
-/** Byte-identical to `videoShareChannelEnum`'s labels. */
-export const RecordShareSchema = z
-  .object({ channel: z.enum(["copy_link", "x", "whatsapp", "linkedin", "email"]) })
-  .strict();
-
-/**
- * `videoId` is ABSENT and that absence is the point: it comes from the path, never the
- * body. `.strict()` turns an attempt to send one into a 422.
- */
-export const CreateCommentSchema = z
-  .object({
-    // 1..2000 mirrors the `video_comment_body_ck` CHECK.
-    body: z.string().trim().min(1).max(2000),
-    // ONE LEVEL OF THREADING. A reply-to-a-reply is a 409 from the service, not a
-    // schema error — the schema cannot see the parent's own parent.
-    parentCommentId: z.uuid().optional(),
-  })
-  .strict();
-
-export const UpdateCommentSchema = z.object({ body: z.string().trim().min(1).max(2000) }).strict();
-
-/**
- * NO `sort` PARAMETER. §8.4 states that `video.commentSortOrder` remains an unbacked
- * preference column — offering `?sort=top` would be implying it works, and a
- * like-count sort breaks the keyset cursor's stable key anyway.
- */
-export const ListVideoCommentsQuerySchema = z
-  .object({
-    limit: z.coerce.number().int().min(1).max(50).default(20),
-    cursor: z.string().trim().min(1).max(200).optional(),
-    // Absent → the top-level thread, newest first. Present → that comment's replies,
-    // oldest first.
-    parentCommentId: z.uuid().optional(),
-  })
-  .strict();
-
-// ---------------------------------------------------------------------------
-// Viewer identity
-// ---------------------------------------------------------------------------
 
 /**
  * The client IP, for the fingerprint hash and nothing else.
@@ -218,10 +90,6 @@ function parseCommentIdParam(req: Request, res: Response): string | null {
   }
   return parsed.data.commentId;
 }
-
-// ---------------------------------------------------------------------------
-// Beacon and playback errors
-// ---------------------------------------------------------------------------
 
 /**
  * `POST /videos/:videoId/view-beacon`.
@@ -304,10 +172,6 @@ export async function reportPlaybackError(req: Request, res: Response): Promise<
   };
   res.status(202).json(response);
 }
-
-// ---------------------------------------------------------------------------
-// Likes, saves, shares
-// ---------------------------------------------------------------------------
 
 /**
  * `PUT`/`DELETE /videos/:videoId/like` and `.../save`.
@@ -413,10 +277,6 @@ export async function recordShare(req: Request, res: Response): Promise<void> {
   };
   res.status(200).json(response);
 }
-
-// ---------------------------------------------------------------------------
-// Comments
-// ---------------------------------------------------------------------------
 
 /**
  * `GET /videos/:videoId/comments`.
@@ -597,10 +457,6 @@ export function likeComment(req: Request, res: Response): Promise<void> {
 export function unlikeComment(req: Request, res: Response): Promise<void> {
   return respondToCommentLike(req, res, false);
 }
-
-// ---------------------------------------------------------------------------
-// Subscriptions
-// ---------------------------------------------------------------------------
 
 async function respondToSubscription(
   req: Request,

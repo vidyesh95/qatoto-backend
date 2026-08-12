@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import { config } from "#src/config/index.js";
 import {
@@ -12,6 +11,30 @@ import { respondProofOfEffortError } from "#src/controllers/proof-of-effort-erro
 import { decodeDateCursor } from "#src/lib/date-cursor.js";
 import { exchangeCodeForToken, fetchViewerLogin } from "#src/lib/github-integration.js";
 import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
+import {
+  AuditTrailQuerySchema,
+  AuthorizeIntegrationSchema,
+  BakePieSchema,
+  CastVoteSchema,
+  CreateSuggestionSchema,
+  DecideSuggestionSchema,
+  DisputeListQuerySchema,
+  EffortClaimListQuerySchema,
+  IntegrationCallbackQuerySchema,
+  IntegrationProviderSchema,
+  LockRateSchema,
+  OverrideQueueQuerySchema,
+  OverrideStepSchema,
+  PaginationQuerySchema,
+  ProposalListQuerySchema,
+  ProposeRateSchema,
+  RaiseDisputeSchema,
+  ResolveDisputeSchema,
+  ReverifySchema,
+  SequencePaginationQuerySchema,
+  SubmitClaimSchema,
+  UploadReceiptSchema,
+} from "#src/schemas/proof-of-effort.schemas.js";
 import * as disputeService from "#src/services/dispute.service.js";
 import * as claimsService from "#src/services/effort-claims.service.js";
 import * as snapshotService from "#src/services/equity-snapshot.service.js";
@@ -25,201 +48,6 @@ import * as membershipService from "#src/services/project-membership.service.js"
 import * as allocationService from "#src/services/slice-allocation.service.js";
 import * as ledgerService from "#src/services/slice-ledger.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
-
-/**
- * Proof of Effort (R_AND_D_BACKEND_STRUCTURE.md §9, §11e).
- *
- * THE FIELDS THAT DO NOT EXIST IN ANY SCHEMA HERE, and are therefore 422s rather than
- * silent overwrites (§13). Every one of them is formula-produced:
- *   groundedMinutes · slicesAwarded · sliceNumerator · proposedSlices · escrowedSlices ·
- *   equityBasisPoints · totalSlices · verdict · verificationStatus · entryHash ·
- *   sequenceNumber · windowClosesAt · consensusAdjustedMinutes · currencyCode
- *
- * The client sends **ids and intent**; the server looks every real value up in its own
- * rows. That is §0's answer to "what if the client edits the number and posts it back" —
- * there is no field to edit.
- *
- * THE TWO DELIBERATE EXCEPTIONS, both NEGOTIATED INPUTS rather than derived outputs, and
- * both documented as such in §0 and §13:
- *   1. `fairMarketRateCentsPerHour` + `paidCashRateCentsPerHour` on a rate proposal — a
- *      number two people agreed on, which the server does not own.
- *   2. `scopedWindowStartsAt` / `scopedWindowEndsAt` on a dispute resolution — a TIME
- *      RANGE, not a quantity. The server re-derives the minutes from artifact overlap
- *      inside it (§9.12 option (a)).
- *
- * `currencyCode` is deliberately absent from every schema below even though §11e's table
- * lists it: §4b says an amount's currency is derived from the project, never sent.
- *
- * THE §17 STEP 7 SWEEP, ANSWERED HERE SO NOBODY HAS TO RE-DERIVE IT. Grepping every schema
- * below for `userId|equity|slice|Cents|score|verdict|status|Minutes` returns exactly four
- * live hits, and each is accounted for:
- *
- *   `fairMarketRateCentsPerHour` + `paidCashRateCentsPerHour` — exception 1 above.
- *   `valuationCents` on a bake — see the note on {@link BakePieSchema}: it is RECORDED
- *       EVIDENCE, and no formula reads it.
- *   `status` on the proposal LIST query — a filter over rows that already exist, not an
- *       assertion about one. A query parameter cannot set anything.
- *
- * Zero hits for `slice`, `equity`, `verdict`, `score`, `Minutes` or `userId` in any body,
- * which is the property that actually matters: there is no field through which a client
- * could name a number the formula owns.
- */
-
-const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
-
-/**
- * Money in, as a decimal STRING rather than a JS number.
- *
- * A rate is a `bigint` cent value; `z.number()` would silently lose precision past 2^53
- * and, worse, would accept `120.5` for a value that must be an integer number of cents.
- */
-const CentsStringSchema = z
-  .string()
-  .regex(/^\d{1,15}$/, "Must be a whole number of cents, as a string");
-
-const PaginationQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(200).optional(),
-  })
-  .strict();
-
-/**
- * The ledger and the audit trail take a KEYSET cursor as well as a page (§11l.2 item 4).
- *
- * `page` is retained because the frontend calls both reads today and this tranche is
- * additive by rule; `fromSequence` is the mode a new caller should use. Both are optional
- * and `fromSequence` wins, because a caller sending a cursor has decided which mode it is
- * in.
- */
-const SequencePaginationQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(200).optional(),
-    fromSequence: z.coerce.number().int().min(1).optional(),
-  })
-  .strict();
-
-export const ProposeRateSchema = z
-  .object({
-    fairMarketRateCentsPerHour: CentsStringSchema,
-    // Zero for the unpaid founder case, which is most of them. Required rather than
-    // optional: §9.2 calls the missing paid portion the largest correctness gap in the
-    // mock, and a defaulted field is one a founder never has to think about.
-    paidCashRateCentsPerHour: CentsStringSchema,
-    effectiveFrom: z.iso.datetime(),
-    rationaleNote: z.string().trim().min(1).max(1_000),
-  })
-  .strict();
-
-export const LockRateSchema = z.object({ rateId: z.uuid(), acknowledgement: z.string() }).strict();
-
-export const SubmitClaimSchema = z
-  .object({
-    sourceKind: z.enum(["daily_log", "physical_receipt"]),
-    dailyLogId: z.uuid().optional(),
-    physicalReceiptIds: z.array(z.uuid()).max(20).default([]),
-    claimedForDate: IsoDateSchema,
-    narrative: z.string().trim().max(1_000).optional(),
-    idempotencyKey: z.string().trim().min(8).max(128),
-  })
-  .strict();
-
-export const ReverifySchema = z.object({ reason: z.string().trim().min(1).max(1_000) }).strict();
-
-export const OverrideStepSchema = z
-  .object({
-    // `pending` is absent: an override that un-decides a step would leave the verdict
-    // permanently incomplete, and the CHECK constraint rejects it anyway.
-    overriddenStatus: z.enum(["passed", "flagged", "failed", "skipped"]),
-    overrideReason: z.string().trim().min(1).max(1_000),
-  })
-  .strict();
-
-export const RaiseDisputeSchema = z
-  .object({ disputeNote: z.string().trim().min(1).max(2_000) })
-  .strict();
-
-export const CastVoteSchema = z
-  .object({
-    position: z.enum(["uphold", "void", "re_verify"]),
-    note: z.string().trim().max(2_000).optional(),
-  })
-  .strict();
-
-export const ResolveDisputeSchema = z
-  .object({
-    resolution: z.enum(["upheld", "voided", "re_verified"]),
-    resolutionNote: z.string().trim().min(1).max(2_000),
-    // A WINDOW, never a quantity (§9.12 option (a)).
-    scopedWindowStartsAt: z.iso.datetime().optional(),
-    scopedWindowEndsAt: z.iso.datetime().optional(),
-  })
-  .strict();
-
-export const AuditTrailQuerySchema = z
-  .object({
-    fromSequence: z.coerce.number().int().min(1).optional(),
-    toSequence: z.coerce.number().int().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(200).optional(),
-  })
-  .strict();
-
-/**
- * `cursor` is the keyset form (§11l.2 item 4) and WINS over `page` when both arrive. `page`
- * stays only for back-compat: offset paging drifts under concurrent inserts, so a client that
- * has adopted the cursor must not be silently dropped back onto the old behaviour.
- */
-export const ProposalListQuerySchema = z
-  .object({
-    status: z.enum(["open", "disputed", "locked", "consensus_reached"]).optional(),
-    page: z.coerce.number().int().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(100).optional(),
-    cursor: z.string().trim().min(1).max(200).optional(),
-  })
-  .strict();
-
-/**
- * `GET …/disputes` (§11j.2). The three values are `disputeStatusEnum` verbatim.
- *
- * `page`/`limit` carry DEFAULTS here, unlike the schema above, because these two lists
- * answer with a `PaginatedResponse` and the envelope's `pagination` block has to state the
- * page it actually served — which means the controller, not the service, must know it.
- */
-export const DisputeListQuerySchema = z
-  .object({
-    status: z.enum(["open", "withdrawn", "consensus_reached"]).optional(),
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-  })
-  .strict();
-
-/** `GET …/effort-claims` (§11j.2). The six values are `effortVerificationStatusEnum`. */
-/**
- * No `page`, deliberately. A review queue is worked from the front; a page-2 control on it
- * invites a reviewer to browse a backlog rather than clear it, and every row here is equity
- * that is not being minted while it waits.
- */
-export const OverrideQueueQuerySchema = z
-  .object({ limit: z.coerce.number().int().min(1).max(200).default(50) })
-  .strict();
-
-export const EffortClaimListQuerySchema = z
-  .object({
-    status: z
-      .enum(["not_run", "queued", "running", "verified", "flagged_for_review", "unverified"])
-      .optional(),
-    // The PUBLIC user id, matching `…/members/:memberUserId/fair-market-rate`. There is no
-    // `memberId` key and no `projectId` key: the project comes from the path, and the
-    // internal member id is not a thing a client should be holding.
-    memberUserId: z.string().trim().min(1).max(64).optional(),
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-    // Keyset mode (§11l.2 item 4). Wins over `page`, and swaps the `pagination` block for a
-    // `nextCursor` — see `listEffortClaims` for why the two cannot both be honest at once.
-    cursor: z.string().trim().min(1).max(200).optional(),
-  })
-  .strict();
 
 interface ProofOfEffortCaller {
   readonly context: membershipService.ProjectMemberContext;
@@ -259,8 +87,6 @@ async function requireRoleOrRespond(
 function respondOk(res: Response, message: string, data: unknown): void {
   res.status(200).json({ status: "success", statusCode: 200, message, data } satisfies ApiResponse);
 }
-
-// --- Stakeholder reads. Every §9 number a member can see, and not one of them writable.
 
 /** `GET …/proof-of-effort` — the page's summary read, in one round trip. */
 export async function getProofOfEffortSummary(req: Request, res: Response): Promise<void> {
@@ -587,8 +413,6 @@ export async function listEffortClaims(req: Request, res: Response): Promise<voi
   res.status(200).json(response);
 }
 
-// --- The fair market rate. The one place a number legitimately enters via a body.
-
 /** `POST …/members/:memberUserId/fair-market-rate` — founder only. */
 export async function proposeFairMarketRate(req: Request, res: Response): Promise<void> {
   const caller = await requireRoleOrRespond(req, res, "founder");
@@ -718,8 +542,6 @@ export async function lockFairMarketRate(req: Request, res: Response): Promise<v
   );
 }
 
-// --- Claims. No minutes, no cash, no verdict, no slices — ids and intent only.
-
 /** `POST …/effort-claims` — **202**, a receipt, and a pipeline in flight. Never a verdict. */
 export async function submitEffortClaim(req: Request, res: Response): Promise<void> {
   const caller = await requireRoleOrRespond(req, res, "contributor");
@@ -830,8 +652,6 @@ export async function overrideVerificationStep(req: Request, res: Response): Pro
   }
   respondOk(res, "Step overridden. The verdict is being recomputed.", overridden.value);
 }
-
-// --- Disputes. Any active member, including the claim's own subject.
 
 /** `POST …/allocation-proposals/:proposalId/dispute` — freezes the slices in escrow. */
 export async function raiseDispute(req: Request, res: Response): Promise<void> {
@@ -981,8 +801,6 @@ export async function resolveDispute(req: Request, res: Response): Promise<void>
   } satisfies ApiResponse);
 }
 
-// --- The audit chain. Independently verifiable, or it is decoration.
-
 /** `GET …/audit-trail` — every hashed column, so a client can canonicalize it itself. */
 export async function listAuditTrail(req: Request, res: Response): Promise<void> {
   const caller = await requireRoleOrRespond(req, res, "contributor");
@@ -1048,63 +866,6 @@ export async function getAuditHashInput(req: Request, res: Response): Promise<vo
   }
   respondOk(res, "Hash input loaded.", hashInput.value);
 }
-
-// --- Physical receipts. Every measurement is the server's; the body carries a kind and a
-// --- dedup token, and nothing else.
-
-export const UploadReceiptSchema = z
-  .object({
-    receiptKind: z.enum(["photo_of_work", "cad_file", "material_receipt", "other"]),
-    idempotencyKey: z.string().trim().min(8).max(128),
-  })
-  .strict();
-
-export const CreateSuggestionSchema = z
-  .object({
-    title: z.string().trim().min(1).max(200),
-    bodyText: z.string().trim().min(1).max(4_000),
-    memberId: z.uuid().optional(),
-    evidenceLabels: z.array(z.string().trim().min(1).max(500)).max(20).default([]),
-  })
-  .strict();
-
-export const DecideSuggestionSchema = z
-  .object({ note: z.string().trim().max(2_000).optional() })
-  .strict();
-
-export const AuthorizeIntegrationSchema = z
-  .object({
-    // The narrowed scope the member consents to. Empty is legal and means "connect the
-    // account but read nothing yet" — §9.10's default-to-narrowest rule.
-    requestedResourceIds: z.array(z.string().trim().min(1).max(200)).max(50).default([]),
-  })
-  .strict();
-
-/**
- * `valuationCents` IS ACCEPTED, AND IT IS NOT AN EXCEPTION TO §0.
- *
- * §0 forbids a body carrying a value the SERVER owns. A priced round's valuation is agreed
- * with an investor outside this system and is unknowable to it — and, decisively, NO FORMULA
- * READS IT. It is stored, put in the audit payload, and returned; it never enters
- * `computeSlicesAwarded`, never touches a numerator, and cannot move a basis point. It is
- * recorded EVIDENCE about why the pie was baked, in the same category as
- * `triggerEvidenceNote` beside it.
- */
-export const BakePieSchema = z
-  .object({
-    trigger: z.enum(["cash_flow_breakeven", "priced_round"]),
-    triggerEvidenceNote: z.string().trim().min(1).max(2_000),
-    // Money as a decimal STRING; a valuation in cents is far past 2^53 for any real round.
-    valuationCents: z
-      .string()
-      .regex(/^\d{1,18}$/, "Must be a whole number of cents, as a string")
-      .optional(),
-    acknowledgement: z.string(),
-    expectedSnapshotId: z.uuid(),
-  })
-  .strict();
-
-const IntegrationProviderSchema = z.enum(["github", "gitlab", "figma", "jira", "linear"]);
 
 /**
  * `POST …/physical-receipts` — multipart, **202**.
@@ -1213,8 +974,6 @@ export async function getPhysicalReceipt(req: Request, res: Response): Promise<v
   respondOk(res, "Receipt loaded.", receipt);
 }
 
-// --- Integration consent. A TRIPLE — (project, member, provider) — never a pair.
-
 /** `GET …/integrations` — the caller's own grants, never anyone else's, never a token. */
 export async function listIntegrations(req: Request, res: Response): Promise<void> {
   const caller = await requireRoleOrRespond(req, res, "contributor");
@@ -1315,8 +1074,6 @@ export async function revokeIntegration(req: Request, res: Response): Promise<vo
   );
 }
 
-// --- Baking the pie. Irreversible, once ever.
-
 /** `GET …/pie-bake` — the frozen cap table, or null while equity is still dynamic. */
 export async function getPieBake(req: Request, res: Response): Promise<void> {
   const caller = await requireRoleOrRespond(req, res, "contributor");
@@ -1363,8 +1120,6 @@ export async function bakePie(req: Request, res: Response): Promise<void> {
     data: baked.value,
   } satisfies ApiResponse);
 }
-
-// --- Optimization suggestions. They suggest; they never allocate.
 
 export async function listOptimizationSuggestions(req: Request, res: Response): Promise<void> {
   const caller = await requireRoleOrRespond(req, res, "contributor");
@@ -1430,10 +1185,6 @@ export function decideOptimizationSuggestion(
     respondOk(res, `Suggestion ${decision}.`, decided.value);
   };
 }
-
-const IntegrationCallbackQuerySchema = z
-  .object({ code: z.string().min(1), state: z.string().min(1) })
-  .strict();
 
 /**
  * `GET /integrations/:provider/callback` — the provider redirect. Mounted at the ROOT,

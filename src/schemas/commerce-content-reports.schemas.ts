@@ -74,3 +74,5 @@ export const ListContentReportsQuerySchema = z
   .strict();
 
 export type ListContentReportsQuery = z.infer<typeof ListContentReportsQuerySchema>;
+
+export const EmptyObjectSchema = z.object({}).strict();

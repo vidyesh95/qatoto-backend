@@ -7,13 +7,14 @@ import {
   RelationIdParamsSchema,
   ReplaceProductRelationsSchema,
 } from "#src/schemas/commerce-catalog.schemas.js";
+import {
+  EmptyObjectSchema,
+  EmptyRequestBodySchema,
+} from "#src/schemas/commerce-catalog.schemas.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import type { CommerceProductRelationError } from "#src/services/commerce-product-relations.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
-const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

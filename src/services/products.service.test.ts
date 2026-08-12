@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CreateProductInput } from "#src/controllers/products.controller.js";
+import type { CreateProductInput } from "#src/schemas/products.schemas.js";
 
 interface CategoryRow {
   readonly id: string;

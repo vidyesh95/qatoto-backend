@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // environment — nothing here calls a handler.
 vi.mock("#src/services/products.service.js", () => ({}));
 
-const { CreateProductSchema, UpdateProductSchema } = await import("#src/controllers/products.controller.js");
+const { CreateProductSchema, UpdateProductSchema } = await import("#src/schemas/products.schemas.js");
 
 /**
  * REGRESSION SUITE for a data-loss bug, not a style preference.

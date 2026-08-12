@@ -3,20 +3,14 @@ import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
+import {
+  DocumentIdParamsSchema,
+  EmptyObjectSchema,
+  ListTradeDocumentsQuerySchema,
+} from "#src/schemas/commerce-documents.schemas.js";
 import * as commerceTradeDocumentService from "#src/services/commerce-trade-document.service.js";
 import type { CommerceTradeDocumentError } from "#src/services/commerce-trade-document.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
-
-const DocumentIdParamsSchema = z.object({ documentId: z.string().trim().min(1).max(200) }).strict();
-
-const ListTradeDocumentsQuerySchema = z
-  .object({
-    cursor: z.string().trim().min(1).max(500).optional(),
-    limit: z.coerce.number().int().min(1).max(100).optional(),
-  })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import { respondFundingError } from "#src/controllers/funding-error-response.js";
 import {
@@ -7,6 +6,16 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/project-error-response.js";
+import {
+  CreateFundingRoundSchema,
+  CreatePledgeSchema,
+  DealsQuerySchema,
+  MilestoneSchema,
+  MilestoneVarianceSchema,
+  PaginationQuerySchema,
+  UpdateFundingRoundSchema,
+  UpdateMilestoneSchema,
+} from "#src/schemas/funding.schemas.js";
 import * as compensationService from "#src/services/compensation.service.js";
 // NOTHING FROM escrow-releases, escrow-settlement OR escrow.service IS IMPORTED HERE ANY
 // MORE (§7A.6, §11g). The nine escrow routes are retired; the services and their tables
@@ -17,167 +26,6 @@ import * as confidenceService from "#src/services/investor-confidence.service.js
 import * as milestonesService from "#src/services/milestones.service.js";
 import * as membershipService from "#src/services/project-membership.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * Funding and escrow (R_AND_D_BACKEND_STRUCTURE.md §7, §11c).
- *
- * ---------------------------------------------------------------------------
- * THE REJECTED-KEYS LIST. §7 enumerates 27 keys so a reviewer can grep for them on the
- * pledge body, and every one is ABSENT from every schema below — so `.strict()` turns each
- * into a 422 rather than a silent overwrite:
- *
- *   backerUserId · userId · projectId · currency · platformFeeInCents · netToEscrowInCents
- *   feeInCents · status · verificationStatus · equityBasisPoints · sliceCount · slices
- *   raisedAmountInCents · percentageFunded · percentageFundedBasisPoints · backersCount
- *   escrowAccountId · journalEntryId · ledgerEntryId · providerTransferId ·
- *   payoutDestinationId · paymentMethodId · occurredAt · createdAt · id
- *
- * `funding.controller.schemas.test.ts` asserts all of them, because a comment claiming a
- * key is rejected and a test proving it are different artifacts.
- *
- * THE PLEDGE BODY IS `{ amountInCents }`. THE ESCROW-RELEASE BODY CARRIES NO AMOUNT AT
- * ALL. Both are §7 verbatim, and both are the shape that makes the tampering test in §17
- * step 4 a non-event: there is no field to edit.
- * ---------------------------------------------------------------------------
- *
- * THE ONE NUMBER THAT LEGITIMATELY ENTERS THROUGH A BODY HERE is a founder's own
- * `goalAmountInCents` and the milestone amounts they set — negotiated INPUTS they own,
- * like a seller setting `priceInCents`, not server-computed outputs. Everything derived
- * from them (the fee, the net, the raised total, the percentage) is computed server-side
- * and has no field.
- *
- * NO AUTHORIZATION MIDDLEWARE. Membership and role are proven inside each handler via
- * `requireProjectRole`, because a middleware cannot return a `Result` and so cannot
- * participate in the exhaustive error switch (§4a Layer 2). Failure is 404, not 403.
- */
-
-/**
- * Money in, as a decimal STRING rather than a JS number.
- *
- * `z.number()` would silently lose precision past 2^53 and, worse, would accept `120.5`
- * for a value that must be a whole number of cents. 15 digits caps a single request at
- * ~$10 trillion, which is above any real round and below the point where a typo becomes a
- * denial-of-service on the `bigint` arithmetic downstream.
- */
-const CentsStringSchema = z
-  .string()
-  .regex(/^\d{1,15}$/, "Must be a whole number of cents, as a string");
-
-const IsoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be an ISO date (YYYY-MM-DD)");
-
-const PaginationQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(200).optional(),
-  })
-  .strict();
-
-export const CreateFundingRoundSchema = z
-  .object({
-    type: z.enum(["crowdfunding", "equity", "venture"]),
-    title: z.string().trim().min(1).max(200),
-    summary: z.string().trim().max(2_000).optional(),
-    goalAmountInCents: CentsStringSchema,
-    minimumPledgeInCents: CentsStringSchema.optional(),
-    maximumPledgeInCents: CentsStringSchema.optional(),
-    opensAt: z.iso.datetime().optional(),
-    closesAt: z.iso.datetime().optional(),
-  })
-  .strict();
-
-/**
- * THE PLEDGE BODY. `{ amountInCents }` and nothing else — §7's own words.
- *
- * Every other figure a client might send is derived server-side from the round, and every
- * one of §7's 27 rejected keys is absent from this object, so `.strict()` answers 422.
- */
-/**
- * `PATCH /funding-rounds/:roundId` (§11j.3) — a draft correction, nothing more.
- *
- * `type` IS ABSENT and stays absent: the enabled-types gate is re-checked at open, and a
- * round that could change type after creation would sidestep it. `currency`,
- * `raisedAmountInCents`, `backersCount`, `status` and `closedAt` are absent because all
- * five are server-owned — `.strict()` turns any of them into a 422.
- *
- * A `"0"` goal parses here and is refused by the SERVICE: `CentsStringSchema` bounds the
- * shape, not the value, and `funding_round_goal_ck` is what the number has to satisfy.
- */
-export const UpdateFundingRoundSchema = z
-  .object({
-    title: z.string().trim().min(1).max(200).optional(),
-    summary: z.string().trim().max(2_000).nullable().optional(),
-    goalAmountInCents: CentsStringSchema.optional(),
-    minimumPledgeInCents: CentsStringSchema.optional(),
-    maximumPledgeInCents: CentsStringSchema.nullable().optional(),
-    opensAt: z.iso.datetime().nullable().optional(),
-    closesAt: z.iso.datetime().nullable().optional(),
-  })
-  .strict();
-
-export const CreatePledgeSchema = z.object({ amountInCents: CentsStringSchema }).strict();
-
-export const MilestoneSchema = z
-  .object({
-    title: z.string().trim().min(1).max(200),
-    description: z.string().trim().max(5_000).optional(),
-    plannedPayoutInCents: CentsStringSchema,
-    dueDate: IsoDateSchema.optional(),
-  })
-  .strict();
-
-/**
- * `status` is deliberately ABSENT. It moves through `/complete`, which writes `completedAt`
- * in the same statement — a PATCH that could set `done` without a completion instant would
- * produce a milestone an escrow release could be approved against with no record of when
- * the work finished.
- */
-export const UpdateMilestoneSchema = z
-  .object({
-    title: z.string().trim().min(1).max(200).optional(),
-    description: z.string().trim().max(5_000).nullable().optional(),
-    plannedPayoutInCents: CentsStringSchema.optional(),
-    dueDate: IsoDateSchema.nullable().optional(),
-  })
-  .strict();
-
-/** Six typed integers (§15). `varianceBasisPoints` is absent — the server computes it. */
-export const MilestoneVarianceSchema = z
-  .object({
-    plannedDurationDays: z.number().int().min(0).max(100_000),
-    actualDurationDays: z.number().int().min(0).max(100_000),
-    plannedCostInCents: CentsStringSchema,
-    actualCostInCents: CentsStringSchema,
-    plannedEffortMinutes: z.number().int().min(0).max(100_000_000),
-    actualEffortMinutes: z.number().int().min(0).max(100_000_000),
-  })
-  .strict();
-
-// THE THREE ESCROW BODIES ARE GONE, along with the routes that parsed them (§7A.6):
-// RequestEscrowReleaseSchema, DecideEscrowReleaseSchema and SettleTransferSchema. Their
-// assertions move to nothing rather than to another file — a schema with no route is not
-// a boundary, and a test proving a dead schema rejects a key proves nothing about the API.
-//
-// Their rejected keys are not lost. `payoutDestinationId`, `destinationAccountId`,
-// `accountNumber`, `iban` and `upiId` are all asserted against every §7A body in
-// compensation.controller.schemas.test.ts, which is where a body could now carry one.
-
-export const DealsQuerySchema = z
-  .object({
-    roundType: z.enum(["crowdfunding", "equity", "venture"]).optional(),
-    stage: z
-      .enum([
-        "market_research",
-        "problem_validation",
-        "team_building",
-        "building_mvp",
-        "raising_funding",
-        "go_to_market",
-      ])
-      .optional(),
-    page: z.coerce.number().int().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(100).optional(),
-  })
-  .strict();
 
 interface FundingCaller {
   readonly context: membershipService.ProjectMemberContext;
@@ -257,10 +105,6 @@ function respondOk(res: Response, message: string, data: unknown): void {
 function respondCreated(res: Response, message: string, data: unknown): void {
   res.status(201).json({ status: "success", statusCode: 201, message, data } satisfies ApiResponse);
 }
-
-// ---------------------------------------------------------------------------
-// Rounds
-// ---------------------------------------------------------------------------
 
 /** `POST /research-projects/:projectSlug/funding-rounds` — founder only. */
 export async function createFundingRound(req: Request, res: Response): Promise<void> {
@@ -421,10 +265,6 @@ export async function getPledgeOptions(req: Request, res: Response): Promise<voi
   respondOk(res, "Pledge options loaded.", options.value);
 }
 
-// ---------------------------------------------------------------------------
-// Pledges
-// ---------------------------------------------------------------------------
-
 /**
  * `POST /funding-rounds/:roundId/pledges` — `201`, and `raisedAmountInCents` has NOT moved.
  *
@@ -516,10 +356,6 @@ export async function listFundingDeals(req: Request, res: Response): Promise<voi
 
   respondOk(res, "Deal flow loaded.", await roundsService.listFundingDeals(parsedQuery.data));
 }
-
-// ---------------------------------------------------------------------------
-// Milestones
-// ---------------------------------------------------------------------------
 
 export async function listProjectMilestones(req: Request, res: Response): Promise<void> {
   const caller = await requireRoleOrRespond(req, res, "contributor");
@@ -782,10 +618,6 @@ export async function putMilestoneVariance(req: Request, res: Response): Promise
   }
   respondOk(res, "Milestone variance recorded.", stored.value);
 }
-
-// ---------------------------------------------------------------------------
-// Compensation and investor confidence
-// ---------------------------------------------------------------------------
 
 /** `GET …/compensation` — reads §9's rate table; there is no second one (§7 divergence). */
 export async function getProjectCompensation(req: Request, res: Response): Promise<void> {

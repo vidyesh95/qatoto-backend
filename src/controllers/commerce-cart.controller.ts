@@ -2,56 +2,17 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
+import {
+  EmptyObjectSchema,
+  EmptyRequestBodySchema,
+  ProductIdParamsSchema,
+  RemoveCartItemQuerySchema,
+  SetCartItemSchema,
+} from "#src/schemas/commerce-cart.schemas.js";
 import * as commerceCartService from "#src/services/commerce-cart.service.js";
 import type { CommerceCartError } from "#src/services/commerce-cart.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
-const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
-
-const ProductIdParamsSchema = z.object({ productId: z.string().trim().min(1).max(200) }).strict();
-
-export const SetCartItemSchema = z
-  .object({
-    quantity: z.number().int().positive(),
-    /**
-     * A1. Required by the server whenever the product has active variants — the
-     * absence of a value here is exactly what produces `VARIANT_REQUIRED`, so it
-     * stays optional in the schema and mandatory in the domain.
-     */
-    variantId: z.string().trim().min(1).max(200).optional(),
-    /**
-     * A17. Opt-in per line. A sample sits beside the bulk line rather than replacing
-     * it, because ordering a sample and then a bulk quantity is the point.
-     */
-    isSample: z.boolean().optional(),
-    /**
-     * A18. Slot keys, not option ids: the key is the seller's stable machine name for
-     * the slot, so a client that cached one still means the same thing after a rename.
-     */
-    customizations: z
-      .array(
-        z
-          .object({
-            slotKey: z.string().trim().min(1).max(60),
-            encryptedDocumentId: z.string().trim().min(1).max(200).optional(),
-            choiceValue: z.string().trim().min(1).max(120).optional(),
-          })
-          .strict(),
-      )
-      .max(12)
-      .optional(),
-  })
-  .strict();
-
-/**
- * Naming a variant removes that line; omitting one removes every line for the
- * product, which is what "remove this product from my cart" means.
- */
-const RemoveCartItemQuerySchema = z
-  .object({ variantId: z.string().trim().min(1).max(200).optional() })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**

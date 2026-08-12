@@ -1,29 +1,10 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import { respondValidationFailed } from "#src/controllers/project-error-response.js";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
+import { UpdateMyProfileSchema } from "#src/schemas/users.schemas.js";
 import * as usersService from "#src/services/users.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-/**
- * Display name a user is allowed to set. Trimmed first, then bounded 1–100 and
- * restricted to letters/marks plus spaces, apostrophes, hyphens and periods —
- * the value must START with a letter/mark so it can't be pure punctuation.
- * Unicode-aware (`\p{L}\p{M}`) so non-Latin names are accepted.
- */
-const FullNameSchema = z
-  .string()
-  .trim()
-  .min(1, "Name is required.")
-  .max(100, "Name must be at most 100 characters.")
-  .regex(/^[\p{L}\p{M}][\p{L}\p{M} '.-]*$/u, "Name contains invalid characters.");
-
-/**
- * Body for PATCH /users/me. `.strict()` rejects unknown keys — in particular any
- * client-sent `id`, which is ignored regardless (the id comes from the session).
- */
-const UpdateMyProfileSchema = z.object({ fullName: FullNameSchema }).strict();
 
 /**
  * GET /users

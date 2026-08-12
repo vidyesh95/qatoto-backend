@@ -1,5 +1,4 @@
 import type { Request, Response } from "express";
-import { z } from "zod";
 
 import {
   firstParam,
@@ -9,125 +8,20 @@ import {
 } from "#src/controllers/discovery-error-response.js";
 import { respondGoToMarketError } from "#src/controllers/go-to-market-error-response.js";
 import { respondProjectError } from "#src/controllers/project-error-response.js";
+import {
+  CreateSupplierEngagementSchema,
+  CreateSupplierSchema,
+  LaunchReadyProjectsQuerySchema,
+  ListSupplierEngagementsQuerySchema,
+  ListSuppliersQuerySchema,
+  UpdateSupplierEngagementSchema,
+  UpdateSupplierSchema,
+} from "#src/schemas/suppliers.schemas.js";
 import * as readinessService from "#src/services/launch-readiness.service.js";
 import * as membershipService from "#src/services/project-membership.service.js";
 import * as engagementsService from "#src/services/supplier-engagements.service.js";
 import * as suppliersService from "#src/services/suppliers.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
-
-/**
- * Go-to-market — the supplier directory and launch readiness
- * (R_AND_D_BACKEND_STRUCTURE.md §11i, Appendix B4).
- *
- * ---------------------------------------------------------------------------
- * THE FIELDS THAT EXIST IN NO SCHEMA HERE, and are therefore 422s rather than silent
- * overwrites (§0, §13). Every one is server-owned:
- *
- *   id · createdAt · updatedAt · createdByUserId · isActive (on create) ·
- *   verificationState (on create) · slug (on update) · projectId · researchProjectId ·
- *   metCount · state · observedCount · asOf
- *
- * TWO OF THOSE ARE WORTH NAMING. `verificationState` is absent from the CREATE schema so a
- * new listing is always `unverified` — a directory whose rows assert their own trust level
- * is worse than no directory. And `slug` is absent from the UPDATE schema because it is
- * the public identity a client has already linked to; renaming it silently breaks every
- * stored reference, which is why `research_project` freezes its slug at publish too.
- *
- * THE ENGAGEMENT BODIES REJECT `verificationState`, `supplierSlug`, `isActive`,
- * `createdByMemberId` and `projectId` — and the first of those is the one that matters.
- * §6's rule is that nothing on a project-scoped route may feed a supplier's trust level:
- * `contracted` means THIS TEAM SAYS IT SIGNED SOMETHING, and the only party attesting is
- * the one that benefits. `.strict()` is the first of three enforcements; the service
- * touching exactly one table is the second; the test asserting it is the third.
- *
- * `supplierId` is additionally absent from the engagement UPDATE schema: the unique
- * (projectId, supplierId) makes that pair the row's identity, so re-pointing it is a delete
- * plus a create rather than an edit.
- *
- * READINESS IS COMPUTED, NEVER SUBMITTED. There is no POST that sets an item's state and no
- * body that carries one: `state` is derived from `research_project.stage`, `project_stats`,
- * the bake event, the engagement rows and the linked listings. A client that could assert
- * "met" would be asserting an input into a launch decision (§0).
- * ---------------------------------------------------------------------------
- */
-
-const SlugSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(80)
-  .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "Must be a lowercase, hyphen-separated slug");
-
-const SUPPLIER_VERIFICATION_STATES = [
-  "unverified",
-  "documents_pending",
-  "verified",
-  "suspended",
-] as const;
-
-const SUPPLIER_CONTACT_POLICIES = ["via_platform", "direct_email", "no_contact"] as const;
-
-/**
- * `capability` accepts one value or several, and several means AND.
- *
- * The union-then-transform shape is `ListTalentQuerySchema`'s verbatim: Express hands a
- * repeated query key back as an array, and normalizing here means the service only ever
- * sees a list.
- */
-export const ListSuppliersQuerySchema = z
-  .object({
-    capability: z
-      .union([SlugSchema, z.array(SlugSchema).max(10)])
-      .transform((value) => (Array.isArray(value) ? value : [value]))
-      .optional(),
-    region: z.string().trim().min(1).max(60).optional(),
-    verificationState: z.enum(SUPPLIER_VERIFICATION_STATES).optional(),
-    page: z.coerce.number().int().min(1).max(500).default(1),
-    limit: z.coerce.number().int().min(1).max(50).default(20),
-  })
-  .strict();
-
-export const CreateSupplierSchema = z
-  .object({
-    slug: SlugSchema,
-    name: z.string().trim().min(1).max(120),
-    summary: z.string().trim().max(2_000).optional(),
-    regionSlug: z.string().trim().min(1).max(60).optional(),
-    contactPolicy: z.enum(SUPPLIER_CONTACT_POLICIES).optional(),
-    // Not `z.url()`: the host allowlist in the service is the check that matters, and a
-    // schemeless link the frontend accepts must not 422 here after a green checkmark.
-    websiteUrl: z.string().trim().min(1).max(2_048).optional(),
-    // Integer days and integer units. Bounded here AND by a CHECK — the schema catches one
-    // hostile payload, the constraint catches a value assembled across two requests.
-    leadTimeDays: z.coerce.number().int().min(0).max(3_650).optional(),
-    minimumOrderQuantity: z.coerce.number().int().min(0).max(100_000_000).optional(),
-    capabilitySlugs: z.array(SlugSchema).max(20).default([]),
-  })
-  .strict();
-
-export const UpdateSupplierSchema = z
-  .object({
-    name: z.string().trim().min(1).max(120).optional(),
-    // Explicit null clears the field; absent leaves it alone. The two must stay
-    // distinguishable or a name-only PATCH silently drops a summary.
-    summary: z.string().trim().max(2_000).nullable().optional(),
-    regionSlug: z.string().trim().min(1).max(60).nullable().optional(),
-    verificationState: z.enum(SUPPLIER_VERIFICATION_STATES).optional(),
-    contactPolicy: z.enum(SUPPLIER_CONTACT_POLICIES).optional(),
-    websiteUrl: z.string().trim().min(1).max(2_048).nullable().optional(),
-    leadTimeDays: z.coerce.number().int().min(0).max(3_650).nullable().optional(),
-    minimumOrderQuantity: z.coerce.number().int().min(0).max(100_000_000).nullable().optional(),
-    isActive: z.boolean().optional(),
-    capabilitySlugs: z.array(SlugSchema).max(20).optional(),
-  })
-  .strict();
-
-export const LaunchReadyProjectsQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).max(500).default(1),
-    limit: z.coerce.number().int().min(1).max(50).default(20),
-  })
-  .strict();
 
 /** `GET /supplier-capabilities` — the seeded vocabulary behind the filter chips. */
 export async function listSupplierCapabilities(_req: Request, res: Response): Promise<void> {
@@ -333,40 +227,6 @@ export async function getLaunchReadiness(req: Request, res: Response): Promise<v
     data: readiness,
   } satisfies ApiResponse);
 }
-
-// --- Supplier engagements — a project's private manufacturing CRM (§11j.5).
-
-const ENGAGEMENT_STATUSES = ["considering", "contacted", "contracted", "ended"] as const;
-
-/**
- * `verificationState` is ABSENT here and that is the §6 rule, not an oversight: a project
- * declaring itself `contracted` must never move the supplier's public trust level.
- */
-export const CreateSupplierEngagementSchema = z
-  .object({
-    supplierId: z.string().trim().min(1).max(64),
-    status: z.enum(ENGAGEMENT_STATUSES).default("considering"),
-    // `project_supplier_engagement_note_ck` is `char_length(note) <= 2000`, so the schema
-    // and the constraint agree and an over-long note is a 422 rather than a 500.
-    note: z.string().trim().max(2000).optional(),
-  })
-  .strict();
-
-/** `supplierId` is absent: the (projectId, supplierId) pair is the row's identity. */
-export const UpdateSupplierEngagementSchema = z
-  .object({
-    status: z.enum(ENGAGEMENT_STATUSES).optional(),
-    note: z.string().trim().max(2000).nullable().optional(),
-  })
-  .strict();
-
-export const ListSupplierEngagementsQuerySchema = z
-  .object({
-    status: z.enum(ENGAGEMENT_STATUSES).optional(),
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-  })
-  .strict();
 
 /**
  * Maintainer+ on the project in the path, or the same 404 a stranger gets.

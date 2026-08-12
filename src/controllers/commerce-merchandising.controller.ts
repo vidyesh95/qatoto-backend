@@ -16,6 +16,11 @@ import {
   SeedCartFromPathwaySchema,
   UpdatePathwaySchema,
 } from "#src/schemas/commerce-merchandising.schemas.js";
+import {
+  EmptyObjectSchema,
+  EmptyRequestBodySchema,
+  PageQuerySchema,
+} from "#src/schemas/commerce-merchandising.schemas.js";
 import * as commerceCustomizationAssetService from "#src/services/commerce-customization-asset.service.js";
 import * as commercePathwaysService from "#src/services/commerce-pathways.service.js";
 import type {
@@ -23,15 +28,6 @@ import type {
   CommercePathwayError,
 } from "#src/services/commerce-pathways.service.js";
 import type { ApiResponse } from "#src/types/index.js";
-
-const EmptyObjectSchema = z.object({}).strict();
-const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
-const PageQuerySchema = z
-  .object({
-    limit: z.coerce.number().int().min(1).max(50).default(20),
-    cursor: z.string().trim().min(1).max(500).optional(),
-  })
-  .strict();
 
 function sendZodError(res: Response, error: z.ZodError): void {
   /**
