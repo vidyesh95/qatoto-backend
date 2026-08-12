@@ -515,54 +515,44 @@ async function persistTrendingRanking(
   });
 }
 
-export async function recomputeProductTrending(
+/**
+ * One candidate after scoring: the raw signal row, the score breakdown that produced its
+ * points, and the enforcement verdict applied to it.
+ *
+ * Declared at module level rather than inside the recompute because the scoring pass and
+ * the ranking pass are now separate functions that both speak in these.
+ */
+interface ScoredCandidate {
+  readonly row: TrendingCandidateRow;
+  readonly breakdown: ReturnType<typeof scoreCommerceTrendingCandidate>;
+  readonly finalScorePoints: number;
+  readonly multipliers: ReturnType<typeof buildMultipliers>;
+  readonly conversionRateBasisPoints: number | null;
+  readonly rankingMode: "percentile" | "sparse_exploration";
+  readonly enforcementAction: RankingEnforcementAction;
+  readonly satisfiedClauses: readonly string[];
+  readonly unevaluatedClauses: readonly string[];
+}
+
+/**
+ * Score every candidate, dropping the ones that fail the fraud guard or the spike test.
+ *
+ * WHY A CANDIDATE CAN VANISH HERE. Being in the candidate set means a product had signal in
+ * the window; being scored means the signal survived scrutiny. The fraud guard and the
+ * spike threshold both drop rows, so the scored count is deliberately not the candidate
+ * count and the caller reports both.
+ *
+ * The demand prior is smoothed toward the category baseline rather than used raw: a product
+ * with three conversions out of four views has a 7500 basis-point rate and no business
+ * outranking a product with a thousand of each, and the smoothing is what stops a tiny
+ * denominator from winning.
+ */
+async function scoreTrendingCandidates(
   asOf: Date,
-  options: { readonly enforcementEnabled?: boolean } = {},
-): Promise<{ scored: number; ranked: number; gated: boolean }> {
-  const enforcementEnabled = options.enforcementEnabled ?? false;
-
-  /*
-   * THE CALENDAR GATE. Before fourteen days of confirmation history exist, W2 measures a
-   * period that did not happen. Rather than publish a ranking built on half a window, the
-   * run still executes and still writes — but at `score_algorithm_version = 0`, which the
-   * read paths refuse. An operator sees rows and a log line instead of silence.
-   */
-  const [historyRow] = (
-    await db.execute<{ earliest: Date | null }>(
-      sql`SELECT min(confirmed_at) AS earliest FROM commerce_order WHERE confirmed_at IS NOT NULL`,
-    )
-  ).rows;
-  const earliest = historyRow?.earliest ?? null;
-  const gated =
-    earliest === null ||
-    asOf.getTime() - new Date(earliest).getTime() <
-      MINIMUM_CONFIRMED_HISTORY_DAYS * MILLISECONDS_PER_DAY;
-
-  const w1Start = new Date(asOf.getTime() - 7 * MILLISECONDS_PER_DAY);
-  const w2Start = new Date(asOf.getTime() - 14 * MILLISECONDS_PER_DAY);
-
-  const candidates = await loadTrendingCandidates(asOf, w1Start, w2Start);
-
-  if (candidates.length === 0) {
-    await clearRankingState(asOf);
-    return { scored: 0, ranked: 0, gated };
-  }
-
-  const demandByCategoryCurrency = await loadLatestCategoryDemand(asOf);
-  const algorithmVersion = gated ? PRE_GATE_ALGORITHM_VERSION : COMMERCE_TRENDING_ALGORITHM_VERSION;
-
-  interface ScoredCandidate {
-    readonly row: TrendingCandidateRow;
-    readonly breakdown: ReturnType<typeof scoreCommerceTrendingCandidate>;
-    readonly finalScorePoints: number;
-    readonly multipliers: ReturnType<typeof buildMultipliers>;
-    readonly conversionRateBasisPoints: number | null;
-    readonly rankingMode: "percentile" | "sparse_exploration";
-    readonly enforcementAction: RankingEnforcementAction;
-    readonly satisfiedClauses: readonly string[];
-    readonly unevaluatedClauses: readonly string[];
-  }
-
+  candidates: readonly TrendingCandidateRow[],
+  demandByCategoryCurrency: Awaited<ReturnType<typeof loadLatestCategoryDemand>>,
+  enforcementEnabled: boolean,
+): Promise<ScoredCandidate[]> {
   const scored: ScoredCandidate[] = [];
 
   for (const row of candidates) {
@@ -660,33 +650,27 @@ export async function recomputeProductTrending(
     });
   }
 
-  const asOfIso = asOf.toISOString();
+  return scored;
+}
 
-  /*
-   * A TOTAL ORDER, all the way down. `commerce_product_trending_snapshot_rank_unq` makes a
-   * tie an INSERT FAILURE rather than an arbitrary order, so the tiebreak chain has to end
-   * in something that cannot repeat — the product id.
-   *
-   * Sparse-exploration candidates draw on a stable hash of (productId, asOf) rather than
-   * `random()`, so two runs of one `asOf` agree. Randomness here would break the
-   * determinism assertion that is the only thing separating "the scorer is correct" from
-   * "the scorer looks correct".
-   */
-  const byCategory = new Map<string, ScoredCandidate[]>();
-  for (const candidate of scored) {
-    const key = candidate.row.category_id ?? "";
-    const bucket = byCategory.get(key) ?? [];
-    bucket.push(candidate);
-    byCategory.set(key, bucket);
-  }
-
-  /**
-   * The PRE-ENFORCEMENT base score per product, for the search-document copy.
-   *
-   * Search sorts on the base and not the final score, because an enforcement penalty must
-   * never make a product unfindable by its own exact title — see the update at the end of
-   * the transaction below.
-   */
+/**
+ * Turn scored candidates into the three row sets a recompute publishes.
+ *
+ * RANKED WITHIN A CATEGORY, NOT GLOBALLY. A category with more traffic would otherwise take
+ * every slot on the storefront, so each bucket is ranked independently and the exploration
+ * key breaks ties without letting a fixed ordering ossify.
+ *
+ * Returns all three sets together because they are written together — the snapshot is the
+ * evidence for the state, and the enforcement events are the audit of any demotion applied
+ * to it. Building one without the others would let the storefront rank against a snapshot
+ * that does not explain it.
+ */
+function buildTrendingRankingRows(
+  asOf: Date,
+  asOfIso: string,
+  algorithmVersion: number,
+  byCategory: ReadonlyMap<string, ScoredCandidate[]>,
+) {
   const scoredBaseByProduct = new Map<string, number>();
 
   const snapshotRows: (typeof commerceProductTrendingSnapshot.$inferInsert)[] = [];
@@ -816,6 +800,82 @@ export async function recomputeProductTrending(
       });
     }
   }
+
+  return { scoredBaseByProduct, snapshotRows, stateRows, enforcementEvents };
+}
+
+export async function recomputeProductTrending(
+  asOf: Date,
+  options: { readonly enforcementEnabled?: boolean } = {},
+): Promise<{ scored: number; ranked: number; gated: boolean }> {
+  const enforcementEnabled = options.enforcementEnabled ?? false;
+
+  /*
+   * THE CALENDAR GATE. Before fourteen days of confirmation history exist, W2 measures a
+   * period that did not happen. Rather than publish a ranking built on half a window, the
+   * run still executes and still writes — but at `score_algorithm_version = 0`, which the
+   * read paths refuse. An operator sees rows and a log line instead of silence.
+   */
+  const [historyRow] = (
+    await db.execute<{ earliest: Date | null }>(
+      sql`SELECT min(confirmed_at) AS earliest FROM commerce_order WHERE confirmed_at IS NOT NULL`,
+    )
+  ).rows;
+  const earliest = historyRow?.earliest ?? null;
+  const gated =
+    earliest === null ||
+    asOf.getTime() - new Date(earliest).getTime() <
+      MINIMUM_CONFIRMED_HISTORY_DAYS * MILLISECONDS_PER_DAY;
+
+  const w1Start = new Date(asOf.getTime() - 7 * MILLISECONDS_PER_DAY);
+  const w2Start = new Date(asOf.getTime() - 14 * MILLISECONDS_PER_DAY);
+
+  const candidates = await loadTrendingCandidates(asOf, w1Start, w2Start);
+
+  if (candidates.length === 0) {
+    await clearRankingState(asOf);
+    return { scored: 0, ranked: 0, gated };
+  }
+
+  const demandByCategoryCurrency = await loadLatestCategoryDemand(asOf);
+  const algorithmVersion = gated ? PRE_GATE_ALGORITHM_VERSION : COMMERCE_TRENDING_ALGORITHM_VERSION;
+
+  const scored = await scoreTrendingCandidates(
+    asOf,
+    candidates,
+    demandByCategoryCurrency,
+    enforcementEnabled,
+  );
+
+  const asOfIso = asOf.toISOString();
+
+  /*
+   * A TOTAL ORDER, all the way down. `commerce_product_trending_snapshot_rank_unq` makes a
+   * tie an INSERT FAILURE rather than an arbitrary order, so the tiebreak chain has to end
+   * in something that cannot repeat — the product id.
+   *
+   * Sparse-exploration candidates draw on a stable hash of (productId, asOf) rather than
+   * `random()`, so two runs of one `asOf` agree. Randomness here would break the
+   * determinism assertion that is the only thing separating "the scorer is correct" from
+   * "the scorer looks correct".
+   */
+  const byCategory = new Map<string, ScoredCandidate[]>();
+  for (const candidate of scored) {
+    const key = candidate.row.category_id ?? "";
+    const bucket = byCategory.get(key) ?? [];
+    bucket.push(candidate);
+    byCategory.set(key, bucket);
+  }
+
+  /**
+   * The PRE-ENFORCEMENT base score per product, for the search-document copy.
+   *
+   * Search sorts on the base and not the final score, because an enforcement penalty must
+   * never make a product unfindable by its own exact title — see the update at the end of
+   * the transaction below.
+   */
+  const { scoredBaseByProduct, snapshotRows, stateRows, enforcementEvents } =
+    buildTrendingRankingRows(asOf, asOfIso, algorithmVersion, byCategory);
 
   await persistTrendingRanking(
     asOf,
