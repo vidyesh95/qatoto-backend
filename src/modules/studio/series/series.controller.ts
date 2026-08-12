@@ -14,8 +14,8 @@ import {
   UpdateEpisodeSchema,
   UpdateSeasonSchema,
   UpdateSeriesSchema,
-} from "#src/schemas/series.schemas.js";
-import * as seriesService from "#src/services/series.service.js";
+} from "#src/modules/studio/series/series.schemas.js";
+import * as seriesService from "#src/modules/studio/series/series.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** Reads the nested path ids that prove the ownership chain. */

@@ -1,8 +1,8 @@
 import express from "express";
 
-import * as seriesController from "#src/controllers/series.controller.js";
 import { longFormBody } from "#src/middleware/json-body.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as seriesController from "#src/modules/studio/series/series.controller.js";
 
 const router = express.Router();
 

@@ -53,7 +53,7 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/", specifier: "#src/routes/engagement.routes.js", exportName: "commentRouter" },
   { mountPath: "/", specifier: "#src/routes/engagement.routes.js", exportName: "creatorRouter" },
   { mountPath: "/playlists", specifier: "#src/modules/studio/playlists/playlists.routes.js", exportName: "default" },
-  { mountPath: "/series", specifier: "#src/routes/series.routes.js", exportName: "default" },
+  { mountPath: "/series", specifier: "#src/modules/studio/series/series.routes.js", exportName: "default" },
   { mountPath: "/research-projects", specifier: "#src/routes/research-projects.routes.js", exportName: "default" },
   { mountPath: "/research-programs", specifier: "#src/routes/research-programs.routes.js", exportName: "default" },
   { mountPath: "/discovery", specifier: "#src/routes/discovery.routes.js", exportName: "default" },

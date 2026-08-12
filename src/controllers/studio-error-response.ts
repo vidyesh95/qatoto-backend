@@ -2,8 +2,8 @@ import type { Response } from "express";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import type { PlaylistError } from "#src/modules/studio/playlists/playlists.service.js";
+import type { AnimeSeriesError } from "#src/modules/studio/series/series.service.js";
 import type { ContentReviewError } from "#src/services/content-review.service.js";
-import type { AnimeSeriesError } from "#src/services/series.service.js";
 import type { VideoError } from "#src/services/videos.service.js";
 
 /**

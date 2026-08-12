@@ -12,6 +12,7 @@ import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import { requestLog } from "#src/middleware/request-log.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
+import seriesRouter from "#src/modules/studio/series/series.routes.js";
 import authRouter from "#src/routes/auth.routes.js";
 import commerceCartRouter from "#src/routes/commerce-cart.routes.js";
 import commerceCatalogRouter from "#src/routes/commerce-catalog.routes.js";
@@ -62,7 +63,6 @@ import researchProgramsRouter, {
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/routes/research-projects.routes.js";
-import seriesRouter from "#src/routes/series.routes.js";
 import spotlightRouter from "#src/routes/spotlight.routes.js";
 import storeRouter from "#src/routes/store.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";

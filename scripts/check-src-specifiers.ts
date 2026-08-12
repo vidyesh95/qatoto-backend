@@ -66,7 +66,11 @@ async function findDanglingSpecifiers(): Promise<readonly DanglingSpecifier[]> {
         // real specifier carries either — callers always write the concrete path — so
         // skipping them excludes the documentation without weakening the check. Concrete
         // paths mentioned in comments are still checked, and going stale is the point.
-        if (specifier.includes("*") || specifier.includes("...")) continue;
+        // `#src/${stem}.js` is a specifier BUILT at runtime (scripts/codemod-move-module.ts
+        // composes them), so there is no literal path to resolve.
+        if (specifier.includes("*") || specifier.includes("...") || specifier.includes("${")) {
+          continue;
+        }
         if (existsSync(resolveSpecifierToSourcePath(specifier))) continue;
         dangling.push({ specifier, sourceFile });
       }

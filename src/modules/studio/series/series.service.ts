@@ -10,7 +10,7 @@ import type {
   UpdateEpisodeInput,
   UpdateSeasonInput,
   UpdateSeriesInput,
-} from "#src/schemas/series.schemas.js";
+} from "#src/modules/studio/series/series.schemas.js";
 import type { Result } from "#src/types/index.js";
 
 /**
