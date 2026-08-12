@@ -12,14 +12,14 @@ import {
   commerceSellerProfile,
   storeSearchDocument,
 } from "#src/db/schema.js";
-import { withTradingOrganizationCountryCode } from "#src/lib/commerce-organization-country.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { withTradingOrganizationCountryCode } from "#src/modules/store/commerce-organization-country.js";
 import {
   loadSellerDeclaredProfiles,
   type OrganizationProductionLineProjection,
   type OrganizationSamplePolicyProjection,
   type OrganizationSiteProjection,
 } from "#src/modules/store/organizations/commerce-seller-profile.service.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import {
   loadOrganizationFulfillmentMetrics,
   type OrganizationFulfillmentMetrics,

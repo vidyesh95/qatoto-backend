@@ -8,7 +8,7 @@ import {
   type ClaimVerdict,
   type VerificationStepOutcome,
   type VerificationStepStatus,
-} from "#src/lib/verdict.js";
+} from "#src/modules/rnd/verdict.js";
 
 const ALL_STATUSES: readonly VerificationStepStatus[] = ["pending", "passed", "flagged", "failed", "skipped"];
 

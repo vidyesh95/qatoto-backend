@@ -12,12 +12,12 @@ import {
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   computePerceptualHash,
   perceptualHashDistance,
   readReceiptExif,
-} from "#src/lib/receipt-forensics.js";
-import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
+} from "#src/modules/rnd/receipt-forensics.js";
 import type { Result } from "#src/types/index.js";
 
 /**

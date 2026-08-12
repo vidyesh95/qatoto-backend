@@ -14,7 +14,6 @@ import {
   commerceRefund,
 } from "#src/db/schema.js";
 import { sendJob, JOB_NAMES, idempotencyKeyFor } from "#src/lib/jobs.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import {
   appendCommerceJournalEntry,
   recognizeCommission,
@@ -27,6 +26,7 @@ import {
   evaluateBuyerQualification,
   type BuyerQualificationVerdict,
 } from "#src/modules/store/procurement/commerce-buyer-qualification.service.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import {
   resolveCommercePaymentProvider,
   type CommercePaymentProviderError,

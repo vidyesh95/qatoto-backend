@@ -20,7 +20,7 @@ import {
   explorationOrderKey,
   scoreCommerceTrendingCandidate,
   type CommerceTrendingScoreInput,
-} from "#src/lib/commerce-trending-score.js";
+} from "#src/modules/store/commerce-trending-score.js";
 
 /**
  * The ranking engine's arithmetic, tested without a database.

@@ -1,7 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
-import { computeClientSubnetHash } from "#src/lib/client-subnet.js";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import {
   EmptyObjectSchema,
@@ -12,6 +11,7 @@ import * as commerceProductEngagementService from "#src/modules/store/catalog/co
 import type { ProductEngagementKind } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
 import * as commerceProductViewService from "#src/modules/store/catalog/commerce-product-view.service.js";
 import { resolveEligibleProductRefBySlug } from "#src/modules/store/catalog/store-catalog.service.js";
+import { computeClientSubnetHash } from "#src/modules/store/client-subnet.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

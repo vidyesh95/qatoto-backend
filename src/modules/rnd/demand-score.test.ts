@@ -8,7 +8,7 @@ import {
   distinctReporterPoints,
   openRoleDemandPoints,
   projectScarcityPoints,
-} from "#src/lib/demand-score.js";
+} from "#src/modules/rnd/demand-score.js";
 
 /**
  * The expected rungs are restated here as literals rather than imported from the module.

@@ -5,7 +5,7 @@ import {
   MARKET_INSIGHT_PERCENT_LEVEL_MAX_MILLI,
   MARKET_INSIGHT_STAT_MAX_MILLI,
   type MarketInsightStat,
-} from "#src/lib/market-insight-stat.js";
+} from "#src/modules/rnd/market-insight-stat.js";
 
 /**
  * The predicate that has to agree with three CHECK constraints it cannot see.

@@ -2,11 +2,11 @@ import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { projectMember, sliceLedgerEntry, user } from "#src/db/schema.js";
-import { computeSlicesAwarded } from "#src/lib/slice-math.js";
 import {
   appendAuditEntry,
   allocateLedgerSequenceNumber,
 } from "#src/modules/rnd/projects/project-audit.service.js";
+import { computeSlicesAwarded } from "#src/modules/rnd/slice-math.js";
 import type { Result } from "#src/types/index.js";
 
 /**

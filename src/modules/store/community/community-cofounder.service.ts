@@ -10,10 +10,10 @@ import {
   communityModerationAction,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { isIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 /**

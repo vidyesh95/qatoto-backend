@@ -8,7 +8,6 @@
 import type { Request, Response } from "express";
 
 import { logger } from "#src/lib/logger.js";
-import { isWellFormedRankSeed, mintRankSeed } from "#src/lib/rank-seed.js";
 import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
 import {
   firstParam,
@@ -26,6 +25,7 @@ import {
   listFeedVideos as listFeedVideosService,
   searchVideos as searchVideosService,
 } from "#src/modules/home/feed/feed.service.js";
+import { isWellFormedRankSeed, mintRankSeed } from "#src/modules/home/rank-seed.js";
 import * as contentCategoriesService from "#src/modules/studio/content-categories.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 

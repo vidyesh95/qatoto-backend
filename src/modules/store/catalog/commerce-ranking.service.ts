@@ -29,14 +29,14 @@ import {
   NEUTRAL_MULTIPLIER_BASIS_POINTS,
 } from "#src/lib/commerce-ranking-multipliers.js";
 import { computeSpikeThreshold } from "#src/lib/commerce-robust-statistics.js";
+import { utcDayStringOf } from "#src/lib/utc-day.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import {
   COMMERCE_TRENDING_ALGORITHM_VERSION,
   explorationOrderKey,
   scoreCommerceTrendingCandidate,
-} from "#src/lib/commerce-trending-score.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
-import { utcDayStringOf } from "#src/lib/utc-day.js";
-import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
+} from "#src/modules/store/commerce-trending-score.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 /**

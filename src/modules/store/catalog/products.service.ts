@@ -25,13 +25,13 @@ import {
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
-import { slugifyPublicTitle } from "#src/lib/store-cursor.js";
 import { ensureCommerceProductStatsRow } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
 import type {
   CreateProductInput,
   UpdateProductInput,
 } from "#src/modules/store/catalog/products.schemas.js";
 import { enqueueProductSearchDocumentRefresh } from "#src/modules/store/catalog/store-search.service.js";
+import { slugifyPublicTitle } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 /** Max images per listing (the wizard's MAX_PRODUCT_IMAGES). Enforced here, not the DB. */

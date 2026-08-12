@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeDateCursor, encodeDateCursor, type DateCursor } from "#src/lib/date-cursor.js";
+import { decodeDateCursor, encodeDateCursor, type DateCursor } from "#src/modules/rnd/date-cursor.js";
 
 describe("date cursor", () => {
   const cursor: DateCursor = { calendarDate: "2026-03-14", id: "claim_9f2e" };

@@ -13,7 +13,7 @@ import {
   commerceThread,
   commerceThreadParticipant,
 } from "#src/db/schema.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 /**

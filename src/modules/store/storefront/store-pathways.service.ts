@@ -8,18 +8,18 @@ import {
   storePathwaySlot,
   storePathwaySlotCandidate,
 } from "#src/db/schema.js";
-import {
-  loadPurchasableProductForCheckout,
-  type CommercePricingError,
-} from "#src/lib/commerce-pricing.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
-import { merchandisingWindowOpen } from "#src/lib/store-merchandising-window.js";
 import type { CommerceProductRelationKind } from "#src/modules/store/catalog/commerce-product-relations.service.js";
 import {
   resolveEligibleProductCardsByIds,
   type StoreProductCardProjection,
   type StoreStockState,
 } from "#src/modules/store/catalog/store-catalog.service.js";
+import {
+  loadPurchasableProductForCheckout,
+  type CommercePricingError,
+} from "#src/modules/store/commerce-pricing.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import { merchandisingWindowOpen } from "#src/modules/store/store-merchandising-window.js";
 import type { Result } from "#src/types/index.js";
 
 export type StorePathwayError = { type: "NOT_FOUND" } | { type: "INVALID_CURSOR" };

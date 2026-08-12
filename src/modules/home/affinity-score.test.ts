@@ -4,7 +4,7 @@ import {
   AFFINITY_SCORE_COMPONENT_BUDGETS,
   computeAffinityScorePoints,
   type AffinityScoreInputs,
-} from "#src/lib/affinity-score.js";
+} from "#src/modules/home/affinity-score.js";
 
 function engagedViewer(overrides: Partial<AffinityScoreInputs> = {}): AffinityScoreInputs {
   return {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeDailyLogFeedCursor, encodeDailyLogFeedCursor } from "#src/lib/daily-log-cursor.js";
+import { decodeDailyLogFeedCursor, encodeDailyLogFeedCursor } from "#src/modules/rnd/daily-log-cursor.js";
 
 /**
  * The cursor is the whole correctness argument for the cross-project feed: a codec that

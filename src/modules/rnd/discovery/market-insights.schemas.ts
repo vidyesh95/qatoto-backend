@@ -19,7 +19,7 @@ import {
   findStatViolations,
   MARKET_INSIGHT_PERCENT_LEVEL_MAX_MILLI,
   MARKET_INSIGHT_STAT_MAX_MILLI,
-} from "#src/lib/market-insight-stat.js";
+} from "#src/modules/rnd/market-insight-stat.js";
 
 export const TREND_DIRECTIONS = ["up", "down", "flat"] as const;
 

@@ -7,7 +7,7 @@ stubServerEnvironment();
 vi.mock("dotenv/config", () => ({}));
 vi.mock("#src/db/index.js", async () => (await import("#src/test-support/database-mock.js")).databaseModuleMock());
 
-const { buildSpecificationSnapshot, resolveUnitPriceInCents } = await import("#src/lib/commerce-pricing.js");
+const { buildSpecificationSnapshot, resolveUnitPriceInCents } = await import("#src/modules/store/commerce-pricing.js");
 
 describe("resolveUnitPriceInCents", () => {
   it("uses the base price when no tiers exist", () => {

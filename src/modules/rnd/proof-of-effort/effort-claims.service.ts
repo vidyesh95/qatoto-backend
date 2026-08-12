@@ -14,14 +14,8 @@ import {
   user,
   verificationStep,
 } from "#src/db/schema.js";
-import { encodeDateCursor, type DateCursor } from "#src/lib/date-cursor.js";
-import {
-  cashSliceNumerator,
-  computeSlicesAwarded,
-  timeSliceNumerator,
-} from "#src/lib/slice-math.js";
-import { decideClaimVerdict, type VerificationStepStatus } from "#src/lib/verdict.js";
 import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
+import { encodeDateCursor, type DateCursor } from "#src/modules/rnd/date-cursor.js";
 import { findEffectiveRate } from "#src/modules/rnd/funding/fair-market-rate.service.js";
 import {
   openAllocationProposal,
@@ -35,6 +29,12 @@ import {
   loadStepOutcomes,
   requeueFinalizeVerdict,
 } from "#src/modules/rnd/proof-of-effort/verification.service.js";
+import {
+  cashSliceNumerator,
+  computeSlicesAwarded,
+  timeSliceNumerator,
+} from "#src/modules/rnd/slice-math.js";
+import { decideClaimVerdict, type VerificationStepStatus } from "#src/modules/rnd/verdict.js";
 import type { Result } from "#src/types/index.js";
 
 /**

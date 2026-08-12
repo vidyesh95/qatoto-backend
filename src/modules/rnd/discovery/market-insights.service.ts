@@ -2,7 +2,6 @@ import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { discoveryRegion, marketInsight, researchCategory } from "#src/db/schema.js";
-import { findStatViolations, type MarketInsightStat } from "#src/lib/market-insight-stat.js";
 import { isForeignKeyViolation } from "#src/lib/pg-errors.js";
 import { recordPlatformAction } from "#src/modules/platform/audit/platform-audit.service.js";
 import {
@@ -15,6 +14,10 @@ import {
   type DiscoveryCategoryRef,
   type DiscoveryRegionRef,
 } from "#src/modules/rnd/discovery/discovery-catalog.service.js";
+import {
+  findStatViolations,
+  type MarketInsightStat,
+} from "#src/modules/rnd/market-insight-stat.js";
 import type { Result } from "#src/types/index.js";
 
 /**

@@ -2,7 +2,6 @@ import { and, asc, eq, gt, or, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { commerceProductInquiry, product } from "#src/db/schema.js";
-import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import {
   memberCanOperateBuyer,
   type CommerceOrganizationMemberRole,
@@ -10,6 +9,7 @@ import {
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { createOrGetThread } from "#src/modules/store/procurement/commerce-messages.service.js";
 import type { CommerceThreadProjection } from "#src/modules/store/procurement/commerce-messages.service.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { ListProductInquiriesQuery } from "#src/modules/store/trust/commerce-product-inquiry.schemas.js";
 import type { Result } from "#src/types/index.js";
 

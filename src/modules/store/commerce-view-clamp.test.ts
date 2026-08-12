@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+// From `network-block.js` and not `client-subnet.js`: the latter reads `config` at module
+// scope for its hashing secret, and this parser needs no environment at all.
+import { deriveClientNetworkBlock } from "#src/lib/network-block.js";
 import {
   clampViewDwellSeconds,
   isCountedViewDwell,
   MAXIMUM_VIEW_DWELL_SECONDS,
   VIEW_DWELL_GRACE_SECONDS,
-} from "#src/lib/commerce-view-clamp.js";
-// From `network-block.js` and not `client-subnet.js`: the latter reads `config` at module
-// scope for its hashing secret, and this parser needs no environment at all.
-import { deriveClientNetworkBlock } from "#src/lib/network-block.js";
+} from "#src/modules/store/commerce-view-clamp.js";
 
 /**
  * The two modules that stand between a hostile request and a ranking input.

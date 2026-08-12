@@ -11,7 +11,6 @@ import {
   commerceProviderProfile,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { recordPlatformAction } from "#src/modules/platform/audit/platform-audit.service.js";
 import {
   requirePlatformCapability,
@@ -22,6 +21,7 @@ import {
   type FreightMode,
   type FreightRateCardState,
 } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 /**

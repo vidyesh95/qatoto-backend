@@ -13,20 +13,20 @@ import {
   productPricingTier,
 } from "#src/db/schema.js";
 import {
-  tradingOrganizationCountryCode,
-  withTradingOrganizationCountryCode,
-} from "#src/lib/commerce-organization-country.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
-import {
   EMPTY_PRODUCT_ENGAGEMENT,
   loadProductEngagements,
   type ProductEngagementProjection,
 } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
+import {
+  tradingOrganizationCountryCode,
+  withTradingOrganizationCountryCode,
+} from "#src/modules/store/commerce-organization-country.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   loadSellerDeclaredProfiles,
   type SellerDeclaredProfileProjection,
 } from "#src/modules/store/organizations/commerce-seller-profile.service.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import {
   deriveContactAffordance,
   type ProductContactAffordance,

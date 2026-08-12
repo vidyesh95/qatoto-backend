@@ -2,12 +2,12 @@ import { and, asc, eq, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { storeHeroSlide, storePathway, storeRail, storeRailPlacement } from "#src/db/schema.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
-import { merchandisingWindowOpen } from "#src/lib/store-merchandising-window.js";
 import * as storeRankingService from "#src/modules/store/catalog/commerce-ranking.service.js";
 import * as storeCatalogService from "#src/modules/store/catalog/store-catalog.service.js";
 import * as storeSearchService from "#src/modules/store/catalog/store-search.service.js";
 import * as commerceProvidersService from "#src/modules/store/procurement/commerce-providers.service.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import { merchandisingWindowOpen } from "#src/modules/store/store-merchandising-window.js";
 import type { Result } from "#src/types/index.js";
 
 export type StoreMerchandisingError =

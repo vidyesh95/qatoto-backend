@@ -14,15 +14,15 @@ import {
   physicalWorkReceipt,
   verificationStep,
 } from "#src/db/schema.js";
-import { fetchAuthoredCommits } from "#src/lib/github-integration.js";
 import { idempotencyKeyFor, JOB_NAMES, PermanentJobError, sendJob } from "#src/lib/jobs.js";
-import { decryptToken } from "#src/lib/token-encryption.js";
+import { fetchAuthoredCommits } from "#src/modules/rnd/github-integration.js";
+import { decryptToken } from "#src/modules/rnd/token-encryption.js";
 import {
   decideClaimVerdict,
   VERIFICATION_STEP_KINDS,
   type VerificationStepKind,
   type VerificationStepStatus,
-} from "#src/lib/verdict.js";
+} from "#src/modules/rnd/verdict.js";
 
 /**
  * The four-step verification pipeline (R_AND_D_BACKEND_STRUCTURE.md §9.7;

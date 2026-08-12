@@ -2,8 +2,8 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { projectMember, workshopBoardColumn, workshopTask } from "#src/db/schema.js";
-import { initialRanks, rankBetween } from "#src/lib/lexorank.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { initialRanks, rankBetween } from "#src/modules/rnd/lexorank.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -26,7 +26,7 @@ import type { Result } from "#src/types/index.js";
  *     reordered rarely and by one person, so a re-pack is two rows in a transaction — and
  *     the DEFERRABLE unique constraint lets that transaction pass through a state where
  *     two columns briefly share a position.
- *   - Tasks use a lexicographic `rank` (src/lib/lexorank.ts). Cards are dragged
+ *   - Tasks use a lexicographic `rank` (src/modules/rnd/lexorank.ts). Cards are dragged
  *     concurrently, where a re-pack is a write storm and a lost move.
  */
 
@@ -677,6 +677,6 @@ export async function ensureDefaultBoard(
 /**
  * Exported for the seed path and for tests: `initialRanks` is the only other place a rank
  * is minted, and re-exporting it here keeps every rank in this domain traceable to
- * src/lib/lexorank.ts.
+ * src/modules/rnd/lexorank.ts.
  */
 export { initialRanks };

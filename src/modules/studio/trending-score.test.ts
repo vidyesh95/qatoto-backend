@@ -4,7 +4,7 @@ import {
   computeTrendingScorePoints,
   TRENDING_SCORE_COMPONENT_BUDGETS,
   type TrendingScoreInputs,
-} from "#src/lib/trending-score.js";
+} from "#src/modules/studio/trending-score.js";
 
 function risingVideo(overrides: Partial<TrendingScoreInputs> = {}): TrendingScoreInputs {
   return {

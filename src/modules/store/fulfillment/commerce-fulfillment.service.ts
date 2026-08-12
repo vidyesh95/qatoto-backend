@@ -27,7 +27,6 @@ import {
   commerceShipmentLeg,
   commerceShipmentProductLine,
 } from "#src/db/schema.js";
-import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { insertShipmentLegs } from "#src/modules/store/fulfillment/commerce-fulfillment-phase6.service.js";
 import {
   canExecutePaidFulfillmentForOrderState,
@@ -44,6 +43,7 @@ import {
   type CommerceOrganizationMemberRole,
 } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

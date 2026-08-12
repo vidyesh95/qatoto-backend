@@ -12,20 +12,20 @@ import {
   commerceRfqInvitation,
   commerceThreadParticipant,
 } from "#src/db/schema.js";
-import {
-  decryptCommerceDocument,
-  encryptCommerceDocument,
-} from "#src/lib/commerce-document-encryption.js";
 import { decryptCommercePii, encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import {
   deletePrivateCommerceDocument,
   downloadPrivateCommerceDocument,
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import {
+  decryptCommerceDocument,
+  encryptCommerceDocument,
+} from "#src/modules/store/commerce-document-encryption.js";
 import { scheduleDocumentScan } from "#src/modules/store/organizations/commerce-document-scan.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 /**

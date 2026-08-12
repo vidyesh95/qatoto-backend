@@ -7,7 +7,7 @@ import {
   SLICE_DENOMINATOR,
   timeSliceNumerator,
   unpaidRateCentsPerHour,
-} from "#src/lib/slice-math.js";
+} from "#src/modules/rnd/slice-math.js";
 
 /**
  * The reproduction suite R_AND_D_BACKEND_STRUCTURE.md §17 step 2 demands: "assert

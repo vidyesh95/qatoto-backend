@@ -10,7 +10,7 @@ import {
   MINIMUM_REPORTED_DURATION_SECONDS,
   pinReportedDurationSeconds,
   type ViewSessionClampState,
-} from "#src/lib/view-beacon-clamp.js";
+} from "#src/modules/home/view-beacon-clamp.js";
 
 /**
  * The clamp is the only thing standing between an attacker-controlled payload and the

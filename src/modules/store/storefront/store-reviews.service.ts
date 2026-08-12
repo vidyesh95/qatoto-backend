@@ -9,12 +9,12 @@ import {
   commerceReviewScore,
   commerceReviewVote,
 } from "#src/db/schema.js";
-import { withTradingOrganizationCountryCode } from "#src/lib/commerce-organization-country.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import {
   resolveEligibleProductRefBySlug,
   type StoreCatalogError,
 } from "#src/modules/store/catalog/store-catalog.service.js";
+import { withTradingOrganizationCountryCode } from "#src/modules/store/commerce-organization-country.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { StoreReviewListQuery } from "#src/modules/store/storefront/store-reviews.schemas.js";
 import {
   EMPTY_REVIEW_SCORE_AVERAGES,

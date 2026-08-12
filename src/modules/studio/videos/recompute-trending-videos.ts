@@ -10,7 +10,7 @@ import {
   computeTrendingScorePoints,
   TRENDING_SNAPSHOT_SIZE,
   TRENDING_WINDOW_HOURS,
-} from "#src/lib/trending-score.js";
+} from "#src/modules/studio/trending-score.js";
 
 /**
  * §6 — the hourly trending list. `?mode=trending&limit=3` is Spotlight.

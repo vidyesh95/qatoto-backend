@@ -378,7 +378,7 @@ points.** No `numeric`, no floats, ever.
 > **This section used to be a plan and is now an inventory**, and the difference mattered: the plan
 > named three services that were never written (`discovery.service.ts`, `funding.service.ts`,
 > `slicing-pie.service.ts` — the discovery work split four ways, funding split three, and the equity
-> formula lives in `slice-allocation` + `equity-snapshot` + `src/lib/slice-math.ts`), and it named
+> formula lives in `slice-allocation` + `equity-snapshot` + `src/modules/rnd/slice-math.ts`), and it named
 > fourteen services where fifty-one exist. A reader looking for `slicing-pie.service.ts` found
 > nothing and had no way to know whether it was missing or misnamed.
 
@@ -2038,7 +2038,7 @@ contribution kinds reduce to a **single denominator of 3000**:
 - Cash: `dollars × 4` = `(cents/100) × 4` = `cents × 120 / 3000`
 
 ```ts
-// src/lib/slice-math.ts
+// src/modules/rnd/slice-math.ts
 export const SLICE_DENOMINATOR = 3000n;
 export const BASIS_POINTS_TOTAL = 10000n;
 
@@ -2285,7 +2285,7 @@ attempts — which sets the step `failed` and drives the verdict to `unverified-
 
 The verdict function is pure and exhaustive — any `failed` → `unverified-zero-slices`; any `flagged`
 (no `failed`) → `flagged-for-review`; all `passed`/`skipped` → `verified`. Written once in
-`src/lib/verdict.ts` with a `never` default, unit-tested over all 5⁴ combinations.
+`src/modules/rnd/verdict.ts` with a `never` default, unit-tested over all 5⁴ combinations.
 
 ### 9.8 The dispute state machine
 
@@ -2741,7 +2741,7 @@ Four states, checked against the actual route files in `src/routes/`, not agains
 | [11e](#11e-proof-of-effort-9)                       | Proof of Effort (§9)                | ✅ Shipped | `proof-of-effort.routes.ts`, `proof-of-effort.controller.ts`, ten services, six jobs, migrations 0014–0015                                                                                                          |
 | [11f](#11f-project-immortal-10)                     | Research programmes (§10)           | ✅ Shipped | `research-programs.routes.ts`, `research-programs.controller.ts` / `research-program-error-response.ts`, eleven services, two jobs, migrations 0029–0031, `lib/object-storage.ts`, `lib/pdf.ts`                     |
 | [11g](#11g-funding-and-compensation-7-7a)           | Funding & compensation (§7, §7A)    | ✅ Shipped | `funding.routes.ts`, `compensation.routes.ts`, `compensation.controller.ts`, three services, two jobs, migrations 0017–0019                                                                                         |
-| [11h](#11h-cross-project-reads-8-7a)                | Cross-project reads (§8, §7A)       | ✅ Shipped | `workshop.routes.ts`'s `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`, `governance-summary.service.ts`, `src/lib/daily-log-cursor.ts`, `scripts/smoke-daily-log-feed.ts`, migrations 0020–0021 |
+| [11h](#11h-cross-project-reads-8-7a)                | Cross-project reads (§8, §7A)       | ✅ Shipped | `workshop.routes.ts`'s `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`, `governance-summary.service.ts`, `src/modules/rnd/daily-log-cursor.ts`, `scripts/smoke-daily-log-feed.ts`, migrations 0020–0021 |
 | [11i](#11i-go-to-market-6-family)                   | Go-to-market (§6-family)            | ✅ Shipped | `suppliers.routes.ts`, `suppliers.controller.ts`, `suppliers.service.ts`, `launch-readiness.service.ts`, migration 0020                                                                                             |
 | [11j](#11j-gaps--what-the-rd-surface-still-needs)   | **Gaps** — everything above's holes | ✅ Shipped | `market-insights.*`, `discovery-vocabulary.*`, `supplier-engagements.service.ts`, `go-to-market-error-response.ts`, `lib/market-insight-stat.ts`, `applicationInboxRouter`, migration 0022, two smoke scripts       |
 | [11k](#11k-gaps-found-after-11j-shipped)            | **Gaps** found after §11j shipped   | ✅ Shipped | `research-projects.service.ts`'s `findOriginCluster` / `findRelatedInsights`, `project-insight-links.service.ts`, `market_insight_project_link`, migration 0023, `scripts/smoke-project-insight-links.ts`           |
@@ -3089,7 +3089,7 @@ strands pointing at a policy with no mechanism behind it.
 
 **✅ Shipped in full.** Three root-mounted reads, backed by `workshop.routes.ts`'s
 `dailyLogFeedRouter`, `compensation.routes.ts`'s `governanceRouter`,
-`governance-summary.service.ts`, `src/lib/daily-log-cursor.ts` and migrations 0020–0021, and
+`governance-summary.service.ts`, `src/modules/rnd/daily-log-cursor.ts` and migrations 0020–0021, and
 exercised end to end by `scripts/smoke-daily-log-feed.ts`.
 
 These exist because §4c's `/build-log` and `/governance` stage pages are **cross-project by
@@ -4719,7 +4719,7 @@ one.
   (§4c rule 4). Backed by a new composite `daily_log_feed_idx` on
   `(projectId, logDate, submittedAt, id)`, partial on `status = 'submitted'`. Merging six projects
   client-side is the thing CLAUDE.md §Performance forbids, and the codec lives in
-  `src/lib/daily-log-cursor.ts` with its own test. **The index serves the filter, not the
+  `src/modules/rnd/daily-log-cursor.ts` with its own test. **The index serves the filter, not the
   ordering** — `project_id IN (subquery)` plans as a semi-join, so the `ORDER BY` sorts; §17 item 11
   records the measurement and why that bound is accepted rather than indexed around.
   **`submitted_at` is `timestamp(3)` because the cursor carries milliseconds** (§17 item 11a). A

@@ -2,10 +2,10 @@ import { and, eq, lt, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { commerceEncryptedDocument, commerceOrganizationVerification } from "#src/db/schema.js";
-import { decryptCommerceDocument } from "#src/lib/commerce-document-encryption.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { errorFields, logger } from "#src/lib/logger.js";
 import { downloadPrivateCommerceDocument } from "#src/lib/object-storage.js";
+import { decryptCommerceDocument } from "#src/modules/store/commerce-document-encryption.js";
 import {
   resolveDocumentScanner,
   type DocumentScanVerdict,

@@ -20,6 +20,7 @@ import {
   commerceProductVariant,
   product,
 } from "#src/db/schema.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
   buildSpecificationSnapshot,
   inventoryScopeKey,
@@ -27,12 +28,11 @@ import {
   loadPurchasableProductForCheckout,
   type CommercePricingError,
   type PricedProductLine,
-} from "#src/lib/commerce-pricing.js";
+} from "#src/modules/store/commerce-pricing.js";
 import {
   derivePromisedDeliveryAt,
   latestPromisedDeliveryAt,
-} from "#src/lib/commerce-promised-delivery.js";
-import { isUniqueViolation } from "#src/lib/pg-errors.js";
+} from "#src/modules/store/commerce-promised-delivery.js";
 import { projectPrepareArrivalWindow } from "#src/modules/store/fulfillment/commerce-arrival-window.service.js";
 import {
   estimateDeliveryForLines,

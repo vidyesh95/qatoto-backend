@@ -12,7 +12,7 @@ import {
   squaredDistanceScaled,
   type BoundingBoxMicrodegrees,
   type GeoPointMicrodegrees,
-} from "#src/lib/geo.js";
+} from "#src/modules/rnd/geo.js";
 
 /**
  * A deterministic linear congruential generator. `Math.random()` is banned in this

@@ -8,9 +8,9 @@ import {
   projectMember,
   user,
 } from "#src/db/schema.js";
-import { containsPaymentInstrument } from "#src/lib/payment-instrument.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
+import { containsPaymentInstrument } from "#src/modules/rnd/payment-instrument.js";
 import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
@@ -39,7 +39,7 @@ import type { Result } from "#src/types/index.js";
  *
  * No account number, no IBAN, no UPI handle, no card detail. The `.strict()` schema
  * rejects those KEYS outright (§7A's rejected-keys list); `containsPaymentInstrument`
- * (src/lib/payment-instrument.ts) rejects the VALUES, because a founder pasting a full
+ * (src/modules/rnd/payment-instrument.ts) rejects the VALUES, because a founder pasting a full
  * card number into a free-text reference field is a mistake rather than an attack and
  * deserves a 422 rather than a silent PCI-DSS scope expansion. Both, not either: a
  * rejected-key list is defeated by putting the value somewhere else.

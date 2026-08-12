@@ -7,11 +7,6 @@ import {
   userTopicAffinitySnapshot,
 } from "#src/db/schema.js";
 import {
-  ANONYMOUS_AFFINITY_WINDOW_DAYS,
-  computeAffinityScorePoints,
-  COLD_START_POPULARITY_DAMPING_PERCENT,
-} from "#src/lib/affinity-score.js";
-import {
   applyDiversityCaps,
   FEED_RANK_COMPONENT_BUDGETS,
   feedRankExpression,
@@ -21,6 +16,11 @@ import {
 import { logger } from "#src/lib/logger.js";
 import { escapeLikePattern } from "#src/lib/sql-pattern.js";
 import { utcDateFromRow, utcTimestamp } from "#src/lib/sql-time.js";
+import {
+  ANONYMOUS_AFFINITY_WINDOW_DAYS,
+  computeAffinityScorePoints,
+  COLD_START_POPULARITY_DAMPING_PERCENT,
+} from "#src/modules/home/affinity-score.js";
 import type { Result } from "#src/types/index.js";
 
 /**

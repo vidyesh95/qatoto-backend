@@ -9,9 +9,9 @@ import {
   commerceOrganization,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { createOrGetThread } from "#src/modules/store/procurement/commerce-messages.service.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import { resolveFactoryForInquiry } from "#src/modules/store/storefront/store-factories.service.js";
 import type { Result } from "#src/types/index.js";
 

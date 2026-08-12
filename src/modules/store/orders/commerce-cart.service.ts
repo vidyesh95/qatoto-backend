@@ -11,15 +11,15 @@ import {
   commerceProductVariant,
   product,
 } from "#src/db/schema.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import type { StoreStockState } from "#src/modules/store/catalog/store-catalog.service.js";
 import {
   inventoryScopeKey,
   loadHeldQuantitiesByProduct,
   loadPurchasableProductForCheckout,
   type CommercePricingError,
   type PricedProductLine,
-} from "#src/lib/commerce-pricing.js";
-import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import type { StoreStockState } from "#src/modules/store/catalog/store-catalog.service.js";
+} from "#src/modules/store/commerce-pricing.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import {

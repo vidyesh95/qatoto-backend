@@ -17,10 +17,6 @@ import {
   deleteOrganizationLogo,
   uploadOrganizationLogo as uploadOrganizationLogoAsset,
 } from "#src/lib/cloudinary.js";
-import {
-  decryptCommerceDocument,
-  encryptCommerceDocument,
-} from "#src/lib/commerce-document-encryption.js";
 import { decryptCommercePii, encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import type { ImageValidationError } from "#src/lib/image.js";
 import { validateAndNormalizeImage } from "#src/lib/image.js";
@@ -31,6 +27,10 @@ import {
 } from "#src/lib/object-storage.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
+import {
+  decryptCommerceDocument,
+  encryptCommerceDocument,
+} from "#src/modules/store/commerce-document-encryption.js";
 import { scheduleDocumentScan } from "#src/modules/store/organizations/commerce-document-scan.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";

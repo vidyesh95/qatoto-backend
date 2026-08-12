@@ -11,9 +11,9 @@ import {
   product,
   user,
 } from "#src/db/schema.js";
-import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { ensureCommerceProductStatsRow } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
 import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type {
   AnswerProductQuestionInput,
   AskProductQuestionInput,

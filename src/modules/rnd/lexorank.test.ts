@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { initialRanks, isValidRank, rankBetween } from "#src/lib/lexorank.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
+import { initialRanks, isValidRank, rankBetween } from "#src/modules/rnd/lexorank.js";
 
 /**
  * The board's ordering is the one thing in §8 that two independent systems compute:

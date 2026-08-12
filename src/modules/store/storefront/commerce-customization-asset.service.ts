@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import { db } from "#src/db/index.js";
 import { commerceEncryptedDocument } from "#src/db/schema.js";
-import { encryptCommerceDocument } from "#src/lib/commerce-document-encryption.js";
 import { encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import {
   deletePrivateCommerceDocument,
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
+import { encryptCommerceDocument } from "#src/modules/store/commerce-document-encryption.js";
 import { scheduleDocumentScan } from "#src/modules/store/organizations/commerce-document-scan.service.js";
 import type { Result } from "#src/types/index.js";
 

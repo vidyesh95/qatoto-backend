@@ -5,7 +5,7 @@
  * interpreting attacker-controlled structure, and every one of them has a CVE history
  * involving embedded fonts, JavaScript actions and malformed xref tables. This module
  * makes exactly the claims it can make from a byte inspection, which is the same
- * position `src/lib/receipt-forensics.ts` takes on EXIF: it hand-reads four tags rather
+ * position `src/modules/rnd/receipt-forensics.ts` takes on EXIF: it hand-reads four tags rather
  * than adding a dependency whose job is to interpret hostile input.
  *
  * WHAT THIS PROVES, precisely: the bytes begin with a PDF header, declare a version

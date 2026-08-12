@@ -5,7 +5,7 @@ import {
   decodeTimestampStoreCursor,
   encodeStoreCursor,
   slugifyPublicTitle,
-} from "#src/lib/store-cursor.js";
+} from "#src/modules/store/store-cursor.js";
 
 describe("store cursor helpers", () => {
   it("round-trips sort key and id", () => {

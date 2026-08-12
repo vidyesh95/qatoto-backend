@@ -14,7 +14,6 @@ import {
   user,
   projectMember,
 } from "#src/db/schema.js";
-import { decodeDailyLogFeedCursor, encodeDailyLogFeedCursor } from "#src/lib/daily-log-cursor.js";
 import { streakAfterLog, type IsoDate } from "#src/lib/daily-log-streak.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
@@ -25,6 +24,10 @@ import {
   type FetchImplementation,
   type YoutubeSourceError,
 } from "#src/lib/youtube.js";
+import {
+  decodeDailyLogFeedCursor,
+  encodeDailyLogFeedCursor,
+} from "#src/modules/rnd/daily-log-cursor.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 

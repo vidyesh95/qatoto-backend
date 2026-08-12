@@ -12,14 +12,13 @@ import {
 } from "#src/db/schema.js";
 import type { CloudinaryError } from "#src/lib/cloudinary.js";
 import { deleteStorePathwayImage, uploadStorePathwayImage } from "#src/lib/cloudinary.js";
-import { resolveUnitPriceInCents } from "#src/lib/commerce-pricing.js";
 import type { ImageValidationError } from "#src/lib/image.js";
 import { validateAndNormalizeImage } from "#src/lib/image.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import type { CommerceProductRelationKind } from "#src/modules/store/catalog/commerce-product-relations.service.js";
 import { resolveEligibleProductCardsByIds } from "#src/modules/store/catalog/store-catalog.service.js";
+import { resolveUnitPriceInCents } from "#src/modules/store/commerce-pricing.js";
 import {
   getCart,
   getOrCreateCartForUpdate,
@@ -29,6 +28,7 @@ import {
 } from "#src/modules/store/orders/commerce-cart.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import { getPathwaySetBySlug } from "#src/modules/store/storefront/store-pathways.service.js";
 import type { Result } from "#src/types/index.js";
 

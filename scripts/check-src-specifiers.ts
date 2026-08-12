@@ -20,7 +20,7 @@ import path from "node:path";
  * `pnpm test` catches these eventually. This catches them in about two seconds, which is
  * what makes it usable as a pre-commit gate during a file-moving refactor.
  *
- * FILES ARE READ AS BYTES, DELIBERATELY. `src/lib/commerce-pricing.ts` and
+ * FILES ARE READ AS BYTES, DELIBERATELY. `src/modules/store/commerce-pricing.ts` and
  * `src/modules/rnd/proof-of-effort/verification.service.ts` embed a literal NUL (`\x00`) as a SQL
  * expression-index delimiter, and `grep`/`rg` classify both as binary and skip them
  * WITHOUT SAYING SO — ten real specifiers, silently unchecked, in a checker that reports

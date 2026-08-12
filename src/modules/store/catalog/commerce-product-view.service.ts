@@ -6,10 +6,13 @@ import {
   commerceProductViewSession,
   type commerceProductViewSourceEnum,
 } from "#src/db/schema.js";
-import { computeClientSubnetHash } from "#src/lib/client-subnet.js";
-import { clampViewDwellSeconds, isCountedViewDwell } from "#src/lib/commerce-view-clamp.js";
 import { computeCommerceViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
 import { ensureCommerceProductStatsRow } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
+import { computeClientSubnetHash } from "#src/modules/store/client-subnet.js";
+import {
+  clampViewDwellSeconds,
+  isCountedViewDwell,
+} from "#src/modules/store/commerce-view-clamp.js";
 
 /**
  * The product view beacon (STORE Phase 13).

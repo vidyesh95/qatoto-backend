@@ -28,10 +28,8 @@ import {
   productPricingTier,
   storeSearchDocument,
 } from "#src/db/schema.js";
-import { tradingOrganizationCountryCode } from "#src/lib/commerce-organization-country.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { escapeLikePattern } from "#src/lib/sql-pattern.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 /**
  * A39. `listActiveCategorySubtreeSlugs` is IMPORTED, not redeclared. This file carried a
  * byte-identical private copy and called that one, so the facets and the filters could have
@@ -42,6 +40,8 @@ import {
   deriveStockState,
   listActiveCategorySubtreeSlugs,
 } from "#src/modules/store/catalog/store-catalog.service.js";
+import { tradingOrganizationCountryCode } from "#src/modules/store/commerce-organization-country.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 async function enqueueRefresh(

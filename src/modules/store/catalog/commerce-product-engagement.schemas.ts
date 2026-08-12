@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-import { MAXIMUM_VIEW_DWELL_SECONDS } from "#src/lib/commerce-view-clamp.js";
+import { MAXIMUM_VIEW_DWELL_SECONDS } from "#src/modules/store/commerce-view-clamp.js";
 
 export const EmptyObjectSchema = z.object({}).strict();
 

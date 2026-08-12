@@ -3,9 +3,9 @@ import { and, asc, desc, eq, lte } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { memberFairMarketRate, pieBakeEvent, projectMember, user } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { unpaidRateCentsPerHour } from "#src/lib/slice-math.js";
 import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
+import { unpaidRateCentsPerHour } from "#src/modules/rnd/slice-math.js";
 import type { Result } from "#src/types/index.js";
 
 /**

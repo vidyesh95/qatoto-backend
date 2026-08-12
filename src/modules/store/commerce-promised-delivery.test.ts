@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { derivePromisedDeliveryAt, latestPromisedDeliveryAt } from "#src/lib/commerce-promised-delivery.js";
+import { derivePromisedDeliveryAt, latestPromisedDeliveryAt } from "#src/modules/store/commerce-promised-delivery.js";
 
 const ORDERED_AT = new Date("2026-08-07T12:00:00.000Z");
 

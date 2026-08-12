@@ -5,13 +5,13 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import { artifactEvidence, effortClaim, integrationConsentGrant } from "#src/db/schema.js";
+import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   encryptToken,
   isTokenEncryptionConfigured,
   TOKEN_KEY_VERSION,
-} from "#src/lib/token-encryption.js";
-import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
-import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
+} from "#src/modules/rnd/token-encryption.js";
 import type { Result } from "#src/types/index.js";
 
 /**

@@ -3110,7 +3110,7 @@ export const dailyLog = pgTable(
     /**
      * `precision: 3`, and it is load-bearing for the same reason `workshop_chat_message`'s
      * `sent_at` is: this column is the SECOND TERM OF THE CROSS-PROJECT FEED'S KEYSET
-     * CURSOR (§11h), and `src/lib/daily-log-cursor.ts` encodes it as `getTime()` —
+     * CURSOR (§11h), and `src/modules/rnd/daily-log-cursor.ts` encodes it as `getTime()` —
      * milliseconds. A microsecond column under a millisecond cursor makes rows between the
      * truncated boundary and the true value unreachable on every page.
      *
@@ -3593,7 +3593,7 @@ export const verificationStepKindEnum = pgEnum("verification_step_kind", [
 // One step's outcome. `skipped` and `failed` are NOT interchangeable and the difference
 // decides whether someone is paid: `skipped` means the step does not apply (AST analysis
 // of a photograph), while a claim with NO digital receipts FAILS grounding — SPEC §4
-// step 2 is explicit that it earns zero. See src/lib/verdict.ts.
+// step 2 is explicit that it earns zero. See src/modules/rnd/verdict.ts.
 export const verificationStepStatusEnum = pgEnum("verification_step_status", [
   "pending",
   "passed",
@@ -3795,7 +3795,7 @@ export const pieBakeTriggerEnum = pgEnum("pie_bake_trigger", [
  * so the ledger prices `fairMarketRateCentsPerHour − paidCashRateCentsPerHour`. Without
  * the second column a salaried member earns full sweat equity ON TOP OF their salary;
  * §9.2 calls that the largest correctness gap in the mock, and it has no frontend
- * representation at all. See src/lib/slice-math.ts `unpaidRateCentsPerHour`.
+ * representation at all. See src/modules/rnd/slice-math.ts `unpaidRateCentsPerHour`.
  *
  * THE ONE PLACE A RATE LEGITIMATELY ENTERS VIA A REQUEST BODY (§0, §13). It is a
  * NEGOTIATED INPUT, not a derived output — the same category as a founder's advertised
@@ -3815,7 +3815,7 @@ export const memberFairMarketRate = pgTable(
       .references(() => projectMember.id, { onDelete: "restrict" }),
     // `bigint` because it is money (§4b). A rate is per HOUR while effort is recorded in
     // MINUTES; the conversion is exact integer arithmetic over a denominator of 3000 and
-    // happens only in src/lib/slice-math.ts.
+    // happens only in src/modules/rnd/slice-math.ts.
     fairMarketRateCentsPerHour: bigint("fair_market_rate_cents_per_hour", {
       mode: "bigint",
     }).notNull(),
@@ -4037,7 +4037,7 @@ export const claimVerificationRun = pgTable(
     scopedWindowEndsAt: timestamp("scoped_window_ends_at"),
     startedAt: timestamp("started_at").defaultNow().notNull(),
     completedAt: timestamp("completed_at"),
-    // The pure verdict function's output (src/lib/verdict.ts), constrained to the three
+    // The pure verdict function's output (src/modules/rnd/verdict.ts), constrained to the three
     // TERMINAL values — `incomplete` describes a run in flight and is never persisted.
     verdict: effortVerificationStatusEnum("verdict"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -4423,7 +4423,7 @@ export const sliceAllocationProposal = pgTable(
     status: sliceAllocationProposalStatusEnum("status").default("open").notNull(),
     windowOpensAt: timestamp("window_opens_at").defaultNow().notNull(),
     // PRECISION 3 IS LOAD-BEARING, for the same reason daily_log.submitted_at carries it
-    // (see src/lib/daily-log-cursor.ts). This column is written as `now() + interval`, so
+    // (see src/modules/rnd/daily-log-cursor.ts). This column is written as `now() + interval`, so
     // Postgres would otherwise store MICROSECONDS while a JS Date — and therefore the
     // keyset cursor over this column — carries only milliseconds. Two proposals 0.5 ms
     // apart would read as the same instant, and the cursor predicate would step over both.
@@ -6520,7 +6520,7 @@ export const investorConfidenceSnapshotRelations = relations(
  *
  * THIS IS NOT `member_fair_market_rate.paidCashRateCentsPerHour`, AND THE DIFFERENCE
  * MATTERS. That column exists so the slice math can price the UNPAID portion of an hour
- * (`fairMarketRate − paidCash`, src/lib/slice-math.ts). This table is what the member is
+ * (`fairMarketRate − paidCash`, src/modules/rnd/slice-math.ts). This table is what the member is
  * actually OWED. They are usually the same number and must still be two columns: one is an
  * input to an equity formula, the other is an obligation. When an hourly agreement is
  * accepted the two are validated equal and a mismatch is a `422`, so the pie and the

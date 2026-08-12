@@ -9,9 +9,9 @@ import {
   projectOpenRole,
   researchProject,
 } from "#src/db/schema.js";
-import { computeDemandScorePoints, deriveTrendDirection } from "#src/lib/demand-score.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
+import { computeDemandScorePoints, deriveTrendDirection } from "#src/modules/rnd/demand-score.js";
 
 /**
  * The nightly knowledge-hub demand leaderboard (R_AND_D_BACKEND_STRUCTURE.md §6, §4e),

@@ -20,23 +20,27 @@ import {
   testingCertificationOfferingDetail,
   warehouseOfferingDetail,
 } from "#src/db/schema.js";
-import {
-  tradingOrganizationCountryCode,
-  withTradingOrganizationCountryCode,
-} from "#src/lib/commerce-organization-country.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { decodeStoreCursor, encodeStoreCursor, slugifyPublicTitle } from "#src/lib/store-cursor.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import {
   enqueueOfferingSearchDocumentRefresh,
   enqueueProductSearchDocumentRefresh,
 } from "#src/modules/store/catalog/store-search.service.js";
+import {
+  tradingOrganizationCountryCode,
+  withTradingOrganizationCountryCode,
+} from "#src/modules/store/commerce-organization-country.js";
 import { memberCanOperateProvider } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   loadSellerDeclaredProfiles,
   type SellerDeclaredProfileProjection,
 } from "#src/modules/store/organizations/commerce-seller-profile.service.js";
+import {
+  decodeStoreCursor,
+  encodeStoreCursor,
+  slugifyPublicTitle,
+} from "#src/modules/store/store-cursor.js";
 import {
   EMPTY_FULFILLMENT_METRICS,
   EMPTY_MEASURED_METRICS,

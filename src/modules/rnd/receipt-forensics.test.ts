@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 
-import { computePerceptualHash, perceptualHashDistance, readReceiptExif } from "#src/lib/receipt-forensics.js";
+import { computePerceptualHash, perceptualHashDistance, readReceiptExif } from "#src/modules/rnd/receipt-forensics.js";
 
 /** A deterministic gradient, so every hash below is reproducible rather than fixture-shaped. */
 async function gradientImage(

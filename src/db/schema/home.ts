@@ -49,7 +49,7 @@ import {
 //
 //   R1. Every byte from a viewer is a CLAIM, not a measurement. The beacon is the only
 //       unauthenticated write on the platform, and it is clamped in TS
-//       (src/lib/view-beacon-clamp.ts) before any of these columns move.
+//       (src/modules/home/view-beacon-clamp.ts) before any of these columns move.
 //   R2. Integers only. `completion_bp_sum` + `completion_sample_count` are stored
 //       instead of an average, because an average is a float and a float makes a
 //       ranking bug irreproducible.

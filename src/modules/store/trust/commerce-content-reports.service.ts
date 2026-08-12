@@ -11,10 +11,10 @@ import {
   commerceReview,
   product,
 } from "#src/db/schema.js";
-import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import { enqueueProductSearchDocumentRefresh } from "#src/modules/store/catalog/store-search.service.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type {
   CreateContentReportInput,
   DecideContentReportInput,

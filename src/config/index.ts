@@ -265,7 +265,7 @@ const envSchema = z.object({
   // The key that envelope-encrypts third-party access tokens at rest. OPTIONAL, and its
   // absence DISABLES the connect routes with 503 rather than degrading to a default key —
   // a default key is indistinguishable from plaintext to anyone who has read the source.
-  // §9.10 specifies a KMS-held key; src/lib/token-encryption.ts isolates the derivation
+  // §9.10 specifies a KMS-held key; src/modules/rnd/token-encryption.ts isolates the derivation
   // into one function so that swap is an edit rather than a migration.
   INTEGRATION_TOKEN_SECRET: z.string().min(32).optional(),
   /**

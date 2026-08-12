@@ -2,10 +2,13 @@ import { sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { userCreatorAffinitySnapshot, userTopicAffinitySnapshot } from "#src/db/schema.js";
-import { AFFINITY_WINDOW_DAYS, computeAffinityScorePoints } from "#src/lib/affinity-score.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
 import { utcTimestamp } from "#src/lib/sql-time.js";
+import {
+  AFFINITY_WINDOW_DAYS,
+  computeAffinityScorePoints,
+} from "#src/modules/home/affinity-score.js";
 
 /**
  * §4.3, §4.4 — what each signed-in viewer likes, by category and by creator.

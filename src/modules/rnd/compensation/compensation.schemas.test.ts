@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
 
-import { containsPaymentInstrument } from "#src/lib/payment-instrument.js";
+import { containsPaymentInstrument } from "#src/modules/rnd/payment-instrument.js";
 
 // The controller imports its services, which pull in the db pool at module scope. Stub the
 // modules so the schemas can be parsed without a configured environment — nothing here

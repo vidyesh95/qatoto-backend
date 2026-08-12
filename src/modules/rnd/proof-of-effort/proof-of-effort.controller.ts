@@ -1,15 +1,15 @@
 import type { Request, Response } from "express";
 
 import { config } from "#src/config/index.js";
-import { decodeDateCursor } from "#src/lib/date-cursor.js";
-import { exchangeCodeForToken, fetchViewerLogin } from "#src/lib/github-integration.js";
 import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
+import { decodeDateCursor } from "#src/modules/rnd/date-cursor.js";
 import * as suggestionsService from "#src/modules/rnd/discovery/optimization-suggestions.service.js";
 import * as snapshotService from "#src/modules/rnd/funding/equity-snapshot.service.js";
 import * as rateService from "#src/modules/rnd/funding/fair-market-rate.service.js";
 import * as bakeService from "#src/modules/rnd/funding/pie-bake.service.js";
 import * as allocationService from "#src/modules/rnd/funding/slice-allocation.service.js";
 import * as ledgerService from "#src/modules/rnd/funding/slice-ledger.service.js";
+import { exchangeCodeForToken, fetchViewerLogin } from "#src/modules/rnd/github-integration.js";
 import * as auditService from "#src/modules/rnd/projects/project-audit.service.js";
 import {
   firstParam,

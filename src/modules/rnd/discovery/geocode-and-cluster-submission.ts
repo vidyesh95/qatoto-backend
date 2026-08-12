@@ -2,14 +2,6 @@ import { and, between, eq, isNotNull, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { problemCluster, problemSubmission } from "#src/db/schema.js";
-import {
-  boundingBoxMicrodegrees,
-  isWithinRadius,
-  meanCentroidMicrodegrees,
-  squaredDistanceScaled,
-  type GeoPointMicrodegrees,
-} from "#src/lib/geo.js";
-import { resolveLocation } from "#src/lib/geocoding.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
 import {
@@ -17,6 +9,14 @@ import {
   normalizeToTokenSet,
   TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS,
 } from "#src/lib/text-similarity.js";
+import {
+  boundingBoxMicrodegrees,
+  isWithinRadius,
+  meanCentroidMicrodegrees,
+  squaredDistanceScaled,
+  type GeoPointMicrodegrees,
+} from "#src/modules/rnd/geo.js";
+import { resolveLocation } from "#src/modules/rnd/geocoding.js";
 
 /**
  * Attaches one problem submission to a cluster, geocoding it first

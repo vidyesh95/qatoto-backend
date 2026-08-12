@@ -25,7 +25,6 @@ import {
   uploadOrganizationStakeholderPhoto,
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
-import { encryptCommerceDocument } from "#src/lib/commerce-document-encryption.js";
 import { encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import {
@@ -35,6 +34,7 @@ import {
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
+import { encryptCommerceDocument } from "#src/modules/store/commerce-document-encryption.js";
 import { scheduleDocumentScan } from "#src/modules/store/organizations/commerce-document-scan.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";

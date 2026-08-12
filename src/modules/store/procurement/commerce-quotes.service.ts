@@ -38,13 +38,12 @@ import {
   warehouseEngagementDetail,
   warehouseQuoteServiceDetail,
 } from "#src/db/schema.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { deriveStockState } from "#src/modules/store/catalog/store-catalog.service.js";
 import {
   derivePromisedDeliveryAt,
   latestPromisedDeliveryAt,
-} from "#src/lib/commerce-promised-delivery.js";
-import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
-import { deriveStockState } from "#src/modules/store/catalog/store-catalog.service.js";
+} from "#src/modules/store/commerce-promised-delivery.js";
 import {
   createEscrowSessionForOrder,
   scheduleEscrowCommands,
@@ -55,6 +54,7 @@ import {
 } from "#src/modules/store/orders/commerce-settlement.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
