@@ -17,10 +17,10 @@ import {
   ProductQuestionListParamsSchema,
   ProductQuestionListQuerySchema,
   SellerQuestionInboxQuerySchema,
-} from "#src/schemas/commerce-product-qa.schemas.js";
-import { EmptyObjectSchema } from "#src/schemas/commerce-product-qa.schemas.js";
-import * as commerceProductQaService from "#src/services/commerce-product-qa.service.js";
-import type { CommerceProductQaError } from "#src/services/commerce-product-qa.service.js";
+} from "#src/modules/store/trust/commerce-product-qa.schemas.js";
+import { EmptyObjectSchema } from "#src/modules/store/trust/commerce-product-qa.schemas.js";
+import * as commerceProductQaService from "#src/modules/store/trust/commerce-product-qa.service.js";
+import type { CommerceProductQaError } from "#src/modules/store/trust/commerce-product-qa.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

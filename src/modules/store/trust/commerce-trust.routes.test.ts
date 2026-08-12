@@ -120,7 +120,7 @@ const serviceStubs = vi.hoisted(() => ({
   listDisputesForParticipant: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-trust.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/trust/commerce-trust.service.js", () => serviceStubs);
 
 /**
  * `GET /commerce/completions` is served by the completion service, not the trust one.
@@ -142,7 +142,7 @@ describe("commerce trust routes", () => {
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const trustRouter = (await import("#src/routes/commerce-trust.routes.js")).default;
+    const trustRouter = (await import("#src/modules/store/trust/commerce-trust.routes.js")).default;
     app.use("/commerce", trustRouter);
   });
 
@@ -591,7 +591,7 @@ describe("commerce review edit routes (A38)", () => {
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const trustRouter = (await import("#src/routes/commerce-trust.routes.js")).default;
+    const trustRouter = (await import("#src/modules/store/trust/commerce-trust.routes.js")).default;
     app.use("/commerce", trustRouter);
   });
 
@@ -743,7 +743,7 @@ describe("commerce dispute note routes (A40)", () => {
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const trustRouter = (await import("#src/routes/commerce-trust.routes.js")).default;
+    const trustRouter = (await import("#src/modules/store/trust/commerce-trust.routes.js")).default;
     app.use("/commerce", trustRouter);
   });
 

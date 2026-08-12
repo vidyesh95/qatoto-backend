@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceContentReportsController from "#src/controllers/commerce-content-reports.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
@@ -9,6 +8,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as commerceContentReportsController from "#src/modules/store/trust/commerce-content-reports.controller.js";
 
 /**
  * Content reports and the commerce moderation queue (STORE Appendix A12).

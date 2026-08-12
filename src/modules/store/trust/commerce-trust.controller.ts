@@ -21,14 +21,14 @@ import {
   ReviewIdParamsSchema,
   ReviewMediaParamsSchema,
   UpsertReviewReplySchema,
-} from "#src/schemas/commerce-trust.schemas.js";
-import { EmptyObjectSchema } from "#src/schemas/commerce-trust.schemas.js";
-import { StoreReviewListQuerySchema } from "#src/schemas/store-reviews.schemas.js";
-import * as commerceTrustService from "#src/services/commerce-trust.service.js";
+} from "#src/modules/store/trust/commerce-trust.schemas.js";
+import { EmptyObjectSchema } from "#src/modules/store/trust/commerce-trust.schemas.js";
+import * as commerceTrustService from "#src/modules/store/trust/commerce-trust.service.js";
 import type {
   CommerceReviewMediaError,
   CommerceTrustError,
-} from "#src/services/commerce-trust.service.js";
+} from "#src/modules/store/trust/commerce-trust.service.js";
+import { StoreReviewListQuerySchema } from "#src/schemas/store-reviews.schemas.js";
 import * as storeReviewsService from "#src/services/store-reviews.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 

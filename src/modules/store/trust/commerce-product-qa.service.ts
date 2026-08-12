@@ -18,7 +18,7 @@ import type {
   AnswerProductQuestionInput,
   AskProductQuestionInput,
   ProductQuestionListQuery,
-} from "#src/schemas/commerce-product-qa.schemas.js";
+} from "#src/modules/store/trust/commerce-product-qa.schemas.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

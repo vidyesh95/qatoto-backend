@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceTrustController from "#src/controllers/commerce-trust.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
@@ -18,6 +17,7 @@ import {
   requireActiveCommerceOrganization,
   requireActiveSellerCommerceOrganization,
 } from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import * as commerceTrustController from "#src/modules/store/trust/commerce-trust.controller.js";
 
 const router = express.Router();
 

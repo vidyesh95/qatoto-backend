@@ -117,7 +117,7 @@ const MOUNTED_ROUTERS: readonly {
    * the whole trust surface. Found while adding Phase 10; the omission is the exact
    * failure mode the header comment above predicted.
    */
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-trust.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/modules/store/trust/commerce-trust.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/modules/store/orders/commerce-payments.routes.js", exportName: "default" },
   {
     mountPath: "/commerce",
@@ -125,9 +125,21 @@ const MOUNTED_ROUTERS: readonly {
     exportName: "default",
   },
   // Phase 10 (Appendix A9, A11, A12, A14).
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-product-qa.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-content-reports.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-product-inquiry.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/trust/commerce-product-qa.routes.js",
+    exportName: "default",
+  },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/trust/commerce-content-reports.routes.js",
+    exportName: "default",
+  },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/trust/commerce-product-inquiry.routes.js",
+    exportName: "default",
+  },
   {
     mountPath: "/store",
     specifier: "#src/modules/store/catalog/commerce-product-engagement.routes.js",

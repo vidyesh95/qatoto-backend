@@ -53,8 +53,8 @@ const qaStubs = vi.hoisted(() => ({
   listProductQuestionAnswers: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-product-qa.service.js", async () => ({
-  ...(await vi.importActual<Record<string, unknown>>("#src/services/commerce-product-qa.service.js")),
+vi.mock("#src/modules/store/trust/commerce-product-qa.service.js", async () => ({
+  ...(await vi.importActual<Record<string, unknown>>("#src/modules/store/trust/commerce-product-qa.service.js")),
   ...qaStubs,
 }));
 

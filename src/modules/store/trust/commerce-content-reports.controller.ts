@@ -9,10 +9,10 @@ import {
   ListContentReportsQuerySchema,
   ReportIdParamsSchema,
   RestoreContentSchema,
-} from "#src/schemas/commerce-content-reports.schemas.js";
-import { EmptyObjectSchema } from "#src/schemas/commerce-content-reports.schemas.js";
-import * as commerceContentReportsService from "#src/services/commerce-content-reports.service.js";
-import type { CommerceContentReportsError } from "#src/services/commerce-content-reports.service.js";
+} from "#src/modules/store/trust/commerce-content-reports.schemas.js";
+import { EmptyObjectSchema } from "#src/modules/store/trust/commerce-content-reports.schemas.js";
+import * as commerceContentReportsService from "#src/modules/store/trust/commerce-content-reports.service.js";
+import type { CommerceContentReportsError } from "#src/modules/store/trust/commerce-content-reports.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

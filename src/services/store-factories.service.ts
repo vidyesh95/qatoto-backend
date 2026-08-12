@@ -23,7 +23,7 @@ import {
 import {
   loadOrganizationFulfillmentMetrics,
   type OrganizationFulfillmentMetrics,
-} from "#src/services/commerce-trust-metrics.service.js";
+} from "#src/modules/store/trust/commerce-trust-metrics.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

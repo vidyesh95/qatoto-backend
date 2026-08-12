@@ -1,10 +1,10 @@
 import express from "express";
 
-import * as commerceProductInquiryController from "#src/controllers/commerce-product-inquiry.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { commerceMessageWriteLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireProvisionedBuyerCommerceWorkspace } from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import * as commerceProductInquiryController from "#src/modules/store/trust/commerce-product-inquiry.controller.js";
 
 /**
  * Pre-sales product inquiries (STORE Appendix A14) — the backend behind "Chat now".

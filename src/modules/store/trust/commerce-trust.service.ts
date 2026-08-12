@@ -36,7 +36,7 @@ import type {
   CreateReviewInput,
   DecideDisputeInput,
   UpsertReviewReplyInput,
-} from "#src/schemas/commerce-trust.schemas.js";
+} from "#src/modules/store/trust/commerce-trust.schemas.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

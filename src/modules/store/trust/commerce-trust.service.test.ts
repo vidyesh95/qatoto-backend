@@ -7,7 +7,7 @@ vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
 const { evaluateDisputeOpeningRelationship, evaluateReviewRelationship, isModeratorMemberOfDisputeParty } =
-  await import("#src/services/commerce-trust.service.js");
+  await import("#src/modules/store/trust/commerce-trust.service.js");
 
 describe("commerce trust relationship policy", () => {
   it("allows only the completion buyer to review a different counterparty", () => {

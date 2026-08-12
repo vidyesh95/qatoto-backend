@@ -15,7 +15,6 @@ import {
   resolveEligibleProductRefBySlug,
   type StoreCatalogError,
 } from "#src/modules/store/catalog/store-catalog.service.js";
-import type { StoreReviewListQuery } from "#src/schemas/store-reviews.schemas.js";
 import {
   EMPTY_REVIEW_SCORE_AVERAGES,
   EMPTY_REVIEW_SUMMARY,
@@ -25,7 +24,8 @@ import {
   loadProductReviewSummaries,
   type ReviewScoreAverages,
   type ReviewSummaryAggregate,
-} from "#src/services/commerce-trust-metrics.service.js";
+} from "#src/modules/store/trust/commerce-trust-metrics.service.js";
+import type { StoreReviewListQuery } from "#src/schemas/store-reviews.schemas.js";
 import type { Result } from "#src/types/index.js";
 
 type ReviewSort = StoreReviewListQuery["sort"];

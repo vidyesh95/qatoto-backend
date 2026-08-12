@@ -20,11 +20,11 @@ import type {
   DecideContentReportInput,
   ListContentReportsQuery,
   RestoreContentInput,
-} from "#src/schemas/commerce-content-reports.schemas.js";
+} from "#src/modules/store/trust/commerce-content-reports.schemas.js";
 import {
   refreshProductQuestionCounters,
   refreshQuestionAnswerSummary,
-} from "#src/services/commerce-product-qa.service.js";
+} from "#src/modules/store/trust/commerce-product-qa.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

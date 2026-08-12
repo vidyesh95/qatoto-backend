@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceProductQaController from "#src/controllers/commerce-product-qa.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
@@ -14,6 +13,7 @@ import {
   requireActiveCommerceOrganization,
   requireActiveSellerCommerceOrganization,
 } from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import * as commerceProductQaController from "#src/modules/store/trust/commerce-product-qa.controller.js";
 
 /**
  * Product Q&A authoring (STORE Appendix A9).

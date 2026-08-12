@@ -30,7 +30,7 @@ import {
 import {
   deriveContactAffordance,
   type ProductContactAffordance,
-} from "#src/services/commerce-product-inquiry.service.js";
+} from "#src/modules/store/trust/commerce-product-inquiry.service.js";
 import {
   EMPTY_FULFILLMENT_METRICS as EMPTY_CARD_FULFILLMENT_METRICS,
   EMPTY_MEASURED_METRICS,
@@ -39,7 +39,7 @@ import {
   loadProductReviewMetrics,
   type OrganizationFulfillmentMetrics,
   type OrganizationMeasuredMetrics,
-} from "#src/services/commerce-trust-metrics.service.js";
+} from "#src/modules/store/trust/commerce-trust-metrics.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type StoreStockState = "in_stock" | "low_stock" | "made_to_order" | "unavailable";

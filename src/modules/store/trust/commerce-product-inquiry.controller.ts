@@ -7,10 +7,10 @@ import type { CommerceOrganizationMemberRole } from "#src/modules/store/organiza
 import {
   CreateProductInquiryParamsSchema,
   ListProductInquiriesQuerySchema,
-} from "#src/schemas/commerce-product-inquiry.schemas.js";
-import { EmptyObjectSchema } from "#src/schemas/commerce-product-inquiry.schemas.js";
-import * as commerceProductInquiryService from "#src/services/commerce-product-inquiry.service.js";
-import type { CommerceProductInquiryError } from "#src/services/commerce-product-inquiry.service.js";
+} from "#src/modules/store/trust/commerce-product-inquiry.schemas.js";
+import { EmptyObjectSchema } from "#src/modules/store/trust/commerce-product-inquiry.schemas.js";
+import * as commerceProductInquiryService from "#src/modules/store/trust/commerce-product-inquiry.service.js";
+import type { CommerceProductInquiryError } from "#src/modules/store/trust/commerce-product-inquiry.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

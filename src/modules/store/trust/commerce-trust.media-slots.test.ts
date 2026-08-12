@@ -122,7 +122,7 @@ vi.mock("#src/db/index.js", () => ({
   },
 }));
 
-const { attachReviewVideo, detachReviewMedia } = await import("#src/services/commerce-trust.service.js");
+const { attachReviewVideo, detachReviewMedia } = await import("#src/modules/store/trust/commerce-trust.service.js");
 
 const ACTOR = {
   organizationId: "org-buyer",

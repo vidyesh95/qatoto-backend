@@ -13,7 +13,7 @@ import {
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { mintSampleCreditsForOrder } from "#src/modules/store/orders/commerce-sample-credit.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import type { CommerceTrustError } from "#src/services/commerce-trust.service.js";
+import type { CommerceTrustError } from "#src/modules/store/trust/commerce-trust.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
