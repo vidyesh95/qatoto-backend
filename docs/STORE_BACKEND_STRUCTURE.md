@@ -608,6 +608,10 @@ withdrawn | expired`
 - quote, monotonic revision number, currency, validity deadline
 - subtotal, tax, service fee, shipping, discount, and total in integer cents
 - payment terms, Incoterm when relevant, notes, createdByMemberId
+- `incoterm` is the `commerce_incoterm` ENUM since Phase 23 (`0115`/`0116`, A40) — Incoterms 2020,
+  the eleven the ICC publishes. It was free text under a 20-character length check, which accepted
+  `BANANA`, and `commerce_prevent_submitted_quote_revision_mutation` then froze the bad value on the
+  revision forever
 - immutable after submission
 
 `commerce_quote_product_line` and `commerce_quote_service_line`
@@ -645,6 +649,10 @@ quantity, and selected variant/options only. It does not store an authoritative 
 - `state`: `pending_payment | payment_processing | confirmed | in_fulfillment |
 partially_completed | completed | cancelled | disputed`
 - immutable legal names, addresses, currency, totals, terms, and accepted quote revision
+- `incoterm_snapshot` carries the same `commerce_incoterm` enum as the revision it is copied from
+  (Phase 23, `0116`, A40). It carried NO constraint of any kind before that — a snapshot less
+  constrained than its source, which is how a term the revision could never have stated could still
+  appear on the order
 
 `commerce_order_product_line` and `commerce_order_service_line`
 
@@ -905,6 +913,7 @@ started, not that payment, booking, testing, or settlement succeeded.
 | GET    | `/commerce/seller/questions`                              | Cross-listing question queue; `?unansweredOnly=` — A38   |
 | GET    | `/commerce/seller/reviews`                                | The seller's review inbox; `?unreplied=` — A38           |
 | PATCH  | `/commerce/reviews/:reviewId`                             | The author's ONE edit, within 30 days. No DELETE — A38   |
+| POST   | `/commerce/disputes/:disputeId/notes`                     | Either party speaks, while open; 404 to a non-party — A40 |
 
 **`paymentIntentId` joined both order projections** rather than becoming a list route. An order
 carries at most one live intent — `commerce_payment_intent_active_order_uidx` is what makes that
@@ -1202,7 +1211,12 @@ Scheduled jobs:
 - reconcile payment and transfer state;
 - retry provider calls with bounded exponential backoff and dead-letter visibility;
 - recompute public provider metrics and search documents;
-- expire temporary document URLs, never source objects required for audit.
+- expire temporary document URLs, never source objects required for audit;
+- re-check third-party embeds nightly (`revalidate-youtube-embeds`, 05:10 UTC). It reads TWO
+  candidate sets since Phase 23 (A40) — the `video` table and `commerce_review_media` — on ONE
+  cron, sharing one per-run oEmbed cache, one dead-letter queue and, critically, one outage rule:
+  only "this video is gone" hides a row, "YouTube did not answer" hides nothing, and a run where
+  YouTube answered nothing at all throws rather than reporting success.
 
 ---
 
@@ -2700,6 +2714,10 @@ as product decisions.
   Incoterms and this backend does not. **Cost:** on most lanes, where no forwarder sells a domestic
   card in the destination country, a perfectly good ocean rate goes unshown. **This is the largest
   practical divergence in the phase**, and the fix is an Incoterm concept, not a rate table.
+  **Phase 23 shipped the VOCABULARY ONLY** (`commerce_incoterm`, A40): a quote revision can now
+  only state a term the ICC publishes. Nothing branches on the value and no leg is modelled from
+  it, so this divergence stays open — a delivery term is now spelled correctly, and still means
+  nothing to the rating.
 - **Customs dwell is exposed as its own component.** Alibaba does not surface it; it bundles
   clearance into the estimate or sells DDP. Here the backend is **more** transparent than Alibaba,
   not less, which is the intended direction.
@@ -3651,10 +3669,14 @@ reads `commerce-trust-metrics` does.
 **Corrected while here:** `attachReviewVideo`'s docblock credited "the shipped
 `verify-youtube-video` oEmbed job" with checking whether a review's video exists. That job reads the
 `video` table alone and has never touched `commerce_review_media`, so a well-formed id pointing at a
-deleted or private video is stored and rendered indefinitely. The comment now says so. The decided
-design for when it is built: **a dead video hides its media row and leaves the review standing**,
-because a buyer's testimony must not be deleted when a third-party host removes a file — which needs
-a state column on `commerce_review_media` and is not built.
+deleted or private video is stored and rendered indefinitely. The comment now says so.
+
+**That last note is CLOSED in Phase 23; see A40.** The design it recorded — a dead video hides its
+media row and leaves the review standing, because a buyer's testimony must not be deleted when a
+third-party host removes a file — is what `0117`/`0118` built, and
+`revalidate-youtube-embeds` is what decides. A40 also records what the decision cost, which this
+entry could not have predicted: `media_count` had to start counting VISIBLE media, and three
+writers were still reading it as a count of attached rows.
 
 ---
 
@@ -4385,3 +4407,134 @@ proves the implementation equals itself. `smoke-store-phase-22` asserts the phas
 **every facet count equals the number of results returned when that value is applied as a filter**,
 across every dimension, plus drill-down blind-to-self and the category page agreeing with the same
 query on search.
+
+---
+
+### A40. Four things that were quietly wrong — **SHIPPED (Phase 23, `0115`–`0118`)**
+
+**Needed by:** the review strip, the quote form, the dispute timeline, and whoever loads the first
+freight rate card. Four unrelated defects, closed together because each was small enough that none
+would ever have been given a phase of its own — and one of them turned out not to be small.
+
+#### A dead review video rendered forever
+
+`attachReviewVideo` stores a well-formed YouTube id without checking that it resolves, and A22's
+closing note recorded both the gap and the decided fix: **HIDE, NOT DELETE**. A buyer's testimony
+must not be deleted because a third party removed a file, and a video that returns — unlisted
+flipped back to public — must be able to come back with it.
+
+`0117` adds `commerce_review_media_state` (`visible | unavailable_upstream`) and `0118` the column,
+its `unavailable_at`, and two CHECKs: the state and the timestamp are one fact in both directions,
+and only a `youtube_video` row may be unavailable upstream, because a photo's bytes are on
+Cloudinary and this platform controls those.
+
+**A NEW TWO-VALUE ENUM, not `commerce_ugc_visibility_state`.** That type's four values are all
+about WHO MODERATED, and its own comment forbids exactly this reuse: an automatic hide is not a
+human decision, and flattening the two would make the moderation queue lie about who acted. None of
+its values says "the host deleted it".
+
+**The nightly job gained a second candidate set rather than a sibling.**
+`revalidate-youtube-embeds` already ran at 05:10, already called `verifyYoutubeVideo`, and already
+got the hard part right — `YOUTUBE_VERIFY_FAILED` is evidence of nothing, and a run where YouTube
+answered nothing at all throws rather than reporting success. One cron, one dead-letter queue, one
+per-run oEmbed cache, so a video that appears both as a `video` row and in a review is checked once.
+
+#### What that decision cost, which is the part worth reading
+
+**`media_count` COUNTS VISIBLE MEDIA from Phase 23 on**, because `hasMedia=true` has to keep
+meaning "has media you can see". Every read of that counter therefore had to be re-examined, and
+the first commit missed three:
+
+- **Positions are NOT repacked on a hide** — a hidden row keeps its slot so an un-hide restores it
+  in place, and the gallery renders around the gap. `repackReviewMediaPositions` is deliberately
+  not reused; repacking would free a sixth slot and turn the six-item cap into "six visible".
+- So `position: review.mediaCount` on both attach paths chose a slot that was **still occupied**,
+  and `commerce_review_media_position_uidx` refused it — a 500 on a buyer's own review, and on the
+  photo path the just-uploaded Cloudinary asset was destroyed on the way out.
+- And the cap itself became "six VISIBLE" against a `position BETWEEN 0 AND 5` CHECK that means six
+  attached, so a seventh row could be accepted by the service and then refused by the database.
+- `detachReviewMedia` decremented unconditionally, but the job had already decremented when it hid
+  the row — so detaching a hidden row decremented twice and pushed the counter below the media the
+  review still shows.
+
+`readReviewMediaOccupancy` answers both questions from the rows instead: `count(*)` for the cap,
+`max(position) + 1` for the slot, under the review lock the attach paths already hold. Not one
+number for both — they disagree the moment a detach is interrupted, and the unique index is on the
+position, not on the count.
+
+**None of this was reachable by any existing test.** Every review-media suite mocks
+`#src/db/index.js`, so the unique index that actually refuses is present in none of them.
+`commerce-trust.media-slots.test.ts` pins it against a hand-stubbed database — five visible rows and
+six attached, which is what one dead video looks like — and three of its four assertions fail
+against the code as first shipped.
+
+#### `BANANA` was a valid Incoterm
+
+`commerce_quote_revision.incoterm` carried a 20-character length check and
+`commerce_order.incoterm_snapshot` carried **nothing at all** — a snapshot less constrained than
+the column it is copied from. Nothing in the codebase branched on the value: all sixteen sites were
+pass-through assignment or a type declaration.
+
+`0115`/`0116` make both columns `commerce_incoterm`: Incoterms 2020, all eleven —
+`EXW FCA CPT CIP DAP DPU DDP` for any mode, `FAS FOB CFR CIF` for sea and inland waterway.
+
+**The `USING` clause is the only way this could have been cleaned.**
+`commerce_prevent_submitted_quote_revision_mutation` is a row trigger that refuses any write to a
+submitted revision, so an `UPDATE … SET incoterm = NULL` cleanup was impossible. DDL does not fire
+row triggers, so the cast did what no statement could: anything that was never a real Incoterm
+became NULL, which is the honest outcome for a value that named no term.
+
+**Vocabulary only.** §19.9's Incoterm divergence stays open — a term is now spelled correctly and
+still means nothing to the rating.
+
+#### A dispute had no way to say anything after it was opened
+
+`commerce_dispute_event.note_added` had existed since `0052` **with no writer**, while A28's
+participant read has rendered the timeline — `note` included, no `eventKind` filter — since Phase
+15. So a note had somewhere to appear all along and nothing to put there: a buyer could open a
+dispute over a six-figure order and then say nothing further, and the seller could read the
+accusation and not answer it.
+
+`POST /commerce/disputes/:disputeId/notes`, guarded exactly as its siblings are. **Both parties,
+while the dispute is open** — both can already read it, and a counterparty who cannot respond makes
+the timeline a one-sided record of a two-sided disagreement. Refused once the dispute is decided,
+because `decideDispute` has by then restored the order's `priorOrderState` and the table is
+append-only, so a late note could never be withdrawn. **A non-party gets `404`, never `403`** —
+A28's rule, so the route cannot be used to enumerate dispute ids.
+
+The party check MOVED out of `getDisputeForParticipant` into `isDisputeParty` rather than being
+copied: a second copy is how the read and the write eventually disagree about who may speak in a
+dispute they can both see. Sequence numbering was unified while there — `openDispute` hard-coded 0
+and `decideDispute` used `count(*)`, which agree only because every writer starts at zero;
+`nextDisputeEventSequence` is `MAX + 1` for all three, taken under the `FOR UPDATE` every caller
+already holds.
+
+The response is the whole updated timeline rather than the one note, so the answer and a refresh
+cannot disagree.
+
+#### The first freight rate card would have done nothing
+
+No code, and §19.11 is the whole fix. Two rules decided whether a lane rendered anything and were
+written where a spec reader finds them and an operator does not: a card created without a future
+`validFrom` is in force immediately and its `/breaks` routes can then never succeed, and a card
+with no band at `minBillableWeightGrams: 0` reports every small consignment as an uncovered lane —
+indistinguishable, to the buyer, from having loaded no data at all.
+
+#### How it is checked
+
+`verify-store-phase-23-constraints` asserts the two new CHECKs — both by probe and by reading
+`pg_get_constraintdef`, because a probe needs a review, a review needs a completion, and a
+development database that has never taken an order would otherwise report four skips as four
+passes. It also asserts the enum's eleven members, both incoterm columns' type, the amended
+`media_count` invariant, contiguous media positions across ALL rows including hidden ones, and
+contiguous dispute event sequences now that a third writer appends to them.
+
+`verify-store-phase-10-constraints`' media assertion was amended in the same change to count only
+visible rows; left alone it would have started failing the first night the job hid a video.
+
+`smoke-store-phase-23` drives the dispute note and the Incoterm vocabulary over HTTP. **Its media
+check does not run today, and says why rather than skipping quietly:** a completion is minted only
+when a shipment is marked delivered, an order becomes shippable only when a payment settles, and
+`applyPaymentSettlement` posts `buyer_clearing` and `order_held` — two accounts Phase 14's rail map
+permits only on `internal_custody`, which no live order uses. That is a payments defect, it predates
+this phase, and it is recorded here because it is the reason the media check reads as a skip.
