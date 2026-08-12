@@ -1,10 +1,10 @@
 import type { Response } from "express";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
+import type { ContentReviewError } from "#src/modules/studio/content-review.service.js";
 import type { PlaylistError } from "#src/modules/studio/playlists/playlists.service.js";
 import type { AnimeSeriesError } from "#src/modules/studio/series/series.service.js";
 import type { VideoError } from "#src/modules/studio/videos/videos.service.js";
-import type { ContentReviewError } from "#src/services/content-review.service.js";
 
 /**
  * Error mapping for the Creator Studio controllers (docs/STUDIO_BACKEND_STRUCTURE.md §8).

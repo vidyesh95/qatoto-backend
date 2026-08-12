@@ -1,12 +1,6 @@
 import type { Request, Response } from "express";
 
 import {
-  firstParam,
-  respondStudioError,
-  respondUnauthenticated,
-  respondValidationFailed,
-} from "#src/controllers/studio-error-response.js";
-import {
   CreateEpisodeSchema,
   CreateSeasonSchema,
   CreateSeriesSchema,
@@ -16,6 +10,12 @@ import {
   UpdateSeriesSchema,
 } from "#src/modules/studio/series/series.schemas.js";
 import * as seriesService from "#src/modules/studio/series/series.service.js";
+import {
+  firstParam,
+  respondStudioError,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/studio/studio-error-response.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** Reads the nested path ids that prove the ownership chain. */

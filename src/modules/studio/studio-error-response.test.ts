@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("#src/db/index.js", () => ({ db: {} }));
 vi.mock("#src/config/index.js", () => ({ config: { YOUTUBE_OEMBED_TIMEOUT_MS: 3_000 } }));
 
-const { mapStudioErrorToResponse } = await import("#src/controllers/studio-error-response.js");
+const { mapStudioErrorToResponse } = await import("#src/modules/studio/studio-error-response.js");
 type StudioDomainError = Parameters<typeof mapStudioErrorToResponse>[0];
 
 /**

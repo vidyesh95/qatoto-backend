@@ -13,7 +13,7 @@ import {
   videoViewSession,
 } from "#src/db/schema.js";
 import { applyViewBeacon, pinReportedDurationSeconds } from "#src/lib/view-beacon-clamp.js";
-import { findPublicVideo } from "#src/services/public-video-gate.js";
+import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
 import type { Result } from "#src/types/index.js";
 
 /**

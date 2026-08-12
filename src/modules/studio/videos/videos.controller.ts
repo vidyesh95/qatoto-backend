@@ -6,7 +6,7 @@ import {
   respondStudioError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/studio-error-response.js";
+} from "#src/modules/studio/studio-error-response.js";
 import {
   CreateVideoSchema,
   ListMyVideosQuerySchema,

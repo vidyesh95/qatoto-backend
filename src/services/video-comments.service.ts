@@ -3,7 +3,7 @@ import { and, asc, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { user, video, videoComment, videoCommentLike, videoStats } from "#src/db/schema.js";
 import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
-import { findPublicVideo } from "#src/services/public-video-gate.js";
+import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
 import type { Result } from "#src/types/index.js";
 
 /**

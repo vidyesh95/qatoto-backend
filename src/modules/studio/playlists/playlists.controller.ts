@@ -1,18 +1,18 @@
 import type { Request, Response } from "express";
 
 import {
-  firstParam,
-  respondStudioError,
-  respondUnauthenticated,
-  respondValidationFailed,
-} from "#src/controllers/studio-error-response.js";
-import {
   CreatePlaylistSchema,
   ListMyPlaylistsQuerySchema,
   ReplacePlaylistVideosSchema,
   UpdatePlaylistSchema,
 } from "#src/modules/studio/playlists/playlists.schemas.js";
 import * as playlistsService from "#src/modules/studio/playlists/playlists.service.js";
+import {
+  firstParam,
+  respondStudioError,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/studio/studio-error-response.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** POST /playlists */

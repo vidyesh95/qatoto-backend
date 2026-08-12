@@ -39,15 +39,15 @@ import {
   type YoutubeSourceError,
   type YoutubeVideoFacts,
 } from "#src/lib/youtube.js";
-import type {
-  CreateVideoInput,
-  UpdateVideoInput,
-} from "#src/modules/studio/videos/videos.schemas.js";
 import {
   DEFAULT_CONTENT_CATEGORY_SLUG,
   findUnavailableCategoryIds,
   resolveDefaultCategoryId,
-} from "#src/services/content-categories.service.js";
+} from "#src/modules/studio/content-categories.service.js";
+import type {
+  CreateVideoInput,
+  UpdateVideoInput,
+} from "#src/modules/studio/videos/videos.schemas.js";
 import { ensureVideoStatsRows } from "#src/services/video-engagement.service.js";
 
 /**

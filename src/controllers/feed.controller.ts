@@ -16,12 +16,12 @@ import {
 import { logger } from "#src/lib/logger.js";
 import { isWellFormedRankSeed, mintRankSeed } from "#src/lib/rank-seed.js";
 import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
+import * as contentCategoriesService from "#src/modules/studio/content-categories.service.js";
 import {
   ListFeedVideosQuerySchema,
   SearchVideosQuerySchema,
   WatchVideoIdParamSchema,
 } from "#src/schemas/feed.schemas.js";
-import * as contentCategoriesService from "#src/services/content-categories.service.js";
 import {
   listFeedVideos as listFeedVideosService,
   searchVideos as searchVideosService,

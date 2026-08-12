@@ -13,7 +13,7 @@ import {
   videoSave,
   videoStats,
 } from "#src/db/schema.js";
-import { PUBLICLY_SERVABLE } from "#src/services/public-video-gate.js";
+import { PUBLICLY_SERVABLE } from "#src/modules/studio/public-video-gate.js";
 import type { Result } from "#src/types/index.js";
 
 /**

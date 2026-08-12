@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as adminReviewController from "#src/controllers/admin-review.controller.js";
 import { longFormBody } from "#src/middleware/json-body.js";
 import {
   contentReviewLimiter,
@@ -8,6 +7,7 @@ import {
   videoThumbnailUploadLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as adminReviewController from "#src/modules/studio/admin-review.controller.js";
 import { uploadVideoThumbnail } from "#src/modules/studio/videos/upload-video-thumbnail.js";
 import * as videosController from "#src/modules/studio/videos/videos.controller.js";
 
