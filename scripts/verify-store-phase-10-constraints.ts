@@ -304,6 +304,12 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
     detail: `${String(productsWithoutStats)} product(s) without stats`,
   });
 
+  // THE SHARE HALF WAS STALE, and it was stale in the direction that fails: Phase 13 gave
+  // `commerce_product_share` a `counted` column so an ANONYMOUS share is written but never
+  // counted — the rows are real events and deleting them would destroy evidence, they simply
+  // must not push a ranking input a stranger can move. This assertion still reconciled the
+  // counter against EVERY row, so one signed-out share reported the counter as drifted.
+  // `verify-store-phase-13-constraints` has had the correct predicate since that phase.
   const driftedEngagementCounters = await countQuery(
     `SELECT count(*) AS row_count
        FROM commerce_product_stats AS stats
@@ -317,7 +323,8 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
                  AND engagement.engagement_kind = 'bookmarked')
          OR stats.share_count <> (
               SELECT count(*) FROM commerce_product_share AS share
-               WHERE share.product_id = stats.product_id)`,
+               WHERE share.product_id = stats.product_id
+                 AND share.counted)`,
   );
   outcomes.push({
     label: "engagement counters agree with their rows",
