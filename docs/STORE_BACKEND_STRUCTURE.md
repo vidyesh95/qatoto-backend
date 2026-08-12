@@ -674,6 +674,13 @@ Commerce does not post into project-funding rows. It introduces:
 The journal is double-entry and append-only. Provider calls are made only after the local transfer
 row and idempotency key are committed. Webhook receipt is stored before state transition.
 
+**WHAT A PAYMENT POSTS DEPENDS ON THE ORDER'S RAIL** (Phase 24, A41). `direct_processor` records
+`settlement_funding_memo → settlement_released_memo` under the `direct_settled` entry kind, with no
+custody hop, because the processor settles buyer straight to seller; the frozen `internal_custody`
+rail keeps `buyer_clearing → order_held` so historical orders stay readable. A payment intent is
+refused outright on `direct_offline` and `external_escrow`, which settle elsewhere. Until Phase 24
+every rail posted the frozen pair, so no payment could settle at all.
+
 Payment state:
 
 `created → requires_action | processing → authorized → settled`
@@ -1282,6 +1289,9 @@ Scheduled jobs:
 - **Shipped (ledger + fake adapter).** See `docs/STORE_PHASE_5_ROLLOUT.md` for migrate,
   worker install, verification, and smoke tests. Trade-assurance language and real payment
   processors remain blocked on legal/provider decisions (§14).
+- **Its postings became rail-aware in Phase 24 (A41).** This phase wrote
+  `buyer_clearing → order_held`; Phase 14 froze that pair onto a rail it had retired and did not
+  revisit this service, so from Phase 14 until Phase 24 no payment could settle on any live rail.
 
 ### Phase 6 — connector execution
 
@@ -4533,8 +4543,111 @@ contiguous dispute event sequences now that a third writer appends to them.
 visible rows; left alone it would have started failing the first night the job hid a video.
 
 `smoke-store-phase-23` drives the dispute note and the Incoterm vocabulary over HTTP. **Its media
-check does not run today, and says why rather than skipping quietly:** a completion is minted only
-when a shipment is marked delivered, an order becomes shippable only when a payment settles, and
-`applyPaymentSettlement` posts `buyer_clearing` and `order_held` — two accounts Phase 14's rail map
-permits only on `internal_custody`, which no live order uses. That is a payments defect, it predates
-this phase, and it is recorded here because it is the reason the media check reads as a skip.
+check could not run when this shipped, and said why rather than skipping quietly:** a completion is
+minted only when a shipment is marked delivered, an order becomes shippable only when a payment
+settles, and `applyPaymentSettlement` posted `buyer_clearing` and `order_held` — two accounts Phase
+14's rail map permits only on `internal_custody`, which no live order uses.
+
+**CLOSED in Phase 24; see A41.** The postings are rail-aware now, so the smoke buys, pays, ships and
+delivers an order end to end, and the media check runs against a real
+`commerce_review_media_position_uidx` — the refusal no mocked-database test in this repo can reach.
+
+---
+
+### A41. No payment could settle on any rail a live order uses — **SHIPPED (Phase 24, no migration)**
+
+**Needed by:** every order. `POST /orders/:orderId/payment-intents` answered `202`, the order moved
+to `payment_processing`, and it stayed there forever.
+
+**What was wrong.** `applyPaymentSettlement` posted `buyer_clearing → order_held`. That pair says
+QATOTO IS HOLDING THE BUYER'S MONEY, which §14 decided it never does; Phase 14 froze the pair onto
+`internal_custody` — the rail it retired — and the same phase made the journal rail-aware, mirroring
+`commerce_settlement_rail_account_guard` in a TypeScript map so a forbidden account fails fast and
+legibly. **The payment service was never revisited.** A `grep` for "rail" in a 1,500-line file that
+decides how money is recorded returned nothing at all.
+
+So every settlement threw inside `appendCommerceJournalEntry`, the outbox `catch` recorded the
+message in `last_error`, and the row retried eight times with backoff before dead-lettering. The
+refund path was broken the same way (`order_held → refunds_payable → buyer_clearing`), and had
+anyone reached it.
+
+**What it cost downstream, which is how it was finally noticed.** An order that cannot leave
+`payment_processing` is not shippable (`SHIPPABLE_ORDER_STATES`), so no shipment could be created, so
+`issueCompletionsForOrder` never ran, so no completion and no review could exist. Phase 23's A40
+smoke could not construct a review to attach media to and skipped its own load-bearing check; that
+skip is what led here.
+
+**No migration.** Every account, entry kind and column this needed already existed —
+`direct_settled` had been in `commerce_journal_kind` since Phase 14 with **no writer**, its comment
+reading "the `direct_processor` rail settling buyer → seller, with the seller as the settlement
+account". Phase 14 built the vocabulary; nothing moved the payment path onto it.
+
+#### What each rail posts now
+
+| Rail | On settlement | On refund |
+| --- | --- | --- |
+| `direct_processor` | `direct_settled`: `settlement_funding_memo −X`, `settlement_released_memo +X` | one entry: `settlement_released_memo −Y`, `settlement_refunded_memo +Y` |
+| `internal_custody` | unchanged: `buyer_clearing −X`, `order_held +X` | unchanged, both entries |
+| `direct_offline`, `external_escrow` | refused before a payment intent exists | — |
+
+**NO CUSTODY HOP on `direct_processor`, and the rail map already said so.** The processor settles
+buyer straight to the seller's own account, so the money never rests anywhere Qatoto can see;
+`settlement_custody_memo` is denied on that rail precisely because a custody balance there would be
+value nobody is holding. The memo identity still closes: funding −X, released +X−Y, refunded +Y.
+
+**One entry where the frozen rail needs two.** The legacy refund models money arriving in custody and
+then leaving it — two movements because there really were two. On the processor rail there is one.
+
+**The frozen branch stays.** A replayed webhook for a pre-Phase-14 order must post what THAT order's
+rail permits; relabelling it would make the journal disagree with the rail it claims, and backing
+Phase 14 out has to remain a data edit rather than a deploy.
+
+#### A payment intent belongs to one rail
+
+`commerce_payment_intent.settlement_account_ref` has carried the rule since Phase 14 — "`direct_offline`
+and `external_escrow` never create a payment intent at all" — and nothing enforced it. All four rails
+reached a settlement that could only post `internal_custody` accounts.
+
+`createPaymentIntent` now refuses the other three with `409` and a message naming that rail's own
+settlement path: an offline order settles by wire and is recorded as a party attestation, an escrow
+order is funded at the provider where `applyNormalizedEscrowEvent` is the only function permitted to
+move the balance, and the frozen rail is history. **The refusal belongs at the request** — the same
+refusal eight retries deep in an outbox is a `last_error` column nobody reads.
+
+#### Commission accrues on both rails
+
+`recognizeCommission` was private to `commerce-escrow.service.ts` and reachable only from an escrow
+release, so Phase 14's rail table promising "commission + memo funding/release" on `direct_processor`
+was a promise rather than a description. It moves to `commerce-journal.service.ts`, which both
+callers already import and which owns the rail knowledge — and it is the one posting with no rail
+branch at all, because the three `platform_fee_*` accounts are permitted everywhere.
+
+Behaviour is unchanged: a receivable against recognized revenue, never a deduction, since no rail
+lets Qatoto take a fee out of money it holds; and **at the default zero basis points it posts nothing
+at all**, because a rate of zero means "not decided" and should leave no trace in a ledger. No
+reversal on refund — the fee is a receivable and §14 has not decided how it is collected, let alone
+unwound.
+
+**Still open, unchanged by this:** collection mechanics (receivable-then-invoice, or a processor
+application fee that works only on `direct_processor`), and with them `settlementAccountRef` and
+`applicationFeeInCents`, which stay unset because no seller processor account exists to route to.
+
+#### How it is checked, and why it was not
+
+**This service had no tests. None** — not the service, not its controller, not the adapter, not the
+outbox. `commerce-journal.service.test.ts` asserts the rail MAP against the trigger arm for arm and
+never asks what a producer posts, and `verify-store-phase-14-constraints` reads live journal lines,
+which could never be wrong because the wrong write always failed.
+
+The postings are now a PURE PLANNER (`planSettlementPostings`, `planRefundPostings`) and a writer.
+The decision that was wrong is the half that needed no database, and
+`commerce-payments.settlement.test.ts` holds every planned line against
+`COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL` **imported from the real module rather than restated** — a
+test that listed the account names would have been written from the same wrong assumption as the
+code. Fifteen assertions; the rail-map one fails against the code as it stood.
+
+End to end, `smoke-store-phase-23` now buys, pays, ships and delivers an order to mint the completion
+its media check needs, and reports the outbox's `last_error` verbatim if the payment does not settle.
+`smoke-store-phase-14` passes 34/34 — its eight failures were the missing
+`SMOKE14_ESCROW_WEBHOOK_SECRET` in the server's environment, which that file's own header documents,
+and not this defect.

@@ -38,6 +38,14 @@ gap. Qatoto cannot observe a wire between two banks it has no relationship with,
 a memo entry for money it did not see would assert a fact from an absence — the error A16
 refused when it returned an empty estimate array instead of a zero.
 
+**The `direct_processor` row of that table was a PROMISE until Phase 24 (A41), not a description.**
+This phase permitted those accounts and minted the `direct_settled` entry kind for them; nothing
+posted either, because `applyPaymentSettlement` still wrote the frozen rail's
+`buyer_clearing → order_held` on every rail — so from this phase until Phase 24 no payment settled
+at all, on any rail. Phase 24 wrote the posting, refused a payment intent on the two rails that take
+none, and moved `recognizeCommission` out of the escrow service so the "commission" half of the row
+is true on both rails.
+
 ## The rule the accounting rests on
 
 `applyNormalizedEscrowEvent` is the **only** function that moves a settlement balance.
@@ -159,7 +167,9 @@ cannot make safe.
   order" is true and sayable; "Qatoto guarantees your money" is not, and on the default rail
   neither is anything at all.
 - **Commission collection mechanics** — receivable-then-invoice, which works on every rail,
-  or a processor application fee, which works only on `direct_processor`.
+  or a processor application fee, which works only on `direct_processor`. Phase 24 made the
+  ACCRUAL reach both live rails; how the receivable is collected is still undecided, and
+  `settlementAccountRef` / `applicationFeeInCents` stay unset until it is.
 - **`product.category` and the `product_category` enum**, which are on the Studio wire and
   need a frontend decision before the column can go.
 - **Wiring the four connector seams** into the Phase 6 engagement state machines, once a
