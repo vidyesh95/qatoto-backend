@@ -1731,6 +1731,224 @@ export async function getQuote(
  * Atomically accepts a submitted revision, creates an order snapshot, awards the RFQ,
  * and declines competing submitted quotes.
  */
+/**
+ * Take the row locks acceptance needs and run every refusal that can be decided from them.
+ *
+ * WHY THIS IS SEPARATE FROM `acceptQuote` AND WHY IT TAKES `transaction`. Eight of the ten
+ * ways an acceptance can fail are decided here, before a single row is written, and reading
+ * them as one ladder is the only way to see the ORDER of the locks — quote, then RFQ, then
+ * buyer, then revision. That order is what stops two buyers racing the same RFQ, and it was
+ * previously buried under the four hundred lines of writing that follow it.
+ *
+ * The caller passes its own `transaction` and this function never opens one. The lock is
+ * worthless if it is taken in a different transaction from the write it guards.
+ *
+ * Returns `locked` with everything the write phase needs, or the refusal verbatim —
+ * `acceptQuote` hands that straight back to its own outcome switch, whose `never` check is
+ * what proves nothing was dropped in the move.
+ */
+async function lockQuoteForAcceptance(
+  transaction: DatabaseTransaction,
+  actor: QuoteActorContext,
+  quoteId: string,
+  expectedRevision: number,
+) {
+  const [quote] = await transaction
+    .select()
+    .from(commerceQuote)
+    .where(eq(commerceQuote.id, quoteId))
+    .for("update");
+  if (!quote) return { status: "not_found" as const };
+
+  const [rfq] = await transaction
+    .select()
+    .from(commerceRfq)
+    .where(eq(commerceRfq.id, quote.rfqId))
+    .for("update");
+  if (!rfq) return { status: "not_found" as const };
+
+  if (rfq.buyerOrganizationId !== actor.organizationId) {
+    return { status: "not_found" as const };
+  }
+
+  const [buyerOrg] = await transaction
+    .select({
+      tradeState: commerceOrganization.tradeState,
+      legalName: commerceOrganization.legalName,
+    })
+    .from(commerceOrganization)
+    .where(eq(commerceOrganization.id, actor.organizationId))
+    .limit(1);
+  if (!buyerOrg || buyerOrg.tradeState !== "active") {
+    return { status: "org_inactive" as const };
+  }
+
+  const [existingOrder] = await transaction
+    .select()
+    .from(commerceOrder)
+    .where(eq(commerceOrder.acceptedQuoteId, quote.id))
+    .limit(1);
+  if (existingOrder) {
+    return { status: "replay" as const, order: existingOrder };
+  }
+
+  if (rfq.state === "awarded") {
+    const [competingOrder] = await transaction
+      .select({ id: commerceOrder.id })
+      .from(commerceOrder)
+      .innerJoin(commerceQuote, eq(commerceQuote.id, commerceOrder.acceptedQuoteId))
+      .where(eq(commerceQuote.rfqId, rfq.id))
+      .limit(1);
+    if (competingOrder) {
+      return { status: "conflicting" as const, orderId: competingOrder.id };
+    }
+    return { status: "rfq_not_open" as const };
+  }
+
+  if (rfq.state !== "open") {
+    return { status: "rfq_not_open" as const };
+  }
+
+  if (quote.status !== "submitted") {
+    return { status: "invalid_state" as const };
+  }
+
+  if (expectedRevision !== quote.latestRevisionNumber) {
+    return {
+      status: "revision_changed" as const,
+      currentRevision: quote.latestRevisionNumber,
+    };
+  }
+
+  const [revision] = await transaction
+    .select()
+    .from(commerceQuoteRevision)
+    .where(
+      and(
+        eq(commerceQuoteRevision.quoteId, quote.id),
+        eq(commerceQuoteRevision.revisionNumber, expectedRevision),
+      ),
+    )
+    .for("update");
+  if (!revision || revision.submittedAt === null) {
+    return { status: "invalid_state" as const };
+  }
+
+  const now = new Date();
+  if (revision.validityDeadlineAt.getTime() <= now.getTime()) {
+    return { status: "expired" as const, expiredAt: revision.validityDeadlineAt };
+  }
+
+  const [providerOrg] = await transaction
+    .select({ legalName: commerceOrganization.legalName })
+    .from(commerceOrganization)
+    .where(eq(commerceOrganization.id, quote.providerOrganizationId))
+    .limit(1);
+  if (!providerOrg) {
+    return { status: "not_found" as const };
+  }
+
+  return { status: "locked" as const, quote, rfq, buyerOrg, revision, providerOrg, now };
+}
+
+/**
+ * Lock each ordered product, decrement what is physically held, and write the order lines.
+ *
+ * THE ONE REFUSAL THAT HAPPENS AFTER WRITING HAS BEGUN, which is why it is a return value
+ * rather than a throw: the order row already exists by the time this runs, and the
+ * transaction has to roll the whole acceptance back rather than leave an order with no
+ * lines. Returning the refusal lets `acceptQuote`'s outcome switch answer 409 with the
+ * quantity actually available, instead of the caller seeing a generic conflict.
+ *
+ * MADE-TO-ORDER RESERVES NOTHING, deliberately. `deriveStockState` says whether a product
+ * has a stock number at all; a lead-time-only product has no quantity to decrement, so it
+ * records `quantityReserved: 0` and the seller's lead time is the promise. Treating it as
+ * zero stock would refuse every made-to-order acceptance.
+ *
+ * Takes the caller's `transaction` and never opens one: the `SELECT … FOR UPDATE` on each
+ * product is what serialises two buyers racing the last unit, and a lock in a different
+ * transaction from the decrement guards nothing.
+ *
+ * Returns `null` when every line was written.
+ */
+async function reserveStockAndWriteProductLines(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly orderId: string;
+    readonly productLines: readonly {
+      readonly productId: string | null;
+      readonly quoteLine: typeof commerceQuoteProductLine.$inferSelect;
+    }[];
+    readonly linePromisedDeliveryDates: readonly (Date | null)[];
+  },
+) {
+  for (const [lineIndex, line] of input.productLines.entries()) {
+    let quantityReserved = 0;
+    if (line.productId !== null) {
+      const [lockedProduct] = await transaction
+        .select({
+          id: product.id,
+          stockQuantity: product.stockQuantity,
+          leadTimeMinDays: product.leadTimeMinDays,
+          leadTimeMaxDays: product.leadTimeMaxDays,
+        })
+        .from(product)
+        .where(eq(product.id, line.productId))
+        .for("update");
+      if (!lockedProduct) {
+        return {
+          status: "insufficient_stock" as const,
+          productId: line.productId,
+          availableQuantity: 0,
+        };
+      }
+      const stockState = deriveStockState({
+        stockQuantity: lockedProduct.stockQuantity,
+        leadTimeMinDays: lockedProduct.leadTimeMinDays,
+        leadTimeMaxDays: lockedProduct.leadTimeMaxDays,
+      });
+      if (stockState === "unavailable") {
+        return {
+          status: "insufficient_stock" as const,
+          productId: line.productId,
+          availableQuantity: 0,
+        };
+      }
+      if (stockState !== "made_to_order") {
+        if (lockedProduct.stockQuantity < line.quoteLine.quantity) {
+          return {
+            status: "insufficient_stock" as const,
+            productId: line.productId,
+            availableQuantity: lockedProduct.stockQuantity,
+          };
+        }
+        await transaction
+          .update(product)
+          .set({
+            stockQuantity: lockedProduct.stockQuantity - line.quoteLine.quantity,
+          })
+          .where(eq(product.id, line.productId));
+        quantityReserved = line.quoteLine.quantity;
+      }
+    }
+
+    await transaction.insert(commerceOrderProductLine).values({
+      orderId: input.orderId,
+      productId: line.productId,
+      titleSnapshot: line.quoteLine.titleSnapshot,
+      specificationSnapshot: line.quoteLine.specificationSnapshot,
+      quantityOrdered: line.quoteLine.quantity,
+      quantityReserved,
+      unitPriceInCents: line.quoteLine.unitPriceInCents,
+      lineTotalInCents: line.quoteLine.lineTotalInCents,
+      promisedDeliveryAt: input.linePromisedDeliveryDates[lineIndex] ?? null,
+      siblingOrder: line.quoteLine.siblingOrder,
+    });
+  }
+
+  return null;
+}
+
 export async function acceptQuote(
   actor: QuoteActorContext,
   quoteId: string,
@@ -1747,100 +1965,11 @@ export async function acceptQuote(
 ): Promise<Result<OrderProjection, CommerceQuotesError>> {
   try {
     const outcome = await db.transaction(async (transaction) => {
-      const [quote] = await transaction
-        .select()
-        .from(commerceQuote)
-        .where(eq(commerceQuote.id, quoteId))
-        .for("update");
-      if (!quote) return { status: "not_found" as const };
-
-      const [rfq] = await transaction
-        .select()
-        .from(commerceRfq)
-        .where(eq(commerceRfq.id, quote.rfqId))
-        .for("update");
-      if (!rfq) return { status: "not_found" as const };
-
-      if (rfq.buyerOrganizationId !== actor.organizationId) {
-        return { status: "not_found" as const };
-      }
-
-      const [buyerOrg] = await transaction
-        .select({
-          tradeState: commerceOrganization.tradeState,
-          legalName: commerceOrganization.legalName,
-        })
-        .from(commerceOrganization)
-        .where(eq(commerceOrganization.id, actor.organizationId))
-        .limit(1);
-      if (!buyerOrg || buyerOrg.tradeState !== "active") {
-        return { status: "org_inactive" as const };
-      }
-
-      const [existingOrder] = await transaction
-        .select()
-        .from(commerceOrder)
-        .where(eq(commerceOrder.acceptedQuoteId, quote.id))
-        .limit(1);
-      if (existingOrder) {
-        return { status: "replay" as const, order: existingOrder };
-      }
-
-      if (rfq.state === "awarded") {
-        const [competingOrder] = await transaction
-          .select({ id: commerceOrder.id })
-          .from(commerceOrder)
-          .innerJoin(commerceQuote, eq(commerceQuote.id, commerceOrder.acceptedQuoteId))
-          .where(eq(commerceQuote.rfqId, rfq.id))
-          .limit(1);
-        if (competingOrder) {
-          return { status: "conflicting" as const, orderId: competingOrder.id };
-        }
-        return { status: "rfq_not_open" as const };
-      }
-
-      if (rfq.state !== "open") {
-        return { status: "rfq_not_open" as const };
-      }
-
-      if (quote.status !== "submitted") {
-        return { status: "invalid_state" as const };
-      }
-
-      if (expectedRevision !== quote.latestRevisionNumber) {
-        return {
-          status: "revision_changed" as const,
-          currentRevision: quote.latestRevisionNumber,
-        };
-      }
-
-      const [revision] = await transaction
-        .select()
-        .from(commerceQuoteRevision)
-        .where(
-          and(
-            eq(commerceQuoteRevision.quoteId, quote.id),
-            eq(commerceQuoteRevision.revisionNumber, expectedRevision),
-          ),
-        )
-        .for("update");
-      if (!revision || revision.submittedAt === null) {
-        return { status: "invalid_state" as const };
-      }
-
-      const now = new Date();
-      if (revision.validityDeadlineAt.getTime() <= now.getTime()) {
-        return { status: "expired" as const, expiredAt: revision.validityDeadlineAt };
-      }
-
-      const [providerOrg] = await transaction
-        .select({ legalName: commerceOrganization.legalName })
-        .from(commerceOrganization)
-        .where(eq(commerceOrganization.id, quote.providerOrganizationId))
-        .limit(1);
-      if (!providerOrg) {
-        return { status: "not_found" as const };
-      }
+      // Every refusal decidable from the locked rows happens in here; anything it returns
+      // other than `locked` is already a final outcome and passes straight through.
+      const gate = await lockQuoteForAcceptance(transaction, actor, quoteId, expectedRevision);
+      if (gate.status !== "locked") return gate;
+      const { quote, rfq, buyerOrg, revision, providerOrg, now } = gate;
 
       const productLines = await transaction
         .select({
@@ -1996,69 +2125,12 @@ export async function acceptQuote(
         escrowOutboxIds.push(session.value.outboxId);
       }
 
-      for (const [lineIndex, line] of productLines.entries()) {
-        let quantityReserved = 0;
-        if (line.productId !== null) {
-          const [lockedProduct] = await transaction
-            .select({
-              id: product.id,
-              stockQuantity: product.stockQuantity,
-              leadTimeMinDays: product.leadTimeMinDays,
-              leadTimeMaxDays: product.leadTimeMaxDays,
-            })
-            .from(product)
-            .where(eq(product.id, line.productId))
-            .for("update");
-          if (!lockedProduct) {
-            return {
-              status: "insufficient_stock" as const,
-              productId: line.productId,
-              availableQuantity: 0,
-            };
-          }
-          const stockState = deriveStockState({
-            stockQuantity: lockedProduct.stockQuantity,
-            leadTimeMinDays: lockedProduct.leadTimeMinDays,
-            leadTimeMaxDays: lockedProduct.leadTimeMaxDays,
-          });
-          if (stockState === "unavailable") {
-            return {
-              status: "insufficient_stock" as const,
-              productId: line.productId,
-              availableQuantity: 0,
-            };
-          }
-          if (stockState !== "made_to_order") {
-            if (lockedProduct.stockQuantity < line.quoteLine.quantity) {
-              return {
-                status: "insufficient_stock" as const,
-                productId: line.productId,
-                availableQuantity: lockedProduct.stockQuantity,
-              };
-            }
-            await transaction
-              .update(product)
-              .set({
-                stockQuantity: lockedProduct.stockQuantity - line.quoteLine.quantity,
-              })
-              .where(eq(product.id, line.productId));
-            quantityReserved = line.quoteLine.quantity;
-          }
-        }
-
-        await transaction.insert(commerceOrderProductLine).values({
-          orderId: order.id,
-          productId: line.productId,
-          titleSnapshot: line.quoteLine.titleSnapshot,
-          specificationSnapshot: line.quoteLine.specificationSnapshot,
-          quantityOrdered: line.quoteLine.quantity,
-          quantityReserved,
-          unitPriceInCents: line.quoteLine.unitPriceInCents,
-          lineTotalInCents: line.quoteLine.lineTotalInCents,
-          promisedDeliveryAt: linePromisedDeliveryDates[lineIndex] ?? null,
-          siblingOrder: line.quoteLine.siblingOrder,
-        });
-      }
+      const reservation = await reserveStockAndWriteProductLines(transaction, {
+        orderId: order.id,
+        productLines,
+        linePromisedDeliveryDates,
+      });
+      if (reservation) return reservation;
 
       for (const line of serviceLines) {
         const [orderServiceLine] = await transaction
