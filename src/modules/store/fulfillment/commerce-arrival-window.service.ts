@@ -9,20 +9,20 @@ import {
   commerceRfq,
   product,
 } from "#src/db/schema.js";
-import type { CommerceOrdersError } from "#src/modules/store/orders/commerce-orders.service.js";
-import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
 import {
   resolveCustomsDwell,
   type CustomsDwellResolution,
-} from "#src/services/commerce-customs-dwell.service.js";
-import { resolveShippingOriginCountryCode } from "#src/services/commerce-delivery-estimate.service.js";
+} from "#src/modules/store/fulfillment/commerce-customs-dwell.service.js";
+import { resolveShippingOriginCountryCode } from "#src/modules/store/fulfillment/commerce-delivery-estimate.service.js";
 import {
   planFreightJourney,
   type FreightJourneyLegSelection,
   type FreightLanePlan,
-} from "#src/services/commerce-freight-journey.service.js";
-import { FREIGHT_MODE_ORDER } from "#src/services/commerce-freight-rating.service.js";
-import type { ConsignmentMeasurement } from "#src/services/commerce-freight-rating.service.js";
+} from "#src/modules/store/fulfillment/commerce-freight-journey.service.js";
+import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
+import { FREIGHT_MODE_ORDER } from "#src/modules/store/fulfillment/commerce-freight-rating.service.js";
+import type { ConsignmentMeasurement } from "#src/modules/store/fulfillment/commerce-freight-rating.service.js";
+import type { CommerceOrdersError } from "#src/modules/store/orders/commerce-orders.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

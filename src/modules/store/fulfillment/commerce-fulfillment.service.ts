@@ -28,6 +28,14 @@ import {
   commerceShipmentProductLine,
 } from "#src/db/schema.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { insertShipmentLegs } from "#src/modules/store/fulfillment/commerce-fulfillment-phase6.service.js";
+import {
+  canExecutePaidFulfillmentForOrderState,
+  finalizeShipmentState,
+  isRequiredDeliverableSatisfied,
+  reconcileOrderAggregateState,
+} from "#src/modules/store/fulfillment/commerce-fulfillment-reconciliation.service.js";
+import type { ShipmentLegInput } from "#src/modules/store/fulfillment/commerce-fulfillment.schemas.js";
 import { issueCompletionsForOrder } from "#src/modules/store/orders/commerce-completion.service.js";
 import {
   memberCanOperateBuyer,
@@ -36,14 +44,6 @@ import {
   type CommerceOrganizationMemberRole,
 } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import type { ShipmentLegInput } from "#src/schemas/commerce-fulfillment.schemas.js";
-import { insertShipmentLegs } from "#src/services/commerce-fulfillment-phase6.service.js";
-import {
-  canExecutePaidFulfillmentForOrderState,
-  finalizeShipmentState,
-  isRequiredDeliverableSatisfied,
-  reconcileOrderAggregateState,
-} from "#src/services/commerce-fulfillment-reconciliation.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

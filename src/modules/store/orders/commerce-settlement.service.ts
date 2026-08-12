@@ -11,7 +11,7 @@ import {
 import {
   listActiveProviders,
   type ActiveProvider,
-} from "#src/services/commerce-connector.service.js";
+} from "#src/modules/store/fulfillment/commerce-connector.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

@@ -130,15 +130,15 @@ const phase6ServiceStubs = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("#src/services/commerce-fulfillment.service.js", () => serviceStubs);
-vi.mock("#src/services/commerce-fulfillment-phase6.service.js", () => phase6ServiceStubs);
+vi.mock("#src/modules/store/fulfillment/commerce-fulfillment.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/fulfillment/commerce-fulfillment-phase6.service.js", () => phase6ServiceStubs);
 
 describe("commerce fulfillment routes", () => {
   let app: Express;
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const fulfillmentRouter = (await import("#src/routes/commerce-fulfillment.routes.js")).default;
+    const fulfillmentRouter = (await import("#src/modules/store/fulfillment/commerce-fulfillment.routes.js")).default;
     app.use("/commerce", fulfillmentRouter);
   });
 

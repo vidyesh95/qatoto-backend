@@ -1,15 +1,15 @@
 import { and, eq, lt, sql } from "drizzle-orm";
 
-import {
-  resolveDocumentScanner,
-  type DocumentScanVerdict,
-} from "#src/adapters/document-scanner.adapter.js";
 import { db } from "#src/db/index.js";
 import { commerceEncryptedDocument, commerceOrganizationVerification } from "#src/db/schema.js";
 import { decryptCommerceDocument } from "#src/lib/commerce-document-encryption.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { errorFields, logger } from "#src/lib/logger.js";
 import { downloadPrivateCommerceDocument } from "#src/lib/object-storage.js";
+import {
+  resolveDocumentScanner,
+  type DocumentScanVerdict,
+} from "#src/modules/store/fulfillment/document-scanner.adapter.js";
 import type { Result } from "#src/types/index.js";
 
 /**

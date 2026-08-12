@@ -98,10 +98,18 @@ const MOUNTED_ROUTERS: readonly {
   },
   { mountPath: "/commerce", specifier: "#src/modules/store/orders/commerce-cart.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/modules/store/orders/commerce-orders.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-fulfillment.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/fulfillment/commerce-fulfillment.routes.js",
+    exportName: "default",
+  },
   // Phase 20 (§19.2–§19.3). This line lands in the SAME commit as the mount in app.ts:
   // a router missing from this table is silently unchecked, which has happened before.
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-freight-rates.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/fulfillment/commerce-freight-rates.routes.js",
+    exportName: "default",
+  },
   { mountPath: "/commerce", specifier: "#src/modules/store/catalog/commerce-catalog.routes.js", exportName: "default" },
   /**
    * These three were mounted in `app.ts` and MISSING from this list, so every mutating
@@ -140,7 +148,11 @@ const MOUNTED_ROUTERS: readonly {
    * and missing from this list — the SAME omission the Phase 10 note above records, twice
    * more. Added while wiring Phase 17, along with Phase 17's own router.
    */
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-documents.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/fulfillment/commerce-documents.routes.js",
+    exportName: "default",
+  },
   {
     mountPath: "/commerce",
     specifier: "#src/modules/store/catalog/commerce-categories.routes.js",

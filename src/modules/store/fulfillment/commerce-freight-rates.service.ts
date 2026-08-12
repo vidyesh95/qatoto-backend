@@ -21,7 +21,7 @@ import {
   ANY_SCOPE_FILTER,
   type FreightMode,
   type FreightRateCardState,
-} from "#src/schemas/commerce-freight-rates.schemas.js";
+} from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 import type { Result } from "#src/types/index.js";
 
 /**

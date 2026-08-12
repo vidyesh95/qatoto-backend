@@ -2,12 +2,13 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
-import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import * as commerceFulfillmentPhase6Service from "#src/modules/store/fulfillment/commerce-fulfillment-phase6.service.js";
+import type { CommercePhase6Error } from "#src/modules/store/fulfillment/commerce-fulfillment-phase6.service.js";
 import {
   CreateShipmentWithLegsSchema,
   ServiceEngagementCommandSchema,
   ShipmentLegCommandSchema,
-} from "#src/schemas/commerce-fulfillment.schemas.js";
+} from "#src/modules/store/fulfillment/commerce-fulfillment.schemas.js";
 import {
   AppendShipmentEventSchema,
   EmptyObjectSchema,
@@ -18,11 +19,10 @@ import {
   OrderIdParamsSchema,
   ShipmentIdParamsSchema,
   TransitionServiceEngagementSchema,
-} from "#src/schemas/commerce-fulfillment.schemas.js";
-import * as commerceFulfillmentPhase6Service from "#src/services/commerce-fulfillment-phase6.service.js";
-import type { CommercePhase6Error } from "#src/services/commerce-fulfillment-phase6.service.js";
-import * as commerceFulfillmentService from "#src/services/commerce-fulfillment.service.js";
-import type { CommerceFulfillmentError } from "#src/services/commerce-fulfillment.service.js";
+} from "#src/modules/store/fulfillment/commerce-fulfillment.schemas.js";
+import * as commerceFulfillmentService from "#src/modules/store/fulfillment/commerce-fulfillment.service.js";
+import type { CommerceFulfillmentError } from "#src/modules/store/fulfillment/commerce-fulfillment.service.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 export const CreateShipmentSchema = CreateShipmentWithLegsSchema;

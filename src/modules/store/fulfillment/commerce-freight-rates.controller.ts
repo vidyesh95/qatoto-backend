@@ -6,7 +6,7 @@ import {
   respondCommerceFreightRateError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/commerce-freight-rates-error-response.js";
+} from "#src/modules/store/fulfillment/commerce-freight-rates-error-response.js";
 import {
   AppendFreightRateBreakSchema,
   CreateCustomsDwellEstimateSchema,
@@ -18,8 +18,8 @@ import {
   ReplaceFreightRateBreaksSchema,
   UpdateCustomsDwellEstimateSchema,
   UpdateFreightRateCardSchema,
-} from "#src/schemas/commerce-freight-rates.schemas.js";
-import * as commerceFreightRatesService from "#src/services/commerce-freight-rates.service.js";
+} from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
+import * as commerceFreightRatesService from "#src/modules/store/fulfillment/commerce-freight-rates.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

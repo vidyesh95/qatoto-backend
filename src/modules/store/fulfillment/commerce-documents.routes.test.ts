@@ -51,7 +51,7 @@ const serviceStubs = vi.hoisted(() => ({
   downloadTradeDocument: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-trade-document.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/fulfillment/commerce-trade-document.service.js", () => serviceStubs);
 
 /** A real PNG signature, so the controller's decoded-byte check has something to pass. */
 const PNG_BYTES = Buffer.from(

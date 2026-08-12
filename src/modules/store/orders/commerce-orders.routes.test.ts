@@ -126,7 +126,7 @@ const arrivalWindowStubs = vi.hoisted(() => ({
   projectFreight: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-arrival-window.service.js", () => arrivalWindowStubs);
+vi.mock("#src/modules/store/fulfillment/commerce-arrival-window.service.js", () => arrivalWindowStubs);
 
 const ORDER_SUMMARY = {
   id: "order-1",

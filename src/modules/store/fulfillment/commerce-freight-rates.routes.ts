@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceFreightRatesController from "#src/controllers/commerce-freight-rates.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
@@ -8,6 +7,7 @@ import {
   commerceFreightRateWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as commerceFreightRatesController from "#src/modules/store/fulfillment/commerce-freight-rates.controller.js";
 
 /**
  * The §19 delivery surface's REFERENCE DATA — the platform's own freight admin (Store Phase 20,

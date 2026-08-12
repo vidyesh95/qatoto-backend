@@ -7,20 +7,20 @@ vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
 const { CreateShipmentWithLegsSchema, ServiceEngagementCommandSchema, ShipmentLegCommandSchema } =
-  await import("#src/schemas/commerce-fulfillment.schemas.js");
+  await import("#src/modules/store/fulfillment/commerce-fulfillment.schemas.js");
 const {
   buildFulfillmentRequestFingerprint,
   canExecuteServiceEngagementCommandForOrderState,
   canExecuteShipmentLegCommandForOrderState,
   computeFulfillmentProgress,
   isShipmentLegCommandAllowed,
-} = await import("#src/services/commerce-fulfillment-phase6.service.js");
+} = await import("#src/modules/store/fulfillment/commerce-fulfillment-phase6.service.js");
 const {
   canExecutePaidFulfillmentForOrderState,
   deriveOrderAggregateState,
   deriveShipmentTerminalState,
   isRequiredDeliverableSatisfied,
-} = await import("#src/services/commerce-fulfillment-reconciliation.service.js");
+} = await import("#src/modules/store/fulfillment/commerce-fulfillment-reconciliation.service.js");
 
 describe("commerce fulfillment Phase 6 schemas", () => {
   it("rejects create-shipment bodies with unknown keys", () => {

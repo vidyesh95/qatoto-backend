@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-import { FreightModeSchema } from "#src/schemas/commerce-freight-rates.schemas.js";
+import { FreightModeSchema } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 
 export const EmptyObjectSchema = z.object({}).strict();
 

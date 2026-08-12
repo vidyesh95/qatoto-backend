@@ -59,7 +59,7 @@ const serviceStubs = vi.hoisted(() => ({
   listCustomsDwellEstimates: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-freight-rates.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/fulfillment/commerce-freight-rates.service.js", () => serviceStubs);
 
 const RATE_CARD_PROJECTION = {
   id: "rate_card_1",
@@ -99,7 +99,8 @@ describe("commerce freight rate card admin routes", () => {
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const freightRatesRouter = (await import("#src/routes/commerce-freight-rates.routes.js")).default;
+    const freightRatesRouter = (await import("#src/modules/store/fulfillment/commerce-freight-rates.routes.js"))
+      .default;
     app.use("/commerce", freightRatesRouter);
   });
 
@@ -298,7 +299,8 @@ describe("commerce customs dwell estimate admin routes", () => {
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const freightRatesRouter = (await import("#src/routes/commerce-freight-rates.routes.js")).default;
+    const freightRatesRouter = (await import("#src/modules/store/fulfillment/commerce-freight-rates.routes.js"))
+      .default;
     app.use("/commerce", freightRatesRouter);
   });
 
@@ -397,7 +399,8 @@ describe("commerce freight rate card admin reads", () => {
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const freightRatesRouter = (await import("#src/routes/commerce-freight-rates.routes.js")).default;
+    const freightRatesRouter = (await import("#src/modules/store/fulfillment/commerce-freight-rates.routes.js"))
+      .default;
     app.use("/commerce", freightRatesRouter);
   });
 
@@ -507,7 +510,8 @@ describe("commerce customs dwell estimate admin reads", () => {
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const freightRatesRouter = (await import("#src/routes/commerce-freight-rates.routes.js")).default;
+    const freightRatesRouter = (await import("#src/modules/store/fulfillment/commerce-freight-rates.routes.js"))
+      .default;
     app.use("/commerce", freightRatesRouter);
   });
 

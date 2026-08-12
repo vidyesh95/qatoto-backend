@@ -1,7 +1,7 @@
 import type { Response } from "express";
 
 import { fieldRefusal } from "#src/modules/rnd/projects/project-error-response.js";
-import type { CommerceFreightRateError } from "#src/services/commerce-freight-rates.service.js";
+import type { CommerceFreightRateError } from "#src/modules/store/fulfillment/commerce-freight-rates.service.js";
 
 /**
  * The §19 reference data's error→HTTP map — lane rate cards and customs dwell.

@@ -7,7 +7,7 @@ vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
 const { computePackagingTotals, groupOfferingsIntoEstimates } =
-  await import("#src/services/commerce-delivery-estimate.service.js");
+  await import("#src/modules/store/fulfillment/commerce-delivery-estimate.service.js");
 
 type EstimateBasis = Parameters<typeof groupOfferingsIntoEstimates>[1];
 type CoveringOffering = Parameters<typeof groupOfferingsIntoEstimates>[0][number];

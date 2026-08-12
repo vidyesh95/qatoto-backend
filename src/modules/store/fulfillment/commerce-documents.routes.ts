@@ -1,11 +1,11 @@
 import express from "express";
 
-import * as commerceDocumentsController from "#src/controllers/commerce-documents.controller.js";
 import {
   commerceDocumentDownloadLimiter,
   commerceOrganizationEvidenceLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as commerceDocumentsController from "#src/modules/store/fulfillment/commerce-documents.controller.js";
 import { requireProvisionedBuyerCommerceWorkspace } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 import { uploadCommerceVerificationEvidence } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
 

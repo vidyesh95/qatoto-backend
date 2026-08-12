@@ -101,12 +101,12 @@ const PHASE_21_COLLECTION_READS = [
     breaks: "the thread inbox, and with it settlement agreements",
   },
   {
-    router: "#src/routes/commerce-documents.routes.js",
+    router: "#src/modules/store/fulfillment/commerce-documents.routes.js",
     collection: "/documents",
     breaks: "the attachment picker's backing list",
   },
   {
-    router: "#src/routes/commerce-fulfillment.routes.js",
+    router: "#src/modules/store/fulfillment/commerce-fulfillment.routes.js",
     collection: "/shipments",
     breaks: "the buyer's inbound shipment queue",
   },
@@ -138,12 +138,12 @@ const PHASE_21_SHADOWING_HAZARDS = [
     detail: "/threads/:threadId/messages",
   },
   {
-    router: "#src/routes/commerce-documents.routes.js",
+    router: "#src/modules/store/fulfillment/commerce-documents.routes.js",
     collection: "/documents",
     detail: "/documents/:documentId",
   },
   {
-    router: "#src/routes/commerce-fulfillment.routes.js",
+    router: "#src/modules/store/fulfillment/commerce-fulfillment.routes.js",
     collection: "/shipments",
     detail: "/shipments/:shipmentId",
   },
@@ -179,8 +179,8 @@ describe("Phase 21b collection reads", () => {
    */
   it.each([
     "#src/modules/store/procurement/commerce-messages.routes.js",
-    "#src/routes/commerce-documents.routes.js",
-    "#src/routes/commerce-fulfillment.routes.js",
+    "#src/modules/store/fulfillment/commerce-documents.routes.js",
+    "#src/modules/store/fulfillment/commerce-fulfillment.routes.js",
     "#src/modules/store/procurement/commerce-quotes.routes.js",
     "#src/modules/store/orders/commerce-payments.routes.js",
   ])("%s declares no route that swallows a later one", async (routerModule) => {

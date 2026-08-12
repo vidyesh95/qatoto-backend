@@ -6,15 +6,12 @@ import { config } from "#src/config/index.js";
 import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
-import { handleDispatchConnectorCommand } from "#src/jobs/dispatch-connector-command.js";
 import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
 import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-videos.js";
 import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
 import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
-import { handleReconcileConnectorState } from "#src/jobs/reconcile-connector-state.js";
 import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
-import { handleScanEncryptedDocument } from "#src/jobs/scan-encrypted-document.js";
 import {
   handleCloseCompensationPeriodTick,
   handleRecomputeCompensationDraftTick,
@@ -44,7 +41,6 @@ import {
   handleReconcileConnectorStateTick,
   handleSweepPendingDocumentScansTick,
 } from "#src/jobs/scheduled-ticks.js";
-import { handleSweepPendingDocumentScans } from "#src/jobs/sweep-pending-document-scans.js";
 import { handleVerifyYoutubeVideo } from "#src/jobs/verify-youtube-video.js";
 import {
   createPgBossDbAdapter,
@@ -79,6 +75,10 @@ import { handleRecomputeCommerceProductTrending } from "#src/modules/store/catal
 import { handleRecomputePlatformCategoryPopularity } from "#src/modules/store/catalog/recompute-platform-category-popularity.js";
 import { handleRefreshStoreSearchDocument } from "#src/modules/store/catalog/refresh-store-search-document.js";
 import { handleRollupCommerceProductDailySignal } from "#src/modules/store/catalog/rollup-commerce-product-daily-signal.js";
+import { handleDispatchConnectorCommand } from "#src/modules/store/fulfillment/dispatch-connector-command.js";
+import { handleReconcileConnectorState } from "#src/modules/store/fulfillment/reconcile-connector-state.js";
+import { handleScanEncryptedDocument } from "#src/modules/store/fulfillment/scan-encrypted-document.js";
+import { handleSweepPendingDocumentScans } from "#src/modules/store/fulfillment/sweep-pending-document-scans.js";
 import { handleReconcileCommercePayments } from "#src/modules/store/orders/reconcile-commerce-payments.js";
 import { handleReleaseExpiredInventoryReservations } from "#src/modules/store/orders/release-expired-inventory-reservations.js";
 import { handleExpireCommerceQuotes } from "#src/modules/store/procurement/expire-commerce-quotes.js";

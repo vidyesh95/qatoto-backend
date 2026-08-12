@@ -2,14 +2,14 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
-import { evidenceBytesMatchMediaType } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
 import {
   DocumentIdParamsSchema,
   EmptyObjectSchema,
   ListTradeDocumentsQuerySchema,
-} from "#src/schemas/commerce-documents.schemas.js";
-import * as commerceTradeDocumentService from "#src/services/commerce-trade-document.service.js";
-import type { CommerceTradeDocumentError } from "#src/services/commerce-trade-document.service.js";
+} from "#src/modules/store/fulfillment/commerce-documents.schemas.js";
+import * as commerceTradeDocumentService from "#src/modules/store/fulfillment/commerce-trade-document.service.js";
+import type { CommerceTradeDocumentError } from "#src/modules/store/fulfillment/commerce-trade-document.service.js";
+import { evidenceBytesMatchMediaType } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

@@ -36,6 +36,18 @@ import {
   warehouseDeliverableDetail,
   warehouseEngagementDetail,
 } from "#src/db/schema.js";
+import {
+  canExecutePaidFulfillmentForOrderState,
+  isRequiredDeliverableSatisfied,
+  reconcileOrderAggregateState,
+  reconcileShipmentStateFromLegs,
+} from "#src/modules/store/fulfillment/commerce-fulfillment-reconciliation.service.js";
+import type {
+  ServiceEngagementCommand,
+  ShipmentLegCommand,
+  ShipmentLegInput,
+  TypedDeliverableResultSchema,
+} from "#src/modules/store/fulfillment/commerce-fulfillment.schemas.js";
 import { issueCompletionsForOrder } from "#src/modules/store/orders/commerce-completion.service.js";
 import {
   memberCanOperateBuyer,
@@ -44,18 +56,6 @@ import {
   type CommerceOrganizationMemberRole,
 } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import type {
-  ServiceEngagementCommand,
-  ShipmentLegCommand,
-  ShipmentLegInput,
-  TypedDeliverableResultSchema,
-} from "#src/schemas/commerce-fulfillment.schemas.js";
-import {
-  canExecutePaidFulfillmentForOrderState,
-  isRequiredDeliverableSatisfied,
-  reconcileOrderAggregateState,
-  reconcileShipmentStateFromLegs,
-} from "#src/services/commerce-fulfillment-reconciliation.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

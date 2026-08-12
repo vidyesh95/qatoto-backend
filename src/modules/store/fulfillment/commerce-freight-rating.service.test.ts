@@ -11,7 +11,7 @@ const {
   rateCard,
   rateLaneFromCards,
   selectRateBreak,
-} = await import("#src/services/commerce-freight-rating.service.js");
+} = await import("#src/modules/store/fulfillment/commerce-freight-rating.service.js");
 
 type Band = Parameters<typeof selectRateBreak>[0][number];
 type Card = Parameters<typeof rateCard>[0];

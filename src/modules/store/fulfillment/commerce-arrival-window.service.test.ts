@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 
 const { composeArrivalWindow, projectFreight, projectManufacturing } =
-  await import("#src/services/commerce-arrival-window.service.js");
+  await import("#src/modules/store/fulfillment/commerce-arrival-window.service.js");
 
 const ORDER_PLACED_AT = new Date("2026-01-01T00:00:00.000Z");
 const PROMISED_DELIVERY_AT = new Date("2026-01-26T00:00:00.000Z"); // 25 days later

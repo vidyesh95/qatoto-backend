@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 
 const { resolveCustomsDwell, selectMostSpecificDwellEstimate } =
-  await import("#src/services/commerce-customs-dwell.service.js");
+  await import("#src/modules/store/fulfillment/commerce-customs-dwell.service.js");
 
 type DwellRow = Parameters<typeof selectMostSpecificDwellEstimate>[0][number];
 

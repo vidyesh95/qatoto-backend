@@ -2,8 +2,8 @@ import { inArray } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { product } from "#src/db/schema.js";
-import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
-import { computePackagingTotals } from "#src/services/commerce-delivery-estimate.service.js";
+import { computePackagingTotals } from "#src/modules/store/fulfillment/commerce-delivery-estimate.service.js";
+import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 import {
   FREIGHT_MODE_ORDER,
   rateLane,
@@ -11,7 +11,7 @@ import {
   type FreightOption,
   type FreightRatingUnavailableReason,
   type QuotableFreightProvider,
-} from "#src/services/commerce-freight-rating.service.js";
+} from "#src/modules/store/fulfillment/commerce-freight-rating.service.js";
 
 /**
  * Decomposing a delivery into priced legs, and recomposing those legs into whole journeys

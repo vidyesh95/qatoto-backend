@@ -33,6 +33,11 @@ import {
   latestPromisedDeliveryAt,
 } from "#src/lib/commerce-promised-delivery.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { projectPrepareArrivalWindow } from "#src/modules/store/fulfillment/commerce-arrival-window.service.js";
+import {
+  estimateDeliveryForLines,
+  type DeliveryEstimateProjection,
+} from "#src/modules/store/fulfillment/commerce-delivery-estimate.service.js";
 import {
   getOrCreateCartForUpdate,
   supersedeActiveCheckoutPrepares,
@@ -53,16 +58,11 @@ import {
   resolveSettlementRail,
 } from "#src/modules/store/orders/commerce-settlement.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import { projectPrepareArrivalWindow } from "#src/services/commerce-arrival-window.service.js";
 import {
   resolveCustomizationSelections,
   type CommerceCustomizationError,
   type ResolvedCustomizationSelection,
 } from "#src/services/commerce-customization.service.js";
-import {
-  estimateDeliveryForLines,
-  type DeliveryEstimateProjection,
-} from "#src/services/commerce-delivery-estimate.service.js";
 import type { Result } from "#src/types/index.js";
 
 type PrepareRow = typeof commerceCheckoutPrepare.$inferSelect;

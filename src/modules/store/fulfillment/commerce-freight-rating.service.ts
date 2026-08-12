@@ -2,7 +2,7 @@ import { and, asc, eq, gt, inArray, isNull, lte, ne, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { commerceFreightRateBreak, commerceFreightRateCard } from "#src/db/schema.js";
-import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
+import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 
 /**
  * Rating a lane from a purchased forwarder tariff (STORE_BACKEND_STRUCTURE.md §19.2, §19.6).

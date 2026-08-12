@@ -64,8 +64,8 @@ vi.mock("#src/modules/store/catalog/store-catalog.service.js", () => catalogStub
 vi.mock("#src/modules/store/catalog/store-search.service.js", () => searchStubs);
 vi.mock("#src/modules/store/catalog/store-merchandising.service.js", () => merchandisingStubs);
 vi.mock("#src/services/store-pathways.service.js", () => pathwayStubs);
-vi.mock("#src/services/commerce-delivery-estimate.service.js", () => deliveryEstimateStubs);
-vi.mock("#src/services/commerce-freight-journey.service.js", () => freightJourneyStubs);
+vi.mock("#src/modules/store/fulfillment/commerce-delivery-estimate.service.js", () => deliveryEstimateStubs);
+vi.mock("#src/modules/store/fulfillment/commerce-freight-journey.service.js", () => freightJourneyStubs);
 vi.mock("#src/modules/store/procurement/commerce-providers.service.js", () => providersStubs);
 
 describe("public store routes", () => {

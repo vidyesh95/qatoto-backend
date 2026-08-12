@@ -7,6 +7,8 @@ import * as storeCatalogService from "#src/modules/store/catalog/store-catalog.s
 import type { StoreCatalogError } from "#src/modules/store/catalog/store-catalog.service.js";
 import * as storeMerchandisingService from "#src/modules/store/catalog/store-merchandising.service.js";
 import * as storeSearchService from "#src/modules/store/catalog/store-search.service.js";
+import * as commerceDeliveryEstimateService from "#src/modules/store/fulfillment/commerce-delivery-estimate.service.js";
+import * as commerceFreightJourneyService from "#src/modules/store/fulfillment/commerce-freight-journey.service.js";
 import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import * as commerceProvidersService from "#src/modules/store/procurement/commerce-providers.service.js";
 import {
@@ -27,8 +29,6 @@ import {
   RailParamsSchema,
   SearchQuerySchema,
 } from "#src/schemas/store.schemas.js";
-import * as commerceDeliveryEstimateService from "#src/services/commerce-delivery-estimate.service.js";
-import * as commerceFreightJourneyService from "#src/services/commerce-freight-journey.service.js";
 import * as storePathwaysService from "#src/services/store-pathways.service.js";
 import * as storeReviewsService from "#src/services/store-reviews.service.js";
 import type { ApiResponse } from "#src/types/index.js";

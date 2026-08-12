@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 
 const { composeJourneys, computeConsignmentMeasurement, planLegs } =
-  await import("#src/services/commerce-freight-journey.service.js");
+  await import("#src/modules/store/fulfillment/commerce-freight-journey.service.js");
 
 type LegPlan = Parameters<typeof composeJourneys>[0][number];
 type Option = LegPlan["options"][number];
