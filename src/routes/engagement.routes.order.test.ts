@@ -74,7 +74,7 @@ describe("the /videos prefix, shared by two routers", () => {
 
   it("shares no (method, path) pair with the studio router", async () => {
     const engagementRouter = (await import("#src/routes/engagement.routes.js")).default;
-    const videosRouter = (await import("#src/routes/videos.routes.js")).default;
+    const videosRouter = (await import("#src/modules/studio/videos/videos.routes.js")).default;
 
     const studioKeys = new Set(
       declaredRoutes(videosRouter).flatMap((route) => route.methods.map((method) => `${method} ${route.path}`)),

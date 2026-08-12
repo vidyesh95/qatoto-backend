@@ -175,7 +175,7 @@ describe("per-route body caps", () => {
       import("#src/middleware/upload-avatar.js"),
       import("#src/middleware/upload-product-image.js"),
       import("#src/middleware/upload-project-cover.js"),
-      import("#src/middleware/upload-video-thumbnail.js"),
+      import("#src/modules/studio/videos/upload-video-thumbnail.js"),
       import("#src/middleware/upload-physical-receipt.js"),
       // §10's research-paper PDF upload — the first NON-IMAGE multipart route in the
       // codebase. Its bytes are bounded by multer's 25 MB cap (imported from

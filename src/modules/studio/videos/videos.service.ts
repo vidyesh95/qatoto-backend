@@ -39,7 +39,10 @@ import {
   type YoutubeSourceError,
   type YoutubeVideoFacts,
 } from "#src/lib/youtube.js";
-import type { CreateVideoInput, UpdateVideoInput } from "#src/schemas/videos.schemas.js";
+import type {
+  CreateVideoInput,
+  UpdateVideoInput,
+} from "#src/modules/studio/videos/videos.schemas.js";
 import {
   DEFAULT_CONTENT_CATEGORY_SLUG,
   findUnavailableCategoryIds,

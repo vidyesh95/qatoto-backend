@@ -48,7 +48,7 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/promotions", specifier: "#src/routes/promotions.routes.js", exportName: "default" },
   { mountPath: "/spotlight", specifier: "#src/routes/spotlight.routes.js", exportName: "default" },
   { mountPath: "/feed", specifier: "#src/routes/feed.routes.js", exportName: "default" },
-  { mountPath: "/videos", specifier: "#src/routes/videos.routes.js", exportName: "default" },
+  { mountPath: "/videos", specifier: "#src/modules/studio/videos/videos.routes.js", exportName: "default" },
   { mountPath: "/videos", specifier: "#src/routes/engagement.routes.js", exportName: "default" },
   { mountPath: "/", specifier: "#src/routes/engagement.routes.js", exportName: "commentRouter" },
   { mountPath: "/", specifier: "#src/routes/engagement.routes.js", exportName: "creatorRouter" },

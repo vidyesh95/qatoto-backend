@@ -151,7 +151,7 @@ interface VerifiedVideo {
 /**
  * Parses and PROVES a pasted link before any row is written.
  *
- * Reused verbatim from the studio path (src/services/videos.service.ts): parse to an id
+ * Reused verbatim from the studio path (src/modules/studio/videos/videos.service.ts): parse to an id
  * against the hostname allowlist, then one free oEmbed call that proves the video exists,
  * is public enough to embed, and is not deleted. The 422/502 split is load-bearing — the
  * first means the member must fix their link, the second means YouTube did not answer.

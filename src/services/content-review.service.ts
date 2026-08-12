@@ -9,12 +9,15 @@ import {
   user,
   video,
 } from "#src/db/schema.js";
+import type {
+  ContentReviewStatus,
+  VideoNotFoundError,
+} from "#src/modules/studio/videos/videos.service.js";
 import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
 } from "#src/services/platform-role.service.js";
-import type { ContentReviewStatus, VideoNotFoundError } from "#src/services/videos.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

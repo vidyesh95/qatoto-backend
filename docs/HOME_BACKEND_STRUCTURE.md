@@ -57,7 +57,7 @@ is the same error as fabricating a value the server returned as `null`.
 | ------------------------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------- |
 | `video` table, ~50 columns                                   | `src/db/schema.ts:9383`              | ✅ built, YouTube-first                                                          |
 | `videoSource` / `youtubeVideoId` + charset CHECK             | `schema.ts:9280`, `:9513-9521`       | ✅ — the CHECK is a **security** constraint, it closes SSRF at the storage layer |
-| Owner-scoped `/videos` CRUD, publish, review                 | `src/routes/videos.routes.ts:38-120` | ✅ built, **all `requireAuth`**                                                  |
+| Owner-scoped `/videos` CRUD, publish, review                 | `src/modules/studio/videos/videos.routes.ts:38-120` | ✅ built, **all `requireAuth`**                                                  |
 | `contentReviewAction` audit log, anime review queue          | `schema.ts:9831`                     | ✅ built                                                                         |
 | **Any public read route**                                    | —                                    | 🚫 does not exist                                                                |
 | **Taxonomy** (categories with slugs + images)                | —                                    | 🚫 `video.category` is nullable free text                                        |

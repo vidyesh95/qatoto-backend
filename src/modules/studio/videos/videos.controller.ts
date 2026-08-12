@@ -14,8 +14,8 @@ import {
   ReplacePlaylistsSchema,
   ReplaceProductsSchema,
   UpdateVideoSchema,
-} from "#src/schemas/videos.schemas.js";
-import * as videosService from "#src/services/videos.service.js";
+} from "#src/modules/studio/videos/videos.schemas.js";
+import * as videosService from "#src/modules/studio/videos/videos.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** POST /videos */

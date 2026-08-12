@@ -7,7 +7,7 @@ vi.mock("#src/db/index.js", () => ({ db: {} }));
 vi.mock("#src/config/index.js", () => ({ config: { YOUTUBE_OEMBED_TIMEOUT_MS: 3_000 } }));
 
 const { assertGatingSupported, deriveStudioVideoStatus, validateChapterSet } =
-  await import("#src/services/videos.service.js");
+  await import("#src/modules/studio/videos/videos.service.js");
 
 const chapters = (...starts: readonly number[]) =>
   starts.map((startSeconds, index) => ({ startSeconds, title: `Chapter ${index + 1}` }));

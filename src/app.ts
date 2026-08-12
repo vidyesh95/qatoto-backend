@@ -14,6 +14,7 @@ import { requestLog } from "#src/middleware/request-log.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
+import videosRouter from "#src/modules/studio/videos/videos.routes.js";
 import authRouter from "#src/routes/auth.routes.js";
 import commerceCartRouter from "#src/routes/commerce-cart.routes.js";
 import commerceCatalogRouter from "#src/routes/commerce-catalog.routes.js";
@@ -67,7 +68,6 @@ import spotlightRouter from "#src/routes/spotlight.routes.js";
 import storeRouter from "#src/routes/store.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
-import videosRouter from "#src/routes/videos.routes.js";
 import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.js";
 
 const app = express();

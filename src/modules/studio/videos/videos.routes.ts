@@ -1,7 +1,6 @@
 import express from "express";
 
 import * as adminReviewController from "#src/controllers/admin-review.controller.js";
-import * as videosController from "#src/controllers/videos.controller.js";
 import { longFormBody } from "#src/middleware/json-body.js";
 import {
   contentReviewLimiter,
@@ -9,7 +8,8 @@ import {
   videoThumbnailUploadLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadVideoThumbnail } from "#src/middleware/upload-video-thumbnail.js";
+import { uploadVideoThumbnail } from "#src/modules/studio/videos/upload-video-thumbnail.js";
+import * as videosController from "#src/modules/studio/videos/videos.controller.js";
 
 const router = express.Router();
 
