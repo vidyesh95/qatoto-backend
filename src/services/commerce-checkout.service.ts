@@ -33,6 +33,7 @@ import {
   latestPromisedDeliveryAt,
 } from "#src/lib/commerce-promised-delivery.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { projectPrepareArrivalWindow } from "#src/services/commerce-arrival-window.service.js";
 import {
   getOrCreateCartForUpdate,
@@ -53,7 +54,6 @@ import {
   createEscrowSessionForOrder,
   scheduleEscrowCommands,
 } from "#src/services/commerce-escrow.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import {
   consumeSampleCredits,
   listSpendableSampleCredits,

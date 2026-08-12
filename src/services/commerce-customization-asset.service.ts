@@ -8,7 +8,7 @@ import {
   deletePrivateCommerceDocument,
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
-import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
+import { scheduleDocumentScan } from "#src/modules/store/organizations/commerce-document-scan.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

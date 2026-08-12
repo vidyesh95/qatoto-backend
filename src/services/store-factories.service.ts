@@ -19,7 +19,7 @@ import {
   type OrganizationProductionLineProjection,
   type OrganizationSamplePolicyProjection,
   type OrganizationSiteProjection,
-} from "#src/services/commerce-seller-profile.service.js";
+} from "#src/modules/store/organizations/commerce-seller-profile.service.js";
 import {
   loadOrganizationFulfillmentMetrics,
   type OrganizationFulfillmentMetrics,

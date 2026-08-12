@@ -9,6 +9,7 @@ import {
   commerceCartWriteLimiter,
   commerceCheckoutWriteLimiter,
 } from "#src/middleware/rate-limit.js";
+import { requireAuth } from "#src/middleware/require-auth.js";
 /**
  * §14. Every route here but `checkout/confirm` runs on a PENDING buyer workspace. The
  * confirm keeps `requireActiveBuyerCommerceOrganization` because that is one of the four
@@ -17,8 +18,7 @@ import {
 import {
   requireActiveBuyerCommerceOrganization,
   requireProvisionedBuyerCommerceWorkspace,
-} from "#src/middleware/require-active-commerce-organization.js";
-import { requireAuth } from "#src/middleware/require-auth.js";
+} from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 const router = express.Router();
 

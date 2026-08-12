@@ -26,7 +26,7 @@ stubServerEnvironment();
 const appendCommerceOrganizationAuditEntry = vi.fn<() => Promise<{ success: true }>>(() =>
   Promise.resolve({ success: true as const }),
 );
-vi.mock("#src/services/commerce-organization-audit.service.js", () => ({
+vi.mock("#src/modules/store/organizations/commerce-organization-audit.service.js", () => ({
   appendCommerceOrganizationAuditEntry,
 }));
 

@@ -3,7 +3,7 @@ import { logger } from "#src/lib/logger.js";
 import {
   countPendingDocumentScans,
   sweepPendingDocumentScans,
-} from "#src/services/commerce-document-scan.service.js";
+} from "#src/modules/store/organizations/commerce-document-scan.service.js";
 
 /**
  * Re-enqueues document scans whose original enqueue was lost (STORE Phase 14b).

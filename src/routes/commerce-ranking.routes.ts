@@ -4,8 +4,8 @@ import * as commerceRankingController from "#src/controllers/commerce-ranking.co
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import { commerceProductRelationWriteLimiter } from "#src/middleware/rate-limit.js";
-import { requireActiveSellerCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireActiveSellerCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 /**
  * Ranking transparency and appeals (STORE Phase 13, stage 5).

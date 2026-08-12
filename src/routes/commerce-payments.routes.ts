@@ -4,11 +4,11 @@ import * as commercePaymentsController from "#src/controllers/commerce-payments.
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import { commercePaymentWriteLimiter } from "#src/middleware/rate-limit.js";
+import { requireAuth } from "#src/middleware/require-auth.js";
 import {
   requireActiveBuyerCommerceOrganization,
   requireActiveCommerceOrganization,
-} from "#src/middleware/require-active-commerce-organization.js";
-import { requireAuth } from "#src/middleware/require-auth.js";
+} from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 const router = express.Router();
 

@@ -5,9 +5,9 @@ import { commerceOrder, commerceOrganizationAddress } from "#src/db/schema.js";
 import {
   memberCanOperateCounterparty,
   type CommerceOrganizationMemberRole,
-} from "#src/services/commerce-organization-access.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
-import { readableAddress } from "#src/services/commerce-organizations.service.js";
+} from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import { readableAddress } from "#src/modules/store/organizations/commerce-organizations.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

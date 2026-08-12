@@ -30,7 +30,7 @@ const serviceStubs = vi.hoisted(() => ({
   transitionTradeState: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-organizations.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/organizations/commerce-organizations.service.js", () => serviceStubs);
 
 interface CachedResponse {
   readonly fingerprint: string;

@@ -8,11 +8,11 @@ import {
   commerceArrivalWindowReadLimiter,
   commerceOrderWriteLimiter,
 } from "#src/middleware/rate-limit.js";
+import { requireAuth } from "#src/middleware/require-auth.js";
 import {
   requireActiveBuyerCommerceOrganization,
   requireActiveCommerceOrganization,
-} from "#src/middleware/require-active-commerce-organization.js";
-import { requireAuth } from "#src/middleware/require-auth.js";
+} from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 const router = express.Router();
 

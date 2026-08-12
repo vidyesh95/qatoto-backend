@@ -71,7 +71,11 @@ const MOUNTED_ROUTERS: readonly {
     specifier: "#src/modules/platform/notifications/notifications.routes.js",
     exportName: "default",
   },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-organizations.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/organizations/commerce-organizations.routes.js",
+    exportName: "default",
+  },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-providers.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-rfqs.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-quotes.routes.js", exportName: "default" },
@@ -111,7 +115,11 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/commerce", specifier: "#src/routes/commerce-documents.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-categories.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-ranking.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-seller-profile.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/organizations/commerce-seller-profile.routes.js",
+    exportName: "default",
+  },
   // Phase 17 (§16, Appendix A32).
   { mountPath: "/commerce", specifier: "#src/routes/commerce-factories.routes.js", exportName: "default" },
   // Phase 18 (§17, Appendix A33). A new mount prefix — community is a sibling context.

@@ -37,7 +37,7 @@ function attachBuyerWorkspace(req: Request, _res: Response, next: NextFunction):
   next();
 }
 
-vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
+vi.mock("#src/modules/store/organizations/require-active-commerce-organization.js", () => ({
   attachOptionalSellerCommerceOrganization: attachOrganization,
   requireActiveCommerceOrganization: attachOrganization,
   requireActiveBuyerCommerceOrganization: attachOrganization,

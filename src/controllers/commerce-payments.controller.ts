@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   CreateRefundBodySchema,
   EmptyObjectSchema,
@@ -10,7 +11,6 @@ import {
   OrderIdParamsSchema,
   PaymentIntentIdParamsSchema,
 } from "#src/schemas/commerce-payments.schemas.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commercePaymentsService from "#src/services/commerce-payments.service.js";
 import type { CommercePaymentsError } from "#src/services/commerce-payments.service.js";
 import type { ApiResponse } from "#src/types/index.js";

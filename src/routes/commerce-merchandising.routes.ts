@@ -7,13 +7,13 @@ import {
   commerceOrganizationEvidenceLimiter,
   commercePathwayWriteLimiter,
 } from "#src/middleware/rate-limit.js";
+import { requireAuth } from "#src/middleware/require-auth.js";
+import { uploadPathwayImageFile } from "#src/middleware/upload-pathway-image.js";
 import {
   attachOptionalSellerCommerceOrganization,
   requireActiveBuyerCommerceOrganization,
-} from "#src/middleware/require-active-commerce-organization.js";
-import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
-import { uploadPathwayImageFile } from "#src/middleware/upload-pathway-image.js";
+} from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import { uploadCommerceVerificationEvidence } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
 
 /**
  * Guided pathway authoring and moderation (STORE_BACKEND_STRUCTURE.md §15.8).

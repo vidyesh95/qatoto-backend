@@ -34,7 +34,7 @@ const updateMock = vi.fn<(table: unknown) => { set: typeof setMock }>(() => ({
 vi.mock("#src/db/index.js", () => ({ db: { select: selectMock, update: updateMock } }));
 
 const { resolveActiveCommerceOrganization, resolveActiveSellerCommerceOrganization } =
-  await import("#src/services/commerce-organization-access.service.js");
+  await import("#src/modules/store/organizations/commerce-organization-access.service.js");
 
 describe("active commerce organization access", () => {
   beforeEach(() => {

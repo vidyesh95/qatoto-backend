@@ -4,13 +4,13 @@ import * as commerceRfqsController from "#src/controllers/commerce-rfqs.controll
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { commerceRfqWriteLimiter } from "#src/middleware/rate-limit.js";
+import { requireAuth } from "#src/middleware/require-auth.js";
 import {
   requireActiveBuyerCommerceOrganization,
   requireActiveCommerceOrganization,
   requireActiveProviderCommerceOrganization,
   requireProvisionedBuyerCommerceWorkspace,
-} from "#src/middleware/require-active-commerce-organization.js";
-import { requireAuth } from "#src/middleware/require-auth.js";
+} from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 const router = express.Router();
 

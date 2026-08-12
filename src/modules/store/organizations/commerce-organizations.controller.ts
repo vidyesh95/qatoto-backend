@@ -2,7 +2,6 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
-import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import {
   AddressParamsSchema,
@@ -22,9 +21,10 @@ import {
   UpdateCommerceOrganizationMemberSchema,
   UpdateCommerceOrganizationSchema,
   VerificationParamsSchema,
-} from "#src/schemas/commerce-organizations.schemas.js";
-import * as commerceOrganizationsService from "#src/services/commerce-organizations.service.js";
-import type { CommerceOrganizationsError } from "#src/services/commerce-organizations.service.js";
+} from "#src/modules/store/organizations/commerce-organizations.schemas.js";
+import * as commerceOrganizationsService from "#src/modules/store/organizations/commerce-organizations.service.js";
+import type { CommerceOrganizationsError } from "#src/modules/store/organizations/commerce-organizations.service.js";
+import { evidenceBytesMatchMediaType } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function validationError(res: Response, error: z.ZodError): void {

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   AddKindLinkSchema,
   CreateOfferingSchema,
@@ -16,7 +17,6 @@ import {
   UpdateOfferingSchema,
   UpsertProfileSchema,
 } from "#src/schemas/commerce-providers.schemas.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 

@@ -4,8 +4,8 @@ import * as commerceFulfillmentController from "#src/controllers/commerce-fulfil
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import { commerceFulfillmentWriteLimiter } from "#src/middleware/rate-limit.js";
-import { requireActiveCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireActiveCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 const router = express.Router();
 

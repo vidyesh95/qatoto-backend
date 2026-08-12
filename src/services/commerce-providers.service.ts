@@ -28,11 +28,11 @@ import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor, slugifyPublicTitle } from "#src/lib/store-cursor.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
-import { memberCanOperateProvider } from "#src/services/commerce-organization-access.service.js";
+import { memberCanOperateProvider } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   loadSellerDeclaredProfiles,
   type SellerDeclaredProfileProjection,
-} from "#src/services/commerce-seller-profile.service.js";
+} from "#src/modules/store/organizations/commerce-seller-profile.service.js";
 import {
   EMPTY_FULFILLMENT_METRICS,
   EMPTY_MEASURED_METRICS,

@@ -1,13 +1,13 @@
 import express from "express";
 
-import * as commerceOrganizationsController from "#src/controllers/commerce-organizations.controller.js";
 import * as commerceProvidersController from "#src/controllers/commerce-providers.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { commerceProviderWriteLimiter } from "#src/middleware/rate-limit.js";
-import { requireActiveCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
+import * as commerceOrganizationsController from "#src/modules/store/organizations/commerce-organizations.controller.js";
+import { requireActiveCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import { uploadCommerceVerificationEvidence } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
 
 const commerceProvidersRouter = express.Router();
 

@@ -6,7 +6,7 @@ const resolveActiveCommerceOrganization = vi.fn<(...arguments_: readonly unknown
 const resolveActiveBuyerCommerceOrganization = vi.fn<(...arguments_: readonly unknown[]) => Promise<unknown>>();
 const provisionBuyerCommerceWorkspace = vi.fn<(...arguments_: readonly unknown[]) => Promise<unknown>>();
 
-vi.mock("#src/services/commerce-organization-access.service.js", () => ({
+vi.mock("#src/modules/store/organizations/commerce-organization-access.service.js", () => ({
   resolveActiveCommerceOrganization,
   resolveActiveBuyerCommerceOrganization,
 }));
@@ -21,7 +21,7 @@ const {
   requireActiveCommerceOrganization,
   requireActiveBuyerCommerceOrganization,
   requireProvisionedBuyerCommerceWorkspace,
-} = await import("#src/middleware/require-active-commerce-organization.js");
+} = await import("#src/modules/store/organizations/require-active-commerce-organization.js");
 
 function buildProbeApp(): express.Express {
   const app = express();

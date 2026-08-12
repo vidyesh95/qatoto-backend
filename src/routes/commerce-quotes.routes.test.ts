@@ -51,7 +51,7 @@ const activeRole = vi.hoisted(() => ({
   value: "provider" as "provider" | "buyer" | "generic",
 }));
 
-vi.mock("#src/middleware/require-active-commerce-organization.js", () => ({
+vi.mock("#src/modules/store/organizations/require-active-commerce-organization.js", () => ({
   // Phase 9 authoring routes attach an organization optionally, because a platform
   // merchandiser may not belong to one. Mounted through app.ts, so every suite that
   // mocks this module must provide it.

@@ -2,7 +2,6 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
-import { evidenceBytesMatchMediaType } from "#src/middleware/upload-commerce-verification-evidence.js";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import {
   AddOrganizationMediaSchema,
@@ -17,9 +16,10 @@ import {
   StakeholderParamsSchema,
   SubmitCertificationSchema,
   UpsertSellerProfileSchema,
-} from "#src/schemas/commerce-seller-profile.schemas.js";
-import * as commerceSellerProfileService from "#src/services/commerce-seller-profile.service.js";
-import type { CommerceSellerProfileError } from "#src/services/commerce-seller-profile.service.js";
+} from "#src/modules/store/organizations/commerce-seller-profile.schemas.js";
+import * as commerceSellerProfileService from "#src/modules/store/organizations/commerce-seller-profile.service.js";
+import type { CommerceSellerProfileError } from "#src/modules/store/organizations/commerce-seller-profile.service.js";
+import { evidenceBytesMatchMediaType } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function authenticatedRequest(req: Request, res: Response) {

@@ -10,8 +10,8 @@ import {
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { createOrGetThread } from "#src/services/commerce-messages.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import { resolveFactoryForInquiry } from "#src/services/store-factories.service.js";
 import type { Result } from "#src/types/index.js";
 

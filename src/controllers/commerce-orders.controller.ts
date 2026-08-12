@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   ArrivalWindowQuerySchema,
   EmptyObjectSchema,
@@ -14,7 +15,6 @@ import * as commerceDeliveryAddressService from "#src/services/commerce-delivery
 import type { CommerceDeliveryAddressError } from "#src/services/commerce-delivery-address.service.js";
 import * as commerceOrdersService from "#src/services/commerce-orders.service.js";
 import type { CommerceOrdersError } from "#src/services/commerce-orders.service.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

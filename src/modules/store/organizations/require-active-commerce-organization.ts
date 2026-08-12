@@ -1,10 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 
 import {
-  provisionBuyerCommerceWorkspace,
-  type BuyerCommerceWorkspaceError,
-} from "#src/services/commerce-buyer-workspace.service.js";
-import {
   resolveActiveBuyerCommerceOrganization,
   resolveActiveCommerceOrganization,
   resolveActiveProviderCommerceOrganization,
@@ -12,7 +8,11 @@ import {
   type ActiveBuyerCommerceOrganizationAccessError,
   type ActiveProviderCommerceOrganizationAccessError,
   type ActiveSellerCommerceOrganizationAccessError,
-} from "#src/services/commerce-organization-access.service.js";
+} from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import {
+  provisionBuyerCommerceWorkspace,
+  type BuyerCommerceWorkspaceError,
+} from "#src/services/commerce-buyer-workspace.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

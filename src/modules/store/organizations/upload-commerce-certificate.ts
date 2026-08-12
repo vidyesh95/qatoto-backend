@@ -1,8 +1,8 @@
+import { createSingleFileUpload } from "#src/middleware/upload.js";
 import {
   COMMERCE_EVIDENCE_MEDIA_TYPES,
   MAXIMUM_COMMERCE_EVIDENCE_BYTES,
-} from "#src/middleware/upload-commerce-verification-evidence.js";
-import { createSingleFileUpload } from "#src/middleware/upload.js";
+} from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
 
 /**
  * Multipart parser for POST /commerce/organizations/:organizationId/certifications (A13).

@@ -8,6 +8,7 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/controllers/store-factories-error-response.js";
+import * as sellerProfileService from "#src/modules/store/organizations/commerce-seller-profile.service.js";
 import {
   AuditIdParamsSchema,
   CreateManufacturingInquirySchema,
@@ -23,7 +24,6 @@ import {
   WithdrawSiteAuditSchema,
 } from "#src/schemas/store-factories.schemas.js";
 import * as manufacturingInquiryService from "#src/services/commerce-manufacturing-inquiry.service.js";
-import * as sellerProfileService from "#src/services/commerce-seller-profile.service.js";
 import * as storeFactoriesService from "#src/services/store-factories.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 

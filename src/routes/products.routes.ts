@@ -8,10 +8,10 @@ import {
   productCreateLimiter,
   productImageUploadLimiter,
 } from "#src/middleware/rate-limit.js";
-import { requireActiveSellerCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { uploadProductHighlightImageFile } from "#src/middleware/upload-product-highlight-image.js";
 import { uploadProductImage } from "#src/middleware/upload-product-image.js";
+import { requireActiveSellerCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 const router = express.Router();
 

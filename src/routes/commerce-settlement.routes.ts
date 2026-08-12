@@ -4,8 +4,8 @@ import * as commerceSettlementController from "#src/controllers/commerce-settlem
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import { commerceSettlementWriteLimiter } from "#src/middleware/rate-limit.js";
-import { requireActiveCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireActiveCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 /**
  * Negotiated settlement agreements (STORE Phase 14).

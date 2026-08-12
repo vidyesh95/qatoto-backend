@@ -3,14 +3,14 @@ import { and, asc, eq, gt, or, type SQL } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { commerceProductInquiry, product } from "#src/db/schema.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
-import type { ListProductInquiriesQuery } from "#src/schemas/commerce-product-inquiry.schemas.js";
-import { createOrGetThread } from "#src/services/commerce-messages.service.js";
-import type { CommerceThreadProjection } from "#src/services/commerce-messages.service.js";
 import {
   memberCanOperateBuyer,
   type CommerceOrganizationMemberRole,
-} from "#src/services/commerce-organization-access.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
+} from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import type { ListProductInquiriesQuery } from "#src/schemas/commerce-product-inquiry.schemas.js";
+import { createOrGetThread } from "#src/services/commerce-messages.service.js";
+import type { CommerceThreadProjection } from "#src/services/commerce-messages.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type CommerceProductInquiryError =

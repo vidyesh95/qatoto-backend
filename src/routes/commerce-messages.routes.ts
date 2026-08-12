@@ -4,6 +4,7 @@ import * as commerceMessagesController from "#src/controllers/commerce-messages.
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { commerceMessageWriteLimiter } from "#src/middleware/rate-limit.js";
+import { requireAuth } from "#src/middleware/require-auth.js";
 /**
  * §14, consequence for A14. Every route here runs on a possibly-`pending` workspace.
  *
@@ -15,8 +16,7 @@ import { commerceMessageWriteLimiter } from "#src/middleware/rate-limit.js";
  * SCOPING IS UNCHANGED: `assertThreadParticipant` still proves membership of the specific
  * thread, so a pending workspace can reach its OWN conversations and no others.
  */
-import { requireProvisionedBuyerCommerceWorkspace } from "#src/middleware/require-active-commerce-organization.js";
-import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireProvisionedBuyerCommerceWorkspace } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 const commerceMessagesRouter = express.Router();
 

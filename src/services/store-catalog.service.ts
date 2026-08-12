@@ -17,7 +17,11 @@ import {
   withTradingOrganizationCountryCode,
 } from "#src/lib/commerce-organization-country.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import {
+  loadSellerDeclaredProfiles,
+  type SellerDeclaredProfileProjection,
+} from "#src/modules/store/organizations/commerce-seller-profile.service.js";
 import {
   EMPTY_PRODUCT_ENGAGEMENT,
   loadProductEngagements,
@@ -27,10 +31,6 @@ import {
   deriveContactAffordance,
   type ProductContactAffordance,
 } from "#src/services/commerce-product-inquiry.service.js";
-import {
-  loadSellerDeclaredProfiles,
-  type SellerDeclaredProfileProjection,
-} from "#src/services/commerce-seller-profile.service.js";
 import {
   EMPTY_FULFILLMENT_METRICS as EMPTY_CARD_FULFILLMENT_METRICS,
   EMPTY_MEASURED_METRICS,

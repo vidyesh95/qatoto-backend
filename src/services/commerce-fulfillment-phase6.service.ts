@@ -36,6 +36,13 @@ import {
   warehouseDeliverableDetail,
   warehouseEngagementDetail,
 } from "#src/db/schema.js";
+import {
+  memberCanOperateBuyer,
+  memberCanOperateCounterparty,
+  memberCanOperateProvider,
+  type CommerceOrganizationMemberRole,
+} from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import type {
   ServiceEngagementCommand,
   ShipmentLegCommand,
@@ -49,13 +56,6 @@ import {
   reconcileOrderAggregateState,
   reconcileShipmentStateFromLegs,
 } from "#src/services/commerce-fulfillment-reconciliation.service.js";
-import {
-  memberCanOperateBuyer,
-  memberCanOperateCounterparty,
-  memberCanOperateProvider,
-  type CommerceOrganizationMemberRole,
-} from "#src/services/commerce-organization-access.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

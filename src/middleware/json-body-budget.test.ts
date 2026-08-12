@@ -183,7 +183,7 @@ describe("per-route body caps", () => {
       import("#src/modules/rnd/programs/upload-research-paper.js"),
       // Commerce verification evidence is multipart and bounded by its upload middleware,
       // not by the JSON parser's per-route budget.
-      import("#src/middleware/upload-commerce-verification-evidence.js"),
+      import("#src/modules/store/organizations/upload-commerce-verification-evidence.js"),
       // The promotional-carousel image routes. The create route carries TEXT PARTS
       // alongside the file, so without this import `isMultipart()` would not recognize
       // it, the sweep would treat it as a JSON body-reading route, and it would be
@@ -193,10 +193,10 @@ describe("per-route body caps", () => {
       // TEXT PARTS (`mediaKind`, `altText`) alongside the file, so without this import
       // `isMultipart()` would not recognize it, the sweep would treat it as a JSON
       // body-reading route, and it would be reported as missing a declared cap.
-      import("#src/middleware/upload-organization-media.js"),
+      import("#src/modules/store/organizations/upload-organization-media.js"),
       // A13's certificate upload. Its own module because the verification-evidence parser
       // caps multer at two text fields and a certification sends six.
-      import("#src/middleware/upload-commerce-certificate.js"),
+      import("#src/modules/store/organizations/upload-commerce-certificate.js"),
       // The store-category create/replace routes (0098). Create carries TEXT PARTS
       // (`name`, `slug`, `parentCategoryId`, `searchSynonyms`, `state`) alongside an
       // OPTIONAL file, so without this import `isMultipart()` would not recognize it, the

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   CreateContentReportSchema,
   DecideContentReportSchema,
@@ -12,7 +13,6 @@ import {
 import { EmptyObjectSchema } from "#src/schemas/commerce-content-reports.schemas.js";
 import * as commerceContentReportsService from "#src/services/commerce-content-reports.service.js";
 import type { CommerceContentReportsError } from "#src/services/commerce-content-reports.service.js";
-import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

@@ -9,8 +9,8 @@ import {
   manufacturingInquiryWriteLimiter,
   siteAuditWriteLimiter,
 } from "#src/middleware/rate-limit.js";
-import { requireActiveCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireActiveCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 /**
  * Manufacturing inquiries and seller-owned factory depth (§16.3, §16.5).

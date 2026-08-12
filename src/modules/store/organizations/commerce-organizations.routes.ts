@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceOrganizationsController from "#src/controllers/commerce-organizations.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
@@ -8,8 +7,9 @@ import {
   commerceOrganizationWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
-import { uploadOrganizationLogoFile } from "#src/middleware/upload-organization-logo.js";
+import * as commerceOrganizationsController from "#src/modules/store/organizations/commerce-organizations.controller.js";
+import { uploadCommerceVerificationEvidence } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
+import { uploadOrganizationLogoFile } from "#src/modules/store/organizations/upload-organization-logo.js";
 
 const router = express.Router();
 

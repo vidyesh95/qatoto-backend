@@ -4,8 +4,8 @@ import * as commerceCatalogController from "#src/controllers/commerce-catalog.co
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { commerceProductRelationWriteLimiter } from "#src/middleware/rate-limit.js";
-import { requireActiveSellerCommerceOrganization } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireActiveSellerCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 /**
  * The product relation graph's authoring surface (STORE_BACKEND_STRUCTURE.md §15.8).

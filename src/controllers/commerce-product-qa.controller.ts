@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   AnswerProductQuestionSchema,
   AskProductQuestionSchema,
@@ -14,7 +15,6 @@ import {
   SellerQuestionInboxQuerySchema,
 } from "#src/schemas/commerce-product-qa.schemas.js";
 import { EmptyObjectSchema } from "#src/schemas/commerce-product-qa.schemas.js";
-import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductQaService from "#src/services/commerce-product-qa.service.js";
 import type { CommerceProductQaError } from "#src/services/commerce-product-qa.service.js";
 import {

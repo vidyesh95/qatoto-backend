@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   StoreOrganizationReviewParamsSchema,
   StoreProductReviewParamsSchema,
@@ -22,7 +23,6 @@ import {
 } from "#src/schemas/store.schemas.js";
 import * as commerceDeliveryEstimateService from "#src/services/commerce-delivery-estimate.service.js";
 import * as commerceFreightJourneyService from "#src/services/commerce-freight-journey.service.js";
-import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
 import * as storeCatalogService from "#src/services/store-catalog.service.js";

@@ -5,9 +5,9 @@ import {
   commerceDocumentDownloadLimiter,
   commerceOrganizationEvidenceLimiter,
 } from "#src/middleware/rate-limit.js";
-import { requireProvisionedBuyerCommerceWorkspace } from "#src/middleware/require-active-commerce-organization.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadCommerceVerificationEvidence } from "#src/middleware/upload-commerce-verification-evidence.js";
+import { requireProvisionedBuyerCommerceWorkspace } from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import { uploadCommerceVerificationEvidence } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
 
 /**
  * Trade attachments (STORE Appendix A30, and A27's second half).

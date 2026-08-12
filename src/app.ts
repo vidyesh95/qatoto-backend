@@ -44,6 +44,8 @@ import supplierRouter, {
   projectGoToMarketRouter,
 } from "#src/modules/rnd/suppliers/suppliers.routes.js";
 import workshopRouter, { dailyLogFeedRouter } from "#src/modules/rnd/workshop/workshop.routes.js";
+import commerceOrganizationsRouter from "#src/modules/store/organizations/commerce-organizations.routes.js";
+import commerceSellerProfileRouter from "#src/modules/store/organizations/commerce-seller-profile.routes.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
 import videosRouter from "#src/modules/studio/videos/videos.routes.js";
@@ -58,7 +60,6 @@ import commerceFulfillmentRouter from "#src/routes/commerce-fulfillment.routes.j
 import commerceMerchandisingRouter from "#src/routes/commerce-merchandising.routes.js";
 import commerceMessagesRouter from "#src/routes/commerce-messages.routes.js";
 import commerceOrdersRouter from "#src/routes/commerce-orders.routes.js";
-import commerceOrganizationsRouter from "#src/routes/commerce-organizations.routes.js";
 import commercePaymentsRouter from "#src/routes/commerce-payments.routes.js";
 import commerceProductEngagementRouter from "#src/routes/commerce-product-engagement.routes.js";
 import commerceProductInquiryRouter from "#src/routes/commerce-product-inquiry.routes.js";
@@ -67,7 +68,6 @@ import commerceProvidersRouter from "#src/routes/commerce-providers.routes.js";
 import commerceQuotesRouter from "#src/routes/commerce-quotes.routes.js";
 import commerceRankingRouter from "#src/routes/commerce-ranking.routes.js";
 import commerceRfqsRouter from "#src/routes/commerce-rfqs.routes.js";
-import commerceSellerProfileRouter from "#src/routes/commerce-seller-profile.routes.js";
 import commerceSettlementRouter from "#src/routes/commerce-settlement.routes.js";
 import commerceTrustRouter from "#src/routes/commerce-trust.routes.js";
 import commerceWebhooksRouter from "#src/routes/commerce-webhooks.routes.js";

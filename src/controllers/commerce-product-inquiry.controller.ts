@@ -2,12 +2,12 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   CreateProductInquiryParamsSchema,
   ListProductInquiriesQuerySchema,
 } from "#src/schemas/commerce-product-inquiry.schemas.js";
 import { EmptyObjectSchema } from "#src/schemas/commerce-product-inquiry.schemas.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductInquiryService from "#src/services/commerce-product-inquiry.service.js";
 import type { CommerceProductInquiryError } from "#src/services/commerce-product-inquiry.service.js";
 import { resolveEligibleProductRefById } from "#src/services/store-catalog.service.js";

@@ -12,12 +12,12 @@ import {
   user,
 } from "#src/db/schema.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import type {
   AnswerProductQuestionInput,
   AskProductQuestionInput,
   ProductQuestionListQuery,
 } from "#src/schemas/commerce-product-qa.schemas.js";
-import { resolveActiveCommerceOrganization } from "#src/services/commerce-organization-access.service.js";
 import { ensureCommerceProductStatsRow } from "#src/services/commerce-product-engagement.service.js";
 import type { Result } from "#src/types/index.js";
 

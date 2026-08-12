@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   CreateShipmentWithLegsSchema,
   ServiceEngagementCommandSchema,
@@ -22,7 +23,6 @@ import * as commerceFulfillmentPhase6Service from "#src/services/commerce-fulfil
 import type { CommercePhase6Error } from "#src/services/commerce-fulfillment-phase6.service.js";
 import * as commerceFulfillmentService from "#src/services/commerce-fulfillment.service.js";
 import type { CommerceFulfillmentError } from "#src/services/commerce-fulfillment.service.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 export const CreateShipmentSchema = CreateShipmentWithLegsSchema;

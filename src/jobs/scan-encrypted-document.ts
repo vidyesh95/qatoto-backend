@@ -1,5 +1,5 @@
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { scanEncryptedDocument } from "#src/services/commerce-document-scan.service.js";
+import { scanEncryptedDocument } from "#src/modules/store/organizations/commerce-document-scan.service.js";
 
 /**
  * Scans one private commerce document and records the verdict (STORE Phase 14b).

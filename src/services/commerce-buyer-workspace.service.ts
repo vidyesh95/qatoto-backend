@@ -8,9 +8,9 @@ import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
   findBuyerCommerceWorkspaces,
   type ProvisionedBuyerCommerceWorkspaceContext,
-} from "#src/services/commerce-organization-access.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
-import { normalizeLegalName } from "#src/services/commerce-organizations.service.js";
+} from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import { normalizeLegalName } from "#src/modules/store/organizations/commerce-organizations.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type BuyerCommerceWorkspaceError =

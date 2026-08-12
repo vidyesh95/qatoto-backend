@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceSellerProfileController from "#src/controllers/commerce-seller-profile.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
@@ -9,9 +8,10 @@ import {
   productCatalogDepthWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadCommerceCertificate } from "#src/middleware/upload-commerce-certificate.js";
-import { uploadOrganizationMediaImage } from "#src/middleware/upload-organization-media.js";
-import { uploadStakeholderPhotoFile } from "#src/middleware/upload-stakeholder-photo.js";
+import * as commerceSellerProfileController from "#src/modules/store/organizations/commerce-seller-profile.controller.js";
+import { uploadCommerceCertificate } from "#src/modules/store/organizations/upload-commerce-certificate.js";
+import { uploadOrganizationMediaImage } from "#src/modules/store/organizations/upload-organization-media.js";
+import { uploadStakeholderPhotoFile } from "#src/modules/store/organizations/upload-stakeholder-photo.js";
 
 /**
  * Seller profile depth (Appendix A13, Phase 12).

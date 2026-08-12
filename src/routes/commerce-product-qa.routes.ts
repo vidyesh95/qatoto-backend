@@ -8,12 +8,12 @@ import {
   commerceProductQuestionLimiter,
   commerceReviewVoteLimiter,
 } from "#src/middleware/rate-limit.js";
+import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import {
   requireActiveCommerceOrganization,
   requireActiveSellerCommerceOrganization,
-} from "#src/middleware/require-active-commerce-organization.js";
-import { requireAuth } from "#src/middleware/require-auth.js";
-import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+} from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 /**
  * Product Q&A authoring (STORE Appendix A9).

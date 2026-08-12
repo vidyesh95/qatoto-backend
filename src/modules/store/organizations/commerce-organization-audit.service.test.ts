@@ -32,7 +32,8 @@ vi.mock("#src/db/index.js", () => ({
 }));
 
 const { db } = await import("#src/db/index.js");
-const { appendCommerceOrganizationAuditEntry } = await import("#src/services/commerce-organization-audit.service.js");
+const { appendCommerceOrganizationAuditEntry } =
+  await import("#src/modules/store/organizations/commerce-organization-audit.service.js");
 
 type AuditAppendInput = Parameters<typeof appendCommerceOrganizationAuditEntry>[1];
 

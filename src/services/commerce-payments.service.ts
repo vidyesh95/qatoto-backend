@@ -22,6 +22,8 @@ import {
 } from "#src/db/schema.js";
 import { sendJob, JOB_NAMES, idempotencyKeyFor } from "#src/lib/jobs.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import {
   evaluateBuyerQualification,
   type BuyerQualificationVerdict,
@@ -32,8 +34,6 @@ import {
   type CommerceJournalAccountKind,
   type CommerceJournalKind,
 } from "#src/services/commerce-journal.service.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

@@ -10,9 +10,9 @@ import {
   product,
 } from "#src/db/schema.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { loadOrderCompletionIndex } from "#src/services/commerce-completion.service.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

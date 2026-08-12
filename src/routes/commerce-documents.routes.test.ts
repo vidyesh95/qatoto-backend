@@ -15,7 +15,7 @@ vi.mock("#src/lib/auth.js", async () => (await import("#src/test-support/auth-mo
 const ORGANIZATION_ID = "commerce_org_documents";
 const MEMBER_ID = "member-documents";
 
-vi.mock("#src/middleware/require-active-commerce-organization.js", () => {
+vi.mock("#src/modules/store/organizations/require-active-commerce-organization.js", () => {
   const attach = (req: Request, _res: Response, next: NextFunction): void => {
     req.commerceOrganization = {
       organizationId: ORGANIZATION_ID,

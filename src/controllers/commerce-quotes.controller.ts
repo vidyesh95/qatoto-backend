@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   AcceptQuoteSchema,
   AppendQuoteRevisionSchema,
@@ -12,7 +13,6 @@ import {
   QuoteRevisionParamsSchema,
   RfqIdParamsSchema,
 } from "#src/schemas/commerce-quotes.schemas.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commerceQuotesService from "#src/services/commerce-quotes.service.js";
 import type { CommerceQuotesError } from "#src/services/commerce-quotes.service.js";
 import type { ApiResponse } from "#src/types/index.js";

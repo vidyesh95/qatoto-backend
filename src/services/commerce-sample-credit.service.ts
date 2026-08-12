@@ -7,7 +7,7 @@ import {
   commerceSampleCredit,
   product,
 } from "#src/db/schema.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   ProductIdParamsSchema,
   RelationIdParamsSchema,
@@ -11,7 +12,6 @@ import {
   EmptyObjectSchema,
   EmptyRequestBodySchema,
 } from "#src/schemas/commerce-catalog.schemas.js";
-import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import type { CommerceProductRelationError } from "#src/services/commerce-product-relations.service.js";
 import type { ApiResponse } from "#src/types/index.js";
