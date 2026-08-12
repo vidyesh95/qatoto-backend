@@ -111,7 +111,8 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
-    "lint:fix": "oxlint --fix"
+    "lint:fix": "oxlint --fix",
+    "check:specifiers": "tsx scripts/check-src-specifiers.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",

@@ -17,13 +17,34 @@
   },
   "rules": {
     "no-alert": "error",
-    "no-underscore-dangle": ["error", { "allow": ["__filename", "__dirname"] }],
-    "no-console": ["error", { "allow": ["warn", "error"] }],
+    "no-underscore-dangle": [
+      "error",
+      {
+        "allow": ["__filename", "__dirname"]
+      }
+    ],
+    "no-console": [
+      "error",
+      {
+        "allow": ["warn", "error"]
+      }
+    ],
     "no-plusplus": "off",
     "oxc/approx-constant": "warn",
-    "eslint/prefer-const": ["error", { "destructuring": "any" }],
+    "eslint/prefer-const": [
+      "error",
+      {
+        "destructuring": "any"
+      }
+    ],
     "typescript/no-explicit-any": "error",
-    "import/no-unassigned-import": ["warn", { "allow": ["**/dotenv/config"] }]
+    "import/no-unassigned-import": [
+      "warn",
+      {
+        "allow": ["**/dotenv/config"]
+      }
+    ],
+    "import/no-relative-parent-imports": "error"
   },
   "overrides": [
     {
@@ -36,12 +57,16 @@
         "src/lib/logger.ts",
         "scripts/**/*.ts"
       ],
-      "rules": { "no-console": "off" }
+      "rules": {
+        "no-console": "off"
+      }
     },
     {
       "files": ["**/*.test.ts", "**/*.spec.ts", "tests/**"],
       "plugins": ["vitest"],
-      "env": { "vitest": true }
+      "env": {
+        "vitest": true
+      }
     }
   ]
 }
