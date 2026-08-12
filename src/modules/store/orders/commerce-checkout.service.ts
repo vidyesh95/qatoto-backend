@@ -1347,6 +1347,218 @@ async function writeSellerOrderLines(
   });
 }
 
+/**
+ * Create one seller's order: resolve its settlement rail, write the order row, spend any
+ * sample credits and open an escrow session if the rail calls for one.
+ *
+ * ONE ORDER PER SELLER AND CURRENCY, which is why this takes a group rather than a cart. A
+ * multi-seller cart becomes several orders under one checkout group — each seller ships,
+ * invoices and is paid independently, and a single order row spanning two sellers could not
+ * express that.
+ *
+ * THE THREE THINGS THE CALLER ACCUMULATES ARE RETURNED, NOT PUSHED. The created order, the
+ * escrow outbox id and the discount are collected across every seller in the cart and used
+ * after the loop — the outbox ids are dispatched only once the transaction commits, and the
+ * discount is folded per currency across sellers. Returning them keeps this function unable
+ * to observe or corrupt the other sellers' results.
+ *
+ * Every refusal here rolls the whole checkout back, not just this seller. A cart is
+ * confirmed atomically: a buyer who cannot pay one seller has not bought from any of them.
+ */
+async function createOrderForSellerGroup(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly sellerGroup: SellerOrderGroup;
+    readonly prepare: PrepareRow;
+    readonly checkoutGroup: typeof commerceCheckoutGroup.$inferSelect;
+    readonly buyerOrganization: { readonly legalName: string };
+    readonly sellerLegalNameById: ReadonlyMap<string, string>;
+    readonly agreementBySeller: ReadonlyMap<string, string>;
+    readonly deliveryAddressId: string | null;
+    readonly deliveryAddressSnapshot: string | null;
+    readonly actor: CommerceCartActorContext;
+    readonly now: Date;
+  },
+) {
+  const {
+    sellerGroup,
+    prepare,
+    checkoutGroup,
+    buyerOrganization,
+    sellerLegalNameById,
+    agreementBySeller,
+    deliveryAddressId,
+    deliveryAddressSnapshot,
+    actor,
+    now,
+  } = input;
+
+  let escrowOutboxId: string | null = null;
+
+  const sellerLegalName = sellerLegalNameById.get(sellerGroup.sellerOrganizationId);
+  if (!sellerLegalName) return { status: "not_found" as const };
+
+  const subtotalInCents = sellerGroup.lines.reduce((sum, line) => sum + line.lineTotalInCents, 0);
+
+  /**
+   * A17. Credits are resolved HERE, under the row lock, not from whatever the
+   * prepare displayed — a credit consumed by another confirm in between must not
+   * be applied twice. The prepare's figure is a preview; this one is the charge.
+   *
+   * `shippingInCents` stays 0 (A16): the delivery estimate is display-only, and
+   * an order total must not contain a number nobody quoted.
+   */
+  const spendableCredits = await listSpendableSampleCredits(transaction, {
+    buyerOrganizationId: actor.organizationId,
+    sellerOrganizationId: sellerGroup.sellerOrganizationId,
+    currency: sellerGroup.currency,
+    asOf: now,
+    forUpdate: true,
+  });
+  const { consumedCredits, discountInCents } = selectConsumableCredits(
+    spendableCredits,
+    subtotalInCents,
+  );
+
+  /**
+   * A13. Derived here, from the lead time each prepare line snapshotted, so the
+   * order and its lines commit to the same dates in the same transaction.
+   *
+   * `now` is the confirm instant — the moment the buyer became committed — not the
+   * prepare instant. A prepare may sit unconfirmed for a while, and a seller's
+   * lead time starts when the order does.
+   */
+  const linePromisedDeliveryDates = sellerGroup.lines.map((line) =>
+    derivePromisedDeliveryAt({
+      orderedAt: now,
+      leadTimeMaxDays: line.leadTimeMaxDaysSnapshot,
+    }),
+  );
+  const orderPromisedDeliveryAt = latestPromisedDeliveryAt(linePromisedDeliveryDates);
+
+  /**
+   * STORE Phase 14. THE RAIL IS RESOLVED BEFORE THE INSERT, and it has to be:
+   * `settlement_rail` is part of the immutable commercial snapshot that
+   * `commerce_prevent_order_snapshot_mutation` guards, so an UPDATE after the fact
+   * is refused by the database. It is also the honest place for it — how an order
+   * settles is decided when the order is created, not afterwards.
+   */
+  const orderTotalInCents = subtotalInCents - discountInCents;
+  const railResolution = await resolveSettlementRail(transaction, {
+    buyerOrganizationId: actor.organizationId,
+    sellerOrganizationId: sellerGroup.sellerOrganizationId,
+    currency: sellerGroup.currency,
+    totalInCents: orderTotalInCents,
+    /**
+     * Direct-checkout orders take a payment intent, so the processor rail is the
+     * right non-escrow default here. `direct_offline` belongs to quote-originated
+     * orders settled by wire, which do not come through this path.
+     */
+    hasProcessorPayment: true,
+    requestedAgreementId: agreementBySeller.get(sellerGroup.sellerOrganizationId) ?? null,
+  });
+  if (!railResolution.success) {
+    return {
+      status: "settlement_unavailable" as const,
+      sellerOrganizationId: sellerGroup.sellerOrganizationId,
+      error: railResolution.error,
+    };
+  }
+
+  const [order] = await transaction
+    .insert(commerceOrder)
+    .values({
+      settlementRail: railResolution.value.rail,
+      buyerOrganizationId: actor.organizationId,
+      counterpartyOrganizationId: sellerGroup.sellerOrganizationId,
+      checkoutGroupId: checkoutGroup.id,
+      source: "direct_checkout",
+      state: "pending_payment",
+      currency: sellerGroup.currency,
+      subtotalInCents,
+      taxInCents: 0,
+      serviceFeeInCents: 0,
+      shippingInCents: 0,
+      discountInCents,
+      totalInCents: subtotalInCents - discountInCents,
+      paymentTermsSnapshot: null,
+      incotermSnapshot: null,
+      buyerLegalNameSnapshot: buyerOrganization.legalName,
+      counterpartyLegalNameSnapshot: sellerLegalName,
+      buyerAddressSnapshot: deliveryAddressSnapshot,
+      counterpartyAddressSnapshot: null,
+      /**
+       * A15. The snapshot above is redacted by design; this is the durable
+       * pointer an authorized seller decrypts the rest through. Written here,
+       * at confirm, because this is the moment the address becomes part of an
+       * immutable commercial record.
+       */
+      deliveryAddressId,
+      /**
+       * A13. Null when no line on this order declared a lead time, which keeps the
+       * order out of the on-time denominator rather than scoring it against a
+       * promise nobody made.
+       */
+      promisedDeliveryAt: orderPromisedDeliveryAt,
+      createdByMemberId: actor.memberId,
+    })
+    .returning();
+  if (!order) throw new Error("Order insert returned no row.");
+
+  /**
+   * STORE Phase 14. Spend the agreement and open the escrow session inside the same
+   * transaction as the order, so a session can never exist without its order and an
+   * agreement can never be spent by an order that failed to commit.
+   *
+   * The provider is NOT called here. `createEscrowSessionForOrder` enqueues an outbox
+   * command; the call happens in a worker after commit, which is what stops a slow
+   * escrow API from holding inventory row locks open.
+   */
+  if (railResolution.value.rail === "external_escrow") {
+    const consumed = await consumeSettlementAgreement(
+      transaction,
+      railResolution.value.agreementId,
+      order.id,
+    );
+    if (!consumed.success) {
+      return {
+        status: "settlement_unavailable" as const,
+        sellerOrganizationId: sellerGroup.sellerOrganizationId,
+        error: consumed.error,
+      };
+    }
+
+    const session = await createEscrowSessionForOrder(transaction, {
+      orderId: order.id,
+      agreementId: railResolution.value.agreementId,
+      providerId: railResolution.value.providerId,
+      currency: railResolution.value.currency,
+      totalInCents: railResolution.value.totalInCents,
+    });
+    if (!session.success) {
+      return {
+        status: "escrow_session_failed" as const,
+        sellerOrganizationId: sellerGroup.sellerOrganizationId,
+        reason: "reason" in session.error ? session.error.reason : session.error.type,
+      };
+    }
+    escrowOutboxId = session.value.outboxId;
+  }
+
+  await writeSellerOrderLines(transaction, {
+    order,
+    sellerGroup,
+    prepare,
+    checkoutGroup,
+    consumedCredits,
+    linePromisedDeliveryDates,
+    actor,
+    now,
+  });
+
+  return { status: "created" as const, order, escrowOutboxId, discountInCents };
+}
+
 export async function confirmCheckout(
   actor: CommerceCartActorContext,
   input: ConfirmCheckoutInput,
@@ -1451,177 +1663,30 @@ export async function confirmCheckout(
        */
       const discountByCurrency = new Map<string, number>();
       for (const sellerGroup of sellerGroups) {
-        const sellerLegalName = sellerLegalNameById.get(sellerGroup.sellerOrganizationId);
-        if (!sellerLegalName) return { status: "not_found" as const };
-
-        const subtotalInCents = sellerGroup.lines.reduce(
-          (sum, line) => sum + line.lineTotalInCents,
-          0,
-        );
-
-        /**
-         * A17. Credits are resolved HERE, under the row lock, not from whatever the
-         * prepare displayed — a credit consumed by another confirm in between must not
-         * be applied twice. The prepare's figure is a preview; this one is the charge.
-         *
-         * `shippingInCents` stays 0 (A16): the delivery estimate is display-only, and
-         * an order total must not contain a number nobody quoted.
-         */
-        const spendableCredits = await listSpendableSampleCredits(transaction, {
-          buyerOrganizationId: actor.organizationId,
-          sellerOrganizationId: sellerGroup.sellerOrganizationId,
-          currency: sellerGroup.currency,
-          asOf: now,
-          forUpdate: true,
-        });
-        const { consumedCredits, discountInCents } = selectConsumableCredits(
-          spendableCredits,
-          subtotalInCents,
-        );
-
-        /**
-         * A13. Derived here, from the lead time each prepare line snapshotted, so the
-         * order and its lines commit to the same dates in the same transaction.
-         *
-         * `now` is the confirm instant — the moment the buyer became committed — not the
-         * prepare instant. A prepare may sit unconfirmed for a while, and a seller's
-         * lead time starts when the order does.
-         */
-        const linePromisedDeliveryDates = sellerGroup.lines.map((line) =>
-          derivePromisedDeliveryAt({
-            orderedAt: now,
-            leadTimeMaxDays: line.leadTimeMaxDaysSnapshot,
-          }),
-        );
-        const orderPromisedDeliveryAt = latestPromisedDeliveryAt(linePromisedDeliveryDates);
-
-        /**
-         * STORE Phase 14. THE RAIL IS RESOLVED BEFORE THE INSERT, and it has to be:
-         * `settlement_rail` is part of the immutable commercial snapshot that
-         * `commerce_prevent_order_snapshot_mutation` guards, so an UPDATE after the fact
-         * is refused by the database. It is also the honest place for it — how an order
-         * settles is decided when the order is created, not afterwards.
-         */
-        const orderTotalInCents = subtotalInCents - discountInCents;
-        const railResolution = await resolveSettlementRail(transaction, {
-          buyerOrganizationId: actor.organizationId,
-          sellerOrganizationId: sellerGroup.sellerOrganizationId,
-          currency: sellerGroup.currency,
-          totalInCents: orderTotalInCents,
-          /**
-           * Direct-checkout orders take a payment intent, so the processor rail is the
-           * right non-escrow default here. `direct_offline` belongs to quote-originated
-           * orders settled by wire, which do not come through this path.
-           */
-          hasProcessorPayment: true,
-          requestedAgreementId: agreementBySeller.get(sellerGroup.sellerOrganizationId) ?? null,
-        });
-        if (!railResolution.success) {
-          return {
-            status: "settlement_unavailable" as const,
-            sellerOrganizationId: sellerGroup.sellerOrganizationId,
-            error: railResolution.error,
-          };
-        }
-
-        const [order] = await transaction
-          .insert(commerceOrder)
-          .values({
-            settlementRail: railResolution.value.rail,
-            buyerOrganizationId: actor.organizationId,
-            counterpartyOrganizationId: sellerGroup.sellerOrganizationId,
-            checkoutGroupId: checkoutGroup.id,
-            source: "direct_checkout",
-            state: "pending_payment",
-            currency: sellerGroup.currency,
-            subtotalInCents,
-            taxInCents: 0,
-            serviceFeeInCents: 0,
-            shippingInCents: 0,
-            discountInCents,
-            totalInCents: subtotalInCents - discountInCents,
-            paymentTermsSnapshot: null,
-            incotermSnapshot: null,
-            buyerLegalNameSnapshot: buyerOrganization.legalName,
-            counterpartyLegalNameSnapshot: sellerLegalName,
-            buyerAddressSnapshot: deliveryAddressSnapshot,
-            counterpartyAddressSnapshot: null,
-            /**
-             * A15. The snapshot above is redacted by design; this is the durable
-             * pointer an authorized seller decrypts the rest through. Written here,
-             * at confirm, because this is the moment the address becomes part of an
-             * immutable commercial record.
-             */
-            deliveryAddressId,
-            /**
-             * A13. Null when no line on this order declared a lead time, which keeps the
-             * order out of the on-time denominator rather than scoring it against a
-             * promise nobody made.
-             */
-            promisedDeliveryAt: orderPromisedDeliveryAt,
-            createdByMemberId: actor.memberId,
-          })
-          .returning();
-        if (!order) throw new Error("Order insert returned no row.");
-        createdOrders.push(order);
-
-        /**
-         * STORE Phase 14. Spend the agreement and open the escrow session inside the same
-         * transaction as the order, so a session can never exist without its order and an
-         * agreement can never be spent by an order that failed to commit.
-         *
-         * The provider is NOT called here. `createEscrowSessionForOrder` enqueues an outbox
-         * command; the call happens in a worker after commit, which is what stops a slow
-         * escrow API from holding inventory row locks open.
-         */
-        if (railResolution.value.rail === "external_escrow") {
-          const consumed = await consumeSettlementAgreement(
-            transaction,
-            railResolution.value.agreementId,
-            order.id,
-          );
-          if (!consumed.success) {
-            return {
-              status: "settlement_unavailable" as const,
-              sellerOrganizationId: sellerGroup.sellerOrganizationId,
-              error: consumed.error,
-            };
-          }
-
-          const session = await createEscrowSessionForOrder(transaction, {
-            orderId: order.id,
-            agreementId: railResolution.value.agreementId,
-            providerId: railResolution.value.providerId,
-            currency: railResolution.value.currency,
-            totalInCents: railResolution.value.totalInCents,
-          });
-          if (!session.success) {
-            return {
-              status: "escrow_session_failed" as const,
-              sellerOrganizationId: sellerGroup.sellerOrganizationId,
-              reason: "reason" in session.error ? session.error.reason : session.error.type,
-            };
-          }
-          escrowOutboxIds.push(session.value.outboxId);
-        }
-
-        if (discountInCents > 0) {
-          discountByCurrency.set(
-            sellerGroup.currency,
-            (discountByCurrency.get(sellerGroup.currency) ?? 0) + discountInCents,
-          );
-        }
-
-        await writeSellerOrderLines(transaction, {
-          order,
+        const created = await createOrderForSellerGroup(transaction, {
           sellerGroup,
           prepare,
           checkoutGroup,
-          consumedCredits,
-          linePromisedDeliveryDates,
+          buyerOrganization,
+          sellerLegalNameById,
+          agreementBySeller,
+          deliveryAddressId,
+          deliveryAddressSnapshot,
           actor,
           now,
         });
+        if (created.status !== "created") return created;
+
+        createdOrders.push(created.order);
+        if (created.escrowOutboxId !== null) {
+          escrowOutboxIds.push(created.escrowOutboxId);
+        }
+        if (created.discountInCents > 0) {
+          discountByCurrency.set(
+            sellerGroup.currency,
+            (discountByCurrency.get(sellerGroup.currency) ?? 0) + created.discountInCents,
+          );
+        }
       }
 
       await transaction
