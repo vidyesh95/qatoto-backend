@@ -38,6 +38,9 @@ const SELLER_EMAIL = "store-demo-seller@example.invalid";
 const BUYER_ORGANIZATION_ID = "store_demo_org_buyer";
 const SELLER_ORGANIZATION_ID = "store_demo_org_seller";
 
+const DEMO_PRODUCT_ID = "store_demo_product_chair";
+const DELIVERY_ADDRESS_ID = "store_demo_address_delivery";
+
 /** Eleven characters, the shape `commerce_review_media_youtube_ck` demands. Never resolved here. */
 const FIRST_VIDEO_URL = "https://www.youtube.com/watch?v=aaaaaaaaaaa";
 const SECOND_VIDEO_URL = "https://www.youtube.com/watch?v=bbbbbbbbbbb";
@@ -162,13 +165,75 @@ async function activateOrganization(actor: Actor, organizationId: string): Promi
 const MEDIA_LABEL = "A40 · a slot held by a hidden video is not handed to the next attach";
 
 /**
+ * Buys the demo chair and has the seller deliver it, so a completion exists to review.
+ *
+ * A completion is minted by `issueCompletionsForOrder` when a shipment is marked delivered, and
+ * NOTHING ELSE in this repo mints one — the seed does not, and `smoke-store-phase-14` stops at
+ * confirmation. So the real path is the only path: cart → prepare → confirm → pay → ship →
+ * deliver.
+ *
+ * IT CANNOT REACH THE END TODAY, and the reason is worth stating rather than hiding behind a
+ * skip. An order lands in `pending_payment` and only a SETTLED payment confirms it, but
+ * `applyPaymentSettlement` posts `buyer_clearing` and `order_held` — two accounts Phase 14's
+ * rail map permits ONLY on `internal_custody`, a rail no live order uses. Every settlement on
+ * `direct_processor` therefore fails in the outbox with "account buyer_clearing is not permitted
+ * on order …'s settlement rail", and the order never becomes shippable. That is a payments
+ * defect, not a Phase 23 one, and it is why this returns a REASON rather than a boolean.
+ */
+async function mintReviewableCompletion(buyer: Actor): Promise<string> {
+  await callApi("PUT", `/commerce/cart/items/${DEMO_PRODUCT_ID}`, {
+    actor: buyer,
+    idempotencyPrefix: "cart",
+    body: { quantity: 20 },
+  });
+  const prepared = await callApi("POST", "/commerce/checkout/prepare", {
+    actor: buyer,
+    idempotencyPrefix: "prepare",
+    body: { deliveryAddressId: DELIVERY_ADDRESS_ID },
+  });
+  const prepareId = dataOf(prepared)["prepareId"];
+  if (typeof prepareId !== "string" || prepareId === "") {
+    return `checkout prepare answered ${String(prepared.status)} — run \`pnpm run db:seed-store-demo\` first`;
+  }
+
+  const confirmed = await callApi("POST", "/commerce/checkout/confirm", {
+    actor: buyer,
+    idempotencyPrefix: "confirm",
+    body: { prepareId, settlementAgreements: [] },
+  });
+  const orderId = asRecord(arrayField(dataOf(confirmed), "orders")[0])["id"];
+  if (typeof orderId !== "string" || orderId === "") {
+    return `checkout confirm answered ${String(confirmed.status)}`;
+  }
+
+  await callApi("POST", `/commerce/orders/${orderId}/payment-intents`, {
+    actor: buyer,
+    idempotencyPrefix: "pay",
+    body: {},
+  });
+
+  // The dispatch is asynchronous, so the reason it failed appears a moment after the 202.
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const failure = await db.execute<{ last_error: string | null }>(sql`
+      SELECT last_error FROM commerce_payment_outbox
+       WHERE order_id = ${orderId} ORDER BY created_at DESC LIMIT 1`);
+    const lastError = failure.rows[0]?.last_error;
+    if (lastError) return `order ${orderId} cannot be paid: ${lastError}`;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return `order ${orderId} is still awaiting payment settlement — is \`pnpm run dev:worker\` running?`;
+}
+
+/**
  * A review this buyer authored with room for two more media rows.
  *
- * Prefers writing one, because a review it created is one it may freely decorate and undo. Falls
- * back to an existing review, and skips rather than inventing a completion — a completion is a
- * delivered order, and minting one is `smoke-store-phase-14`'s job, not this file's.
+ * Prefers an existing one, then a reviewable completion, and only then tries to buy one into
+ * existence — cheapest path first, so a rerun does no work it does not need to. When all three
+ * fail it answers WHY, because "skipped" without a cause is how a check quietly stops running.
  */
-async function findOrCreateBuyerReview(buyer: Actor): Promise<string | null> {
+async function findOrCreateBuyerReview(
+  buyer: Actor,
+): Promise<{ readonly reviewId: string | null; readonly reason?: string }> {
   const existing = await db.execute<{ id: string }>(sql`
     SELECT review.id
       FROM commerce_review AS review
@@ -179,8 +244,15 @@ async function findOrCreateBuyerReview(buyer: Actor): Promise<string | null> {
      ORDER BY review.created_at DESC
      LIMIT 1`);
   const found = existing.rows[0]?.id;
-  if (found !== undefined) return found;
+  if (found !== undefined) return { reviewId: found };
 
+  const reviewed = await reviewFirstAvailableCompletion(buyer);
+  if (reviewed !== null) return { reviewId: reviewed };
+
+  return { reviewId: null, reason: await mintReviewableCompletion(buyer) };
+}
+
+async function reviewFirstAvailableCompletion(buyer: Actor): Promise<string | null> {
   const completions = await callApi("GET", "/commerce/completions?reviewable=true&limit=10", {
     actor: buyer,
   });
@@ -210,12 +282,10 @@ async function readReviewMediaCount(reviewId: string): Promise<number> {
 }
 
 async function smokeReviewMediaSlots(buyer: Actor): Promise<void> {
-  const reviewId = await findOrCreateBuyerReview(buyer);
+  const located = await findOrCreateBuyerReview(buyer);
+  const reviewId = located.reviewId;
   if (reviewId === null) {
-    skip(
-      MEDIA_LABEL,
-      "no review this buyer authored and no reviewable completion — run `pnpm run db:smoke-store-phase-14` first",
-    );
+    skip(MEDIA_LABEL, located.reason ?? "no review this buyer could decorate");
     return;
   }
 
@@ -449,10 +519,17 @@ async function smokeIncotermVocabulary(seller: Actor): Promise<void> {
     body: quoteRevisionBody("FOB"),
     idempotencyPrefix: "incoterm-fob",
   });
+  /*
+   * FOB IS ALSO REFUSED, and that is not a failure of this check. The body carries no lines, so
+   * the service refuses the revision itself once the parse layer has let it through — with a
+   * `422` that carries a message and NO field map. What separates the two calls is which layer
+   * answered: BANANA never reached the service, and `incoterm` is named in its field map.
+   */
+  const fobFields = asRecord(fob.body["errors"]);
   record(
-    "A40 · FOB parses, and fails on the quote id instead",
-    fob.status !== 422,
-    `status=${String(fob.status)} (404 expected — the quote is invented)`,
+    "A40 · FOB gets past the vocabulary, and is refused for something else",
+    !("incoterm" in fobFields),
+    `status=${String(fob.status)} message=${JSON.stringify(fob.body["message"])}`,
   );
 }
 
