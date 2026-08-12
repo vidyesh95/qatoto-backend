@@ -164,27 +164,59 @@ async function activateOrganization(actor: Actor, organizationId: string): Promi
 
 const MEDIA_LABEL = "A40 · a slot held by a hidden video is not handed to the next attach";
 
+const SHIPPABLE_ORDER_STATES = ["confirmed", "in_fulfillment", "partially_completed"];
+
+/**
+ * Waits for the payment to settle, reporting WHY if it does not.
+ *
+ * `createPaymentIntent` answers `202` and leaves the order in `payment_processing`: the provider
+ * call rides the outbox, and the order reaches `confirmed` only once `applyPaymentSettlement` has
+ * posted and committed. Needs `pnpm run dev:worker`; nothing here executes the job.
+ *
+ * The outbox's `last_error` is read on the way out because that column is where a settlement
+ * failure lands — silently, since a non-terminal outbox failure is not an error to the job that
+ * ran it. A41 was invisible for two phases for exactly that reason.
+ */
+async function waitForShippableOrder(orderId: string): Promise<string | null> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const row = await db.execute<{ state: string }>(sql`
+      SELECT state::text AS state FROM commerce_order WHERE id = ${orderId}`);
+    const state = row.rows[0]?.state ?? "";
+    if (SHIPPABLE_ORDER_STATES.includes(state)) return null;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+
+  const failure = await db.execute<{ last_error: string | null }>(sql`
+    SELECT last_error FROM commerce_payment_outbox
+     WHERE order_id = ${orderId} ORDER BY created_at DESC LIMIT 1`);
+  const lastError = failure.rows[0]?.last_error;
+  return lastError
+    ? `order ${orderId} could not be paid: ${lastError}`
+    : `order ${orderId} never left payment_processing — is \`pnpm run dev:worker\` running?`;
+}
+
 /**
  * Buys the demo chair and has the seller deliver it, so a completion exists to review.
  *
  * A completion is minted by `issueCompletionsForOrder` when a shipment is marked delivered, and
  * NOTHING ELSE in this repo mints one — the seed does not, and `smoke-store-phase-14` stops at
  * confirmation. So the real path is the only path: cart → prepare → confirm → pay → ship →
- * deliver.
+ * deliver, six calls and no shortcut.
  *
- * IT CANNOT REACH THE END TODAY, and the reason is worth stating rather than hiding behind a
- * skip. An order lands in `pending_payment` and only a SETTLED payment confirms it, but
- * `applyPaymentSettlement` posts `buyer_clearing` and `order_held` — two accounts Phase 14's
- * rail map permits ONLY on `internal_custody`, a rail no live order uses. Every settlement on
- * `direct_processor` therefore fails in the outbox with "account buyer_clearing is not permitted
- * on order …'s settlement rail", and the order never becomes shippable. That is a payments
- * defect, not a Phase 23 one, and it is why this returns a REASON rather than a boolean.
+ * IT COULD NOT REACH THE END UNTIL A41. An order becomes shippable only once a payment settles,
+ * and settlement posted two accounts no live rail permits, so it failed in the outbox every time.
+ * This function is the end-to-end proof that it does not any more: nothing else in the suite
+ * exercises checkout, payment, fulfilment and review in one line.
  */
-async function mintReviewableCompletion(buyer: Actor): Promise<string> {
+async function mintReviewableCompletion(buyer: Actor, seller: Actor): Promise<string | null> {
+  /*
+   * The demo chair's lowest pricing tier starts at 10, so this is the smallest checkout the
+   * catalog will accept — and the smallest bite out of a fixture every other smoke shares.
+   */
   await callApi("PUT", `/commerce/cart/items/${DEMO_PRODUCT_ID}`, {
     actor: buyer,
     idempotencyPrefix: "cart",
-    body: { quantity: 20 },
+    body: { quantity: 10 },
   });
   const prepared = await callApi("POST", "/commerce/checkout/prepare", {
     actor: buyer,
@@ -206,22 +238,50 @@ async function mintReviewableCompletion(buyer: Actor): Promise<string> {
     return `checkout confirm answered ${String(confirmed.status)}`;
   }
 
-  await callApi("POST", `/commerce/orders/${orderId}/payment-intents`, {
+  const paid = await callApi("POST", `/commerce/orders/${orderId}/payment-intents`, {
     actor: buyer,
     idempotencyPrefix: "pay",
     body: {},
   });
-
-  // The dispatch is asynchronous, so the reason it failed appears a moment after the 202.
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const failure = await db.execute<{ last_error: string | null }>(sql`
-      SELECT last_error FROM commerce_payment_outbox
-       WHERE order_id = ${orderId} ORDER BY created_at DESC LIMIT 1`);
-    const lastError = failure.rows[0]?.last_error;
-    if (lastError) return `order ${orderId} cannot be paid: ${lastError}`;
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+  if (paid.status !== 202) {
+    return `payment intent answered ${String(paid.status)}: ${JSON.stringify(paid.body["message"])}`;
   }
-  return `order ${orderId} is still awaiting payment settlement — is \`pnpm run dev:worker\` running?`;
+
+  const unsettled = await waitForShippableOrder(orderId);
+  if (unsettled !== null) return unsettled;
+
+  const lineRows = await db.execute<{ id: string; quantity: number }>(sql`
+    SELECT id, (quantity_ordered - quantity_fulfilled - quantity_cancelled)::int AS quantity
+      FROM commerce_order_product_line
+     WHERE order_id = ${orderId}
+       AND quantity_ordered > quantity_fulfilled + quantity_cancelled`);
+  if (lineRows.rows.length === 0) return `order ${orderId} has no unfulfilled product line`;
+
+  const shipment = await callApi("POST", `/commerce/orders/${orderId}/shipments`, {
+    actor: seller,
+    idempotencyPrefix: "shipment",
+    body: {
+      lines: lineRows.rows.map((line) => ({
+        orderProductLineId: line.id,
+        quantity: line.quantity,
+      })),
+      packageCount: 1,
+    },
+  });
+  const shipmentId = dataOf(shipment)["id"];
+  if (typeof shipmentId !== "string" || shipmentId === "") {
+    return `shipment creation answered ${String(shipment.status)}: ${JSON.stringify(shipment.body["message"])}`;
+  }
+
+  const delivered = await callApi("POST", `/commerce/shipments/${shipmentId}/events`, {
+    actor: seller,
+    idempotencyPrefix: "delivered",
+    body: { eventKind: "delivered" },
+  });
+  if (delivered.status !== 201 && delivered.status !== 200) {
+    return `delivery event answered ${String(delivered.status)}: ${JSON.stringify(delivered.body["message"])}`;
+  }
+  return null;
 }
 
 /**
@@ -233,6 +293,7 @@ async function mintReviewableCompletion(buyer: Actor): Promise<string> {
  */
 async function findOrCreateBuyerReview(
   buyer: Actor,
+  seller: Actor,
 ): Promise<{ readonly reviewId: string | null; readonly reason?: string }> {
   const existing = await db.execute<{ id: string }>(sql`
     SELECT review.id
@@ -249,7 +310,13 @@ async function findOrCreateBuyerReview(
   const reviewed = await reviewFirstAvailableCompletion(buyer);
   if (reviewed !== null) return { reviewId: reviewed };
 
-  return { reviewId: null, reason: await mintReviewableCompletion(buyer) };
+  const blocked = await mintReviewableCompletion(buyer, seller);
+  if (blocked !== null) return { reviewId: null, reason: blocked };
+
+  const minted = await reviewFirstAvailableCompletion(buyer);
+  return minted === null
+    ? { reviewId: null, reason: "the delivered order produced no reviewable completion" }
+    : { reviewId: minted };
 }
 
 async function reviewFirstAvailableCompletion(buyer: Actor): Promise<string | null> {
@@ -281,8 +348,8 @@ async function readReviewMediaCount(reviewId: string): Promise<number> {
   return row.rows[0]?.value ?? -1;
 }
 
-async function smokeReviewMediaSlots(buyer: Actor): Promise<void> {
-  const located = await findOrCreateBuyerReview(buyer);
+async function smokeReviewMediaSlots(buyer: Actor, seller: Actor): Promise<void> {
+  const located = await findOrCreateBuyerReview(buyer, seller);
   const reviewId = located.reviewId;
   if (reviewId === null) {
     skip(MEDIA_LABEL, located.reason ?? "no review this buyer could decorate");
@@ -541,7 +608,7 @@ async function main(): Promise<void> {
   const seller = await signIn(SELLER_EMAIL);
   await activateOrganization(seller, SELLER_ORGANIZATION_ID);
 
-  await smokeReviewMediaSlots(buyer);
+  await smokeReviewMediaSlots(buyer, seller);
   await smokeDisputeNotes(buyer, seller);
   await smokeIncotermVocabulary(seller);
 

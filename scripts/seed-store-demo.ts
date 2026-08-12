@@ -329,7 +329,16 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
         packageGrossWeightGrams: 8_500,
         unitsPerPackage: 4,
       })
-      .onConflictDoNothing({ target: product.id });
+      /**
+       * STOCK IS RESTORED ON EVERY RE-SEED, and only stock.
+       *
+       * This was `onConflictDoNothing`, which is right for the listing's commercial content — a
+       * local edit to a title or a price is somebody's work in progress. It is wrong for the
+       * quantity: every smoke that checks out consumes some, nothing puts it back, and the demo
+       * product silently becomes unbuyable after a few runs. `smoke-store-phase-23` hit exactly
+       * that, and a smoke that fails because a fixture ran out reports a defect that is not there.
+       */
+      .onConflictDoUpdate({ target: product.id, set: { stockQuantity: 500 } });
 
     /**
      * A11. This seed writes `product` rows DIRECTLY rather than through
