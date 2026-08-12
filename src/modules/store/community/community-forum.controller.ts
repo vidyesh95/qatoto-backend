@@ -359,6 +359,8 @@ export async function listMyForumThreads(req: Request, res: Response): Promise<v
 
   const result = await communityForumService.listMyForumThreads({
     authorUserId: user.id,
+    board: query.data.board,
+    threadState: query.data.threadState,
     limit: query.data.limit,
     cursor: query.data.cursor,
   });

@@ -45,10 +45,12 @@ export type CommerceManufacturingInquiryError =
   | { type: "SELF_INQUIRY_FORBIDDEN" };
 
 /**
- * What `POST` answers with: THE TABLE'S OWN COLUMNS, not a projection of the factory.
+ * The inquiry as every read and write answers with it.
  *
- * The success screen has no factory object to read and must not pretend otherwise — the
- * same discipline `CreatedServiceOffering` keeps.
+ * THE TABLE'S OWN COLUMNS, PLUS BOTH PARTIES' NAMES AND NOTHING ELSE. There is no nested factory
+ * or buyer object, and that is the line: a success screen has no factory profile to read and must
+ * not pretend otherwise — the same discipline `CreatedServiceOffering` keeps. What it does have is
+ * enough to name who each row is between, because a queue of UUIDs is not a queue anyone can work.
  */
 export interface ManufacturingInquiryProjection {
   readonly id: string;
@@ -57,6 +59,19 @@ export interface ManufacturingInquiryProjection {
   readonly factorySlug: string;
   readonly factoryDisplayName: string;
   readonly buyerOrganizationId: string;
+  /**
+   * The buyer's organization name, resolved the same way the factory's is.
+   *
+   * IT EXISTS FOR THE RECEIVED QUEUE. `/factories/inquiries/received` is read by the FACTORY, and
+   * an inquiry list that can only name the factory tells that reader nothing — every row would be
+   * their own name beside an opaque buyer id. The id alone is not a substitute: it is a UUID on
+   * every row a seller is being asked to quote.
+   *
+   * It is the organization's `displayName`, never a person's. An inquiry is between organizations,
+   * and naming the individual who typed it would put a person on a commercial record that outlives
+   * their membership.
+   */
+  readonly buyerDisplayName: string;
   readonly state: InquiryRow["state"];
   readonly capabilityKind: CapabilityKind;
   readonly productDescription: string;
@@ -104,6 +119,7 @@ function projectInquiry(input: {
   readonly row: InquiryRow;
   readonly factorySlug: string;
   readonly factoryDisplayName: string;
+  readonly buyerDisplayName: string;
   readonly requiredCertifications: readonly StandardCode[];
 }): ManufacturingInquiryProjection {
   return {
@@ -113,6 +129,7 @@ function projectInquiry(input: {
     factorySlug: input.factorySlug,
     factoryDisplayName: input.factoryDisplayName,
     buyerOrganizationId: input.row.buyerOrganizationId,
+    buyerDisplayName: input.buyerDisplayName,
     state: input.row.state,
     capabilityKind: input.row.capabilityKind,
     productDescription: input.row.productDescription,
@@ -132,16 +149,27 @@ function projectInquiry(input: {
   };
 }
 
-/** Batches the two joins every projection needs: the factory's identity, and the codes. */
+/**
+ * Batches the joins every projection needs: both organizations' identities, and the codes.
+ *
+ * ONE QUERY FOR BOTH SIDES. The factory and buyer ids go into a single `inArray` rather than two
+ * round trips — a page of twenty inquiries would otherwise be forty lookups to save a `Map`. The
+ * two are read out of the same map afterwards.
+ */
 async function projectInquiries(
   rows: readonly InquiryRow[],
 ): Promise<ManufacturingInquiryProjection[]> {
   if (rows.length === 0) return [];
 
-  const factoryIds = [...new Set(rows.map((row) => row.factoryOrganizationId))];
+  const organizationIds = [
+    ...new Set([
+      ...rows.map((row) => row.factoryOrganizationId),
+      ...rows.map((row) => row.buyerOrganizationId),
+    ]),
+  ];
   const inquiryIds = rows.map((row) => row.id);
 
-  const [factories, certificationRows] = await Promise.all([
+  const [organizations, certificationRows] = await Promise.all([
     db
       .select({
         id: commerceOrganization.id,
@@ -149,7 +177,7 @@ async function projectInquiries(
         displayName: commerceOrganization.displayName,
       })
       .from(commerceOrganization)
-      .where(inArray(commerceOrganization.id, factoryIds)),
+      .where(inArray(commerceOrganization.id, organizationIds)),
     db
       .select()
       .from(commerceManufacturingInquiryCertification)
@@ -160,7 +188,7 @@ async function projectInquiries(
       ),
   ]);
 
-  const factoryById = new Map(factories.map((factory) => [factory.id, factory]));
+  const organizationById = new Map(organizations.map((organization) => [organization.id, organization]));
   const codesByInquiry = new Map<string, StandardCode[]>();
   for (const row of certificationRows) {
     const existing = codesByInquiry.get(row.inquiryId) ?? [];
@@ -169,7 +197,7 @@ async function projectInquiries(
   }
 
   return rows.map((row) => {
-    const factory = factoryById.get(row.factoryOrganizationId);
+    const factory = organizationById.get(row.factoryOrganizationId);
     return projectInquiry({
       row,
       /**
@@ -179,6 +207,10 @@ async function projectInquiries(
        */
       factorySlug: factory?.slug ?? row.factoryOrganizationId,
       factoryDisplayName: factory?.displayName ?? row.factoryOrganizationId,
+      // Same totality argument as the factory above: the FK is `restrict`, so a missing row cannot
+      // happen, and the id standing in beats throwing and taking the whole page down with it.
+      buyerDisplayName:
+        organizationById.get(row.buyerOrganizationId)?.displayName ?? row.buyerOrganizationId,
       requiredCertifications: codesByInquiry.get(row.id) ?? [],
     });
   });

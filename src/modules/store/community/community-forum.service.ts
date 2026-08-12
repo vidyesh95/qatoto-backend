@@ -134,10 +134,34 @@ export interface ForumReplyProjection {
   readonly viewer: ForumViewerState | null;
 }
 
+/**
+ * The reader's standing in THIS thread.
+ *
+ * `null` for an anonymous reader, never a defaulted `false` — the same rule `ForumViewerState`
+ * follows on a reply, and for the same reason: "nobody is reading this" and "somebody who is not
+ * the author is reading this" are different facts, and only one of them should ever be inferred.
+ */
+export interface ForumThreadViewerState {
+  /**
+   * Whether the reader authored this thread.
+   *
+   * IT DECIDES WHETHER THE ACCEPT-ANSWER CONTROL RENDERS AT ALL, and it has to come from the
+   * server because it cannot be derived from anything else on this payload: the thread carries an
+   * `authorDisplayName`, deliberately not an `authorUserId`, so a client has nothing to compare a
+   * session against. Without it the control is either shown to everyone — and 403s for all but one
+   * of them — or shown to nobody, which is what it does today.
+   *
+   * It is NOT authorization. `setAcceptedReply` re-proves authorship under the row; this only
+   * decides what to offer.
+   */
+  readonly isThreadAuthor: boolean;
+}
+
 export interface ForumThreadDetailProjection {
   readonly thread: ForumThreadCardProjection;
   readonly body: string;
   readonly createdAt: Date;
+  readonly viewer: ForumThreadViewerState | null;
   readonly replies: {
     readonly items: readonly ForumReplyProjection[];
     readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
@@ -146,6 +170,30 @@ export interface ForumThreadDetailProjection {
 
 export interface ForumThreadListPage {
   readonly items: readonly ForumThreadCardProjection[];
+  readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+}
+
+/**
+ * An author's own thread, on `/community/forum/threads/mine`.
+ *
+ * THE CARD PLUS THE MODERATION VERDICT, and the verdict is the entire reason this list exists as
+ * something other than a filtered public read. `reject` does not delete a thread: it leaves the row
+ * `pending_review` and writes a `decisionReason`, invisible in every public read and readable by
+ * its author HERE. Projecting the card alone — which is what this route did — meant a rejected
+ * author saw their thread sitting in "pending" with no reason and no signal that anyone had looked
+ * at it, and the only rational response to that is to post it again.
+ *
+ * `moderatedAt` NULL MEANS NOBODY HAS DECIDED YET, and it is what separates "waiting" from
+ * "decided" — `state` cannot, because a rejection leaves the state exactly where it was.
+ */
+export interface OwnForumThreadProjection extends ForumThreadCardProjection {
+  readonly createdAt: Date;
+  readonly moderatedAt: Date | null;
+  readonly decisionReason: string | null;
+}
+
+export interface OwnForumThreadListPage {
+  readonly items: readonly OwnForumThreadProjection[];
   readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
 }
 
@@ -422,6 +470,16 @@ export async function getForumThreadBySlug(input: {
       thread: card,
       body: thread.body,
       createdAt: thread.createdAt,
+      // Compared against the ROW's `authorUserId`, which never leaves the server. A removed author
+      // leaves `thread.authorUserId` null, and `null === null` must not read as authorship — hence
+      // the explicit guard rather than a bare equality.
+      viewer:
+        input.viewerUserId === null
+          ? null
+          : {
+              isThreadAuthor:
+                thread.authorUserId !== null && thread.authorUserId === input.viewerUserId,
+            },
       replies: { items: replies, page: { nextCursor, hasMore } },
     },
   };
@@ -525,9 +583,11 @@ export async function createForumThread(
  */
 export async function listMyForumThreads(input: {
   readonly authorUserId: string;
+  readonly board?: ThreadRow["board"];
+  readonly threadState?: ThreadRow["state"];
   readonly limit: number;
   readonly cursor?: string;
-}): Promise<Result<ForumThreadListPage, CommunityForumError>> {
+}): Promise<Result<OwnForumThreadListPage, CommunityForumError>> {
   const decodedCursor =
     input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
@@ -535,6 +595,12 @@ export async function listMyForumThreads(input: {
   }
 
   const filters: SQL[] = [eq(communityForumThread.authorUserId, input.authorUserId)];
+  // Both narrow within the author scope above, never around it. `pending_review` is filterable
+  // here and nowhere else — it is the state an author comes to this list to find.
+  if (input.board !== undefined) filters.push(eq(communityForumThread.board, input.board));
+  if (input.threadState !== undefined) {
+    filters.push(eq(communityForumThread.state, input.threadState));
+  }
   if (decodedCursor !== null) {
     const keyset = or(
       lt(communityForumThread.createdAt, decodedCursor.sortKey),
@@ -561,9 +627,28 @@ export async function listMyForumThreads(input: {
       ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.id })
       : null;
 
+  const cards = await projectThreadCards(pageRows);
+  const rowById = new Map(pageRows.map((row) => [row.id, row]));
+
   return {
     success: true,
-    value: { items: await projectThreadCards(pageRows), page: { nextCursor, hasMore } },
+    value: {
+      // The card carries `lastActivityAt`; the three added here are the author-only facts.
+      items: cards.flatMap((card) => {
+        const row = rowById.get(card.id);
+        return row === undefined
+          ? []
+          : [
+              {
+                ...card,
+                createdAt: row.createdAt,
+                moderatedAt: row.moderatedAt,
+                decisionReason: row.decisionReason,
+              },
+            ];
+      }),
+      page: { nextCursor, hasMore },
+    },
   };
 }
 
@@ -890,8 +975,25 @@ async function requireCommunityModerator(
   return { success: true, value: capability.value };
 }
 
+/**
+ * A thread as the MODERATION QUEUE shows it: the card plus the full body.
+ *
+ * THE BODY IS HERE BECAUSE THERE IS NOWHERE ELSE TO READ IT. A queued thread is
+ * `pending_review`, and every public read filters that state out — so `GET /store/forum/threads/:slug`
+ * answers 404 for exactly the threads a moderator is being asked to judge. The queue was projecting
+ * the card alone, whose `excerpt` is server-truncated to 240 characters, which meant the decision to
+ * publish or reject was being made on the first paragraph.
+ *
+ * `createdAt` comes with it because the queue is worked oldest-first and "how long has this been
+ * waiting" is the other thing the row has to answer.
+ */
+export interface AdminForumThreadProjection extends ForumThreadCardProjection {
+  readonly body: string;
+  readonly createdAt: Date;
+}
+
 export interface ModerationQueuePage {
-  readonly items: readonly ForumThreadCardProjection[];
+  readonly items: readonly AdminForumThreadProjection[];
   readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
 }
 
@@ -949,9 +1051,18 @@ export async function listForumModerationQueue(input: {
       ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.id })
       : null;
 
+  const cards = await projectThreadCards(pageRows);
+  const rowById = new Map(pageRows.map((row) => [row.id, row]));
+
   return {
     success: true,
-    value: { items: await projectThreadCards(pageRows), page: { nextCursor, hasMore } },
+    value: {
+      items: cards.flatMap((card) => {
+        const row = rowById.get(card.id);
+        return row === undefined ? [] : [{ ...card, body: row.body, createdAt: row.createdAt }];
+      }),
+      page: { nextCursor, hasMore },
+    },
   };
 }
 
@@ -986,7 +1097,10 @@ export async function moderateForumThread(input: {
   readonly threadId: string;
   readonly decision: ForumThreadDecision;
   readonly reasonNote: string;
-}): Promise<Result<ForumThreadCardProjection, CommunityForumError>> {
+  // ANSWERS THE SAME SHAPE THE QUEUE DOES. A decision replaces the row the console is looking at,
+  // so returning a narrower projection than the list it came from would make the row lose its body
+  // the moment it was acted on.
+}): Promise<Result<AdminForumThreadProjection, CommunityForumError>> {
   const staff = await requireCommunityModerator(input.moderatorUserId);
   if (!staff.success) return staff;
   const moderator = staff.value;
@@ -1111,7 +1225,10 @@ export async function moderateForumThread(input: {
   const cards = await projectThreadCards([outcome.row]);
   const card = cards[0];
   if (!card) throw new Error("Forum thread projection returned no row.");
-  return { success: true, value: card };
+  return {
+    success: true,
+    value: { ...card, body: outcome.row.body, createdAt: outcome.row.createdAt },
+  };
 }
 
 /** Hides or restores one reply. Same audit discipline as the thread decision above. */

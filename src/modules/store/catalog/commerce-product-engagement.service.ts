@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -6,6 +6,8 @@ import {
   commerceProductShare,
   commerceProductStats,
 } from "#src/db/schema.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import type { Result } from "#src/types/index.js";
 // From `utc-day.js` and NOT `viewer-fingerprint.js`, which reads `config` at module scope:
 // this service is imported by the product read path, and a unit test of that path must not
 // need a populated environment to name a UTC day.
@@ -349,4 +351,100 @@ export async function loadProductEngagements(
     });
   }
   return engagements;
+}
+
+/**
+ * One page of the caller's own saved / bookmarked product IDS.
+ *
+ * IT RETURNS IDS, NOT CARDS, and that is this module's standing rule rather than a shortcut: the
+ * header above explains that importing `store-catalog.service` here would close an import cycle,
+ * because the catalog already imports `loadProductEngagements` to put counters on a product page.
+ * The controller depends on both and is where an id becomes a card.
+ *
+ * WHY THE READ EXISTS AT ALL (A11). The toggles have shipped since Phase 13 and nothing ever listed
+ * what they produced — a buyer could save two hundred products and had no route that would tell
+ * them which. The counters were readable per-product; the set was not readable at all.
+ *
+ * USER-SCOPED, matching the writes. An organization-keyed list would put a single tap behind staff
+ * verification and let any `viewer`-role colleague empty the team's list; A11 records that the
+ * shared sourcing shortlist is a different, named, permissioned object and is NOT this.
+ *
+ * `kind` ABSENT MEANS BOTH KINDS, not a default to one. Save and bookmark are independent toggles
+ * with independent counters, and a caller who asks for neither is asking for everything they have
+ * marked. A product marked BOTH ways appears once — `selectDistinct` over the id, because the
+ * caller wants a list of products, not a list of engagements.
+ *
+ * ORDERED `(createdAt DESC, productId ASC)` — most recently marked first, which is the only order a
+ * list like this is ever read in. `productId` breaks the tie so the keyset cannot drop a row when
+ * two saves share a millisecond.
+ */
+export async function listSavedProductIds(input: {
+  readonly userId: string;
+  readonly kind?: ProductEngagementKind;
+  readonly limit: number;
+  readonly cursor?: string;
+}): Promise<
+  Result<
+    {
+      readonly productIds: readonly string[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    { type: "INVALID_CURSOR" }
+  >
+> {
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
+  const filters: SQL[] = [eq(commerceProductEngagement.userId, input.userId)];
+  if (input.kind !== undefined) {
+    filters.push(eq(commerceProductEngagement.engagementKind, input.kind));
+  }
+  if (decodedCursor !== null) {
+    const keyset = or(
+      lt(commerceProductEngagement.createdAt, decodedCursor.sortKey),
+      and(
+        eq(commerceProductEngagement.createdAt, decodedCursor.sortKey),
+        gt(commerceProductEngagement.productId, decodedCursor.id),
+      ),
+    );
+    if (keyset) filters.push(keyset);
+  }
+
+  const rows = await db
+    .select({
+      productId: commerceProductEngagement.productId,
+      createdAt: commerceProductEngagement.createdAt,
+    })
+    .from(commerceProductEngagement)
+    .where(and(...filters))
+    .orderBy(desc(commerceProductEngagement.createdAt), asc(commerceProductEngagement.productId))
+    .limit(input.limit + 1);
+
+  const pageRows = rows.slice(0, input.limit);
+  const lastRow = pageRows[pageRows.length - 1];
+  const hasMore = rows.length > input.limit;
+  const nextCursor =
+    hasMore && lastRow
+      ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.productId })
+      : null;
+
+  /**
+   * DEDUPED AFTER THE PAGE, not with `selectDistinct`, and the difference matters.
+   *
+   * A product marked both ways is two rows with two different `createdAt`s, so a distinct over the
+   * id alone cannot be expressed alongside this keyset — Postgres requires the ORDER BY terms in
+   * the select list. Deduping the page instead can make a page shorter than `limit`, which is
+   * already true of this endpoint for a different reason: `resolveEligibleProductCardsByIds` drops
+   * any product that is no longer eligible. `hasMore` and the cursor stay honest either way, which
+   * is what a keyset caller actually depends on.
+   */
+  const seen = new Set<string>();
+  const productIds = pageRows.flatMap((row) =>
+    seen.has(row.productId) ? [] : (seen.add(row.productId), [row.productId]),
+  );
+
+  return { success: true, value: { productIds, page: { nextCursor, hasMore } } };
 }

@@ -127,6 +127,29 @@ export interface OwnedCofounderProfileProjection extends CofounderProfileDetailP
   readonly createdAt: Date;
 }
 
+/**
+ * A profile as the MODERATION QUEUE shows it: the card plus the text being judged.
+ *
+ * `bio` AND `lookingFor` ARE THE CONTENT UNDER REVIEW, and the card carries neither — it has a
+ * headline and some enums. A moderator was being asked to publish or reject a person's profile on
+ * the strength of one line, with no route anywhere else to read the rest: a `pending_review`
+ * profile is absent from the public directory by construction.
+ *
+ * `submittedAt` is what the queue is ordered by and how long somebody has been waiting.
+ */
+export interface AdminCofounderProfileProjection extends CofounderProfileCardProjection {
+  readonly bio: string;
+  readonly lookingFor: string;
+  readonly state: ProfileState;
+  readonly priorVentures: readonly CofounderPriorVentureProjection[];
+  readonly submittedAt: Date;
+}
+
+export interface AdminCofounderProfileQueuePage {
+  readonly items: readonly AdminCofounderProfileProjection[];
+  readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+}
+
 export interface CofounderDirectoryPage {
   readonly items: readonly CofounderProfileCardProjection[];
   readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
@@ -735,7 +758,7 @@ export async function listCofounderModerationQueue(input: {
   readonly moderatorUserId: string;
   readonly limit: number;
   readonly cursor?: string;
-}): Promise<Result<CofounderDirectoryPage, CommunityCofounderError>> {
+}): Promise<Result<AdminCofounderProfileQueuePage, CommunityCofounderError>> {
   const staff = await requireCommunityModerator(input.moderatorUserId);
   if (!staff.success) return staff;
 
@@ -772,9 +795,30 @@ export async function listCofounderModerationQueue(input: {
       ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.id })
       : null;
 
+  const cards = await projectCards(pageRows);
+  const rowById = new Map(pageRows.map((row) => [row.id, row]));
+
   return {
     success: true,
-    value: { items: await projectCards(pageRows), page: { nextCursor, hasMore } },
+    value: {
+      items: cards.flatMap((card) => {
+        const row = rowById.get(card.id);
+        return row === undefined
+          ? []
+          : [
+              {
+                ...card,
+                bio: row.bio,
+                lookingFor: row.lookingFor,
+                state: row.state,
+                priorVentures: [],
+                // Every row in this queue is `pending_review`, so it has been submitted.
+                submittedAt: row.updatedAt,
+              },
+            ];
+      }),
+      page: { nextCursor, hasMore },
+    },
   };
 }
 

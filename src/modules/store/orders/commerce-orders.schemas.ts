@@ -34,8 +34,34 @@ export const OrderIdParamsSchema = z
  */
 export const ArrivalWindowQuerySchema = z.object({ mode: FreightModeSchema.optional() }).strict();
 
+/**
+ * The order list filter, for both `/orders` and `/provider/orders`.
+ *
+ * `state` IS APPLIED IN SQL, and it arrived late for a reason worth recording. Until it existed
+ * this schema was `.strict()` over `{ limit, cursor }` alone, so a seller's dispatch queue — "paid,
+ * nothing shipped yet" — had no way to ask the server for it. The frontend filtered the fetched
+ * page instead and said so in a comment, defending it only on the grounds that no server filter
+ * existed. That defence is now spent: filtering a page silently short-pages the result, so a seller
+ * with 60 orders would see the dispatchable ones from the newest 20 and nothing more.
+ *
+ * OMITTING IT MEANS EVERY STATE, not a default. Both lists are already scoped to one side of the
+ * order by their own predicate, and there is no state an organization should be prevented from
+ * seeing on its own orders — `state` narrows within that scope rather than widening it.
+ */
 export const ListQuerySchema = z
   .object({
+    state: z
+      .enum([
+        "pending_payment",
+        "payment_processing",
+        "confirmed",
+        "in_fulfillment",
+        "partially_completed",
+        "completed",
+        "cancelled",
+        "disputed",
+      ])
+      .optional(),
     limit: z.coerce.number().int().min(1).max(50).optional(),
     cursor: z.string().trim().min(1).max(500).optional(),
   })

@@ -37,6 +37,8 @@ export interface CommerceOrderActorContext {
 export interface ListOrdersInput {
   readonly limit?: number;
   readonly cursor?: string;
+  /** Narrows within the caller's own side of the order; omitted means every state. */
+  readonly state?: OrderState;
 }
 
 export interface OrderSummaryProjection {
@@ -352,10 +354,13 @@ async function listOrdersBy(
           ),
         );
 
+  const statePredicate =
+    input.state === undefined ? undefined : eq(commerceOrder.state, input.state);
+
   const rows = await db
     .select()
     .from(commerceOrder)
-    .where(and(organizationFilter, cursorPredicate))
+    .where(and(organizationFilter, statePredicate, cursorPredicate))
     .orderBy(desc(commerceOrder.createdAt), asc(commerceOrder.id))
     .limit(limit + 1);
 

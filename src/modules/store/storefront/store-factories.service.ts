@@ -88,6 +88,19 @@ export interface FactoryCardProjection {
  */
 export interface FactoryCertificationRecordProjection {
   readonly certification: StandardCode;
+  /**
+   * The certificate's own title, as the seller submitted it and a moderator approved.
+   *
+   * BESIDE THE CODE, NOT INSTEAD OF IT. `certification` is the filterable enum and stays the
+   * thing every query and facet is built on; this is what the certificate actually says, which
+   * carries the revision year the enum cannot — "ISO 9001:2015" against `iso_9001`.
+   *
+   * It is projected rather than left for the client to derive because deriving it would mean a
+   * label map that can only ever print the generic form, on a page whose whole subject is what a
+   * specific factory was specifically audited against. The uncoded records beside it have carried
+   * this field since §16.2; the coded ones were dropping a column they already loaded.
+   */
+  readonly standardName: string;
   readonly certificateNumber: string | null;
   readonly issuingBody: string | null;
   readonly validFrom: string | null;
@@ -581,6 +594,7 @@ export async function getFactoryBySlug(
     }
     certificationRecords.push({
       certification: certification.standardCode,
+      standardName: certification.standardName,
       certificateNumber: certification.certificateNumber,
       issuingBody: certification.issuerName,
       validFrom: certification.validFrom,

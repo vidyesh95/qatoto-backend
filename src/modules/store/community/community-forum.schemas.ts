@@ -88,8 +88,18 @@ export const SetAcceptedReplySchema = z
   })
   .strict();
 
+/**
+ * The author's own threads.
+ *
+ * `threadState` SPANS ALL FOUR VALUES HERE, unlike the public read's three — `pending_review` is
+ * exactly what an author comes to this list to find, and hiding it would make the one state they
+ * cannot see anywhere else unfilterable. The public list omits it because a thread awaiting review
+ * is not published; its author is not the public.
+ */
 export const ListMyForumThreadsQuerySchema = z
   .object({
+    board: ForumBoardSchema.optional(),
+    threadState: z.enum(["pending_review", "open", "answered", "locked"]).optional(),
     limit: z.coerce.number().int().min(1).max(50).default(20),
     cursor: z.string().trim().min(1).max(500).optional(),
   })
@@ -117,6 +127,18 @@ export const CreateCommunityReportSchema = z
   })
   .strict();
 
+/**
+ * The moderation queue. NO `state` FILTER, AND THAT IS THE DESIGN.
+ *
+ * The service's predicate is `state = 'pending_review' AND moderated_at IS NULL` — the WORK, not
+ * the board. A `state` key was considered and rejected: `reject` does not delete a thread, it
+ * leaves it `pending_review` with a note, so filtering on state alone would show every rejection
+ * this console has ever made, forever, and the queue would never empty.
+ *
+ * Reviewing past decisions is a different question with a different shape (a decision log ordered
+ * by `moderated_at`), and it wants its own route rather than a filter that quietly changes what
+ * this one means.
+ */
 export const ListForumModerationQueueQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).default(20),

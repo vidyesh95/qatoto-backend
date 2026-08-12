@@ -494,8 +494,30 @@ export const ListQuerySchema = z
   })
   .strict();
 
+/**
+ * `role` picks WHICH SIDE of the engagement the caller is listing; `state` narrows within it.
+ *
+ * `state` matches the shape `ListShipmentsQuerySchema` below already has, and for the same reason:
+ * these lists are worked as queues — "what is awaiting me", "what is still running" — and without
+ * a server-side filter the client's only options are a 422 against this `.strict()` schema or
+ * filtering the fetched page, which short-pages the result.
+ *
+ * All seven states are filterable, `disputed` included: an engagement in dispute is precisely the
+ * one an operator goes looking for.
+ */
 export const ListServiceEngagementsQuerySchema = ListQuerySchema.extend({
   role: z.enum(["buyer", "provider"]).optional(),
+  state: z
+    .enum([
+      "awaiting_provider",
+      "scheduled",
+      "in_progress",
+      "awaiting_buyer",
+      "completed",
+      "cancelled",
+      "disputed",
+    ])
+    .optional(),
 }).strict();
 
 export const ListShipmentsQuerySchema = ListQuerySchema.extend({

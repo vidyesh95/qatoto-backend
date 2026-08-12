@@ -834,6 +834,13 @@
       "when": 1786105939394,
       "tag": "0118_store_phase_23_review_media_state",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1786105944394,
+      "tag": "0119_store_phase_25_seller_settlement_index",
+      "breakpoints": true
     }
   ]
 }

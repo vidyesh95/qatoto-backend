@@ -44,3 +44,17 @@ export const ProductSlugParamsSchema = z
     productSlug: z.string().trim().min(1).max(200),
   })
   .strict();
+
+/**
+ * `GET /commerce/saved-products` (A11).
+ *
+ * `kind` OMITTED MEANS BOTH, not a default to one. Save and bookmark are independent toggles with
+ * independent counters, so a caller who names neither is asking for everything they have marked.
+ */
+export const ListSavedProductsQuerySchema = z
+  .object({
+    kind: z.enum(["saved", "bookmarked"]).optional(),
+    limit: z.coerce.number().int().min(1).max(48).default(24),
+    cursor: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();

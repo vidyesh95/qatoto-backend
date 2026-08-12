@@ -129,6 +129,14 @@ export const SetEngagementStateSchema = z
   })
   .strict();
 
+/**
+ * The cofounder moderation queue. NO `state` FILTER, for the same reason the forum queue has none.
+ *
+ * The service filters `state = 'pending_review'` — the work, not the directory. This queue does
+ * empty on its own, unlike the forum's: a rejected profile returns to `draft` so its owner can fix
+ * and resubmit, rather than sitting in `pending_review` with a note. So there is nothing a `state`
+ * key would rescue here, and it would only turn a queue into a browse.
+ */
 export const ListCofounderQueueQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).default(20),

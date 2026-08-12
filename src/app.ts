@@ -47,7 +47,9 @@ import workshopRouter, { dailyLogFeedRouter } from "#src/modules/rnd/workshop/wo
 import commerceCatalogRouter from "#src/modules/store/catalog/commerce-catalog.routes.js";
 import commerceCategoriesRouter from "#src/modules/store/catalog/commerce-categories.routes.js";
 import commerceMerchandisingRouter from "#src/modules/store/catalog/commerce-merchandising.routes.js";
-import commerceProductEngagementRouter from "#src/modules/store/catalog/commerce-product-engagement.routes.js";
+import commerceProductEngagementRouter, {
+  commerceSavedProductsRouter,
+} from "#src/modules/store/catalog/commerce-product-engagement.routes.js";
 import commerceRankingRouter from "#src/modules/store/catalog/commerce-ranking.routes.js";
 import productsRouter from "#src/modules/store/catalog/products.routes.js";
 import communityCofounderRouter from "#src/modules/store/community/community-cofounder.routes.js";
@@ -211,6 +213,14 @@ app.use("/commerce", commerceContentReportsRouter);
 app.use("/commerce", commerceProductInquiryRouter);
 // STORE Phase 13 — ranking transparency and the appeal path.
 app.use("/commerce", commerceRankingRouter);
+/**
+ * A11. The caller's own saved / bookmarked listings.
+ *
+ * `/commerce` and NOT `/store`, unlike the engagement WRITES it shares a module with: `/store` is
+ * what a signed-out visitor browses, and this read is session-only. Declared here rather than on
+ * `commerceProductEngagementRouter` so that router keeps its single `/store` mount.
+ */
+app.use("/commerce", commerceSavedProductsRouter);
 // STORE Phase 15 — trade attachments (A30). `/documents` collides with no other
 // commerce segment; the verification-evidence upload lives under
 // `/providers/:organizationId/evidence` and its download under

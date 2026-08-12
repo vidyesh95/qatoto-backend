@@ -249,6 +249,7 @@ export async function listMyRfqs(req: Request, res: Response): Promise<void> {
 
   const listed = await commerceRfqsService.listMyRfqs({
     buyerOrganizationId: buyerContext.buyerOrganizationId,
+    state: listQuery.state,
     limit: listQuery.limit,
     cursor: listQuery.cursor,
   });
@@ -397,6 +398,7 @@ export async function listProviderRfqs(req: Request, res: Response): Promise<voi
 
   const listed = await commerceRfqsService.listProviderRfqs({
     providerOrganizationId: providerContext.providerOrganizationId,
+    state: listQuery.state,
     limit: listQuery.limit,
     cursor: listQuery.cursor,
   });

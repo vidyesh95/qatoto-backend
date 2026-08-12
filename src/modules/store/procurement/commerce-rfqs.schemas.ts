@@ -232,8 +232,25 @@ export const EmptyObjectSchema = z.object({}).strict();
 
 export const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
 
+/**
+ * The RFQ list filter, for both `/rfqs/mine` and `/provider/rfqs`.
+ *
+ * `state` IS APPLIED IN SQL, and it exists because the surfaces that read these lists are
+ * state-organised: a buyer's RFQ page separates drafts from open requests from closed ones, and a
+ * provider's queue is only ever interested in what is still open. Without the key the client's
+ * options are a 422 (this schema is `.strict()`) or filtering the fetched page, which silently
+ * short-pages every result — so the filter has to live here or the tabs cannot exist.
+ *
+ * OMITTING IT MEANS EVERY STATE, not a default. A buyer's drafts are theirs to see and there is no
+ * state this list should hide from the organization that owns it; the provider list's own
+ * visibility predicate already restricts what a provider may see, and `state` narrows within that
+ * rather than widening it.
+ */
 export const ListQuerySchema = z
   .object({
+    state: z
+      .enum(["draft", "open", "closed", "awarded", "cancelled", "expired"])
+      .optional(),
     limit: z.coerce.number().int().min(1).max(50).optional(),
     cursor: z.string().trim().min(1).max(500).optional(),
   })

@@ -136,6 +136,7 @@ export interface ListServiceEngagementsInput {
   readonly limit?: number;
   readonly cursor?: string;
   readonly role?: "buyer" | "provider";
+  readonly state?: (typeof commerceServiceEngagement.$inferSelect)["state"];
 }
 
 export interface ListShipmentsInput {
@@ -688,7 +689,15 @@ export async function listServiceEngagements(
   const rows = await db
     .select()
     .from(commerceServiceEngagement)
-    .where(and(membershipFilter, cursorPredicate))
+    .where(
+      and(
+        // NARROWS WITHIN THE MEMBERSHIP FILTER, never around it: `membershipFilter` is what decides
+        // which engagements this organization may see, and `state` only subsets that.
+        membershipFilter,
+        input.state === undefined ? undefined : eq(commerceServiceEngagement.state, input.state),
+        cursorPredicate,
+      ),
+    )
     .orderBy(desc(commerceServiceEngagement.createdAt), asc(commerceServiceEngagement.id))
     .limit(limit + 1);
 

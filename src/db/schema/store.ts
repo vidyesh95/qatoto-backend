@@ -7421,6 +7421,15 @@ export const commercePaymentIntent = pgTable(
       ),
     index("commerce_payment_intent_order_idx").on(table.orderId, table.id),
     index("commerce_payment_intent_buyer_idx").on(table.buyerOrganizationId, table.state, table.id),
+    /**
+     * Phase 25. The seller side of the same question, for `GET /commerce/provider/earnings`.
+     *
+     * PARTIAL ON `settled_at IS NOT NULL`: an intent that never settled contributes nothing to
+     * any earnings figure by definition, so the rows the sum must exclude stay out of the index.
+     */
+    index("commerce_payment_intent_counterparty_idx")
+      .on(table.counterpartyOrganizationId, table.state, table.settledAt)
+      .where(sql`settled_at IS NOT NULL`),
     index("commerce_payment_intent_state_idx").on(table.state, table.updatedAt, table.id),
     check("commerce_payment_intent_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
     check("commerce_payment_intent_amount_ck", sql`amount_in_cents > 0`),

@@ -102,4 +102,31 @@ commerceProductEngagementRouter.post(
   commerceProductEngagementController.recordProductViewBeacon,
 );
 
+/**
+ * The caller's own saved / bookmarked listings (A11).
+ *
+ * ITS OWN ROUTER, MOUNTED AT `/commerce` RATHER THAN `/store`, and the split is the same one this
+ * file's header already makes for the writes. `/store` is the prefix a signed-out visitor browses;
+ * a personal list is not browsable by anyone but its owner, and hanging it there would put a
+ * session-only read behind a prefix whose whole posture is `attachOptionalUser`.
+ *
+ * `requireIdentifiedUser` MATCHES THE TOGGLES. An anonymous-session account cannot save a product,
+ * so it has no list to read — and better-auth's `anonymous()` mints real sessions, which means a
+ * `requireAuth`-only guard would let one through to an empty page that looks like data loss.
+ *
+ * A READ, SO NO IDEMPOTENCY KEY and no write limiter. It carries the ordinary engagement limiter
+ * because it is the one route here that fans out into a product-card resolution.
+ */
+const commerceSavedProductsRouter = express.Router();
+
+commerceSavedProductsRouter.get(
+  "/saved-products",
+  requireAuth,
+  requireIdentifiedUser,
+  commerceProductEngagementLimiter,
+  commerceProductEngagementController.listSavedProducts,
+);
+
+export { commerceSavedProductsRouter };
+
 export default commerceProductEngagementRouter;

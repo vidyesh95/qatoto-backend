@@ -1140,6 +1140,7 @@ export async function createDraftRfq(input: {
 
 export async function listMyRfqs(input: {
   readonly buyerOrganizationId: string;
+  readonly state?: RfqRow["state"];
   readonly limit?: number;
   readonly cursor?: string;
 }): Promise<Result<RfqListPage, CommerceRfqsError>> {
@@ -1163,7 +1164,15 @@ export async function listMyRfqs(input: {
   const rows = await db
     .select()
     .from(commerceRfq)
-    .where(and(eq(commerceRfq.buyerOrganizationId, input.buyerOrganizationId), cursorPredicate))
+    .where(
+      and(
+        eq(commerceRfq.buyerOrganizationId, input.buyerOrganizationId),
+        // Undefined narrows on nothing — `and()` drops it — so an absent filter is every state
+        // rather than a default. Applied in SQL so the page stays a full page.
+        input.state === undefined ? undefined : eq(commerceRfq.state, input.state),
+        cursorPredicate,
+      ),
+    )
     .orderBy(desc(commerceRfq.createdAt), asc(commerceRfq.id))
     .limit(limit + 1);
 
@@ -1676,6 +1685,7 @@ export async function closeRfq(input: {
 
 export async function listProviderRfqs(input: {
   readonly providerOrganizationId: string;
+  readonly state?: RfqRow["state"];
   readonly limit?: number;
   readonly cursor?: string;
 }): Promise<Result<RfqListPage, CommerceRfqsError>> {
@@ -1739,7 +1749,15 @@ export async function listProviderRfqs(input: {
   const rows = await db
     .select()
     .from(commerceRfq)
-    .where(and(or(invitedExists, matchedExists), cursorPredicate))
+    .where(
+      and(
+        or(invitedExists, matchedExists),
+        // NARROWS WITHIN THE VISIBILITY PREDICATE, never around it: the `or()` above is what
+        // decides which RFQs this provider may see at all, and `state` only subsets that.
+        input.state === undefined ? undefined : eq(commerceRfq.state, input.state),
+        cursorPredicate,
+      ),
+    )
     .orderBy(desc(commerceRfq.createdAt), asc(commerceRfq.id))
     .limit(limit + 1);
 

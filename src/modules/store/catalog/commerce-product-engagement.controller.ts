@@ -4,13 +4,17 @@ import { z } from "zod";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import {
   EmptyObjectSchema,
+  ListSavedProductsQuerySchema,
   ProductSlugParamsSchema,
   ProductViewBeaconBodySchema,
 } from "#src/modules/store/catalog/commerce-product-engagement.schemas.js";
 import * as commerceProductEngagementService from "#src/modules/store/catalog/commerce-product-engagement.service.js";
 import type { ProductEngagementKind } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
 import * as commerceProductViewService from "#src/modules/store/catalog/commerce-product-view.service.js";
-import { resolveEligibleProductRefBySlug } from "#src/modules/store/catalog/store-catalog.service.js";
+import {
+  resolveEligibleProductCardsByIds,
+  resolveEligibleProductRefBySlug,
+} from "#src/modules/store/catalog/store-catalog.service.js";
 import { computeClientSubnetHash } from "#src/modules/store/client-subnet.js";
 import type { ApiResponse } from "#src/types/index.js";
 
@@ -178,5 +182,61 @@ export async function recordProductViewBeacon(req: Request, res: Response): Prom
     statusCode: 200,
     message: "View recorded.",
     data: beacon,
+  } satisfies ApiResponse);
+}
+
+/**
+ * `GET /commerce/saved-products` — the caller's own saved and bookmarked listings (A11).
+ *
+ * THIS CONTROLLER IS WHERE AN ID BECOMES A CARD, and that is a deliberate layering rather than
+ * convenience: `commerce-product-engagement.service` must not import `store-catalog.service`,
+ * because the catalog already imports `loadProductEngagements` to put counters on a product page
+ * and the two would close an import cycle. The controller is allowed to depend on both.
+ *
+ * `resolveEligibleProductCardsByIds` DROPS WHAT IS NO LONGER ELIGIBLE — unpublished, hidden by a
+ * moderator, or belonging to an organization that stopped trading — so a page can come back
+ * shorter than the ids that produced it. That is the correct behaviour for this list: a wishlist
+ * is not a licence to keep rendering a listing the store has withdrawn. It also means the count
+ * here is never a count of engagements, which is why the response carries no total.
+ */
+export async function listSavedProducts(req: Request, res: Response): Promise<void> {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const query = ListSavedProductsQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const listed = await commerceProductEngagementService.listSavedProductIds({
+    userId: user.id,
+    kind: query.data.kind,
+    limit: query.data.limit,
+    cursor: query.data.cursor,
+  });
+  if (!listed.success) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "Invalid cursor.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const items = await resolveEligibleProductCardsByIds(listed.value.productIds);
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Saved products loaded.",
+    data: { items, page: listed.value.page },
   } satisfies ApiResponse);
 }
