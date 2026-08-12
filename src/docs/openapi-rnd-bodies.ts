@@ -32,7 +32,7 @@ import {
   MilestoneVarianceSchema,
   UpdateFundingRoundSchema,
   UpdateMilestoneSchema,
-} from "#src/schemas/funding.schemas.js";
+} from "#src/modules/rnd/funding/funding.schemas.js";
 import {
   CreateMarketInsightSchema,
   UpdateMarketInsightSchema,

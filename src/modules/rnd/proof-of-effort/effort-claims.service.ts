@@ -22,6 +22,11 @@ import {
 } from "#src/lib/slice-math.js";
 import { decideClaimVerdict, type VerificationStepStatus } from "#src/lib/verdict.js";
 import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
+import { findEffectiveRate } from "#src/modules/rnd/funding/fair-market-rate.service.js";
+import {
+  openAllocationProposal,
+  settleProposal,
+} from "#src/modules/rnd/funding/slice-allocation.service.js";
 import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import {
@@ -30,8 +35,6 @@ import {
   loadStepOutcomes,
   requeueFinalizeVerdict,
 } from "#src/modules/rnd/proof-of-effort/verification.service.js";
-import { findEffectiveRate } from "#src/services/fair-market-rate.service.js";
-import { openAllocationProposal, settleProposal } from "#src/services/slice-allocation.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

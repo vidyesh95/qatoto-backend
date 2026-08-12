@@ -1,11 +1,11 @@
 import express from "express";
 
-import * as fundingController from "#src/controllers/funding.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { fundingRoundWriteLimiter, pledgeLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as fundingController from "#src/modules/rnd/funding/funding.controller.js";
 
 /**
  * Funding as a record of intent (R_AND_D_BACKEND_STRUCTURE.md §7, §11g).

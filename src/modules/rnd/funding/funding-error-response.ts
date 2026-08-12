@@ -1,11 +1,11 @@
 import type { Response } from "express";
 
-import type { EscrowReleaseError } from "#src/services/escrow-releases.service.js";
-import type { SettlementError } from "#src/services/escrow-settlement.service.js";
-import type { EscrowError } from "#src/services/escrow.service.js";
-import type { FundingError } from "#src/services/funding-rounds.service.js";
-import type { InvestorConfidenceError } from "#src/services/investor-confidence.service.js";
-import type { MilestoneError } from "#src/services/milestones.service.js";
+import type { EscrowReleaseError } from "#src/modules/rnd/funding/escrow-releases.service.js";
+import type { SettlementError } from "#src/modules/rnd/funding/escrow-settlement.service.js";
+import type { EscrowError } from "#src/modules/rnd/funding/escrow.service.js";
+import type { FundingError } from "#src/modules/rnd/funding/funding-rounds.service.js";
+import type { InvestorConfidenceError } from "#src/modules/rnd/funding/investor-confidence.service.js";
+import type { MilestoneError } from "#src/modules/rnd/funding/milestones.service.js";
 
 /**
  * The §7 error mapper (R_AND_D_BACKEND_STRUCTURE.md §7, §11c, §13).

@@ -1,12 +1,11 @@
 import type { Request, Response } from "express";
 
-import { respondFundingError } from "#src/controllers/funding-error-response.js";
-import {
-  firstParam,
-  respondUnauthenticated,
-  respondValidationFailed,
-} from "#src/modules/rnd/projects/project-error-response.js";
-import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
+import { respondFundingError } from "#src/modules/rnd/funding/funding-error-response.js";
+// NOTHING FROM escrow-releases, escrow-settlement OR escrow.service IS IMPORTED HERE ANY
+// MORE (§7A.6, §11g). The nine escrow routes are retired; the services and their tables
+// are still on disk, unreachable and uncalled, and the ledger design is preserved for the
+// commerce domain in docs/ESCROW_LEDGER_STRUCTURE.md.
+import * as roundsService from "#src/modules/rnd/funding/funding-rounds.service.js";
 import {
   CreateFundingRoundSchema,
   CreatePledgeSchema,
@@ -16,15 +15,16 @@ import {
   PaginationQuerySchema,
   UpdateFundingRoundSchema,
   UpdateMilestoneSchema,
-} from "#src/schemas/funding.schemas.js";
+} from "#src/modules/rnd/funding/funding.schemas.js";
+import * as confidenceService from "#src/modules/rnd/funding/investor-confidence.service.js";
+import * as milestonesService from "#src/modules/rnd/funding/milestones.service.js";
+import {
+  firstParam,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/rnd/projects/project-error-response.js";
+import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
 import * as compensationService from "#src/services/compensation.service.js";
-// NOTHING FROM escrow-releases, escrow-settlement OR escrow.service IS IMPORTED HERE ANY
-// MORE (§7A.6, §11g). The nine escrow routes are retired; the services and their tables
-// are still on disk, unreachable and uncalled, and the ledger design is preserved for the
-// commerce domain in docs/ESCROW_LEDGER_STRUCTURE.md.
-import * as roundsService from "#src/services/funding-rounds.service.js";
-import * as confidenceService from "#src/services/investor-confidence.service.js";
-import * as milestonesService from "#src/services/milestones.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 interface FundingCaller {

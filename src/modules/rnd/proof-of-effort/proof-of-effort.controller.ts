@@ -4,6 +4,11 @@ import { config } from "#src/config/index.js";
 import { decodeDateCursor } from "#src/lib/date-cursor.js";
 import { exchangeCodeForToken, fetchViewerLogin } from "#src/lib/github-integration.js";
 import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
+import * as snapshotService from "#src/modules/rnd/funding/equity-snapshot.service.js";
+import * as rateService from "#src/modules/rnd/funding/fair-market-rate.service.js";
+import * as bakeService from "#src/modules/rnd/funding/pie-bake.service.js";
+import * as allocationService from "#src/modules/rnd/funding/slice-allocation.service.js";
+import * as ledgerService from "#src/modules/rnd/funding/slice-ledger.service.js";
 import * as auditService from "#src/modules/rnd/projects/project-audit.service.js";
 import {
   firstParam,
@@ -41,12 +46,7 @@ import {
   SubmitClaimSchema,
   UploadReceiptSchema,
 } from "#src/modules/rnd/proof-of-effort/proof-of-effort.schemas.js";
-import * as snapshotService from "#src/services/equity-snapshot.service.js";
-import * as rateService from "#src/services/fair-market-rate.service.js";
 import * as suggestionsService from "#src/services/optimization-suggestions.service.js";
-import * as bakeService from "#src/services/pie-bake.service.js";
-import * as allocationService from "#src/services/slice-allocation.service.js";
-import * as ledgerService from "#src/services/slice-ledger.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 interface ProofOfEffortCaller {

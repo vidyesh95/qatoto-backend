@@ -24,6 +24,7 @@ import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
 import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
+import fundingRouter, { projectFundingRouter } from "#src/modules/rnd/funding/funding.routes.js";
 import researchCatalogRouter from "#src/modules/rnd/programs/research-catalog.routes.js";
 import researchProgramsRouter, {
   researchPaperCategoryRouter,
@@ -67,7 +68,6 @@ import communityForumRouter from "#src/routes/community-forum.routes.js";
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
-import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
 import indexRouter from "#src/routes/index.js";
 import productsRouter from "#src/routes/products.routes.js";
 import storeRouter from "#src/routes/store.routes.js";

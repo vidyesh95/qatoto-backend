@@ -10,11 +10,11 @@ import {
 import { apportionLargestRemainder, BASIS_POINTS_TOTAL } from "#src/lib/money.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
 import { SLICE_DENOMINATOR, timeSliceNumerator } from "#src/lib/slice-math.js";
-import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import {
   findLatestLedgerSequenceNumber,
   sumSlicesByMember,
-} from "#src/services/slice-ledger.service.js";
+} from "#src/modules/rnd/funding/slice-ledger.service.js";
+import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 
 /**
  * The cap table (R_AND_D_BACKEND_STRUCTURE.md §9.4, §9.5).

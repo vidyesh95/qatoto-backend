@@ -8,7 +8,7 @@ import {
   deriveAccountBalances,
   ESCROW_ACCOUNT_KINDS,
   type EscrowAccountKind,
-} from "#src/services/escrow.service.js";
+} from "#src/modules/rnd/funding/escrow.service.js";
 
 /**
  * Provider ↔ ledger reconciliation (R_AND_D_BACKEND_STRUCTURE.md §7, §4e). Hourly.

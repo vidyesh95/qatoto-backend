@@ -1,5 +1,5 @@
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { submitTransfer } from "#src/services/escrow-provider-adapter.service.js";
+import { submitTransfer } from "#src/modules/rnd/funding/escrow-provider-adapter.service.js";
 
 /**
  * Hands a pledge's transfer to the provider adapter (R_AND_D_BACKEND_STRUCTURE.md §7, §4e).

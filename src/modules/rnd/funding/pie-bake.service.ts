@@ -3,13 +3,13 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { equitySnapshot, pieBakeEvent, sliceAllocationProposal } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
-import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   findSnapshot,
   recomputeEquitySnapshot,
   type EquitySnapshotView,
-} from "#src/services/equity-snapshot.service.js";
+} from "#src/modules/rnd/funding/equity-snapshot.service.js";
+import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
+import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

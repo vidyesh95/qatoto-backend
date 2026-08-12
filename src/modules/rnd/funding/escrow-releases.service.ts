@@ -10,10 +10,13 @@ import {
 } from "#src/db/schema.js";
 import { canonicalizeDocument, type CanonicalValue } from "#src/lib/canonical-hash.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
+import { createTransfer } from "#src/modules/rnd/funding/escrow-provider-adapter.service.js";
+import {
+  appendJournalEntry,
+  deriveAvailableEscrowInCents,
+} from "#src/modules/rnd/funding/escrow.service.js";
 import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
-import { createTransfer } from "#src/services/escrow-provider-adapter.service.js";
-import { appendJournalEntry, deriveAvailableEscrowInCents } from "#src/services/escrow.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

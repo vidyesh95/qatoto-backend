@@ -3,9 +3,12 @@ import { and, asc, desc, eq, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { effortClaim, projectMember, sliceAllocationProposal, user } from "#src/db/schema.js";
 import { encodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
+import {
+  writeLedgerEntry,
+  type LedgerContribution,
+} from "#src/modules/rnd/funding/slice-ledger.service.js";
 import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
-import { writeLedgerEntry, type LedgerContribution } from "#src/services/slice-ledger.service.js";
 
 /**
  * The 24-hour transparency window (R_AND_D_BACKEND_STRUCTURE.md §9.8;

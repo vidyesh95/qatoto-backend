@@ -3,7 +3,7 @@ import {
   CONFIDENCE_WINDOW_DAYS,
   listProjectsForConfidence,
   recomputeInvestorConfidence,
-} from "#src/services/investor-confidence.service.js";
+} from "#src/modules/rnd/funding/investor-confidence.service.js";
 
 /**
  * The nightly deal-flow signal (R_AND_D_BACKEND_STRUCTURE.md §7, §4e).

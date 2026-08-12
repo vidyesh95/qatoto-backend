@@ -21,9 +21,9 @@ vi.stubEnv("GITHUB_CLIENT_SECRET", "test-github-client-secret");
 vi.stubEnv("PLATFORM_FEE_BASIS_POINTS", "500");
 
 const { percentageFundedBasisPoints, derivePlatformFeeInCents } =
-  await import("#src/services/funding-rounds.service.js");
-const { computeVarianceBasisPoints } = await import("#src/services/milestones.service.js");
-const { computeConfidenceBasisPoints } = await import("#src/services/investor-confidence.service.js");
+  await import("#src/modules/rnd/funding/funding-rounds.service.js");
+const { computeVarianceBasisPoints } = await import("#src/modules/rnd/funding/milestones.service.js");
+const { computeConfidenceBasisPoints } = await import("#src/modules/rnd/funding/investor-confidence.service.js");
 
 /**
  * The §7 arithmetic (R_AND_D_BACKEND_STRUCTURE.md §4b, §4c, §7).

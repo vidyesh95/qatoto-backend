@@ -5,7 +5,7 @@ import {
   parseJobPayload,
   sendJob,
 } from "#src/lib/jobs.js";
-import { sweepExpiredWindows } from "#src/services/slice-allocation.service.js";
+import { sweepExpiredWindows } from "#src/modules/rnd/funding/slice-allocation.service.js";
 
 /**
  * The expiry sweep (R_AND_D_BACKEND_STRUCTURE.md §9.8, §4e).

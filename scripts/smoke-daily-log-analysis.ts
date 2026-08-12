@@ -61,6 +61,12 @@ import { parseExternalLink } from "#src/lib/external-link.js";
 import { DAILY_LOG_ANALYSIS_PROMPT_VERSION } from "#src/lib/gemini.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
 import {
+  acceptFairMarketRate,
+  lockFairMarketRate,
+  proposeFairMarketRate,
+  RATE_LOCK_ACKNOWLEDGEMENT,
+} from "#src/modules/rnd/funding/fair-market-rate.service.js";
+import {
   finalizeClaimVerdict,
   overrideVerificationStep,
   submitEffortClaim,
@@ -72,12 +78,6 @@ import {
 } from "#src/modules/rnd/proof-of-effort/verification.service.js";
 import { handleAnalyzeDailyLog } from "#src/modules/rnd/workshop/analyze-daily-log.js";
 import * as logsService from "#src/modules/rnd/workshop/daily-logs.service.js";
-import {
-  acceptFairMarketRate,
-  lockFairMarketRate,
-  proposeFairMarketRate,
-  RATE_LOCK_ACKNOWLEDGEMENT,
-} from "#src/services/fair-market-rate.service.js";
 
 /**
  * The video the transcription leg runs against.

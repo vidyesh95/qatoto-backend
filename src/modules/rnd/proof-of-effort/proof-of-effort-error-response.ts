@@ -1,17 +1,17 @@
 import type { Response } from "express";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
+import type { EquitySnapshotError } from "#src/modules/rnd/funding/equity-snapshot.service.js";
+import type { FairMarketRateError } from "#src/modules/rnd/funding/fair-market-rate.service.js";
+import type { PieBakeError } from "#src/modules/rnd/funding/pie-bake.service.js";
+import type { AllocationError } from "#src/modules/rnd/funding/slice-allocation.service.js";
+import type { LedgerError } from "#src/modules/rnd/funding/slice-ledger.service.js";
 import type { AuditChainError } from "#src/modules/rnd/projects/project-audit.service.js";
 import type { DisputeError } from "#src/modules/rnd/proof-of-effort/dispute.service.js";
 import type { EffortClaimError } from "#src/modules/rnd/proof-of-effort/effort-claims.service.js";
 import type { IntegrationError } from "#src/modules/rnd/proof-of-effort/integration-consent.service.js";
 import type { PhysicalReceiptError } from "#src/modules/rnd/proof-of-effort/physical-receipts.service.js";
-import type { EquitySnapshotError } from "#src/services/equity-snapshot.service.js";
-import type { FairMarketRateError } from "#src/services/fair-market-rate.service.js";
 import type { OptimizationSuggestionError } from "#src/services/optimization-suggestions.service.js";
-import type { PieBakeError } from "#src/services/pie-bake.service.js";
-import type { AllocationError } from "#src/services/slice-allocation.service.js";
-import type { LedgerError } from "#src/services/slice-ledger.service.js";
 
 /**
  * The §9 error mapper (R_AND_D_BACKEND_STRUCTURE.md §9, §11e, §13).

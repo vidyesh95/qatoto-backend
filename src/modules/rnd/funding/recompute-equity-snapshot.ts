@@ -3,7 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { researchProject } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { recomputeEquitySnapshot } from "#src/services/equity-snapshot.service.js";
+import { recomputeEquitySnapshot } from "#src/modules/rnd/funding/equity-snapshot.service.js";
 
 /**
  * The nightly cap-table recomputation (R_AND_D_BACKEND_STRUCTURE.md §9.4, §4e).

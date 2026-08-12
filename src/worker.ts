@@ -16,8 +16,6 @@ import { handleRecomputeCommerceCategoryDemand } from "#src/jobs/recompute-comme
 import { handleRecomputeCommerceProductTrending } from "#src/jobs/recompute-commerce-product-trending.js";
 import { handleRecomputeCompensationDraft } from "#src/jobs/recompute-compensation-draft.js";
 import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals.js";
-import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapshot.js";
-import { handleRecomputeInvestorConfidence } from "#src/jobs/recompute-investor-confidence.js";
 import { handleRecomputeOpportunityScores } from "#src/jobs/recompute-opportunity-scores.js";
 import { handleRecomputePlatformCategoryPopularity } from "#src/jobs/recompute-platform-category-popularity.js";
 import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-videos.js";
@@ -71,6 +69,8 @@ import {
   type JobName,
 } from "#src/lib/jobs.js";
 import { handleDeliverNotification } from "#src/modules/platform/notifications/deliver-notification.js";
+import { handleRecomputeEquitySnapshot } from "#src/modules/rnd/funding/recompute-equity-snapshot.js";
+import { handleRecomputeInvestorConfidence } from "#src/modules/rnd/funding/recompute-investor-confidence.js";
 import { handleRecomputeBranchSignals } from "#src/modules/rnd/programs/recompute-branch-signals.js";
 import { handleRecomputeProgramStats } from "#src/modules/rnd/programs/recompute-program-stats.js";
 import { handleSweepDisputeWindows } from "#src/modules/rnd/proof-of-effort/sweep-dispute-windows.js";

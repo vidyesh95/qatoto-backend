@@ -50,10 +50,10 @@ vi.mock("#src/modules/rnd/proof-of-effort/effort-claims.service.js", () => ({
   listOverrideQueue: (...args: readonly unknown[]) => listOverrideQueue(...args),
   listClaims: (...args: readonly unknown[]) => listClaims(...args),
 }));
-vi.mock("#src/services/fair-market-rate.service.js", () => ({
+vi.mock("#src/modules/rnd/funding/fair-market-rate.service.js", () => ({
   listProjectFairMarketRates: (...args: readonly unknown[]) => listProjectFairMarketRates(...args),
 }));
-vi.mock("#src/services/slice-allocation.service.js", () => ({
+vi.mock("#src/modules/rnd/funding/slice-allocation.service.js", () => ({
   findAllocationProposalView: (...args: readonly unknown[]) => findAllocationProposalView(...args),
   listAllocationProposals: (...args: readonly unknown[]) => listAllocationProposals(...args),
 }));

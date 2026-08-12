@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { mapFundingErrorToResponse, type FundingDomainError } from "#src/controllers/funding-error-response.js";
+import { mapFundingErrorToResponse, type FundingDomainError } from "#src/modules/rnd/funding/funding-error-response.js";
 
 /**
  * The §7 status policy (R_AND_D_BACKEND_STRUCTURE.md §7, §11c, §13).

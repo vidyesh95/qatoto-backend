@@ -4,12 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 // modules so the schemas can be parsed without a configured environment — nothing here
 // calls a handler. Same arrangement as workshop.controller.schemas.test.ts.
 vi.mock("#src/services/compensation.service.js", () => ({}));
-vi.mock("#src/services/escrow-releases.service.js", () => ({}));
-vi.mock("#src/services/escrow-settlement.service.js", () => ({}));
-vi.mock("#src/services/escrow.service.js", () => ({}));
-vi.mock("#src/services/funding-rounds.service.js", () => ({}));
-vi.mock("#src/services/investor-confidence.service.js", () => ({}));
-vi.mock("#src/services/milestones.service.js", () => ({}));
+vi.mock("#src/modules/rnd/funding/escrow-releases.service.js", () => ({}));
+vi.mock("#src/modules/rnd/funding/escrow-settlement.service.js", () => ({}));
+vi.mock("#src/modules/rnd/funding/escrow.service.js", () => ({}));
+vi.mock("#src/modules/rnd/funding/funding-rounds.service.js", () => ({}));
+vi.mock("#src/modules/rnd/funding/investor-confidence.service.js", () => ({}));
+vi.mock("#src/modules/rnd/funding/milestones.service.js", () => ({}));
 vi.mock("#src/modules/platform/roles/platform-role.service.js", () => ({}));
 vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({}));
 
@@ -20,7 +20,7 @@ const {
   MilestoneVarianceSchema,
   UpdateFundingRoundSchema,
   UpdateMilestoneSchema,
-} = await import("#src/schemas/funding.schemas.js");
+} = await import("#src/modules/rnd/funding/funding.schemas.js");
 
 /**
  * The §7 boundary (R_AND_D_BACKEND_STRUCTURE.md §7, §13, §17 steps 4 and 8).

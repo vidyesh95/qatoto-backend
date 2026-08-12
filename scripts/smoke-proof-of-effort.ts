@@ -40,6 +40,22 @@ import {
   verificationStep,
 } from "#src/db/schema.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
+import {
+  findLatestSnapshot,
+  recomputeEquitySnapshot,
+} from "#src/modules/rnd/funding/equity-snapshot.service.js";
+import {
+  acceptFairMarketRate,
+  lockFairMarketRate,
+  proposeFairMarketRate,
+  RATE_LOCK_ACKNOWLEDGEMENT,
+} from "#src/modules/rnd/funding/fair-market-rate.service.js";
+import {
+  listAllocationProposals,
+  sweepExpiredWindows,
+  type SettlementOutcome,
+} from "#src/modules/rnd/funding/slice-allocation.service.js";
+import { listLedgerEntries } from "#src/modules/rnd/funding/slice-ledger.service.js";
 import { verifyAuditChain } from "#src/modules/rnd/projects/project-audit.service.js";
 import { castDisputeVote, raiseDispute } from "#src/modules/rnd/proof-of-effort/dispute.service.js";
 import {
@@ -53,22 +69,6 @@ import {
   runAnalyzeTemporal,
   runGroundArtifacts,
 } from "#src/modules/rnd/proof-of-effort/verification.service.js";
-import {
-  findLatestSnapshot,
-  recomputeEquitySnapshot,
-} from "#src/services/equity-snapshot.service.js";
-import {
-  acceptFairMarketRate,
-  lockFairMarketRate,
-  proposeFairMarketRate,
-  RATE_LOCK_ACKNOWLEDGEMENT,
-} from "#src/services/fair-market-rate.service.js";
-import {
-  listAllocationProposals,
-  sweepExpiredWindows,
-  type SettlementOutcome,
-} from "#src/services/slice-allocation.service.js";
-import { listLedgerEntries } from "#src/services/slice-ledger.service.js";
 
 let failureCount = 0;
 

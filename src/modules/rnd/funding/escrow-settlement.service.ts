@@ -12,8 +12,11 @@ import {
   markSettlementEventProcessed,
   recordSettlementEvent,
   type ProviderTransferError,
-} from "#src/services/escrow-provider-adapter.service.js";
-import { appendJournalEntry, appendReversingEntry } from "#src/services/escrow.service.js";
+} from "#src/modules/rnd/funding/escrow-provider-adapter.service.js";
+import {
+  appendJournalEntry,
+  appendReversingEntry,
+} from "#src/modules/rnd/funding/escrow.service.js";
 
 /**
  * THE SETTLEMENT PATH (R_AND_D_BACKEND_STRUCTURE.md §7).
