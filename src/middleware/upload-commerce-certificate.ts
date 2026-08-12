@@ -1,11 +1,8 @@
-import type { NextFunction, Request, Response } from "express";
-import multer from "multer";
-
 import {
   COMMERCE_EVIDENCE_MEDIA_TYPES,
   MAXIMUM_COMMERCE_EVIDENCE_BYTES,
 } from "#src/middleware/upload-commerce-verification-evidence.js";
-import type { ApiResponse } from "#src/types/index.js";
+import { createSingleFileUpload } from "#src/middleware/upload.js";
 
 /**
  * Multipart parser for POST /commerce/organizations/:organizationId/certifications (A13).
@@ -26,58 +23,13 @@ import type { ApiResponse } from "#src/types/index.js";
  */
 const CERTIFICATE_TEXT_FIELD_LIMIT = 8;
 
-const certificateUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: MAXIMUM_COMMERCE_EVIDENCE_BYTES,
-    files: 1,
-    fields: CERTIFICATE_TEXT_FIELD_LIMIT,
-  },
-  fileFilter: (_req, file, callback) => {
-    if (COMMERCE_EVIDENCE_MEDIA_TYPES.some((mediaType) => mediaType === file.mimetype)) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error("UNSUPPORTED_COMMERCE_EVIDENCE_MEDIA_TYPE"));
-  },
+export const uploadCommerceCertificate = createSingleFileUpload({
+  fieldName: "evidence",
+  maximumBytes: MAXIMUM_COMMERCE_EVIDENCE_BYTES,
+  acceptsMediaType: (mediaType) =>
+    COMMERCE_EVIDENCE_MEDIA_TYPES.some((allowed) => allowed === mediaType),
+  tooLargeMessage: "Certificate file exceeds the 8 MB size limit.",
+  unsupportedMediaTypeMessage: "A certificate must be a PDF, JPEG or PNG.",
+  invalidUploadMessage: "Invalid certificate upload.",
+  textFieldLimit: CERTIFICATE_TEXT_FIELD_LIMIT,
 });
-
-export function uploadCommerceCertificate(req: Request, res: Response, next: NextFunction): void {
-  certificateUpload.single("evidence")(req, res, (uploadError: unknown) => {
-    if (!uploadError) {
-      next();
-      return;
-    }
-
-    if (uploadError instanceof multer.MulterError) {
-      if (uploadError.code === "LIMIT_FILE_SIZE") {
-        res.status(413).json({
-          status: "error",
-          statusCode: 413,
-          message: "Certificate file exceeds the 8 MB size limit.",
-        } satisfies ApiResponse);
-        return;
-      }
-      res.status(422).json({
-        status: "error",
-        statusCode: 422,
-        message: "Invalid certificate upload.",
-      } satisfies ApiResponse);
-      return;
-    }
-
-    if (
-      uploadError instanceof Error &&
-      uploadError.message === "UNSUPPORTED_COMMERCE_EVIDENCE_MEDIA_TYPE"
-    ) {
-      res.status(422).json({
-        status: "error",
-        statusCode: 422,
-        message: "A certificate must be a PDF, JPEG or PNG.",
-      } satisfies ApiResponse);
-      return;
-    }
-
-    next(uploadError);
-  });
-}

@@ -1,5 +1,4 @@
-import type { Request, Response, NextFunction } from "express";
-import multer from "multer";
+import { createSingleFileUpload, acceptsAnyImage } from "#src/middleware/upload.js";
 
 /**
  * Multipart parser for the single `photo` field of
@@ -16,52 +15,11 @@ import multer from "multer";
  */
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB — a headshot, not a factory floor.
 
-const memoryUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
-  fileFilter: (_req, file, callback) => {
-    // First-pass mimetype gate. NOT authoritative — sharp proves the real format later.
-    if (file.mimetype.startsWith("image/")) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error("UNSUPPORTED_MIME"));
-  },
+export const uploadStakeholderPhotoFile = createSingleFileUpload({
+  fieldName: "photo",
+  maximumBytes: MAX_UPLOAD_BYTES,
+  acceptsMediaType: acceptsAnyImage,
+  tooLargeMessage: "Photo exceeds the 5 MB size limit.",
+  unsupportedMediaTypeMessage: "File must be an image.",
+  invalidUploadMessage: "Invalid photo upload.",
 });
-
-export function uploadStakeholderPhotoFile(req: Request, res: Response, next: NextFunction): void {
-  memoryUpload.single("photo")(req, res, (uploadError: unknown) => {
-    if (!uploadError) {
-      next();
-      return;
-    }
-
-    if (uploadError instanceof multer.MulterError) {
-      if (uploadError.code === "LIMIT_FILE_SIZE") {
-        res.status(413).json({
-          status: "error",
-          statusCode: 413,
-          message: "Photo exceeds the 5 MB size limit.",
-        });
-        return;
-      }
-      res.status(422).json({
-        status: "error",
-        statusCode: 422,
-        message: "Invalid photo upload.",
-      });
-      return;
-    }
-
-    if (uploadError instanceof Error && uploadError.message === "UNSUPPORTED_MIME") {
-      res.status(422).json({
-        status: "error",
-        statusCode: 422,
-        message: "File must be an image.",
-      });
-      return;
-    }
-
-    next(uploadError);
-  });
-}

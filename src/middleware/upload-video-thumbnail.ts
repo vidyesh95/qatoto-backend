@@ -1,13 +1,7 @@
-import type { Request, Response, NextFunction } from "express";
-import multer from "multer";
+import { createSingleFileUpload, acceptsAnyImage } from "#src/middleware/upload.js";
 
 /**
  * Multipart parser for the single `image` field of POST /videos/:videoId/thumbnail.
- *
- * Buffers the file in memory (no disk temp) so we can hand the bytes straight to
- * sharp for validation and then Cloudinary. The byte cap here is a CHEAP first
- * gate that stops oversized uploads before any decoding; sharp re-checks the real
- * image afterwards (CLAUDE.md §1.1 — the multipart headers are untrusted).
  *
  * A copy of upload-product-image.ts. The house convention is one upload middleware per
  * surface (avatar, product image, project cover, video thumbnail) rather than one generic
@@ -25,58 +19,11 @@ import multer from "multer";
  */
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
 
-const memoryUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
-  fileFilter: (_req, file, callback) => {
-    // First-pass mimetype gate. NOT authoritative — sharp proves the real format
-    // later — but rejects the obvious non-image before buffering it.
-    if (file.mimetype.startsWith("image/")) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error("UNSUPPORTED_MIME"));
-  },
+export const uploadVideoThumbnail = createSingleFileUpload({
+  fieldName: "image",
+  maximumBytes: MAX_UPLOAD_BYTES,
+  acceptsMediaType: acceptsAnyImage,
+  tooLargeMessage: "Thumbnail image exceeds the 5 MB size limit.",
+  unsupportedMediaTypeMessage: "The thumbnail file must be an image.",
+  invalidUploadMessage: "Invalid thumbnail image upload.",
 });
-
-/**
- * Run multer for the `image` field and translate its failures into our standard
- * error envelope (422), with the size cap surfaced as 413. On success `req.file`
- * holds the buffered upload and control passes to the controller.
- */
-export function uploadVideoThumbnail(req: Request, res: Response, next: NextFunction): void {
-  memoryUpload.single("image")(req, res, (uploadError: unknown) => {
-    if (!uploadError) {
-      next();
-      return;
-    }
-
-    if (uploadError instanceof multer.MulterError) {
-      if (uploadError.code === "LIMIT_FILE_SIZE") {
-        res.status(413).json({
-          status: "error",
-          statusCode: 413,
-          message: "Thumbnail image exceeds the 5 MB size limit.",
-        });
-        return;
-      }
-      res.status(422).json({
-        status: "error",
-        statusCode: 422,
-        message: "Invalid thumbnail image upload.",
-      });
-      return;
-    }
-
-    if (uploadError instanceof Error && uploadError.message === "UNSUPPORTED_MIME") {
-      res.status(422).json({
-        status: "error",
-        statusCode: 422,
-        message: "The thumbnail file must be an image.",
-      });
-      return;
-    }
-
-    next(uploadError);
-  });
-}

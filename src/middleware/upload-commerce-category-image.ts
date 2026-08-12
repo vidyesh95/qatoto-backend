@@ -1,19 +1,13 @@
-import type { Request, Response, NextFunction } from "express";
-import multer from "multer";
+import { createSingleFileUpload, acceptsAnyImage } from "#src/middleware/upload.js";
 
 /**
  * Multipart parser for the single `image` field of the commerce-category write routes
  * (POST /commerce/admin/categories and PATCH /commerce/admin/categories/:categoryId/image).
  *
- * Buffers the file in memory (no disk temp) so the bytes go straight to sharp for
- * validation and then to Cloudinary. The byte cap here is a CHEAP first gate that stops
- * oversized uploads before any decoding; sharp re-checks the real image afterwards
- * (CLAUDE.md §1.1 — the multipart headers are untrusted).
- *
- * A copy of upload-promotional-slide-image.ts, deliberately rather than a parameterised
- * shared middleware: the field name, the size cap and the error copy are this route's
- * CONTRACT, and a factory that took them as arguments would make changing one route's
- * contract look like changing every route's.
+ * Kept as its own module so this route's contract — field name, cap, error copy — is
+ * stated in one place and changing it changes only this route. The shared error-branch
+ * ladder lives in upload.ts, which also answers why that is not the same as sharing the
+ * contract.
  *
  * Runs INSIDE the route so the global express.json() never touches multipart bodies. The
  * create route carries text parts alongside the file — multer parses those into `req.body`
@@ -22,58 +16,11 @@ import multer from "multer";
  */
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
 
-const memoryUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
-  fileFilter: (_req, file, callback) => {
-    // First-pass mimetype gate. NOT authoritative — sharp proves the real format later —
-    // but rejects the obvious non-image before buffering it.
-    if (file.mimetype.startsWith("image/")) {
-      callback(null, true);
-      return;
-    }
-    callback(new Error("UNSUPPORTED_MIME"));
-  },
+export const uploadCommerceCategoryImage = createSingleFileUpload({
+  fieldName: "image",
+  maximumBytes: MAX_UPLOAD_BYTES,
+  acceptsMediaType: acceptsAnyImage,
+  tooLargeMessage: "Image exceeds the 5 MB size limit.",
+  unsupportedMediaTypeMessage: "File must be an image.",
+  invalidUploadMessage: "Invalid image upload.",
 });
-
-/**
- * Run multer for the `image` field and translate its failures into the standard error
- * envelope (422), with the size cap surfaced as 413. On success `req.file` holds the
- * buffered upload and control passes to the controller.
- */
-export function uploadCommerceCategoryImage(req: Request, res: Response, next: NextFunction): void {
-  memoryUpload.single("image")(req, res, (uploadError: unknown) => {
-    if (!uploadError) {
-      next();
-      return;
-    }
-
-    if (uploadError instanceof multer.MulterError) {
-      if (uploadError.code === "LIMIT_FILE_SIZE") {
-        res.status(413).json({
-          status: "error",
-          statusCode: 413,
-          message: "Image exceeds the 5 MB size limit.",
-        });
-        return;
-      }
-      res.status(422).json({
-        status: "error",
-        statusCode: 422,
-        message: "Invalid image upload.",
-      });
-      return;
-    }
-
-    if (uploadError instanceof Error && uploadError.message === "UNSUPPORTED_MIME") {
-      res.status(422).json({
-        status: "error",
-        statusCode: 422,
-        message: "File must be an image.",
-      });
-      return;
-    }
-
-    next(uploadError);
-  });
-}
