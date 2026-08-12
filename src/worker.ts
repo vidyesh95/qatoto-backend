@@ -61,14 +61,7 @@ import {
   handleReconcileConnectorStateTick,
   handleSweepPendingDocumentScansTick,
 } from "#src/jobs/scheduled-ticks.js";
-import { handleSweepDisputeWindows } from "#src/jobs/sweep-dispute-windows.js";
 import { handleSweepPendingDocumentScans } from "#src/jobs/sweep-pending-document-scans.js";
-import {
-  handleAnalyzeSubstance,
-  handleAnalyzeTemporal,
-  handleFinalizeVerdict,
-  handleGroundArtifacts,
-} from "#src/jobs/verify-effort-claim.js";
 import { handleVerifyYoutubeVideo } from "#src/jobs/verify-youtube-video.js";
 import {
   createPgBossDbAdapter,
@@ -80,6 +73,13 @@ import {
 import { handleDeliverNotification } from "#src/modules/platform/notifications/deliver-notification.js";
 import { handleRecomputeBranchSignals } from "#src/modules/rnd/programs/recompute-branch-signals.js";
 import { handleRecomputeProgramStats } from "#src/modules/rnd/programs/recompute-program-stats.js";
+import { handleSweepDisputeWindows } from "#src/modules/rnd/proof-of-effort/sweep-dispute-windows.js";
+import {
+  handleAnalyzeSubstance,
+  handleAnalyzeTemporal,
+  handleFinalizeVerdict,
+  handleGroundArtifacts,
+} from "#src/modules/rnd/proof-of-effort/verify-effort-claim.js";
 import { handleAnalyzeDailyLog } from "#src/modules/rnd/workshop/analyze-daily-log.js";
 import { handleRecomputeDailyLogStreaks } from "#src/modules/rnd/workshop/recompute-daily-log-streaks.js";
 

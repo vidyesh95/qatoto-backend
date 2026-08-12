@@ -31,6 +31,9 @@ import researchProgramsRouter, {
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/modules/rnd/projects/research-projects.routes.js";
+import proofOfEffortRouter, {
+  integrationCallbackRouter,
+} from "#src/modules/rnd/proof-of-effort/proof-of-effort.routes.js";
 import workshopRouter, { dailyLogFeedRouter } from "#src/modules/rnd/workshop/workshop.routes.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
@@ -67,9 +70,6 @@ import docsRouter from "#src/routes/docs.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
 import indexRouter from "#src/routes/index.js";
 import productsRouter from "#src/routes/products.routes.js";
-import proofOfEffortRouter, {
-  integrationCallbackRouter,
-} from "#src/routes/proof-of-effort.routes.js";
 import storeRouter from "#src/routes/store.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
 

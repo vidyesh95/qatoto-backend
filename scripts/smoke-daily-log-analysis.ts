@@ -60,24 +60,24 @@ import {
 import { parseExternalLink } from "#src/lib/external-link.js";
 import { DAILY_LOG_ANALYSIS_PROMPT_VERSION } from "#src/lib/gemini.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
-import { handleAnalyzeDailyLog } from "#src/modules/rnd/workshop/analyze-daily-log.js";
-import * as logsService from "#src/modules/rnd/workshop/daily-logs.service.js";
 import {
   finalizeClaimVerdict,
   overrideVerificationStep,
   submitEffortClaim,
-} from "#src/services/effort-claims.service.js";
+} from "#src/modules/rnd/proof-of-effort/effort-claims.service.js";
+import {
+  runAnalyzeSubstance,
+  runAnalyzeTemporal,
+  runGroundArtifacts,
+} from "#src/modules/rnd/proof-of-effort/verification.service.js";
+import { handleAnalyzeDailyLog } from "#src/modules/rnd/workshop/analyze-daily-log.js";
+import * as logsService from "#src/modules/rnd/workshop/daily-logs.service.js";
 import {
   acceptFairMarketRate,
   lockFairMarketRate,
   proposeFairMarketRate,
   RATE_LOCK_ACKNOWLEDGEMENT,
 } from "#src/services/fair-market-rate.service.js";
-import {
-  runAnalyzeSubstance,
-  runAnalyzeTemporal,
-  runGroundArtifacts,
-} from "#src/services/verification.service.js";
 
 /**
  * The video the transcription leg runs against.
@@ -503,7 +503,7 @@ async function main(): Promise<void> {
     .where(eq(effortClaim.id, claim.value.claimId));
   // With no connected integration a link has no independently verifiable timestamp, so
   // grounding resolves `flagged` — real evidence, withheld pending a human. Not a bug:
-  // src/services/verification.service.ts states this outcome as the shipped one.
+  // src/modules/rnd/proof-of-effort/verification.service.ts states this outcome as the shipped one.
   check(
     "link-only evidence is FLAGGED for review, never auto-verified",
     afterPipeline?.status === "flagged_for_review",

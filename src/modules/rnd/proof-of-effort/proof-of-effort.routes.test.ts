@@ -46,7 +46,7 @@ const listProjectFairMarketRates = vi.fn<(...args: readonly unknown[]) => unknow
 const findAllocationProposalView = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listAllocationProposals = vi.fn<(...args: readonly unknown[]) => unknown>();
 
-vi.mock("#src/services/effort-claims.service.js", () => ({
+vi.mock("#src/modules/rnd/proof-of-effort/effort-claims.service.js", () => ({
   listOverrideQueue: (...args: readonly unknown[]) => listOverrideQueue(...args),
   listClaims: (...args: readonly unknown[]) => listClaims(...args),
 }));

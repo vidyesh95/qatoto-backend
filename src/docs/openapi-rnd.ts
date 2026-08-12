@@ -21,7 +21,7 @@ import platformRolesRouter from "#src/modules/platform/roles/platform-roles.rout
 import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
-} from "#src/routes/proof-of-effort.routes.js";
+} from "#src/modules/rnd/proof-of-effort/proof-of-effort.routes.js";
 import researchCatalogRouter from "#src/modules/rnd/programs/research-catalog.routes.js";
 import researchProgramsRouter, {
   researchPaperCategoryRouter,

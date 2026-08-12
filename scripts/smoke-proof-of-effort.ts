@@ -41,13 +41,18 @@ import {
 } from "#src/db/schema.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
 import { verifyAuditChain } from "#src/modules/rnd/projects/project-audit.service.js";
-import { castDisputeVote, raiseDispute } from "#src/services/dispute.service.js";
+import { castDisputeVote, raiseDispute } from "#src/modules/rnd/proof-of-effort/dispute.service.js";
 import {
   finalizeClaimVerdict,
   overrideVerificationStep,
   submitEffortClaim,
   type ClaimReceipt,
-} from "#src/services/effort-claims.service.js";
+} from "#src/modules/rnd/proof-of-effort/effort-claims.service.js";
+import {
+  runAnalyzeSubstance,
+  runAnalyzeTemporal,
+  runGroundArtifacts,
+} from "#src/modules/rnd/proof-of-effort/verification.service.js";
 import {
   findLatestSnapshot,
   recomputeEquitySnapshot,
@@ -64,11 +69,6 @@ import {
   type SettlementOutcome,
 } from "#src/services/slice-allocation.service.js";
 import { listLedgerEntries } from "#src/services/slice-ledger.service.js";
-import {
-  runAnalyzeSubstance,
-  runAnalyzeTemporal,
-  runGroundArtifacts,
-} from "#src/services/verification.service.js";
 
 let failureCount = 0;
 

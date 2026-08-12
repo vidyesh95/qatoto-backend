@@ -24,14 +24,14 @@ import { decideClaimVerdict, type VerificationStepStatus } from "#src/lib/verdic
 import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
 import { appendAuditEntry } from "#src/modules/rnd/projects/project-audit.service.js";
 import type { ProjectAccessError } from "#src/modules/rnd/projects/project-membership.service.js";
-import { findEffectiveRate } from "#src/services/fair-market-rate.service.js";
-import { openAllocationProposal, settleProposal } from "#src/services/slice-allocation.service.js";
 import {
   createVerificationRun,
   enqueueGroundingInTransaction,
   loadStepOutcomes,
   requeueFinalizeVerdict,
-} from "#src/services/verification.service.js";
+} from "#src/modules/rnd/proof-of-effort/verification.service.js";
+import { findEffectiveRate } from "#src/services/fair-market-rate.service.js";
+import { openAllocationProposal, settleProposal } from "#src/services/slice-allocation.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

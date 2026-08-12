@@ -74,7 +74,7 @@ import {
   ReverifySchema,
   SubmitClaimSchema,
   UploadReceiptSchema,
-} from "#src/schemas/proof-of-effort.schemas.js";
+} from "#src/modules/rnd/proof-of-effort/proof-of-effort.schemas.js";
 import {
   AttachPaperFileSchema,
   CreateBranchSchema,

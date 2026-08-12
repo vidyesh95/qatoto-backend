@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as proofOfEffortController from "#src/controllers/proof-of-effort.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
@@ -11,7 +10,8 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
-import { uploadPhysicalReceipt } from "#src/middleware/upload-physical-receipt.js";
+import * as proofOfEffortController from "#src/modules/rnd/proof-of-effort/proof-of-effort.controller.js";
+import { uploadPhysicalReceipt } from "#src/modules/rnd/proof-of-effort/upload-physical-receipt.js";
 
 const router = express.Router();
 

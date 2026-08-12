@@ -1,7 +1,6 @@
 import type { Request, Response } from "express";
 
 import { config } from "#src/config/index.js";
-import { respondProofOfEffortError } from "#src/controllers/proof-of-effort-error-response.js";
 import { decodeDateCursor } from "#src/lib/date-cursor.js";
 import { exchangeCodeForToken, fetchViewerLogin } from "#src/lib/github-integration.js";
 import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
@@ -13,6 +12,11 @@ import {
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
 import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
+import * as disputeService from "#src/modules/rnd/proof-of-effort/dispute.service.js";
+import * as claimsService from "#src/modules/rnd/proof-of-effort/effort-claims.service.js";
+import * as integrationService from "#src/modules/rnd/proof-of-effort/integration-consent.service.js";
+import * as receiptsService from "#src/modules/rnd/proof-of-effort/physical-receipts.service.js";
+import { respondProofOfEffortError } from "#src/modules/rnd/proof-of-effort/proof-of-effort-error-response.js";
 import {
   AuditTrailQuerySchema,
   AuthorizeIntegrationSchema,
@@ -36,14 +40,10 @@ import {
   SequencePaginationQuerySchema,
   SubmitClaimSchema,
   UploadReceiptSchema,
-} from "#src/schemas/proof-of-effort.schemas.js";
-import * as disputeService from "#src/services/dispute.service.js";
-import * as claimsService from "#src/services/effort-claims.service.js";
+} from "#src/modules/rnd/proof-of-effort/proof-of-effort.schemas.js";
 import * as snapshotService from "#src/services/equity-snapshot.service.js";
 import * as rateService from "#src/services/fair-market-rate.service.js";
-import * as integrationService from "#src/services/integration-consent.service.js";
 import * as suggestionsService from "#src/services/optimization-suggestions.service.js";
-import * as receiptsService from "#src/services/physical-receipts.service.js";
 import * as bakeService from "#src/services/pie-bake.service.js";
 import * as allocationService from "#src/services/slice-allocation.service.js";
 import * as ledgerService from "#src/services/slice-ledger.service.js";

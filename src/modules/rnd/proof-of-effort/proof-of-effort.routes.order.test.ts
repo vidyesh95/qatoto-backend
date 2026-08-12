@@ -97,7 +97,7 @@ function shadowedBy(earlier: DeclaredRoute, later: DeclaredRoute): boolean {
 
 describe("proof-of-effort router declaration order", () => {
   it("declares no route that swallows a later one", async () => {
-    const router = (await import("#src/routes/proof-of-effort.routes.js")).default;
+    const router = (await import("#src/modules/rnd/proof-of-effort/proof-of-effort.routes.js")).default;
     const routes = declaredRoutes(router);
 
     const collisions = routes.flatMap((earlier, index) =>
@@ -121,7 +121,7 @@ describe("proof-of-effort router declaration order", () => {
     { path: "/:projectSlug/override-queue", reads: "the steps awaiting human review" },
     { path: "/:projectSlug/integrations/available", reads: "the provider catalogue" },
   ])("declares $path, which $reads", async ({ path }) => {
-    const router = (await import("#src/routes/proof-of-effort.routes.js")).default;
+    const router = (await import("#src/modules/rnd/proof-of-effort/proof-of-effort.routes.js")).default;
     expect(declaredRoutes(router).map((route) => route.path)).toContain(path);
   });
 
@@ -135,7 +135,7 @@ describe("proof-of-effort router declaration order", () => {
    * which is why nothing is broken; the order is what keeps it that way when a GET arrives.
    */
   it("declares /integrations/available before any /integrations/:provider route", async () => {
-    const router = (await import("#src/routes/proof-of-effort.routes.js")).default;
+    const router = (await import("#src/modules/rnd/proof-of-effort/proof-of-effort.routes.js")).default;
     const paths = declaredRoutes(router).map((route) => route.path);
 
     const literalIndex = paths.indexOf("/:projectSlug/integrations/available");

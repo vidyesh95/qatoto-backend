@@ -21,7 +21,7 @@ import path from "node:path";
  * what makes it usable as a pre-commit gate during a file-moving refactor.
  *
  * FILES ARE READ AS BYTES, DELIBERATELY. `src/lib/commerce-pricing.ts` and
- * `src/services/verification.service.ts` embed a literal NUL (`\x00`) as a SQL
+ * `src/modules/rnd/proof-of-effort/verification.service.ts` embed a literal NUL (`\x00`) as a SQL
  * expression-index delimiter, and `grep`/`rg` classify both as binary and skip them
  * WITHOUT SAYING SO — ten real specifiers, silently unchecked, in a checker that reports
  * success. Node's reader has no such heuristic. Do not reimplement this on top of grep.

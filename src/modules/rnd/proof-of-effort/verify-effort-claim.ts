@@ -1,10 +1,10 @@
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { finalizeClaimVerdict } from "#src/services/effort-claims.service.js";
+import { finalizeClaimVerdict } from "#src/modules/rnd/proof-of-effort/effort-claims.service.js";
 import {
   runAnalyzeSubstance,
   runAnalyzeTemporal,
   runGroundArtifacts,
-} from "#src/services/verification.service.js";
+} from "#src/modules/rnd/proof-of-effort/verification.service.js";
 
 /**
  * The four stages of §9's verification pipeline, as pg-boss handlers
