@@ -1,8 +1,8 @@
 import type { Response } from "express";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
-import type { PromotionalDestinationError } from "#src/lib/promotional-destination.js";
-import type { PromotionalSlideError } from "#src/services/promotions.service.js";
+import type { PromotionalDestinationError } from "#src/modules/home/promotions/promotional-destination.js";
+import type { PromotionalSlideError } from "#src/modules/home/promotions/promotions.service.js";
 
 /**
  * Error mapping for the promotional-carousel controller.

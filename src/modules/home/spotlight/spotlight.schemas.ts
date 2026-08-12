@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-import { MAX_SPOTLIGHT_SLOTS } from "#src/services/spotlight.service.js";
+import { MAX_SPOTLIGHT_SLOTS } from "#src/modules/home/spotlight/spotlight.service.js";
 
 /**
  * The whole ordered set. Empty clears the rail. Max three; uniqueness is enforced in the

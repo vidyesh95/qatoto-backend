@@ -1,9 +1,9 @@
 import express from "express";
 
-import * as spotlightController from "#src/controllers/spotlight.controller.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import { spotlightWriteLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as spotlightController from "#src/modules/home/spotlight/spotlight.controller.js";
 
 const router = express.Router();
 

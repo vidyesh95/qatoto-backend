@@ -30,7 +30,7 @@ import { db, pool } from "#src/db/index.js";
 import { promotionalSlide } from "#src/db/schema.js";
 import { uploadPromotionalSlideImage } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage } from "#src/lib/image.js";
-import { parsePromotionalDestination } from "#src/lib/promotional-destination.js";
+import { parsePromotionalDestination } from "#src/modules/home/promotions/promotional-destination.js";
 
 /** Matches SLIDE_OUTPUT_MAX_DIMENSION_PX in promotions.service.ts. */
 const SLIDE_OUTPUT_MAX_DIMENSION_PX = 2400;

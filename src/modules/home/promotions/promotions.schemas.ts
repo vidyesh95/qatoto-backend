@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 
-import { MAX_PROMOTIONAL_SLIDES } from "#src/services/promotions.service.js";
+import { MAX_PROMOTIONAL_SLIDES } from "#src/modules/home/promotions/promotions.service.js";
 
 export const DestinationKindSchema = z.enum(["internal_path", "external_url"]);
 

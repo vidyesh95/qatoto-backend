@@ -1,13 +1,13 @@
 import express from "express";
 
-import * as promotionsController from "#src/controllers/promotions.controller.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
   promotionalSlideImageUploadLimiter,
   promotionalSlideWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadPromotionalSlideImage } from "#src/middleware/upload-promotional-slide-image.js";
+import * as promotionsController from "#src/modules/home/promotions/promotions.controller.js";
+import { uploadPromotionalSlideImage } from "#src/modules/home/promotions/upload-promotional-slide-image.js";
 
 const router = express.Router();
 

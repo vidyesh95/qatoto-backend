@@ -5,13 +5,13 @@ import {
   respondPromotionalSlideError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/promotions-error-response.js";
+} from "#src/modules/home/promotions/promotions-error-response.js";
 import {
   CreatePromotionalSlideSchema,
   ReorderPromotionalSlidesSchema,
   UpdatePromotionalSlideSchema,
-} from "#src/schemas/promotions.schemas.js";
-import * as promotionsService from "#src/services/promotions.service.js";
+} from "#src/modules/home/promotions/promotions.schemas.js";
+import * as promotionsService from "#src/modules/home/promotions/promotions.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

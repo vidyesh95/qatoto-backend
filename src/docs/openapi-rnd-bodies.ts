@@ -59,7 +59,7 @@ import {
   CreatePromotionalSlideSchema,
   ReorderPromotionalSlidesSchema,
   UpdatePromotionalSlideSchema,
-} from "#src/schemas/promotions.schemas.js";
+} from "#src/modules/home/promotions/promotions.schemas.js";
 import {
   AuthorizeIntegrationSchema,
   BakePieSchema,
@@ -104,7 +104,7 @@ import {
   UpdateProjectSchema,
   UpdateProjectStageSchema,
 } from "#src/schemas/research-projects.schemas.js";
-import { ReplaceSpotlightSlotsSchema } from "#src/schemas/spotlight.schemas.js";
+import { ReplaceSpotlightSlotsSchema } from "#src/modules/home/spotlight/spotlight.schemas.js";
 import {
   CreateSupplierEngagementSchema,
   CreateSupplierSchema,

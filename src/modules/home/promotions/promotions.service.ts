@@ -38,7 +38,7 @@ import {
   parsePromotionalDestination,
   type PromotionalDestinationError,
   type PromotionalDestinationKind,
-} from "#src/lib/promotional-destination.js";
+} from "#src/modules/home/promotions/promotional-destination.js";
 import { recordPlatformAction } from "#src/services/platform-audit.service.js";
 import {
   requirePlatformCapability,

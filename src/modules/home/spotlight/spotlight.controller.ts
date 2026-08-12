@@ -4,9 +4,9 @@ import {
   respondSpotlightError,
   respondUnauthenticated,
   respondValidationFailed,
-} from "#src/controllers/spotlight-error-response.js";
-import { ReplaceSpotlightSlotsSchema } from "#src/schemas/spotlight.schemas.js";
-import * as spotlightService from "#src/services/spotlight.service.js";
+} from "#src/modules/home/spotlight/spotlight-error-response.js";
+import { ReplaceSpotlightSlotsSchema } from "#src/modules/home/spotlight/spotlight.schemas.js";
+import * as spotlightService from "#src/modules/home/spotlight/spotlight.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /** `GET /spotlight/videos` — PUBLIC. Live, eligible slots only, already ordered. */

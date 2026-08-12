@@ -188,7 +188,7 @@ describe("per-route body caps", () => {
       // alongside the file, so without this import `isMultipart()` would not recognize
       // it, the sweep would treat it as a JSON body-reading route, and it would be
       // reported as missing a declared cap.
-      import("#src/middleware/upload-promotional-slide-image.js"),
+      import("#src/modules/home/promotions/upload-promotional-slide-image.js"),
       // A13's company photography. Like the promotional-carousel route above, it carries
       // TEXT PARTS (`mediaKind`, `altText`) alongside the file, so without this import
       // `isMultipart()` would not recognize it, the sweep would treat it as a JSON

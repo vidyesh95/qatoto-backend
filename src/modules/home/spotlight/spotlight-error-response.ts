@@ -1,7 +1,7 @@
 import type { Response } from "express";
 
-import type { SpotlightError } from "#src/services/spotlight.service.js";
-import { MAX_SPOTLIGHT_SLOTS } from "#src/services/spotlight.service.js";
+import type { SpotlightError } from "#src/modules/home/spotlight/spotlight.service.js";
+import { MAX_SPOTLIGHT_SLOTS } from "#src/modules/home/spotlight/spotlight.service.js";
 
 /**
  * Error mapping for the Spotlight controller.

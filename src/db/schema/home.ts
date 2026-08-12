@@ -1347,7 +1347,7 @@ export const promotionalSlide = pgTable(
      *
      * `//evil.tld/x` starts with "/" and IS an open redirect, so the internal arm has to
      * refuse a doubled leading slash explicitly. The fine-grained parse lives in
-     * `src/lib/promotional-destination.ts` where it can return a useful message; this
+     * `src/modules/home/promotions/promotional-destination.ts` where it can return a useful message; this
      * check exists so the bad row stays UNREPRESENTABLE even if a future code path
      * skips the service.
      *

@@ -23,7 +23,7 @@ import sharp from "sharp";
 
 import { db, pool } from "#src/db/index.js";
 import { promotionalSlide, user } from "#src/db/schema.js";
-import * as promotionsService from "#src/services/promotions.service.js";
+import * as promotionsService from "#src/modules/home/promotions/promotions.service.js";
 
 interface CheckOutcome {
   readonly label: string;

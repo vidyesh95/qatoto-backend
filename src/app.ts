@@ -16,6 +16,8 @@ import engagementRouter, {
   creatorRouter,
 } from "#src/modules/home/engagement/engagement.routes.js";
 import feedRouter from "#src/modules/home/feed/feed.routes.js";
+import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
+import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
@@ -56,7 +58,6 @@ import indexRouter from "#src/routes/index.js";
 import platformAuditRouter from "#src/routes/platform-audit.routes.js";
 import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
-import promotionsRouter from "#src/routes/promotions.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
 } from "#src/routes/proof-of-effort.routes.js";
@@ -67,7 +68,6 @@ import researchProgramsRouter, {
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/routes/research-projects.routes.js";
-import spotlightRouter from "#src/routes/spotlight.routes.js";
 import storeRouter from "#src/routes/store.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
 import usersRouter from "#src/routes/users.routes.js";
