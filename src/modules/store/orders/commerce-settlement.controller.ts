@@ -9,12 +9,12 @@ import {
   ProposeAgreementBodySchema,
   RespondBodySchema,
   ThreadIdParamsSchema,
-} from "#src/schemas/commerce-settlement.schemas.js";
-import * as commerceSettlementService from "#src/services/commerce-settlement.service.js";
+} from "#src/modules/store/orders/commerce-settlement.schemas.js";
+import * as commerceSettlementService from "#src/modules/store/orders/commerce-settlement.service.js";
 import type {
   CommerceSettlementError,
   SettlementActorContext,
-} from "#src/services/commerce-settlement.service.js";
+} from "#src/modules/store/orders/commerce-settlement.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

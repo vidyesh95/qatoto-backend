@@ -1,5 +1,5 @@
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { reconcileCommercePayments } from "#src/services/commerce-payments.service.js";
+import { reconcileCommercePayments } from "#src/modules/store/orders/commerce-payments.service.js";
 
 /**
  * Reconciles commerce payment outbox rows and submitted transfers

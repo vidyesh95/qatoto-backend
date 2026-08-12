@@ -7,7 +7,7 @@ vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
 const { isOrderEligibleForCompletion, isProductLineEligibleForCompletion, isServiceEngagementEligibleForCompletion } =
-  await import("#src/services/commerce-completion.service.js");
+  await import("#src/modules/store/orders/commerce-completion.service.js");
 
 describe("commerce completion eligibility", () => {
   it("requires delivered product quantity and a terminal line balance", () => {

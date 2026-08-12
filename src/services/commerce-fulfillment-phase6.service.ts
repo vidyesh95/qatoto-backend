@@ -36,6 +36,7 @@ import {
   warehouseDeliverableDetail,
   warehouseEngagementDetail,
 } from "#src/db/schema.js";
+import { issueCompletionsForOrder } from "#src/modules/store/orders/commerce-completion.service.js";
 import {
   memberCanOperateBuyer,
   memberCanOperateCounterparty,
@@ -49,7 +50,6 @@ import type {
   ShipmentLegInput,
   TypedDeliverableResultSchema,
 } from "#src/schemas/commerce-fulfillment.schemas.js";
-import { issueCompletionsForOrder } from "#src/services/commerce-completion.service.js";
 import {
   canExecutePaidFulfillmentForOrderState,
   isRequiredDeliverableSatisfied,

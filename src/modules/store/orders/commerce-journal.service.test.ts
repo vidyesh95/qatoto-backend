@@ -10,13 +10,19 @@ vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
 const { COMMERCE_JOURNAL_ACCOUNT_KINDS, COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL, isMemorandumAccountKind } =
-  await import("#src/services/commerce-journal.service.js");
+  await import("#src/modules/store/orders/commerce-journal.service.js");
 
 /**
  * The migration that defines `commerce_settlement_rail_account_guard`. Asserted to be the
  * ONLY definition below, so this test cannot silently read a superseded one.
  */
-const RAIL_BINDING_MIGRATION_URL = new URL("../../drizzle/0087_store_phase_14_rail_binding.sql", import.meta.url);
+// THE ONLY RELATIVE FILESYSTEM PATH IN src/, and it has to be counted by hand on every
+// move: it is `import.meta.url`-relative, so tsc, oxlint and check:specifiers are all blind
+// to it. When this file lived in src/services/ the prefix was `../../`; at
+// src/modules/store/orders/ it is four levels. Getting it wrong does not fail the suite —
+// the file stops COLLECTING, vitest reports "no tests" for it, and the run still says
+// "passed" with a quietly smaller total.
+const RAIL_BINDING_MIGRATION_URL = new URL("../../../../drizzle/0087_store_phase_14_rail_binding.sql", import.meta.url);
 
 /**
  * Pull the `WHEN '<rail>' THEN ARRAY[ ... ]` arms out of the trigger's CASE expression.

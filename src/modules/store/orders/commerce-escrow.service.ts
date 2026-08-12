@@ -20,6 +20,10 @@ import {
 } from "#src/db/schema.js";
 import { logger } from "#src/lib/logger.js";
 import {
+  appendCommerceJournalEntry,
+  recognizeCommission,
+} from "#src/modules/store/orders/commerce-journal.service.js";
+import {
   claimConnectorOutboxRow,
   completeConnectorOutboxRow,
   enqueueConnectorCommand,
@@ -30,10 +34,6 @@ import {
   scheduleConnectorDispatch,
   type CommerceConnectorError,
 } from "#src/services/commerce-connector.service.js";
-import {
-  appendCommerceJournalEntry,
-  recognizeCommission,
-} from "#src/services/commerce-journal.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

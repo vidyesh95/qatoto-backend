@@ -9,6 +9,7 @@ import {
   commerceRfq,
   product,
 } from "#src/db/schema.js";
+import type { CommerceOrdersError } from "#src/modules/store/orders/commerce-orders.service.js";
 import type { FreightMode } from "#src/schemas/commerce-freight-rates.schemas.js";
 import {
   resolveCustomsDwell,
@@ -22,7 +23,6 @@ import {
 } from "#src/services/commerce-freight-journey.service.js";
 import { FREIGHT_MODE_ORDER } from "#src/services/commerce-freight-rating.service.js";
 import type { ConsignmentMeasurement } from "#src/services/commerce-freight-rating.service.js";
-import type { CommerceOrdersError } from "#src/services/commerce-orders.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

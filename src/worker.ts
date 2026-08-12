@@ -12,9 +12,7 @@ import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-vide
 import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
 import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
-import { handleReconcileCommercePayments } from "#src/jobs/reconcile-commerce-payments.js";
 import { handleReconcileConnectorState } from "#src/jobs/reconcile-connector-state.js";
-import { handleReleaseExpiredInventoryReservations } from "#src/jobs/release-expired-inventory-reservations.js";
 import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
 import { handleScanEncryptedDocument } from "#src/jobs/scan-encrypted-document.js";
 import {
@@ -81,6 +79,8 @@ import { handleRecomputeCommerceProductTrending } from "#src/modules/store/catal
 import { handleRecomputePlatformCategoryPopularity } from "#src/modules/store/catalog/recompute-platform-category-popularity.js";
 import { handleRefreshStoreSearchDocument } from "#src/modules/store/catalog/refresh-store-search-document.js";
 import { handleRollupCommerceProductDailySignal } from "#src/modules/store/catalog/rollup-commerce-product-daily-signal.js";
+import { handleReconcileCommercePayments } from "#src/modules/store/orders/reconcile-commerce-payments.js";
+import { handleReleaseExpiredInventoryReservations } from "#src/modules/store/orders/release-expired-inventory-reservations.js";
 import { handleExpireCommerceQuotes } from "#src/modules/store/procurement/expire-commerce-quotes.js";
 
 /**

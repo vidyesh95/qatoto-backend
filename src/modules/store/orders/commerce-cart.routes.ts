@@ -1,7 +1,5 @@
 import express from "express";
 
-import * as commerceCartController from "#src/controllers/commerce-cart.controller.js";
-import * as commerceCheckoutController from "#src/controllers/commerce-checkout.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
@@ -10,6 +8,8 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import * as commerceMerchandisingController from "#src/modules/store/catalog/commerce-merchandising.controller.js";
+import * as commerceCartController from "#src/modules/store/orders/commerce-cart.controller.js";
+import * as commerceCheckoutController from "#src/modules/store/orders/commerce-checkout.controller.js";
 /**
  * §14. Every route here but `checkout/confirm` runs on a PENDING buyer workspace. The
  * confirm keeps `requireActiveBuyerCommerceOrganization` because that is one of the four

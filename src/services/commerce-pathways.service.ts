@@ -20,15 +20,15 @@ import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import type { CommerceProductRelationKind } from "#src/modules/store/catalog/commerce-product-relations.service.js";
 import { resolveEligibleProductCardsByIds } from "#src/modules/store/catalog/store-catalog.service.js";
-import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import {
   getCart,
   getOrCreateCartForUpdate,
   supersedeActiveCheckoutPrepares,
   upsertCartProductLine,
   type CommerceCartProjection,
-} from "#src/services/commerce-cart.service.js";
+} from "#src/modules/store/orders/commerce-cart.service.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { getPathwaySetBySlug } from "#src/services/store-pathways.service.js";
 import type { Result } from "#src/types/index.js";
 

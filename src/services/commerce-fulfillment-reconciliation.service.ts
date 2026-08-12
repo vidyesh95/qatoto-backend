@@ -11,7 +11,7 @@ import {
   commerceShipmentLeg,
   commerceShipmentProductLine,
 } from "#src/db/schema.js";
-import { issueCompletionsForOrder } from "#src/services/commerce-completion.service.js";
+import { issueCompletionsForOrder } from "#src/modules/store/orders/commerce-completion.service.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type OrderState = typeof commerceOrder.$inferSelect.state;

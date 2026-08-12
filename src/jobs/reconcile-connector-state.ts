@@ -1,8 +1,8 @@
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
+import { reconcileExternalEscrowSessions } from "#src/modules/store/orders/commerce-escrow.service.js";
+import { expireStaleSettlementAgreements } from "#src/modules/store/orders/commerce-settlement.service.js";
 import { reconcileConnectorOutbox } from "#src/services/commerce-connector.service.js";
-import { reconcileExternalEscrowSessions } from "#src/services/commerce-escrow.service.js";
-import { expireStaleSettlementAgreements } from "#src/services/commerce-settlement.service.js";
 
 /**
  * Hourly connector reconciliation (STORE Phase 14).

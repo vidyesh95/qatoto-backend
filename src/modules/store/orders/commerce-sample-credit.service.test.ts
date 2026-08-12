@@ -6,7 +6,7 @@ stubServerEnvironment();
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
-const { selectConsumableCredits } = await import("#src/services/commerce-sample-credit.service.js");
+const { selectConsumableCredits } = await import("#src/modules/store/orders/commerce-sample-credit.service.js");
 
 type SampleCredit = Parameters<typeof selectConsumableCredits>[0][number];
 

@@ -25,8 +25,10 @@ stubServerEnvironment();
 vi.mock("dotenv/config", () => ({}));
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 
-const { COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL } = await import("#src/services/commerce-journal.service.js");
-const { planSettlementPostings, planRefundPostings } = await import("#src/services/commerce-payments.service.js");
+const { COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL } =
+  await import("#src/modules/store/orders/commerce-journal.service.js");
+const { planSettlementPostings, planRefundPostings } =
+  await import("#src/modules/store/orders/commerce-payments.service.js");
 
 const ORDER_ID = "order-1";
 const AMOUNT = 9_600_000n;

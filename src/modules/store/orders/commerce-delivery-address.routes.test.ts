@@ -50,7 +50,7 @@ const deliveryAddressStubs = vi.hoisted(() => ({
   revealOrderDeliveryAddress: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-delivery-address.service.js", () => deliveryAddressStubs);
+vi.mock("#src/modules/store/orders/commerce-delivery-address.service.js", () => deliveryAddressStubs);
 
 const REVEALED_ADDRESS = {
   orderId: "order_1",
@@ -70,7 +70,7 @@ describe("order delivery address reveal route (A15)", () => {
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const ordersRouter = (await import("#src/routes/commerce-orders.routes.js")).default;
+    const ordersRouter = (await import("#src/modules/store/orders/commerce-orders.routes.js")).default;
     app.use("/commerce", ordersRouter);
   });
 

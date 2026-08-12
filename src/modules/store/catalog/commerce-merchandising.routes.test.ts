@@ -122,7 +122,7 @@ describe("commerce guided pathway routes", () => {
   beforeAll(async () => {
     app = await buildTestApp();
     const merchandisingRouter = (await import("#src/modules/store/catalog/commerce-merchandising.routes.js")).default;
-    const cartRouter = (await import("#src/routes/commerce-cart.routes.js")).default;
+    const cartRouter = (await import("#src/modules/store/orders/commerce-cart.routes.js")).default;
     app.use("/commerce", merchandisingRouter);
     app.use("/commerce", cartRouter);
   });

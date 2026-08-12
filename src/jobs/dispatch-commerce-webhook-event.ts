@@ -1,5 +1,5 @@
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { processCommercePaymentOutboxRow } from "#src/services/commerce-payments.service.js";
+import { processCommercePaymentOutboxRow } from "#src/modules/store/orders/commerce-payments.service.js";
 
 /**
  * Dispatches one commerce payment outbox row to the provider adapter

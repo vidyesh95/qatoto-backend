@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { ACCEPTED_IMAGE_FORMATS_SENTENCE, describeUnsupportedImageFormat } from "#src/lib/image.js";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import * as commerceCompletionService from "#src/modules/store/orders/commerce-completion.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   AddDisputeNoteSchema,
@@ -23,7 +24,6 @@ import {
 } from "#src/schemas/commerce-trust.schemas.js";
 import { EmptyObjectSchema } from "#src/schemas/commerce-trust.schemas.js";
 import { StoreReviewListQuerySchema } from "#src/schemas/store-reviews.schemas.js";
-import * as commerceCompletionService from "#src/services/commerce-completion.service.js";
 import * as commerceTrustService from "#src/services/commerce-trust.service.js";
 import type {
   CommerceReviewMediaError,

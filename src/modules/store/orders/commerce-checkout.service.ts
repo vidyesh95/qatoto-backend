@@ -33,14 +33,27 @@ import {
   latestPromisedDeliveryAt,
 } from "#src/lib/commerce-promised-delivery.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import { projectPrepareArrivalWindow } from "#src/services/commerce-arrival-window.service.js";
 import {
   getOrCreateCartForUpdate,
   supersedeActiveCheckoutPrepares,
   type CommerceCartActorContext,
   type DatabaseTransaction,
-} from "#src/services/commerce-cart.service.js";
+} from "#src/modules/store/orders/commerce-cart.service.js";
+import {
+  createEscrowSessionForOrder,
+  scheduleEscrowCommands,
+} from "#src/modules/store/orders/commerce-escrow.service.js";
+import {
+  consumeSampleCredits,
+  listSpendableSampleCredits,
+  selectConsumableCredits,
+} from "#src/modules/store/orders/commerce-sample-credit.service.js";
+import {
+  consumeSettlementAgreement,
+  resolveSettlementRail,
+} from "#src/modules/store/orders/commerce-settlement.service.js";
+import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import { projectPrepareArrivalWindow } from "#src/services/commerce-arrival-window.service.js";
 import {
   resolveCustomizationSelections,
   type CommerceCustomizationError,
@@ -50,19 +63,6 @@ import {
   estimateDeliveryForLines,
   type DeliveryEstimateProjection,
 } from "#src/services/commerce-delivery-estimate.service.js";
-import {
-  createEscrowSessionForOrder,
-  scheduleEscrowCommands,
-} from "#src/services/commerce-escrow.service.js";
-import {
-  consumeSampleCredits,
-  listSpendableSampleCredits,
-  selectConsumableCredits,
-} from "#src/services/commerce-sample-credit.service.js";
-import {
-  consumeSettlementAgreement,
-  resolveSettlementRail,
-} from "#src/services/commerce-settlement.service.js";
 import type { Result } from "#src/types/index.js";
 
 type PrepareRow = typeof commerceCheckoutPrepare.$inferSelect;

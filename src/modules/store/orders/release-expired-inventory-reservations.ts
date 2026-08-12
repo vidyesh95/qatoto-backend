@@ -1,5 +1,5 @@
 import { parseJobPayload, JOB_NAMES, JOB_PAYLOAD_SCHEMAS } from "#src/lib/jobs.js";
-import { releaseExpiredInventoryReservations } from "#src/services/commerce-checkout.service.js";
+import { releaseExpiredInventoryReservations } from "#src/modules/store/orders/commerce-checkout.service.js";
 
 /**
  * Releases expired checkout preparations and inventory holds (STORE Phase 4).

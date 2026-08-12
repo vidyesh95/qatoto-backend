@@ -1,10 +1,10 @@
 import express from "express";
 
-import * as commerceSettlementController from "#src/controllers/commerce-settlement.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import { commerceSettlementWriteLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as commerceSettlementController from "#src/modules/store/orders/commerce-settlement.controller.js";
 import { requireActiveCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 /**

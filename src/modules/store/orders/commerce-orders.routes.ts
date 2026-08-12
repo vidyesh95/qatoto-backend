@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceOrdersController from "#src/controllers/commerce-orders.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
@@ -9,6 +8,7 @@ import {
   commerceOrderWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as commerceOrdersController from "#src/modules/store/orders/commerce-orders.controller.js";
 import {
   requireActiveBuyerCommerceOrganization,
   requireActiveCommerceOrganization,

@@ -2,14 +2,14 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
-import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   ConfirmCheckoutSchema,
   EmptyObjectSchema,
   PrepareCheckoutSchema,
-} from "#src/schemas/commerce-checkout.schemas.js";
-import * as commerceCheckoutService from "#src/services/commerce-checkout.service.js";
-import type { CommerceCheckoutError } from "#src/services/commerce-checkout.service.js";
+} from "#src/modules/store/orders/commerce-checkout.schemas.js";
+import * as commerceCheckoutService from "#src/modules/store/orders/commerce-checkout.service.js";
+import type { CommerceCheckoutError } from "#src/modules/store/orders/commerce-checkout.service.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 const IDEMPOTENCY_HEADER = "idempotency-key";

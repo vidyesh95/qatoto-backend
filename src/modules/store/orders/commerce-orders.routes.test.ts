@@ -116,7 +116,7 @@ const serviceStubs = vi.hoisted(() => ({
   cancelOrder: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-orders.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/orders/commerce-orders.service.js", () => serviceStubs);
 
 const arrivalWindowStubs = vi.hoisted(() => ({
   getOrderArrivalWindow: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
@@ -147,7 +147,7 @@ describe("commerce order routes", () => {
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const ordersRouter = (await import("#src/routes/commerce-orders.routes.js")).default;
+    const ordersRouter = (await import("#src/modules/store/orders/commerce-orders.routes.js")).default;
     app.use("/commerce", ordersRouter);
   });
 

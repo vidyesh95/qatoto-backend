@@ -132,8 +132,8 @@ const completionStubs = vi.hoisted(() => ({
   loadOrderCompletionIndex: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-completion.service.js", async () => ({
-  ...(await vi.importActual<Record<string, unknown>>("#src/services/commerce-completion.service.js")),
+vi.mock("#src/modules/store/orders/commerce-completion.service.js", async () => ({
+  ...(await vi.importActual<Record<string, unknown>>("#src/modules/store/orders/commerce-completion.service.js")),
   ...completionStubs,
 }));
 

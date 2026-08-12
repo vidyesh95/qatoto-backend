@@ -1,5 +1,5 @@
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { processConnectorOutboxRow } from "#src/services/commerce-escrow.service.js";
+import { processConnectorOutboxRow } from "#src/modules/store/orders/commerce-escrow.service.js";
 
 /**
  * Dispatches one connector outbox row to its provider adapter (STORE Phase 14).

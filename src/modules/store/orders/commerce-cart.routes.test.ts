@@ -120,15 +120,15 @@ const checkoutServiceStubs = vi.hoisted(() => ({
   confirmCheckout: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-cart.service.js", () => cartServiceStubs);
-vi.mock("#src/services/commerce-checkout.service.js", () => checkoutServiceStubs);
+vi.mock("#src/modules/store/orders/commerce-cart.service.js", () => cartServiceStubs);
+vi.mock("#src/modules/store/orders/commerce-checkout.service.js", () => checkoutServiceStubs);
 
 describe("commerce cart and checkout routes", () => {
   let app: Express;
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const cartRouter = (await import("#src/routes/commerce-cart.routes.js")).default;
+    const cartRouter = (await import("#src/modules/store/orders/commerce-cart.routes.js")).default;
     app.use("/commerce", cartRouter);
   });
 

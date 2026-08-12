@@ -116,7 +116,7 @@ const PHASE_21_COLLECTION_READS = [
     breaks: "a provider's own bid list",
   },
   {
-    router: "#src/routes/commerce-payments.routes.js",
+    router: "#src/modules/store/orders/commerce-payments.routes.js",
     collection: "/refunds",
     breaks: "the only reader a refund has",
   },
@@ -182,7 +182,7 @@ describe("Phase 21b collection reads", () => {
     "#src/routes/commerce-documents.routes.js",
     "#src/routes/commerce-fulfillment.routes.js",
     "#src/modules/store/procurement/commerce-quotes.routes.js",
-    "#src/routes/commerce-payments.routes.js",
+    "#src/modules/store/orders/commerce-payments.routes.js",
   ])("%s declares no route that swallows a later one", async (routerModule) => {
     const routes = declaredRoutes((await import(routerModule)).default);
 

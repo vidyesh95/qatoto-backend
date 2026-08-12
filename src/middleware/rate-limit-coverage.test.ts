@@ -96,8 +96,8 @@ const MOUNTED_ROUTERS: readonly {
     specifier: "#src/modules/store/procurement/commerce-messages.routes.js",
     exportName: "default",
   },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-cart.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-orders.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/modules/store/orders/commerce-cart.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/modules/store/orders/commerce-orders.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-fulfillment.routes.js", exportName: "default" },
   // Phase 20 (§19.2–§19.3). This line lands in the SAME commit as the mount in app.ts:
   // a router missing from this table is silently unchecked, which has happened before.
@@ -110,7 +110,7 @@ const MOUNTED_ROUTERS: readonly {
    * failure mode the header comment above predicted.
    */
   { mountPath: "/commerce", specifier: "#src/routes/commerce-trust.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-payments.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/modules/store/orders/commerce-payments.routes.js", exportName: "default" },
   {
     mountPath: "/commerce",
     specifier: "#src/modules/store/catalog/commerce-merchandising.routes.js",
@@ -129,7 +129,11 @@ const MOUNTED_ROUTERS: readonly {
   // Phase 14. The webhook router is the only mounted router whose writes carry no session,
   // so its limiter is IP-keyed; it is listed here precisely because "no session" must not
   // become an excuse for "no bound".
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-settlement.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/orders/commerce-settlement.routes.js",
+    exportName: "default",
+  },
   { mountPath: "/webhooks", specifier: "#src/routes/commerce-webhooks.routes.js", exportName: "default" },
   /**
    * Phase 15's trade attachments and Phase 16's taxonomy admin were mounted in `app.ts`

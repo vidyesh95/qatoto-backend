@@ -2,19 +2,19 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
-import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import * as commerceDeliveryAddressService from "#src/modules/store/orders/commerce-delivery-address.service.js";
+import type { CommerceDeliveryAddressError } from "#src/modules/store/orders/commerce-delivery-address.service.js";
 import {
   ArrivalWindowQuerySchema,
   EmptyObjectSchema,
   EmptyRequestBodySchema,
   ListQuerySchema,
   OrderIdParamsSchema,
-} from "#src/schemas/commerce-orders.schemas.js";
+} from "#src/modules/store/orders/commerce-orders.schemas.js";
+import * as commerceOrdersService from "#src/modules/store/orders/commerce-orders.service.js";
+import type { CommerceOrdersError } from "#src/modules/store/orders/commerce-orders.service.js";
+import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import * as commerceArrivalWindowService from "#src/services/commerce-arrival-window.service.js";
-import * as commerceDeliveryAddressService from "#src/services/commerce-delivery-address.service.js";
-import type { CommerceDeliveryAddressError } from "#src/services/commerce-delivery-address.service.js";
-import * as commerceOrdersService from "#src/services/commerce-orders.service.js";
-import type { CommerceOrdersError } from "#src/services/commerce-orders.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

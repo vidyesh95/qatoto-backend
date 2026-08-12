@@ -28,6 +28,7 @@ import {
   commerceShipmentProductLine,
 } from "#src/db/schema.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { issueCompletionsForOrder } from "#src/modules/store/orders/commerce-completion.service.js";
 import {
   memberCanOperateBuyer,
   memberCanOperateCounterparty,
@@ -36,7 +37,6 @@ import {
 } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import type { ShipmentLegInput } from "#src/schemas/commerce-fulfillment.schemas.js";
-import { issueCompletionsForOrder } from "#src/services/commerce-completion.service.js";
 import { insertShipmentLegs } from "#src/services/commerce-fulfillment-phase6.service.js";
 import {
   canExecutePaidFulfillmentForOrderState,
