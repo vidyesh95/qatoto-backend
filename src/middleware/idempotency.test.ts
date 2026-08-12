@@ -45,9 +45,16 @@ vi.mock("#src/db/index.js", () => {
   };
 });
 
-const handler = vi.fn<(...args: readonly unknown[]) => unknown>();
+interface ProbeApp {
+  readonly app: express.Express;
+  readonly handler: ReturnType<typeof vi.fn<(...args: readonly unknown[]) => unknown>>;
+}
 
-async function buildProbeApp(): Promise<express.Express> {
+async function buildProbeApp(): Promise<ProbeApp> {
+  // ONE SPY PER APP, not one per module. Every test builds its own probe, so a request that
+  // outlives its test cannot land on the next test's handler and inflate its call count —
+  // which is exactly how "passes a keyless request straight through" failed intermittently.
+  const handler = vi.fn<(...args: readonly unknown[]) => unknown>();
   const { idempotency } = await import("#src/middleware/idempotency.js");
   const app = express();
   app.use(express.json());
@@ -93,7 +100,7 @@ async function buildProbeApp(): Promise<express.Express> {
       res.status(201).json({ status: "success", statusCode: 201, message: "created" });
     },
   );
-  return app;
+  return { app, handler };
 }
 
 describe("idempotency middleware", () => {
@@ -103,7 +110,7 @@ describe("idempotency middleware", () => {
   });
 
   it("passes a keyless request straight through", async () => {
-    const app = await buildProbeApp();
+    const { app, handler } = await buildProbeApp();
 
     const response = await request(app).post("/probe").send({ amountInCents: "100" });
 
@@ -112,7 +119,7 @@ describe("idempotency middleware", () => {
   });
 
   it("refuses a keyless request only where the route insists", async () => {
-    const app = await buildProbeApp();
+    const { app, handler } = await buildProbeApp();
 
     const response = await request(app).post("/probe-required").send({ amountInCents: "100" });
 
@@ -121,7 +128,7 @@ describe("idempotency middleware", () => {
   });
 
   it("rejects a key too short to be a real one", async () => {
-    const app = await buildProbeApp();
+    const { app, handler } = await buildProbeApp();
 
     const response = await request(app).post("/probe").set("Idempotency-Key", "short").send({ amountInCents: "100" });
 
@@ -130,7 +137,7 @@ describe("idempotency middleware", () => {
   });
 
   it("records the response of a first attempt", async () => {
-    const app = await buildProbeApp();
+    const { app, handler } = await buildProbeApp();
 
     await request(app).post("/probe").set("Idempotency-Key", "attempt-0000001").send({ amountInCents: "100" });
 
@@ -145,7 +152,7 @@ describe("idempotency middleware", () => {
   });
 
   it("derives an organization-specific key only from proven active context", async () => {
-    const app = await buildProbeApp();
+    const { app } = await buildProbeApp();
 
     await request(app)
       .post("/commerce-probe")
@@ -164,7 +171,7 @@ describe("idempotency middleware", () => {
   });
 
   it("replays the original response and does not run the handler again", async () => {
-    const app = await buildProbeApp();
+    const { app, handler } = await buildProbeApp();
 
     // The fingerprint the middleware computes for this exact request. Captured from a
     // first pass so the replay branch is exercised against a real value rather than a
@@ -196,7 +203,7 @@ describe("idempotency middleware", () => {
   });
 
   it("answers 409 when the same key carries a different body", async () => {
-    const app = await buildProbeApp();
+    const { app, handler } = await buildProbeApp();
 
     selectRows.push({
       requestFingerprint: "0".repeat(64),
@@ -214,7 +221,7 @@ describe("idempotency middleware", () => {
   });
 
   it("includes a persisted multipart filename in the request fingerprint", async () => {
-    const app = await buildProbeApp();
+    const { app, handler } = await buildProbeApp();
     const evidenceBytes = Buffer.from("same evidence bytes");
 
     await request(app)
