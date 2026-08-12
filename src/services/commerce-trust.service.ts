@@ -1090,6 +1090,45 @@ async function repackReviewMediaPositions(
   );
 }
 
+interface ReviewMediaOccupancy {
+  readonly attachedCount: number;
+  readonly nextPosition: number;
+}
+
+/**
+ * The gallery's occupancy, as the GALLERY sees it rather than as the counter does (A40).
+ *
+ * `commerce_review.media_count` counts VISIBLE media from Phase 23 on, and a row hidden by
+ * `revalidate-youtube-embeds` KEEPS ITS SLOT so an un-hide restores it in place. So the counter
+ * answers "how much can a buyer see" and this answers "how much is attached" — which is what the
+ * six-item cap and the next position both need, and neither of them is about visibility.
+ *
+ * Reading the counter for either is the bug this exists to close: one hidden row and the next
+ * attach picks an occupied position, which `commerce_review_media_position_uidx` refuses as a 500,
+ * and the cap silently becomes "six visible" against a `position BETWEEN 0 AND 5` CHECK that says
+ * six attached.
+ *
+ * `max(position) + 1`, not `count(*)`, because the two disagree the moment a detach is interrupted
+ * — and the unique index is on the position, not on the count.
+ */
+async function readReviewMediaOccupancy(
+  executor: DatabaseTransaction | typeof db,
+  reviewId: string,
+): Promise<ReviewMediaOccupancy> {
+  const [occupancy] = await executor
+    .select({
+      attachedCount: sql<number>`count(*)::int`,
+      nextPosition: sql<number>`(coalesce(max(${commerceReviewMedia.position}), -1) + 1)::int`,
+    })
+    .from(commerceReviewMedia)
+    .where(eq(commerceReviewMedia.reviewId, reviewId));
+
+  return {
+    attachedCount: occupancy?.attachedCount ?? 0,
+    nextPosition: occupancy?.nextPosition ?? 0,
+  };
+}
+
 function projectReviewMedia(media: typeof commerceReviewMedia.$inferSelect): ReviewMediaProjection {
   return {
     id: media.id,
@@ -1154,7 +1193,8 @@ export async function attachReviewPhoto(
   if (!preflightReview) {
     return { success: false, error: { type: "NOT_FOUND" } };
   }
-  if (preflightReview.mediaCount >= MAXIMUM_REVIEW_MEDIA_COUNT) {
+  const preflightOccupancy = await readReviewMediaOccupancy(db, preflightReview.id);
+  if (preflightOccupancy.attachedCount >= MAXIMUM_REVIEW_MEDIA_COUNT) {
     return {
       success: false,
       error: { type: "MEDIA_LIMIT_REACHED", limit: MAXIMUM_REVIEW_MEDIA_COUNT },
@@ -1179,7 +1219,8 @@ export async function attachReviewPhoto(
     const outcome = await db.transaction(async (transaction) => {
       const review = await loadOwnVisibleReview(transaction, reviewId, actor.organizationId, true);
       if (!review) return { status: "not_found" as const };
-      if (review.mediaCount >= MAXIMUM_REVIEW_MEDIA_COUNT) {
+      const occupancy = await readReviewMediaOccupancy(transaction, review.id);
+      if (occupancy.attachedCount >= MAXIMUM_REVIEW_MEDIA_COUNT) {
         return { status: "limit_reached" as const };
       }
 
@@ -1192,7 +1233,7 @@ export async function attachReviewPhoto(
           url: uploaded.value.secureUrl,
           widthPx: normalized.value.width,
           heightPx: normalized.value.height,
-          position: review.mediaCount,
+          position: occupancy.nextPosition,
         })
         .returning();
       if (!inserted) return { status: "limit_reached" as const };
@@ -1261,10 +1302,14 @@ export async function attachReviewPhoto(
  * therefore stored and rendered indefinitely. A false comment about a verification is
  * worse than a missing one, so it says the true thing now.
  *
- * The decided design for when it is built: a dead video HIDES ITS MEDIA ROW and leaves
- * the review standing. A buyer's testimony must not be deleted because a third-party
- * host removed a file, which rules out dropping the row and recomputing `mediaCount`.
- * That needs a state column on `commerce_review_media`; it is not built yet.
+ * WHAT CHECKS IT AFTERWARDS, since Phase 23 (A40): `revalidate-youtube-embeds` re-reads
+ * every `youtube_video` row nightly and a dead one HIDES ITS MEDIA ROW —
+ * `state = 'unavailable_upstream'` — leaving the review standing. A buyer's testimony
+ * must not be deleted because a third-party host removed a file, which is why the row is
+ * hidden rather than dropped, and why the hide is reversible when the video returns.
+ *
+ * A hidden row KEEPS ITS POSITION, so `mediaCount` — which counts VISIBLE media — is not
+ * what the cap or the next position may be read from. See `readReviewMediaOccupancy`.
  */
 export async function attachReviewVideo(
   actor: CommerceTrustActorContext,
@@ -1283,7 +1328,8 @@ export async function attachReviewVideo(
   const outcome = await db.transaction(async (transaction) => {
     const review = await loadOwnVisibleReview(transaction, reviewId, actor.organizationId, true);
     if (!review) return { status: "not_found" as const };
-    if (review.mediaCount >= MAXIMUM_REVIEW_MEDIA_COUNT) {
+    const occupancy = await readReviewMediaOccupancy(transaction, review.id);
+    if (occupancy.attachedCount >= MAXIMUM_REVIEW_MEDIA_COUNT) {
       return { status: "limit_reached" as const };
     }
 
@@ -1293,7 +1339,7 @@ export async function attachReviewVideo(
         reviewId: review.id,
         mediaKind: "youtube_video",
         youtubeVideoId,
-        position: review.mediaCount,
+        position: occupancy.nextPosition,
       })
       .returning();
     if (!inserted) return { status: "limit_reached" as const };
@@ -1508,11 +1554,21 @@ export async function detachReviewMedia(
 
     await repackReviewMediaPositions(transaction, review.id);
 
-    const [updated] = await transaction
-      .update(commerceReview)
-      .set({ mediaCount: sql`GREATEST(${commerceReview.mediaCount} - 1, 0)` })
-      .where(eq(commerceReview.id, review.id))
-      .returning({ mediaCount: commerceReview.mediaCount });
+    /**
+     * A40. ONLY A VISIBLE ROW MOVES THE COUNTER. `media_count` counts visible media, and
+     * `revalidate-youtube-embeds` already decremented when it hid this row — decrementing again
+     * here would take the counter one below the media the review still shows, and
+     * `verify-store-phase-10-constraints` would then report drift against a review nobody
+     * mis-edited.
+     */
+    const [updated] =
+      deleted.state === "visible"
+        ? await transaction
+            .update(commerceReview)
+            .set({ mediaCount: sql`GREATEST(${commerceReview.mediaCount} - 1, 0)` })
+            .where(eq(commerceReview.id, review.id))
+            .returning({ mediaCount: commerceReview.mediaCount })
+        : [{ mediaCount: review.mediaCount }];
 
     await appendAuditOrThrow(transaction, {
       organizationId: actor.organizationId,
