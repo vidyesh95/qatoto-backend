@@ -1176,6 +1176,344 @@ async function lockEngagementForCommand(
   return { status: "locked" as const, engagement };
 }
 
+/**
+ * Interpret one command against a locked engagement and return the fields it changes.
+ *
+ * A STATE DELTA, NOT A WRITE. Nineteen refusals live in this switch and any of them has to
+ * leave the engagement untouched, so nothing here updates the row — it computes what the
+ * next version should look like and hands that back. The caller performs the single
+ * optimistic UPDATE, which is also the only place the version is bumped.
+ *
+ * THE EIGHT FIELDS ARE ONLY EVER ASSIGNED HERE, never read back. That is what makes them a
+ * delta rather than accumulator state: each command sets the subset it owns, and the ones it
+ * does not touch keep the value they were seeded with from the engagement.
+ *
+ * The switch ends in a `never` check, so a new command that nobody handles fails the build
+ * rather than silently falling through to an unchanged engagement.
+ */
+async function applyEngagementCommand(
+  transaction: DatabaseTransaction,
+  actor: CommerceFulfillmentActorContext,
+  engagement: EngagementRow,
+  command: ServiceEngagementCommand,
+  now: Date,
+) {
+  let nextState: EngagementState = engagement.state;
+  let scheduledAt = engagement.scheduledAt;
+  let startedAt = engagement.startedAt;
+  let completedAt = engagement.completedAt;
+  let cancelledAt = engagement.cancelledAt;
+  let executionContractState = engagement.executionContractState;
+  let executionContractProvenance = engagement.executionContractProvenance;
+  let requiresDeliverableNormalization = engagement.requiresDeliverableNormalization;
+
+  switch (command.command) {
+    case "initialize": {
+      if (engagement.executionContractState === "ready") {
+        return {
+          status: "invalid_state" as const,
+          currentState: engagement.state,
+          command: command.command,
+        };
+      }
+      const detailResult = await ensureEngagementDetailFromInitialize(
+        transaction,
+        engagement,
+        command,
+      );
+      if (!detailResult.success) {
+        return { status: "error" as const, error: detailResult.error };
+      }
+      for (const deliverable of command.deliverables) {
+        await transaction.insert(commerceEngagementDeliverable).values({
+          engagementId: engagement.id,
+          sequence: deliverable.sequence,
+          title: deliverable.title,
+          isRequired: deliverable.isRequired,
+          state: "planned",
+          dueAt: deliverable.dueAt === undefined ? null : new Date(deliverable.dueAt),
+          createdByMemberId: actor.memberId,
+        });
+      }
+      executionContractState = "ready";
+      executionContractProvenance = "operator_initialized";
+      if (command.deliverables.length > 0) {
+        requiresDeliverableNormalization = false;
+      }
+      break;
+    }
+    case "normalize_deliverables": {
+      if (!engagement.requiresDeliverableNormalization) {
+        return {
+          status: "invalid_state" as const,
+          currentState: engagement.state,
+          command: command.command,
+        };
+      }
+      if (engagement.executionContractState !== "ready") {
+        return { status: "contract_missing" as const };
+      }
+      const existingDeliverables = await transaction
+        .select({ id: commerceEngagementDeliverable.id })
+        .from(commerceEngagementDeliverable)
+        .where(eq(commerceEngagementDeliverable.engagementId, engagement.id))
+        .limit(1);
+      if (existingDeliverables.length > 0) {
+        return {
+          status: "error" as const,
+          error: {
+            type: "VALIDATION_FAILED",
+            message:
+              "Structured deliverables already exist; free-text obligations cannot be re-normalized.",
+          } satisfies CommercePhase6Error,
+        };
+      }
+      for (const deliverable of command.deliverables) {
+        await transaction.insert(commerceEngagementDeliverable).values({
+          engagementId: engagement.id,
+          sequence: deliverable.sequence,
+          title: deliverable.title,
+          isRequired: deliverable.isRequired,
+          state: "planned",
+          dueAt: deliverable.dueAt === undefined ? null : new Date(deliverable.dueAt),
+          createdByMemberId: actor.memberId,
+        });
+      }
+      requiresDeliverableNormalization = false;
+      break;
+    }
+    case "schedule":
+      if (engagement.state !== "awaiting_provider") {
+        return {
+          status: "invalid_state" as const,
+          currentState: engagement.state,
+          command: command.command,
+        };
+      }
+      nextState = "scheduled";
+      scheduledAt = now;
+      break;
+    case "start":
+      if (engagement.state !== "scheduled" && engagement.state !== "awaiting_buyer") {
+        return {
+          status: "invalid_state" as const,
+          currentState: engagement.state,
+          command: command.command,
+        };
+      }
+      nextState = "in_progress";
+      startedAt = startedAt ?? now;
+      break;
+    case "request_buyer_action":
+      if (engagement.state !== "in_progress") {
+        return {
+          status: "invalid_state" as const,
+          currentState: engagement.state,
+          command: command.command,
+        };
+      }
+      nextState = "awaiting_buyer";
+      break;
+    case "submit_deliverable": {
+      if (command.result.kind !== engagement.providerKind) {
+        return {
+          status: "error" as const,
+          error: { type: "PROVIDER_KIND_MISMATCH" } satisfies CommercePhase6Error,
+        };
+      }
+      const [deliverable] = await transaction
+        .select()
+        .from(commerceEngagementDeliverable)
+        .where(eq(commerceEngagementDeliverable.id, command.deliverableId))
+        .for("update");
+      if (!deliverable || deliverable.engagementId !== engagement.id) {
+        return { status: "not_found" as const };
+      }
+      if (deliverable.state !== "planned" && deliverable.state !== "submitted") {
+        return {
+          status: "invalid_state" as const,
+          currentState: deliverable.state,
+          command: command.command,
+        };
+      }
+      if (command.evidenceDocumentId) {
+        const documentCheck = await assertAvailableDocument(
+          transaction,
+          actor.organizationId,
+          command.evidenceDocumentId,
+        );
+        if (!documentCheck.success) {
+          return { status: "error" as const, error: documentCheck.error };
+        }
+      }
+      await transaction
+        .delete(freightDeliverableDetail)
+        .where(eq(freightDeliverableDetail.deliverableId, deliverable.id));
+      await transaction
+        .delete(customsBrokerageDeliverableDetail)
+        .where(eq(customsBrokerageDeliverableDetail.deliverableId, deliverable.id));
+      await transaction
+        .delete(insuranceDeliverableDetail)
+        .where(eq(insuranceDeliverableDetail.deliverableId, deliverable.id));
+      await transaction
+        .delete(inspectionDeliverableDetail)
+        .where(eq(inspectionDeliverableDetail.deliverableId, deliverable.id));
+      await transaction
+        .delete(testingCertificationDeliverableDetail)
+        .where(eq(testingCertificationDeliverableDetail.deliverableId, deliverable.id));
+      await transaction
+        .delete(warehouseDeliverableDetail)
+        .where(eq(warehouseDeliverableDetail.deliverableId, deliverable.id));
+      await transaction
+        .delete(marketingDeliverableDetail)
+        .where(eq(marketingDeliverableDetail.deliverableId, deliverable.id));
+      await transaction
+        .delete(foreignExchangeDeliverableDetail)
+        .where(eq(foreignExchangeDeliverableDetail.deliverableId, deliverable.id));
+
+      const detailInsert = await insertTypedDeliverableDetail(
+        transaction,
+        deliverable.id,
+        command.result,
+      );
+      if (!detailInsert.success) {
+        return { status: "error" as const, error: detailInsert.error };
+      }
+
+      const [eventCount] = await transaction
+        .select({ count: sql<number>`count(*)::int` })
+        .from(commerceEngagementDeliverableEvent)
+        .where(eq(commerceEngagementDeliverableEvent.deliverableId, deliverable.id));
+      await transaction.insert(commerceEngagementDeliverableEvent).values({
+        deliverableId: deliverable.id,
+        sequence: eventCount?.count ?? 0,
+        previousState: deliverable.state,
+        nextState: "submitted",
+        commandKind: "submit_deliverable",
+        note: command.note ?? null,
+        resultSnapshotJson: JSON.stringify(command.result),
+        evidenceDocumentId: command.evidenceDocumentId ?? null,
+        occurredAt: now,
+        createdByMemberId: actor.memberId,
+      });
+      await transaction
+        .update(commerceEngagementDeliverable)
+        .set({
+          state: "submitted",
+          submittedAt: now,
+          reviewedAt: null,
+          reviewNote: null,
+          evidenceDocumentId: command.evidenceDocumentId ?? null,
+          updatedAt: now,
+        })
+        .where(eq(commerceEngagementDeliverable.id, deliverable.id));
+      if (engagement.state === "awaiting_provider" || engagement.state === "scheduled") {
+        nextState = "in_progress";
+        startedAt = startedAt ?? now;
+      }
+      break;
+    }
+    case "accept_deliverable":
+    case "reject_deliverable":
+    case "waive_deliverable": {
+      const [deliverable] = await transaction
+        .select()
+        .from(commerceEngagementDeliverable)
+        .where(eq(commerceEngagementDeliverable.id, command.deliverableId))
+        .for("update");
+      if (!deliverable || deliverable.engagementId !== engagement.id) {
+        return { status: "not_found" as const };
+      }
+      const nextDeliverableState =
+        command.command === "accept_deliverable"
+          ? ("accepted" as const)
+          : command.command === "waive_deliverable"
+            ? ("waived" as const)
+            : ("planned" as const);
+      if (command.command !== "waive_deliverable" && deliverable.state !== "submitted") {
+        return {
+          status: "invalid_state" as const,
+          currentState: deliverable.state,
+          command: command.command,
+        };
+      }
+      if (command.command === "waive_deliverable" && deliverable.state === "accepted") {
+        return {
+          status: "invalid_state" as const,
+          currentState: deliverable.state,
+          command: command.command,
+        };
+      }
+      const [eventCount] = await transaction
+        .select({ count: sql<number>`count(*)::int` })
+        .from(commerceEngagementDeliverableEvent)
+        .where(eq(commerceEngagementDeliverableEvent.deliverableId, deliverable.id));
+      await transaction.insert(commerceEngagementDeliverableEvent).values({
+        deliverableId: deliverable.id,
+        sequence: eventCount?.count ?? 0,
+        previousState: deliverable.state,
+        nextState: nextDeliverableState,
+        commandKind: command.command,
+        note: command.note ?? null,
+        occurredAt: now,
+        createdByMemberId: actor.memberId,
+      });
+      await transaction
+        .update(commerceEngagementDeliverable)
+        .set({
+          state: nextDeliverableState,
+          reviewedAt: now,
+          reviewNote: command.note ?? null,
+          updatedAt: now,
+        })
+        .where(eq(commerceEngagementDeliverable.id, deliverable.id));
+      break;
+    }
+    case "complete": {
+      if (engagement.state !== "in_progress" && engagement.state !== "awaiting_buyer") {
+        return {
+          status: "invalid_state" as const,
+          currentState: engagement.state,
+          command: command.command,
+        };
+      }
+      if (requiresDeliverableNormalization) {
+        return { status: "normalization_required" as const };
+      }
+      const incomplete = await loadRequiredIncompleteDeliverableIds(transaction, engagement.id);
+      if (incomplete.length > 0) {
+        return {
+          status: "incomplete_deliverables" as const,
+          deliverableIds: incomplete,
+        };
+      }
+      nextState = "completed";
+      completedAt = now;
+      break;
+    }
+    case "cancel":
+      nextState = "cancelled";
+      cancelledAt = now;
+      break;
+    default: {
+      const exhaustiveCheck: never = command;
+      throw new Error(`Unhandled engagement command: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+
+  return {
+    status: "applied" as const,
+    nextState,
+    scheduledAt,
+    startedAt,
+    completedAt,
+    cancelledAt,
+    executionContractState,
+    executionContractProvenance,
+    requiresDeliverableNormalization,
+  };
+}
+
 export async function executeServiceEngagementCommand(
   actor: CommerceFulfillmentActorContext,
   engagementId: string,
@@ -1194,308 +1532,18 @@ export async function executeServiceEngagementCommand(
     const { engagement } = gate;
 
     const now = new Date();
-    let nextState: EngagementState = engagement.state;
-    let scheduledAt = engagement.scheduledAt;
-    let startedAt = engagement.startedAt;
-    let completedAt = engagement.completedAt;
-    let cancelledAt = engagement.cancelledAt;
-    let executionContractState = engagement.executionContractState;
-    let executionContractProvenance = engagement.executionContractProvenance;
-    let requiresDeliverableNormalization = engagement.requiresDeliverableNormalization;
-
-    switch (command.command) {
-      case "initialize": {
-        if (engagement.executionContractState === "ready") {
-          return {
-            status: "invalid_state" as const,
-            currentState: engagement.state,
-            command: command.command,
-          };
-        }
-        const detailResult = await ensureEngagementDetailFromInitialize(
-          transaction,
-          engagement,
-          command,
-        );
-        if (!detailResult.success) {
-          return { status: "error" as const, error: detailResult.error };
-        }
-        for (const deliverable of command.deliverables) {
-          await transaction.insert(commerceEngagementDeliverable).values({
-            engagementId: engagement.id,
-            sequence: deliverable.sequence,
-            title: deliverable.title,
-            isRequired: deliverable.isRequired,
-            state: "planned",
-            dueAt: deliverable.dueAt === undefined ? null : new Date(deliverable.dueAt),
-            createdByMemberId: actor.memberId,
-          });
-        }
-        executionContractState = "ready";
-        executionContractProvenance = "operator_initialized";
-        if (command.deliverables.length > 0) {
-          requiresDeliverableNormalization = false;
-        }
-        break;
-      }
-      case "normalize_deliverables": {
-        if (!engagement.requiresDeliverableNormalization) {
-          return {
-            status: "invalid_state" as const,
-            currentState: engagement.state,
-            command: command.command,
-          };
-        }
-        if (engagement.executionContractState !== "ready") {
-          return { status: "contract_missing" as const };
-        }
-        const existingDeliverables = await transaction
-          .select({ id: commerceEngagementDeliverable.id })
-          .from(commerceEngagementDeliverable)
-          .where(eq(commerceEngagementDeliverable.engagementId, engagement.id))
-          .limit(1);
-        if (existingDeliverables.length > 0) {
-          return {
-            status: "error" as const,
-            error: {
-              type: "VALIDATION_FAILED",
-              message:
-                "Structured deliverables already exist; free-text obligations cannot be re-normalized.",
-            } satisfies CommercePhase6Error,
-          };
-        }
-        for (const deliverable of command.deliverables) {
-          await transaction.insert(commerceEngagementDeliverable).values({
-            engagementId: engagement.id,
-            sequence: deliverable.sequence,
-            title: deliverable.title,
-            isRequired: deliverable.isRequired,
-            state: "planned",
-            dueAt: deliverable.dueAt === undefined ? null : new Date(deliverable.dueAt),
-            createdByMemberId: actor.memberId,
-          });
-        }
-        requiresDeliverableNormalization = false;
-        break;
-      }
-      case "schedule":
-        if (engagement.state !== "awaiting_provider") {
-          return {
-            status: "invalid_state" as const,
-            currentState: engagement.state,
-            command: command.command,
-          };
-        }
-        nextState = "scheduled";
-        scheduledAt = now;
-        break;
-      case "start":
-        if (engagement.state !== "scheduled" && engagement.state !== "awaiting_buyer") {
-          return {
-            status: "invalid_state" as const,
-            currentState: engagement.state,
-            command: command.command,
-          };
-        }
-        nextState = "in_progress";
-        startedAt = startedAt ?? now;
-        break;
-      case "request_buyer_action":
-        if (engagement.state !== "in_progress") {
-          return {
-            status: "invalid_state" as const,
-            currentState: engagement.state,
-            command: command.command,
-          };
-        }
-        nextState = "awaiting_buyer";
-        break;
-      case "submit_deliverable": {
-        if (command.result.kind !== engagement.providerKind) {
-          return {
-            status: "error" as const,
-            error: { type: "PROVIDER_KIND_MISMATCH" } satisfies CommercePhase6Error,
-          };
-        }
-        const [deliverable] = await transaction
-          .select()
-          .from(commerceEngagementDeliverable)
-          .where(eq(commerceEngagementDeliverable.id, command.deliverableId))
-          .for("update");
-        if (!deliverable || deliverable.engagementId !== engagement.id) {
-          return { status: "not_found" as const };
-        }
-        if (deliverable.state !== "planned" && deliverable.state !== "submitted") {
-          return {
-            status: "invalid_state" as const,
-            currentState: deliverable.state,
-            command: command.command,
-          };
-        }
-        if (command.evidenceDocumentId) {
-          const documentCheck = await assertAvailableDocument(
-            transaction,
-            actor.organizationId,
-            command.evidenceDocumentId,
-          );
-          if (!documentCheck.success) {
-            return { status: "error" as const, error: documentCheck.error };
-          }
-        }
-        await transaction
-          .delete(freightDeliverableDetail)
-          .where(eq(freightDeliverableDetail.deliverableId, deliverable.id));
-        await transaction
-          .delete(customsBrokerageDeliverableDetail)
-          .where(eq(customsBrokerageDeliverableDetail.deliverableId, deliverable.id));
-        await transaction
-          .delete(insuranceDeliverableDetail)
-          .where(eq(insuranceDeliverableDetail.deliverableId, deliverable.id));
-        await transaction
-          .delete(inspectionDeliverableDetail)
-          .where(eq(inspectionDeliverableDetail.deliverableId, deliverable.id));
-        await transaction
-          .delete(testingCertificationDeliverableDetail)
-          .where(eq(testingCertificationDeliverableDetail.deliverableId, deliverable.id));
-        await transaction
-          .delete(warehouseDeliverableDetail)
-          .where(eq(warehouseDeliverableDetail.deliverableId, deliverable.id));
-        await transaction
-          .delete(marketingDeliverableDetail)
-          .where(eq(marketingDeliverableDetail.deliverableId, deliverable.id));
-        await transaction
-          .delete(foreignExchangeDeliverableDetail)
-          .where(eq(foreignExchangeDeliverableDetail.deliverableId, deliverable.id));
-
-        const detailInsert = await insertTypedDeliverableDetail(
-          transaction,
-          deliverable.id,
-          command.result,
-        );
-        if (!detailInsert.success) {
-          return { status: "error" as const, error: detailInsert.error };
-        }
-
-        const [eventCount] = await transaction
-          .select({ count: sql<number>`count(*)::int` })
-          .from(commerceEngagementDeliverableEvent)
-          .where(eq(commerceEngagementDeliverableEvent.deliverableId, deliverable.id));
-        await transaction.insert(commerceEngagementDeliverableEvent).values({
-          deliverableId: deliverable.id,
-          sequence: eventCount?.count ?? 0,
-          previousState: deliverable.state,
-          nextState: "submitted",
-          commandKind: "submit_deliverable",
-          note: command.note ?? null,
-          resultSnapshotJson: JSON.stringify(command.result),
-          evidenceDocumentId: command.evidenceDocumentId ?? null,
-          occurredAt: now,
-          createdByMemberId: actor.memberId,
-        });
-        await transaction
-          .update(commerceEngagementDeliverable)
-          .set({
-            state: "submitted",
-            submittedAt: now,
-            reviewedAt: null,
-            reviewNote: null,
-            evidenceDocumentId: command.evidenceDocumentId ?? null,
-            updatedAt: now,
-          })
-          .where(eq(commerceEngagementDeliverable.id, deliverable.id));
-        if (engagement.state === "awaiting_provider" || engagement.state === "scheduled") {
-          nextState = "in_progress";
-          startedAt = startedAt ?? now;
-        }
-        break;
-      }
-      case "accept_deliverable":
-      case "reject_deliverable":
-      case "waive_deliverable": {
-        const [deliverable] = await transaction
-          .select()
-          .from(commerceEngagementDeliverable)
-          .where(eq(commerceEngagementDeliverable.id, command.deliverableId))
-          .for("update");
-        if (!deliverable || deliverable.engagementId !== engagement.id) {
-          return { status: "not_found" as const };
-        }
-        const nextDeliverableState =
-          command.command === "accept_deliverable"
-            ? ("accepted" as const)
-            : command.command === "waive_deliverable"
-              ? ("waived" as const)
-              : ("planned" as const);
-        if (command.command !== "waive_deliverable" && deliverable.state !== "submitted") {
-          return {
-            status: "invalid_state" as const,
-            currentState: deliverable.state,
-            command: command.command,
-          };
-        }
-        if (command.command === "waive_deliverable" && deliverable.state === "accepted") {
-          return {
-            status: "invalid_state" as const,
-            currentState: deliverable.state,
-            command: command.command,
-          };
-        }
-        const [eventCount] = await transaction
-          .select({ count: sql<number>`count(*)::int` })
-          .from(commerceEngagementDeliverableEvent)
-          .where(eq(commerceEngagementDeliverableEvent.deliverableId, deliverable.id));
-        await transaction.insert(commerceEngagementDeliverableEvent).values({
-          deliverableId: deliverable.id,
-          sequence: eventCount?.count ?? 0,
-          previousState: deliverable.state,
-          nextState: nextDeliverableState,
-          commandKind: command.command,
-          note: command.note ?? null,
-          occurredAt: now,
-          createdByMemberId: actor.memberId,
-        });
-        await transaction
-          .update(commerceEngagementDeliverable)
-          .set({
-            state: nextDeliverableState,
-            reviewedAt: now,
-            reviewNote: command.note ?? null,
-            updatedAt: now,
-          })
-          .where(eq(commerceEngagementDeliverable.id, deliverable.id));
-        break;
-      }
-      case "complete": {
-        if (engagement.state !== "in_progress" && engagement.state !== "awaiting_buyer") {
-          return {
-            status: "invalid_state" as const,
-            currentState: engagement.state,
-            command: command.command,
-          };
-        }
-        if (requiresDeliverableNormalization) {
-          return { status: "normalization_required" as const };
-        }
-        const incomplete = await loadRequiredIncompleteDeliverableIds(transaction, engagement.id);
-        if (incomplete.length > 0) {
-          return {
-            status: "incomplete_deliverables" as const,
-            deliverableIds: incomplete,
-          };
-        }
-        nextState = "completed";
-        completedAt = now;
-        break;
-      }
-      case "cancel":
-        nextState = "cancelled";
-        cancelledAt = now;
-        break;
-      default: {
-        const exhaustiveCheck: never = command;
-        throw new Error(`Unhandled engagement command: ${JSON.stringify(exhaustiveCheck)}`);
-      }
-    }
+    const applied = await applyEngagementCommand(transaction, actor, engagement, command, now);
+    if (applied.status !== "applied") return applied;
+    const {
+      nextState,
+      scheduledAt,
+      startedAt,
+      completedAt,
+      cancelledAt,
+      executionContractState,
+      executionContractProvenance,
+      requiresDeliverableNormalization,
+    } = applied;
 
     const [eventCount] = await transaction
       .select({ count: sql<number>`count(*)::int` })
