@@ -54,16 +54,23 @@ function selectChain(): unknown {
    * TWO SHAPES OFF ONE MOCK. The review load ends in `.limit(1).for("update")`; the occupancy
    * read ends at `.where()` and is awaited there. `then` on the `where` result is what makes the
    * second await resolve without the first one resolving early.
+   *
+   * EVERY `then` BELOW IS DELIBERATE, and `unicorn/no-thenable` is disabled at each one. A
+   * Drizzle query builder IS a thenable — that is what lets a caller await a partial chain —
+   * so a mock that omitted `then` would not emulate the thing under test. The rule exists to
+   * catch thenables added by accident; these are the opposite.
    */
   return (projection?: Record<string, unknown>) => ({
     from: () => ({
       where: () => ({
         limit: () => ({
           for: () => Promise.resolve([reviewRow]),
+          // oxlint-disable-next-line unicorn/no-thenable
           then: (resolve: (value: unknown) => unknown) => resolve([reviewRow]),
         }),
         // `repackReviewMediaPositions` orders the survivors; an empty gallery ends it early.
         orderBy: () => Promise.resolve([]),
+        // oxlint-disable-next-line unicorn/no-thenable
         then: (resolve: (value: unknown) => unknown) =>
           resolve(projection && "attachedCount" in projection ? [occupancy] : [reviewRow]),
       }),
@@ -102,6 +109,9 @@ function executor(): Record<string, unknown> {
         return {
           where: () => ({
             returning: () => Promise.resolve([{ mediaCount: 4 }]),
+            // The counter update is awaited without `.returning()` — see selectChain's header
+            // on why emulating a Drizzle builder means carrying a `then`.
+            // oxlint-disable-next-line unicorn/no-thenable
             then: (resolve: (value: unknown) => unknown) => resolve(undefined),
           }),
         };

@@ -234,7 +234,7 @@ async function main(): Promise<void> {
       prepare.status === 403
         ? " — prepare is still gated on activation"
         : prepare.status >= 400
-          ? ` — ${String(prepare.body["message"] ?? "no message")}`
+          ? ` — ${JSON.stringify(prepare.body["message"] ?? "no message")}`
           : ""
     }`,
   );

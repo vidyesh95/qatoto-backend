@@ -44,7 +44,10 @@ function updateChain(inTransaction: boolean): unknown {
       return {
         where: () => ({
           returning: () => Promise.resolve(returningRows),
-          // `commerce_review`'s counter update is awaited without `.returning()`.
+          // `commerce_review`'s counter update is awaited without `.returning()`. A Drizzle
+          // builder is genuinely thenable, so emulating one means carrying a `then` — the
+          // rule is guarding against ACCIDENTAL thenables, which this is the opposite of.
+          // oxlint-disable-next-line unicorn/no-thenable
           then: (resolve: (value: unknown) => unknown) => resolve(undefined),
         }),
       };
@@ -53,7 +56,7 @@ function updateChain(inTransaction: boolean): unknown {
 }
 
 vi.mock("#src/db/index.js", () => ({
-  pool: { query: vi.fn(), end: vi.fn() },
+  pool: { query: vi.fn<(...args: unknown[]) => unknown>(), end: vi.fn<(...args: unknown[]) => unknown>() },
   db: {
     execute: () => Promise.resolve(executeResults.shift() ?? { rows: [] }),
     update: updateChain(false),
