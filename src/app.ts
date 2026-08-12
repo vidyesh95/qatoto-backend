@@ -5,6 +5,7 @@ import express from "express";
 import helmet from "helmet";
 
 import { config } from "#src/config/index.js";
+import docsRouter from "#src/docs/docs.routes.js";
 import { auth } from "#src/lib/auth.js";
 import { errorHandler } from "#src/middleware/error-handler.js";
 import { parseJsonBodyOnce } from "#src/middleware/json-body.js";
@@ -72,7 +73,6 @@ import commerceTrustRouter from "#src/routes/commerce-trust.routes.js";
 import commerceWebhooksRouter from "#src/routes/commerce-webhooks.routes.js";
 import communityCofounderRouter from "#src/routes/community-cofounder.routes.js";
 import communityForumRouter from "#src/routes/community-forum.routes.js";
-import docsRouter from "#src/routes/docs.routes.js";
 import indexRouter from "#src/routes/index.js";
 import productsRouter from "#src/routes/products.routes.js";
 import storeRouter from "#src/routes/store.routes.js";

@@ -1,5 +1,9 @@
 import type { Request, Response } from "express";
 
+import {
+  RejectReviewSchema,
+  ReviewQueueQuerySchema,
+} from "#src/modules/studio/admin-review.schemas.js";
 import * as contentReviewService from "#src/modules/studio/content-review.service.js";
 import {
   firstParam,
@@ -7,7 +11,6 @@ import {
   respondUnauthenticated,
   respondValidationFailed,
 } from "#src/modules/studio/studio-error-response.js";
-import { RejectReviewSchema, ReviewQueueQuerySchema } from "#src/schemas/admin-review.schemas.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** GET /videos/admin/review?status&page&limit */
