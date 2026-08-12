@@ -173,7 +173,7 @@ describe("per-route body caps", () => {
     const rnd = await import("#src/docs/openapi-rnd.js");
     const uploads = await Promise.all([
       import("#src/modules/auth/users/upload-avatar.js"),
-      import("#src/middleware/upload-product-image.js"),
+      import("#src/modules/store/catalog/upload-product-image.js"),
       import("#src/modules/rnd/projects/upload-project-cover.js"),
       import("#src/modules/studio/videos/upload-video-thumbnail.js"),
       import("#src/modules/rnd/proof-of-effort/upload-physical-receipt.js"),
@@ -202,7 +202,7 @@ describe("per-route body caps", () => {
       // OPTIONAL file, so without this import `isMultipart()` would not recognize it, the
       // sweep would treat it as a JSON body-reading route, and it would be reported as
       // missing a declared cap.
-      import("#src/middleware/upload-commerce-category-image.js"),
+      import("#src/modules/store/catalog/upload-commerce-category-image.js"),
     ]);
 
     const router: unknown = Reflect.get(app, "router");

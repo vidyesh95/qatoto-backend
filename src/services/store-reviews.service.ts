@@ -11,6 +11,10 @@ import {
 } from "#src/db/schema.js";
 import { withTradingOrganizationCountryCode } from "#src/lib/commerce-organization-country.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import {
+  resolveEligibleProductRefBySlug,
+  type StoreCatalogError,
+} from "#src/modules/store/catalog/store-catalog.service.js";
 import type { StoreReviewListQuery } from "#src/schemas/store-reviews.schemas.js";
 import {
   EMPTY_REVIEW_SCORE_AVERAGES,
@@ -22,10 +26,6 @@ import {
   type ReviewScoreAverages,
   type ReviewSummaryAggregate,
 } from "#src/services/commerce-trust-metrics.service.js";
-import {
-  resolveEligibleProductRefBySlug,
-  type StoreCatalogError,
-} from "#src/services/store-catalog.service.js";
 import type { Result } from "#src/types/index.js";
 
 type ReviewSort = StoreReviewListQuery["sort"];

@@ -560,7 +560,7 @@ export async function updateOrganization(
   );
   if (patchTouchesSearchDocument) {
     const { enqueueOrganizationSearchDocumentRefresh } =
-      await import("#src/services/store-search.service.js");
+      await import("#src/modules/store/catalog/store-search.service.js");
     await enqueueOrganizationSearchDocumentRefresh(organizationId);
   }
   return { success: true, value: updated };
@@ -685,7 +685,7 @@ async function enqueueOrganizationSearchDocumentRefreshAfterLogoChange(
   organizationId: string,
 ): Promise<void> {
   const { enqueueOrganizationSearchDocumentRefresh } =
-    await import("#src/services/store-search.service.js");
+    await import("#src/modules/store/catalog/store-search.service.js");
   await enqueueOrganizationSearchDocumentRefresh(organizationId);
 }
 
@@ -1537,7 +1537,7 @@ export async function transitionTradeState(input: {
   switch (outcome.status) {
     case "transitioned": {
       const { enqueueOrganizationSearchDocumentRefresh } =
-        await import("#src/services/store-search.service.js");
+        await import("#src/modules/store/catalog/store-search.service.js");
       await enqueueOrganizationSearchDocumentRefresh(input.organizationId);
       return { success: true, value: publicOrganization(outcome.organization) };
     }

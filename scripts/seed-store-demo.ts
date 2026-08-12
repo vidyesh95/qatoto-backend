@@ -47,7 +47,7 @@ import {
   encryptCommercePii,
   isCommercePiiEncryptionConfigured,
 } from "#src/lib/commerce-pii-encryption.js";
-import { refreshProductSearchDocument } from "#src/services/store-search.service.js";
+import { refreshProductSearchDocument } from "#src/modules/store/catalog/store-search.service.js";
 
 /**
  * Fixed ids, so a rerun is a no-op and a teardown is one `LIKE 'store_demo_%'`. The

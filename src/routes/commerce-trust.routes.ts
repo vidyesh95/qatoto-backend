@@ -12,7 +12,7 @@ import {
   commerceTrustModerationLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadProductImage } from "#src/middleware/upload-product-image.js";
+import { uploadProductImage } from "#src/modules/store/catalog/upload-product-image.js";
 import {
   requireActiveBuyerCommerceOrganization,
   requireActiveCommerceOrganization,

@@ -13,7 +13,7 @@ import {
   refreshOfferingSearchDocument,
   refreshOrganizationSearchDocument,
   refreshProductSearchDocument,
-} from "#src/services/store-search.service.js";
+} from "#src/modules/store/catalog/store-search.service.js";
 
 interface CheckOutcome {
   readonly label: string;

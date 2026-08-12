@@ -44,6 +44,7 @@ import {
 } from "#src/lib/commerce-promised-delivery.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { deriveStockState } from "#src/modules/store/catalog/store-catalog.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import {
@@ -54,7 +55,6 @@ import {
   consumeSettlementAgreement,
   resolveSettlementRail,
 } from "#src/services/commerce-settlement.service.js";
-import { deriveStockState } from "#src/services/store-catalog.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

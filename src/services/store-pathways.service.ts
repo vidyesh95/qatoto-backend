@@ -14,12 +14,12 @@ import {
 } from "#src/lib/commerce-pricing.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { merchandisingWindowOpen } from "#src/lib/store-merchandising-window.js";
-import type { CommerceProductRelationKind } from "#src/services/commerce-product-relations.service.js";
+import type { CommerceProductRelationKind } from "#src/modules/store/catalog/commerce-product-relations.service.js";
 import {
   resolveEligibleProductCardsByIds,
   type StoreProductCardProjection,
   type StoreStockState,
-} from "#src/services/store-catalog.service.js";
+} from "#src/modules/store/catalog/store-catalog.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type StorePathwayError = { type: "NOT_FOUND" } | { type: "INVALID_CURSOR" };

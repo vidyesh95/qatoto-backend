@@ -60,9 +60,9 @@ const providersStubs = vi.hoisted(() => ({
   getPublicServiceOfferingBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/store-catalog.service.js", () => catalogStubs);
-vi.mock("#src/services/store-search.service.js", () => searchStubs);
-vi.mock("#src/services/store-merchandising.service.js", () => merchandisingStubs);
+vi.mock("#src/modules/store/catalog/store-catalog.service.js", () => catalogStubs);
+vi.mock("#src/modules/store/catalog/store-search.service.js", () => searchStubs);
+vi.mock("#src/modules/store/catalog/store-merchandising.service.js", () => merchandisingStubs);
 vi.mock("#src/services/store-pathways.service.js", () => pathwayStubs);
 vi.mock("#src/services/commerce-delivery-estimate.service.js", () => deliveryEstimateStubs);
 vi.mock("#src/services/commerce-freight-journey.service.js", () => freightJourneyStubs);

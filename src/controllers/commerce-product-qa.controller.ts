@@ -2,6 +2,10 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import {
+  resolveEligibleProductRefById,
+  resolveEligibleProductRefBySlug,
+} from "#src/modules/store/catalog/store-catalog.service.js";
 import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   AnswerProductQuestionSchema,
@@ -17,10 +21,6 @@ import {
 import { EmptyObjectSchema } from "#src/schemas/commerce-product-qa.schemas.js";
 import * as commerceProductQaService from "#src/services/commerce-product-qa.service.js";
 import type { CommerceProductQaError } from "#src/services/commerce-product-qa.service.js";
-import {
-  resolveEligibleProductRefById,
-  resolveEligibleProductRefBySlug,
-} from "#src/services/store-catalog.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

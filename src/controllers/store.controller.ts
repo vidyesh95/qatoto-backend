@@ -2,6 +2,11 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import * as commerceProductRelationsService from "#src/modules/store/catalog/commerce-product-relations.service.js";
+import * as storeCatalogService from "#src/modules/store/catalog/store-catalog.service.js";
+import type { StoreCatalogError } from "#src/modules/store/catalog/store-catalog.service.js";
+import * as storeMerchandisingService from "#src/modules/store/catalog/store-merchandising.service.js";
+import * as storeSearchService from "#src/modules/store/catalog/store-search.service.js";
 import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   StoreOrganizationReviewParamsSchema,
@@ -23,14 +28,9 @@ import {
 } from "#src/schemas/store.schemas.js";
 import * as commerceDeliveryEstimateService from "#src/services/commerce-delivery-estimate.service.js";
 import * as commerceFreightJourneyService from "#src/services/commerce-freight-journey.service.js";
-import * as commerceProductRelationsService from "#src/services/commerce-product-relations.service.js";
 import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
-import * as storeCatalogService from "#src/services/store-catalog.service.js";
-import type { StoreCatalogError } from "#src/services/store-catalog.service.js";
-import * as storeMerchandisingService from "#src/services/store-merchandising.service.js";
 import * as storePathwaysService from "#src/services/store-pathways.service.js";
 import * as storeReviewsService from "#src/services/store-reviews.service.js";
-import * as storeSearchService from "#src/services/store-search.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

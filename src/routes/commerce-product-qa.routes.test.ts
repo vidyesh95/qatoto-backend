@@ -62,8 +62,8 @@ const catalogStubs = vi.hoisted(() => ({
   resolveEligibleProductRefBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/store-catalog.service.js", async () => ({
-  ...(await vi.importActual<Record<string, unknown>>("#src/services/store-catalog.service.js")),
+vi.mock("#src/modules/store/catalog/store-catalog.service.js", async () => ({
+  ...(await vi.importActual<Record<string, unknown>>("#src/modules/store/catalog/store-catalog.service.js")),
   ...catalogStubs,
 }));
 

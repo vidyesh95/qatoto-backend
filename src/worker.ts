@@ -5,24 +5,18 @@ import type { Job } from "pg-boss";
 import { config } from "#src/config/index.js";
 import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
-import { handleDeriveProductRelations } from "#src/jobs/derive-product-relations.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
 import { handleDispatchConnectorCommand } from "#src/jobs/dispatch-connector-command.js";
 import { handleExpireCommerceQuotes } from "#src/jobs/expire-commerce-quotes.js";
 import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
-import { handleRecomputeCommerceCategoryDemand } from "#src/jobs/recompute-commerce-category-demand.js";
-import { handleRecomputeCommerceProductTrending } from "#src/jobs/recompute-commerce-product-trending.js";
-import { handleRecomputePlatformCategoryPopularity } from "#src/jobs/recompute-platform-category-popularity.js";
 import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-videos.js";
 import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
 import { handleRecomputeVideoDurations } from "#src/jobs/recompute-video-durations.js";
 import { handleRecomputeVideoQualityScores } from "#src/jobs/recompute-video-quality-scores.js";
 import { handleReconcileCommercePayments } from "#src/jobs/reconcile-commerce-payments.js";
 import { handleReconcileConnectorState } from "#src/jobs/reconcile-connector-state.js";
-import { handleRefreshStoreSearchDocument } from "#src/jobs/refresh-store-search-document.js";
 import { handleReleaseExpiredInventoryReservations } from "#src/jobs/release-expired-inventory-reservations.js";
 import { handleRevalidateYoutubeEmbeds } from "#src/jobs/revalidate-youtube-embeds.js";
-import { handleRollupCommerceProductDailySignal } from "#src/jobs/rollup-commerce-product-daily-signal.js";
 import { handleScanEncryptedDocument } from "#src/jobs/scan-encrypted-document.js";
 import {
   handleCloseCompensationPeriodTick,
@@ -82,6 +76,12 @@ import {
 } from "#src/modules/rnd/proof-of-effort/verify-effort-claim.js";
 import { handleAnalyzeDailyLog } from "#src/modules/rnd/workshop/analyze-daily-log.js";
 import { handleRecomputeDailyLogStreaks } from "#src/modules/rnd/workshop/recompute-daily-log-streaks.js";
+import { handleDeriveProductRelations } from "#src/modules/store/catalog/derive-product-relations.js";
+import { handleRecomputeCommerceCategoryDemand } from "#src/modules/store/catalog/recompute-commerce-category-demand.js";
+import { handleRecomputeCommerceProductTrending } from "#src/modules/store/catalog/recompute-commerce-product-trending.js";
+import { handleRecomputePlatformCategoryPopularity } from "#src/modules/store/catalog/recompute-platform-category-popularity.js";
+import { handleRefreshStoreSearchDocument } from "#src/modules/store/catalog/refresh-store-search-document.js";
+import { handleRollupCommerceProductDailySignal } from "#src/modules/store/catalog/rollup-commerce-product-daily-signal.js";
 
 /**
  * The background worker process (R_AND_D_BACKEND_STRUCTURE.md §4e).

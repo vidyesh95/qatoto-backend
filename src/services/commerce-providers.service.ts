@@ -28,6 +28,10 @@ import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor, slugifyPublicTitle } from "#src/lib/store-cursor.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
+import {
+  enqueueOfferingSearchDocumentRefresh,
+  enqueueProductSearchDocumentRefresh,
+} from "#src/modules/store/catalog/store-search.service.js";
 import { memberCanOperateProvider } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import {
   loadSellerDeclaredProfiles,
@@ -42,10 +46,6 @@ import {
   type OrganizationFulfillmentMetrics,
   type OrganizationMeasuredMetrics,
 } from "#src/services/commerce-trust-metrics.service.js";
-import {
-  enqueueOfferingSearchDocumentRefresh,
-  enqueueProductSearchDocumentRefresh,
-} from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 
 type ProviderProfile = typeof commerceProviderProfile.$inferSelect;

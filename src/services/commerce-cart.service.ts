@@ -19,6 +19,7 @@ import {
   type PricedProductLine,
 } from "#src/lib/commerce-pricing.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import type { StoreStockState } from "#src/modules/store/catalog/store-catalog.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import {
@@ -27,7 +28,6 @@ import {
   type CustomizationSelectionInput,
   type ResolvedCustomizationSelection,
 } from "#src/services/commerce-customization.service.js";
-import type { StoreStockState } from "#src/services/store-catalog.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

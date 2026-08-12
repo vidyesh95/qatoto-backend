@@ -44,7 +44,7 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/", specifier: "#src/modules/auth/session/auth.routes.js", exportName: "default" },
   { mountPath: "/users", specifier: "#src/modules/auth/users/users.routes.js", exportName: "default" },
   { mountPath: "/handles", specifier: "#src/modules/auth/handles/handles.routes.js", exportName: "default" },
-  { mountPath: "/products", specifier: "#src/routes/products.routes.js", exportName: "default" },
+  { mountPath: "/products", specifier: "#src/modules/store/catalog/products.routes.js", exportName: "default" },
   { mountPath: "/promotions", specifier: "#src/modules/home/promotions/promotions.routes.js", exportName: "default" },
   { mountPath: "/spotlight", specifier: "#src/modules/home/spotlight/spotlight.routes.js", exportName: "default" },
   { mountPath: "/feed", specifier: "#src/modules/home/feed/feed.routes.js", exportName: "default" },
@@ -86,7 +86,7 @@ const MOUNTED_ROUTERS: readonly {
   // Phase 20 (§19.2–§19.3). This line lands in the SAME commit as the mount in app.ts:
   // a router missing from this table is silently unchecked, which has happened before.
   { mountPath: "/commerce", specifier: "#src/routes/commerce-freight-rates.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-catalog.routes.js", exportName: "default" },
+  { mountPath: "/commerce", specifier: "#src/modules/store/catalog/commerce-catalog.routes.js", exportName: "default" },
   /**
    * These three were mounted in `app.ts` and MISSING from this list, so every mutating
    * route they own passed the assertion below without ever being looked at — including
@@ -95,12 +95,20 @@ const MOUNTED_ROUTERS: readonly {
    */
   { mountPath: "/commerce", specifier: "#src/routes/commerce-trust.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-payments.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-merchandising.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/catalog/commerce-merchandising.routes.js",
+    exportName: "default",
+  },
   // Phase 10 (Appendix A9, A11, A12, A14).
   { mountPath: "/commerce", specifier: "#src/routes/commerce-product-qa.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-content-reports.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-product-inquiry.routes.js", exportName: "default" },
-  { mountPath: "/store", specifier: "#src/routes/commerce-product-engagement.routes.js", exportName: "default" },
+  {
+    mountPath: "/store",
+    specifier: "#src/modules/store/catalog/commerce-product-engagement.routes.js",
+    exportName: "default",
+  },
   { mountPath: "/store", specifier: "#src/routes/store.routes.js", exportName: "default" },
   // Phase 14. The webhook router is the only mounted router whose writes carry no session,
   // so its limiter is IP-keyed; it is listed here precisely because "no session" must not
@@ -113,8 +121,12 @@ const MOUNTED_ROUTERS: readonly {
    * more. Added while wiring Phase 17, along with Phase 17's own router.
    */
   { mountPath: "/commerce", specifier: "#src/routes/commerce-documents.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-categories.routes.js", exportName: "default" },
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-ranking.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/catalog/commerce-categories.routes.js",
+    exportName: "default",
+  },
+  { mountPath: "/commerce", specifier: "#src/modules/store/catalog/commerce-ranking.routes.js", exportName: "default" },
   {
     mountPath: "/commerce",
     specifier: "#src/modules/store/organizations/commerce-seller-profile.routes.js",
