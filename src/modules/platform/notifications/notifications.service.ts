@@ -31,7 +31,7 @@ import type { Result } from "#src/types/index.js";
  *
  * DELIVERY IS SOMEBODY ELSE'S JOB, literally: this module writes the row and queues
  * `deliver-notification`. Whether an email goes out, and what happens when the provider is
- * unconfigured or down, is decided in `src/jobs/deliver-notification.ts` — because a
+ * unconfigured or down, is decided in `src/modules/platform/notifications/deliver-notification.ts` — because a
  * fan-out that awaited an HTTP call would put a third-party outage inside the transaction
  * that finalizes a compensation statement.
  */

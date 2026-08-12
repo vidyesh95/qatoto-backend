@@ -4,9 +4,9 @@ import { respondValidationFailed } from "#src/controllers/project-error-response
 import {
   ListNotificationsQuerySchema,
   MarkNotificationsReadSchema,
-} from "#src/schemas/notifications.schemas.js";
-import * as notificationsService from "#src/services/notifications.service.js";
-import type { NotificationError } from "#src/services/notifications.service.js";
+} from "#src/modules/platform/notifications/notifications.schemas.js";
+import * as notificationsService from "#src/modules/platform/notifications/notifications.service.js";
+import type { NotificationError } from "#src/modules/platform/notifications/notifications.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function respondNotificationError(res: Response, error: NotificationError): void {

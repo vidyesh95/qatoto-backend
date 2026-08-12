@@ -7,7 +7,6 @@ import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
 import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
-import { handleDeliverNotification } from "#src/jobs/deliver-notification.js";
 import { handleDeriveProductRelations } from "#src/jobs/derive-product-relations.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
 import { handleDispatchConnectorCommand } from "#src/jobs/dispatch-connector-command.js";
@@ -82,6 +81,7 @@ import {
   stopSendOnlyBoss,
   type JobName,
 } from "#src/lib/jobs.js";
+import { handleDeliverNotification } from "#src/modules/platform/notifications/deliver-notification.js";
 
 /**
  * The background worker process (R_AND_D_BACKEND_STRUCTURE.md §4e).

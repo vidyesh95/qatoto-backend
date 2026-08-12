@@ -24,7 +24,7 @@ const listNotifications = vi.fn<(...args: readonly unknown[]) => unknown>();
 const countUnread = vi.fn<(...args: readonly unknown[]) => unknown>();
 const markReadThrough = vi.fn<(...args: readonly unknown[]) => unknown>();
 
-vi.mock("#src/services/notifications.service.js", () => ({
+vi.mock("#src/modules/platform/notifications/notifications.service.js", () => ({
   listNotifications: (...args: readonly unknown[]) => listNotifications(...args),
   countUnread: (...args: readonly unknown[]) => countUnread(...args),
   markReadThrough: (...args: readonly unknown[]) => markReadThrough(...args),

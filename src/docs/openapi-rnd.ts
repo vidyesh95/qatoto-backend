@@ -15,7 +15,7 @@ import {
 import compensationRouter, { governanceRouter } from "#src/routes/compensation.routes.js";
 import discoveryRouter from "#src/routes/discovery.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
-import notificationsRouter from "#src/routes/notifications.routes.js";
+import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import platformAuditRouter from "#src/routes/platform-audit.routes.js";
 import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import promotionsRouter from "#src/routes/promotions.routes.js";

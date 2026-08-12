@@ -58,7 +58,11 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/research-programs", specifier: "#src/routes/research-programs.routes.js", exportName: "default" },
   { mountPath: "/discovery", specifier: "#src/routes/discovery.routes.js", exportName: "default" },
   { mountPath: "/suppliers", specifier: "#src/routes/suppliers.routes.js", exportName: "default" },
-  { mountPath: "/notifications", specifier: "#src/routes/notifications.routes.js", exportName: "default" },
+  {
+    mountPath: "/notifications",
+    specifier: "#src/modules/platform/notifications/notifications.routes.js",
+    exportName: "default",
+  },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-organizations.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-providers.routes.js", exportName: "default" },
   { mountPath: "/commerce", specifier: "#src/routes/commerce-rfqs.routes.js", exportName: "default" },

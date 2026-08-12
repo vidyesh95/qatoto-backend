@@ -12,7 +12,7 @@ import {
   user,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { enqueueNotifications } from "#src/services/notifications.service.js";
+import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
 import type { ProjectAccessError } from "#src/services/project-membership.service.js";
 import { syncOpenRoleCount } from "#src/services/project-roles.service.js";
 import type { Result } from "#src/types/index.js";

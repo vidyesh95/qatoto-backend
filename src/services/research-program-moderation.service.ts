@@ -10,7 +10,7 @@ import {
   user,
 } from "#src/db/schema.js";
 import { encodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
-import { enqueueNotifications } from "#src/services/notifications.service.js";
+import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
 import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import type { PlatformStaffContext } from "#src/services/platform-role.service.js";
 import type { ResearchPaperModerationStatus } from "#src/services/research-papers.service.js";

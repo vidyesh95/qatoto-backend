@@ -31,8 +31,8 @@ import {
   proratedRetainerCents,
 } from "#src/lib/compensation-period.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
 import { listAgreementsOverlapping } from "#src/services/compensation-agreements.service.js";
-import { enqueueNotifications } from "#src/services/notifications.service.js";
 import {
   advanceStatementChainHead,
   allocateCompensationSequenceNumber,

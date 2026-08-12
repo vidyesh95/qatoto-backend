@@ -4,7 +4,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { db } from "#src/db/index.js";
 import { platformRoleGrantProposal, user } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { enqueueNotifications } from "#src/services/notifications.service.js";
+import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
 import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import {
   listPlatformCapabilitiesForRole,

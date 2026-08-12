@@ -21,8 +21,8 @@ import {
   timeSliceNumerator,
 } from "#src/lib/slice-math.js";
 import { decideClaimVerdict, type VerificationStepStatus } from "#src/lib/verdict.js";
+import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
 import { findEffectiveRate } from "#src/services/fair-market-rate.service.js";
-import { enqueueNotifications } from "#src/services/notifications.service.js";
 import { appendAuditEntry } from "#src/services/project-audit.service.js";
 import type { ProjectAccessError } from "#src/services/project-membership.service.js";
 import { openAllocationProposal, settleProposal } from "#src/services/slice-allocation.service.js";

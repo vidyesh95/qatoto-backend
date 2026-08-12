@@ -1,8 +1,8 @@
 import express from "express";
 
-import * as notificationsController from "#src/controllers/notifications.controller.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as notificationsController from "#src/modules/platform/notifications/notifications.controller.js";
 
 const router = express.Router();
 

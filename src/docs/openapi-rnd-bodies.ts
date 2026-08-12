@@ -37,7 +37,7 @@ import {
   CreateMarketInsightSchema,
   UpdateMarketInsightSchema,
 } from "#src/schemas/market-insights.schemas.js";
-import { MarkNotificationsReadSchema } from "#src/schemas/notifications.schemas.js";
+import { MarkNotificationsReadSchema } from "#src/modules/platform/notifications/notifications.schemas.js";
 import {
   CountersignPlatformRoleSchema,
   ProposePlatformRoleSchema,
