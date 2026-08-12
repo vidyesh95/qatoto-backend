@@ -4632,6 +4632,26 @@ unwound.
 application fee that works only on `direct_processor`), and with them `settlementAccountRef` and
 `applicationFeeInCents`, which stay unset because no seller processor account exists to route to.
 
+#### A second defect, found while checking the first
+
+**A failed outbox dispatch could never be retried.** `enqueueOutboxDispatch` derived its
+idempotency key from the outbox row alone, and `sendJob` turns that key into pg-boss's JOB ID — so
+a re-send deduplicated against every send that row had ever made, a completed one included. The
+reconciler re-enqueued the stranded rows every hour, pg-boss dropped each send as a duplicate, and
+nothing ran. Its own comment promised the opposite: "the scheduled reconciler will pick up pending
+outbox rows."
+
+It surfaced only because the six orders this phase stranded did NOT recover once the postings were
+fixed — they sat at `attempt_count = 1` while reconcile after reconcile produced no dispatch job.
+The key is scoped to the attempt now: `attemptCount` is incremented under the row lock when a
+dispatch claims it, so each attempt gets its own job id, while two enqueues of the SAME attempt — a
+create racing a reconcile — still collapse into one, which is what the key is for. All six then
+settled and confirmed with no intervention.
+
+**A retry that silently does not happen is the worst shape a retry can have**, and it hid behind
+the same silence as the posting: a non-terminal outbox failure is not an error to the job that ran
+it, so nothing anywhere said a word.
+
 #### How it is checked, and why it was not
 
 **This service had no tests. None** — not the service, not its controller, not the adapter, not the
