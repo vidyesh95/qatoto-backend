@@ -1,6 +1,6 @@
 import type { Response } from "express";
 
-import type { SupplierEngagementError } from "#src/services/supplier-engagements.service.js";
+import type { SupplierEngagementError } from "#src/modules/rnd/suppliers/supplier-engagements.service.js";
 
 /**
  * The §11i/§11j.5 project-scoped go-to-market error mapper.

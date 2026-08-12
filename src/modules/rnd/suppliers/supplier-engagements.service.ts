@@ -7,7 +7,7 @@ import type {
   ProjectAccessError,
   ProjectMemberContext,
 } from "#src/modules/rnd/projects/project-membership.service.js";
-import type { SupplierError } from "#src/services/suppliers.service.js";
+import type { SupplierError } from "#src/modules/rnd/suppliers/suppliers.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

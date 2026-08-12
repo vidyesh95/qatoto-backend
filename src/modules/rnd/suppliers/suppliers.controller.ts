@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 
-import { respondGoToMarketError } from "#src/controllers/go-to-market-error-response.js";
 import {
   firstParam,
   respondDiscoveryError,
@@ -10,6 +9,8 @@ import {
 import * as readinessService from "#src/modules/rnd/discovery/launch-readiness.service.js";
 import { respondProjectError } from "#src/modules/rnd/projects/project-error-response.js";
 import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
+import { respondGoToMarketError } from "#src/modules/rnd/suppliers/go-to-market-error-response.js";
+import * as engagementsService from "#src/modules/rnd/suppliers/supplier-engagements.service.js";
 import {
   CreateSupplierEngagementSchema,
   CreateSupplierSchema,
@@ -18,9 +19,8 @@ import {
   ListSuppliersQuerySchema,
   UpdateSupplierEngagementSchema,
   UpdateSupplierSchema,
-} from "#src/schemas/suppliers.schemas.js";
-import * as engagementsService from "#src/services/supplier-engagements.service.js";
-import * as suppliersService from "#src/services/suppliers.service.js";
+} from "#src/modules/rnd/suppliers/suppliers.schemas.js";
+import * as suppliersService from "#src/modules/rnd/suppliers/suppliers.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** `GET /supplier-capabilities` — the seeded vocabulary behind the filter chips. */

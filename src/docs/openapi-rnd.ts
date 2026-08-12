@@ -30,7 +30,7 @@ import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/modules/rnd/projects/research-projects.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
-import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
+import supplierRouter, { projectGoToMarketRouter } from "#src/modules/rnd/suppliers/suppliers.routes.js";
 import workshopRouter, { dailyLogFeedRouter } from "#src/modules/rnd/workshop/workshop.routes.js";
 
 /**

@@ -9,7 +9,7 @@ import type {
 } from "#src/modules/rnd/discovery/problem-clusters.service.js";
 import type { TalentProfileError } from "#src/modules/rnd/discovery/talent-profiles.service.js";
 import type { ResearchCategoryError } from "#src/modules/rnd/programs/research-categories.service.js";
-import type { SupplierError } from "#src/services/suppliers.service.js";
+import type { SupplierError } from "#src/modules/rnd/suppliers/suppliers.service.js";
 
 /**
  * Error mapping for the §6 discovery controllers.

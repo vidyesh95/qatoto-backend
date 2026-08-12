@@ -110,7 +110,7 @@ import {
   CreateSupplierSchema,
   UpdateSupplierEngagementSchema,
   UpdateSupplierSchema,
-} from "#src/schemas/suppliers.schemas.js";
+} from "#src/modules/rnd/suppliers/suppliers.schemas.js";
 import { TalentProfileSchema } from "#src/modules/rnd/discovery/talent-profiles.schemas.js";
 import {
   AddFileLinkSchema,

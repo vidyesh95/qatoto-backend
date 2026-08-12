@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 // The controller imports its services, which pull in the db pool at module scope. Stub the
 // modules so the schemas can be parsed without a configured environment — nothing here
 // calls a handler. Same arrangement as compensation.controller.schemas.test.ts.
-vi.mock("#src/services/suppliers.service.js", () => ({}));
+vi.mock("#src/modules/rnd/suppliers/suppliers.service.js", () => ({}));
 vi.mock("#src/modules/rnd/discovery/launch-readiness.service.js", () => ({}));
 vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({}));
-vi.mock("#src/services/supplier-engagements.service.js", () => ({}));
+vi.mock("#src/modules/rnd/suppliers/supplier-engagements.service.js", () => ({}));
 
 const {
   CreateSupplierEngagementSchema,
@@ -15,7 +15,7 @@ const {
   ListSuppliersQuerySchema,
   UpdateSupplierEngagementSchema,
   UpdateSupplierSchema,
-} = await import("#src/schemas/suppliers.schemas.js");
+} = await import("#src/modules/rnd/suppliers/suppliers.schemas.js");
 
 /**
  * R_AND_D_BACKEND_STRUCTURE.md §11i's rejected-keys list, §0 and §13.
