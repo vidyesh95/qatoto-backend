@@ -1,14 +1,6 @@
 import { and, eq, inArray, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 
-import {
-  mintEscrowIdempotencyKey,
-  resolveExternalEscrowProvider,
-  type EscrowMilestonePlanEntry,
-  type ExternalEscrowProviderAdapter,
-  type NormalizedEscrowEvent,
-  type NormalizedEscrowSessionState,
-} from "#src/adapters/external-escrow-provider.adapter.js";
 import { db } from "#src/db/index.js";
 import {
   commerceConnectorOutbox,
@@ -34,6 +26,14 @@ import {
   appendCommerceJournalEntry,
   recognizeCommission,
 } from "#src/modules/store/orders/commerce-journal.service.js";
+import {
+  mintEscrowIdempotencyKey,
+  resolveExternalEscrowProvider,
+  type EscrowMilestonePlanEntry,
+  type ExternalEscrowProviderAdapter,
+  type NormalizedEscrowEvent,
+  type NormalizedEscrowSessionState,
+} from "#src/modules/store/storefront/external-escrow-provider.adapter.js";
 import type { Result } from "#src/types/index.js";
 
 /**

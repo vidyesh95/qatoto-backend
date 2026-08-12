@@ -21,12 +21,12 @@ import {
   PageQuerySchema,
 } from "#src/modules/store/catalog/commerce-merchandising.schemas.js";
 import { evidenceBytesMatchMediaType } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
-import * as commerceCustomizationAssetService from "#src/services/commerce-customization-asset.service.js";
-import * as commercePathwaysService from "#src/services/commerce-pathways.service.js";
+import * as commerceCustomizationAssetService from "#src/modules/store/storefront/commerce-customization-asset.service.js";
+import * as commercePathwaysService from "#src/modules/store/storefront/commerce-pathways.service.js";
 import type {
   CommercePathwayActor,
   CommercePathwayError,
-} from "#src/services/commerce-pathways.service.js";
+} from "#src/modules/store/storefront/commerce-pathways.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

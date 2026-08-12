@@ -13,7 +13,7 @@ const {
   parseExternalEscrowProviderName,
   resolveExternalEscrowProvider,
   verifyEscrowWebhookSignature,
-} = await import("#src/adapters/external-escrow-provider.adapter.js");
+} = await import("#src/modules/store/storefront/external-escrow-provider.adapter.js");
 
 const SIGNING_SECRET = "escrow_signing_secret_for_tests";
 

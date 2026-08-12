@@ -5,7 +5,6 @@ import type { Job } from "pg-boss";
 import { config } from "#src/config/index.js";
 import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
-import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
 import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
 import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-videos.js";
 import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
@@ -82,6 +81,7 @@ import { handleSweepPendingDocumentScans } from "#src/modules/store/fulfillment/
 import { handleReconcileCommercePayments } from "#src/modules/store/orders/reconcile-commerce-payments.js";
 import { handleReleaseExpiredInventoryReservations } from "#src/modules/store/orders/release-expired-inventory-reservations.js";
 import { handleExpireCommerceQuotes } from "#src/modules/store/procurement/expire-commerce-quotes.js";
+import { handleDispatchCommerceWebhookEvent } from "#src/modules/store/storefront/dispatch-commerce-webhook-event.js";
 
 /**
  * The background worker process (R_AND_D_BACKEND_STRUCTURE.md §4e).

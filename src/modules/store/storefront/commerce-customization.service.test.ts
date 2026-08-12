@@ -35,7 +35,8 @@ vi.mock("#src/db/index.js", () => ({
   pool: {},
 }));
 
-const { resolveCustomizationSelections } = await import("#src/services/commerce-customization.service.js");
+const { resolveCustomizationSelections } =
+  await import("#src/modules/store/storefront/commerce-customization.service.js");
 const { db } = await import("#src/db/index.js");
 
 const LOGO_OPTION = {

@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 
-import { resolveExternalEscrowProvider } from "#src/adapters/external-escrow-provider.adapter.js";
 import { logger } from "#src/lib/logger.js";
 import {
   loadProviderById,
@@ -10,7 +9,8 @@ import { applyNormalizedEscrowEvent } from "#src/modules/store/orders/commerce-e
 import {
   EmptyObjectSchema,
   ProviderIdParamsSchema,
-} from "#src/schemas/commerce-webhooks.schemas.js";
+} from "#src/modules/store/storefront/commerce-webhooks.schemas.js";
+import { resolveExternalEscrowProvider } from "#src/modules/store/storefront/external-escrow-provider.adapter.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

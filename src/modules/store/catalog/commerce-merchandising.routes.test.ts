@@ -106,7 +106,7 @@ const serviceStubs = vi.hoisted(() => ({
   seedCartFromPathway: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-pathways.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/storefront/commerce-pathways.service.js", () => serviceStubs);
 
 const PATHWAY_PROJECTION = {
   id: "pathway_1",

@@ -62,7 +62,7 @@ import {
   resolveCustomizationSelections,
   type CommerceCustomizationError,
   type ResolvedCustomizationSelection,
-} from "#src/services/commerce-customization.service.js";
+} from "#src/modules/store/storefront/commerce-customization.service.js";
 import type { Result } from "#src/types/index.js";
 
 type PrepareRow = typeof commerceCheckoutPrepare.$inferSelect;

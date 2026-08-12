@@ -65,6 +65,9 @@ import commerceMessagesRouter from "#src/modules/store/procurement/commerce-mess
 import commerceProvidersRouter from "#src/modules/store/procurement/commerce-providers.routes.js";
 import commerceQuotesRouter from "#src/modules/store/procurement/commerce-quotes.routes.js";
 import commerceRfqsRouter from "#src/modules/store/procurement/commerce-rfqs.routes.js";
+import commerceFactoriesRouter from "#src/modules/store/storefront/commerce-factories.routes.js";
+import commerceWebhooksRouter from "#src/modules/store/storefront/commerce-webhooks.routes.js";
+import storeRouter from "#src/modules/store/storefront/store.routes.js";
 import commerceContentReportsRouter from "#src/modules/store/trust/commerce-content-reports.routes.js";
 import commerceProductInquiryRouter from "#src/modules/store/trust/commerce-product-inquiry.routes.js";
 import commerceProductQaRouter from "#src/modules/store/trust/commerce-product-qa.routes.js";
@@ -72,10 +75,7 @@ import commerceTrustRouter from "#src/modules/store/trust/commerce-trust.routes.
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
 import videosRouter from "#src/modules/studio/videos/videos.routes.js";
-import commerceFactoriesRouter from "#src/routes/commerce-factories.routes.js";
-import commerceWebhooksRouter from "#src/routes/commerce-webhooks.routes.js";
 import indexRouter from "#src/routes/index.js";
-import storeRouter from "#src/routes/store.routes.js";
 
 const app = express();
 

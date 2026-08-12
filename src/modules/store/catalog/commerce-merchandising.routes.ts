@@ -7,13 +7,13 @@ import {
   commercePathwayWriteLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import { uploadPathwayImageFile } from "#src/middleware/upload-pathway-image.js";
 import * as commerceMerchandisingController from "#src/modules/store/catalog/commerce-merchandising.controller.js";
 import {
   attachOptionalSellerCommerceOrganization,
   requireActiveBuyerCommerceOrganization,
 } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 import { uploadCommerceVerificationEvidence } from "#src/modules/store/organizations/upload-commerce-verification-evidence.js";
+import { uploadPathwayImageFile } from "#src/modules/store/storefront/upload-pathway-image.js";
 
 /**
  * Guided pathway authoring and moderation (STORE_BACKEND_STRUCTURE.md §15.8).

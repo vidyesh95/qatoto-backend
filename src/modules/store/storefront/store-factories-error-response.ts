@@ -1,7 +1,7 @@
 import type { Response } from "express";
 
 import type { CommerceManufacturingInquiryError } from "#src/modules/store/procurement/commerce-manufacturing-inquiry.service.js";
-import type { StoreFactoriesError } from "#src/services/store-factories.service.js";
+import type { StoreFactoriesError } from "#src/modules/store/storefront/store-factories.service.js";
 
 /**
  * Error mapping for the manufacturer directory and its inquiry (§16).

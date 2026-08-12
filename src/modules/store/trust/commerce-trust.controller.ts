@@ -5,6 +5,8 @@ import { ACCEPTED_IMAGE_FORMATS_SENTENCE, describeUnsupportedImageFormat } from 
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import * as commerceCompletionService from "#src/modules/store/orders/commerce-completion.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
+import { StoreReviewListQuerySchema } from "#src/modules/store/storefront/store-reviews.schemas.js";
+import * as storeReviewsService from "#src/modules/store/storefront/store-reviews.service.js";
 import {
   AddDisputeNoteSchema,
   AttachReviewPhotoFieldsSchema,
@@ -28,8 +30,6 @@ import type {
   CommerceReviewMediaError,
   CommerceTrustError,
 } from "#src/modules/store/trust/commerce-trust.service.js";
-import { StoreReviewListQuerySchema } from "#src/schemas/store-reviews.schemas.js";
-import * as storeReviewsService from "#src/services/store-reviews.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

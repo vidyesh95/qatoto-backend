@@ -1,11 +1,11 @@
 import express from "express";
 
-import * as storeFactoriesController from "#src/controllers/store-factories.controller.js";
-import * as storeController from "#src/controllers/store.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { storeFactoryReadLimiter, storeReadLimiter } from "#src/middleware/rate-limit.js";
 import * as communityCofounderController from "#src/modules/store/community/community-cofounder.controller.js";
 import * as communityForumController from "#src/modules/store/community/community-forum.controller.js";
+import * as storeFactoriesController from "#src/modules/store/storefront/store-factories.controller.js";
+import * as storeController from "#src/modules/store/storefront/store.controller.js";
 import * as commerceProductQaController from "#src/modules/store/trust/commerce-product-qa.controller.js";
 
 /**

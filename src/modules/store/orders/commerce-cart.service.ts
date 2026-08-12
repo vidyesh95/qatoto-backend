@@ -27,7 +27,7 @@ import {
   type CommerceCustomizationError,
   type CustomizationSelectionInput,
   type ResolvedCustomizationSelection,
-} from "#src/services/commerce-customization.service.js";
+} from "#src/modules/store/storefront/commerce-customization.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

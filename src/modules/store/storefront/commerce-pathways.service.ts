@@ -29,7 +29,7 @@ import {
 } from "#src/modules/store/orders/commerce-cart.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import { getPathwaySetBySlug } from "#src/services/store-pathways.service.js";
+import { getPathwaySetBySlug } from "#src/modules/store/storefront/store-pathways.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

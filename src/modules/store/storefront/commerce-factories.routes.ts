@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as storeFactoriesController from "#src/controllers/store-factories.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
@@ -11,6 +10,7 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireActiveCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import * as storeFactoriesController from "#src/modules/store/storefront/store-factories.controller.js";
 
 /**
  * Manufacturing inquiries and seller-owned factory depth (§16.3, §16.5).

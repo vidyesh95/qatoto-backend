@@ -1,7 +1,7 @@
 import express from "express";
 
-import * as commerceWebhooksController from "#src/controllers/commerce-webhooks.controller.js";
 import { commerceConnectorWebhookLimiter } from "#src/middleware/rate-limit.js";
+import * as commerceWebhooksController from "#src/modules/store/storefront/commerce-webhooks.controller.js";
 
 /**
  * Inbound connector webhooks (STORE Phase 14).

@@ -145,7 +145,7 @@ const MOUNTED_ROUTERS: readonly {
     specifier: "#src/modules/store/catalog/commerce-product-engagement.routes.js",
     exportName: "default",
   },
-  { mountPath: "/store", specifier: "#src/routes/store.routes.js", exportName: "default" },
+  { mountPath: "/store", specifier: "#src/modules/store/storefront/store.routes.js", exportName: "default" },
   // Phase 14. The webhook router is the only mounted router whose writes carry no session,
   // so its limiter is IP-keyed; it is listed here precisely because "no session" must not
   // become an excuse for "no bound".
@@ -154,7 +154,11 @@ const MOUNTED_ROUTERS: readonly {
     specifier: "#src/modules/store/orders/commerce-settlement.routes.js",
     exportName: "default",
   },
-  { mountPath: "/webhooks", specifier: "#src/routes/commerce-webhooks.routes.js", exportName: "default" },
+  {
+    mountPath: "/webhooks",
+    specifier: "#src/modules/store/storefront/commerce-webhooks.routes.js",
+    exportName: "default",
+  },
   /**
    * Phase 15's trade attachments and Phase 16's taxonomy admin were mounted in `app.ts`
    * and missing from this list — the SAME omission the Phase 10 note above records, twice
@@ -177,7 +181,11 @@ const MOUNTED_ROUTERS: readonly {
     exportName: "default",
   },
   // Phase 17 (§16, Appendix A32).
-  { mountPath: "/commerce", specifier: "#src/routes/commerce-factories.routes.js", exportName: "default" },
+  {
+    mountPath: "/commerce",
+    specifier: "#src/modules/store/storefront/commerce-factories.routes.js",
+    exportName: "default",
+  },
   // Phase 18 (§17, Appendix A33). A new mount prefix — community is a sibling context.
   {
     mountPath: "/community",

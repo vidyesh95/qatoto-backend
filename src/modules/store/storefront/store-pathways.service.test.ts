@@ -6,7 +6,8 @@ stubServerEnvironment();
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
 vi.mock("dotenv/config", () => ({}));
 
-const { aggregateCurrencyTotals, deriveSlotState } = await import("#src/services/store-pathways.service.js");
+const { aggregateCurrencyTotals, deriveSlotState } =
+  await import("#src/modules/store/storefront/store-pathways.service.js");
 
 type SlotProjection = Parameters<typeof aggregateCurrencyTotals>[0][number];
 type ProductCard = SlotProjection["candidates"][number]["product"];

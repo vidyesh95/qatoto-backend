@@ -11,11 +11,13 @@ import * as commerceDeliveryEstimateService from "#src/modules/store/fulfillment
 import * as commerceFreightJourneyService from "#src/modules/store/fulfillment/commerce-freight-journey.service.js";
 import { resolveActiveCommerceOrganization } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import * as commerceProvidersService from "#src/modules/store/procurement/commerce-providers.service.js";
+import * as storePathwaysService from "#src/modules/store/storefront/store-pathways.service.js";
 import {
   StoreOrganizationReviewParamsSchema,
   StoreProductReviewParamsSchema,
   StoreReviewListQuerySchema,
-} from "#src/schemas/store-reviews.schemas.js";
+} from "#src/modules/store/storefront/store-reviews.schemas.js";
+import * as storeReviewsService from "#src/modules/store/storefront/store-reviews.service.js";
 import {
   CategoriesQuerySchema,
   CategoryParamsSchema,
@@ -28,9 +30,7 @@ import {
   ProvidersQuerySchema,
   RailParamsSchema,
   SearchQuerySchema,
-} from "#src/schemas/store.schemas.js";
-import * as storePathwaysService from "#src/services/store-pathways.service.js";
-import * as storeReviewsService from "#src/services/store-reviews.service.js";
+} from "#src/modules/store/storefront/store.schemas.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

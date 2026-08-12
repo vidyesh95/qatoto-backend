@@ -2,13 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import { and, asc, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm";
 
-import {
-  resolveCommercePaymentProvider,
-  type CommercePaymentProviderError,
-  type CommercePaymentProviderName,
-  type NormalizedPaymentIntentState,
-  type NormalizedRefundState,
-} from "#src/adapters/commerce-payment-provider.adapter.js";
 import { db } from "#src/db/index.js";
 import {
   commerceOrder,
@@ -34,6 +27,13 @@ import {
   evaluateBuyerQualification,
   type BuyerQualificationVerdict,
 } from "#src/modules/store/procurement/commerce-buyer-qualification.service.js";
+import {
+  resolveCommercePaymentProvider,
+  type CommercePaymentProviderError,
+  type CommercePaymentProviderName,
+  type NormalizedPaymentIntentState,
+  type NormalizedRefundState,
+} from "#src/modules/store/storefront/commerce-payment-provider.adapter.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

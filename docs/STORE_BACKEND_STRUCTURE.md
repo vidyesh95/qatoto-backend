@@ -4134,7 +4134,7 @@ Verified against `src/routes/*.ts` and the mounts at `src/app.ts:171-341`:
   parse fails closed as a `PARSE` result rather than crashing, which means the failure presents as an
   empty organization list rather than as an error — the worst of both.
 - **`GET /store/providers` accepts only `providerKind`, `limit` and `cursor`**
-  (`src/routes/store.routes.ts:63`), while `src/lib/store/providers.schemas.ts` documents seven filters
+  (`src/modules/store/storefront/store.routes.ts:63`), while `src/lib/store/providers.schemas.ts` documents seven filters
   the frontend expects. A `.strict()` query schema answers **422** for an unrecognized key, not an
   ignored value, so sending one of the seven does not degrade — it fails the whole read.
 

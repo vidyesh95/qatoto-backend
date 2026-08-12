@@ -119,7 +119,7 @@ describe("commerce factories router declaration order", () => {
   ])(
     "declares $literal before $parameterised, or $breaks silently resolves as a lookup",
     async ({ literal, parameterised }) => {
-      const router = (await import("#src/routes/commerce-factories.routes.js")).default;
+      const router = (await import("#src/modules/store/storefront/commerce-factories.routes.js")).default;
       const paths = declaredPaths(router);
 
       const literalIndex = paths.indexOf(literal);
@@ -137,7 +137,7 @@ describe("commerce factories router declaration order", () => {
    * `/factories/inquiries/<literal>`.
    */
   it("declares no route that swallows a later one", async () => {
-    const router = (await import("#src/routes/commerce-factories.routes.js")).default;
+    const router = (await import("#src/modules/store/storefront/commerce-factories.routes.js")).default;
     const routes = declaredRoutes(router);
 
     const collisions = routes.flatMap((earlier, index) =>
@@ -151,7 +151,7 @@ describe("commerce factories router declaration order", () => {
   });
 
   it("keeps the create behind a required idempotency key", async () => {
-    const paths = declaredPaths((await import("#src/routes/commerce-factories.routes.js")).default);
+    const paths = declaredPaths((await import("#src/modules/store/storefront/commerce-factories.routes.js")).default);
     expect(paths).toContain("/factories/:factorySlug/inquiries");
   });
 });
