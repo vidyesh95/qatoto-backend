@@ -17,6 +17,7 @@ import type { ImageValidationError } from "#src/lib/image.js";
 import { validateAndNormalizeImage } from "#src/lib/image.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import {
   getCart,
   getOrCreateCartForUpdate,
@@ -27,7 +28,6 @@ import {
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { CommerceProductRelationKind } from "#src/services/commerce-product-relations.service.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import { resolveEligibleProductCardsByIds } from "#src/services/store-catalog.service.js";
 import { getPathwaySetBySlug } from "#src/services/store-pathways.service.js";
 import type { Result } from "#src/types/index.js";

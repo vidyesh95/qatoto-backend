@@ -4,15 +4,15 @@ import { alias } from "drizzle-orm/pg-core";
 import { db } from "#src/db/index.js";
 import { platformRoleGrantProposal, user } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
-import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
 import {
   listPlatformCapabilitiesForRole,
   requirePlatformCapability,
   type PlatformAccessError,
   type PlatformCapability,
   type PlatformRole,
-} from "#src/services/platform-role.service.js";
+} from "#src/modules/platform/roles/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

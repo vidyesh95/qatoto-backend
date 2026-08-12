@@ -9,6 +9,10 @@ import {
 import { respondResearchProgramError } from "#src/controllers/research-program-error-response.js";
 import { decodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
 import {
+  requirePlatformCapability,
+  type PlatformStaffContext,
+} from "#src/modules/platform/roles/platform-role.service.js";
+import {
   AttachPaperFileSchema,
   CreateBranchSchema,
   CreateOpportunitySchema,
@@ -37,10 +41,6 @@ import {
   UpdateParticipationSchema,
   UpdateProgramSchema,
 } from "#src/schemas/research-programs.schemas.js";
-import {
-  requirePlatformCapability,
-  type PlatformStaffContext,
-} from "#src/services/platform-role.service.js";
 import * as categoriesService from "#src/services/research-paper-categories.service.js";
 import * as papersService from "#src/services/research-papers.service.js";
 import {

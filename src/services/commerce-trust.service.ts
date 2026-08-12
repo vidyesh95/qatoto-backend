@@ -23,6 +23,7 @@ import {
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { extractYoutubeVideoId } from "#src/lib/youtube.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import type {
   AttachReviewVideoInput,
   CreateDisputeInput,
@@ -36,7 +37,6 @@ import {
   type CommerceOrganizationMemberRole,
 } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];

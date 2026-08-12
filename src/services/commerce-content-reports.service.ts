@@ -12,6 +12,8 @@ import {
   product,
 } from "#src/db/schema.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
+import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import type {
   CreateContentReportInput,
   DecideContentReportInput,
@@ -22,8 +24,6 @@ import {
   refreshProductQuestionCounters,
   refreshQuestionAnswerSummary,
 } from "#src/services/commerce-product-qa.service.js";
-import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import { enqueueProductSearchDocumentRefresh } from "#src/services/store-search.service.js";
 import type { Result } from "#src/types/index.js";
 

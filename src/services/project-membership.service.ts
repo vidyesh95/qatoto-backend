@@ -11,7 +11,7 @@ import {
   researchProject,
   user,
 } from "#src/db/schema.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import { recomputeOpenRoleStatus } from "#src/services/project-roles.service.js";
 import type { Result } from "#src/types/index.js";
 

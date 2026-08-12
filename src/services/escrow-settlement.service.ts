@@ -7,13 +7,13 @@ import {
   fundingRoundPledge,
   providerTransfer,
 } from "#src/db/schema.js";
+import type { PlatformAccessError } from "#src/modules/platform/roles/platform-role.service.js";
 import {
   markSettlementEventProcessed,
   recordSettlementEvent,
   type ProviderTransferError,
 } from "#src/services/escrow-provider-adapter.service.js";
 import { appendJournalEntry, appendReversingEntry } from "#src/services/escrow.service.js";
-import type { PlatformAccessError } from "#src/services/platform-role.service.js";
 
 /**
  * THE SETTLEMENT PATH (R_AND_D_BACKEND_STRUCTURE.md §7).

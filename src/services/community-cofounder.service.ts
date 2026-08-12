@@ -12,8 +12,8 @@ import {
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { isIdentifiedUser } from "#src/middleware/require-identified-user.js";
-import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
+import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

@@ -10,8 +10,8 @@ import {
 import {
   type PlatformCapability,
   requirePlatformCapability,
-} from "#src/services/platform-role.service.js";
-import type { PlatformAccessError } from "#src/services/platform-role.service.js";
+} from "#src/modules/platform/roles/platform-role.service.js";
+import type { PlatformAccessError } from "#src/modules/platform/roles/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

@@ -10,9 +10,9 @@ import {
   user,
 } from "#src/db/schema.js";
 import { encodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
+import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
-import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
-import type { PlatformStaffContext } from "#src/services/platform-role.service.js";
+import type { PlatformStaffContext } from "#src/modules/platform/roles/platform-role.service.js";
 import type { ResearchPaperModerationStatus } from "#src/services/research-papers.service.js";
 import type { ProgramAccessError } from "#src/services/research-program-access.service.js";
 import type { Result } from "#src/types/index.js";

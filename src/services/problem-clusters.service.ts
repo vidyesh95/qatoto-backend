@@ -11,13 +11,13 @@ import {
   researchProject,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import {
   DISCOVERY_CATEGORY_REF_COLUMNS,
   DISCOVERY_REGION_REF_COLUMNS,
   type DiscoveryCategoryRef,
   type DiscoveryRegionRef,
 } from "#src/services/discovery-catalog.service.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

@@ -2,9 +2,9 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { commerceProductRelation, product } from "#src/db/schema.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import {
   resolveEligibleProductCardsByIds,
   type StoreProductCardProjection,

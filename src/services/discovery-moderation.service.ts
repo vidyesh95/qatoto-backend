@@ -10,11 +10,11 @@ import {
 import {
   appendPlatformAuditEntry,
   recordPlatformAction,
-} from "#src/services/platform-audit.service.js";
+} from "#src/modules/platform/audit/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
-} from "#src/services/platform-role.service.js";
+} from "#src/modules/platform/roles/platform-role.service.js";
 import {
   applyCategoryDecision,
   findCategoryStatusById,

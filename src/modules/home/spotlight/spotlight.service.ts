@@ -17,11 +17,11 @@ import { asc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { feedSpotlightSlot, video } from "#src/db/schema.js";
-import { recordPlatformAction } from "#src/services/platform-audit.service.js";
+import { recordPlatformAction } from "#src/modules/platform/audit/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
-} from "#src/services/platform-role.service.js";
+} from "#src/modules/platform/roles/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /** Hard ceiling — the expanding-tile layout has left / center / right and nothing else. */

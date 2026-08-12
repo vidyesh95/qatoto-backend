@@ -4,17 +4,17 @@ import { db } from "#src/db/index.js";
 import { discoveryRegion, marketInsight, researchCategory } from "#src/db/schema.js";
 import { findStatViolations, type MarketInsightStat } from "#src/lib/market-insight-stat.js";
 import { isForeignKeyViolation } from "#src/lib/pg-errors.js";
+import { recordPlatformAction } from "#src/modules/platform/audit/platform-audit.service.js";
+import {
+  requirePlatformCapability,
+  type PlatformAccessError,
+} from "#src/modules/platform/roles/platform-role.service.js";
 import {
   DISCOVERY_CATEGORY_REF_COLUMNS,
   DISCOVERY_REGION_REF_COLUMNS,
   type DiscoveryCategoryRef,
   type DiscoveryRegionRef,
 } from "#src/services/discovery-catalog.service.js";
-import { recordPlatformAction } from "#src/services/platform-audit.service.js";
-import {
-  requirePlatformCapability,
-  type PlatformAccessError,
-} from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

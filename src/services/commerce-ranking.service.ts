@@ -36,7 +36,7 @@ import {
 } from "#src/lib/commerce-trending-score.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/lib/store-cursor.js";
 import { utcDayStringOf } from "#src/lib/utc-day.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

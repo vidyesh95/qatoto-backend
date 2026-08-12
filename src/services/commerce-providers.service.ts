@@ -26,6 +26,8 @@ import {
 } from "#src/lib/commerce-organization-country.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { decodeStoreCursor, encodeStoreCursor, slugifyPublicTitle } from "#src/lib/store-cursor.js";
+import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import { memberCanOperateProvider } from "#src/services/commerce-organization-access.service.js";
 import {
   loadSellerDeclaredProfiles,
@@ -40,8 +42,6 @@ import {
   type OrganizationFulfillmentMetrics,
   type OrganizationMeasuredMetrics,
 } from "#src/services/commerce-trust-metrics.service.js";
-import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import {
   enqueueOfferingSearchDocumentRefresh,
   enqueueProductSearchDocumentRefresh,

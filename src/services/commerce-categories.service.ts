@@ -36,11 +36,11 @@ import { db } from "#src/db/index.js";
 import { commerceCategory, commerceCategoryRequest, product } from "#src/db/schema.js";
 import { uploadCommerceCategoryImage, type CloudinaryError } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
-import { recordPlatformAction } from "#src/services/platform-audit.service.js";
+import { recordPlatformAction } from "#src/modules/platform/audit/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
-} from "#src/services/platform-role.service.js";
+} from "#src/modules/platform/roles/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

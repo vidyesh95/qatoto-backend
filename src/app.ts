@@ -21,7 +21,9 @@ import engagementRouter, {
 import feedRouter from "#src/modules/home/feed/feed.routes.js";
 import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
+import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
+import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
 import videosRouter from "#src/modules/studio/videos/videos.routes.js";
@@ -56,8 +58,6 @@ import discoveryRouter from "#src/routes/discovery.routes.js";
 import docsRouter from "#src/routes/docs.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/routes/funding.routes.js";
 import indexRouter from "#src/routes/index.js";
-import platformAuditRouter from "#src/routes/platform-audit.routes.js";
-import platformRolesRouter from "#src/routes/platform-roles.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,

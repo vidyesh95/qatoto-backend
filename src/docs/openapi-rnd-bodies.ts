@@ -41,7 +41,7 @@ import { MarkNotificationsReadSchema } from "#src/modules/platform/notifications
 import {
   CountersignPlatformRoleSchema,
   ProposePlatformRoleSchema,
-} from "#src/schemas/platform-roles.schemas.js";
+} from "#src/modules/platform/roles/platform-roles.schemas.js";
 import {
   CreateClusterProjectLinkSchema,
   CreateProblemReportSchema,

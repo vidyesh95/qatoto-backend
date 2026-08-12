@@ -8,7 +8,7 @@
  * access to a machine that already holds the database credentials.
  *
  * Roles, and what they can do (the grant table lives in
- * src/services/platform-role.service.ts):
+ * src/modules/platform/roles/platform-role.service.ts):
  *   moderator — approve/reject user-minted categories, decide cluster merge proposals,
  *               moderate §10 content
  *   auditor   — read the §7 escrow ledger. Read-only, and DISJOINT from moderator.
@@ -26,8 +26,8 @@ import { eq } from "drizzle-orm";
 
 import { db, pool } from "#src/db/index.js";
 import { user } from "#src/db/schema.js";
-import { appendPlatformAuditEntry } from "#src/services/platform-audit.service.js";
-import type { PlatformRole } from "#src/services/platform-role.service.js";
+import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
+import type { PlatformRole } from "#src/modules/platform/roles/platform-role.service.js";
 
 const ASSIGNABLE_ROLES = ["moderator", "auditor", "admin"] as const;
 const REVOKE_KEYWORD = "none";

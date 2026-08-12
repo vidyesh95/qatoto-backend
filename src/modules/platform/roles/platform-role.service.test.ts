@@ -19,7 +19,7 @@ const selectMock = vi.fn<(columns: unknown) => { from: typeof fromMock }>(() => 
 
 vi.mock("#src/db/index.js", () => ({ db: { select: selectMock } }));
 
-const { requirePlatformCapability } = await import("#src/services/platform-role.service.js");
+const { requirePlatformCapability } = await import("#src/modules/platform/roles/platform-role.service.js");
 
 function stubPlatformRole(platformRole: string | null): void {
   limitMock.mockResolvedValue(platformRole === null ? [] : [{ platformRole }]);

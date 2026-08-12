@@ -1,9 +1,9 @@
 import express from "express";
 
-import * as platformRolesController from "#src/controllers/platform-roles.controller.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import { platformRoleWriteLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as platformRolesController from "#src/modules/platform/roles/platform-roles.controller.js";
 
 const router = express.Router();
 

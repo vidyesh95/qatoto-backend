@@ -30,9 +30,9 @@ import {
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import { scheduleDocumentScan } from "#src/services/commerce-document-scan.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
-import { requirePlatformCapability } from "#src/services/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 type Organization = typeof commerceOrganization.$inferSelect;

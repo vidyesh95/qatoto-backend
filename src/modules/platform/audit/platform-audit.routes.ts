@@ -1,8 +1,8 @@
 import express from "express";
 
-import * as platformAuditController from "#src/controllers/platform-audit.controller.js";
 import { chainVerifyLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as platformAuditController from "#src/modules/platform/audit/platform-audit.controller.js";
 
 const router = express.Router();
 

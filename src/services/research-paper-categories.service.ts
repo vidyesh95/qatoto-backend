@@ -3,11 +3,11 @@ import { and, asc, eq } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { researchPaperCategory } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { recordPlatformAction } from "#src/services/platform-audit.service.js";
+import { recordPlatformAction } from "#src/modules/platform/audit/platform-audit.service.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,
-} from "#src/services/platform-role.service.js";
+} from "#src/modules/platform/roles/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

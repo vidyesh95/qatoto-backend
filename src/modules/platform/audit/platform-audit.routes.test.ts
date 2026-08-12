@@ -27,7 +27,7 @@ vi.mock("#src/lib/auth.js", async () => (await import("#src/test-support/auth-mo
 const listPlatformAuditTrail = vi.fn<(...args: readonly unknown[]) => unknown>();
 const verifyPlatformAuditChain = vi.fn<(...args: readonly unknown[]) => unknown>();
 
-vi.mock("#src/services/platform-audit.service.js", () => ({
+vi.mock("#src/modules/platform/audit/platform-audit.service.js", () => ({
   listPlatformAuditTrail: (...args: readonly unknown[]) => listPlatformAuditTrail(...args),
   verifyPlatformAuditChain: (...args: readonly unknown[]) => verifyPlatformAuditChain(...args),
 }));

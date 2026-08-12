@@ -1,6 +1,6 @@
 import type { Response } from "express";
 
-import type { PlatformAccessError } from "#src/services/platform-role.service.js";
+import type { PlatformAccessError } from "#src/modules/platform/roles/platform-role.service.js";
 import type { ResearchPaperCategoryError } from "#src/services/research-paper-categories.service.js";
 import type { ResearchPaperError } from "#src/services/research-papers.service.js";
 import type { ProgramNotWritableError } from "#src/services/research-program-access.service.js";
