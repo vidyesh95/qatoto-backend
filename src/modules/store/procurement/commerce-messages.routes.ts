@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceMessagesController from "#src/controllers/commerce-messages.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { commerceMessageWriteLimiter } from "#src/middleware/rate-limit.js";
@@ -17,6 +16,7 @@ import { requireAuth } from "#src/middleware/require-auth.js";
  * thread, so a pending workspace can reach its OWN conversations and no others.
  */
 import { requireProvisionedBuyerCommerceWorkspace } from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import * as commerceMessagesController from "#src/modules/store/procurement/commerce-messages.controller.js";
 
 const commerceMessagesRouter = express.Router();
 

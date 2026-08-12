@@ -7,7 +7,6 @@ import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
 import { handleDispatchConnectorCommand } from "#src/jobs/dispatch-connector-command.js";
-import { handleExpireCommerceQuotes } from "#src/jobs/expire-commerce-quotes.js";
 import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
 import { handleRecomputeTrendingVideos } from "#src/jobs/recompute-trending-videos.js";
 import { handleRecomputeUserAffinities } from "#src/jobs/recompute-user-affinities.js";
@@ -82,6 +81,7 @@ import { handleRecomputeCommerceProductTrending } from "#src/modules/store/catal
 import { handleRecomputePlatformCategoryPopularity } from "#src/modules/store/catalog/recompute-platform-category-popularity.js";
 import { handleRefreshStoreSearchDocument } from "#src/modules/store/catalog/refresh-store-search-document.js";
 import { handleRollupCommerceProductDailySignal } from "#src/modules/store/catalog/rollup-commerce-product-daily-signal.js";
+import { handleExpireCommerceQuotes } from "#src/modules/store/procurement/expire-commerce-quotes.js";
 
 /**
  * The background worker process (R_AND_D_BACKEND_STRUCTURE.md §4e).

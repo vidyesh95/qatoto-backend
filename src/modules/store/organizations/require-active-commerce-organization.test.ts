@@ -13,7 +13,7 @@ vi.mock("#src/modules/store/organizations/commerce-organization-access.service.j
 
 // Phase 21. Mocked rather than left real because the workspace service reaches `db`, and an
 // unmocked import of it pulls the whole env-validated config into a unit test.
-vi.mock("#src/services/commerce-buyer-workspace.service.js", () => ({
+vi.mock("#src/modules/store/procurement/commerce-buyer-workspace.service.js", () => ({
   provisionBuyerCommerceWorkspace,
 }));
 

@@ -137,7 +137,7 @@ const serviceStubs = vi.hoisted(() => ({
   listProviderRfqs: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-rfqs.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/procurement/commerce-rfqs.service.js", () => serviceStubs);
 
 const CREATE_BODY = {
   title: "Need pallet freight",

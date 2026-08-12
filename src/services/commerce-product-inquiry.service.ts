@@ -8,9 +8,9 @@ import {
   type CommerceOrganizationMemberRole,
 } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import { createOrGetThread } from "#src/modules/store/procurement/commerce-messages.service.js";
+import type { CommerceThreadProjection } from "#src/modules/store/procurement/commerce-messages.service.js";
 import type { ListProductInquiriesQuery } from "#src/schemas/commerce-product-inquiry.schemas.js";
-import { createOrGetThread } from "#src/services/commerce-messages.service.js";
-import type { CommerceThreadProjection } from "#src/services/commerce-messages.service.js";
 import type { Result } from "#src/types/index.js";
 
 export type CommerceProductInquiryError =

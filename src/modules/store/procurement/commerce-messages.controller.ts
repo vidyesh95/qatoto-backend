@@ -8,8 +8,8 @@ import {
   ListMessagesQuerySchema,
   ListThreadsQuerySchema,
   ThreadParamsSchema,
-} from "#src/schemas/commerce-messages.schemas.js";
-import * as commerceMessagesService from "#src/services/commerce-messages.service.js";
+} from "#src/modules/store/procurement/commerce-messages.schemas.js";
+import * as commerceMessagesService from "#src/modules/store/procurement/commerce-messages.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

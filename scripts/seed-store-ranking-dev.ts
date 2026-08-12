@@ -73,7 +73,7 @@ import {
 import { auth } from "#src/lib/auth.js";
 import { utcDayStringOf } from "#src/lib/utc-day.js";
 import { refreshProductSearchDocument } from "#src/modules/store/catalog/store-search.service.js";
-import { evaluateBuyerQualification } from "#src/services/commerce-buyer-qualification.service.js";
+import { evaluateBuyerQualification } from "#src/modules/store/procurement/commerce-buyer-qualification.service.js";
 
 const SLUG_PREFIX = "devseed-";
 const ID_PREFIX = "devseed_";

@@ -128,7 +128,7 @@ const serviceStubs = vi.hoisted(() => ({
   linkSupplierToCommerceOrganization: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-providers.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/procurement/commerce-providers.service.js", () => serviceStubs);
 
 describe("commerce provider routes", () => {
   let app: Express;

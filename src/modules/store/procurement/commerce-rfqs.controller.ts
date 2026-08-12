@@ -10,9 +10,9 @@ import {
   ListQuerySchema,
   RfqIdParamsSchema,
   UpdateDraftRfqSchema,
-} from "#src/schemas/commerce-rfqs.schemas.js";
-import * as commerceRfqsService from "#src/services/commerce-rfqs.service.js";
-import type { CommerceRfqsError } from "#src/services/commerce-rfqs.service.js";
+} from "#src/modules/store/procurement/commerce-rfqs.schemas.js";
+import * as commerceRfqsService from "#src/modules/store/procurement/commerce-rfqs.service.js";
+import type { CommerceRfqsError } from "#src/modules/store/procurement/commerce-rfqs.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function validationError(res: Response, error: z.ZodError): void {

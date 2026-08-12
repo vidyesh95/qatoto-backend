@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceRfqsController from "#src/controllers/commerce-rfqs.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { commerceRfqWriteLimiter } from "#src/middleware/rate-limit.js";
@@ -11,6 +10,7 @@ import {
   requireActiveProviderCommerceOrganization,
   requireProvisionedBuyerCommerceWorkspace,
 } from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import * as commerceRfqsController from "#src/modules/store/procurement/commerce-rfqs.controller.js";
 
 const router = express.Router();
 

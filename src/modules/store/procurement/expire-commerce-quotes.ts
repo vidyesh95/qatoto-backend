@@ -1,5 +1,5 @@
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
-import { expireCommerceQuotesAndRfqs } from "#src/services/commerce-messages.service.js";
+import { expireCommerceQuotesAndRfqs } from "#src/modules/store/procurement/commerce-messages.service.js";
 
 /**
  * Expires submitted quotes past their latest revision validity deadline and open RFQs

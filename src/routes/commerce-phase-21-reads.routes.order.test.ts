@@ -96,7 +96,7 @@ function shadowedBy(earlier: DeclaredRoute, later: DeclaredRoute): boolean {
 /** Every read this phase added, and the feature that does not exist without it. */
 const PHASE_21_COLLECTION_READS = [
   {
-    router: "#src/routes/commerce-messages.routes.js",
+    router: "#src/modules/store/procurement/commerce-messages.routes.js",
     collection: "/threads",
     breaks: "the thread inbox, and with it settlement agreements",
   },
@@ -111,7 +111,7 @@ const PHASE_21_COLLECTION_READS = [
     breaks: "the buyer's inbound shipment queue",
   },
   {
-    router: "#src/routes/commerce-quotes.routes.js",
+    router: "#src/modules/store/procurement/commerce-quotes.routes.js",
     collection: "/provider/quotes",
     breaks: "a provider's own bid list",
   },
@@ -133,7 +133,7 @@ const PHASE_21_COLLECTION_READS = [
  */
 const PHASE_21_SHADOWING_HAZARDS = [
   {
-    router: "#src/routes/commerce-messages.routes.js",
+    router: "#src/modules/store/procurement/commerce-messages.routes.js",
     collection: "/threads",
     detail: "/threads/:threadId/messages",
   },
@@ -178,10 +178,10 @@ describe("Phase 21b collection reads", () => {
    * `/:param` of the same depth.
    */
   it.each([
-    "#src/routes/commerce-messages.routes.js",
+    "#src/modules/store/procurement/commerce-messages.routes.js",
     "#src/routes/commerce-documents.routes.js",
     "#src/routes/commerce-fulfillment.routes.js",
-    "#src/routes/commerce-quotes.routes.js",
+    "#src/modules/store/procurement/commerce-quotes.routes.js",
     "#src/routes/commerce-payments.routes.js",
   ])("%s declares no route that swallows a later one", async (routerModule) => {
     const routes = declaredRoutes((await import(routerModule)).default);

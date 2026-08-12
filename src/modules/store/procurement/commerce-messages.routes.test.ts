@@ -110,7 +110,7 @@ const serviceStubs = vi.hoisted(() => ({
   appendMessage: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-messages.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/procurement/commerce-messages.service.js", () => serviceStubs);
 
 describe("commerce message routes", () => {
   let app: Express;

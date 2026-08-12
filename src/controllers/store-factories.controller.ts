@@ -9,6 +9,7 @@ import {
   respondValidationFailed,
 } from "#src/controllers/store-factories-error-response.js";
 import * as sellerProfileService from "#src/modules/store/organizations/commerce-seller-profile.service.js";
+import * as manufacturingInquiryService from "#src/modules/store/procurement/commerce-manufacturing-inquiry.service.js";
 import {
   AuditIdParamsSchema,
   CreateManufacturingInquirySchema,
@@ -23,7 +24,6 @@ import {
   ReplaceProductionLinesSchema,
   WithdrawSiteAuditSchema,
 } from "#src/schemas/store-factories.schemas.js";
-import * as manufacturingInquiryService from "#src/services/commerce-manufacturing-inquiry.service.js";
 import * as storeFactoriesService from "#src/services/store-factories.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 

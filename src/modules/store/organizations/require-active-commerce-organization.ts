@@ -12,7 +12,7 @@ import {
 import {
   provisionBuyerCommerceWorkspace,
   type BuyerCommerceWorkspaceError,
-} from "#src/services/commerce-buyer-workspace.service.js";
+} from "#src/modules/store/procurement/commerce-buyer-workspace.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

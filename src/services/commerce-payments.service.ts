@@ -27,7 +27,7 @@ import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organiz
 import {
   evaluateBuyerQualification,
   type BuyerQualificationVerdict,
-} from "#src/services/commerce-buyer-qualification.service.js";
+} from "#src/modules/store/procurement/commerce-buyer-qualification.service.js";
 import {
   appendCommerceJournalEntry,
   recognizeCommission,

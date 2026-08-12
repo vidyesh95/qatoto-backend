@@ -12,9 +12,9 @@ import {
   QuoteIdParamsSchema,
   QuoteRevisionParamsSchema,
   RfqIdParamsSchema,
-} from "#src/schemas/commerce-quotes.schemas.js";
-import * as commerceQuotesService from "#src/services/commerce-quotes.service.js";
-import type { CommerceQuotesError } from "#src/services/commerce-quotes.service.js";
+} from "#src/modules/store/procurement/commerce-quotes.schemas.js";
+import * as commerceQuotesService from "#src/modules/store/procurement/commerce-quotes.service.js";
+import type { CommerceQuotesError } from "#src/modules/store/procurement/commerce-quotes.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

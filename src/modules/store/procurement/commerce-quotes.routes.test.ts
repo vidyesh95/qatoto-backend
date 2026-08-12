@@ -120,14 +120,14 @@ const serviceStubs = vi.hoisted(() => ({
   withdrawQuote: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
-vi.mock("#src/services/commerce-quotes.service.js", () => serviceStubs);
+vi.mock("#src/modules/store/procurement/commerce-quotes.service.js", () => serviceStubs);
 
 describe("commerce quote routes", () => {
   let app: Express;
 
   beforeAll(async () => {
     app = await buildTestApp();
-    const quotesRouter = (await import("#src/routes/commerce-quotes.routes.js")).default;
+    const quotesRouter = (await import("#src/modules/store/procurement/commerce-quotes.routes.js")).default;
     app.use("/commerce", quotesRouter);
   });
 

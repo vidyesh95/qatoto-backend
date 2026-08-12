@@ -16,8 +16,8 @@ import {
   SupplierParamsSchema,
   UpdateOfferingSchema,
   UpsertProfileSchema,
-} from "#src/schemas/commerce-providers.schemas.js";
-import * as commerceProvidersService from "#src/services/commerce-providers.service.js";
+} from "#src/modules/store/procurement/commerce-providers.schemas.js";
+import * as commerceProvidersService from "#src/modules/store/procurement/commerce-providers.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 function sendZodError(res: Response, error: z.ZodError): void {

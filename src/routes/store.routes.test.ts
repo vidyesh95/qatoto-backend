@@ -66,7 +66,7 @@ vi.mock("#src/modules/store/catalog/store-merchandising.service.js", () => merch
 vi.mock("#src/services/store-pathways.service.js", () => pathwayStubs);
 vi.mock("#src/services/commerce-delivery-estimate.service.js", () => deliveryEstimateStubs);
 vi.mock("#src/services/commerce-freight-journey.service.js", () => freightJourneyStubs);
-vi.mock("#src/services/commerce-providers.service.js", () => providersStubs);
+vi.mock("#src/modules/store/procurement/commerce-providers.service.js", () => providersStubs);
 
 describe("public store routes", () => {
   let app: Express;

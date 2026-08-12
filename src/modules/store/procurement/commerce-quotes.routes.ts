@@ -1,6 +1,5 @@
 import express from "express";
 
-import * as commerceQuotesController from "#src/controllers/commerce-quotes.controller.js";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import { commerceQuoteWriteLimiter } from "#src/middleware/rate-limit.js";
@@ -10,6 +9,7 @@ import {
   requireActiveCommerceOrganization,
   requireActiveProviderCommerceOrganization,
 } from "#src/modules/store/organizations/require-active-commerce-organization.js";
+import * as commerceQuotesController from "#src/modules/store/procurement/commerce-quotes.controller.js";
 
 const router = express.Router();
 
