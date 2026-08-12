@@ -9,7 +9,6 @@ import {
   type NormalizedEscrowEvent,
   type NormalizedEscrowSessionState,
 } from "#src/adapters/external-escrow-provider.adapter.js";
-import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import {
   commerceConnectorOutbox,
@@ -31,7 +30,10 @@ import {
   scheduleConnectorDispatch,
   type CommerceConnectorError,
 } from "#src/services/commerce-connector.service.js";
-import { appendCommerceJournalEntry } from "#src/services/commerce-journal.service.js";
+import {
+  appendCommerceJournalEntry,
+  recognizeCommission,
+} from "#src/services/commerce-journal.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -855,54 +857,12 @@ async function applyMilestoneMovement(
       currency: input.session.currency,
       releasedAmountInCents: input.amountInCents,
       occurredAt: input.occurredAt,
+      description: "Platform commission recognized on an escrow release",
     });
   }
 
   await settleSessionIfComplete(transaction, input.session, input.occurredAt);
   return { success: true, value: true };
-}
-
-/**
- * Accrues Qatoto's commission as a RECEIVABLE against recognized revenue.
- *
- * A receivable and not a deduction, because no rail here lets Qatoto take its fee out of
- * money it is holding — it holds none. The seller owes it, and how that debt is collected
- * is still §14's open decision.
- *
- * AT ZERO BASIS POINTS THIS POSTS NOTHING AT ALL, rather than writing a zero-value entry.
- * The commission mechanism ships in this phase; the commission policy does not, and a rate
- * of zero means "not decided", which should leave no trace in a ledger.
- */
-async function recognizeCommission(
-  transaction: DatabaseTransaction,
-  input: {
-    readonly orderId: string;
-    readonly currency: string;
-    readonly releasedAmountInCents: number;
-    readonly occurredAt: Date;
-  },
-): Promise<void> {
-  const basisPoints = config.COMMERCE_PLATFORM_COMMISSION_BASIS_POINTS;
-  if (basisPoints === 0) return;
-
-  // Integer arithmetic throughout; a fractional cent of commission is rounded down, in the
-  // payer's favour, rather than introducing a float into a ledger.
-  const commissionInCents = Math.floor((input.releasedAmountInCents * basisPoints) / 10_000);
-  if (commissionInCents <= 0) return;
-
-  await appendCommerceJournalEntry(transaction, {
-    orderId: input.orderId,
-    currency: input.currency,
-    kind: "fee_recognized",
-    description: "Platform commission recognized on an escrow release",
-    settlement: "settled",
-    occurredAt: input.occurredAt,
-    lines: [
-      { accountKind: "platform_fee_receivable", signedAmountInCents: BigInt(commissionInCents) },
-      { accountKind: "platform_fee_earned", signedAmountInCents: -BigInt(commissionInCents) },
-    ],
-    createdByUserId: null,
-  });
 }
 
 /**

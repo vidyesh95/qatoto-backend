@@ -1,5 +1,6 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 
+import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import {
   commerceJournalAccount,
@@ -438,4 +439,54 @@ export async function deriveCommerceJournalBalances(
     balances.set(row.accountKind, BigInt(row.total));
   }
   return balances;
+}
+
+/**
+ * Accrues Qatoto's commission as a RECEIVABLE against recognized revenue.
+ *
+ * A receivable and not a deduction, because no rail here lets Qatoto take its fee out of money it
+ * is holding — it holds none. The seller owes it, and how that debt is collected is still §14's
+ * open decision.
+ *
+ * AT ZERO BASIS POINTS THIS POSTS NOTHING AT ALL, rather than writing a zero-value entry. The
+ * commission mechanism ships; the commission policy does not, and a rate of zero means "not
+ * decided", which should leave no trace in a ledger.
+ *
+ * IT LIVES HERE RATHER THAN IN THE ESCROW SERVICE (A41). It was private to `commerce-escrow` and
+ * so reachable only from an escrow release, which quietly made Phase 14's rail table — "commission
+ * + memo funding/release" for `direct_processor` — a promise rather than a description. The three
+ * `platform_fee_*` accounts are permitted on every rail, so this is the one posting with no rail
+ * branch at all, which is the reason it belongs beside the rail map instead of beside one caller.
+ */
+export async function recognizeCommission(
+  transaction: DatabaseExecutor,
+  input: {
+    readonly orderId: string;
+    readonly currency: string;
+    readonly releasedAmountInCents: number;
+    readonly occurredAt: Date;
+    readonly description: string;
+  },
+): Promise<void> {
+  const basisPoints = config.COMMERCE_PLATFORM_COMMISSION_BASIS_POINTS;
+  if (basisPoints === 0) return;
+
+  // Integer arithmetic throughout; a fractional cent of commission is rounded down, in the
+  // payer's favour, rather than introducing a float into a ledger.
+  const commissionInCents = Math.floor((input.releasedAmountInCents * basisPoints) / 10_000);
+  if (commissionInCents <= 0) return;
+
+  await appendCommerceJournalEntry(transaction, {
+    orderId: input.orderId,
+    currency: input.currency,
+    kind: "fee_recognized",
+    description: input.description,
+    settlement: "settled",
+    occurredAt: input.occurredAt,
+    lines: [
+      { accountKind: "platform_fee_receivable", signedAmountInCents: BigInt(commissionInCents) },
+      { accountKind: "platform_fee_earned", signedAmountInCents: -BigInt(commissionInCents) },
+    ],
+    createdByUserId: null,
+  });
 }

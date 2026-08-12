@@ -26,7 +26,12 @@ import {
   evaluateBuyerQualification,
   type BuyerQualificationVerdict,
 } from "#src/services/commerce-buyer-qualification.service.js";
-import { appendCommerceJournalEntry } from "#src/services/commerce-journal.service.js";
+import {
+  appendCommerceJournalEntry,
+  recognizeCommission,
+  type CommerceJournalAccountKind,
+  type CommerceJournalKind,
+} from "#src/services/commerce-journal.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/services/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/services/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";
@@ -36,6 +41,8 @@ type PaymentIntentRow = typeof commercePaymentIntent.$inferSelect;
 type RefundRow = typeof commerceRefund.$inferSelect;
 type OrderRow = typeof commerceOrder.$inferSelect;
 type TransferRow = typeof commerceProviderTransfer.$inferSelect;
+/** Read off the order rather than imported, so it cannot drift from the column it describes. */
+type SettlementRail = OrderRow["settlementRail"];
 
 export type CommercePaymentsError =
   | { type: "NOT_FOUND" }
@@ -186,6 +193,28 @@ function computeOutboxBackoffMs(attemptCount: number): number {
   return OUTBOX_BACKOFF_BASE_MS * 2 ** cappedAttempt;
 }
 
+/**
+ * Why a payment intent exists on ONE rail and is refused on the other three (A41).
+ *
+ * `commerce_payment_intent.settlement_account_ref` has said this since Phase 14 — "`direct_offline`
+ * and `external_escrow` never create a payment intent at all" — and nothing enforced it, so all
+ * four rails reached a settlement that could only post `internal_custody` accounts. The refusal
+ * belongs HERE, at the request, and not eight outbox retries later where only a `last_error`
+ * column records it.
+ *
+ * Each message names the rail's own settlement path, because a buyer told "this order cannot be
+ * paid" without being told how it IS paid learns nothing.
+ */
+const PAYMENT_INTENT_RAIL_REFUSALS: Readonly<Record<SettlementRail, string | null>> = {
+  direct_processor: null,
+  direct_offline:
+    "This order settles directly between the parties. Record the transfer as a settlement attestation rather than paying it here.",
+  external_escrow:
+    "This order settles through its escrow provider. Fund the escrow session with the provider; Qatoto never holds the funds.",
+  internal_custody:
+    "This order was created under a settlement model Qatoto no longer operates and cannot take a new payment.",
+};
+
 function mapNormalizedPaymentState(state: NormalizedPaymentIntentState): PaymentIntentRow["state"] {
   switch (state) {
     case "requires_action":
@@ -291,6 +320,10 @@ export async function createPaymentIntent(
         status: "invalid_state" as const,
         message: "Payment intents can only be created for orders awaiting payment.",
       };
+    }
+    const railRefusal = PAYMENT_INTENT_RAIL_REFUSALS[order.settlementRail];
+    if (railRefusal !== null) {
+      return { status: "invalid_state" as const, message: railRefusal };
     }
     if (order.totalInCents <= 0) {
       return {
@@ -803,6 +836,127 @@ async function markWebhookProcessed(
     );
 }
 
+/** One journal entry, decided but not yet written. */
+export interface RailJournalPosting {
+  readonly kind: CommerceJournalKind;
+  readonly description: string;
+  readonly lines: readonly {
+    readonly accountKind: CommerceJournalAccountKind;
+    readonly signedAmountInCents: bigint;
+  }[];
+}
+
+/**
+ * The settled payment, in the accounts the ORDER'S RAIL permits (A41).
+ *
+ * SPLIT INTO A PURE PLANNER AND AN IMPURE WRITER on purpose. Which accounts a rail may name is the
+ * part that was wrong for two phases and the part no test could reach while it was buried in a
+ * function that needed a database, a transaction and an outbox row to call. `planSettlementPostings`
+ * takes a rail and answers with entries, so `commerce-payments.settlement.test.ts` can hold it
+ * against `COMMERCE_JOURNAL_ACCOUNT_KINDS_BY_RAIL` directly.
+ *
+ * `buyer_clearing → order_held` says QATOTO IS HOLDING THE BUYER'S MONEY, and §14 decided it never
+ * does. Phase 14 froze that pair onto `internal_custody` and this function kept posting it on every
+ * rail, so every settlement threw inside `appendCommerceJournalEntry`, the outbox swallowed it, and
+ * no order has been able to leave `payment_processing` since.
+ *
+ * ON `direct_processor` THE MONEY NEVER STOPS ANYWHERE Qatoto can see. The processor settles buyer
+ * straight to the seller's own account, so the entry is `funding → released` with NO CUSTODY HOP —
+ * the rail map denies `settlement_custody_memo` here precisely because a custody balance would be
+ * value nobody is holding. `direct_settled` is the entry kind minted for this in Phase 14 and left
+ * without a writer until now.
+ *
+ * THE FROZEN BRANCH STAYS. A replayed webhook for a pre-Phase-14 order must post what THAT order's
+ * rail permits; relabelling it would make the journal disagree with the rail it claims.
+ *
+ * The other two rails THROW rather than returning an error, per §3.3: `createPaymentIntent` refuses
+ * them, so an intent existing on one is a broken invariant and not an operational failure. It must
+ * be loud — this defect was silent for two phases.
+ */
+export function planSettlementPostings(
+  rail: SettlementRail,
+  orderId: string,
+  amount: bigint,
+): readonly RailJournalPosting[] {
+  switch (rail) {
+    case "direct_processor":
+      return [
+        {
+          kind: "direct_settled",
+          description: `Processor settled order ${orderId} to the seller`,
+          lines: [
+            { accountKind: "settlement_funding_memo", signedAmountInCents: -amount },
+            { accountKind: "settlement_released_memo", signedAmountInCents: amount },
+          ],
+        },
+      ];
+    case "internal_custody":
+      return [
+        {
+          kind: "payment_settled",
+          description: `Payment settled for order ${orderId}`,
+          lines: [
+            { accountKind: "buyer_clearing", signedAmountInCents: -amount },
+            { accountKind: "order_held", signedAmountInCents: amount },
+          ],
+        },
+      ];
+    case "direct_offline":
+    case "external_escrow":
+      throw new Error(
+        `planSettlementPostings: order ${orderId} settles on ${rail}, which takes no payment intent`,
+      );
+    default: {
+      const exhaustiveRail: never = rail;
+      throw new Error(`Unhandled settlement rail: ${JSON.stringify(exhaustiveRail)}`);
+    }
+  }
+}
+
+async function postSettlementForRail(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly intent: PaymentIntentRow;
+    readonly transfer: TransferRow;
+    readonly order: OrderRow;
+    readonly amount: bigint;
+    readonly occurredAt: Date;
+  },
+): Promise<void> {
+  const { intent, transfer, order, amount, occurredAt } = input;
+
+  for (const posting of planSettlementPostings(order.settlementRail, order.id, amount)) {
+    await appendCommerceJournalEntry(transaction, {
+      orderId: order.id,
+      currency: intent.currency,
+      kind: posting.kind,
+      description: posting.description,
+      settlement: "settled",
+      occurredAt,
+      lines: posting.lines,
+      linkedPaymentIntentId: intent.id,
+      linkedTransferId: transfer.id,
+      createdByUserId: null,
+    });
+  }
+
+  /*
+   * The seller has the money at this instant, so this is where commission is owed — the same point
+   * an escrow RELEASE recognizes it. At the default zero basis points it posts nothing. Not on the
+   * frozen rail: those orders are history, and accruing a fee against one now would invent a debt
+   * that was never charged.
+   */
+  if (order.settlementRail === "direct_processor") {
+    await recognizeCommission(transaction, {
+      orderId: order.id,
+      currency: intent.currency,
+      releasedAmountInCents: intent.amountInCents,
+      occurredAt,
+      description: "Platform commission recognized on a direct settlement",
+    });
+  }
+}
+
 async function applyPaymentSettlement(
   transaction: DatabaseTransaction,
   intent: PaymentIntentRow,
@@ -815,20 +969,12 @@ async function applyPaymentSettlement(
 
   // Fake (and immediate) settlement posts one settled entry. A future real processor that
   // separates authorize from capture should append authorize → reverse → settle instead.
-  await appendCommerceJournalEntry(transaction, {
-    orderId: order.id,
-    currency: intent.currency,
-    kind: "payment_settled",
-    description: `Payment settled for order ${order.id}`,
-    settlement: "settled",
+  await postSettlementForRail(transaction, {
+    intent,
+    transfer,
+    order,
+    amount,
     occurredAt,
-    lines: [
-      { accountKind: "buyer_clearing", signedAmountInCents: -amount },
-      { accountKind: "order_held", signedAmountInCents: amount },
-    ],
-    linkedPaymentIntentId: intent.id,
-    linkedTransferId: transfer.id,
-    createdByUserId: null,
   });
 
   await transaction
@@ -993,6 +1139,103 @@ async function applyPaymentFailure(
   });
 }
 
+/**
+ * The settled refund, in the accounts the ORDER'S RAIL permits (A41).
+ *
+ * ONE ENTRY ON `direct_processor`, WHERE THE FROZEN RAIL NEEDS TWO. The legacy pair models money
+ * arriving in Qatoto's custody (`order_held → refunds_payable`) and then leaving it
+ * (`refunds_payable → buyer_clearing`) — two movements because there really were two. On the
+ * processor rail the money went buyer → seller without stopping, so the return is a single
+ * movement of the same gross value: out of released, into refunded.
+ *
+ * THE MEMO IDENTITY IS WHAT MAKES THAT READABLE. After a settlement and a partial refund an order
+ * holds funding −X, released +X−Y, refunded +Y, which still sums to zero — so
+ * `verify-store-phase-14-constraints` can check a refunded order without knowing anything about
+ * refunds.
+ *
+ * NO COMMISSION REVERSAL. The fee accrued at settlement is a receivable against the seller and
+ * §14 has not decided how it is collected, let alone unwound; inventing a reversal here would be
+ * this file deciding a commercial policy. A refunded order with an outstanding fee receivable is
+ * visible in the ledger, which is the honest state until that decision is made.
+ */
+export function planRefundPostings(
+  rail: SettlementRail,
+  orderId: string,
+  amount: bigint,
+): readonly RailJournalPosting[] {
+  switch (rail) {
+    case "direct_processor":
+      return [
+        {
+          kind: "payment_refunded",
+          description: `Refund returned to buyer for order ${orderId}`,
+          lines: [
+            { accountKind: "settlement_released_memo", signedAmountInCents: -amount },
+            { accountKind: "settlement_refunded_memo", signedAmountInCents: amount },
+          ],
+        },
+      ];
+    case "internal_custody":
+      return [
+        {
+          kind: "payment_refunded",
+          description: `Refund settled for order ${orderId}`,
+          lines: [
+            { accountKind: "order_held", signedAmountInCents: -amount },
+            { accountKind: "refunds_payable", signedAmountInCents: amount },
+          ],
+        },
+        {
+          kind: "payment_refunded",
+          description: `Refund returned to buyer for order ${orderId}`,
+          lines: [
+            { accountKind: "refunds_payable", signedAmountInCents: -amount },
+            { accountKind: "buyer_clearing", signedAmountInCents: amount },
+          ],
+        },
+      ];
+    case "direct_offline":
+    case "external_escrow":
+      throw new Error(
+        `planRefundPostings: order ${orderId} settles on ${rail}, which takes no payment intent`,
+      );
+    default: {
+      const exhaustiveRail: never = rail;
+      throw new Error(`Unhandled settlement rail: ${JSON.stringify(exhaustiveRail)}`);
+    }
+  }
+}
+
+async function postRefundForRail(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly intent: PaymentIntentRow;
+    readonly refund: RefundRow;
+    readonly transfer: TransferRow;
+    readonly order: OrderRow;
+    readonly amount: bigint;
+    readonly occurredAt: Date;
+  },
+): Promise<void> {
+  const { intent, refund, transfer, order, amount, occurredAt } = input;
+
+  for (const posting of planRefundPostings(order.settlementRail, order.id, amount)) {
+    await appendCommerceJournalEntry(transaction, {
+      orderId: order.id,
+      currency: refund.currency,
+      kind: posting.kind,
+      description: posting.description,
+      settlement: "settled",
+      occurredAt,
+      lines: posting.lines,
+      linkedPaymentIntentId: intent.id,
+      linkedRefundId: refund.id,
+      linkedTransferId: transfer.id,
+      createdByUserId: null,
+    });
+  }
+}
+
 async function applyRefundSettlement(
   transaction: DatabaseTransaction,
   intent: PaymentIntentRow,
@@ -1004,39 +1247,7 @@ async function applyRefundSettlement(
 ): Promise<void> {
   const amount = BigInt(refund.amountInCents);
 
-  await appendCommerceJournalEntry(transaction, {
-    orderId: order.id,
-    currency: refund.currency,
-    kind: "payment_refunded",
-    description: `Refund settled for order ${order.id}`,
-    settlement: "settled",
-    occurredAt,
-    lines: [
-      { accountKind: "order_held", signedAmountInCents: -amount },
-      { accountKind: "refunds_payable", signedAmountInCents: amount },
-    ],
-    linkedPaymentIntentId: intent.id,
-    linkedRefundId: refund.id,
-    linkedTransferId: transfer.id,
-    createdByUserId: null,
-  });
-
-  await appendCommerceJournalEntry(transaction, {
-    orderId: order.id,
-    currency: refund.currency,
-    kind: "payment_refunded",
-    description: `Refund returned to buyer for order ${order.id}`,
-    settlement: "settled",
-    occurredAt,
-    lines: [
-      { accountKind: "refunds_payable", signedAmountInCents: -amount },
-      { accountKind: "buyer_clearing", signedAmountInCents: amount },
-    ],
-    linkedPaymentIntentId: intent.id,
-    linkedRefundId: refund.id,
-    linkedTransferId: transfer.id,
-    createdByUserId: null,
-  });
+  await postRefundForRail(transaction, { intent, refund, transfer, order, amount, occurredAt });
 
   await transaction
     .update(commerceProviderTransfer)
