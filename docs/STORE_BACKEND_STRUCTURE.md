@@ -2939,6 +2939,78 @@ which status. The keyset and the single-query band fetch are exercised only agai
 
 ---
 
+### 19.11 Authoring the first card — **NO CODE, Phase 23**
+
+Everything above says what the endpoints ENFORCE. This says what an operator must DO, in order,
+and it exists because two of those rules are invisible until they have already cost a lane: a card
+authored the obvious way can never have its bands edited, and a lane that looks fully loaded can
+report nothing at all to every buyer who asks. Both are correct behaviour. Neither is discoverable
+from a `409` or from an empty delivery sheet.
+
+The tables ship **empty** and no seed fills them (§19.1, A36), so the first card on any lane is
+authored by hand against these six routes.
+
+#### The sequence
+
+1. **`POST /commerce/admin/freight-rate-cards` with a FUTURE `validFrom`, and its bands in the same
+   call.** `validFrom` is optional and the controller defaults it to `new Date()` — a defaulted card
+   is IN FORCE THE INSTANT IT EXISTS, and `assertCardAcceptsBreakWrites` then refuses both `/breaks`
+   routes on it forever with `409 COMMERCE_FREIGHT_RATE_CARD_IN_FORCE`. There is no unmaking that:
+   `validFrom` is absent from every PATCH schema and `.strict()` refuses it, so a card staged wrong
+   is withdrawn and rewritten, not corrected. `breaks` is required on create anyway (1..20, same
+   transaction), so a correctly staged card is priced from its first instant.
+2. **Confirm `bandsEditable: true` on the response.** It is the same predicate the `409` comes from,
+   published on the projection every read and write returns. If it is `false`, the card is in force
+   and step 3 cannot run.
+3. **`POST`/`PATCH .../breaks` while it is still staged**, until the ladder is right.
+4. **Author at least one band whose `minBillableWeightGrams` is `0`.** Without it every consignment
+   lighter than the smallest band rates `below_smallest_break` and the lane publishes NO OPTION —
+   which reaches the buyer as an empty delivery sheet, indistinguishable from having loaded no data
+   at all. That refusal is deliberate (§19.9: a card whose smallest band starts at 45 kg is a tariff
+   that says so), and it is why floor coverage is one reviewable row rather than a fallback.
+5. **Author one `commerce_customs_dwell_estimate` row for the lane**, or the arrival window is
+   `null` with customs named as the missing component (§19.4). A row scoped to neither origin nor
+   commodity — both NULL, both meaning "any" — is the one that makes a lane answer at all; §19.3's
+   precedence then lets a narrower row override it later. A DOMESTIC lane needs none: it has no
+   customs leg, which is an absent component and not a zero-day one.
+6. **Wait for `validFrom`.** The rating read selects on the window, never on `state = 'active'`, so
+   the card starts pricing the moment its window opens with no further write.
+
+#### The five sentinels an operator will see, and what each means for authoring
+
+`unavailableReasons` is populated only when a lane produced no options at all, and every entry is
+reported rather than defaulted (§19.6). Read as a checklist against the sequence above:
+
+| Reason | What is actually missing |
+| --- | --- |
+| `no_active_rate_card` | No card whose window is open on this lane, mode and currency. Step 1, or a `validFrom` still in the future |
+| `card_has_no_breaks` | A card exists with an empty ladder — only reachable by deleting bands, since create requires 1..20 |
+| `below_smallest_break` | Step 4. The card is loaded and the consignment is lighter than its smallest floor |
+| `volume_not_declared` | The consignment, not the card: a positive volume floor cannot be cleared by an undeclared volume |
+| `consignment_not_measurable` | The consignment again: no usable weight, so chargeable weight has no value |
+
+Only the first three are the author's to fix. The last two are a listing's shipping facts (§19.9a),
+and a lane can be perfectly authored and still report them.
+
+#### Two numbers that are wrong quietly rather than loudly
+
+- **`volumetricDivisorCm3PerKg` is REQUIRED and per card**, because it varies by forwarder as well
+  as by mode: ocean W/M 1000, road ~3000, air 5000–6000 (§19.9). It is bounded `BETWEEN 100 AND
+  20000`, which catches a decimal slip and nothing subtler — a road divisor typed onto an air card
+  is inside the bound and will underbill every bulky consignment on that lane.
+- **`unitPriceInCents` is CENTS PER KILOGRAM of chargeable weight** — not per consignment, and not
+  per the band. The two `min*` columns are the band's ENTRY CONDITION, not its denominator. A
+  forwarder's sheet quoting a flat lane price is entered as `minimumChargeInCents`, not as a
+  `unitPriceInCents` that happens to look right at one weight.
+
+#### What this section does not do
+
+It makes the tables **authorable**, not **filled**. A36's commercial half stays open: forwarders
+sell lane price lists, Qatoto has bought none, and until it does the freight surface answers
+`no_active_rate_card` on every lane no matter how well this sequence is documented.
+
+---
+
 ## Appendix A — What the frontend needs and this backend does not have
 
 **Written from the other side.** §5 and §6 record what this backend serves. This records what the
