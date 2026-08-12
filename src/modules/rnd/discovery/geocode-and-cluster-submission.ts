@@ -85,6 +85,95 @@ export function selectBestCandidate(scored: readonly ScoredCandidate[]): ScoredC
   return best;
 }
 
+/**
+ * Find the active cluster a submission belongs to, or `null` to start a new one.
+ *
+ * TWO FILTERS, AND THEY DO DIFFERENT JOBS. Geography is a prefilter Postgres can index:
+ * one or two rectangles that strictly CONTAIN the circle, tested with a plain BETWEEN on
+ * two int4 columns. The exact circle test then runs here in TypeScript, where the
+ * arithmetic is bigint and reproducible rather than dependent on a float path in the
+ * database. A submission inside the box but outside the circle is dropped by the second
+ * test, never the first.
+ *
+ * Text similarity is the second filter and the one that stops "potholes on Main Street"
+ * merging into "streetlights on Main Street" — same place, different problem.
+ *
+ * THE CLUSTER CENTROID IS THE ANCHOR in every comparison, not the submission. `geo.ts`
+ * takes its cosine band from whichever point is passed first, so anchoring on the
+ * candidate keeps every candidate in one round measured against the same reference
+ * instead of each against itself.
+ *
+ * Reads outside a transaction on purpose: this is a prefilter, and the decision it feeds
+ * is re-asserted under a row lock by the caller. Nothing is written here.
+ */
+async function findBestMatchingCluster(
+  submission: { readonly title: string; readonly description: string; readonly categoryId: string },
+  submissionPoint: GeoPointMicrodegrees,
+): Promise<ScoredCandidate | null> {
+  const submissionTokens = normalizeToTokenSet(`${submission.title} ${submission.description}`);
+
+  const boundingBoxes = boundingBoxMicrodegrees(submissionPoint, CLUSTER_RADIUS_MILLIMETRES);
+  const boxPredicates = boundingBoxes.map((box) =>
+    and(
+      between(
+        problemCluster.centroidLatitudeMicrodegrees,
+        box.minLatitudeMicrodegrees,
+        box.maxLatitudeMicrodegrees,
+      ),
+      between(
+        problemCluster.centroidLongitudeMicrodegrees,
+        box.minLongitudeMicrodegrees,
+        box.maxLongitudeMicrodegrees,
+      ),
+    ),
+  );
+
+  const candidates: readonly ClusterCandidate[] = await db
+    .select({
+      id: problemCluster.id,
+      title: problemCluster.title,
+      description: problemCluster.description,
+      centroidLatitudeMicrodegrees: problemCluster.centroidLatitudeMicrodegrees,
+      centroidLongitudeMicrodegrees: problemCluster.centroidLongitudeMicrodegrees,
+    })
+    .from(problemCluster)
+    .where(
+      and(
+        eq(problemCluster.categoryId, submission.categoryId),
+        eq(problemCluster.status, "active"),
+        boxPredicates.length === 1 ? boxPredicates[0] : or(...boxPredicates),
+      ),
+    );
+
+  const scored: ScoredCandidate[] = [];
+  for (const candidate of candidates) {
+    const candidateCentroid: GeoPointMicrodegrees = {
+      latitudeMicrodegrees: candidate.centroidLatitudeMicrodegrees,
+      longitudeMicrodegrees: candidate.centroidLongitudeMicrodegrees,
+    };
+
+    if (!isWithinRadius(candidateCentroid, submissionPoint, CLUSTER_RADIUS_MILLIMETRES)) {
+      continue;
+    }
+
+    const similarityBasisPoints = jaccardBasisPoints(
+      submissionTokens,
+      normalizeToTokenSet(`${candidate.title} ${candidate.description}`),
+    );
+    if (similarityBasisPoints < TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS) {
+      continue;
+    }
+
+    scored.push({
+      candidate,
+      similarityBasisPoints,
+      squaredDistanceScaled: squaredDistanceScaled(candidateCentroid, submissionPoint),
+    });
+  }
+
+  return selectBestCandidate(scored);
+}
+
 export async function handleGeocodeAndClusterSubmission(rawPayload: unknown): Promise<void> {
   const payload = parseJobPayload(
     JOB_NAMES.geocodeAndClusterSubmission,
@@ -151,74 +240,8 @@ export async function handleGeocodeAndClusterSubmission(rawPayload: unknown): Pr
     latitudeMicrodegrees: resolved.latitudeMicrodegrees,
     longitudeMicrodegrees: resolved.longitudeMicrodegrees,
   };
-  const submissionTokens = normalizeToTokenSet(`${submission.title} ${submission.description}`);
 
-  // The index-friendly prefilter: one or two rectangles that strictly contain the circle.
-  // Postgres does a plain BETWEEN on two int4 columns; the exact circle test runs in
-  // TypeScript, where the arithmetic is bigint and reproducible.
-  const boundingBoxes = boundingBoxMicrodegrees(submissionPoint, CLUSTER_RADIUS_MILLIMETRES);
-  const boxPredicates = boundingBoxes.map((box) =>
-    and(
-      between(
-        problemCluster.centroidLatitudeMicrodegrees,
-        box.minLatitudeMicrodegrees,
-        box.maxLatitudeMicrodegrees,
-      ),
-      between(
-        problemCluster.centroidLongitudeMicrodegrees,
-        box.minLongitudeMicrodegrees,
-        box.maxLongitudeMicrodegrees,
-      ),
-    ),
-  );
-
-  const candidates: readonly ClusterCandidate[] = await db
-    .select({
-      id: problemCluster.id,
-      title: problemCluster.title,
-      description: problemCluster.description,
-      centroidLatitudeMicrodegrees: problemCluster.centroidLatitudeMicrodegrees,
-      centroidLongitudeMicrodegrees: problemCluster.centroidLongitudeMicrodegrees,
-    })
-    .from(problemCluster)
-    .where(
-      and(
-        eq(problemCluster.categoryId, submission.categoryId),
-        eq(problemCluster.status, "active"),
-        boxPredicates.length === 1 ? boxPredicates[0] : or(...boxPredicates),
-      ),
-    );
-
-  const scored: ScoredCandidate[] = [];
-  for (const candidate of candidates) {
-    const candidateCentroid: GeoPointMicrodegrees = {
-      latitudeMicrodegrees: candidate.centroidLatitudeMicrodegrees,
-      longitudeMicrodegrees: candidate.centroidLongitudeMicrodegrees,
-    };
-
-    // The CLUSTER CENTROID is the anchor — geo.ts's cosine band is taken from the anchor,
-    // so passing the candidate consistently keeps every comparison in this round measured
-    // against the same reference.
-    if (!isWithinRadius(candidateCentroid, submissionPoint, CLUSTER_RADIUS_MILLIMETRES)) {
-      continue;
-    }
-
-    const similarityBasisPoints = jaccardBasisPoints(
-      submissionTokens,
-      normalizeToTokenSet(`${candidate.title} ${candidate.description}`),
-    );
-    if (similarityBasisPoints < TEXT_SIMILARITY_THRESHOLD_BASIS_POINTS) {
-      continue;
-    }
-
-    scored.push({
-      candidate,
-      similarityBasisPoints,
-      squaredDistanceScaled: squaredDistanceScaled(candidateCentroid, submissionPoint),
-    });
-  }
-
-  const best = selectBestCandidate(scored);
+  const best = await findBestMatchingCluster(submission, submissionPoint);
 
   await db.transaction(async (tx) => {
     // Re-assert the guard INSIDE the transaction: another worker may have attached this
