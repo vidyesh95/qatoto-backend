@@ -10,12 +10,12 @@ import path from "node:path";
  * DECLARATIONS. A large number of specifiers in this repo are not declarations — they are
  * strings:
  *
- *   - ~199 `vi.mock("#src/...")` calls. A missed one does not fail the build; it silently
- *     stops mocking, and the test then runs against a real database module.
+ *   - ~199 vi.mock() calls taking a specifier string. A missed one does not fail the build;
+ *     it silently stops mocking, and the test then runs against a real database module.
  *   - `src/middleware/rate-limit-coverage.test.ts` holds 45 route specifiers as DATA in an
  *     array, loaded through a variable `await import(specifier)`.
- *   - `await import("#src/app.js")` and `typeof import("#src/docs/zod-to-openapi.js")`
- *     forms scattered through the test suites.
+ *   - dynamic `await import(...)` and `typeof import(...)` forms scattered through the
+ *     test suites.
  *
  * `pnpm test` catches these eventually. This catches them in about two seconds, which is
  * what makes it usable as a pre-commit gate during a file-moving refactor.
@@ -36,7 +36,7 @@ interface DanglingSpecifier {
 }
 
 /**
- * `#src/x/y.js` maps to `src/x/y.ts` under the "development" condition of package.json's
+ * A specifier maps to its TypeScript source under the "development" condition of package.json's
  * imports map — the branch every non-built run takes. A directory import is not legal
  * here (NodeNext requires the extension), so the mapping is exactly one candidate.
  */
@@ -61,10 +61,12 @@ async function findDanglingSpecifiers(): Promise<readonly DanglingSpecifier[]> {
       for (const match of contents.matchAll(SPECIFIER_PATTERN)) {
         const specifier = match[1];
         if (specifier === undefined) continue;
-        // `#src/*` and `#src/docs/*` appear in prose describing the subpath map itself. A
-        // real specifier never carries a wildcard — the map resolves it, callers write the
-        // concrete path — so this excludes the documentation without weakening the check.
-        if (specifier.includes("*")) continue;
+        // Prose describing the subpath map writes placeholders: `#src/*` for the wildcard
+        // the map itself declares, and `#src/...` when the path is beside the point. No
+        // real specifier carries either — callers always write the concrete path — so
+        // skipping them excludes the documentation without weakening the check. Concrete
+        // paths mentioned in comments are still checked, and going stale is the point.
+        if (specifier.includes("*") || specifier.includes("...")) continue;
         if (existsSync(resolveSpecifierToSourcePath(specifier))) continue;
         dangling.push({ specifier, sourceFile });
       }

@@ -1,8 +1,8 @@
 import express from "express";
 
-import * as playlistsController from "#src/controllers/playlists.controller.js";
 import { longFormBody } from "#src/middleware/json-body.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as playlistsController from "#src/modules/studio/playlists/playlists.controller.js";
 
 const router = express.Router();
 

@@ -11,6 +11,7 @@ import { parseJsonBodyOnce } from "#src/middleware/json-body.js";
 import { notFoundHandler } from "#src/middleware/not-found.js";
 import { requestId } from "#src/middleware/request-id.js";
 import { requestLog } from "#src/middleware/request-log.js";
+import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import authRouter from "#src/routes/auth.routes.js";
 import commerceCartRouter from "#src/routes/commerce-cart.routes.js";
 import commerceCatalogRouter from "#src/routes/commerce-catalog.routes.js";
@@ -49,7 +50,6 @@ import indexRouter from "#src/routes/index.js";
 import notificationsRouter from "#src/routes/notifications.routes.js";
 import platformAuditRouter from "#src/routes/platform-audit.routes.js";
 import platformRolesRouter from "#src/routes/platform-roles.routes.js";
-import playlistsRouter from "#src/routes/playlists.routes.js";
 import productsRouter from "#src/routes/products.routes.js";
 import promotionsRouter from "#src/routes/promotions.routes.js";
 import proofOfEffortRouter, {

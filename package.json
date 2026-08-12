@@ -112,7 +112,8 @@
     "fmt:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
-    "check:specifiers": "tsx scripts/check-src-specifiers.ts"
+    "check:specifiers": "tsx scripts/check-src-specifiers.ts",
+    "codemod:move": "tsx scripts/codemod-move-module.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",

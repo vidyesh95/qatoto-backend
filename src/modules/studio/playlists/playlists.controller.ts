@@ -11,8 +11,8 @@ import {
   ListMyPlaylistsQuerySchema,
   ReplacePlaylistVideosSchema,
   UpdatePlaylistSchema,
-} from "#src/schemas/playlists.schemas.js";
-import * as playlistsService from "#src/services/playlists.service.js";
+} from "#src/modules/studio/playlists/playlists.schemas.js";
+import * as playlistsService from "#src/modules/studio/playlists/playlists.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 /** POST /playlists */
