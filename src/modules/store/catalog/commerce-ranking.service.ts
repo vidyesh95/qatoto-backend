@@ -327,33 +327,25 @@ interface TrendingCandidateRow extends Record<string, unknown> {
  * The hourly run: score every eligible product, rank within its category, and record what
  * the circuit breaker would have done.
  */
-export async function recomputeProductTrending(
+/**
+ * Every product that could plausibly trend, with both scoring windows already aggregated.
+ *
+ * ONE QUERY RATHER THAN A LOOP, deliberately. The two seven-day windows, the engagement
+ * counts and the subnet-concentration figures are all derived from the same signal rows,
+ * and pulling them per product would be one round trip per candidate on a table that grows
+ * with the catalogue. The CTEs do the folding in Postgres and hand back one row per
+ * candidate.
+ *
+ * Reads outside any transaction: this is the input to a recompute whose output is written
+ * atomically later, and holding a lock across the scoring pass would block ingestion for
+ * its duration.
+ */
+async function loadTrendingCandidates(
   asOf: Date,
-  options: { readonly enforcementEnabled?: boolean } = {},
-): Promise<{ scored: number; ranked: number; gated: boolean }> {
-  const enforcementEnabled = options.enforcementEnabled ?? false;
-
-  /*
-   * THE CALENDAR GATE. Before fourteen days of confirmation history exist, W2 measures a
-   * period that did not happen. Rather than publish a ranking built on half a window, the
-   * run still executes and still writes — but at `score_algorithm_version = 0`, which the
-   * read paths refuse. An operator sees rows and a log line instead of silence.
-   */
-  const [historyRow] = (
-    await db.execute<{ earliest: Date | null }>(
-      sql`SELECT min(confirmed_at) AS earliest FROM commerce_order WHERE confirmed_at IS NOT NULL`,
-    )
-  ).rows;
-  const earliest = historyRow?.earliest ?? null;
-  const gated =
-    earliest === null ||
-    asOf.getTime() - new Date(earliest).getTime() <
-      MINIMUM_CONFIRMED_HISTORY_DAYS * MILLISECONDS_PER_DAY;
-
-  const w1Start = new Date(asOf.getTime() - 7 * MILLISECONDS_PER_DAY);
-  const w2Start = new Date(asOf.getTime() - 14 * MILLISECONDS_PER_DAY);
-
-  const candidates = (
+  w1Start: Date,
+  w2Start: Date,
+): Promise<readonly TrendingCandidateRow[]> {
+  return (
     await db.execute<TrendingCandidateRow>(sql`
       WITH qualified AS (
         SELECT l.product_id, o.id AS order_id, o.buyer_organization_id, o.confirmed_at,
@@ -432,6 +424,124 @@ export async function recomputeProductTrending(
                ss.hashed_save_count, ss.top_subnet_save_count
     `)
   ).rows;
+}
+
+/**
+ * Publish the recomputed ranking in one transaction.
+ *
+ * ALL THREE WRITES OR NONE. The snapshot rows are the evidence, the state rows are what
+ * the storefront reads, and the enforcement events are the audit of any demotion applied.
+ * A partial write would leave the storefront ranking against a snapshot that does not
+ * explain it, which is precisely the drift the snapshot exists to make checkable.
+ *
+ * Chunked at 500 rows because the parameter count of a single multi-row insert is bounded,
+ * and a full catalogue recompute exceeds it.
+ */
+async function persistTrendingRanking(
+  asOf: Date,
+  scoredBaseByProduct: ReadonlyMap<string, number>,
+  snapshotRows: readonly (typeof commerceProductTrendingSnapshot.$inferInsert)[],
+  stateRows: readonly (typeof commerceProductRankingState.$inferInsert)[],
+  enforcementEvents: readonly (typeof commerceRankingEnforcementEvent.$inferInsert)[],
+): Promise<void> {
+  return await db.transaction(async (transaction) => {
+    if (snapshotRows.length > 0) {
+      for (const chunk of chunked(snapshotRows, 500)) {
+        await transaction
+          .insert(commerceProductTrendingSnapshot)
+          .values(chunk)
+          .onConflictDoNothing();
+      }
+    }
+
+    /*
+     * CLEARED THEN SET. Without the clear, a product that fell out of its category's top N
+     * would keep last hour's rank forever — the failure `recompute-trending-videos`
+     * documents for `video_stats.trending_rank`.
+     */
+    await transaction.execute(sql`DELETE FROM commerce_product_ranking_state`);
+    if (stateRows.length > 0) {
+      for (const chunk of chunked(stateRows, 500)) {
+        await transaction.insert(commerceProductRankingState).values(chunk);
+      }
+    }
+
+    if (enforcementEvents.length > 0) {
+      for (const chunk of chunked(enforcementEvents, 500)) {
+        await transaction.insert(commerceRankingEnforcementEvent).values(chunk);
+      }
+    }
+
+    /*
+     * The denormalized copy search sorts on.
+     *
+     * `SET LOCAL qatoto.ranking_writer` is what gets past
+     * `store_search_document_preserve_discovery_score`. Every other writer of this table —
+     * `refreshProductSearchDocument`, and anything a future contributor adds — has its
+     * change to these two columns silently reverted, which is what stops an ordinary
+     * product edit from erasing an hour of scoring.
+     *
+     * UPDATE ONLY. Never insert, never delete: eligibility is not this job's business, and
+     * when `refreshProductSearchDocument` deletes a de-listed product's document the score
+     * goes with it, which is correct.
+     *
+     * The score written is the PRE-ENFORCEMENT base. An enforcement penalty may lower a
+     * product's position in a discovery rail; it may never lower its position in a query
+     * the buyer typed by name. Exact-match findability is a floor.
+     */
+    await transaction.execute(sql`SET LOCAL qatoto.ranking_writer = 'on'`);
+
+    await transaction.execute(sql`
+      UPDATE store_search_document AS d
+         SET discovery_score_points = NULL, discovery_score_computed_at = NULL
+       WHERE d.document_kind = 'product' AND d.discovery_score_points IS NOT NULL
+    `);
+
+    if (stateRows.length > 0) {
+      const scoreTuples = sql.join(
+        stateRows.map(
+          (row) => sql`(${row.productId}, ${scoredBaseByProduct.get(row.productId) ?? 0}::int)`,
+        ),
+        sql`, `,
+      );
+      await transaction.execute(sql`
+        UPDATE store_search_document AS d
+           SET discovery_score_points = incoming.points,
+               discovery_score_computed_at = ${asOf}
+          FROM (VALUES ${scoreTuples}) AS incoming(entity_id, points)
+         WHERE d.document_kind = 'product' AND d.entity_id = incoming.entity_id
+      `);
+    }
+  });
+}
+
+export async function recomputeProductTrending(
+  asOf: Date,
+  options: { readonly enforcementEnabled?: boolean } = {},
+): Promise<{ scored: number; ranked: number; gated: boolean }> {
+  const enforcementEnabled = options.enforcementEnabled ?? false;
+
+  /*
+   * THE CALENDAR GATE. Before fourteen days of confirmation history exist, W2 measures a
+   * period that did not happen. Rather than publish a ranking built on half a window, the
+   * run still executes and still writes — but at `score_algorithm_version = 0`, which the
+   * read paths refuse. An operator sees rows and a log line instead of silence.
+   */
+  const [historyRow] = (
+    await db.execute<{ earliest: Date | null }>(
+      sql`SELECT min(confirmed_at) AS earliest FROM commerce_order WHERE confirmed_at IS NOT NULL`,
+    )
+  ).rows;
+  const earliest = historyRow?.earliest ?? null;
+  const gated =
+    earliest === null ||
+    asOf.getTime() - new Date(earliest).getTime() <
+      MINIMUM_CONFIRMED_HISTORY_DAYS * MILLISECONDS_PER_DAY;
+
+  const w1Start = new Date(asOf.getTime() - 7 * MILLISECONDS_PER_DAY);
+  const w2Start = new Date(asOf.getTime() - 14 * MILLISECONDS_PER_DAY);
+
+  const candidates = await loadTrendingCandidates(asOf, w1Start, w2Start);
 
   if (candidates.length === 0) {
     await clearRankingState(asOf);
@@ -707,75 +817,13 @@ export async function recomputeProductTrending(
     }
   }
 
-  await db.transaction(async (transaction) => {
-    if (snapshotRows.length > 0) {
-      for (const chunk of chunked(snapshotRows, 500)) {
-        await transaction
-          .insert(commerceProductTrendingSnapshot)
-          .values(chunk)
-          .onConflictDoNothing();
-      }
-    }
-
-    /*
-     * CLEARED THEN SET. Without the clear, a product that fell out of its category's top N
-     * would keep last hour's rank forever — the failure `recompute-trending-videos`
-     * documents for `video_stats.trending_rank`.
-     */
-    await transaction.execute(sql`DELETE FROM commerce_product_ranking_state`);
-    if (stateRows.length > 0) {
-      for (const chunk of chunked(stateRows, 500)) {
-        await transaction.insert(commerceProductRankingState).values(chunk);
-      }
-    }
-
-    if (enforcementEvents.length > 0) {
-      for (const chunk of chunked(enforcementEvents, 500)) {
-        await transaction.insert(commerceRankingEnforcementEvent).values(chunk);
-      }
-    }
-
-    /*
-     * The denormalized copy search sorts on.
-     *
-     * `SET LOCAL qatoto.ranking_writer` is what gets past
-     * `store_search_document_preserve_discovery_score`. Every other writer of this table —
-     * `refreshProductSearchDocument`, and anything a future contributor adds — has its
-     * change to these two columns silently reverted, which is what stops an ordinary
-     * product edit from erasing an hour of scoring.
-     *
-     * UPDATE ONLY. Never insert, never delete: eligibility is not this job's business, and
-     * when `refreshProductSearchDocument` deletes a de-listed product's document the score
-     * goes with it, which is correct.
-     *
-     * The score written is the PRE-ENFORCEMENT base. An enforcement penalty may lower a
-     * product's position in a discovery rail; it may never lower its position in a query
-     * the buyer typed by name. Exact-match findability is a floor.
-     */
-    await transaction.execute(sql`SET LOCAL qatoto.ranking_writer = 'on'`);
-
-    await transaction.execute(sql`
-      UPDATE store_search_document AS d
-         SET discovery_score_points = NULL, discovery_score_computed_at = NULL
-       WHERE d.document_kind = 'product' AND d.discovery_score_points IS NOT NULL
-    `);
-
-    if (stateRows.length > 0) {
-      const scoreTuples = sql.join(
-        stateRows.map(
-          (row) => sql`(${row.productId}, ${scoredBaseByProduct.get(row.productId) ?? 0}::int)`,
-        ),
-        sql`, `,
-      );
-      await transaction.execute(sql`
-        UPDATE store_search_document AS d
-           SET discovery_score_points = incoming.points,
-               discovery_score_computed_at = ${asOf}
-          FROM (VALUES ${scoreTuples}) AS incoming(entity_id, points)
-         WHERE d.document_kind = 'product' AND d.entity_id = incoming.entity_id
-      `);
-    }
-  });
+  await persistTrendingRanking(
+    asOf,
+    scoredBaseByProduct,
+    snapshotRows,
+    stateRows,
+    enforcementEvents,
+  );
 
   return { scored: scored.length, ranked: stateRows.length, gated };
 }
