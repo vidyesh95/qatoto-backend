@@ -1357,21 +1357,22 @@ async function applyRefundFailure(
     occurredAt,
   });
 }
-
 /**
- * Drains one outbox row: call the provider adapter, persist the webhook event, then apply
- * the normalized result. Idempotent under outbox and webhook uniqueness constraints.
+ * Take one outbox row and everything it points at, under a single lock.
+ *
+ * WHY THIS IS ITS OWN TRANSACTION, SEPARATE FROM THE WORK THAT FOLLOWS. Claiming is a
+ * short write — mark the row in-flight so a second worker cannot pick it up — and the
+ * provider call afterwards is a network round trip that can take seconds. Holding the
+ * row lock across that call would serialise every worker behind the slowest provider
+ * response. The claim commits, then the adapter is called outside any transaction, then
+ * the result is applied in a third one.
+ *
+ * Returns a non-`claimed` status when another worker got there first or the row is
+ * already resolved; the caller treats every one of those as "nothing to do" rather than
+ * as a failure, because a drained outbox is the normal steady state.
  */
-export async function processCommercePaymentOutboxRow(
-  outboxId: string,
-): Promise<Result<{ readonly processed: boolean }, CommercePaymentsError>> {
-  const providerResolved = resolveCommercePaymentProvider();
-  if (!providerResolved.success) {
-    return { success: false, error: mapProviderResolutionError(providerResolved.error) };
-  }
-  const adapter = providerResolved.value;
-
-  const claim = await db.transaction(async (transaction) => {
+async function claimPaymentOutboxRow(outboxId: string) {
+  return await db.transaction(async (transaction) => {
     const [outbox] = await transaction
       .select()
       .from(commercePaymentOutbox)
@@ -1450,6 +1451,22 @@ export async function processCommercePaymentOutboxRow(
       refund,
     };
   });
+}
+
+/**
+ * Drains one outbox row: call the provider adapter, persist the webhook event, then apply
+ * the normalized result. Idempotent under outbox and webhook uniqueness constraints.
+ */
+export async function processCommercePaymentOutboxRow(
+  outboxId: string,
+): Promise<Result<{ readonly processed: boolean }, CommercePaymentsError>> {
+  const providerResolved = resolveCommercePaymentProvider();
+  if (!providerResolved.success) {
+    return { success: false, error: mapProviderResolutionError(providerResolved.error) };
+  }
+  const adapter = providerResolved.value;
+
+  const claim = await claimPaymentOutboxRow(outboxId);
 
   if (claim.status !== "claimed") {
     return { success: true, value: { processed: false } };
