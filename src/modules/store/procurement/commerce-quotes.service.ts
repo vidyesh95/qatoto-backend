@@ -2177,6 +2177,188 @@ async function writeOrderServiceLines(
   }
 }
 
+/**
+ * Resolve how this order will settle, write the order row, and open an escrow session if
+ * the rail calls for one.
+ *
+ * THE RAIL IS REVALIDATED HERE, NOT TRUSTED FROM THE REQUEST. A buyer may name a settlement
+ * agreement when accepting, but naming one does not establish it — resolveSettlementRail
+ * re-reads it under the lock and refuses the acceptance if it has lapsed. Omitting it is the
+ * default and settles direct_offline, with the counterparty risk carried between the
+ * parties, which is how most negotiated B2B trade at this size actually settles.
+ *
+ * THE PROVIDER IS NOT CALLED. createEscrowSessionForOrder enqueues an outbox row; the
+ * connector command is dispatched after this transaction commits, so a provider that is slow
+ * or down cannot hold the acceptance open or roll it back.
+ *
+ * Returns the outbox ids it enqueued rather than dispatching them, because the caller owns
+ * the after-commit step and is the only place that knows the transaction succeeded.
+ */
+async function openOrderForAcceptedQuote(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly quote: QuoteRow;
+    readonly rfq: typeof commerceRfq.$inferSelect;
+    readonly revision: RevisionRow;
+    readonly buyerOrg: { readonly legalName: string };
+    readonly providerOrg: { readonly legalName: string };
+    readonly actor: QuoteActorContext;
+    readonly settlementAgreementId: string | null;
+    readonly orderPromisedDeliveryAt: Date | null;
+  },
+) {
+  const {
+    quote,
+    rfq,
+    revision,
+    buyerOrg,
+    providerOrg,
+    actor,
+    settlementAgreementId,
+    orderPromisedDeliveryAt,
+  } = input;
+
+  /** Connector commands enqueued here, dispatched after this transaction commits. */
+  const escrowOutboxIds: string[] = [];
+
+  const railResolution = await resolveSettlementRail(transaction, {
+    buyerOrganizationId: rfq.buyerOrganizationId,
+    sellerOrganizationId: quote.providerOrganizationId,
+    currency: revision.currency,
+    totalInCents: revision.totalInCents,
+    hasProcessorPayment: false,
+    requestedAgreementId: settlementAgreementId,
+  });
+  if (!railResolution.success) {
+    return {
+      status: "settlement_unavailable" as const,
+      reason: railResolution.error.reason,
+    };
+  }
+
+  const [order] = await transaction
+    .insert(commerceOrder)
+    .values({
+      buyerOrganizationId: rfq.buyerOrganizationId,
+      counterpartyOrganizationId: quote.providerOrganizationId,
+      source: "accepted_quote",
+      settlementRail: railResolution.value.rail,
+      state: "pending_payment",
+      acceptedQuoteId: quote.id,
+      acceptedQuoteRevisionId: revision.id,
+      currency: revision.currency,
+      subtotalInCents: revision.subtotalInCents,
+      taxInCents: revision.taxInCents,
+      serviceFeeInCents: revision.serviceFeeInCents,
+      shippingInCents: revision.shippingInCents,
+      discountInCents: revision.discountInCents,
+      totalInCents: revision.totalInCents,
+      paymentTermsSnapshot: revision.paymentTerms,
+      incotermSnapshot: revision.incoterm,
+      buyerLegalNameSnapshot: buyerOrg.legalName,
+      counterpartyLegalNameSnapshot: providerOrg.legalName,
+      promisedDeliveryAt: orderPromisedDeliveryAt,
+      createdByMemberId: actor.memberId,
+    })
+    .returning();
+  if (!order) {
+    throw new Error("Order insert returned no row.");
+  }
+
+  /**
+   * Spend the agreement and open the session in the same transaction as the order.
+   * The provider is called later, by a worker, so a slow escrow API cannot hold the
+   * quote and RFQ row locks this transaction is already holding.
+   */
+  if (railResolution.value.rail === "external_escrow") {
+    const consumed = await consumeSettlementAgreement(
+      transaction,
+      railResolution.value.agreementId,
+      order.id,
+    );
+    if (!consumed.success) {
+      return { status: "settlement_unavailable" as const, reason: consumed.error.reason };
+    }
+
+    const session = await createEscrowSessionForOrder(transaction, {
+      orderId: order.id,
+      agreementId: railResolution.value.agreementId,
+      providerId: railResolution.value.providerId,
+      currency: railResolution.value.currency,
+      totalInCents: railResolution.value.totalInCents,
+    });
+    if (!session.success) {
+      return {
+        status: "settlement_unavailable" as const,
+        reason: "reason" in session.error ? session.error.reason : session.error.type,
+      };
+    }
+    escrowOutboxIds.push(session.value.outboxId);
+  }
+
+  return { status: "opened" as const, order, escrowOutboxIds };
+}
+
+/**
+ * Withdraw every other live quote on the RFQ once one has been accepted.
+ *
+ * AN RFQ AWARDS ONCE. Leaving a competing quote submitted would let a second buyer
+ * acceptance race this one for the same requirement, and the losing provider would keep a
+ * quote that looks live on their dashboard. Each supersession is audited individually so a
+ * provider can see why their quote closed.
+ *
+ * Runs inside the acceptance transaction: if the acceptance rolls back, so do these.
+ */
+async function supersedeCompetingQuotes(
+  transaction: DatabaseTransaction,
+  input: {
+    readonly quote: QuoteRow;
+    readonly rfq: typeof commerceRfq.$inferSelect;
+    readonly actor: QuoteActorContext;
+    readonly now: Date;
+  },
+): Promise<void> {
+  const { quote, rfq, actor, now } = input;
+
+  const competingQuotes = await transaction
+    .select()
+    .from(commerceQuote)
+    .where(
+      and(
+        eq(commerceQuote.rfqId, rfq.id),
+        ne(commerceQuote.id, quote.id),
+        eq(commerceQuote.status, "submitted"),
+      ),
+    )
+    .for("update");
+
+  for (const competing of competingQuotes) {
+    await transaction
+      .update(commerceQuote)
+      .set({
+        status: "declined",
+        declinedAt: now,
+      })
+      .where(eq(commerceQuote.id, competing.id));
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: competing.providerOrganizationId,
+      eventKind: "quote_declined",
+      actorUserId: actor.actorUserId,
+      actorMemberRoleSnapshot: actor.memberRole,
+      targetEntityType: "commerce_quote",
+      targetEntityId: competing.id,
+      payload: {
+        quoteId: competing.id,
+        rfqId: rfq.id,
+        reason: "competing_quote_accepted",
+        acceptedQuoteId: quote.id,
+      },
+      occurredAt: now,
+    });
+  }
+}
+
 export async function acceptQuote(
   actor: QuoteActorContext,
   quoteId: string,
@@ -2217,83 +2399,18 @@ export async function acceptQuote(
        * which this backend never observes. So its non-escrow rail is `direct_offline`,
        * which posts no settlement entries at all and records party attestations instead.
        */
-      /** Connector commands enqueued here, dispatched after this transaction commits. */
-      const escrowOutboxIds: string[] = [];
-
-      const railResolution = await resolveSettlementRail(transaction, {
-        buyerOrganizationId: rfq.buyerOrganizationId,
-        sellerOrganizationId: quote.providerOrganizationId,
-        currency: revision.currency,
-        totalInCents: revision.totalInCents,
-        hasProcessorPayment: false,
-        requestedAgreementId: settlementAgreementId,
+      const opened = await openOrderForAcceptedQuote(transaction, {
+        quote,
+        rfq,
+        revision,
+        buyerOrg,
+        providerOrg,
+        actor,
+        settlementAgreementId,
+        orderPromisedDeliveryAt,
       });
-      if (!railResolution.success) {
-        return {
-          status: "settlement_unavailable" as const,
-          reason: railResolution.error.reason,
-        };
-      }
-
-      const [order] = await transaction
-        .insert(commerceOrder)
-        .values({
-          buyerOrganizationId: rfq.buyerOrganizationId,
-          counterpartyOrganizationId: quote.providerOrganizationId,
-          source: "accepted_quote",
-          settlementRail: railResolution.value.rail,
-          state: "pending_payment",
-          acceptedQuoteId: quote.id,
-          acceptedQuoteRevisionId: revision.id,
-          currency: revision.currency,
-          subtotalInCents: revision.subtotalInCents,
-          taxInCents: revision.taxInCents,
-          serviceFeeInCents: revision.serviceFeeInCents,
-          shippingInCents: revision.shippingInCents,
-          discountInCents: revision.discountInCents,
-          totalInCents: revision.totalInCents,
-          paymentTermsSnapshot: revision.paymentTerms,
-          incotermSnapshot: revision.incoterm,
-          buyerLegalNameSnapshot: buyerOrg.legalName,
-          counterpartyLegalNameSnapshot: providerOrg.legalName,
-          promisedDeliveryAt: orderPromisedDeliveryAt,
-          createdByMemberId: actor.memberId,
-        })
-        .returning();
-      if (!order) {
-        throw new Error("Order insert returned no row.");
-      }
-
-      /**
-       * Spend the agreement and open the session in the same transaction as the order.
-       * The provider is called later, by a worker, so a slow escrow API cannot hold the
-       * quote and RFQ row locks this transaction is already holding.
-       */
-      if (railResolution.value.rail === "external_escrow") {
-        const consumed = await consumeSettlementAgreement(
-          transaction,
-          railResolution.value.agreementId,
-          order.id,
-        );
-        if (!consumed.success) {
-          return { status: "settlement_unavailable" as const, reason: consumed.error.reason };
-        }
-
-        const session = await createEscrowSessionForOrder(transaction, {
-          orderId: order.id,
-          agreementId: railResolution.value.agreementId,
-          providerId: railResolution.value.providerId,
-          currency: railResolution.value.currency,
-          totalInCents: railResolution.value.totalInCents,
-        });
-        if (!session.success) {
-          return {
-            status: "settlement_unavailable" as const,
-            reason: "reason" in session.error ? session.error.reason : session.error.type,
-          };
-        }
-        escrowOutboxIds.push(session.value.outboxId);
-      }
+      if (opened.status !== "opened") return opened;
+      const { order, escrowOutboxIds } = opened;
 
       const reservation = await reserveStockAndWriteProductLines(transaction, {
         orderId: order.id,
@@ -2329,43 +2446,7 @@ export async function acceptQuote(
         })
         .where(eq(commerceRfq.id, rfq.id));
 
-      const competingQuotes = await transaction
-        .select()
-        .from(commerceQuote)
-        .where(
-          and(
-            eq(commerceQuote.rfqId, rfq.id),
-            ne(commerceQuote.id, quote.id),
-            eq(commerceQuote.status, "submitted"),
-          ),
-        )
-        .for("update");
-
-      for (const competing of competingQuotes) {
-        await transaction
-          .update(commerceQuote)
-          .set({
-            status: "declined",
-            declinedAt: now,
-          })
-          .where(eq(commerceQuote.id, competing.id));
-
-        await appendAuditOrThrow(transaction, {
-          organizationId: competing.providerOrganizationId,
-          eventKind: "quote_declined",
-          actorUserId: actor.actorUserId,
-          actorMemberRoleSnapshot: actor.memberRole,
-          targetEntityType: "commerce_quote",
-          targetEntityId: competing.id,
-          payload: {
-            quoteId: competing.id,
-            rfqId: rfq.id,
-            reason: "competing_quote_accepted",
-            acceptedQuoteId: quote.id,
-          },
-          occurredAt: now,
-        });
-      }
+      await supersedeCompetingQuotes(transaction, { quote, rfq, actor, now });
 
       await appendAuditOrThrow(transaction, {
         organizationId: actor.organizationId,
