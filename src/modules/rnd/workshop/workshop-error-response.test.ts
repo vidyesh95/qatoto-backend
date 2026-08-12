@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { mapWorkshopErrorToResponse, type WorkshopDomainError } from "#src/controllers/workshop-error-response.js";
+import {
+  mapWorkshopErrorToResponse,
+  type WorkshopDomainError,
+} from "#src/modules/rnd/workshop/workshop-error-response.js";
 
 /**
  * The §8 status policy, asserted rather than described (§4a/§13).

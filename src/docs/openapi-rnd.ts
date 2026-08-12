@@ -31,7 +31,7 @@ import researchProjectsRouter, {
 } from "#src/modules/rnd/projects/research-projects.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
-import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.js";
+import workshopRouter, { dailyLogFeedRouter } from "#src/modules/rnd/workshop/workshop.routes.js";
 
 /**
  * The R&D half of the OpenAPI document, DERIVED from the mounted routers

@@ -45,10 +45,10 @@ import {
 } from "#src/db/schema.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
 import { compareUtf8Bytes } from "#src/lib/ordering.js";
-import * as logsService from "#src/services/daily-logs.service.js";
-import * as boardService from "#src/services/workshop-board.service.js";
-import * as chatService from "#src/services/workshop-chat.service.js";
-import * as filesService from "#src/services/workshop-files.service.js";
+import * as logsService from "#src/modules/rnd/workshop/daily-logs.service.js";
+import * as boardService from "#src/modules/rnd/workshop/workshop-board.service.js";
+import * as chatService from "#src/modules/rnd/workshop/workshop-chat.service.js";
+import * as filesService from "#src/modules/rnd/workshop/workshop-files.service.js";
 
 const SMOKE_PREFIX = "smoke-workshop";
 

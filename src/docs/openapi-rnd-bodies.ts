@@ -13,7 +13,7 @@ import {
   CreateDailyLogSchema,
   SubmitDailyLogSchema,
   UpdateDailyLogSchema,
-} from "#src/schemas/daily-logs.schemas.js";
+} from "#src/modules/rnd/workshop/daily-logs.schemas.js";
 import { CreateCategorySchema } from "#src/schemas/discovery-catalog.schemas.js";
 import {
   DecideCategorySchema,
@@ -123,7 +123,7 @@ import {
   UpdateColumnSchema,
   UpdateFileLinkSchema,
   UpdateTaskSchema,
-} from "#src/schemas/workshop.schemas.js";
+} from "#src/modules/rnd/workshop/workshop.schemas.js";
 
 /**
  * Which Zod schema each R&D route parses its body with (§11l.2 item 8).

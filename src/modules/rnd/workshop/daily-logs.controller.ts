@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 
-import { respondWorkshopError } from "#src/controllers/workshop-error-response.js";
 import {
   firstParam,
   respondProjectError,
@@ -14,8 +13,9 @@ import {
   ListDailyLogsQuerySchema,
   SubmitDailyLogSchema,
   UpdateDailyLogSchema,
-} from "#src/schemas/daily-logs.schemas.js";
-import * as logsService from "#src/services/daily-logs.service.js";
+} from "#src/modules/rnd/workshop/daily-logs.schemas.js";
+import * as logsService from "#src/modules/rnd/workshop/daily-logs.service.js";
+import { respondWorkshopError } from "#src/modules/rnd/workshop/workshop-error-response.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 interface DailyLogCaller {

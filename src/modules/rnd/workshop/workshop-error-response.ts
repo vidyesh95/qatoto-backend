@@ -1,9 +1,9 @@
 import type { Response } from "express";
 
-import type { DailyLogError } from "#src/services/daily-logs.service.js";
-import type { WorkshopBoardError } from "#src/services/workshop-board.service.js";
-import type { WorkshopChatError } from "#src/services/workshop-chat.service.js";
-import type { WorkshopFileError } from "#src/services/workshop-files.service.js";
+import type { DailyLogError } from "#src/modules/rnd/workshop/daily-logs.service.js";
+import type { WorkshopBoardError } from "#src/modules/rnd/workshop/workshop-board.service.js";
+import type { WorkshopChatError } from "#src/modules/rnd/workshop/workshop-chat.service.js";
+import type { WorkshopFileError } from "#src/modules/rnd/workshop/workshop-files.service.js";
 
 /**
  * The §8 error mapper.

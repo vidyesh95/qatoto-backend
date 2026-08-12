@@ -31,6 +31,7 @@ import researchProgramsRouter, {
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/modules/rnd/projects/research-projects.routes.js";
+import workshopRouter, { dailyLogFeedRouter } from "#src/modules/rnd/workshop/workshop.routes.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
 import videosRouter from "#src/modules/studio/videos/videos.routes.js";
@@ -71,7 +72,6 @@ import proofOfEffortRouter, {
 } from "#src/routes/proof-of-effort.routes.js";
 import storeRouter from "#src/routes/store.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/routes/suppliers.routes.js";
-import workshopRouter, { dailyLogFeedRouter } from "#src/routes/workshop.routes.js";
 
 const app = express();
 

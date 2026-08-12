@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 
-import { respondWorkshopError } from "#src/controllers/workshop-error-response.js";
 import {
   firstParam,
   respondProjectError,
@@ -8,6 +7,10 @@ import {
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
 import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
+import * as boardService from "#src/modules/rnd/workshop/workshop-board.service.js";
+import * as chatService from "#src/modules/rnd/workshop/workshop-chat.service.js";
+import { respondWorkshopError } from "#src/modules/rnd/workshop/workshop-error-response.js";
+import * as filesService from "#src/modules/rnd/workshop/workshop-files.service.js";
 import {
   AddFileLinkSchema,
   CreateColumnSchema,
@@ -20,10 +23,7 @@ import {
   UpdateColumnSchema,
   UpdateFileLinkSchema,
   UpdateTaskSchema,
-} from "#src/schemas/workshop.schemas.js";
-import * as boardService from "#src/services/workshop-board.service.js";
-import * as chatService from "#src/services/workshop-chat.service.js";
-import * as filesService from "#src/services/workshop-files.service.js";
+} from "#src/modules/rnd/workshop/workshop.schemas.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**

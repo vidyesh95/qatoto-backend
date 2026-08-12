@@ -5,7 +5,6 @@ import type { Job } from "pg-boss";
 import { config } from "#src/config/index.js";
 import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
-import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { handleCloseCompensationPeriod } from "#src/jobs/close-compensation-period.js";
 import { handleDeriveProductRelations } from "#src/jobs/derive-product-relations.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/jobs/dispatch-commerce-webhook-event.js";
@@ -16,7 +15,6 @@ import { handlePruneEngagementData } from "#src/jobs/prune-engagement-data.js";
 import { handleRecomputeCommerceCategoryDemand } from "#src/jobs/recompute-commerce-category-demand.js";
 import { handleRecomputeCommerceProductTrending } from "#src/jobs/recompute-commerce-product-trending.js";
 import { handleRecomputeCompensationDraft } from "#src/jobs/recompute-compensation-draft.js";
-import { handleRecomputeDailyLogStreaks } from "#src/jobs/recompute-daily-log-streaks.js";
 import { handleRecomputeDemandSignals } from "#src/jobs/recompute-demand-signals.js";
 import { handleRecomputeEquitySnapshot } from "#src/jobs/recompute-equity-snapshot.js";
 import { handleRecomputeInvestorConfidence } from "#src/jobs/recompute-investor-confidence.js";
@@ -82,6 +80,8 @@ import {
 import { handleDeliverNotification } from "#src/modules/platform/notifications/deliver-notification.js";
 import { handleRecomputeBranchSignals } from "#src/modules/rnd/programs/recompute-branch-signals.js";
 import { handleRecomputeProgramStats } from "#src/modules/rnd/programs/recompute-program-stats.js";
+import { handleAnalyzeDailyLog } from "#src/modules/rnd/workshop/analyze-daily-log.js";
+import { handleRecomputeDailyLogStreaks } from "#src/modules/rnd/workshop/recompute-daily-log-streaks.js";
 
 /**
  * The background worker process (R_AND_D_BACKEND_STRUCTURE.md §4e).

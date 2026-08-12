@@ -57,11 +57,11 @@ import {
   user,
   verificationStep,
 } from "#src/db/schema.js";
-import { handleAnalyzeDailyLog } from "#src/jobs/analyze-daily-log.js";
 import { parseExternalLink } from "#src/lib/external-link.js";
 import { DAILY_LOG_ANALYSIS_PROMPT_VERSION } from "#src/lib/gemini.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
-import * as logsService from "#src/services/daily-logs.service.js";
+import { handleAnalyzeDailyLog } from "#src/modules/rnd/workshop/analyze-daily-log.js";
+import * as logsService from "#src/modules/rnd/workshop/daily-logs.service.js";
 import {
   finalizeClaimVerdict,
   overrideVerificationStep,

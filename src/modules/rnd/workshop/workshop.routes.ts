@@ -1,7 +1,5 @@
 import express from "express";
 
-import * as dailyLogsController from "#src/controllers/daily-logs.controller.js";
-import * as workshopController from "#src/controllers/workshop.controller.js";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
@@ -13,6 +11,8 @@ import {
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
+import * as dailyLogsController from "#src/modules/rnd/workshop/daily-logs.controller.js";
+import * as workshopController from "#src/modules/rnd/workshop/workshop.controller.js";
 
 const router = express.Router();
 

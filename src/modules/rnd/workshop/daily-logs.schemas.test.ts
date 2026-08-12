@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 // The controller imports its services, which pull in the db pool at module scope. Stub the
 // modules so the schemas can be parsed without a configured environment — nothing here
 // calls a handler.
-vi.mock("#src/services/daily-logs.service.js", () => ({}));
+vi.mock("#src/modules/rnd/workshop/daily-logs.service.js", () => ({}));
 vi.mock("#src/modules/rnd/projects/project-membership.service.js", () => ({}));
 
-const { ListDailyLogFeedQuerySchema } = await import("#src/schemas/daily-logs.schemas.js");
+const { ListDailyLogFeedQuerySchema } = await import("#src/modules/rnd/workshop/daily-logs.schemas.js");
 
 /**
  * The cross-project feed's query (§11h, Appendix B2), asserted against §0 and §13.

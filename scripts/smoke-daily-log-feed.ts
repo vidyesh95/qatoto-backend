@@ -53,7 +53,7 @@ import {
   user,
 } from "#src/db/schema.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
-import * as logsService from "#src/services/daily-logs.service.js";
+import * as logsService from "#src/modules/rnd/workshop/daily-logs.service.js";
 
 const SMOKE_PREFIX = "smoke-feed";
 
