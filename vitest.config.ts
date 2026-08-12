@@ -22,6 +22,35 @@ export default defineConfig({
      *
      * This does not make it impossible, and it is not meant to. It makes it rare enough to stop
      * misattributing, and the status assertions added alongside make it legible when it happens.
+     *
+     * ── CORRECTIONS, from measuring rather than reasoning ────────────────────────────────
+     *
+     * THE TRIGGER NAMED ABOVE IS WRONG. It blames oversubscription under `test:shuffle`. The
+     * flake reproduces on plain `pnpm test` — bare `vitest run`, no `--sequence.shuffle`, no
+     * `--maxWorkers` override — at roughly one run in twelve.
+     *
+     * A TIMEOUT IS NOT REQUIRED EITHER. Any work outliving the test body does it:
+     * `idempotency.ts` fires its record write with a deliberate un-awaited `void db.insert(...)`
+     * once the response is on the wire, and `request-log.ts` logs from `res.on("finish")`.
+     * Raising a budget narrows the window and cannot close it.
+     *
+     * A SECOND, INDEPENDENT CAUSE was missing entirely: ~111 express-rate-limit MemoryStores,
+     * one per limiter, created at import and never reset, all keyed by the one test user.
+     * `commerce-trust.routes.test.ts` ran at 15 of 20 on one limiter and 8 of 10 on another.
+     * That one flakes single-threaded, and is fixed — `src/test-support/rate-limit-reset.ts`,
+     * called from every signing-in `beforeEach`. Verified by squeezing a limit to 2: the suite
+     * fails without the reset and passes with it.
+     *
+     * THE SESSION HALF IS NARROWED, NOT CLOSED. `auth-mock.ts` now stamps the caller onto the
+     * request at arrival, so a request that arrives in time cannot be answered with a later
+     * test's identity. A request that ARRIVES late still can — supertest dispatches over a
+     * real socket, and nothing here awaits an abandoned one. Closing that needs the suites to
+     * await their own requests to completion.
+     *
+     * RULED OUT, by instrumenting all eleven per-suite `idempotency` stubs and running until a
+     * failure fired: the residual `expected 400 to be 200` failures are NOT those stubs. The
+     * probe printed nothing, and one such failure was on a GET, which never reaches
+     * idempotency at all. That cause is still unidentified — do not assume it.
      */
     testTimeout: 20_000,
     /**
