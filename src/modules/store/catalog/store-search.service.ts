@@ -320,12 +320,31 @@ function buildStoreSearchTextPredicate(input: {
   )`;
 }
 
-export async function searchStoreDocuments(
-  input: StoreSearchFilterInput & {
+/**
+ * What all three sort strategies need, built once by `searchStoreDocuments`.
+ *
+ * `baseFilters` and `textPredicate` are shared with `computeStoreSearchFacets` (A39):
+ * MEMBERSHIP in the result set is one decision made in one place, so a facet count can
+ * never disagree with the page it labels. Only ORDERING is an individual sort's business,
+ * which is why the three functions below differ in their keyset and in nothing else.
+ */
+interface StoreSearchPageContext {
+  readonly input: StoreSearchFilterInput & {
     readonly limit: number;
     readonly cursor?: string | undefined;
-  },
-): Promise<
+  };
+  readonly decodedCursor: ReturnType<typeof decodeStoreCursor>;
+  readonly baseFilters: ReturnType<typeof buildStoreSearchFilters>;
+  readonly textPredicate: ReturnType<typeof buildStoreSearchTextPredicate>;
+  readonly trimmedQuery: string;
+}
+
+/**
+ * The ranked sort. Keyset over `(discovery_score_points DESC NULLS LAST, id)`, which is
+ * exactly the index migration 0081 created — the one non-relevance sort in this file that
+ * does not fall back to a sequential scan.
+ */
+async function searchByDiscoveryRank(context: StoreSearchPageContext): Promise<
   Result<
     {
       readonly items: readonly StoreSearchHit[];
@@ -334,215 +353,218 @@ export async function searchStoreDocuments(
     StoreSearchError
   >
 > {
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
-  if (input.cursor !== undefined && decodedCursor === null) {
+  const { input, decodedCursor, baseFilters, textPredicate } = context;
+
+  /*
+   * The ranked sort. Keyset over `(discovery_score_points DESC NULLS LAST, id)`, which is
+   * exactly the index `0081` created, so this is the one non-relevance sort in this file
+   * that does not fall back to a sequential scan.
+   *
+   * A TEXT FILTER STILL APPLIES when the caller sent one: "sorted by discovery" does not
+   * mean "ignore what I typed". What it does not do is let the score influence the
+   * MATCHING — a product either matches the words or it does not, and the score only
+   * decides the order among those that do.
+   */
+  const decodedScore = decodedCursor === null ? null : Number.parseInt(decodedCursor.sortKey, 10);
+  if (decodedCursor !== null && !Number.isSafeInteger(decodedScore)) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
 
-  const trimmedQuery = input.query?.trim() ?? "";
-  const hasQuery = trimmedQuery.length > 0;
-  const useDiscovery = input.sort === "discovery";
-  const useRelevance =
-    !useDiscovery && hasQuery && (input.sort === undefined || input.sort === "relevance");
-
-  const categorySlugs =
-    input.categorySlug === undefined
+  const cursorPredicate =
+    decodedCursor === null || decodedScore === null
       ? undefined
-      : await listActiveCategorySubtreeSlugs(input.categorySlug);
-  if (
-    input.categorySlug !== undefined &&
-    (categorySlugs === undefined || categorySlugs.length === 0)
-  ) {
-    return {
-      success: true,
-      value: { items: [], page: { nextCursor: null, hasMore: false } },
-    };
-  }
+      : sql`(coalesce(${storeSearchDocument.discoveryScorePoints}, -1), ${storeSearchDocument.id})
+            < (${decodedScore}, ${decodedCursor.id})`;
 
-  // A39. The SAME builder every facet count uses — see `computeStoreSearchFacets`.
-  const baseFilters = buildStoreSearchFilters(input, categorySlugs);
-  const textPredicate = buildStoreSearchTextPredicate({ trimmedQuery, useRelevance });
+  const rows = await db
+    .select({
+      id: storeSearchDocument.id,
+      documentKind: storeSearchDocument.documentKind,
+      entityId: storeSearchDocument.entityId,
+      publicSlug: storeSearchDocument.publicSlug,
+      title: storeSearchDocument.title,
+      summary: storeSearchDocument.summary,
+      organizationSlug: storeSearchDocument.organizationSlug,
+      organizationDisplayName: storeSearchDocument.organizationDisplayName,
+      organizationCountryCode: storeSearchDocument.organizationCountryCode,
+      categorySlug: storeSearchDocument.categorySlug,
+      providerKind: storeSearchDocument.providerKind,
+      priceInCents: storeSearchDocument.priceInCents,
+      currency: storeSearchDocument.currency,
+      minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
+      stockState: storeSearchDocument.stockState,
+      samplePolicy: storeSearchDocument.samplePolicy,
+      condition: storeSearchDocument.condition,
+      providerVerificationState: storeSearchDocument.providerVerificationState,
+      leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
+      discoveryScorePoints: storeSearchDocument.discoveryScorePoints,
+    })
+    .from(storeSearchDocument)
+    // A39. `textPredicate`, not a local `ILIKE` built from the RAW query — this branch used
+    // to skip `escapeLikePattern`, so a `%` or `_` in the query matched a different set of
+    // documents here than under either other sort.
+    .where(and(...baseFilters, textPredicate, cursorPredicate))
+    .orderBy(
+      sql`coalesce(${storeSearchDocument.discoveryScorePoints}, -1) DESC`,
+      desc(storeSearchDocument.id),
+    )
+    .limit(input.limit + 1);
 
-  if (useDiscovery) {
-    /*
-     * The ranked sort. Keyset over `(discovery_score_points DESC NULLS LAST, id)`, which is
-     * exactly the index `0081` created, so this is the one non-relevance sort in this file
-     * that does not fall back to a sequential scan.
-     *
-     * A TEXT FILTER STILL APPLIES when the caller sent one: "sorted by discovery" does not
-     * mean "ignore what I typed". What it does not do is let the score influence the
-     * MATCHING — a product either matches the words or it does not, and the score only
-     * decides the order among those that do.
-     */
-    const decodedScore = decodedCursor === null ? null : Number.parseInt(decodedCursor.sortKey, 10);
-    if (decodedCursor !== null && !Number.isSafeInteger(decodedScore)) {
-      return { success: false, error: { type: "INVALID_CURSOR" } };
-    }
+  const hasMore = rows.length > input.limit;
+  const pageRows = rows.slice(0, input.limit);
+  const lastRow = pageRows[pageRows.length - 1];
 
-    const cursorPredicate =
-      decodedCursor === null || decodedScore === null
-        ? undefined
-        : sql`(coalesce(${storeSearchDocument.discoveryScorePoints}, -1), ${storeSearchDocument.id})
-              < (${decodedScore}, ${decodedCursor.id})`;
-
-    const rows = await db
-      .select({
-        id: storeSearchDocument.id,
-        documentKind: storeSearchDocument.documentKind,
-        entityId: storeSearchDocument.entityId,
-        publicSlug: storeSearchDocument.publicSlug,
-        title: storeSearchDocument.title,
-        summary: storeSearchDocument.summary,
-        organizationSlug: storeSearchDocument.organizationSlug,
-        organizationDisplayName: storeSearchDocument.organizationDisplayName,
-        organizationCountryCode: storeSearchDocument.organizationCountryCode,
-        categorySlug: storeSearchDocument.categorySlug,
-        providerKind: storeSearchDocument.providerKind,
-        priceInCents: storeSearchDocument.priceInCents,
-        currency: storeSearchDocument.currency,
-        minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
-        stockState: storeSearchDocument.stockState,
-        samplePolicy: storeSearchDocument.samplePolicy,
-        condition: storeSearchDocument.condition,
-        providerVerificationState: storeSearchDocument.providerVerificationState,
-        leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
-        discoveryScorePoints: storeSearchDocument.discoveryScorePoints,
-      })
-      .from(storeSearchDocument)
-      // A39. `textPredicate`, not a local `ILIKE` built from the RAW query — this branch used
-      // to skip `escapeLikePattern`, so a `%` or `_` in the query matched a different set of
-      // documents here than under either other sort.
-      .where(and(...baseFilters, textPredicate, cursorPredicate))
-      .orderBy(
-        sql`coalesce(${storeSearchDocument.discoveryScorePoints}, -1) DESC`,
-        desc(storeSearchDocument.id),
-      )
-      .limit(input.limit + 1);
-
-    const hasMore = rows.length > input.limit;
-    const pageRows = rows.slice(0, input.limit);
-    const lastRow = pageRows[pageRows.length - 1];
-
-    return {
-      success: true,
-      value: {
-        items: pageRows.map((row) => ({
-          documentKind: row.documentKind,
-          entityId: row.entityId,
-          publicSlug: row.publicSlug,
-          title: row.title,
-          summary: row.summary,
-          organizationSlug: row.organizationSlug,
-          organizationDisplayName: row.organizationDisplayName,
-          organizationCountryCode: tradingOrganizationCountryCode(
-            row.organizationCountryCode,
-            row.entityId,
-          ),
-          categorySlug: row.categorySlug,
-          providerKind: row.providerKind,
-          priceInCents: row.priceInCents,
-          currency: row.currency,
-          minimumOrderQuantity: row.minimumOrderQuantity,
-          stockState: row.stockState,
-          samplePolicy: row.samplePolicy,
-          condition: row.condition,
-          providerVerificationState: row.providerVerificationState,
-          leadTimeMaxDays: row.leadTimeMaxDays,
-          // NULL, not the discovery score. `relevanceScore` means "how well did this match
-          // the words you typed", and this sort did not ask that question.
-          relevanceScore: null,
-        })),
-        page: {
-          nextCursor:
-            hasMore && lastRow
-              ? encodeStoreCursor({
-                  sortKey: String(lastRow.discoveryScorePoints ?? -1),
-                  id: lastRow.id,
-                })
-              : null,
-          hasMore,
-        },
+  return {
+    success: true,
+    value: {
+      items: pageRows.map((row) => ({
+        documentKind: row.documentKind,
+        entityId: row.entityId,
+        publicSlug: row.publicSlug,
+        title: row.title,
+        summary: row.summary,
+        organizationSlug: row.organizationSlug,
+        organizationDisplayName: row.organizationDisplayName,
+        organizationCountryCode: tradingOrganizationCountryCode(
+          row.organizationCountryCode,
+          row.entityId,
+        ),
+        categorySlug: row.categorySlug,
+        providerKind: row.providerKind,
+        priceInCents: row.priceInCents,
+        currency: row.currency,
+        minimumOrderQuantity: row.minimumOrderQuantity,
+        stockState: row.stockState,
+        samplePolicy: row.samplePolicy,
+        condition: row.condition,
+        providerVerificationState: row.providerVerificationState,
+        leadTimeMaxDays: row.leadTimeMaxDays,
+        // NULL, not the discovery score. `relevanceScore` means "how well did this match
+        // the words you typed", and this sort did not ask that question.
+        relevanceScore: null,
+      })),
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({
+                sortKey: String(lastRow.discoveryScorePoints ?? -1),
+                id: lastRow.id,
+              })
+            : null,
+        hasMore,
       },
-    };
-  }
+    },
+  };
+}
 
-  if (!useRelevance) {
-    const cursorPredicate =
-      decodedCursor === null
-        ? undefined
-        : or(
-            sql`${storeSearchDocument.title} > ${decodedCursor.sortKey}`,
-            and(
-              eq(storeSearchDocument.title, decodedCursor.sortKey),
-              gt(storeSearchDocument.id, decodedCursor.id),
-            ),
-          );
+/**
+ * The unranked sort: alphabetical, keyset over `(title, id)`. Taken whenever the caller
+ * asked for an explicit order, or asked for relevance without sending a query — with
+ * nothing to rank against, ordering by a rank that is zero for every row would hand back
+ * whatever order the scan happened to produce.
+ */
+async function searchByTitle(context: StoreSearchPageContext): Promise<
+  Result<
+    {
+      readonly items: readonly StoreSearchHit[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    StoreSearchError
+  >
+> {
+  const { input, decodedCursor, baseFilters, textPredicate } = context;
 
-    const rows = await db
-      .select({
-        documentKind: storeSearchDocument.documentKind,
-        entityId: storeSearchDocument.entityId,
-        publicSlug: storeSearchDocument.publicSlug,
-        title: storeSearchDocument.title,
-        summary: storeSearchDocument.summary,
-        organizationSlug: storeSearchDocument.organizationSlug,
-        organizationDisplayName: storeSearchDocument.organizationDisplayName,
-        organizationCountryCode: storeSearchDocument.organizationCountryCode,
-        categorySlug: storeSearchDocument.categorySlug,
-        providerKind: storeSearchDocument.providerKind,
-        priceInCents: storeSearchDocument.priceInCents,
-        currency: storeSearchDocument.currency,
-        minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
-        stockState: storeSearchDocument.stockState,
-        samplePolicy: storeSearchDocument.samplePolicy,
-        condition: storeSearchDocument.condition,
-        providerVerificationState: storeSearchDocument.providerVerificationState,
-        leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
-        id: storeSearchDocument.id,
-      })
-      .from(storeSearchDocument)
-      .where(and(...baseFilters, textPredicate, cursorPredicate))
-      .orderBy(asc(storeSearchDocument.title), asc(storeSearchDocument.id))
-      .limit(input.limit + 1);
-
-    const pageRows = rows.slice(0, input.limit);
-    const lastRow = pageRows[pageRows.length - 1];
-    const nextCursor =
-      rows.length > input.limit && lastRow
-        ? encodeStoreCursor({ sortKey: lastRow.title, id: lastRow.id })
-        : null;
-
-    return {
-      success: true,
-      value: {
-        items: pageRows.map((row) => ({
-          documentKind: row.documentKind,
-          entityId: row.entityId,
-          publicSlug: row.publicSlug,
-          title: row.title,
-          summary: row.summary,
-          organizationSlug: row.organizationSlug,
-          organizationDisplayName: row.organizationDisplayName,
-          organizationCountryCode: tradingOrganizationCountryCode(
-            row.organizationCountryCode,
-            row.entityId,
+  const cursorPredicate =
+    decodedCursor === null
+      ? undefined
+      : or(
+          sql`${storeSearchDocument.title} > ${decodedCursor.sortKey}`,
+          and(
+            eq(storeSearchDocument.title, decodedCursor.sortKey),
+            gt(storeSearchDocument.id, decodedCursor.id),
           ),
-          categorySlug: row.categorySlug,
-          providerKind: row.providerKind,
-          priceInCents: row.priceInCents,
-          currency: row.currency,
-          minimumOrderQuantity: row.minimumOrderQuantity,
-          stockState: row.stockState,
-          samplePolicy: row.samplePolicy,
-          condition: row.condition,
-          providerVerificationState: row.providerVerificationState,
-          leadTimeMaxDays: row.leadTimeMaxDays,
-          relevanceScore: null,
-        })),
-        page: { nextCursor, hasMore: nextCursor !== null },
-      },
-    };
-  }
+        );
+
+  const rows = await db
+    .select({
+      documentKind: storeSearchDocument.documentKind,
+      entityId: storeSearchDocument.entityId,
+      publicSlug: storeSearchDocument.publicSlug,
+      title: storeSearchDocument.title,
+      summary: storeSearchDocument.summary,
+      organizationSlug: storeSearchDocument.organizationSlug,
+      organizationDisplayName: storeSearchDocument.organizationDisplayName,
+      organizationCountryCode: storeSearchDocument.organizationCountryCode,
+      categorySlug: storeSearchDocument.categorySlug,
+      providerKind: storeSearchDocument.providerKind,
+      priceInCents: storeSearchDocument.priceInCents,
+      currency: storeSearchDocument.currency,
+      minimumOrderQuantity: storeSearchDocument.minimumOrderQuantity,
+      stockState: storeSearchDocument.stockState,
+      samplePolicy: storeSearchDocument.samplePolicy,
+      condition: storeSearchDocument.condition,
+      providerVerificationState: storeSearchDocument.providerVerificationState,
+      leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
+      id: storeSearchDocument.id,
+    })
+    .from(storeSearchDocument)
+    .where(and(...baseFilters, textPredicate, cursorPredicate))
+    .orderBy(asc(storeSearchDocument.title), asc(storeSearchDocument.id))
+    .limit(input.limit + 1);
+
+  const pageRows = rows.slice(0, input.limit);
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor =
+    rows.length > input.limit && lastRow
+      ? encodeStoreCursor({ sortKey: lastRow.title, id: lastRow.id })
+      : null;
+
+  return {
+    success: true,
+    value: {
+      items: pageRows.map((row) => ({
+        documentKind: row.documentKind,
+        entityId: row.entityId,
+        publicSlug: row.publicSlug,
+        title: row.title,
+        summary: row.summary,
+        organizationSlug: row.organizationSlug,
+        organizationDisplayName: row.organizationDisplayName,
+        organizationCountryCode: tradingOrganizationCountryCode(
+          row.organizationCountryCode,
+          row.entityId,
+        ),
+        categorySlug: row.categorySlug,
+        providerKind: row.providerKind,
+        priceInCents: row.priceInCents,
+        currency: row.currency,
+        minimumOrderQuantity: row.minimumOrderQuantity,
+        stockState: row.stockState,
+        samplePolicy: row.samplePolicy,
+        condition: row.condition,
+        providerVerificationState: row.providerVerificationState,
+        leadTimeMaxDays: row.leadTimeMaxDays,
+        relevanceScore: null,
+      })),
+      page: { nextCursor, hasMore: nextCursor !== null },
+    },
+  };
+}
+
+/**
+ * Full-text relevance. Builds its own `tsQuery` because `ts_rank_cd` needs one; membership
+ * still comes from the shared `textPredicate`, so this branch decides ORDER only.
+ */
+async function searchByRelevance(context: StoreSearchPageContext): Promise<
+  Result<
+    {
+      readonly items: readonly StoreSearchHit[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    StoreSearchError
+  >
+> {
+  const { input, decodedCursor, baseFilters, textPredicate, trimmedQuery } = context;
 
   /**
    * A39. RANKING ONLY. Membership is `textPredicate`, built once above and shared with the
@@ -639,6 +661,62 @@ export async function searchStoreDocuments(
       page: { nextCursor, hasMore: nextCursor !== null },
     },
   };
+}
+
+export async function searchStoreDocuments(
+  input: StoreSearchFilterInput & {
+    readonly limit: number;
+    readonly cursor?: string | undefined;
+  },
+): Promise<
+  Result<
+    {
+      readonly items: readonly StoreSearchHit[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    StoreSearchError
+  >
+> {
+  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
+  const trimmedQuery = input.query?.trim() ?? "";
+  const hasQuery = trimmedQuery.length > 0;
+  const useDiscovery = input.sort === "discovery";
+  const useRelevance =
+    !useDiscovery && hasQuery && (input.sort === undefined || input.sort === "relevance");
+
+  const categorySlugs =
+    input.categorySlug === undefined
+      ? undefined
+      : await listActiveCategorySubtreeSlugs(input.categorySlug);
+  if (
+    input.categorySlug !== undefined &&
+    (categorySlugs === undefined || categorySlugs.length === 0)
+  ) {
+    return {
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false } },
+    };
+  }
+
+  // A39. The SAME builder every facet count uses — see `computeStoreSearchFacets`.
+  const baseFilters = buildStoreSearchFilters(input, categorySlugs);
+  const textPredicate = buildStoreSearchTextPredicate({ trimmedQuery, useRelevance });
+
+  const context: StoreSearchPageContext = {
+    input,
+    decodedCursor,
+    baseFilters,
+    textPredicate,
+    trimmedQuery,
+  };
+
+  if (useDiscovery) return await searchByDiscoveryRank(context);
+  if (!useRelevance) return await searchByTitle(context);
+  return await searchByRelevance(context);
 }
 
 export interface StoreSearchFacetBucket {
