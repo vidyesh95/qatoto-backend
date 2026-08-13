@@ -46,14 +46,19 @@ export const ProductSlugParamsSchema = z
   .strict();
 
 /**
- * `GET /commerce/saved-products` (A11).
+ * `GET /commerce/bookmarked-products` (A11).
  *
- * `kind` OMITTED MEANS BOTH, not a default to one. Save and bookmark are independent toggles with
- * independent counters, so a caller who names neither is asking for everything they have marked.
+ * THERE IS NO `kind`, AND ITS ABSENCE IS THE POINT. This route was `/saved-products` with an
+ * optional `kind` whose omission meant BOTH kinds — which is precisely how a heart tap ended up
+ * filing a product in the buyer's wishlist. Since migration 0120 a like is a public counter that is
+ * never listed back to the person who made it, so `bookmarked` is the only list there is.
+ *
+ * `.strict()` IS DOING WORK HERE. A client still sending `?kind=liked` gets a 422 naming the
+ * unrecognised key, rather than a silently different list — a loud failure is the right answer to a
+ * caller asking for something that no longer exists.
  */
-export const ListSavedProductsQuerySchema = z
+export const ListBookmarkedProductsQuerySchema = z
   .object({
-    kind: z.enum(["saved", "bookmarked"]).optional(),
     limit: z.coerce.number().int().min(1).max(48).default(24),
     cursor: z.string().trim().min(1).max(500).optional(),
   })

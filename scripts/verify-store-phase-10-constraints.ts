@@ -59,7 +59,7 @@ const EXPECTED_INDEXES: readonly string[] = [
   "commerce_product_engagement_user_idx",
   "commerce_product_engagement_product_idx",
   "commerce_product_share_product_idx",
-  "commerce_product_stats_saved_idx",
+  "commerce_product_stats_like_idx",
   // A9
   "commerce_product_question_public_idx",
   "commerce_product_question_author_idx",
@@ -132,6 +132,7 @@ const EXPECTED_ENUM_VALUES: readonly { readonly typeName: string; readonly value
   { typeName: "commerce_ugc_visibility_state", value: "hidden_pending_review" },
   { typeName: "commerce_ugc_visibility_state", value: "removed_by_author" },
   { typeName: "commerce_product_answer_author_kind", value: "verified_buyer" },
+  { typeName: "commerce_product_engagement_kind", value: "liked" },
   { typeName: "commerce_product_engagement_kind", value: "bookmarked" },
   { typeName: "commerce_content_target_kind", value: "answer" },
   { typeName: "commerce_content_report_reason", value: "counterfeit" },
@@ -313,10 +314,10 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
   const driftedEngagementCounters = await countQuery(
     `SELECT count(*) AS row_count
        FROM commerce_product_stats AS stats
-      WHERE stats.saved_count <> (
+      WHERE stats.like_count <> (
               SELECT count(*) FROM commerce_product_engagement AS engagement
                WHERE engagement.product_id = stats.product_id
-                 AND engagement.engagement_kind = 'saved')
+                 AND engagement.engagement_kind = 'liked')
          OR stats.bookmarked_count <> (
               SELECT count(*) FROM commerce_product_engagement AS engagement
                WHERE engagement.product_id = stats.product_id

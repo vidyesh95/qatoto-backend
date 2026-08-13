@@ -234,10 +234,13 @@ export async function rollupProductDailySignal(asOf: Date): Promise<{ rowsWritte
        WHERE is_counted_view AND view_day_bucket = ${signalDate}::date
        GROUP BY product_id
     ),
-    save_counts AS (
-      SELECT product_id, count(*)::int AS saves
+    -- BOOKMARKS, NOT LIKES. Migration 0120 split the two: a like is a public reaction with
+    -- no purchase intent behind it and is one tap to farm, so only the wishlist gesture is
+    -- allowed to move a ranking input.
+    bookmark_counts AS (
+      SELECT product_id, count(*)::int AS bookmarks
         FROM commerce_product_engagement
-       WHERE engagement_kind = 'saved'
+       WHERE engagement_kind = 'bookmarked'
          AND created_at >= ${dayStart} AND created_at < ${asOf}
        GROUP BY product_id
     ),
@@ -261,21 +264,21 @@ export async function rollupProductDailySignal(asOf: Date): Promise<{ rowsWritte
     merged AS (
       SELECT p.id AS product_id,
              coalesce(v.counted_views, 0) AS counted_views,
-             coalesce(s.saves, 0) AS saves,
+             coalesce(b.bookmarks, 0) AS bookmarks,
              coalesce(sh.shares, 0) AS shares,
              coalesce(o.qualified_orders, 0) AS qualified_orders,
              coalesce(o.qualified_order_value_in_cents, 0) AS qualified_order_value_in_cents
         FROM product p
         LEFT JOIN view_counts v ON v.product_id = p.id
-        LEFT JOIN save_counts s ON s.product_id = p.id
+        LEFT JOIN bookmark_counts b ON b.product_id = p.id
         LEFT JOIN share_counts sh ON sh.product_id = p.id
         LEFT JOIN order_counts o ON o.product_id = p.id
-       WHERE coalesce(v.counted_views, 0) > 0 OR coalesce(s.saves, 0) > 0
+       WHERE coalesce(v.counted_views, 0) > 0 OR coalesce(b.bookmarks, 0) > 0
           OR coalesce(sh.shares, 0) > 0 OR coalesce(o.qualified_orders, 0) > 0
     )
     INSERT INTO commerce_product_daily_signal
-      (product_id, signal_date, counted_views, saves, shares, qualified_orders, qualified_order_value_in_cents)
-    SELECT product_id, ${signalDate}::date, counted_views, saves, shares, qualified_orders, qualified_order_value_in_cents
+      (product_id, signal_date, counted_views, bookmarks, shares, qualified_orders, qualified_order_value_in_cents)
+    SELECT product_id, ${signalDate}::date, counted_views, bookmarks, shares, qualified_orders, qualified_order_value_in_cents
       FROM merged
     ON CONFLICT (product_id, signal_date) DO NOTHING
     RETURNING 1 AS rows_written
@@ -307,11 +310,11 @@ interface TrendingCandidateRow extends Record<string, unknown> {
   /** A STRING from the driver, despite the column being a timestamp. See the insert. */
   readonly last_qualified_order_at: string | null;
   readonly counted_views_w1: number;
-  readonly saves_w1: number;
-  readonly distinct_savers_w1: number;
+  readonly bookmarks_w1: number;
+  readonly distinct_bookmarkers_w1: number;
   readonly converting_viewers_w1: number;
-  readonly hashed_save_count: number;
-  readonly top_subnet_save_count: number;
+  readonly hashed_bookmark_count: number;
+  readonly top_subnet_bookmark_count: number;
   readonly refund_rate_bp: number | null;
   readonly refunded_sample: number;
   readonly cancellation_rate_bp: number | null;
@@ -357,14 +360,17 @@ async function loadTrendingCandidates(
            AND o.confirmed_at >= ${w2Start} AND o.confirmed_at < ${asOf}
            AND l.product_id IS NOT NULL
       ),
-      subnet_saves AS (
-        SELECT product_id, count(*)::int AS hashed_save_count,
-               max(per_subnet)::int AS top_subnet_save_count
+      -- BOOKMARKS ONLY, since 0120. The guard asks "is this product's demand really coming
+      -- from many places?", and only a gesture that costs something is worth asking that of.
+      -- Likes carry a subnet too, but nobody farms a counter that buys them no ranking.
+      subnet_bookmarks AS (
+        SELECT product_id, count(*)::int AS hashed_bookmark_count,
+               max(per_subnet)::int AS top_subnet_bookmark_count
           FROM (
             SELECT e.product_id, e.subnet_hash,
                    count(*) OVER (PARTITION BY e.product_id, e.subnet_hash) AS per_subnet
               FROM commerce_product_engagement e
-             WHERE e.subnet_hash IS NOT NULL AND e.engagement_kind = 'saved'
+             WHERE e.subnet_hash IS NOT NULL AND e.engagement_kind = 'bookmarked'
           ) s
          GROUP BY product_id
       )
@@ -383,16 +389,16 @@ async function loadTrendingCandidates(
           WHERE v.product_id = p.id AND v.is_counted_view
             AND v.first_beacon_at >= ${w1Start} AND v.first_beacon_at < ${asOf}) AS counted_views_w1,
         (SELECT count(*)::int FROM commerce_product_engagement e
-          WHERE e.product_id = p.id AND e.engagement_kind = 'saved'
-            AND e.created_at >= ${w1Start}) AS saves_w1,
+          WHERE e.product_id = p.id AND e.engagement_kind = 'bookmarked'
+            AND e.created_at >= ${w1Start}) AS bookmarks_w1,
         (SELECT count(DISTINCT e.user_id)::int FROM commerce_product_engagement e
-          WHERE e.product_id = p.id AND e.engagement_kind = 'saved'
-            AND e.created_at >= ${w1Start}) AS distinct_savers_w1,
+          WHERE e.product_id = p.id AND e.engagement_kind = 'bookmarked'
+            AND e.created_at >= ${w1Start}) AS distinct_bookmarkers_w1,
         (SELECT count(DISTINCT v.viewer_id)::int FROM commerce_product_view_session v
           WHERE v.product_id = p.id AND v.is_counted_view AND v.viewer_id IS NOT NULL
             AND v.first_beacon_at >= ${w1Start}) AS converting_viewers_w1,
-        coalesce(ss.hashed_save_count, 0) AS hashed_save_count,
-        coalesce(ss.top_subnet_save_count, 0) AS top_subnet_save_count,
+        coalesce(ss.hashed_bookmark_count, 0) AS hashed_bookmark_count,
+        coalesce(ss.top_subnet_bookmark_count, 0) AS top_subnet_bookmark_count,
         (CASE WHEN sum(q.quantity_ordered) > 0
               THEN (sum(q.quantity_refunded) * 10000 / sum(q.quantity_ordered))::int END)
           AS refund_rate_bp,
@@ -415,13 +421,13 @@ async function loadTrendingCandidates(
       FROM product p
       JOIN commerce_organization org ON org.id = p.seller_organization_id
       JOIN qualified q ON q.product_id = p.id
-      LEFT JOIN subnet_saves ss ON ss.product_id = p.id
+      LEFT JOIN subnet_bookmarks ss ON ss.product_id = p.id
       WHERE p.status = 'active' AND p.moderation_state = 'approved'
         AND org.trade_state = 'active'
         AND NOT EXISTS (SELECT 1 FROM commerce_organization_ranking_exclusion x
                          WHERE x.organization_id = org.id)
       GROUP BY p.id, p.category_id, p.currency, p.seller_organization_id, org.id, org.trade_state,
-               ss.hashed_save_count, ss.top_subnet_save_count
+               ss.hashed_bookmark_count, ss.top_subnet_bookmark_count
     `)
   ).rows;
 }
@@ -600,7 +606,7 @@ async function scoreTrendingCandidates(
       sellerHasActiveTradeState: row.seller_trade_active,
       sellerHasApprovedRegistration: row.seller_has_registration,
       sellerHasLiveCertification: row.seller_has_certification,
-      distinctSaversW1: row.distinct_savers_w1,
+      distinctBookmarkersW1: row.distinct_bookmarkers_w1,
     });
 
     // Refinement 1: no qualified demand in W2 is not a low score, it is not a candidate.
@@ -737,7 +743,7 @@ function buildTrendingRankingRows(
         qualifiedOrdersW2: candidate.row.qualified_orders_w2,
         distinctQualifiedBuyersW1: candidate.row.distinct_qualified_buyers_w1,
         countedViewsW1: candidate.row.counted_views_w1,
-        savesW1: candidate.row.saves_w1,
+        bookmarksW1: candidate.row.bookmarks_w1,
         // `db.execute` returns raw driver values, so a timestamp arrives as a STRING here
         // even though the column is a `Date`. Normalizing at this boundary rather than
         // typing the row as `Date` keeps the lie out of the interface.
@@ -768,7 +774,7 @@ function buildTrendingRankingRows(
         subnetSampleSize:
           candidate.multipliers.subnetConcentrationBasisPoints === null
             ? null
-            : candidate.row.hashed_save_count,
+            : candidate.row.hashed_bookmark_count,
         rankingMode: candidate.rankingMode,
         scoreAlgorithmVersion: algorithmVersion,
       });
@@ -907,8 +913,8 @@ function buildMultipliers(input: {
   )[];
 } {
   const subnet = computeSubnetConcentrationPenalty({
-    hashedObservationCount: input.row.hashed_save_count,
-    topSubnetObservationCount: input.row.top_subnet_save_count,
+    hashedObservationCount: input.row.hashed_bookmark_count,
+    topSubnetObservationCount: input.row.top_subnet_bookmark_count,
   });
 
   const orderValueMultiplierBasisPoints = computeOrderValueMultiplier({

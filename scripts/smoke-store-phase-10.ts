@@ -260,9 +260,9 @@ async function smokeEngagement(buyer: Actor): Promise<void> {
   );
   record(
     "engagement counters are integers on the wire",
-    numberField(anonymousEngagement, "savedCount") !== null &&
+    numberField(anonymousEngagement, "likeCount") !== null &&
       numberField(anonymousEngagement, "questionCount") !== null,
-    `savedCount ${String(numberField(anonymousEngagement, "savedCount"))}`,
+    `likeCount ${String(numberField(anonymousEngagement, "likeCount"))}`,
   );
   record(
     "commentCount is absent — A10 has no table and a zero would look wired",
@@ -270,39 +270,39 @@ async function smokeEngagement(buyer: Actor): Promise<void> {
     `keys ${Object.keys(anonymousEngagement).join(",")}`,
   );
 
-  const saved = await callApi("PUT", `/store/products/${CHAIR_PRODUCT_SLUG}/save`, {
+  const liked = await callApi("PUT", `/store/products/${CHAIR_PRODUCT_SLUG}/like`, {
     actor: buyer,
   });
-  const savedOnce = numberField(dataOf(saved), "savedCount");
-  const savedTwice = await callApi("PUT", `/store/products/${CHAIR_PRODUCT_SLUG}/save`, {
+  const likedOnce = numberField(dataOf(liked), "likeCount");
+  const likedTwice = await callApi("PUT", `/store/products/${CHAIR_PRODUCT_SLUG}/like`, {
     actor: buyer,
   });
-  const savedAgain = numberField(dataOf(savedTwice), "savedCount");
+  const likedAgain = numberField(dataOf(likedTwice), "likeCount");
   record(
-    "save is idempotent by verb — a second PUT does not double-count",
-    saved.status === 200 && savedOnce !== null && savedOnce === savedAgain,
-    `first ${String(savedOnce)}, second ${String(savedAgain)}`,
+    "like is idempotent by verb — a second PUT does not double-count",
+    liked.status === 200 && likedOnce !== null && likedOnce === likedAgain,
+    `first ${String(likedOnce)}, second ${String(likedAgain)}`,
   );
 
-  const viewerState = asRecord(dataOf(savedTwice)["viewer"]);
+  const viewerState = asRecord(dataOf(likedTwice)["viewer"]);
   record(
-    "the signed-in viewer sees its own save state",
-    viewerState["hasSaved"] === true,
+    "the signed-in viewer sees its own like state",
+    viewerState["hasLiked"] === true,
     `viewer ${JSON.stringify(viewerState)}`,
   );
 
-  const cleared = await callApi("DELETE", `/store/products/${CHAIR_PRODUCT_SLUG}/save`, {
+  const cleared = await callApi("DELETE", `/store/products/${CHAIR_PRODUCT_SLUG}/like`, {
     actor: buyer,
   });
-  const clearedTwice = await callApi("DELETE", `/store/products/${CHAIR_PRODUCT_SLUG}/save`, {
+  const clearedTwice = await callApi("DELETE", `/store/products/${CHAIR_PRODUCT_SLUG}/like`, {
     actor: buyer,
   });
   record(
-    "un-save is idempotent and never drives the counter negative",
+    "un-like is idempotent and never drives the counter negative",
     cleared.status === 200 &&
       clearedTwice.status === 200 &&
-      (numberField(dataOf(clearedTwice), "savedCount") ?? -1) >= 0,
-    `count ${String(numberField(dataOf(clearedTwice), "savedCount"))}`,
+      (numberField(dataOf(clearedTwice), "likeCount") ?? -1) >= 0,
+    `count ${String(numberField(dataOf(clearedTwice), "likeCount"))}`,
   );
 
   const anonymousShare = await callApi("POST", `/store/products/${CHAIR_PRODUCT_SLUG}/share`);
@@ -312,11 +312,11 @@ async function smokeEngagement(buyer: Actor): Promise<void> {
     `status ${String(anonymousShare.status)}`,
   );
 
-  const unauthenticatedSave = await callApi("PUT", `/store/products/${CHAIR_PRODUCT_SLUG}/save`);
+  const unauthenticatedLike = await callApi("PUT", `/store/products/${CHAIR_PRODUCT_SLUG}/like`);
   record(
-    "saving requires a session",
-    unauthenticatedSave.status === 401,
-    `status ${String(unauthenticatedSave.status)}`,
+    "liking requires a session",
+    unauthenticatedLike.status === 401,
+    `status ${String(unauthenticatedLike.status)}`,
   );
 }
 

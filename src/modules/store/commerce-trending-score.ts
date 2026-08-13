@@ -21,10 +21,14 @@
  *
  * ## The budgets, and why they are shaped by cost-to-forge
  *
- * A save is one authenticated click. An order moves money, and a refund reverses it. So
+ * A bookmark is one authenticated click. An order moves money, and a refund reverses it. So
  * orders and their freshness carry 60 of the 100 points and engagement carries 10 — an
  * attacker who can fake the cheap signal cannot move much, and an attacker who can fake the
  * expensive one is committing fraud with a paper trail.
+ *
+ * A LIKE IS CHEAPER STILL AND SCORES NOTHING AT ALL. It is a public reaction with no intent
+ * behind it, so it earns no rung on any ladder here and no multiplier anywhere — see
+ * migration 0120. The engagement budget reads bookmarks and only bookmarks.
  *
  * ## Eligibility is not a score of zero
  *
@@ -56,8 +60,12 @@ export const COMMERCE_TRENDING_MAXIMUM_POINTS = 100;
  * Bump it when a ladder, a budget or a multiplier changes. Without it, a snapshot from
  * before a change and one from after are indistinguishable, and the determinism check
  * would report a scorer bug every time the formula legitimately moved.
+ *
+ * VERSION 2 — migration 0120. `ENGAGEMENT_LADDER` moved from distinct SAVERS to distinct
+ * BOOKMARKERS and its thresholds came down with it. Every version-1 snapshot measured a
+ * different gesture, so the two are genuinely not comparable and must not be diffed.
  */
-export const COMMERCE_TRENDING_ALGORITHM_VERSION = 1;
+export const COMMERCE_TRENDING_ALGORITHM_VERSION = 2;
 
 export const COMMERCE_TRENDING_COMPONENT_BUDGETS = {
   qualifiedVelocity: 40,
@@ -173,13 +181,36 @@ assertLadderIsWellFormed(
   SELLER_TRUST_SPLIT.measuredPerformance,
 );
 
-/** Distinct savers in W1. Deduped by primary key, so this is people, not taps. */
+/**
+ * Distinct BOOKMARKERS in W1. Deduped by primary key, so this is people, not taps.
+ *
+ * THESE THRESHOLDS ARE PROVISIONAL AND WERE LOWERED ONCE ALREADY. They were `{60, 30, 15,
+ * 7, 3}`, tuned when this rung counted hearts — a one-tap public reaction. Migration 0120
+ * moved the signal onto bookmarks, which measure intent and are therefore far rarer, so
+ * the old thresholds would have scored almost every product at zero and quietly removed a
+ * tenth of the trending formula.
+ *
+ * They were not divided by a measured ratio, because there is not yet one to measure: at
+ * the time of the change the catalog held 46 distinct likers against 1 distinct bookmarker.
+ * A ratio drawn from a single row is noise wearing a decimal point. These numbers are a
+ * deliberate guess at the right ORDER of magnitude and nothing more.
+ *
+ * RE-RUN THIS BEFORE TRUSTING THEM, once bookmarks have accumulated for a few weeks:
+ *
+ *   SELECT engagement_kind, count(DISTINCT user_id)
+ *     FROM commerce_product_engagement
+ *    WHERE created_at >= now() - interval '7 days'
+ *    GROUP BY engagement_kind;
+ *
+ * If the top rung is unreachable in practice, the ladder is scoring a component nobody can
+ * earn; if most products clear it, it has stopped discriminating.
+ */
 const ENGAGEMENT_LADDER: readonly ScoreLadderRung[] = [
-  { threshold: 60, points: 10 },
-  { threshold: 30, points: 8 },
-  { threshold: 15, points: 6 },
-  { threshold: 7, points: 4 },
-  { threshold: 3, points: 2 },
+  { threshold: 24, points: 10 },
+  { threshold: 12, points: 8 },
+  { threshold: 6, points: 6 },
+  { threshold: 3, points: 4 },
+  { threshold: 1, points: 2 },
 ];
 assertLadderIsWellFormed(
   "ENGAGEMENT_LADDER",
@@ -201,7 +232,7 @@ export interface CommerceTrendingScoreInput {
   readonly sellerHasActiveTradeState: boolean;
   readonly sellerHasApprovedRegistration: boolean;
   readonly sellerHasLiveCertification: boolean;
-  readonly distinctSaversW1: number;
+  readonly distinctBookmarkersW1: number;
 }
 
 export interface CommerceTrendingComponentBreakdown {
@@ -242,8 +273,8 @@ export function scoreCommerceTrendingCandidate(
   );
   assertNonNegativeIntegerInput(
     "scoreCommerceTrendingCandidate",
-    "distinctSaversW1",
-    input.distinctSaversW1,
+    "distinctBookmarkersW1",
+    input.distinctBookmarkersW1,
   );
 
   // THE GATE. A product with no qualified demand in W2 is not trending, whatever else is
@@ -292,7 +323,10 @@ export function scoreCommerceTrendingCandidate(
 
   const sellerTrustPoints = measuredPerformancePoints + verifiedStandingPoints;
 
-  const buyerEngagementPoints = pointsForAtLeastLadder(ENGAGEMENT_LADDER, input.distinctSaversW1);
+  const buyerEngagementPoints = pointsForAtLeastLadder(
+    ENGAGEMENT_LADDER,
+    input.distinctBookmarkersW1,
+  );
 
   const totalPoints =
     qualifiedVelocityPoints +

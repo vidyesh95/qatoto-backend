@@ -30,10 +30,17 @@ export const SUBNET_CONCENTRATION_THRESHOLD_BASIS_POINTS = 5_000;
 /**
  * How many hashed observations before the ratio is believable.
  *
- * WITHOUT THIS, the guard is worse than useless. A product with two hashed saves from one
- * network reads as 100% concentration — indistinguishable from a farm, and produced by two
- * colleagues. Twenty is where a ratio starts describing a population rather than a
+ * WITHOUT THIS, the guard is worse than useless. A product with two hashed bookmarks from
+ * one network reads as 100% concentration — indistinguishable from a farm, and produced by
+ * two colleagues. Twenty is where a ratio starts describing a population rather than a
  * coincidence.
+ *
+ * EXPECT THIS GUARD TO BE QUIET FOR A WHILE, and do not read that as products coming up
+ * clean. Migration 0120 narrowed the measured population from likes to bookmarks, which is
+ * a far rarer gesture, so most products now fall below twenty and return `not_measured`.
+ * That is the safe direction — the guard declines to judge rather than penalising on three
+ * data points. Do NOT lower this floor to make the guard fire again; the whole point of the
+ * threshold is that a small sample cannot tell a procurement team from a farm.
  */
 export const SUBNET_MINIMUM_SAMPLE = 20;
 

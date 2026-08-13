@@ -40,7 +40,7 @@ const HEALTHY: CommerceTrendingScoreInput = {
   sellerHasActiveTradeState: true,
   sellerHasApprovedRegistration: true,
   sellerHasLiveCertification: true,
-  distinctSaversW1: 20,
+  distinctBookmarkersW1: 20,
 };
 
 describe("scoreCommerceTrendingCandidate", () => {
@@ -58,7 +58,7 @@ describe("scoreCommerceTrendingCandidate", () => {
       demandAgeDays: 0,
       smoothedConversionRateBasisPoints: 10_000,
       sellerOnTimeRateBasisPoints: 10_000,
-      distinctSaversW1: 10_000,
+      distinctBookmarkersW1: 10_000,
     });
     expect(result.status).toBe("scored");
     if (result.status !== "scored") return;

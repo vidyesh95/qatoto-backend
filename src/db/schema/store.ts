@@ -566,6 +566,23 @@ export const commerceProductRelationKindEnum = pgEnum("commerce_product_relation
 /**
  * Buyer engagement with a listing (STORE Appendix A11).
  *
+ * THE TWO KINDS ARE NOT TWO NAMES FOR ONE THING, and the labels are the only place
+ * that is written down. A `liked` row is a PUBLIC COUNTER and nothing else — it is
+ * never listed back to the person who made it, it says only "this many buyers reacted
+ * to this listing". A `bookmarked` row IS the buyer's wishlist and the only thing
+ * `GET /commerce/bookmarked-products` returns.
+ *
+ * `liked` was called `saved` until migration 0120, and that spelling is what made the
+ * two collapse into each other: "saved" reads as "kept for later" to every reader, so
+ * the list route returned both kinds and a heart tap silently filed a product in the
+ * wishlist. Do not reintroduce the word for either kind.
+ *
+ * The asymmetry has teeth in the ranking: `bookmarked` rows feed the trending score's
+ * buyer-engagement component and the subnet-concentration guard (see
+ * `commerce-ranking.service.ts`), and `liked` rows feed neither. A like is one tap
+ * with no purchase intent behind it and is trivially farmable; a bookmark is a buyer
+ * saying they intend to come back.
+ *
  * USER-scoped, not organization-scoped, and the reason is `commerce_organization`'s
  * own lifecycle: `tradeState` starts `pending` and only a staff `verification_decided`
  * action makes it `active`, so an organization-keyed bookmark would put a single tap
@@ -577,7 +594,7 @@ export const commerceProductRelationKindEnum = pgEnum("commerce_product_relation
  * bag anyone can empty, would be worse than not delivering it.
  */
 export const commerceProductEngagementKindEnum = pgEnum("commerce_product_engagement_kind", [
-  "saved",
+  "liked",
   "bookmarked",
 ]);
 
@@ -828,7 +845,7 @@ export const commerceCategoryPriorLevelEnum = pgEnum("commerce_category_prior_le
  *
  * Enumerated rather than summed into one opaque multiplier so a seller appealing a
  * suppression can be told WHICH signal fired. "Your score was multiplied by 0.4" is not a
- * reviewable statement; "38 of your 40 saves came from one network block" is.
+ * reviewable statement; "38 of your 40 bookmarks came from one network block" is.
  */
 export const commerceRankingPenaltyKindEnum = pgEnum("commerce_ranking_penalty_kind", [
   "subnet_concentration",
@@ -3282,16 +3299,27 @@ export const commerceProductRelation = pgTable(
 );
 
 /**
- * Per-user saves and bookmarks (STORE Appendix A11).
+ * Per-user likes and bookmarks (STORE Appendix A11).
  *
- * ONE table for both kinds, unlike the video domain's separate `video_like` and
- * `video_save`. Those are split because their index shapes genuinely differ — a like
- * set is only probed for membership, a save list is rendered newest-first. Here BOTH
- * kinds are rendered lists, so one index shape serves both and one table means one
- * toggle code path instead of two near-identical copies of the same race-safe insert.
+ * ONE table for both kinds, still — but NOT for the reason first written here. The
+ * original argument was that "BOTH kinds are rendered lists, so one index shape serves
+ * both", which stopped being true at migration 0120: a like is now a public counter
+ * and is never listed back to anyone. The video domain splits `video_like` from
+ * `video_save` on exactly that distinction, and its own service comment concedes the
+ * price — the save toggle there is "byte-for-byte the like toggle, against a different
+ * table and counter."
+ *
+ * The table stays whole because the split would buy that duplication and nothing else.
+ * The composite primary key already makes a double-tap harmless for either gesture, and
+ * `commerce_product_engagement_user_idx` leads with `(userId, engagementKind)`, so the
+ * bookmark list is a kind-filtered range scan that a dedicated table could not serve
+ * faster. A like needs only a membership probe, which the same primary key answers.
  *
  * CASCADE on both sides: neither a deleted user nor a deleted product leaves a
- * meaningful bookmark behind, and nothing downstream references these rows.
+ * meaningful bookmark behind. Note these rows ARE referenced downstream — the
+ * `bookmarked` half feeds the trending score and the subnet guard in
+ * `commerce-ranking.service.ts` — so a cascade here silently moves a ranking input.
+ * That is correct: a deleted user's intent should stop counting.
  */
 export const commerceProductEngagement = pgTable(
   "commerce_product_engagement",
@@ -3304,15 +3332,20 @@ export const commerceProductEngagement = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     engagementKind: commerceProductEngagementKindEnum("engagement_kind").notNull(),
     /**
-     * Salted /24 (IPv4) or /56 (IPv6) hash of the saver's network block (Phase 13).
+     * Salted /24 (IPv4) or /56 (IPv6) hash of the marking user's network block (Phase 13).
+     *
+     * WRITTEN FOR BOTH KINDS, READ FOR ONE. Every set-direction toggle records a subnet,
+     * but since 0120 only the `bookmarked` rows are measured — the concentration guard
+     * scores purchase intent, and a like is too cheap to be worth faking against.
      *
      * NULLABLE AND NEVER BACKFILLABLE — no address was recorded on any commerce row before
-     * Phase 13, and the ones behind existing saves are gone. The subnet concentration
-     * guard is therefore INERT until rows accumulate.
+     * Phase 13, and the ones behind existing rows are gone. The subnet concentration
+     * guard is therefore INERT until rows accumulate, and 0120 reset that clock by
+     * narrowing the population it reads.
      *
      * The rule the scorer must honour: a null is not evidence of low concentration.
-     * "0 of 40 saves carry a subnet" means UNMEASURED, and the guard is skipped below a
-     * minimum hashed sample. Treating null as concentration 0 would clear every product
+     * "0 of 40 bookmarks carry a subnet" means UNMEASURED, and the guard is skipped below
+     * a minimum hashed sample. Treating null as concentration 0 would clear every product
      * for months and then start penalising as coverage grew.
      */
     subnetHash: text("subnet_hash"),
@@ -3320,7 +3353,12 @@ export const commerceProductEngagement = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.productId, table.userId, table.engagementKind] }),
-    /** "My saved products", newest first — the list this table exists to render. */
+    /**
+     * "My bookmarked products", newest first — the one list this table renders.
+     *
+     * Leading with `engagementKind` is what lets the same index answer a like-membership
+     * probe without a second index for it.
+     */
     index("commerce_product_engagement_user_idx").on(
       table.userId,
       table.engagementKind,
@@ -3329,7 +3367,7 @@ export const commerceProductEngagement = pgTable(
     ),
     /** Counter reconciliation in the phase verifier. */
     index("commerce_product_engagement_product_idx").on(table.productId, table.engagementKind),
-    /** "For THIS product, how are saves distributed across network blocks?" */
+    /** "For THIS product, how are bookmarks distributed across network blocks?" */
     index("commerce_product_engagement_subnet_idx")
       .on(table.productId, table.subnetHash)
       .where(sql`subnet_hash IS NOT NULL`),
@@ -3722,7 +3760,8 @@ export const commerceProductTrendingSnapshot = pgTable(
     qualifiedOrdersW2: integer("qualified_orders_w2").notNull(),
     distinctQualifiedBuyersW1: integer("distinct_qualified_buyers_w1").notNull(),
     countedViewsW1: integer("counted_views_w1").notNull(),
-    savesW1: integer("saves_w1").notNull(),
+    /** Bookmarks in W1. Counted hearts before migration 0120 — see that file's tail. */
+    bookmarksW1: integer("bookmarks_w1").notNull(),
     lastQualifiedOrderAt: timestamp("last_qualified_order_at"),
     demandAgeDays: integer("demand_age_days"),
     /**
@@ -3790,7 +3829,7 @@ export const commerceProductTrendingSnapshot = pgTable(
     check(
       "commerce_product_trending_snapshot_inputs_ck",
       sql`qualified_orders_w1 >= 0 AND qualified_orders_w2 >= 0
-          AND distinct_qualified_buyers_w1 >= 0 AND counted_views_w1 >= 0 AND saves_w1 >= 0
+          AND distinct_qualified_buyers_w1 >= 0 AND counted_views_w1 >= 0 AND bookmarks_w1 >= 0
           AND (demand_age_days IS NULL OR demand_age_days >= 0)
           AND currency ~ '^[A-Z]{3}$'`,
     ),
@@ -3936,7 +3975,8 @@ export const commerceProductDailySignal = pgTable(
       .references(() => product.id, { onDelete: "cascade" }),
     signalDate: date("signal_date", { mode: "string" }).notNull(),
     countedViews: integer("counted_views").default(0).notNull(),
-    saves: integer("saves").default(0).notNull(),
+    /** Bookmarks that day. Counted hearts before migration 0120 — see that file's tail. */
+    bookmarks: integer("bookmarks").default(0).notNull(),
     shares: integer("shares").default(0).notNull(),
     qualifiedOrders: integer("qualified_orders").default(0).notNull(),
     qualifiedOrderValueInCents: bigint("qualified_order_value_in_cents", { mode: "number" })
@@ -3978,7 +4018,9 @@ export const commerceProductStats = pgTable(
     productId: text("product_id")
       .primaryKey()
       .references(() => product.id, { onDelete: "cascade" }),
-    savedCount: integer("saved_count").default(0).notNull(),
+    /** The PUBLIC like counter — what the heart shows every visitor. */
+    likeCount: integer("like_count").default(0).notNull(),
+    /** How many buyers put this in their wishlist. Also a ranking input. */
     bookmarkedCount: integer("bookmarked_count").default(0).notNull(),
     shareCount: integer("share_count").default(0).notNull(),
     /** Visible questions (A9). */
@@ -4000,13 +4042,13 @@ export const commerceProductStats = pgTable(
   (table) => [
     check(
       "commerce_product_stats_counters_non_negative_ck",
-      sql`saved_count >= 0 AND bookmarked_count >= 0 AND share_count >= 0
+      sql`like_count >= 0 AND bookmarked_count >= 0 AND share_count >= 0
           AND question_count >= 0 AND answered_question_count >= 0
           AND answered_question_count <= question_count
           AND view_count >= 0
           AND (unique_viewer_count IS NULL OR (unique_viewer_count >= 0 AND unique_viewer_count <= view_count))`,
     ),
-    index("commerce_product_stats_saved_idx").on(table.savedCount, table.productId),
+    index("commerce_product_stats_like_idx").on(table.likeCount, table.productId),
   ],
 );
 

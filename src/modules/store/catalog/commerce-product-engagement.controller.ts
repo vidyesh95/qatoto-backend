@@ -4,7 +4,7 @@ import { z } from "zod";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import {
   EmptyObjectSchema,
-  ListSavedProductsQuerySchema,
+  ListBookmarkedProductsQuerySchema,
   ProductSlugParamsSchema,
   ProductViewBeaconBodySchema,
 } from "#src/modules/store/catalog/commerce-product-engagement.schemas.js";
@@ -96,7 +96,11 @@ function buildToggleHandler(
             engagementKind,
             // Only the SET direction carries a subnet: the row being deleted already has
             // whichever block created it, and rewriting that on the way out would let an
-            // attacker relocate its own history by un-saving from somewhere else.
+            // attacker relocate its own history by un-marking from somewhere else.
+            //
+            // Recorded for BOTH kinds even though only bookmarks are measured — the guard's
+            // population is narrowed where it reads, not where it writes, so widening it
+            // later needs no backfill.
             { subnetHash: computeClientSubnetHash(req.ip) },
           )
         : await commerceProductEngagementService.clearProductEngagement(
@@ -114,9 +118,9 @@ function buildToggleHandler(
   };
 }
 
-export const setProductSaved = buildToggleHandler("saved", "set");
+export const setProductLiked = buildToggleHandler("liked", "set");
 
-export const clearProductSaved = buildToggleHandler("saved", "clear");
+export const clearProductLiked = buildToggleHandler("liked", "clear");
 
 export const setProductBookmarked = buildToggleHandler("bookmarked", "set");
 
@@ -186,7 +190,10 @@ export async function recordProductViewBeacon(req: Request, res: Response): Prom
 }
 
 /**
- * `GET /commerce/saved-products` — the caller's own saved and bookmarked listings (A11).
+ * `GET /commerce/bookmarked-products` — the caller's own wishlist (A11).
+ *
+ * BOOKMARKS ONLY. Likes never appear here: a like is a public counter, not a private list, and the
+ * kind is pinned in the service rather than taken from the query so no caller can widen it.
  *
  * THIS CONTROLLER IS WHERE AN ID BECOMES A CARD, and that is a deliberate layering rather than
  * convenience: `commerce-product-engagement.service` must not import `store-catalog.service`,
@@ -199,7 +206,7 @@ export async function recordProductViewBeacon(req: Request, res: Response): Prom
  * is not a licence to keep rendering a listing the store has withdrawn. It also means the count
  * here is never a count of engagements, which is why the response carries no total.
  */
-export async function listSavedProducts(req: Request, res: Response): Promise<void> {
+export async function listBookmarkedProducts(req: Request, res: Response): Promise<void> {
   const user = req.user;
   if (!user) {
     res.status(401).json({
@@ -210,15 +217,14 @@ export async function listSavedProducts(req: Request, res: Response): Promise<vo
     return;
   }
 
-  const query = ListSavedProductsQuerySchema.safeParse(req.query);
+  const query = ListBookmarkedProductsQuerySchema.safeParse(req.query);
   if (!query.success) {
     sendZodError(res, query.error);
     return;
   }
 
-  const listed = await commerceProductEngagementService.listSavedProductIds({
+  const listed = await commerceProductEngagementService.listBookmarkedProductIds({
     userId: user.id,
-    kind: query.data.kind,
     limit: query.data.limit,
     cursor: query.data.cursor,
   });
@@ -236,7 +242,7 @@ export async function listSavedProducts(req: Request, res: Response): Promise<vo
   res.status(200).json({
     status: "success",
     statusCode: 200,
-    message: "Saved products loaded.",
+    message: "Bookmarked products loaded.",
     data: { items, page: listed.value.page },
   } satisfies ApiResponse);
 }

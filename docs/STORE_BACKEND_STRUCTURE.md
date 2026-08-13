@@ -3280,9 +3280,31 @@ accident is how a change to one silently breaks the other.
 **What exists:** nothing for products. Every counter in the codebase is video-domain (`video_stats`,
 `video_save`, `video_share`, `video_like`).
 
-**What exists now:** `commerce_product_engagement` (per-USER save/bookmark rows),
+**What exists now:** `commerce_product_engagement` (per-USER like/bookmark rows),
 `commerce_product_share`, and `commerce_product_stats` for the counters, with
-`engagement.viewer.hasSaved` / `hasBookmarked` on the product read.
+`engagement.viewer.hasLiked` / `hasBookmarked` on the product read.
+
+**THE HEART AND THE BOOKMARK ARE DIFFERENT FACTS (migration 0120).** They shipped as `saved` and
+`bookmarked` — two names for one behaviour — and `GET /commerce/saved-products` returned BOTH when
+`kind` was absent, so a heart tap filed a product in the buyer's wishlist exactly as a bookmark did.
+They are now split on meaning:
+
+- **`liked`** is a PUBLIC COUNTER and nothing else. It is never listed back to the person who made
+  it, there is no "products you liked" surface, and it earns no ranking points anywhere.
+- **`bookmarked`** IS the wishlist, and is the only kind `GET /commerce/bookmarked-products`
+  returns. That route takes **no `kind` parameter** — the query schema is `.strict()`, so a stale
+  client still sending one gets a 422 rather than a quietly different list.
+
+**The ranking reads bookmarks, never likes.** `commerce-ranking.service.ts` counts
+`engagement_kind = 'bookmarked'` in all four places it touches this table: the nightly
+`commerce_product_daily_signal.bookmarks` rollup, `bookmarks_w1`, `distinct_bookmarkers_w1` — the
+whole buyer-engagement component — and the subnet-concentration guard. A like is one tap with no
+purchase intent behind it and is trivially farmable; only a gesture that means something is allowed
+to move a score. `ENGAGEMENT_LADDER` came down to `{24, 12, 6, 3, 1}` with the switch and
+`COMMERCE_TRENDING_ALGORITHM_VERSION` went to **2**, so version-1 snapshots measured a different
+gesture and must not be compared with version-2 ones. Expect the subnet guard to sit at
+`not_measured` for a while — the bookmark population is far smaller than the like population it
+replaced, and declining to judge is the safe direction.
 
 **User-scoped, not organization-scoped**, and the reason is `commerce_organization.tradeState`: it
 starts `pending` and only a staff decision makes it `active`, so an org-keyed bookmark would put a
@@ -3290,12 +3312,13 @@ single tap behind human verification, flicker for a user in several organization
 `viewer`-role colleague empty the team's list. The real B2B need — a named, owned, permissioned
 sourcing shortlist — is its own object and is not delivered here.
 
-**`viewer` is `null` for an anonymous caller**, not `{hasSaved: false}`: "not saved" and "we do not
+**`viewer` is `null` for an anonymous caller**, not `{hasLiked: false}`: "not liked" and "we do not
 know who you are" are different facts. And **`commentCount` is absent**, because A10 has no table
 and a hardcoded zero is precisely the A13 failure this list exists to avoid.
 
-**Frontend today:** favourite and bookmark toggle the icon locally; the count never moves and nothing
-is sent.
+**Frontend today:** both toggles are wired to the routes below and write the server's returned
+counters straight into cache — nothing is optimistic. A bookmark write invalidates the wishlist
+query; a like write deliberately does not, because a like changes no list.
 
 **Rule:** counts are integers on the wire. The mock renders "3.7k" and "8.8m" as strings — the client
 formats, the server counts.
@@ -4124,8 +4147,9 @@ Verified against `src/routes/*.ts` and the mounts at `src/app.ts:171-341`:
 - `POST /commerce/products/:productId/questions`, `POST /commerce/questions/:questionId/answers`,
   and the two author deletes.
 - `GET /store/products/:productSlug/questions/:questionId/answers`, and the four engagement writes
-  `PUT|DELETE /store/products/:productSlug/save`, `.../bookmark`, `POST .../share`,
-  `POST .../view-beacon` — which mount at `/store` while owning no store table (§1.1).
+  `PUT|DELETE /store/products/:productSlug/like`, `.../bookmark`, `POST .../share`,
+  `POST .../view-beacon` — which mount at `/store` while owning no store table (§1.1). The
+  caller's own wishlist is `GET /commerce/bookmarked-products`, which takes no `kind` (A11).
 
 **Two contract drifts, and each is a wiring-day bug rather than a documentation nicety:**
 

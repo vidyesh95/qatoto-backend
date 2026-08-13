@@ -84,11 +84,11 @@ const REQUIRED_FLAG = "--i-understand-this-writes-fake-commerce-data";
 const HISTORY_DAYS = 120;
 
 /**
- * Accounts that only ever save, bookmark and share.
+ * Accounts that only ever like, bookmark and share.
  *
- * Sized so the subnet fixtures can express a real ratio: a "38 of 40 saves from one
+ * Sized so the subnet fixtures can express a real ratio: a "38 of 40 bookmarks from one
  * network" claim needs 40 users to exist, because the engagement primary key allows one
- * save per user per product.
+ * bookmark per user per product.
  */
 const ENGAGEMENT_USER_COUNT = 40;
 const MILLISECONDS_PER_DAY = 86_400_000;
@@ -1034,7 +1034,7 @@ async function seedOrdersForProduct(
 }
 
 /**
- * Views, saves and shares.
+ * Views, bookmarks and shares.
  *
  * The subnet hashes here are FABRICATED STRINGS, not real hashes — the seed has no client
  * addresses to hash and inventing an IP to feed through `computeClientSubnetHash` would
@@ -1060,7 +1060,7 @@ function fabricatedSubnetHash(label: string): string {
 async function seedEngagementForProduct(
   seedProduct: SeedProduct,
   buyerUserIds: readonly string[],
-  counters: { views: number; saves: number; shares: number },
+  counters: { views: number; bookmarks: number; shares: number },
 ): Promise<void> {
   const productId = `${ID_PREFIX}prod_${seedProduct.key}`;
 
@@ -1127,37 +1127,41 @@ async function seedEngagementForProduct(
     .where(eq(commerceProductStats.productId, productId));
 
   /*
-   * Saves: one row per user per product. The click-farm and corporate-NAT fixtures need a
-   * dense sample to express concentration at all, so they save from nearly everyone; the
-   * rest sample lightly, which is what an ordinary listing looks like.
+   * Bookmarks: one row per user per product. THE RANKING READS THIS KIND AND NOT `liked`
+   * (migration 0120), so seeding likes here would leave every fixture below the subnet
+   * guard's sample floor and score zero buyer engagement.
+   *
+   * The click-farm and corporate-NAT fixtures need a dense sample to express concentration
+   * at all, so they bookmark from nearly everyone; the rest sample lightly, which is what
+   * an ordinary listing looks like.
    */
-  const saveParticipation =
+  const bookmarkParticipation =
     seedProduct.fixture === "click_farm" || seedProduct.fixture === "corporate_nat" ? 0.95 : 0.35;
-  let savedCount = 0;
+  let bookmarkedCount = 0;
   for (const [index, buyerUserId] of buyerUserIds.entries()) {
-    if (nextRandom() > saveParticipation) continue;
+    if (nextRandom() > bookmarkParticipation) continue;
     const inserted = await db
       .insert(commerceProductEngagement)
       .values({
         productId,
         userId: buyerUserId,
-        engagementKind: "saved",
+        engagementKind: "bookmarked",
         subnetHash:
           nextRandom() < viewPlan.dominantShare
             ? dominantSubnet
-            : fabricatedSubnetHash(`${seedProduct.key}-save-${index}`),
+            : fabricatedSubnetHash(`${seedProduct.key}-bookmark-${index}`),
         createdAt: daysAgo(randomInteger(1, 25)),
       })
       .onConflictDoNothing()
       .returning({ productId: commerceProductEngagement.productId });
-    if (inserted.length > 0) savedCount += 1;
+    if (inserted.length > 0) bookmarkedCount += 1;
   }
 
   await db
     .update(commerceProductStats)
-    .set({ savedCount })
+    .set({ bookmarkedCount })
     .where(eq(commerceProductStats.productId, productId));
-  counters.saves += savedCount;
+  counters.bookmarks += bookmarkedCount;
 
   // Shares, respecting the Phase 13 rule: signed-in only, one per user per day, counted.
   let shareCount = 0;
@@ -1285,14 +1289,14 @@ async function main(): Promise<void> {
    * A POPULATION, not just the five order-placing accounts.
    *
    * `commerce_product_engagement` is keyed `(productId, userId, engagementKind)`, so one
-   * user can save a product exactly once — which means the number of saves a fixture can
+   * user can bookmark a product exactly once — which means the number of bookmarks a fixture can
    * express is bounded by the number of users that exist. With only the five buyer owners,
-   * the click-farm fixture could show "4 of 4 saves from one subnet", which is not the
+   * the click-farm fixture could show "4 of 4 bookmarks from one subnet", which is not the
    * signal it is meant to demonstrate: concentration over a sample that small is
    * indistinguishable from coincidence, and the guard's own minimum-sample rule would
    * skip it.
    *
-   * These accounts place no orders. They exist to give the save and share signals a
+   * These accounts place no orders. They exist to give the bookmark and share signals a
    * realistic population, which is what makes the subnet fixtures meaningful.
    */
   const engagementUserIds: string[] = [];
@@ -1310,12 +1314,12 @@ async function main(): Promise<void> {
     ...[...buyerByKey.values()].map((buyer) => buyer.userId),
     ...engagementUserIds,
   ];
-  const engagementCounters = { views: 0, saves: 0, shares: 0 };
+  const engagementCounters = { views: 0, bookmarks: 0, shares: 0 };
   for (const seedProduct of PRODUCTS) {
     await seedEngagementForProduct(seedProduct, buyerUserIds, engagementCounters);
   }
   console.log(
-    `  engagement: ${engagementCounters.views} views, ${engagementCounters.saves} saves, ${engagementCounters.shares} shares`,
+    `  engagement: ${engagementCounters.views} views, ${engagementCounters.bookmarks} bookmarks, ${engagementCounters.shares} shares`,
   );
 
   const [qualified] = await db

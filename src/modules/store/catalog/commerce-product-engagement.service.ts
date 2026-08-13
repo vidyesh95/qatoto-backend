@@ -6,12 +6,12 @@ import {
   commerceProductShare,
   commerceProductStats,
 } from "#src/db/schema.js";
-import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
-import type { Result } from "#src/types/index.js";
 // From `utc-day.js` and NOT `viewer-fingerprint.js`, which reads `config` at module scope:
 // this service is imported by the product read path, and a unit test of that path must not
 // need a populated environment to name a UTC day.
 import { utcDayStringOf } from "#src/lib/utc-day.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import type { Result } from "#src/types/index.js";
 /**
  * THIS MODULE TAKES PRODUCT IDS, NOT SLUGS, and deliberately does not import
  * `store-catalog.service`.
@@ -53,12 +53,14 @@ export interface EngagementRequestContext {
 export type CommerceProductEngagementError = { type: "NOT_FOUND" };
 
 export interface ProductViewerEngagement {
-  readonly hasSaved: boolean;
+  readonly hasLiked: boolean;
   readonly hasBookmarked: boolean;
 }
 
 export interface ProductEngagementProjection {
-  readonly savedCount: number;
+  /** The public like count. A reaction, not an intent — it lists nowhere. */
+  readonly likeCount: number;
+  /** How many buyers hold this in a wishlist. Also the trending score's intent signal. */
   readonly bookmarkedCount: number;
   readonly shareCount: number;
   readonly questionCount: number;
@@ -74,9 +76,9 @@ export interface ProductEngagementProjection {
    */
   readonly uniqueViewerCount: number | null;
   /**
-   * `null` for an anonymous caller, NOT `{hasSaved: false}`.
+   * `null` for an anonymous caller, NOT `{hasLiked: false}`.
    *
-   * "You have not saved this" and "we do not know who you are" are different facts,
+   * "You have not liked this" and "we do not know who you are" are different facts,
    * and a definite `false` for a signed-out visitor teaches the client to render a
    * negative it has no basis for. Same reasoning as `video_stats.uniqueViewerCount`
    * being nullable rather than defaulting to zero.
@@ -85,7 +87,7 @@ export interface ProductEngagementProjection {
 }
 
 export const EMPTY_PRODUCT_ENGAGEMENT: ProductEngagementProjection = {
-  savedCount: 0,
+  likeCount: 0,
   bookmarkedCount: 0,
   shareCount: 0,
   questionCount: 0,
@@ -115,32 +117,32 @@ export async function ensureCommerceProductStatsRow(
  * Counter deltas as literal `.set()` payloads, one per kind.
  *
  * NOT a dynamic `{ [column.name]: ... }`: drizzle's `.set()` is keyed by the TypeScript
- * property name (`savedCount`), while `column.name` is the DATABASE name
- * (`saved_count`). A computed key widens the object type enough that the compiler
+ * property name (`likeCount`), while `column.name` is the DATABASE name
+ * (`like_count`). A computed key widens the object type enough that the compiler
  * accepts the mismatch and the update silently sets nothing.
  */
 function buildEngagementCounterDelta(
   engagementKind: ProductEngagementKind,
   direction: "increment" | "decrement",
-): { savedCount: SQL } | { bookmarkedCount: SQL } {
+): { likeCount: SQL } | { bookmarkedCount: SQL } {
   const column =
-    engagementKind === "saved"
-      ? commerceProductStats.savedCount
+    engagementKind === "liked"
+      ? commerceProductStats.likeCount
       : commerceProductStats.bookmarkedCount;
   // GREATEST floors at zero: a drifted counter must not go negative and trip
-  // `commerce_product_stats_counters_non_negative_ck` on an ordinary un-save.
+  // `commerce_product_stats_counters_non_negative_ck` on an ordinary un-like.
   const delta = direction === "increment" ? sql`${column} + 1` : sql`GREATEST(${column} - 1, 0)`;
-  return engagementKind === "saved" ? { savedCount: delta } : { bookmarkedCount: delta };
+  return engagementKind === "liked" ? { likeCount: delta } : { bookmarkedCount: delta };
 }
 
 /**
- * Save or bookmark a product for the calling USER (Appendix A11).
+ * Like or bookmark a product for the calling USER (Appendix A11).
  *
  * THE NO-DOUBLE-COUNT SHAPE, taken from `setVideoSave`: insert with
  * `onConflictDoNothing().returning()` and move the counter ONLY when a row actually
  * appeared. Checking "does a row exist?" and then inserting would let two concurrent
  * taps both see nothing and both increment, permanently inflating the count for one
- * save.
+ * gesture.
  *
  * Idempotent by verb, which is why the route carries no idempotency key: a repeated
  * PUT returns the same state instead of counting twice.
@@ -182,7 +184,7 @@ export async function setProductEngagement(
   return loadSingleProductEngagement(productId, viewerUserId);
 }
 
-/** Undo a save or bookmark (Appendix A11). Idempotent: clearing twice is not an error. */
+/** Undo a like or bookmark (Appendix A11). Idempotent: clearing twice is not an error. */
 export async function clearProductEngagement(
   viewerUserId: string,
   productId: string,
@@ -321,13 +323,13 @@ export async function loadProductEngagements(
           ),
   ]);
 
-  const viewerStateByProduct = new Map<string, { hasSaved: boolean; hasBookmarked: boolean }>();
+  const viewerStateByProduct = new Map<string, { hasLiked: boolean; hasBookmarked: boolean }>();
   for (const row of viewerRows) {
     const current = viewerStateByProduct.get(row.productId) ?? {
-      hasSaved: false,
+      hasLiked: false,
       hasBookmarked: false,
     };
-    if (row.engagementKind === "saved") current.hasSaved = true;
+    if (row.engagementKind === "liked") current.hasLiked = true;
     if (row.engagementKind === "bookmarked") current.hasBookmarked = true;
     viewerStateByProduct.set(row.productId, current);
   }
@@ -337,7 +339,7 @@ export async function loadProductEngagements(
   for (const productId of productIds) {
     const stats = statsByProduct.get(productId);
     engagements.set(productId, {
-      savedCount: stats?.savedCount ?? 0,
+      likeCount: stats?.likeCount ?? 0,
       bookmarkedCount: stats?.bookmarkedCount ?? 0,
       shareCount: stats?.shareCount ?? 0,
       questionCount: stats?.questionCount ?? 0,
@@ -347,14 +349,14 @@ export async function loadProductEngagements(
       viewer:
         viewerUserId === null
           ? null
-          : (viewerStateByProduct.get(productId) ?? { hasSaved: false, hasBookmarked: false }),
+          : (viewerStateByProduct.get(productId) ?? { hasLiked: false, hasBookmarked: false }),
     });
   }
   return engagements;
 }
 
 /**
- * One page of the caller's own saved / bookmarked product IDS.
+ * One page of the caller's own BOOKMARKED product IDS — their wishlist.
  *
  * IT RETURNS IDS, NOT CARDS, and that is this module's standing rule rather than a shortcut: the
  * header above explains that importing `store-catalog.service` here would close an import cycle,
@@ -362,25 +364,30 @@ export async function loadProductEngagements(
  * The controller depends on both and is where an id becomes a card.
  *
  * WHY THE READ EXISTS AT ALL (A11). The toggles have shipped since Phase 13 and nothing ever listed
- * what they produced — a buyer could save two hundred products and had no route that would tell
+ * what they produced — a buyer could mark two hundred products and had no route that would tell
  * them which. The counters were readable per-product; the set was not readable at all.
  *
  * USER-SCOPED, matching the writes. An organization-keyed list would put a single tap behind staff
  * verification and let any `viewer`-role colleague empty the team's list; A11 records that the
  * shared sourcing shortlist is a different, named, permissioned object and is NOT this.
  *
- * `kind` ABSENT MEANS BOTH KINDS, not a default to one. Save and bookmark are independent toggles
- * with independent counters, and a caller who asks for neither is asking for everything they have
- * marked. A product marked BOTH ways appears once — `selectDistinct` over the id, because the
- * caller wants a list of products, not a list of engagements.
+ * THE KIND IS PINNED HERE, NOT PASSED IN, and that is the whole point of migration 0120. This took
+ * an optional `kind` whose absence meant BOTH kinds, so a `liked` row — a public reaction with no
+ * intent behind it — landed in the buyer's wishlist beside the products they actually meant to keep.
+ * A like is never listed back to anyone, so there is no parameter to widen and no caller that could
+ * supply one.
+ *
+ * NO DEDUPE, AND NONE IS NEEDED. The previous version deduped the page because one product could be
+ * two rows under two kinds. With the kind pinned, the primary key `(productId, userId,
+ * engagementKind)` guarantees at most one row per product, so a `Set` pass here would be dead code
+ * asserting a collision that cannot occur.
  *
  * ORDERED `(createdAt DESC, productId ASC)` — most recently marked first, which is the only order a
  * list like this is ever read in. `productId` breaks the tie so the keyset cannot drop a row when
- * two saves share a millisecond.
+ * two bookmarks share a millisecond.
  */
-export async function listSavedProductIds(input: {
+export async function listBookmarkedProductIds(input: {
   readonly userId: string;
-  readonly kind?: ProductEngagementKind;
   readonly limit: number;
   readonly cursor?: string;
 }): Promise<
@@ -398,10 +405,10 @@ export async function listSavedProductIds(input: {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
 
-  const filters: SQL[] = [eq(commerceProductEngagement.userId, input.userId)];
-  if (input.kind !== undefined) {
-    filters.push(eq(commerceProductEngagement.engagementKind, input.kind));
-  }
+  const filters: SQL[] = [
+    eq(commerceProductEngagement.userId, input.userId),
+    eq(commerceProductEngagement.engagementKind, "bookmarked"),
+  ];
   if (decodedCursor !== null) {
     const keyset = or(
       lt(commerceProductEngagement.createdAt, decodedCursor.sortKey),
@@ -431,20 +438,10 @@ export async function listSavedProductIds(input: {
       ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.productId })
       : null;
 
-  /**
-   * DEDUPED AFTER THE PAGE, not with `selectDistinct`, and the difference matters.
-   *
-   * A product marked both ways is two rows with two different `createdAt`s, so a distinct over the
-   * id alone cannot be expressed alongside this keyset — Postgres requires the ORDER BY terms in
-   * the select list. Deduping the page instead can make a page shorter than `limit`, which is
-   * already true of this endpoint for a different reason: `resolveEligibleProductCardsByIds` drops
-   * any product that is no longer eligible. `hasMore` and the cursor stay honest either way, which
-   * is what a keyset caller actually depends on.
-   */
-  const seen = new Set<string>();
-  const productIds = pageRows.flatMap((row) =>
-    seen.has(row.productId) ? [] : (seen.add(row.productId), [row.productId]),
-  );
+  // A page can still come back shorter than `limit` — `resolveEligibleProductCardsByIds` drops
+  // anything the store has withdrawn. `hasMore` and the cursor stay honest regardless, which is
+  // what a keyset caller actually depends on.
+  const productIds = pageRows.map((row) => row.productId);
 
   return { success: true, value: { productIds, page: { nextCursor, hasMore } } };
 }

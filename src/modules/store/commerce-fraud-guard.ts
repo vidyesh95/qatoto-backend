@@ -53,7 +53,7 @@ export type RankingEnforcementAction =
   | "review_queued";
 
 export interface FraudGuardInput {
-  /** Today's counted views/saves/orders exceeded their dynamic-or-floor threshold. */
+  /** Today's counted views/bookmarks/orders exceeded their dynamic-or-floor threshold. */
   readonly spikeFlagged: boolean;
   /** This product's smoothed conversion, in basis points. `null` when unmeasurable. */
   readonly productConversionRateBasisPoints: number | null;

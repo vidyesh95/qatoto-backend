@@ -48,7 +48,7 @@ import commerceCatalogRouter from "#src/modules/store/catalog/commerce-catalog.r
 import commerceCategoriesRouter from "#src/modules/store/catalog/commerce-categories.routes.js";
 import commerceMerchandisingRouter from "#src/modules/store/catalog/commerce-merchandising.routes.js";
 import commerceProductEngagementRouter, {
-  commerceSavedProductsRouter,
+  commerceBookmarkedProductsRouter,
 } from "#src/modules/store/catalog/commerce-product-engagement.routes.js";
 import commerceRankingRouter from "#src/modules/store/catalog/commerce-ranking.routes.js";
 import productsRouter from "#src/modules/store/catalog/products.routes.js";
@@ -214,13 +214,13 @@ app.use("/commerce", commerceProductInquiryRouter);
 // STORE Phase 13 — ranking transparency and the appeal path.
 app.use("/commerce", commerceRankingRouter);
 /**
- * A11. The caller's own saved / bookmarked listings.
+ * A11. The caller's own wishlist — bookmarked listings, never liked ones.
  *
  * `/commerce` and NOT `/store`, unlike the engagement WRITES it shares a module with: `/store` is
  * what a signed-out visitor browses, and this read is session-only. Declared here rather than on
  * `commerceProductEngagementRouter` so that router keeps its single `/store` mount.
  */
-app.use("/commerce", commerceSavedProductsRouter);
+app.use("/commerce", commerceBookmarkedProductsRouter);
 // STORE Phase 15 — trade attachments (A30). `/documents` collides with no other
 // commerce segment; the verification-evidence upload lives under
 // `/providers/:organizationId/evidence` and its download under

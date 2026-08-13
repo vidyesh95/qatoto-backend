@@ -23,26 +23,31 @@ import * as commerceProductEngagementController from "#src/modules/store/catalog
  * verb, and the composite primary key `(productId, userId, engagementKind)` is what
  * makes a double-tap harmless — the same rule the video like/save routes document.
  *
- * Saves are USER-scoped, so these need a session but NOT a commerce organization:
+ * `/like` AND `/bookmark` ARE NOT SYNONYMS. A like moves a public counter and nothing
+ * else; a bookmark is the buyer's wishlist and is the only kind
+ * `GET /commerce/bookmarked-products` returns. `/like` was `/save` until migration 0120,
+ * when the two stopped being the same fact.
+ *
+ * Engagement is USER-scoped, so these need a session but NOT a commerce organization:
  * an organization only becomes usable after a staff verification decision, and putting
  * a bookmark behind that would be absurd.
  */
 const commerceProductEngagementRouter = express.Router();
 
 commerceProductEngagementRouter.put(
-  "/products/:productSlug/save",
+  "/products/:productSlug/like",
   requireAuth,
   requireIdentifiedUser,
   commerceProductEngagementLimiter,
-  commerceProductEngagementController.setProductSaved,
+  commerceProductEngagementController.setProductLiked,
 );
 
 commerceProductEngagementRouter.delete(
-  "/products/:productSlug/save",
+  "/products/:productSlug/like",
   requireAuth,
   requireIdentifiedUser,
   commerceProductEngagementLimiter,
-  commerceProductEngagementController.clearProductSaved,
+  commerceProductEngagementController.clearProductLiked,
 );
 
 commerceProductEngagementRouter.put(
@@ -103,30 +108,37 @@ commerceProductEngagementRouter.post(
 );
 
 /**
- * The caller's own saved / bookmarked listings (A11).
+ * The caller's own bookmarked listings — their wishlist (A11).
+ *
+ * BOOKMARKS ONLY, AND THERE IS NO PARAMETER TO WIDEN IT. This was `/saved-products` with an
+ * optional `?kind=` whose absence meant BOTH kinds, which is how a heart tap ended up filing a
+ * product in someone's wishlist. Likes are a public counter and are never listed back to the
+ * person who made them, so a `kind` that could only legally say `bookmarked` was a parameter
+ * pretending to offer a choice. The query schema is `.strict()`, so a stale client still sending
+ * `?kind=` gets a 422 rather than a quietly different list.
  *
  * ITS OWN ROUTER, MOUNTED AT `/commerce` RATHER THAN `/store`, and the split is the same one this
  * file's header already makes for the writes. `/store` is the prefix a signed-out visitor browses;
  * a personal list is not browsable by anyone but its owner, and hanging it there would put a
  * session-only read behind a prefix whose whole posture is `attachOptionalUser`.
  *
- * `requireIdentifiedUser` MATCHES THE TOGGLES. An anonymous-session account cannot save a product,
- * so it has no list to read — and better-auth's `anonymous()` mints real sessions, which means a
- * `requireAuth`-only guard would let one through to an empty page that looks like data loss.
+ * `requireIdentifiedUser` MATCHES THE TOGGLES. An anonymous-session account cannot bookmark a
+ * product, so it has no list to read — and better-auth's `anonymous()` mints real sessions, which
+ * means a `requireAuth`-only guard would let one through to an empty page that looks like data loss.
  *
  * A READ, SO NO IDEMPOTENCY KEY and no write limiter. It carries the ordinary engagement limiter
  * because it is the one route here that fans out into a product-card resolution.
  */
-const commerceSavedProductsRouter = express.Router();
+const commerceBookmarkedProductsRouter = express.Router();
 
-commerceSavedProductsRouter.get(
-  "/saved-products",
+commerceBookmarkedProductsRouter.get(
+  "/bookmarked-products",
   requireAuth,
   requireIdentifiedUser,
   commerceProductEngagementLimiter,
-  commerceProductEngagementController.listSavedProducts,
+  commerceProductEngagementController.listBookmarkedProducts,
 );
 
-export { commerceSavedProductsRouter };
+export { commerceBookmarkedProductsRouter };
 
 export default commerceProductEngagementRouter;
