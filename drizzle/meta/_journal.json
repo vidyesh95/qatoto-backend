@@ -848,6 +848,13 @@
       "when": 1786105949394,
       "tag": "0120_store_engagement_like_rename",
       "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1786105954394,
+      "tag": "0121_store_sample_quantity_cap",
+      "breakpoints": true
     }
   ]
 }

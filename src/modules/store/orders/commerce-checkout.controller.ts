@@ -161,6 +161,14 @@ function mapCheckoutError(res: Response, error: CommerceCheckoutError): void {
         data: { productId: error.productId, minimumOrderQuantity: error.minimumOrderQuantity },
       } satisfies ApiResponse);
       return;
+    case "ABOVE_MAXIMUM_SAMPLE_QUANTITY":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "A sample line is above the maximum sample quantity for its listing.",
+        data: { productId: error.productId, maximumSampleQuantity: error.maximumSampleQuantity },
+      } satisfies ApiResponse);
+      return;
     case "INSUFFICIENT_STOCK":
       res.status(409).json({
         status: "error",

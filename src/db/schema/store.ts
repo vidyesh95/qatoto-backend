@@ -2840,6 +2840,16 @@ export const product = pgTable(
     unitOfMeasure: text("unit_of_measure"),
     samplePolicy: productSamplePolicyEnum("sample_policy").default("unavailable").notNull(),
     samplePriceInCents: integer("sample_price_in_cents"),
+    /**
+     * The ceiling on ONE sample cart/order line. A sample bypasses the tier ladder and the
+     * minimum order quantity because both express bulk economics and a sample is the negation
+     * of bulk (A17) — which only holds while a sample line stays small. Without this, a buyer
+     * orders 1,000 "samples" of a `refundable` product, takes delivery, and
+     * `mintSampleCreditsForOrder` mints a credit worth the whole line, spendable against the
+     * next order with the same seller. Defaults to 1, so a seller who never thinks about it
+     * gets Alibaba's ordinary case rather than an open door.
+     */
+    maximumSampleQuantity: integer("maximum_sample_quantity").default(1).notNull(),
     leadTimeMinDays: integer("lead_time_min_days"),
     leadTimeMaxDays: integer("lead_time_max_days"),
     /**
@@ -2906,6 +2916,9 @@ export const product = pgTable(
       sql`(sample_price_in_cents IS NULL OR sample_price_in_cents > 0)
           AND (sample_policy <> 'unavailable' OR sample_price_in_cents IS NULL)`,
     ),
+    // 20 keeps a legitimate "sample pack" expressible while keeping the cap itself from being
+    // set to a number that reopens the hole it exists to close.
+    check("product_maximum_sample_quantity_ck", sql`maximum_sample_quantity BETWEEN 1 AND 20`),
     check(
       "product_lead_time_ck",
       sql`(lead_time_min_days IS NULL AND lead_time_max_days IS NULL)

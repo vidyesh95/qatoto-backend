@@ -378,6 +378,8 @@ export interface PublicProduct {
   readonly unitOfMeasure: string | null;
   readonly samplePolicy: "unavailable" | "paid" | "refundable";
   readonly samplePriceInCents: number | null;
+  /** A17. The seller's ceiling on one sample line. Never null — the column defaults to 1. */
+  readonly maximumSampleQuantity: number;
   readonly leadTimeMinDays: number | null;
   readonly leadTimeMaxDays: number | null;
   readonly packageLengthMm: number | null;
@@ -451,6 +453,7 @@ const PRODUCT_SCALAR_COLUMNS = {
   unitOfMeasure: product.unitOfMeasure,
   samplePolicy: product.samplePolicy,
   samplePriceInCents: product.samplePriceInCents,
+  maximumSampleQuantity: product.maximumSampleQuantity,
   leadTimeMinDays: product.leadTimeMinDays,
   leadTimeMaxDays: product.leadTimeMaxDays,
   packageLengthMm: product.packageLengthMm,
@@ -575,6 +578,7 @@ function toPublicProduct(
     unitOfMeasure: row.unitOfMeasure,
     samplePolicy: row.samplePolicy,
     samplePriceInCents: row.samplePriceInCents,
+    maximumSampleQuantity: row.maximumSampleQuantity,
     leadTimeMinDays: row.leadTimeMinDays,
     leadTimeMaxDays: row.leadTimeMaxDays,
     packageLengthMm: row.packageLengthMm,
@@ -1254,6 +1258,8 @@ export async function createProduct(
             unitOfMeasure: input.unitOfMeasure ?? null,
             samplePolicy: input.samplePolicy ?? "unavailable",
             samplePriceInCents: input.samplePriceInCents ?? null,
+            // Omitted means 1, not "no ceiling" — the whole point of the column's default.
+            maximumSampleQuantity: input.maximumSampleQuantity ?? 1,
             leadTimeMinDays: input.leadTimeMinDays ?? null,
             leadTimeMaxDays: input.leadTimeMaxDays ?? null,
             packageLengthMm: input.packageLengthMm ?? null,
@@ -1379,6 +1385,8 @@ export async function updateProduct(
   if (patch.samplePolicy !== undefined) scalarUpdates.samplePolicy = patch.samplePolicy;
   if (patch.samplePriceInCents !== undefined)
     scalarUpdates.samplePriceInCents = patch.samplePriceInCents;
+  if (patch.maximumSampleQuantity !== undefined)
+    scalarUpdates.maximumSampleQuantity = patch.maximumSampleQuantity;
   if (patch.leadTimeMinDays !== undefined) scalarUpdates.leadTimeMinDays = patch.leadTimeMinDays;
   if (patch.leadTimeMaxDays !== undefined) scalarUpdates.leadTimeMaxDays = patch.leadTimeMaxDays;
   if (patch.packageLengthMm !== undefined) scalarUpdates.packageLengthMm = patch.packageLengthMm;

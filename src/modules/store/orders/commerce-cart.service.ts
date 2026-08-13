@@ -60,6 +60,13 @@ export type CommerceCartError =
   | { type: "CUSTOMIZATION_REJECTED"; customizationError: CommerceCustomizationError }
   /** A17. The listing does not sell a sample, so a sample line can never be bought. */
   | { type: "SAMPLE_NOT_AVAILABLE" }
+  /**
+   * A17. More samples than the listing offers. Top-level like SAMPLE_NOT_AVAILABLE and
+   * unlike BELOW_MINIMUM_ORDER_QUANTITY, and the difference is which direction the buyer
+   * can move: a MOQ shortfall resolves by adding more, so it is advisory at cart time; a
+   * line above the sample cap is invalid at every later moment too.
+   */
+  | { type: "ABOVE_MAXIMUM_SAMPLE_QUANTITY"; maximumSampleQuantity: number }
   | { type: "ORGANIZATION_NOT_ACTIVE" };
 
 export interface CommerceCartActorContext {
@@ -83,6 +90,13 @@ export interface CommerceCartItemProjection {
   readonly lineTotalInCents: number | null;
   readonly isMadeToOrder: boolean | null;
   readonly minimumOrderQuantity: number | null;
+  /**
+   * A17. The ceiling on this line, and null on every bulk line — a bulk line has a floor,
+   * not a ceiling. Also null on a SAMPLE line that failed to price, for the same reason
+   * `minimumOrderQuantity` is: a line we could not price has no term to report, and a
+   * fabricated ceiling is worse than none.
+   */
+  readonly maximumSampleQuantity: number | null;
   readonly stockState?: StoreStockState;
   readonly pricingError?: CommercePricingError;
 }
@@ -440,6 +454,7 @@ export async function getCart(
         lineTotalInCents: null,
         isMadeToOrder: null,
         minimumOrderQuantity: null,
+        maximumSampleQuantity: null,
         pricingError: priced.error,
       });
       continue;
@@ -457,6 +472,7 @@ export async function getCart(
       lineTotalInCents: priced.value.lineTotalInCents,
       isMadeToOrder: priced.value.isMadeToOrder,
       minimumOrderQuantity: priced.value.minimumOrderQuantity,
+      maximumSampleQuantity: priced.value.maximumSampleQuantity,
       stockState: stockStateFromPricedLine(priced.value),
     });
 
@@ -532,6 +548,7 @@ export async function setCartItem(
         .select({
           samplePolicy: product.samplePolicy,
           samplePriceInCents: product.samplePriceInCents,
+          maximumSampleQuantity: product.maximumSampleQuantity,
         })
         .from(product)
         .where(eq(product.id, productId))
@@ -548,6 +565,18 @@ export async function setCartItem(
          * line, it is an unbuyable request, and it can never become buyable.
          */
         return { status: "sample_not_available" as const };
+      }
+      if (sampleRow && quantity > sampleRow.maximumSampleQuantity) {
+        /**
+         * A17. Refused here for the same reason, and NOT left advisory the way a MOQ
+         * shortfall is. The quantity the buyer asked for can never become valid, so
+         * storing it would leave a number sitting in the cart looking accepted until
+         * checkout — and on a `refundable` listing the number is what sizes the credit.
+         */
+        return {
+          status: "above_maximum_sample_quantity" as const,
+          maximumSampleQuantity: sampleRow.maximumSampleQuantity,
+        };
       }
     }
 
@@ -643,6 +672,14 @@ export async function setCartItem(
       return { success: false, error: { type: "VARIANT_NOT_PURCHASABLE" } };
     case "sample_not_available":
       return { success: false, error: { type: "SAMPLE_NOT_AVAILABLE" } };
+    case "above_maximum_sample_quantity":
+      return {
+        success: false,
+        error: {
+          type: "ABOVE_MAXIMUM_SAMPLE_QUANTITY",
+          maximumSampleQuantity: outcome.maximumSampleQuantity,
+        },
+      };
     case "customization_rejected":
       return {
         success: false,
@@ -666,11 +703,18 @@ export async function setCartItem(
  * A1: with variants, one product can occupy several lines. Naming a variant removes
  * that line; omitting one removes every line for the product, which is what
  * "remove this product from my cart" means.
+ *
+ * A17: `isSample` narrows the same way and for a sharper reason. The uniqueness index has
+ * carried `is_sample` since 0061 precisely so a sample line and a bulk line of one product
+ * can coexist — and until this parameter existed, removing either one deleted both, which
+ * made the pair unusable. NULL keeps the "remove this product" meaning; `true` or `false`
+ * removes only lines of that kind.
  */
 export async function removeCartItem(
   actor: CommerceCartActorContext,
   productId: string,
   requestedVariantId: string | null = null,
+  requestedIsSample: boolean | null = null,
 ): Promise<Result<CommerceCartProjection, CommerceCartError>> {
   const outcome = await db.transaction(async (transaction) => {
     const organizationCanHoldCart = await assertOrganizationCanHoldCart(
@@ -696,6 +740,9 @@ export async function removeCartItem(
           requestedVariantId === null
             ? undefined
             : eq(commerceCartProductLine.variantId, requestedVariantId),
+          requestedIsSample === null
+            ? undefined
+            : eq(commerceCartProductLine.isSample, requestedIsSample),
         ),
       )
       .returning({ id: commerceCartProductLine.id });
@@ -710,7 +757,14 @@ export async function removeCartItem(
       actorMemberRoleSnapshot: actor.memberRole,
       targetEntityType: "commerce_cart_product_line",
       targetEntityId: productId,
-      payload: { cartId: cart.id, productId, variantId: requestedVariantId ?? "" },
+      payload: {
+        cartId: cart.id,
+        productId,
+        variantId: requestedVariantId ?? "",
+        // "" means unnarrowed — every line for this product went, sample and bulk alike.
+        isSample: requestedIsSample === null ? "" : String(requestedIsSample),
+        removedLineCount: String(deletedLines.length),
+      },
       occurredAt: now,
     });
 

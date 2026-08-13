@@ -58,7 +58,22 @@ export const SetCartItemSchema = z
 /**
  * Naming a variant removes that line; omitting one removes every line for the
  * product, which is what "remove this product from my cart" means.
+ *
+ * A17. `isSample` narrows the same way, and it has to exist: a buyer holding a sample line
+ * AND a bulk line of one product is the entire pattern samples exist for, and without this
+ * the Remove control on either row deleted both. Omitting it keeps the "remove this product"
+ * meaning, so the old two-parameter call is unchanged.
+ *
+ * `z.enum(["true","false"]).transform(...)`, NOT `z.coerce.boolean()` — `Boolean("false")` is
+ * `true`, so coercion would make `?isSample=false` delete the sample line. The reasoning is
+ * written out at `src/modules/store/storefront/store-reviews.schemas.ts`.
  */
 export const RemoveCartItemQuerySchema = z
-  .object({ variantId: z.string().trim().min(1).max(200).optional() })
+  .object({
+    variantId: z.string().trim().min(1).max(200).optional(),
+    isSample: z
+      .enum(["true", "false"])
+      .transform((rawValue) => rawValue === "true")
+      .optional(),
+  })
   .strict();

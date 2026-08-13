@@ -103,6 +103,12 @@ export type CommerceCheckoutError =
   | { type: "ESCROW_SESSION_FAILED"; sellerOrganizationId: string; reason: string }
   | { type: "PRODUCT_NOT_PURCHASABLE"; productId: string }
   | { type: "BELOW_MINIMUM_ORDER_QUANTITY"; productId: string; minimumOrderQuantity: number }
+  /**
+   * A17. Reachable at prepare and confirm even though the cart refuses it on the way in: a
+   * seller may lower the cap after the line was stored, and confirm re-prices from scratch
+   * for exactly this class of drift.
+   */
+  | { type: "ABOVE_MAXIMUM_SAMPLE_QUANTITY"; productId: string; maximumSampleQuantity: number }
   | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
   /**
    * A1. Distinct from `PRODUCT_NOT_PURCHASABLE` because the product IS purchasable —
@@ -282,6 +288,12 @@ function mapPricingErrorToCheckoutError(
       return { type: "VARIANT_NOT_PURCHASABLE", productId };
     case "SAMPLE_NOT_AVAILABLE":
       return { type: "SAMPLE_NOT_AVAILABLE", productId };
+    case "ABOVE_MAXIMUM_SAMPLE_QUANTITY":
+      return {
+        type: "ABOVE_MAXIMUM_SAMPLE_QUANTITY",
+        productId,
+        maximumSampleQuantity: error.maximumSampleQuantity,
+      };
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce pricing error: ${JSON.stringify(exhaustiveCheck)}`);

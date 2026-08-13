@@ -130,6 +130,17 @@ function mapCartError(res: Response, error: CommerceCartError): void {
         data: { minimumOrderQuantity: error.minimumOrderQuantity },
       } satisfies ApiResponse);
       return;
+    // 409 to match its mirror image above: the quantity conflicts with a commercial term
+    // the listing currently states, and a seller who raises the cap makes the same request
+    // succeed unchanged.
+    case "ABOVE_MAXIMUM_SAMPLE_QUANTITY":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "Quantity is above the maximum sample quantity for this listing.",
+        data: { maximumSampleQuantity: error.maximumSampleQuantity },
+      } satisfies ApiResponse);
+      return;
     case "INSUFFICIENT_STOCK":
       res.status(409).json({
         status: "error",
@@ -253,6 +264,7 @@ export async function removeCartItem(req: Request, res: Response): Promise<void>
     actor,
     params.data.productId,
     query.data.variantId ?? null,
+    query.data.isSample ?? null,
   );
   if (!result.success) {
     mapCartError(res, result.error);

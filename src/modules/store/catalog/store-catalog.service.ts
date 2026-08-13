@@ -189,6 +189,11 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
   readonly countryOfOriginCode: string | null;
   readonly unitOfMeasure: string | null;
   readonly samplePriceInCents: number | null;
+  /**
+   * A17. The ceiling on one sample line, so the PDP's sample control stops where the cart
+   * would refuse rather than sending a quantity the server will reject.
+   */
+  readonly maximumSampleQuantity: number;
   readonly packaging: StorePackagingProjection;
   /** Shared gallery. Variant-scoped media lives on the variant, not here. */
   readonly images: readonly StoreProductMediaProjection[];
@@ -1106,6 +1111,7 @@ export async function getPublicProductBySlug(
       countryOfOriginCode: product.countryOfOriginCode,
       unitOfMeasure: product.unitOfMeasure,
       samplePriceInCents: product.samplePriceInCents,
+      maximumSampleQuantity: product.maximumSampleQuantity,
       packageLengthMm: product.packageLengthMm,
       packageWidthMm: product.packageWidthMm,
       packageHeightMm: product.packageHeightMm,
@@ -1295,6 +1301,7 @@ export async function getPublicProductBySlug(
       countryOfOriginCode: row.countryOfOriginCode,
       unitOfMeasure: row.unitOfMeasure,
       samplePriceInCents: row.samplePriceInCents,
+      maximumSampleQuantity: row.maximumSampleQuantity,
       packaging: {
         packageLengthMm: row.packageLengthMm,
         packageWidthMm: row.packageWidthMm,

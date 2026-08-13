@@ -82,6 +82,12 @@ export const productFieldShapes = {
   unitOfMeasure: z.string().trim().min(1).max(40).optional(),
   samplePolicy: z.enum(["unavailable", "paid", "refundable"]).optional(),
   samplePriceInCents: z.number().int().positive().optional(),
+  /**
+   * A17. How many samples one line may hold. Bounded at 20 to match
+   * `product_maximum_sample_quantity_ck`: a cap large enough to reopen the hole it exists
+   * to close is not a cap. Omitted leaves the column default of 1.
+   */
+  maximumSampleQuantity: z.number().int().min(1).max(20).optional(),
   leadTimeMinDays: z.number().int().min(0).max(3650).optional(),
   leadTimeMaxDays: z.number().int().min(0).max(3650).optional(),
   /**
