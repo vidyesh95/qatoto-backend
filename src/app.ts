@@ -19,6 +19,7 @@ import engagementRouter, {
   commentRouter,
   creatorRouter,
 } from "#src/modules/home/engagement/engagement.routes.js";
+import watchHistoryRouter from "#src/modules/home/engagement/watch-history.routes.js";
 import feedRouter from "#src/modules/home/feed/feed.routes.js";
 import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
@@ -347,6 +348,12 @@ app.use("/videos", engagementRouter);
 // owning video would make the client assert a pairing the server re-checks anyway.
 app.use("/", commentRouter);
 app.use("/", creatorRouter);
+// The viewer's own watch history, on its own prefix rather than inside engagementRouter.
+// That router mounts at "/videos" behind the studio router, so its clear-all would have
+// to be a single-segment `DELETE /videos/watch-history` — permanently shadowed by
+// `GET /:videoId`, exactly as the note above describes. The collection is the viewer's
+// anyway, and only one of its three routes names a video.
+app.use("/watch-history", watchHistoryRouter);
 app.use("/playlists", playlistsRouter);
 app.use("/series", seriesRouter);
 // Cross-project R&D resources (/open-roles, /research-categories) mount at the root,

@@ -91,6 +91,19 @@ export interface FeedVideoItem {
   };
   /** Always false (§5.3). Nothing backs live streaming and this doc says so. */
   readonly isChannelLive: false;
+  /**
+   * When this viewer last started watching, and PRESENT ONLY ON `mode=watched`.
+   *
+   * OPTIONAL RATHER THAN `Date | null`, because absence here is not a fact about the
+   * viewer. On `mode=all` the question was never asked; a `null` would claim "never
+   * watched", which the feed has no idea about and did not look up.
+   *
+   * It is `max(first_beacon_at)` over the viewer's un-hidden counted sessions — the
+   * same expression `orderByClause` sorts on, and they must stay the same expression:
+   * the client groups this list into date headers in one pass, so a value that
+   * disagrees with the sort key makes a date group end and then reappear further down.
+   */
+  readonly watchedAt?: Date;
 }
 
 export interface ListFeedVideosInput {
@@ -496,6 +509,7 @@ function candidatePoolPredicate(input: {
       SELECT 1 FROM video_view_session AS ws
       WHERE ws.video_id = v.id
         AND ws.is_counted_view
+        AND ws.hidden_from_history_at IS NULL
         AND ${viewerMatch}
         AND ws.first_beacon_at > now() - make_interval(days => ${ALREADY_WATCHED_EXCLUSION_DAYS})
     )`);
@@ -529,6 +543,14 @@ type FeedRow = {
   readonly is_subscribed_to_creator: boolean;
   readonly category_slugs: readonly string[] | null;
   readonly category_labels: readonly string[] | null;
+  /**
+   * SELECTED ONLY BY `mode=watched` — the lateral join that supplies it exists in no
+   * other query, so this is `undefined` (key absent) everywhere else rather than null.
+   *
+   * A string at runtime for the same reason as `published_at` above; `utcDateFromRow`
+   * is the conversion. Do not declare it `Date`.
+   */
+  readonly watched_at?: string | Date | null;
 };
 
 type TotalRow = { readonly total: number };
@@ -567,11 +589,26 @@ function toFeedVideoItem(row: FeedRow): FeedVideoItem {
       isSubscribedToCreator: row.is_subscribed_to_creator,
     },
     isChannelLive: false,
+    // KEY-PRESENT-OR-ABSENT, never a null. `watched_at` is selected by exactly one query
+    // (`mode=watched`), so `undefined` here means nobody asked — see the field's own note
+    // on `FeedVideoItem`. `JSON.stringify` drops the key entirely, which is the contract
+    // the frontend's `watchedAt: z.iso.datetime().optional()` parses.
+    ...(row.watched_at === undefined || row.watched_at === null
+      ? {}
+      : { watchedAt: utcDateFromRow(row.watched_at) ?? undefined }),
   };
 }
 
-/** The per-viewer flags and the card's own columns. Shared by every mode. */
-function feedSelectClause(viewerUserId: string | null): SQL {
+/**
+ * The per-viewer flags and the card's own columns. Shared by every mode and by search.
+ *
+ * `isWatchHistory` appends `watched.watched_at`, and it is a parameter rather than
+ * something read off the mode because the `watched` alias only exists in ONE query —
+ * the `mode=watched` page read, which is the only one that adds the lateral join.
+ * Selecting it unconditionally is a `relation "watched" does not exist` on every other
+ * call, including search.
+ */
+function feedSelectClause(viewerUserId: string | null, isWatchHistory = false): SQL {
   const viewerFlag = (tableName: SQL, userColumn: SQL): SQL =>
     viewerUserId === null
       ? sql`false`
@@ -611,6 +648,7 @@ function feedSelectClause(viewerUserId: string | null): SQL {
       FROM video_category AS vc JOIN content_category AS cc ON cc.id = vc.category_id
       WHERE vc.video_id = v.id
     ) AS category_labels
+    ${isWatchHistory ? sql`, watched.watched_at AS watched_at` : sql``}
   `;
 }
 
@@ -707,12 +745,13 @@ export async function listFeedVideos(
             WHERE ws.video_id = v.id
               AND ws.viewer_id = ${input.viewerUserId}
               AND ws.is_counted_view
+              AND ws.hidden_from_history_at IS NULL
           ) AS watched ON true`
         : sql``;
 
     const [pageResult, totalResult] = await Promise.all([
       db.execute<FeedRow>(sql`
-        SELECT ${feedSelectClause(input.viewerUserId)}
+        SELECT ${feedSelectClause(input.viewerUserId, input.mode === "watched")}
         FROM video AS v
         JOIN "user" AS u ON u.id = v.creator_id
         LEFT JOIN video_stats AS vs ON vs.video_id = v.id
@@ -802,9 +841,16 @@ function modeSpecificPredicate(input: ListFeedVideosInput): SQL | null {
     case "trending":
       return sql`vs.trending_rank IS NOT NULL`;
     case "watched":
+      // `hidden_from_history_at IS NULL` must match the lateral join's copy of this
+      // predicate exactly. THIS one is also what the count query runs — the lateral is
+      // only in the page query — so a mismatch would leave `pagination.total` counting
+      // rows the page can never show, and the last page would come back empty.
       return sql`EXISTS (
         SELECT 1 FROM video_view_session AS ws
-        WHERE ws.video_id = v.id AND ws.viewer_id = ${input.viewerUserId} AND ws.is_counted_view
+        WHERE ws.video_id = v.id
+          AND ws.viewer_id = ${input.viewerUserId}
+          AND ws.is_counted_view
+          AND ws.hidden_from_history_at IS NULL
       )`;
     case "new_to_you": {
       // §4.8: creators the viewer has already watched are excluded outright, and the
@@ -817,12 +863,16 @@ function modeSpecificPredicate(input: ListFeedVideosInput): SQL | null {
         input.viewerUserId !== null
           ? sql`ws.viewer_id = ${input.viewerUserId}`
           : sql`ws.viewer_fingerprint = ${input.viewerFingerprint}`;
+      // Hidden sessions do not count as having watched the creator either: a viewer who
+      // clears their whole history and then sees the same creators surface as "new to
+      // you" has been told the clear did nothing.
       return sql`NOT EXISTS (
         SELECT 1 FROM video_view_session AS ws
         JOIN video AS wv ON wv.id = ws.video_id
         WHERE wv.creator_id = v.creator_id
           AND ${viewerMatch}
           AND ws.is_counted_view
+          AND ws.hidden_from_history_at IS NULL
       )`;
     }
     case "all":

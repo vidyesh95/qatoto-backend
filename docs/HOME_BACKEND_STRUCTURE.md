@@ -502,6 +502,20 @@ operational fact about the catalog, not something a client should branch on.
 | `new_to_you`        | `all`, with creators the viewer has already watched excluded and the exploration budget raised to 40.                                                                            |
 | `watched`           | The viewer's own counted-view history, most recent first. **401 when anonymous** — serving it off a fingerprint would leak one person's history to everyone behind the same NAT. |
 
+**`watched` is the only mode that returns `watchedAt`**, and the field is OPTIONAL rather than
+nullable on `FeedVideoItem`. It is `max(first_beacon_at)` over the viewer's un-hidden counted
+sessions — the same expression the mode sorts by, and they must stay the same expression, since
+the client groups the list into date headers in one pass over the sorted rows. On every other
+mode the key is absent, because the question was never asked; a `null` there would claim "never
+watched", which the feed did not look up.
+
+**Hidden sessions are invisible to every per-row "has this viewer watched this" question**:
+`mode=watched`, §4.5's already-watched exclusion, and §4.8's new-to-you creator exclusion all
+filter `hidden_from_history_at IS NULL`. So removing a video from history makes it recommendable
+again, and clearing history resets the new-to-you exclusion — both deliberate. The nightly
+affinity snapshots do NOT filter it; they are aggregates on a schedule, so a hide reaches them on
+the next run at the earliest.
+
 ---
 
 ## 5. Routes
@@ -591,6 +605,50 @@ not post twice.
 
 `GET /feed/watch/:videoId` is the public watch payload. It replaces the frontend's legacy
 `src/lib/videos.ts` / `QATOTO_VIDEO_API_URL` path entirely (frontend §8).
+
+### 5.2a Watch history — `src/modules/home/engagement/watch-history.routes.ts`
+
+The write half of `mode=watched`: a viewer editing their own history, behind `/history`.
+
+| Method   | Path                            | Auth     | Limiter               |
+| -------- | ------------------------------- | -------- | --------------------- |
+| `DELETE` | `/watch-history/videos/:videoId` | required | `watchHistoryLimiter` |
+| `PUT`    | `/watch-history/videos/:videoId` | required | `watchHistoryLimiter` |
+| `DELETE` | `/watch-history`                | required | `watchHistoryLimiter` |
+
+`DELETE` on a video removes it; `PUT` is Undo. The verb pair on one path is the like/save idiom —
+one nullable column with two states, so both directions are idempotent. Clear-all has no undo:
+there is no per-call marker to reverse by, and "restore everything hidden" would also resurrect
+every card the viewer removed on purpose over the previous 90 days.
+
+> **ITS OWN ROUTER AND ITS OWN MOUNT, NOT `engagementRouter`.** That router mounts at `/videos`
+> after the studio router, so every route in it must be two segments deep or more (§5.2, and
+> `engagement.routes.order.test.ts`). Clear-all there would be `DELETE /videos/watch-history` —
+> single-segment, permanently shadowed by `GET /:videoId`, failing as a 401 that reads as an auth
+> bug. The collection is the viewer's anyway, not a video's.
+>
+> **EVERY WRITE IS A STAMP ON `hidden_from_history_at`, NEVER A `DELETE`, AND THAT IS A VIEW-COUNT
+> EXPLOIT.** `video_view_session_unq (video_id, viewer_fingerprint, view_day_bucket)` is the
+> anti-replay mechanism: the beacon inserts with `onConflictDoNothing`, so one viewer gets at most
+> one countable session per video per UTC day. `video_stats.view_count` is incremental, bumped once
+> at the `is_counted_view` flip, and §6's prune states the increment cannot be walked back. Delete a
+> row on user request and the loop reopens — remove, re-watch the same day, the unique key no longer
+> collides, a fresh row inserts, `view_count` increments again, repeat. The beacon limiters bound
+> the rate; they do not close it. This is the same reasoning that makes §8.1's outlier prune zero
+> and clear the flag rather than delete.
+>
+> **No error union, and no 404.** All three writes are scoped to `req.user.id` in the `WHERE`
+> clause, so there is no ownership check to forget, and an unknown or never-watched `videoId`
+> matches zero rows — which is the state the caller asked for. A 404 would also let any signed-in
+> caller probe which uuids are real videos, which §5.4's status policy exists to prevent.
+>
+> Responses count SESSION ROWS, not cards: one video watched across three UTC days is three rows
+> and one card. Hence `hiddenSessionCount` / `restoredSessionCount` / `clearedSessionCount` — so
+> nobody renders "Cleared 41 videos" from a number that does not mean that.
+>
+> `PUT` returning `restoredSessionCount: 0` is a real answer the client must respect: the rows may
+> have aged past the 90-day prune between the hide and the undo, in which case the card is gone for
+> good.
 
 ### 5.3 `live` is not a mode
 

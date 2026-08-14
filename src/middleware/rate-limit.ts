@@ -1060,6 +1060,23 @@ export const videoSaveLimiter = createLimiter({
 });
 
 /**
+ * PUT · DELETE /watch-history/videos/:videoId, and DELETE /watch-history.
+ *
+ * Same budget as like and save, and for the same reason: both verbs are idempotent —
+ * they stamp or clear a nullable column — so this bounds scripted churn, not a viewer
+ * tidying up a long history one card at a time.
+ *
+ * Clear-all shares the bucket rather than getting a tighter one of its own. It is a
+ * single UPDATE over one viewer's rows and repeating it is a no-op after the first, so
+ * there is nothing a separate budget would protect.
+ */
+export const watchHistoryLimiter = createLimiter({
+  namespace: "watchHistory",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
  * POST /videos/:videoId/share.
  *
  * Tighter than like/save because a share APPENDS a row rather than toggling one, and

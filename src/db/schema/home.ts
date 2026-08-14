@@ -156,6 +156,37 @@ export const videoViewSession = pgTable(
     // elapsed seconds, and phase 3's 48-hour view-velocity window scans first_beacon_at.
     firstBeaconAt: timestamp("first_beacon_at", { precision: 3 }).defaultNow().notNull(),
     lastBeaconAt: timestamp("last_beacon_at", { precision: 3 }).defaultNow().notNull(),
+    /**
+     * When the viewer removed this session from their own watch history. NULL means
+     * visible, which is every row until someone asks otherwise.
+     *
+     * A HIDE, AND DELIBERATELY NOT A DELETE — the distinction is a view-count exploit.
+     * `video_view_session_unq` (video, fingerprint, day) IS the anti-replay mechanism,
+     * and `video_stats.view_count` is an incremental counter bumped once when
+     * `is_counted_view` flips. `prune-engagement-data.ts` says outright that the
+     * increment "cannot be walked back from here". So deleting a row on user request
+     * reopens the window: remove from history, re-watch the same video the same day,
+     * `is_counted_view` flips a second time, `view_count` increments again, repeat. The
+     * beacon limiters cap the rate of that; they do not close it.
+     *
+     * Stamping instead leaves the unique key, the counters and the 90-day prune exactly
+     * as they were, and re-watching a hidden video makes it visible again on its own —
+     * which is the behaviour a viewer expects anyway.
+     *
+     * Read by every PER-ROW "has this viewer watched this" question — the `mode=watched`
+     * listing, §4.5's already-watched exclusion, §4.8's new-to-you creator exclusion —
+     * all of which filter `IS NULL`. That means hiding a video makes it recommendable
+     * again, which is deliberate and is what clearing history does elsewhere.
+     *
+     * It must NEVER reach counting or fraud: `is_counted_view`, `video_stats`, the
+     * unique key and the §8.1 outlier prune all ignore it, because a viewer's display
+     * preference is not evidence about whether a view happened.
+     *
+     * The nightly affinity snapshots (`affinity-score.ts`) also ignore it — they are
+     * aggregates recomputed on a schedule, not per-row reads, so a hide shows up there
+     * on the next run at the earliest. Worth knowing before someone reports it as a bug.
+     */
+    hiddenFromHistoryAt: timestamp("hidden_from_history_at", { precision: 3 }),
   },
   (table) => [
     uniqueIndex("video_view_session_unq").on(
@@ -167,12 +198,16 @@ export const videoViewSession = pgTable(
     // the last 7 days?", so a logged-out feed responds after two or three watches
     // instead of staying a flat popularity list forever.
     index("video_view_session_fingerprint_idx").on(table.viewerFingerprint, table.viewDayBucket),
-    // §4.5's "exclude anything this viewer already watched in the last 30 days".
-    // Partial, because the candidate pool only ever asks about counted views by a
-    // signed-in viewer, and that is a small fraction of the table.
+    // §4.5's "exclude anything this viewer already watched in the last 30 days", and
+    // the `mode=watched` history listing. Partial, because both only ever ask about
+    // counted views by a signed-in viewer, and that is a small fraction of the table.
+    //
+    // `hidden_from_history_at IS NULL` is in the predicate because it is in BOTH those
+    // queries — a hidden row is not history and is not an exclusion. Any new query that
+    // wants this index has to carry the same three clauses or Postgres will not use it.
     index("video_view_session_viewer_idx")
       .on(table.viewerId, table.videoId, table.firstBeaconAt)
-      .where(sql`viewer_id IS NOT NULL AND is_counted_view`),
+      .where(sql`viewer_id IS NOT NULL AND is_counted_view AND hidden_from_history_at IS NULL`),
     // §4.1 view velocity: counted views in the first 48 hours.
     index("video_view_session_video_idx").on(table.videoId, table.firstBeaconAt),
     check(
