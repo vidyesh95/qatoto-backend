@@ -21,10 +21,12 @@ const catalogStubs = vi.hoisted(() => ({
 }));
 
 const searchStubs = vi.hoisted(() => ({
-  searchStoreDocuments: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  // A39. Both take ONE filter object, so the arguments the two received compare directly —
+  // see the facets test below, which is the whole reason this shape is spelled out.
+  searchStoreDocuments: vi.fn<(filters: Record<string, unknown>) => unknown>(),
   // A39. `/store/search` now answers counts beside its results, so every suite that mocks
   // this module must provide it or the route resolves `undefined` as a function.
-  computeStoreSearchFacets: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  computeStoreSearchFacets: vi.fn<(filters: Record<string, unknown>) => unknown>(),
 }));
 
 const merchandisingStubs = vi.hoisted(() => ({
@@ -333,7 +335,7 @@ describe("public store routes", () => {
     const searchArguments = searchStubs.searchStoreDocuments.mock.calls[0]?.[0];
     const facetArguments = searchStubs.computeStoreSearchFacets.mock.calls[0]?.[0];
     expect(facetArguments).toEqual(expect.objectContaining({ query: "chair", stockState: "in_stock" }));
-    expect(searchArguments).toEqual(expect.objectContaining(facetArguments as object));
+    expect(searchArguments).toEqual(expect.objectContaining(facetArguments ?? {}));
   });
 
   /** A25. Without this a breadcrumb over a nested category costs one request per level. */

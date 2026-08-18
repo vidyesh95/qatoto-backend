@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { z } from "zod";
 
 /**
  * The signed-in caller a route-level test speaks as, or `null` for a signed-out one.
@@ -7,13 +8,19 @@ import { vi } from "vitest";
  * close over a per-test variable; instead the factory reads this box at call time and each
  * test sets it. `signInAs`/`signOut` are the only writers.
  */
-interface StubbedSessionUser {
-  readonly id: string;
-  readonly email: string;
-  readonly name: string;
-  readonly emailVerified: boolean;
-  readonly handle: string | null;
-}
+const StubbedSessionUserSchema = z
+  .object({
+    id: z.string(),
+    email: z.string(),
+    name: z.string(),
+    emailVerified: z.boolean(),
+    handle: z.string().nullable(),
+  })
+  .readonly();
+export type StubbedSessionUser = z.infer<typeof StubbedSessionUserSchema>;
+
+/** What the stamped header carries: a caller, or `null` for a signed-out one. */
+const StampedSessionSchema = StubbedSessionUserSchema.nullable();
 
 let currentSessionUser: StubbedSessionUser | null = null;
 
@@ -88,20 +95,24 @@ export function authModuleMock(): Record<string, unknown> {
   return {
     auth: {
       api: {
-        getSession: vi.fn(async (options?: { readonly headers?: { get?: unknown } }) => {
-          const get = options?.headers?.get;
-          const stamped =
-            typeof get === "function"
-              ? (get.call(options?.headers, TEST_SESSION_HEADER) as string | null)
-              : null;
+        getSession: vi.fn(
+          async (options?: {
+            readonly headers?: { readonly get?: (name: string) => string | null };
+          }) => {
+            const stamped = options?.headers?.get?.(TEST_SESSION_HEADER) ?? null;
+            const parsedStampedSession =
+              stamped === null ? null : StampedSessionSchema.safeParse(JSON.parse(stamped));
 
-          const user =
-            stamped === null || stamped === undefined
-              ? currentSessionUser
-              : (JSON.parse(stamped) as StubbedSessionUser | null);
+            const user =
+              parsedStampedSession === null
+                ? currentSessionUser
+                : parsedStampedSession.success
+                  ? parsedStampedSession.data
+                  : null;
 
-          return user === null ? null : { user, session: { id: "session_test" } };
-        }),
+            return user === null ? null : { user, session: { id: "session_test" } };
+          },
+        ),
       },
       handler: vi.fn(),
     },

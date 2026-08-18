@@ -65,6 +65,14 @@ function readBuckets(facets: Record<string, unknown>, key: string): readonly Fac
   });
 }
 
+/** A facet's buckets as one order-independent string, so two facet lists compare by value. */
+function bucketsAsText(buckets: readonly FacetBucket[]): string {
+  return buckets
+    .map((bucket) => `${bucket.value}=${String(bucket.count)}`)
+    .toSorted()
+    .join(",");
+}
+
 interface SearchAnswer {
   readonly status: number;
   readonly itemCount: number;
@@ -258,12 +266,6 @@ async function main(): Promise<void> {
     return typeof slug === "string" ? [slug] : [];
   });
 
-  const asText = (buckets: readonly FacetBucket[]): string =>
-    buckets
-      .map((bucket) => `${bucket.value}=${String(bucket.count)}`)
-      .toSorted()
-      .join(",");
-
   /**
    * THE FIRST CATEGORY THAT ACTUALLY HOLDS SOMETHING, not simply the first one listed. Taking
    * `items[0]` compared an empty facet list to an empty facet list and passed — the shape of
@@ -280,14 +282,14 @@ async function main(): Promise<void> {
     });
     const categoryBody = asRecord(await categoryResponse.json().catch(() => ({})));
     const categoryFacets = asRecord(asRecord(categoryBody["data"])["facets"]);
-    const fromCategory = asText(readBuckets(categoryFacets, "stockStates"));
+    const fromCategory = bucketsAsText(readBuckets(categoryFacets, "stockStates"));
     if (fromCategory === "") continue;
 
     const searchInCategory = await search({ category: slug, documentKind: "product" });
     comparedCategory = {
       slug,
       fromCategory,
-      fromSearch: asText(readBuckets(searchInCategory.facets, "stockStates")),
+      fromSearch: bucketsAsText(readBuckets(searchInCategory.facets, "stockStates")),
     };
     break;
   }
