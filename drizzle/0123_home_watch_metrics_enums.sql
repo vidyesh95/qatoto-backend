@@ -1,0 +1,23 @@
+-- ---------------------------------------------------------------------------
+-- §3.3a enums — the one audited READ in the platform chain.
+--
+-- HAND-WRITTEN, like every migration since 0046.
+--
+-- ENUM-ONLY, AND THAT SPLIT IS THE POINT. `drizzle-kit migrate` runs every pending migration
+-- in ONE transaction, where a value added by `ALTER TYPE ... ADD VALUE` cannot yet be used as
+-- a literal. 0124 does not name this value in a predicate today, but the split is kept anyway
+-- so the next reader does not have to work out which of the two cases they are in before they
+-- can add a WHERE clause.
+--
+-- WHY A READ EARNS AN AUDIT ENTRY AT ALL. Every other kind in `platform_audit_event_kind`
+-- records a WRITE, because a chain of reads is a chain nobody can find anything in.
+-- `GET /admin/metrics/users` is the exception: it answers "who watches the most" and "who has
+-- gone quiet" with NAMED ACCOUNTS, assembled from a behavioural record those people cannot see
+-- being assembled. Looking at that is an exercise of authority over other people's data even
+-- though it changes nothing, which is the definition this chain uses.
+--
+-- THE FOUR AGGREGATE METRICS READS ARE DELIBERATELY ABSENT. DAU is nobody's personal data, and
+-- stamping the chain on every dashboard refresh would bury the entries that name a person.
+-- ---------------------------------------------------------------------------
+
+ALTER TYPE "platform_audit_event_kind" ADD VALUE IF NOT EXISTS 'platform_metrics_user_segment_viewed';

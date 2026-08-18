@@ -862,6 +862,20 @@
       "when": 1786105959394,
       "tag": "0122_home_watch_history_hide",
       "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1786105964394,
+      "tag": "0123_home_watch_metrics_enums",
+      "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1786105969394,
+      "tag": "0124_home_watch_metrics",
+      "breakpoints": true
     }
   ]
 }
