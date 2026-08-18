@@ -21,6 +21,7 @@ import {
   handleRecomputePlatformCategoryPopularityTick,
   handleRecomputeTrendingVideosTick,
   handleRecomputeUserAffinitiesTick,
+  handleRollupUserWatchActivityTick,
   handleRecomputeVideoDurationsTick,
   handleRecomputeVideoQualityScoresTick,
   handleRevalidateYoutubeEmbedsTick,
@@ -43,6 +44,7 @@ import {
 } from "#src/lib/jobs.js";
 import { handlePruneEngagementData } from "#src/modules/home/engagement/prune-engagement-data.js";
 import { handleRecomputeUserAffinities } from "#src/modules/home/engagement/recompute-user-affinities.js";
+import { handleRollupUserWatchActivity } from "#src/modules/home/engagement/rollup-user-watch-activity.js";
 import { handleDeliverNotification } from "#src/modules/platform/notifications/deliver-notification.js";
 import { handleCloseCompensationPeriod } from "#src/modules/rnd/compensation/close-compensation-period.js";
 import { handleRecomputeCompensationDraft } from "#src/modules/rnd/compensation/recompute-compensation-draft.js";
@@ -392,6 +394,16 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.recomputeUserAffinities,
     workOptions,
     runJob(JOB_NAMES.recomputeUserAffinities, handleRecomputeUserAffinities),
+  );
+  await boss.work(
+    JOB_NAMES.rollupUserWatchActivityTick,
+    workOptions,
+    runJob(JOB_NAMES.rollupUserWatchActivityTick, handleRollupUserWatchActivityTick),
+  );
+  await boss.work(
+    JOB_NAMES.rollupUserWatchActivity,
+    workOptions,
+    runJob(JOB_NAMES.rollupUserWatchActivity, handleRollupUserWatchActivity),
   );
   await boss.work(
     JOB_NAMES.recomputeTrendingVideosTick,

@@ -215,6 +215,19 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "commerce_freight_rate_breaks_replaced",
   "commerce_customs_dwell_estimate_created",
   "commerce_customs_dwell_estimate_retired",
+  /**
+   * §3.3a — THE ONE READ IN THIS CHAIN, and it is here on purpose.
+   *
+   * Every other kind above records a WRITE, because a chain of reads would be a chain nobody
+   * could find anything in. `GET /admin/metrics/users` is the exception: it answers "who watches
+   * the most" and "who has gone quiet" with named accounts, assembled from a behavioural record
+   * those people cannot see being assembled. Looking at that is an exercise of authority over
+   * other people's data even though it changes nothing, which is the definition this chain uses.
+   *
+   * The four AGGREGATE metrics endpoints are deliberately absent: DAU is nobody's personal data,
+   * and stamping the chain on every dashboard refresh would bury the entries that name a person.
+   */
+  "platform_metrics_user_segment_viewed",
 ]);
 
 /**

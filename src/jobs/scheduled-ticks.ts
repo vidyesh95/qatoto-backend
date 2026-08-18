@@ -446,6 +446,31 @@ export async function handleRecomputeUserAffinitiesTick(
 }
 
 /**
+ * §3.3a — the nightly fold of `user_activity_hour` into its two durable outputs.
+ *
+ * Quantized to the DAY like its neighbours: the job re-aggregates whole UTC dates, so an hourly
+ * `asOf` would enqueue 24 runs that all wrote identical rows.
+ */
+export async function handleRollupUserWatchActivityTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.rollupUserWatchActivity,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.rollupUserWatchActivity(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `rollup-user-watch-activity-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/**
  * THE HOUR, not the day — the one quantization difference in this block.
  *
  * `refresh-talent-projections` makes the same call for the same reason: a surface that

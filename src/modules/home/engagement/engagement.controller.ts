@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { logger } from "#src/lib/logger.js";
+import { utcHourOf } from "#src/lib/utc-day.js";
 import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
 import * as subscriptionsService from "#src/modules/home/engagement/creator-subscriptions.service.js";
 import {
@@ -20,9 +21,11 @@ import {
   ReportPlaybackErrorSchema,
   UpdateCommentSchema,
   VideoIdParamSchema,
+  WatchTimeQuerySchema,
 } from "#src/modules/home/engagement/engagement.schemas.js";
 import * as commentsService from "#src/modules/home/engagement/video-comments.service.js";
 import * as engagementService from "#src/modules/home/engagement/video-engagement.service.js";
+import { getViewerWatchTime } from "#src/modules/home/engagement/watch-time.service.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**
@@ -42,6 +45,7 @@ function readViewerIdentity(req: Request): {
   readonly viewerUserId: string | null;
   readonly viewerFingerprint: string;
   readonly utcDayString: string;
+  readonly utcHour: number;
 } {
   const clientIp = req.ip;
   if (clientIp === undefined) {
@@ -52,11 +56,17 @@ function readViewerIdentity(req: Request): {
   }
 
   const viewerUserId = req.user?.id ?? null;
-  const utcDayString = utcDayStringOf(new Date());
+  // ONE INSTANT, TWO BUCKETS. The day keys `video_view_session` and the (day, hour) pair keys
+  // `user_activity_hour`; reading the clock twice would let a beacon landing on the stroke of
+  // midnight be filed under yesterday's day and today's hour.
+  const requestInstant = new Date();
+  const utcDayString = utcDayStringOf(requestInstant);
+  const utcHour = utcHourOf(requestInstant);
 
   return {
     viewerUserId,
     utcDayString,
+    utcHour,
     viewerFingerprint: computeViewerFingerprint({
       utcDayString,
       viewerUserId,
@@ -116,6 +126,7 @@ export async function recordViewBeacon(req: Request, res: Response): Promise<voi
     viewerUserId: identity.viewerUserId,
     viewerFingerprint: identity.viewerFingerprint,
     viewDayBucket: identity.utcDayString,
+    viewHourBucket: identity.utcHour,
     feedSource: parsedBody.data.feedSource,
     positionSeconds: parsedBody.data.positionSeconds,
     reportedDurationSeconds: parsedBody.data.reportedDurationSeconds,
@@ -502,4 +513,45 @@ export function subscribeToCreator(req: Request, res: Response): Promise<void> {
 
 export function unsubscribeFromCreator(req: Request, res: Response): Promise<void> {
   return respondToSubscription(req, res, false);
+}
+
+/**
+ * `GET /users/me/watch-time` — HOME_BACKEND_STRUCTURE.md §3.3a.
+ *
+ * IT LIVES IN THE ENGAGEMENT CONTROLLER AND IS MOUNTED ON THE USERS ROUTER, which looks like a
+ * seam and is one on purpose. The read is engagement-domain — its source is the beacon counter
+ * three functions above — while its path belongs beside `/users/me/handle` and
+ * `/users/me/linked-accounts`, where a client already looks for facts about itself.
+ *
+ * The alternative was importing the watch-time service into `users.controller.ts`, and that file
+ * is deliberately free of any transitive `#src/db/index.js` import: its two unit-test files mock
+ * only `users.service.js`, so pulling `db` (and therefore `config`, and therefore the whole
+ * environment) into that module breaks both of them at import time. `lib/utc-day.ts` exists for
+ * exactly this reason and its header says so.
+ *
+ * THE ID COMES FROM THE SESSION AND NOTHING ELSE. There is deliberately no
+ * `GET /users/:id/watch-time`: how long somebody watched is theirs. Staff who need cross-user
+ * numbers go through `/admin/metrics`, which is capability-gated and, for named lists, audited.
+ */
+export async function getMyWatchTime(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ status: "error", statusCode: 401, message: "Please sign in." });
+    return;
+  }
+
+  const parsedQuery = WatchTimeQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const watchTime = await getViewerWatchTime(req.user.id, parsedQuery.data.timeZone);
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Watch time retrieved successfully.",
+    data: watchTime,
+  };
+  res.status(200).json(response);
 }

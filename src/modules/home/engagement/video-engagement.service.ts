@@ -4,6 +4,7 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "#src/db/index.js";
 import {
   creatorStats,
+  userActivityHour,
   video,
   videoLike,
   videoPlaybackError,
@@ -50,6 +51,11 @@ export interface ViewBeaconInput {
   readonly viewerUserId: string | null;
   readonly viewerFingerprint: string;
   readonly viewDayBucket: string;
+  /**
+   * The UTC hour, 0..23, taken from the SAME instant as `viewDayBucket` — see
+   * `readViewerIdentity`. Only reaches `user_activity_hour`, and only for a signed-in viewer.
+   */
+  readonly viewHourBucket: number;
   readonly feedSource: (typeof videoViewSession.$inferInsert)["feedSource"];
   readonly positionSeconds: number;
   readonly reportedDurationSeconds: number;
@@ -191,6 +197,47 @@ export async function recordViewBeacon(
         .update(creatorStats)
         .set({ totalViewCount: increment(creatorStats.totalViewCount) })
         .where(eq(creatorStats.userId, publicVideo.creatorId));
+    }
+
+    /**
+     * §3.3a — THE HOUR COUNTER, and the only durable per-user record of watching this platform
+     * keeps. Everything above it is per-VIDEO; `video_view_session` is per-viewer but dies at 90
+     * days and carries no hour.
+     *
+     * `contributesToCompletion` IS THE GATE, reused deliberately rather than re-derived. It is
+     * `viewerId !== null`, so an anonymous beacon writes nothing here — a fingerprint is a per-day
+     * bucket key over an IP and a user agent, and an hour-by-hour profile keyed on one describes a
+     * coffee shop rather than a person. Reusing the same expression means the two questions "does
+     * this move the ranker" and "does this become a behavioural record" can never drift apart.
+     *
+     * `creditedSeconds`, NOT `positionSeconds`. The clamp caps each beacon at
+     * `min(elapsed + 5, 20)`; writing the raw position would let a client claim a year.
+     *
+     * Zero-credit beacons still land, and that is the point of `beacon_count` — a tab left open on
+     * a paused video sends heartbeats that credit nothing, and the pair of columns is what
+     * separates that from attention.
+     */
+    if (contributesToCompletion && session.viewerId !== null) {
+      await tx
+        .insert(userActivityHour)
+        .values({
+          userId: session.viewerId,
+          activityDate: input.viewDayBucket,
+          activityHour: input.viewHourBucket,
+          watchedSeconds: clamped.creditedSeconds,
+          beaconCount: 1,
+        })
+        .onConflictDoUpdate({
+          target: [
+            userActivityHour.userId,
+            userActivityHour.activityDate,
+            userActivityHour.activityHour,
+          ],
+          set: {
+            watchedSeconds: increment(userActivityHour.watchedSeconds, clamped.creditedSeconds),
+            beaconCount: increment(userActivityHour.beaconCount),
+          },
+        });
     }
 
     return { kind: "accepted" } as const;

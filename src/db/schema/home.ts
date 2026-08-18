@@ -1464,3 +1464,167 @@ export const feedSpotlightSlotRelations = relations(feedSpotlightSlot, ({ one })
 }));
 
 // ---------------------------------------------------------------------------
+// WATCH TIME AND ACTIVITY ROLLUPS (§3.3a)
+// ---------------------------------------------------------------------------
+//
+// THREE TABLES, TWO GRAINS, AND ONE REASON THEY EXIST AT ALL.
+//
+// `video_view_session` already carries real, server-clamped watch seconds — but one row per
+// (video, fingerprint, UTC DAY), and every row is DELETED at 90 days by `prune-engagement-data`.
+// So the data that would answer "how long have I watched this year" is destroyed a quarter of the
+// way into the year, and the data that would answer "what hour of the day is this platform busy"
+// never existed: a session row spans a whole day, so attributing its seconds to the hour of its
+// last beacon would put a three-hour evening sitting into one bucket. That histogram would not be
+// missing. It would be WRONG, and plausibly so, which is worse.
+//
+// `commerce_product_daily_signal` is the precedent and its header makes this exact argument for
+// products: a series whose history is pruned on the schedule its sibling uses leaves a detector
+// "shipped, wired, and silently returning nothing".
+
+/**
+ * The write-side counter, incremented as beacons arrive. Per user, per UTC date, per UTC hour.
+ *
+ * PER-USER ROWS RATHER THAN A PLATFORM COUNTER, ON PURPOSE. Twenty-four platform-wide rows
+ * incremented by every beacon on the site is a lock hotspot on the hottest write path there is;
+ * per-user rows spread that contention across the active population, and they are also the grain
+ * the "who has gone quiet" segment needs. The 24-row aggregate is DERIVED from these nightly
+ * (`platform_activity_hour_daily` below), which is the cheap direction to compute in.
+ *
+ * SIGNED-IN ONLY. `recordViewBeacon` writes here only when the session carries a `viewer_id` — the
+ * same §8.1 Rule 2 gate that keeps anonymous watch time out of `completion_bp_sum`. A fingerprint
+ * is a per-day bucket key over an IP and a user agent, so an hour-by-hour profile keyed on one
+ * would be a profile of a coffee shop rather than a person. The user-visible consequence has to be
+ * stated wherever this is displayed: watching signed out does not count toward your time watched.
+ *
+ * RETENTION: 90 DAYS, deliberately equal to `VIEW_SESSION_RETENTION_DAYS`. This is the most
+ * granular behavioural record on the platform and it must not outlive the sessions it was derived
+ * from. The thing that survives 25 months is the aggregate, not this.
+ */
+export const userActivityHour = pgTable(
+  "user_activity_hour",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /**
+     * The UTC date, derived from the SERVER clock in the same breath as the hour below — never
+     * from the request body. Same rule and same reason as `video_view_session.view_day_bucket`:
+     * this is the hostile side of the wire.
+     */
+    activityDate: date("activity_date", { mode: "string" }).notNull(),
+    /** 0..23 UTC. Bounded by CHECK because an out-of-range hour is a bug upstream, not a datum. */
+    activityHour: integer("activity_hour").notNull(),
+    /**
+     * The CLAMPED credit from `applyViewBeacon`, never `positionSeconds`. The clamp caps each
+     * beacon at `min(elapsed + 5, 20)` seconds, and it is the only thing between this column and a
+     * client claiming eight hours a minute.
+     */
+    watchedSeconds: integer("watched_seconds").default(0).notNull(),
+    /**
+     * How many beacons landed in the hour. Kept because it separates "watched 900 seconds" from
+     * "sent 60 beacons that each credited nothing" — the second is a stalled tab, not attention.
+     */
+    beaconCount: integer("beacon_count").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "user_activity_hour_pk",
+      columns: [table.userId, table.activityDate, table.activityHour],
+    }),
+    // The nightly rollup scans a whole DAY across all users, and the per-user histogram reads one
+    // user's recent days. Date-first serves the first; the PK already serves the second.
+    index("user_activity_hour_date_idx").on(table.activityDate, table.activityHour),
+    check(
+      "user_activity_hour_bounds_ck",
+      sql`activity_hour BETWEEN 0 AND 23
+          AND watched_seconds >= 0
+          AND beacon_count >= 0`,
+    ),
+  ],
+);
+
+/**
+ * The retained per-user daily series. One row per user per UTC day they watched anything.
+ *
+ * THIS IS THE ONLY TABLE THAT CAN ANSWER "THIS YEAR", and the only long-lived per-person
+ * behavioural record on the platform. Both facts are why its retention is bounded at 25 months
+ * rather than kept forever: two years plus a month is enough for a year-over-year comparison and a
+ * 24-month cohort grid, and "we keep a daily record of your viewing indefinitely" is a sentence
+ * that has to be defended rather than assumed.
+ *
+ * NOTHING WRITES A ZERO ROW. A user with no row for a day did not watch that day, and the absence
+ * is the answer; a stored zero would be indistinguishable from a day the rollup failed to run.
+ * The read side must return `null` rather than `0` for a user with no rows at all.
+ */
+export const userWatchDaily = pgTable(
+  "user_watch_daily",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    watchDate: date("watch_date", { mode: "string" }).notNull(),
+    watchedSeconds: integer("watched_seconds").default(0).notNull(),
+    countedViewCount: integer("counted_view_count").default(0).notNull(),
+    /**
+     * How many DISTINCT videos, which `user_activity_hour` cannot answer — it counts seconds, not
+     * subjects. Sourced from `video_view_session` for the same (viewer, day), and therefore the
+     * one column in this table that goes stale rather than wrong once those rows are pruned at 90
+     * days: it was computed while they existed and is never recomputed after.
+     */
+    distinctVideoCount: integer("distinct_video_count").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ name: "user_watch_daily_pk", columns: [table.userId, table.watchDate] }),
+    // "This user's last N days", the shape every user-facing read has.
+    index("user_watch_daily_recent_idx").on(table.userId, table.watchDate.desc()),
+    // "Everyone active between two dates" — DAU/WAU/MAU, churn and the cohort grid all scan this
+    // way, date first, and none of them names a user.
+    index("user_watch_daily_date_idx").on(table.watchDate, table.userId),
+    check(
+      "user_watch_daily_bounds_ck",
+      sql`watched_seconds >= 0 AND counted_view_count >= 0 AND distinct_video_count >= 0`,
+    ),
+  ],
+);
+
+/**
+ * The platform hour-of-day series. Twenty-four rows a day, ~18k rows over 25 months.
+ *
+ * CARRIES NO USER ID, which makes it the one thing in this block that survives 25 months without
+ * being personal data. It is folded from `user_activity_hour` by the same nightly job that writes
+ * `user_watch_daily` — one scan, two outputs, the argument `recompute-user-affinities` already
+ * makes for not splitting topic and creator affinity into two jobs over the same rows.
+ */
+export const platformActivityHourDaily = pgTable(
+  "platform_activity_hour_daily",
+  {
+    activityDate: date("activity_date", { mode: "string" }).notNull(),
+    activityHour: integer("activity_hour").notNull(),
+    /** DISTINCT users with any credited second in the hour — not a sum of anything. */
+    activeUserCount: integer("active_user_count").default(0).notNull(),
+    watchedSeconds: bigint("watched_seconds", { mode: "number" }).default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "platform_activity_hour_daily_pk",
+      columns: [table.activityDate, table.activityHour],
+    }),
+    check(
+      "platform_activity_hour_daily_bounds_ck",
+      sql`activity_hour BETWEEN 0 AND 23
+          AND active_user_count >= 0
+          AND watched_seconds >= 0`,
+    ),
+  ],
+);
+
+export const userActivityHourRelations = relations(userActivityHour, ({ one }) => ({
+  user: one(user, { fields: [userActivityHour.userId], references: [user.id] }),
+}));
+
+export const userWatchDailyRelations = relations(userWatchDaily, ({ one }) => ({
+  user: one(user, { fields: [userWatchDaily.userId], references: [user.id] }),
+}));

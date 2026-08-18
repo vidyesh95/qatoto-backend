@@ -5,6 +5,7 @@ import { requireAuth } from "#src/middleware/require-auth.js";
 import * as handleController from "#src/modules/auth/handles/handle.controller.js";
 import { uploadAvatarPhoto } from "#src/modules/auth/users/upload-avatar.js";
 import * as usersController from "#src/modules/auth/users/users.controller.js";
+import * as engagementController from "#src/modules/home/engagement/engagement.controller.js";
 
 const router = express.Router();
 
@@ -58,6 +59,15 @@ router.patch("/me/handle", requireAuth, longFormBody, handleController.updateMyH
  * "me" is never swallowed as an id param.
  */
 router.get("/me/linked-accounts", requireAuth, usersController.getLinkedAccounts);
+
+/**
+ * GET /users/me/watch-time
+ * The caller's own watch time — today, this week, this month, this year — plus a 30-day series
+ * and a 24-bucket hour histogram. Auth required; the id comes from the session and there is
+ * deliberately no `/:id` counterpart. Optional `?timeZone=` decides where a day starts and is
+ * trusted for nothing else. Declared before `/:id` so "me" is never swallowed as an id param.
+ */
+router.get("/me/watch-time", requireAuth, engagementController.getMyWatchTime);
 
 /**
  * GET /users/:id

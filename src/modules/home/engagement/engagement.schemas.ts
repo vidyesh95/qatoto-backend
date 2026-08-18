@@ -132,3 +132,45 @@ export const ListVideoCommentsQuerySchema = z
     parentCommentId: z.uuid().optional(),
   })
   .strict();
+
+/**
+ * The viewer's own watch time — `GET /users/me/watch-time`. One optional field, and it decides
+ * only where a day starts.
+ *
+ * IT LIVES HERE, ON THE HOME SIDE, AND THAT IS THE POINT. It began in
+ * `platform/metrics/metrics.schemas.ts` beside the five `/admin/metrics/*` query schemas, which
+ * put the SIGNED-IN VIEWER's own read behind an import from the platform-admin module — and,
+ * through that file's `USER_SEGMENTS` import, transitively behind `platform-metrics.service.ts`
+ * and its db graph. A viewer asking how long they have watched must not depend on the module that
+ * answers "who watches the most" about other people. The two reads share a subject and share
+ * nothing else.
+ *
+ * VALIDATED AGAINST THE RUNTIME'S OWN ZONE TABLE rather than a regex or a hand-kept list. An
+ * unknown zone reaching Postgres raises inside the query, which would surface as a 500 for what is
+ * really a bad request — and a hand-kept list goes stale every time the IANA database changes.
+ *
+ * TRUSTED FOR NOTHING ELSE. The zone decides display bucketing only; every stored column these
+ * reads touch is UTC, and no authorization or retention decision consults it.
+ */
+export const WatchTimeQuerySchema = z
+  .object({
+    timeZone: z
+      .string()
+      .min(1)
+      .max(64)
+      .refine(isSupportedTimeZone, "Not a recognised IANA time zone.")
+      .default("UTC"),
+  })
+  .strict();
+
+function isSupportedTimeZone(candidate: string): boolean {
+  try {
+    // Constructing the formatter is the check: an unknown zone throws a RangeError here, which is
+    // exactly the answer we want, one layer before it reaches SQL. The instance is discarded, and
+    // it is assigned only so the construction does not read as a bare side effect.
+    const zoneProbe = new Intl.DateTimeFormat("en-US", { timeZone: candidate });
+    return zoneProbe.resolvedOptions().timeZone.length > 0;
+  } catch {
+    return false;
+  }
+}

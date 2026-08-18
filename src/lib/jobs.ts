@@ -112,6 +112,10 @@ export const JOB_NAMES = {
   recomputePlatformCategoryPopularity: "recompute-platform-category-popularity",
   recomputeUserAffinitiesTick: "recompute-user-affinities-tick",
   recomputeUserAffinities: "recompute-user-affinities",
+  // §3.3a — folds the beacon-time hour counter into the per-user daily series and the platform
+  // hour-of-day series. MUST be scheduled before `prune-engagement-data`; see SCHEDULED_JOB_CRONS.
+  rollupUserWatchActivityTick: "rollup-user-watch-activity-tick",
+  rollupUserWatchActivity: "rollup-user-watch-activity",
   // The ONE hourly job in this domain. A "trending" chip recomputed nightly is a lie
   // about what the word means.
   recomputeTrendingVideosTick: "recompute-trending-videos-tick",
@@ -885,6 +889,24 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeUserAffinities),
     },
   },
+  [JOB_NAMES.rollupUserWatchActivityTick]: {
+    name: JOB_NAMES.rollupUserWatchActivityTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.rollupUserWatchActivityTick) },
+  },
+  [JOB_NAMES.rollupUserWatchActivity]: {
+    name: JOB_NAMES.rollupUserWatchActivity,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      // Two aggregate INSERT … SELECTs over four days of one narrow table. Far cheaper than the
+      // affinity scan above, but it shares the hour that scan's prune sibling runs in, so it gets
+      // room rather than the default.
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.rollupUserWatchActivity),
+    },
+  },
   [JOB_NAMES.recomputeTrendingVideosTick]: {
     name: JOB_NAMES.recomputeTrendingVideosTick,
     payloadSchema: TickPayloadSchema,
@@ -1303,6 +1325,12 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // client's playback-error report at three distinct fingerprints; this is what catches a
   // dead player on a video with no viewers left to report it.
   [JOB_NAMES.revalidateYoutubeEmbedsTick]: "10 5 * * *",
+  // §3.3a — 04:40, and the fifteen minutes before the prune are the whole point. This job is the
+  // only thing that carries watch time past `user_activity_hour`'s 90-day horizon, so if it ran
+  // after the prune it would, on exactly the days that matter, aggregate rows that had just been
+  // deleted and write zeros over a real history. Ordering between jobs in this codebase is
+  // expressed by cron minute and nothing else.
+  [JOB_NAMES.rollupUserWatchActivityTick]: "40 4 * * *",
   // Runs BEFORE the 05:10 revalidation and well after the 01:xx chain, so a night's
   // recomputes are complete before anything is removed.
   [JOB_NAMES.pruneEngagementDataTick]: "55 4 * * *",
@@ -1578,6 +1606,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.recomputePlatformCategoryPopularity]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.recomputeUserAffinitiesTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeUserAffinities]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.rollupUserWatchActivityTick]: TickPayloadSchema,
+  [JOB_NAMES.rollupUserWatchActivity]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.recomputeTrendingVideosTick]: TickPayloadSchema,
   [JOB_NAMES.recomputeTrendingVideos]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.revalidateYoutubeEmbedsTick]: TickPayloadSchema,
@@ -1715,6 +1745,8 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.recomputePlatformCategoryPopularity}:${asOfIso}`,
   recomputeUserAffinities: (asOfIso: string): string =>
     `${JOB_NAMES.recomputeUserAffinities}:${asOfIso}`,
+  rollupUserWatchActivity: (asOfIso: string): string =>
+    `${JOB_NAMES.rollupUserWatchActivity}:${asOfIso}`,
   // Quantized to the HOUR rather than the day, so 24 distinct runs a day dedup correctly.
   recomputeTrendingVideos: (asOfIso: string): string =>
     `${JOB_NAMES.recomputeTrendingVideos}:${asOfIso}`,

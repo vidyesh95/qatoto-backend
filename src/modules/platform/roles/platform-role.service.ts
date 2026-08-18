@@ -57,7 +57,19 @@ export type PlatformCapability =
    * which is a phishing lure wearing our own branding. That blast radius belongs next to
    * role management, not next to a review queue.
    */
-  | "manage_promotions";
+  | "manage_promotions"
+  /**
+   * Read platform-wide activity and watch-time metrics. `admin` ONLY, and deliberately NOT held by
+   * `moderator`.
+   *
+   * The aggregates alone would be arguable — DAU is not anybody's personal data. But the same
+   * capability opens `GET /admin/metrics/users`, which answers "who watches the most" and "who has
+   * gone quiet" with NAMED ACCOUNTS. That is a behavioural dossier on identifiable people, assembled
+   * from a record they cannot see being assembled, and it belongs next to role management rather
+   * than next to a review queue. A content moderator needs to judge a video, not to know when its
+   * uploader stopped logging in.
+   */
+  | "view_platform_metrics";
 
 /**
  * The grant table. Explicit and total: every role lists every capability it holds, so
@@ -74,6 +86,7 @@ const PLATFORM_ROLE_GRANTS: Readonly<Record<PlatformRole, readonly PlatformCapab
     "audit_escrow",
     "manage_platform_roles",
     "manage_promotions",
+    "view_platform_metrics",
   ],
 };
 

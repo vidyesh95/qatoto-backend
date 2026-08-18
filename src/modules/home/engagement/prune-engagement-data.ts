@@ -3,12 +3,15 @@ import { sql } from "drizzle-orm";
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
 import {
+  ACTIVITY_HOUR_RETENTION_DAYS,
   SNAPSHOT_RETENTION_DAYS,
   VIEW_SESSION_RETENTION_DAYS,
+  WATCH_ROLLUP_RETENTION_DAYS,
 } from "#src/lib/engagement-retention.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
 import { utcTimestamp } from "#src/lib/sql-time.js";
+import { utcDayStringOf } from "#src/lib/utc-day.js";
 
 /**
  * Retention and the outlier prune — HOME_BACKEND_STRUCTURE.md §3.2, §6, §8.1.
@@ -160,6 +163,55 @@ export async function handlePruneEngagementData(rawPayload: unknown): Promise<vo
     `);
   }
 
+  // --- 4. §3.3a's two horizons. Both are DATE columns, so both cutoffs are date strings — a
+  // timestamp comparison would widen the date to midnight and take a day more than it should.
+  //
+  // THE ROLLUP IS PRUNED, AND THAT IS THE POINT OF IT BEING BOUNDED. `user_watch_daily` is the one
+  // long-lived per-person behavioural record on this platform; 25 months is what year-over-year
+  // and a 24-month cohort grid need, and "indefinitely" is a claim nobody here wants to defend.
+  // `platform_activity_hour_daily` shares the horizon and carries no user id, so it is the only
+  // one of the three whose expiry is housekeeping rather than a privacy promise.
+  const activityHourCutoffDate = utcDayStringOf(
+    new Date(asOf.getTime() - ACTIVITY_HOUR_RETENTION_DAYS * MILLISECONDS_PER_DAY),
+  );
+  const watchRollupCutoffDate = utcDayStringOf(
+    new Date(asOf.getTime() - WATCH_ROLLUP_RETENTION_DAYS * MILLISECONDS_PER_DAY),
+  );
+
+  const watchRetentionTargets = [
+    {
+      tableName: "user_activity_hour",
+      dateColumn: "activity_date",
+      cutoff: activityHourCutoffDate,
+    },
+    { tableName: "user_watch_daily", dateColumn: "watch_date", cutoff: watchRollupCutoffDate },
+    {
+      tableName: "platform_activity_hour_daily",
+      dateColumn: "activity_date",
+      cutoff: watchRollupCutoffDate,
+    },
+  ] as const;
+
+  const watchRetentionCounts: Record<string, number> = {};
+  for (const target of watchRetentionTargets) {
+    const [expired] = (
+      await db.execute<CountRow>(sql`
+        SELECT count(*)::int AS affected_count
+        FROM ${sql.identifier(target.tableName)}
+        WHERE ${sql.identifier(target.dateColumn)} < ${target.cutoff}
+      `)
+    ).rows;
+    const expiredCount = expired?.affected_count ?? 0;
+    watchRetentionCounts[target.tableName] = expiredCount;
+
+    if (isEnabled && expiredCount > 0) {
+      await db.execute(sql`
+        DELETE FROM ${sql.identifier(target.tableName)}
+        WHERE ${sql.identifier(target.dateColumn)} < ${target.cutoff}
+      `);
+    }
+  }
+
   logger.info(
     isEnabled
       ? "prune-engagement-data: complete"
@@ -169,9 +221,12 @@ export async function handlePruneEngagementData(rawPayload: unknown): Promise<vo
       enabled: isEnabled,
       sessionCutoff: sessionCutoff.toISOString(),
       snapshotCutoff: snapshotCutoff.toISOString(),
+      activityHourCutoffDate,
+      watchRollupCutoffDate,
       expiredSessionCount,
       expiredSnapshotCounts: snapshotCounts,
       outlierSessionCount,
+      expiredWatchRetentionCounts: watchRetentionCounts,
     },
   );
 }
