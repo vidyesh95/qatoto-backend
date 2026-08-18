@@ -172,7 +172,10 @@ async function checkSchemaObjects(): Promise<readonly CheckOutcome[]> {
       mismatchedKeys.length === 0
         ? "all three match"
         : mismatchedKeys
-            .map(([name, expected]) => `${name}: ${definitionByName.get(name) ?? "ABSENT"} (expected ${expected})`)
+            .map(
+              ([name, expected]) =>
+                `${name}: ${definitionByName.get(name) ?? "ABSENT"} (expected ${expected})`,
+            )
             .join("; "),
   });
 

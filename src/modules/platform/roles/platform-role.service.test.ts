@@ -91,9 +91,34 @@ describe("requirePlatformCapability", () => {
       "moderate_content",
       "moderate_commerce",
       "audit_escrow",
+      "manage_platform_roles",
+      "manage_promotions",
+      "view_platform_metrics",
     ] as const) {
       stubPlatformRole("admin");
       expect((await requirePlatformCapability("user-1", capability)).success).toBe(true);
+    }
+  });
+
+  /**
+   * §3.3a. The aggregates alone would be arguable — DAU is nobody's personal data. But the same
+   * capability opens `GET /admin/metrics/users`, which answers "who watches the most" and "who
+   * has gone quiet" with NAMED ACCOUNTS, assembled from a behavioural record those people cannot
+   * see being assembled. That belongs next to role management, not next to a review queue: a
+   * content moderator needs to judge a video, not to know when its uploader stopped logging in.
+   *
+   * Pinned separately from the disjointness tests above because the pressure on this one is
+   * different — nobody will ever argue an auditor should approve taxonomy, but "the moderator
+   * dashboard should show engagement" is a request that will be made, and granting it here is a
+   * one-word change with no other symptom.
+   */
+  it("REFUSES every non-admin role the platform metrics capability", async () => {
+    for (const platformRole of ["moderator", "auditor"] as const) {
+      stubPlatformRole(platformRole);
+      expect(
+        (await requirePlatformCapability("user-1", "view_platform_metrics")).success,
+        `${platformRole} must not reach a behavioural dossier on named accounts`,
+      ).toBe(false);
     }
   });
 

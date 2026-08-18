@@ -64,6 +64,7 @@
     "db:verify-escrow-constraints": "tsx --conditions=development scripts/verify-escrow-constraints.ts",
     "db:verify-compensation-constraints": "tsx --conditions=development scripts/verify-compensation-constraints.ts",
     "db:verify-platform-audit-constraints": "tsx --conditions=development scripts/verify-platform-audit-constraints.ts",
+    "db:verify-watch-metrics-constraints": "tsx --conditions=development scripts/verify-watch-metrics-constraints.ts",
     "db:verify-promotional-slide-constraints": "tsx --conditions=development scripts/verify-promotional-slide-constraints.ts",
     "db:verify-commerce-foundation-constraints": "tsx --conditions=development scripts/verify-commerce-foundation-constraints.ts",
     "db:verify-store-phase-1-2-constraints": "tsx --conditions=development scripts/verify-store-phase-1-2-constraints.ts",

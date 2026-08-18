@@ -283,6 +283,70 @@ to `video.durationSeconds`. A median over five independent untrusted clients is 
 trustworthy in the cryptographic sense; it is trustworthy enough to divide by, and it is the best
 available while the bytes live on someone else's CDN.
 
+### 3.3a Watch time and activity — three rollups
+
+The beacon already produces real, clamped watch seconds. Two things it does **not** produce, and
+this section is both of them.
+
+**Nothing survives 90 days.** `video_view_session` rows are deleted at
+`VIEW_SESSION_RETENTION_DAYS`, so "how long have I watched this year" is unanswerable a quarter of
+the way into the year. **And nothing carries an hour.** A session row spans a whole UTC day, so
+attributing its seconds to the hour of its last beacon would file a three-hour evening sitting
+into one bucket. That histogram would not be missing; it would be *wrong, plausibly*, which is
+worse.
+
+| Table | Grain | Written by | Retention |
+| --- | --- | --- | --- |
+| `user_activity_hour` | user × UTC date × UTC hour | `recordViewBeacon`, per beacon | `ACTIVITY_HOUR_RETENTION_DAYS` (90) |
+| `user_watch_daily` | user × UTC date | `rollup-user-watch-activity`, nightly | `WATCH_ROLLUP_RETENTION_DAYS` (762 — 25 months) |
+| `platform_activity_hour_daily` | UTC date × hour, **no user id** | same job, same scan | 762 |
+
+**The hour counter is per-user rather than a 24-row platform counter on purpose.** Twenty-four
+rows incremented by every beacon on the site is a lock hotspot on the hottest write path there
+is. Per-user rows spread the contention and are also the grain the "who has gone quiet" segment
+needs; the aggregate is derived nightly, which is the cheap direction.
+
+**Signed-in only.** The insert is gated on the same `viewerId !== null` expression §8.1 Rule 2
+uses, reused rather than re-derived so "does this move the ranker" and "does this become a
+behavioural record" cannot drift apart. A fingerprint is a per-day bucket key over an IP and a
+user agent; an hour-by-hour profile keyed on one describes a coffee shop. **Every surface built
+on this has to say that signed-out watching is not counted.**
+
+**`ACTIVITY_HOUR_RETENTION_DAYS` equals `VIEW_SESSION_RETENTION_DAYS`, and must stay equal.** The
+hour table is *finer*-grained than the sessions it derives from — it says which hour of which day
+a named account was watching — so a longer horizon there would quietly undo §3.2's promise by
+keeping a sharper record after the blunter one was deleted.
+
+**Cron ordering is the correctness argument.** `rollup-user-watch-activity-tick` runs at `40 4`,
+fifteen minutes before `prune-engagement-data` at `55 4`. Reversed, on exactly the days that
+matter it would aggregate rows that had just been deleted and write zeros over a real history.
+Ordering between jobs in this codebase is expressed by cron minute and nothing else.
+
+**Reads draw one fixed boundary.** The hour table answers for the last 90 days, the rollup for
+everything older. Not "prefer the rollup" — that would make today's number wrong for the twenty
+hours before the job next runs — and not "prefer the live table", which would double count. The
+boundary is derived from the retention constant, so it moves if that does.
+
+`GET /users/me/watch-time` is the viewer's own read: four totals, a 30-day series, a 24-bucket
+histogram. Optional `?timeZone=` decides where a day starts and is trusted for nothing else — a
+display preference in the sense CLAUDE.md means. An account with no rows gets **`null`, never
+`0`**: zero means "we watched you watch nothing".
+
+`/admin/metrics/*` is five reads behind `view_platform_metrics`, held by `admin` alone. Four are
+aggregates that name nobody. The fifth, `GET /admin/metrics/users`, returns named accounts and is
+**the one read in the platform audit chain** — looking at a behavioural dossier the subject
+cannot see being assembled is an exercise of authority even though it changes nothing. The
+aggregates are deliberately unaudited; stamping the chain on every dashboard refresh would bury
+the entries that name a person.
+
+**Churn has one definition**, in `engagement-retention.ts` and nowhere else: active means at least
+one `user_watch_daily` row in the period, churned means active in the previous period and absent
+from this one, `INACTIVITY_CHURN_DAYS = 30`. Watching is the only per-user per-day activity this
+platform records — nothing writes a last-seen — so it is the only honest basis for the word.
+
+> ⚠️ `ENGAGEMENT_PRUNE_ENABLED` still defaults to **false**, so the 762-day horizon, like the
+> 90-day one, is a policy expressed in code that nothing currently enforces.
+
 ### 3.4 `videoStats` — counter cache, in-transaction
 
 ```ts
