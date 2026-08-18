@@ -421,7 +421,9 @@ async function acceptQuoteIntoOfflineOrder(
     body: { expectedRevision: revisionToSubmit },
   });
   const acceptedOrderId =
-    asRecord(dataOf(accepted)["order"])["id"] ?? dataOf(accepted)["id"] ?? dataOf(accepted)["orderId"];
+    asRecord(dataOf(accepted)["order"])["id"] ??
+    dataOf(accepted)["id"] ??
+    dataOf(accepted)["orderId"];
   if (typeof acceptedOrderId !== "string" || acceptedOrderId === "") {
     return `quote accept answered ${String(accepted.status)}: ${JSON.stringify(accepted.body).slice(0, 300)}`;
   }

@@ -248,9 +248,7 @@ export const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]
  */
 export const ListQuerySchema = z
   .object({
-    state: z
-      .enum(["draft", "open", "closed", "awarded", "cancelled", "expired"])
-      .optional(),
+    state: z.enum(["draft", "open", "closed", "awarded", "cancelled", "expired"]).optional(),
     limit: z.coerce.number().int().min(1).max(50).optional(),
     cursor: z.string().trim().min(1).max(500).optional(),
   })

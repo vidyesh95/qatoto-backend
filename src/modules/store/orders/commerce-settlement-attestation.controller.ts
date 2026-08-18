@@ -75,9 +75,7 @@ function mapAttestationError(res: Response, error: CommerceSettlementAttestation
       return;
     default: {
       const exhaustiveCheck: never = error;
-      throw new Error(
-        `Unhandled settlement attestation error: ${JSON.stringify(exhaustiveCheck)}`,
-      );
+      throw new Error(`Unhandled settlement attestation error: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }

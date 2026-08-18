@@ -188,7 +188,9 @@ async function projectInquiries(
       ),
   ]);
 
-  const organizationById = new Map(organizations.map((organization) => [organization.id, organization]));
+  const organizationById = new Map(
+    organizations.map((organization) => [organization.id, organization]),
+  );
   const codesByInquiry = new Map<string, StandardCode[]>();
   for (const row of certificationRows) {
     const existing = codesByInquiry.get(row.inquiryId) ?? [];

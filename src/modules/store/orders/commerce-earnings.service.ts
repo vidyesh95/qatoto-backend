@@ -168,9 +168,7 @@ async function loadProcessorSettled(
         eq(commercePaymentIntent.counterpartyOrganizationId, sellerOrganizationId),
         inArray(commercePaymentIntent.state, SETTLED_PAYMENT_INTENT_STATES),
         isNotNull(commercePaymentIntent.settledAt),
-        window.from === undefined
-          ? undefined
-          : gte(commercePaymentIntent.settledAt, window.from),
+        window.from === undefined ? undefined : gte(commercePaymentIntent.settledAt, window.from),
         window.to === undefined ? undefined : lt(commercePaymentIntent.settledAt, window.to),
       ),
     )

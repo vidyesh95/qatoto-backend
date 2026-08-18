@@ -172,9 +172,7 @@ function projectAttestation(
   };
 }
 
-async function loadAttestationList(
-  order: OrderRow,
-): Promise<SettlementAttestationListProjection> {
+async function loadAttestationList(order: OrderRow): Promise<SettlementAttestationListProjection> {
   const rows = await db
     .select()
     .from(commerceSettlementAttestation)
