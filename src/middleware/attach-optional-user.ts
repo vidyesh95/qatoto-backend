@@ -33,7 +33,19 @@ export async function attachOptionalUser(
 ): Promise<void> {
   const session = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) });
 
-  if (session) {
+  /**
+   * A DEACTIVATED CALLER IS TREATED AS SIGNED OUT, not refused.
+   *
+   * This guard's whole contract is that identity is optional, so 403ing here would break
+   * public reads for somebody mid-deletion rather than degrade them. Leaving `req.user`
+   * unset means every viewer-scoped answer below — "have I saved this", "may I chat" —
+   * comes back as it would for a stranger, which is the honest answer for an account that
+   * is not currently active.
+   *
+   * Free, for the reason `require-auth.ts` records: `deactivatedAt` is an
+   * `additionalFields` member already on the resolved session.
+   */
+  if (session && !session.user.deactivatedAt) {
     req.user = {
       id: session.user.id,
       email: session.user.email,

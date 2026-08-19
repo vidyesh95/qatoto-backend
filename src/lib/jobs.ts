@@ -124,6 +124,17 @@ export const JOB_NAMES = {
   revalidateYoutubeEmbeds: "revalidate-youtube-embeds",
   pruneEngagementDataTick: "prune-engagement-data-tick",
   pruneEngagementData: "prune-engagement-data",
+  // PRIVACY (Part 3). A nightly sweep that FANS OUT to one job per account, rather than
+  // one job that loops: each scrub is ~74 statements across as many tables, so a single
+  // process walking every due account would let one trigger rejection or one lock take
+  // the whole night's batch with it.
+  anonymizeDueAccountsTick: "anonymize-due-accounts-tick",
+  anonymizeDueAccounts: "anonymize-due-accounts",
+  anonymizeAccount: "anonymize-account",
+  // The subject-access archive, and the reaper that keeps the bucket agreeing with the row.
+  assembleDataExport: "assemble-data-export",
+  pruneExpiredDataExportsTick: "prune-expired-data-exports-tick",
+  pruneExpiredDataExports: "prune-expired-data-exports",
   // STORE Phase 1/2 — refresh denormalized public search documents after mutations.
   refreshStoreSearchDocument: "refresh-store-search-document",
   // STORE Phase 3 — expire submitted quotes and open RFQs past their deadlines.
@@ -318,6 +329,27 @@ const DispatchCommerceWebhookEventPayloadSchema = z
 const DispatchConnectorCommandPayloadSchema = z
   .object({
     outboxId: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+/**
+ * PRIVACY Part 3. The deletion request's id and nothing else.
+ *
+ * NOT THE USER ID, deliberately. The request row is what carries the due date, the state
+ * and the attempt count — so a payload naming the user would be a field an operator could
+ * edit to erase somebody who never asked, with no row to contradict it. Everything the
+ * scrub needs is read from the request under a `FOR UPDATE` lock.
+ */
+const AnonymizeAccountPayloadSchema = z
+  .object({
+    requestId: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+/** PRIVACY Part 3. The export request's id; its state is re-read and re-claimed inside. */
+const AssembleDataExportPayloadSchema = z
+  .object({
+    requestId: z.string().trim().min(1).max(200),
   })
   .strict();
 
@@ -954,6 +986,78 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.pruneEngagementData),
     },
   },
+  [JOB_NAMES.anonymizeDueAccountsTick]: {
+    name: JOB_NAMES.anonymizeDueAccountsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.anonymizeDueAccountsTick) },
+  },
+  [JOB_NAMES.anonymizeDueAccounts]: {
+    name: JOB_NAMES.anonymizeDueAccounts,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      // `singleton`: the sweep only reads and enqueues, so a second concurrent one would
+      // mint duplicates the idempotency keys then discard. Cheaper never to start it.
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 600,
+      deadLetter: deadLetterNameFor(JOB_NAMES.anonymizeDueAccounts),
+    },
+  },
+  [JOB_NAMES.assembleDataExport]: {
+    name: JOB_NAMES.assembleDataExport,
+    payloadSchema: AssembleDataExportPayloadSchema,
+    queueOptions: {
+      // `standard`: two people's exports touch disjoint rows and must not queue behind one
+      // another. The per-user single-flight guard is `data_export_request_active_uidx`.
+      policy: "standard",
+      ...STANDARD_RETRY,
+      // Generous, because this walks every table referencing one user and gzips the result
+      // — but bounded, because retention bounds how much there can be.
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.assembleDataExport),
+    },
+  },
+  [JOB_NAMES.pruneExpiredDataExportsTick]: {
+    name: JOB_NAMES.pruneExpiredDataExportsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: { ...RANKING_TICK_QUEUE_OPTIONS(JOB_NAMES.pruneExpiredDataExportsTick) },
+  },
+  [JOB_NAMES.pruneExpiredDataExports]: {
+    name: JOB_NAMES.pruneExpiredDataExports,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 600,
+      deadLetter: deadLetterNameFor(JOB_NAMES.pruneExpiredDataExports),
+    },
+  },
+  [JOB_NAMES.anonymizeAccount]: {
+    name: JOB_NAMES.anonymizeAccount,
+    payloadSchema: AnonymizeAccountPayloadSchema,
+    queueOptions: {
+      // `standard`: several accounts may come due on the same night and they touch
+      // disjoint rows. The per-account guard is the `FOR UPDATE` on its own request row,
+      // not queue serialization.
+      policy: "standard",
+      /**
+       * DELIBERATELY THE MOST PATIENT RETRY IN THIS FILE — an hour, backing off to a day.
+       *
+       * The realistic failure here is a lock or an immutability trigger, and neither is a
+       * flake that clears in thirty seconds. A `PermanentJobError` already dead-letters
+       * the trigger case in one attempt, so what is left for this backoff is contention —
+       * which resolves on the scale of the batch that caused it, not of a network blip.
+       *
+       * The 30-day window is a MINIMUM, so waiting longer is always the safe direction.
+       */
+      retryLimit: 3,
+      retryDelay: 3_600,
+      retryBackoff: true,
+      retryDelayMax: 86_400,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.anonymizeAccount),
+    },
+  },
   [JOB_NAMES.refreshStoreSearchDocument]: {
     name: JOB_NAMES.refreshStoreSearchDocument,
     payloadSchema: RefreshStoreSearchDocumentPayloadSchema,
@@ -1334,6 +1438,26 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // Runs BEFORE the 05:10 revalidation and well after the 01:xx chain, so a night's
   // recomputes are complete before anything is removed.
   [JOB_NAMES.pruneEngagementDataTick]: "55 4 * * *",
+  /**
+   * PRIVACY Part 3 — the erasure sweep.
+   *
+   * AFTER the 04:40 watch rollup and the 04:55 prune, and that ordering is not cosmetic:
+   * the scrub issues per-user DELETEs against `user_activity_hour` and `user_watch_daily`,
+   * which is exactly what `prune-engagement-data` is mid-`DELETE` on at 04:55. Overlapping
+   * them is lock contention for no gain. Twenty minutes clear of the 05:10 YouTube
+   * revalidation on the other side.
+   *
+   * DAILY, NOT HOURLY. The 30-day grace period is a MINIMUM promised to a person, so a
+   * late run only ever lengthens it — the safe direction, and the same argument
+   * `sweep-dispute-windows` makes about its own window.
+   */
+  [JOB_NAMES.anonymizeDueAccountsTick]: "30 5 * * *",
+  /**
+   * The export reaper. AFTER the erasure sweep above, so an account anonymized tonight has
+   * already had its archives purged directly and this pass finds nothing left to do for it
+   * — the two are independent, and the ordering just avoids them racing for the same rows.
+   */
+  [JOB_NAMES.pruneExpiredDataExportsTick]: "45 5 * * *",
   // STORE Phase 3 — hourly quote/RFQ expiry. Minute :20 is lightly occupied (branch
   // signals is daily at 03:20 only); tick work is a single enqueue so sharing is fine.
   [JOB_NAMES.expireCommerceQuotesTick]: "20 * * * *",
@@ -1614,6 +1738,12 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.revalidateYoutubeEmbeds]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.pruneEngagementDataTick]: TickPayloadSchema,
   [JOB_NAMES.pruneEngagementData]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.anonymizeDueAccountsTick]: TickPayloadSchema,
+  [JOB_NAMES.anonymizeDueAccounts]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.anonymizeAccount]: AnonymizeAccountPayloadSchema,
+  [JOB_NAMES.assembleDataExport]: AssembleDataExportPayloadSchema,
+  [JOB_NAMES.pruneExpiredDataExportsTick]: TickPayloadSchema,
+  [JOB_NAMES.pruneExpiredDataExports]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.refreshStoreSearchDocument]: RefreshStoreSearchDocumentPayloadSchema,
   [JOB_NAMES.expireCommerceQuotesTick]: TickPayloadSchema,
   [JOB_NAMES.expireCommerceQuotes]: AsOfOnlyPayloadSchema,
@@ -1753,6 +1883,18 @@ export const idempotencyKeyFor = {
   revalidateYoutubeEmbeds: (asOfIso: string): string =>
     `${JOB_NAMES.revalidateYoutubeEmbeds}:${asOfIso}`,
   pruneEngagementData: (asOfIso: string): string => `${JOB_NAMES.pruneEngagementData}:${asOfIso}`,
+  anonymizeDueAccounts: (asOfIso: string): string => `${JOB_NAMES.anonymizeDueAccounts}:${asOfIso}`,
+  /**
+   * SCOPED TO THE ATTEMPT, for the reason `dispatchCommerceWebhookEvent` below spells out:
+   * this key becomes pg-boss's job id, so keyed on the request alone a retry would
+   * deduplicate against the attempt that already failed and never run at all — leaving an
+   * account permanently stuck one day past its own deletion date.
+   */
+  anonymizeAccount: (requestId: string, attemptCount: number): string =>
+    `${JOB_NAMES.anonymizeAccount}:${requestId}:${String(attemptCount)}`,
+  assembleDataExport: (requestId: string): string => `${JOB_NAMES.assembleDataExport}:${requestId}`,
+  pruneExpiredDataExports: (asOfIso: string): string =>
+    `${JOB_NAMES.pruneExpiredDataExports}:${asOfIso}`,
   // Include a generation so successive mutations inside the retention window each refresh.
   refreshStoreSearchDocumentProduct: (productId: string, generation: string): string =>
     `${JOB_NAMES.refreshStoreSearchDocument}:product:${productId}:${generation}`,

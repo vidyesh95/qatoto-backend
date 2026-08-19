@@ -525,7 +525,9 @@ const PRODUCT_CUSTOMIZATION_OPTION_VIEW_COLUMNS = {
 } as const;
 
 type ProductScalarRow = {
-  readonly [ColumnKey in keyof typeof PRODUCT_SCALAR_COLUMNS]: (typeof product.$inferSelect)[ColumnKey];
+  readonly [
+    ColumnKey in keyof typeof PRODUCT_SCALAR_COLUMNS
+  ]: (typeof product.$inferSelect)[ColumnKey];
 };
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 

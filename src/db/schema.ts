@@ -28,6 +28,7 @@ export * from "#src/db/schema/_core.js";
 export * from "#src/db/schema/_primitives.js";
 export * from "#src/db/schema/home.js";
 export * from "#src/db/schema/platform.js";
+export * from "#src/db/schema/privacy.js";
 export * from "#src/db/schema/rnd.js";
 export * from "#src/db/schema/store.js";
 export * from "#src/db/schema/studio.js";

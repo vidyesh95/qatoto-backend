@@ -783,15 +783,12 @@ describe("meanCentroidMicrodegrees", () => {
       const clusterLongitudeSeed = nextPseudoRandom(360_000_000) - 180_000_000;
       const clusterLatitudeSeed = nextPseudoRandom(180_000_001) - 90_000_000;
 
-      const points: readonly GeoPointMicrodegrees[] = Array.from(
-        { length: memberCount },
-        (): GeoPointMicrodegrees => ({
-          latitudeMicrodegrees: clusterLatitudeSeed,
-          longitudeMicrodegrees: normalizeLongitudeMicrodegrees(
-            clusterLongitudeSeed + nextPseudoRandom(2_000_001) - 1_000_000,
-          ),
-        }),
-      );
+      const points: readonly GeoPointMicrodegrees[] = Array.from({ length: memberCount }, (): GeoPointMicrodegrees => ({
+        latitudeMicrodegrees: clusterLatitudeSeed,
+        longitudeMicrodegrees: normalizeLongitudeMicrodegrees(
+          clusterLongitudeSeed + nextPseudoRandom(2_000_001) - 1_000_000,
+        ),
+      }));
 
       const baseline = meanCentroidMicrodegrees(points);
       const reversed = meanCentroidMicrodegrees(points.toReversed());

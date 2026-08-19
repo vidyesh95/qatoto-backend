@@ -4,12 +4,12 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { anonymous, bearer, emailOTP, multiSession } from "better-auth/plugins";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
-import { account, user } from "#src/db/schema.js";
+import { account, accountDeletionRequest, user } from "#src/db/schema.js";
 import { sendTransactionalEmail } from "#src/lib/email.js";
 import { fetchGitHubPrimaryEmail, readGoogleProfileFromIdToken } from "#src/lib/oauth-profile.js";
 import { assignPlaceholderHandle } from "#src/modules/auth/handles/handle.service.js";
@@ -39,6 +39,62 @@ async function sendOtpEmail(params: {
     htmlContent: `<p>Your Qatoto verification code is <strong>${params.otp}</strong>.</p><p>It expires shortly. If you did not request this, ignore this email.</p>`,
     textContent: `Your Qatoto verification code is ${params.otp}. It expires shortly. If you did not request this, ignore this email.`,
   });
+}
+
+/**
+ * Tells somebody their scheduled deletion was cancelled because they signed in.
+ *
+ * WHY THIS EXISTS AT ALL. The cancellation is silent — no button was pressed and the app
+ * looks exactly as it did before — so without a message the only trace is a row nobody
+ * reads. It also covers the case this is meant to catch: an account somebody else
+ * scheduled for deletion, where the sign-in that undid it is the first the owner hears of
+ * either event.
+ *
+ * READS THE ADDRESS FRESH rather than taking it from the session, because the session's
+ * user object is built before the hook and this runs after a write to that same row.
+ *
+ * NO DEEP LINK AND NO DATE. There is nothing to click — the account is already back — and
+ * the deletion it refers to no longer has a scheduled date to name.
+ */
+async function sendDeletionCancelledEmail(userId: string): Promise<void> {
+  const [recipient] = await db
+    .select({ email: user.email, name: user.name })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
+
+  if (!recipient) return;
+
+  await sendTransactionalEmail({
+    toEmail: recipient.email,
+    subject: "Your Qatoto account deletion was cancelled",
+    htmlContent:
+      `<p>Hello ${escapeHtmlForEmail(recipient.name)},</p>` +
+      `<p>You signed in, so the deletion scheduled for your Qatoto account has been cancelled. ` +
+      `Nothing was erased and your account is back exactly as it was.</p>` +
+      `<p>If you did not sign in, change your password immediately.</p>`,
+    textContent:
+      `Hello ${recipient.name},\n\n` +
+      `You signed in, so the deletion scheduled for your Qatoto account has been cancelled. ` +
+      `Nothing was erased and your account is back exactly as it was.\n\n` +
+      `If you did not sign in, change your password immediately.\n`,
+  });
+}
+
+/**
+ * The five characters that change meaning inside HTML.
+ *
+ * A LOCAL COPY of `deliver-notification.ts`'s, not an import: that one is private to the
+ * notification delivery job, and reaching into a job module from the auth bootstrap would
+ * couple sign-in to the queue for four lines of string replacement.
+ */
+function escapeHtmlForEmail(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 export const auth = betterAuth({
@@ -72,6 +128,20 @@ export const auth = betterAuth({
     // runs the rate-limit + reservation transaction (src/modules/auth/handles/handle.service.ts).
     additionalFields: {
       handle: { type: "string", required: false, input: false },
+      /**
+       * Account lifecycle (Privacy Part 3). NULL = active.
+       *
+       * HERE PURELY SO `requireAuth` CAN READ IT FOR FREE. `auth.api.getSession` already
+       * returns every additionalField on `session.user`, so this turns the deactivation
+       * guard into a null check instead of a per-request PK lookup on the hottest path
+       * in the API. `input:false` for the same reason `handle` is: it is owned solely by
+       * POST /users/me/deletion-request and by the session hook below.
+       *
+       * `anonymizedAt` is deliberately NOT here. An anonymized account can never hold a
+       * session — the hook below refuses to create one and its credentials are gone — so
+       * a field for it would be a column that is null in every row that can read it.
+       */
+      deactivatedAt: { type: "date", required: false, input: false },
     },
   },
   session: {
@@ -179,6 +249,106 @@ export const auth = betterAuth({
               .set({ email: resolvedEmail })
               .where(eq(account.id, createdAccount.id));
           }
+        },
+      },
+    },
+    session: {
+      create: {
+        /**
+         * SIGNING IN IS HOW A SCHEDULED DELETION IS CANCELLED. There is no button, no
+         * cancel endpoint, and no UI for a pending deletion — because this hook means a
+         * signed-in account is never in one (Privacy Part 3).
+         *
+         * ## THE INVARIANT THIS ESTABLISHES
+         *
+         * A LIVE SESSION IMPLIES `user.deactivated_at IS NULL`. Everything downstream is
+         * shaped by it: `requireAuth`'s deactivation check is unreachable belt-and-braces
+         * rather than a real branch, there is no `GET /users/me/deletion-request` because
+         * the answer is always "none", and `delete-account-panel.tsx` has no `scheduled`
+         * state because no session can render one.
+         *
+         * ## WHY `before` AND NOT `after`
+         *
+         * `after` is deferred until AFTER the session INSERT commits and `with-hooks`
+         * passes it no `onError` — so a throw there returns a 500 with the session
+         * ALREADY COMMITTED. That is a live session on an account still queued for
+         * erasure: precisely the state the invariant exists to forbid. `before` fails
+         * closed instead — no reactivation, no session.
+         *
+         * The writes below go through the app's own pool, so they commit independently of
+         * Better Auth's transaction. Two consequences, both checked:
+         *
+         *   - NO DEADLOCK. The session INSERT takes `FOR KEY SHARE` on the `user` row;
+         *     the UPDATE here needs `FOR NO KEY UPDATE`; those two do not conflict in
+         *     Postgres. (`FOR NO KEY UPDATE` conflicts only with SHARE and stronger.)
+         *   - THE ASYMMETRY FALLS THE SAFE WAY. If Better Auth's transaction later rolls
+         *     back, the account is left reactivated with no session and the person signs
+         *     in again. The reverse — a session on a still-scheduled account — cannot
+         *     happen.
+         */
+        before: async (createdSession) => {
+          const [accountRow] = await db
+            .select({ deactivatedAt: user.deactivatedAt, anonymizedAt: user.anonymizedAt })
+            .from(user)
+            .where(eq(user.id, createdSession.userId))
+            .limit(1);
+
+          // No row is not this hook's problem — the FK on `session.user_id` will say so
+          // far more precisely than a guess here would.
+          if (!accountRow) return;
+
+          if (accountRow.anonymizedAt !== null) {
+            /**
+             * Defence in depth, and it should be unreachable: step 2 of the scrub deletes
+             * every `account` and `passkey` row, so there is no credential left to
+             * authenticate with. Reaching here means something restored one.
+             *
+             * THROWN, NOT `return false`. Returning false makes Better Auth's runtime
+             * answer a generic `401 FAILED_TO_CREATE_SESSION` with no message we control;
+             * an APIError carries its own status and text. On the OAuth callback path it
+             * becomes a redirect to the error URL rather than JSON — accepted.
+             */
+            throw new APIError("FORBIDDEN", {
+              message: "This account has been permanently deleted and cannot be signed in to.",
+            });
+          }
+
+          if (accountRow.deactivatedAt === null) return;
+
+          await db.transaction(async (tx) => {
+            await tx
+              .update(user)
+              .set({ deactivatedAt: null })
+              .where(eq(user.id, createdSession.userId));
+
+            /**
+             * `cancelled_at` MOVES WITH `state`, IN ONE STATEMENT, because
+             * `account_deletion_request_state_ck` requires exactly that pairing — a
+             * two-step update would fail the CHECK between them.
+             *
+             * Guarded on `state = 'pending'` so a request the scrub already completed can
+             * never be walked backwards into `cancelled`.
+             */
+            await tx
+              .update(accountDeletionRequest)
+              .set({ state: "cancelled", cancelledAt: new Date() })
+              .where(
+                and(
+                  eq(accountDeletionRequest.userId, createdSession.userId),
+                  eq(accountDeletionRequest.state, "pending"),
+                ),
+              );
+          });
+
+          // BEST EFFORT, AND AFTER THE COMMIT. The reactivation is already durable; a
+          // Brevo outage must not undo it or block the sign-in. Same swallow-and-log
+          // contract the two `create.after` hooks above use, for the same reason.
+          await sendDeletionCancelledEmail(createdSession.userId).catch((emailError: unknown) => {
+            console.error(
+              `Failed to send deletion-cancelled email to ${createdSession.userId}:`,
+              emailError,
+            );
+          });
         },
       },
     },

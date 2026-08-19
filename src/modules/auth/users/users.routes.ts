@@ -1,8 +1,15 @@
 import express from "express";
 
 import { longFormBody } from "#src/middleware/json-body.js";
+import {
+  accountDeletionRequestLimiter,
+  dataExportRequestLimiter,
+  dataExportStatusLimiter,
+} from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as handleController from "#src/modules/auth/handles/handle.controller.js";
+import * as privacyController from "#src/modules/auth/privacy/privacy.controller.js";
 import { uploadAvatarPhoto } from "#src/modules/auth/users/upload-avatar.js";
 import * as usersController from "#src/modules/auth/users/users.controller.js";
 import * as engagementController from "#src/modules/home/engagement/engagement.controller.js";
@@ -68,6 +75,59 @@ router.get("/me/linked-accounts", requireAuth, usersController.getLinkedAccounts
  * trusted for nothing else. Declared before `/:id` so "me" is never swallowed as an id param.
  */
 router.get("/me/watch-time", requireAuth, engagementController.getMyWatchTime);
+
+/**
+ * POST /users/me/deletion-request
+ * Deactivate the caller's own account NOW and schedule its anonymization 30 days out.
+ *
+ * NO `requireIdentifiedUser`. Every other write that matters carries it, and this one
+ * deliberately does not: it would 403 an anonymous account into a dead end where it
+ * cannot close itself, which is the opposite of what a right to erasure is for.
+ *
+ * NO BODY PARSER, because there is no body. The subject is the session (§1.1) and the
+ * grace period is the server's — there is nothing a client could send here that the
+ * server would not have to overrule. `json-body-budget.test.ts` fails the build for a
+ * body cap on a route that reads none.
+ *
+ * THERE IS NO CANCEL ROUTE. Signing in is the cancel — see
+ * `databaseHooks.session.create.before` in `src/lib/auth.ts`.
+ *
+ * Declared before `/:id` so "me" is never swallowed as an id param.
+ */
+router.post(
+  "/me/deletion-request",
+  requireAuth,
+  accountDeletionRequestLimiter,
+  privacyController.createDeletionRequest,
+);
+
+/**
+ * POST /users/me/export
+ * Ask for a copy of everything held about the caller (GDPR Art. 15/20). Answers **202** —
+ * a worker builds the archive and `GET` below reports on it.
+ *
+ * `requireIdentifiedUser` HERE, unlike the deletion route above, and the asymmetry is the
+ * point: an anonymous throwaway generating full-table walks is a denial-of-service with no
+ * subject-access argument behind it, whereas an anonymous account closing ITSELF is
+ * exactly the right this exists to serve.
+ */
+router.post(
+  "/me/export",
+  requireAuth,
+  dataExportRequestLimiter,
+  requireIdentifiedUser,
+  privacyController.createDataExport,
+);
+
+/**
+ * GET /users/me/export
+ * The caller's latest export, plus a five-minute download link once it is ready.
+ *
+ * Its own limiter, separate from the request one above, because the panel polls this every
+ * three seconds while a file builds — and polling must never consume the allowance needed
+ * to ask for the export in the first place.
+ */
+router.get("/me/export", requireAuth, dataExportStatusLimiter, privacyController.getDataExport);
 
 /**
  * GET /users/:id

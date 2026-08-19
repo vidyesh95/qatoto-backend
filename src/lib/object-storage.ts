@@ -47,6 +47,7 @@ import type { Result } from "#src/types/index.js";
 
 const PAPER_KEY_PREFIX = "research-programs";
 const COMMERCE_DOCUMENT_KEY_PREFIX = "commerce-organizations";
+const DATA_EXPORT_KEY_PREFIX = "data-exports";
 
 export type ObjectStorageError =
   | { type: "NOT_CONFIGURED" }
@@ -56,6 +57,17 @@ export type ObjectStorageError =
 /** How long a download link lives. Long enough to click, short enough not to circulate. */
 export const PAPER_DOWNLOAD_URL_TTL_SECONDS = 300;
 export const PRIVATE_COMMERCE_DOCUMENT_URL_TTL_SECONDS = 300;
+/**
+ * A subject-access archive's DOWNLOAD LINK. Same five minutes as its neighbours, and for a
+ * sharper reason: this object is every piece of personal data we hold about one person, so
+ * a URL that outlived the click is the single worst thing to leave lying in a chat log.
+ *
+ * NOT THE SAME CLOCK AS `DATA_EXPORT_RETENTION_DAYS` in `data-export.service.ts`. That one
+ * says how long the archive EXISTS; this says how long one link to it works. Conflating
+ * them would either leave a PII dump in the bucket for a week's worth of link, or expire
+ * the export itself every five minutes.
+ */
+export const DATA_EXPORT_URL_TTL_SECONDS = 300;
 
 interface ConfiguredStorage {
   readonly client: S3Client;
@@ -354,6 +366,10 @@ function normalizePrivateMediaType(mediaType: string): string {
     case "application/pdf":
     case "image/jpeg":
     case "image/png":
+    // Privacy Part 3. WITHOUT THIS CASE a subject-access archive uploads as
+    // `application/octet-stream` — the default below is a deliberate refusal to echo a
+    // client's claim about bytes, but this type is ours and is not a claim.
+    case "application/gzip":
       return mediaType;
     default:
       return "application/octet-stream";
@@ -367,4 +383,95 @@ function normalizePrivateMediaType(mediaType: string): string {
  */
 export function isObjectStorageConfigured(): boolean {
   return ensureConfigured() !== null;
+}
+
+// ---------------------------------------------------------------------------
+// SUBJECT-ACCESS ARCHIVES (Privacy Part 3 — GDPR Art. 15/20).
+//
+// The most sensitive object this bucket ever holds: one file containing everything the
+// platform knows about one named person. Every invariant in the module header applies with
+// more force here, and one in particular — THE BUCKET MUST STAY PRIVATE. A public bucket
+// would make an enumerable key a standing data breach, and these keys contain a user id.
+//
+// KEYS ARE NOT CONTENT-ADDRESSED, unlike papers and commerce documents. Those hash their
+// bytes so a retried upload overwrites itself; an export is a snapshot of a moment and two
+// exports a week apart SHOULD be different objects, so the request id is the identity.
+// ---------------------------------------------------------------------------
+
+/** Where one export's archive lives. Segment-encoded like `commerceDocumentObjectKey`. */
+export function dataExportObjectKey(input: {
+  readonly userId: string;
+  readonly requestId: string;
+}): string {
+  return [
+    DATA_EXPORT_KEY_PREFIX,
+    encodeURIComponent(input.userId),
+    encodeURIComponent(input.requestId),
+    "export.json.gz",
+  ].join("/");
+}
+
+/**
+ * Stores one gzipped subject-access archive.
+ *
+ * The caller has already gzipped and hashed the bytes — this layer trusts them, exactly as
+ * `uploadResearchPaper` trusts an already-validated PDF. `ContentDisposition: attachment`
+ * is set at PUT time rather than left to the download link, so the object cannot be coaxed
+ * into rendering inline on our storage domain even if a URL escapes.
+ */
+export async function uploadDataExportArchive(input: {
+  readonly userId: string;
+  readonly requestId: string;
+  readonly archiveBytes: Buffer;
+  readonly contentSha256: string;
+}): Promise<Result<{ objectKey: string }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  const objectKey = dataExportObjectKey(input);
+  try {
+    await storage.client.send(
+      new PutObjectCommand({
+        Bucket: storage.bucketName,
+        Key: objectKey,
+        Body: input.archiveBytes,
+        ContentType: normalizePrivateMediaType("application/gzip"),
+        ContentDisposition: `attachment; filename="qatoto-data-export.json.gz"`,
+        ChecksumSHA256: Buffer.from(input.contentSha256, "hex").toString("base64"),
+      }),
+    );
+    return { success: true, value: { objectKey } };
+  } catch (uploadError: unknown) {
+    return { success: false, error: { type: "UPLOAD_FAILED", cause: describeCause(uploadError) } };
+  }
+}
+
+/** A five-minute link to one archive. Minted per request and never stored. */
+export async function presignDataExportDownload(
+  objectKey: string,
+): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, ObjectStorageError>> {
+  return presignPrivateObjectDownload(objectKey, DATA_EXPORT_URL_TTL_SECONDS);
+}
+
+/**
+ * Removes an archive, at retention expiry or when its subject is anonymized.
+ *
+ * THE SECOND CALLER IS THE IMPORTANT ONE. An export sitting in the bucket is a complete
+ * copy of everything the scrub just erased; leaving it behind would defeat the whole
+ * erasure while every row in the database looked correct.
+ */
+export async function deleteDataExportArchive(
+  objectKey: string,
+): Promise<Result<{ deleted: boolean }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  try {
+    await storage.client.send(
+      new DeleteObjectCommand({ Bucket: storage.bucketName, Key: objectKey }),
+    );
+    return { success: true, value: { deleted: true } };
+  } catch (deleteError: unknown) {
+    return { success: false, error: { type: "DELETE_FAILED", cause: describeCause(deleteError) } };
+  }
 }

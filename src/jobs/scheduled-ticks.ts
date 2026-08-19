@@ -755,3 +755,62 @@ export async function handleReconcileConnectorStateTick(
     throw new Error(`reconcile-connector-state-tick: enqueue failed (${enqueueResult.error.type})`);
   }
 }
+
+/**
+ * The §Privacy Part 3 erasure tick.
+ *
+ * Quantized to the UTC DAY like its neighbours. The sweep selects requests whose
+ * `scheduled_anonymization_at` has passed, so a day-grained `asOf` is exactly the right
+ * grain: finer would enqueue 24 identical sweeps, and coarser does not exist.
+ *
+ * A LATE OR MISSED RUN IS SAFE BY CONSTRUCTION and that is worth stating, because it is
+ * what lets this be daily rather than hourly. The 30-day window is a MINIMUM promised to a
+ * person; running late leaves an account deactivated slightly longer, which is the
+ * direction that cannot hurt anybody. Running early is the one that could, and a day-start
+ * `asOf` compared against a stored timestamp cannot.
+ */
+export async function handleAnonymizeDueAccountsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcDayStart(readClock());
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.anonymizeDueAccounts,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.anonymizeDueAccounts(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`anonymize-due-accounts-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
+/**
+ * The data-export retention tick (Privacy Part 3).
+ *
+ * Quantized to the UTC DAY: archives live seven days, so a finer grain would enqueue 24
+ * sweeps to delete the same handful of objects. Running late costs a few extra hours of
+ * an archive existing, which is the direction that cannot expose anything new — the link
+ * to it expires in five minutes regardless, and `readLatestDataExport` already refuses to
+ * mint one past `expires_at`.
+ */
+export async function handlePruneExpiredDataExportsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.pruneExpiredDataExports,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.pruneExpiredDataExports(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `prune-expired-data-exports-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}

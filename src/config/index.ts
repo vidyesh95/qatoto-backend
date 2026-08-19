@@ -208,6 +208,38 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((rawValue) => rawValue === "true"),
+  /**
+   * Whether `anonymize-account` actually erases (Privacy Part 3).
+   *
+   * DEFAULTS TO FALSE, and this one matters more than its neighbour above.
+   * `prune-engagement-data` removes rows that a retention policy says are expired;
+   * this removes a named person's identity, and it is the first scheduled job in this
+   * codebase that is IRREVERSIBLE — there is no re-derivation, no backfill, and no
+   * second copy. While it is false the job runs its full selection, logs the exact
+   * per-table counts it would touch, and writes nothing.
+   *
+   * Turn it on once those counts match the manifest — `pnpm db:verify-anonymization-coverage`
+   * proves the statements are legal, but only the logged counts show what they would hit
+   * on real data. The two questions are different and the second is the one that has no
+   * undo.
+   */
+  ACCOUNT_ANONYMIZATION_ENABLED: z
+    .string()
+    .optional()
+    .transform((rawValue) => rawValue === "true"),
+  /**
+   * Whether `POST /users/me/export` accepts requests (Privacy Part 3).
+   *
+   * GATES THE ROUTE, NOT THE JOB, and that asymmetry with the flag above is deliberate. A
+   * dry-run anonymization is useful — it reports what it would erase. A dry-run export is
+   * just a broken feature: it would accept a request, poll forever and never produce a
+   * file. So this refuses at the door with a 503 instead, which is a state the panel can
+   * render honestly.
+   */
+  DATA_EXPORT_ENABLED: z
+    .string()
+    .optional()
+    .transform((rawValue) => rawValue === "true"),
   // --- Geocoding (§6). Problem reports carry a free-text location; the server resolves
   //     it to coordinates and a country, because §6 forbids client-claimed geography.
   //

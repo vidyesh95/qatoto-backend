@@ -76,6 +76,23 @@ export const user = pgTable(
     // out of src/lib/auth.ts additionalFields, which would put it on the
     // client-visible session.
     platformRole: platformRoleEnum("platform_role"),
+    // --- ACCOUNT LIFECYCLE (Privacy Part 3). Until these landed an account had exactly
+    //     two states: it exists, or the row is gone — and the row can never be gone,
+    //     because rule R2 (schema/rnd.ts) makes 40+ tables hold `restrict` FKs here and
+    //     45 migrations install BEFORE UPDATE OR DELETE triggers. Deletion is therefore
+    //     an ANONYMIZATION, and these two columns are the states it passes through.
+    //
+    // NULL = active. Set by POST /users/me/deletion-request, which also deletes every
+    // `session` row in the same transaction. CLEARED AGAIN BY SIGNING IN: the
+    // `session.create.before` hook in src/lib/auth.ts reactivates inside the grace
+    // window, so THE INVARIANT IS THAT A LIVE SESSION IMPLIES A NULL HERE. That is what
+    // lets the rest of the surface skip a cancel endpoint entirely — there is no
+    // authenticated caller for it to serve.
+    deactivatedAt: timestamp("deactivated_at"),
+    // NULL until the scrub commits, and TERMINAL — nothing sets it back. Once stamped,
+    // `email` is an @deleted.qatoto.invalid placeholder and the `account`/`passkey` rows
+    // are gone, so there is no credential left to sign in with even if something tried.
+    anonymizedAt: timestamp("anonymized_at"),
   },
   (table) => [
     // Partial: staff are a handful of rows out of the whole user table, so the index
@@ -83,6 +100,21 @@ export const user = pgTable(
     index("user_platformRole_idx")
       .on(table.platformRole)
       .where(sql`platform_role IS NOT NULL`),
+    // Partial for the same reason: accounts inside a 30-day grace window are a handful
+    // of rows, and this index serves `getAllUsers`' new `deactivated_at IS NULL` filter
+    // plus the anonymization sweep's candidate scan.
+    index("user_deactivatedAt_idx")
+      .on(table.deactivatedAt)
+      .where(sql`deactivated_at IS NOT NULL`),
+    // THE ORDERING IS THE POINT, not the null-checking. An anonymized row that was never
+    // deactivated means the scrub ran without a grace window ever opening — i.e. someone
+    // called the service directly, bypassing the request route. Postgres refusing that
+    // is cheaper than discovering it afterwards, when the data is gone.
+    check(
+      "user_lifecycle_ck",
+      sql`anonymized_at IS NULL
+          OR (deactivated_at IS NOT NULL AND anonymized_at >= deactivated_at)`,
+    ),
   ],
 );
 

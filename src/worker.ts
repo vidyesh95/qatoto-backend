@@ -6,6 +6,8 @@ import { config } from "#src/config/index.js";
 import { createDedicatedPool, db, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
 import {
+  handleAnonymizeDueAccountsTick,
+  handlePruneExpiredDataExportsTick,
   handleCloseCompensationPeriodTick,
   handleRecomputeCompensationDraftTick,
   handleRecomputeDailyLogStreaksTick,
@@ -42,6 +44,14 @@ import {
   stopSendOnlyBoss,
   type JobName,
 } from "#src/lib/jobs.js";
+import {
+  handleAnonymizeAccount,
+  handleAnonymizeDueAccounts,
+} from "#src/modules/auth/privacy/anonymize-account.job.js";
+import {
+  handleAssembleDataExport,
+  handlePruneExpiredDataExports,
+} from "#src/modules/auth/privacy/data-export.job.js";
 import { handlePruneEngagementData } from "#src/modules/home/engagement/prune-engagement-data.js";
 import { handleRecomputeUserAffinities } from "#src/modules/home/engagement/recompute-user-affinities.js";
 import { handleRollupUserWatchActivity } from "#src/modules/home/engagement/rollup-user-watch-activity.js";
@@ -434,6 +444,40 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.pruneEngagementData,
     workOptions,
     runJob(JOB_NAMES.pruneEngagementData, handlePruneEngagementData),
+  );
+
+  // PRIVACY Part 3 — the erasure schedule. The tick quantizes the clock, the sweep finds
+  // due requests by index, and one job per account does the actual scrub so a single
+  // trigger rejection cannot take the whole night's batch with it.
+  await boss.work(
+    JOB_NAMES.anonymizeDueAccountsTick,
+    workOptions,
+    runJob(JOB_NAMES.anonymizeDueAccountsTick, handleAnonymizeDueAccountsTick),
+  );
+  await boss.work(
+    JOB_NAMES.anonymizeDueAccounts,
+    workOptions,
+    runJob(JOB_NAMES.anonymizeDueAccounts, handleAnonymizeDueAccounts),
+  );
+  await boss.work(
+    JOB_NAMES.anonymizeAccount,
+    workOptions,
+    runJob(JOB_NAMES.anonymizeAccount, handleAnonymizeAccount),
+  );
+  await boss.work(
+    JOB_NAMES.assembleDataExport,
+    workOptions,
+    runJob(JOB_NAMES.assembleDataExport, handleAssembleDataExport),
+  );
+  await boss.work(
+    JOB_NAMES.pruneExpiredDataExportsTick,
+    workOptions,
+    runJob(JOB_NAMES.pruneExpiredDataExportsTick, handlePruneExpiredDataExportsTick),
+  );
+  await boss.work(
+    JOB_NAMES.pruneExpiredDataExports,
+    workOptions,
+    runJob(JOB_NAMES.pruneExpiredDataExports, handlePruneExpiredDataExports),
   );
 
   // --- Creator Studio.

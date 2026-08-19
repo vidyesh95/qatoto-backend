@@ -883,6 +883,13 @@
       "when": 1787119913362,
       "tag": "0125_add_account_issuer",
       "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1787119918362,
+      "tag": "0126_privacy_account_lifecycle",
+      "breakpoints": true
     }
   ]
 }

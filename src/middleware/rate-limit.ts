@@ -1539,3 +1539,61 @@ export const commerceArrivalWindowReadLimiter = createLimiter({
   windowMs: ONE_MINUTE_MS,
   limit: 120,
 });
+
+// ---------------------------------------------------------------------------
+// PRIVACY (Privacy Part 3) — the two data-subject rights that have endpoints.
+//
+// Both are user-keyed, and for once the reason is not fairness under a shared NAT: these
+// routes are reachable only with a session, and the thing being bounded is what ONE
+// account can ask us to do to itself.
+// ---------------------------------------------------------------------------
+
+/**
+ * `POST /users/me/deletion-request`.
+ *
+ * NOT TIGHT, BECAUSE THE CONSTRAINT DOES THE REAL WORK. The partial unique index
+ * `account_deletion_request_active_uidx` already makes the second call a 409 no matter how
+ * fast it arrives, so this exists to bound the COST of being refused — the transaction
+ * takes a row lock and the success path sends an email — not to bound the outcome.
+ *
+ * Five an hour also leaves room for the honest sequence: request, sign back in to cancel,
+ * think again, request again. Somebody agonising over closing their account must not hit a
+ * wall for it.
+ */
+export const accountDeletionRequestLimiter = createLimiter({
+  namespace: "accountDeletionRequest",
+  windowMs: ONE_HOUR_MS,
+  limit: 5,
+});
+
+/**
+ * `POST /users/me/export` — three a day.
+ *
+ * THE MOST EXPENSIVE THING AN UNPRIVILEGED CALLER CAN ASK FOR. Each accepted request walks
+ * every table that references the caller, gzips the result and uploads it. The in-flight
+ * partial unique index stops concurrent duplicates; this stops a sequence of them.
+ *
+ * Three rather than one, because a person exercising Art. 15 may reasonably want a fresh
+ * copy after changing something, and an archive expires after seven days.
+ */
+export const dataExportRequestLimiter = createLimiter({
+  namespace: "dataExportRequest",
+  windowMs: 24 * ONE_HOUR_MS,
+  limit: 3,
+});
+
+/**
+ * `GET /users/me/export` — the status poll.
+ *
+ * SIZED FOR THE CLIENT THAT EXISTS: the panel polls every 3 seconds while an export is
+ * building, so a single honest session spends ~20 calls a minute. 30 leaves headroom for a
+ * second tab without letting a loop spin freely.
+ *
+ * Separate from the request limiter on purpose — polling must never consume the allowance
+ * needed to ask for the export in the first place.
+ */
+export const dataExportStatusLimiter = createLimiter({
+  namespace: "dataExportStatus",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});

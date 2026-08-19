@@ -69,10 +69,17 @@ export interface PublicUserListRow {
  * NOT widen it to `SELECT *` or add owner-only columns — they would leak here.
  * New owner-only fields belong on PublicUser (returned by the session-guarded
  * /users/me* routes), never on this list.
+ *
+ * `deactivated_at IS NULL` (Privacy Part 3): an account inside its 30-day deletion
+ * window stops being visible to other people, and this route plus {@link getUserById}
+ * are the only cross-user, user-shaped reads on the platform. The many author joins
+ * that project `user.name` are NOT filtered and deliberately so — attribution keeps
+ * its name until the scrub, which is what makes the scrub the real event. The
+ * `user_deactivatedAt_idx` partial index serves this predicate.
  */
 export async function getAllUsers(): Promise<readonly PublicUserListRow[]> {
   const result = await query<PublicUserListRow>(
-    'SELECT id, email, created_at FROM "user" LIMIT 100',
+    'SELECT id, email, created_at FROM "user" WHERE deactivated_at IS NULL LIMIT 100',
   );
   return result.rows;
 }
@@ -82,10 +89,14 @@ export async function getAllUsers(): Promise<readonly PublicUserListRow[]> {
  *
  * SECURITY: same narrow-SELECT invariant as {@link getAllUsers} — never add any
  * owner-only field to this projection.
+ *
+ * A DEACTIVATED ACCOUNT READS AS NOT FOUND, not as an empty profile. The distinction
+ * matters: 404 is also what a never-existed id returns, so the response cannot be used
+ * to probe whether a particular account is mid-deletion.
  */
 export async function getUserById(id: string): Promise<PublicUserListRow | null> {
   const result = await query<PublicUserListRow>(
-    'SELECT id, email, created_at FROM "user" WHERE id = $1',
+    'SELECT id, email, created_at FROM "user" WHERE id = $1 AND deactivated_at IS NULL',
     [id],
   );
   return result.rows[0] || null;
