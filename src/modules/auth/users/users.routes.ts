@@ -18,9 +18,14 @@ const router = express.Router();
 
 /**
  * GET /users
- * List all users.
+ * Every active account's id, email and join date. **STAFF ONLY** — `requireAuth` for the
+ * session, and a `view_platform_metrics` check inside the service for the role.
+ *
+ * ⚠️ THIS WAS OPEN. Until Privacy Part 3 it needed no session at all and answered with a
+ * hundred real email addresses. Do not remove `requireAuth` without reading the note in
+ * `users.service.ts`.
  */
-router.get("/", usersController.getUsers);
+router.get("/", requireAuth, usersController.getUsers);
 
 /**
  * PATCH /users/me
@@ -131,8 +136,9 @@ router.get("/me/export", requireAuth, dataExportStatusLimiter, privacyController
 
 /**
  * GET /users/:id
- * Get a single user by ID.
+ * One account by id. **STAFF ONLY**, same reasoning as `GET /users` above — it leaked the
+ * same addresses, one row at a time.
  */
-router.get("/:id", usersController.getUserById);
+router.get("/:id", requireAuth, usersController.getUserById);
 
 export default router;

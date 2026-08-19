@@ -27,11 +27,12 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db, pool } from "#src/db/index.js";
-import { accountDeletionRequest, session, user } from "#src/db/schema.js";
+import { account, accountDeletionRequest, session, user } from "#src/db/schema.js";
+import { auth } from "#src/lib/auth.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
 import { requestAccountDeletion } from "#src/modules/auth/privacy/account-deletion.service.js";
 import { anonymizeAccount } from "#src/modules/auth/privacy/anonymize-account.service.js";
@@ -43,6 +44,9 @@ function check(label: string, passed: boolean, detail: string): void {
   if (!passed) failureCount += 1;
 }
 
+/** Long enough for `minPasswordLength: 8`, and never reused outside this script. */
+const SMOKE_PASSWORD = "privacy-smoke-password-2026";
+
 async function createSmokeUser(options: { readonly isStaff: boolean }): Promise<string> {
   const id = `privacy-smoke-${randomUUID()}`;
   await db.insert(user).values({
@@ -53,6 +57,23 @@ async function createSmokeUser(options: { readonly isStaff: boolean }): Promise<
     handle: `smoke_${id.slice(-12)}`,
     locationLabel: "Nowhere",
     platformRole: options.isStaff ? "moderator" : null,
+  });
+
+  /**
+   * A REAL CREDENTIAL, because step 4 signs in for real. Written through Better Auth's own
+   * context so the hash matches what `signInEmail` will verify — this repo swaps in argon2
+   * (`emailAndPassword.password.hash`), so a hand-rolled hash here would silently never
+   * verify and the reactivation assertion would fail for the wrong reason.
+   */
+  const passwordHash = await auth.$context.then((context) => context.password.hash(SMOKE_PASSWORD));
+  await db.insert(account).values({
+    id: randomUUID(),
+    accountId: id,
+    providerId: "credential",
+    issuer: "local:credential",
+    userId: id,
+    password: passwordHash,
+    updatedAt: new Date(),
   });
   // Two sessions, because "every session is destroyed" is the claim and one row cannot
   // distinguish "deleted them all" from "deleted the one".
@@ -77,11 +98,15 @@ async function destroySmokeUser(userId: string): Promise<void> {
    * first version of this script did. The same `restrict` chain is what makes those rows
    * survive a real erasure; here it just has to be walked in reverse.
    */
+  await db.execute(sql`DELETE FROM community_forum_thread WHERE author_user_id = ${userId}
+    OR slug LIKE 'removed-%' AND title = '[removed]' AND id IN
+    (SELECT id FROM community_forum_thread WHERE slug LIKE 'removed-%')`);
   await db.execute(sql`DELETE FROM anonymization_step_log WHERE request_id IN
     (SELECT id FROM account_deletion_request WHERE user_id = ${userId})`);
   await db.delete(accountDeletionRequest).where(eq(accountDeletionRequest.userId, userId));
   await db.execute(sql`DELETE FROM data_export_request WHERE user_id = ${userId}`);
   await db.delete(session).where(eq(session.userId, userId));
+  await db.delete(account).where(eq(account.userId, userId));
   await db.execute(sql`DELETE FROM handle_reservations WHERE user_id = ${userId}`);
   await db.delete(user).where(eq(user.id, userId));
 }
@@ -89,6 +114,7 @@ async function destroySmokeUser(userId: string): Promise<void> {
 async function main(): Promise<void> {
   const subjectId = await createSmokeUser({ isStaff: false });
   const staffId = await createSmokeUser({ isStaff: true });
+  const subjectEmail = `${subjectId}@privacy-smoke.invalid`;
 
   try {
     // --- 1. The request deactivates, schedules, and signs out everywhere.
@@ -147,28 +173,103 @@ async function main(): Promise<void> {
       `deactivated_at=${String(staffRow?.deactivatedAt)}`,
     );
 
-    // --- 4. Reactivation: the exact pair of writes the sign-in hook performs.
-    await db.transaction(async (tx) => {
-      await tx.update(user).set({ deactivatedAt: null }).where(eq(user.id, subjectId));
-      await tx
-        .update(accountDeletionRequest)
-        .set({ state: "cancelled", cancelledAt: new Date() })
-        .where(
-          and(
-            eq(accountDeletionRequest.userId, subjectId),
-            eq(accountDeletionRequest.state, "pending"),
-          ),
+    /**
+     * --- 4. REACTIVATION, THROUGH AN ACTUAL SIGN-IN.
+     *
+     * ⚠️ THIS USED TO SIMULATE THE HOOK by issuing its two UPDATEs directly, which proved
+     * only that the SQL worked. The entire design rests on
+     * `databaseHooks.session.create.before` firing — no cancel endpoint, no pending-deletion
+     * UI, no `scheduled` state anywhere — and a simulation could not have caught the hook
+     * being misconfigured, never registered, or given a signature better-auth ignores.
+     *
+     * So this signs in for real, over `auth.api.signInEmail`, exactly as the browser would.
+     */
+    const signedIn = await auth.api
+      .signInEmail({ body: { email: subjectEmail, password: SMOKE_PASSWORD } })
+      .then(() => true)
+      .catch((error: unknown) => {
+        console.log(
+          `      sign-in threw: ${error instanceof Error ? error.message : String(error)}`,
         );
-    });
+        return false;
+      });
+
+    check("a deactivated account can still sign in", signedIn, "the door back in is open");
+
     const [reactivated] = await db
       .select({ deactivatedAt: user.deactivatedAt })
       .from(user)
       .where(eq(user.id, subjectId));
+    const [cancelledRequest] = await db
+      .select({
+        state: accountDeletionRequest.state,
+        cancelledAt: accountDeletionRequest.cancelledAt,
+      })
+      .from(accountDeletionRequest)
+      .where(eq(accountDeletionRequest.userId, subjectId));
+
     check(
-      "signing in reactivates",
+      "SIGNING IN REACTIVATES — the hook fired",
       reactivated?.deactivatedAt === null,
-      "deactivated_at is null and the request reads cancelled",
+      `deactivated_at=${String(reactivated?.deactivatedAt)}`,
     );
+    check(
+      "the request was cancelled by that sign-in",
+      cancelledRequest?.state === "cancelled" && cancelledRequest.cancelledAt !== null,
+      `state=${cancelledRequest?.state ?? "missing"} cancelled_at=${String(cancelledRequest?.cancelledAt)}`,
+    );
+
+    /**
+     * --- 4b. THE D1 REGRESSION GUARD.
+     *
+     * The scrub's final `user` UPDATE used to carry no predicate. A sign-in mid-run cleared
+     * `deactivated_at`, that UPDATE then violated `user_lifecycle_ck` with a 23514, and the
+     * transaction aborted — AFTER the 76 destructive steps had each committed on their own.
+     * Half-erased account, request reading `cancelled`, retry logging "skipped": data
+     * destroyed and success reported.
+     *
+     * This reproduces the tail of it deterministically: a `pending` request over a user
+     * whose `deactivated_at` is already NULL. The scrub must REFUSE rather than stamp
+     * `anonymized_at`, and must not mark the request `completed`.
+     */
+    const raceProbeId = await createSmokeUser({ isStaff: false });
+    const raced = await requestAccountDeletion(raceProbeId);
+    if (raced.success) {
+      await db
+        .update(accountDeletionRequest)
+        .set({
+          requestedAt: new Date(Date.now() - 31 * 86_400_000),
+          scheduledAnonymizationAt: new Date(Date.now() - 86_400_000),
+        })
+        .where(eq(accountDeletionRequest.id, raced.value.requestId));
+      // The reactivation, without the request state moving — exactly the window D1 opened.
+      await db.update(user).set({ deactivatedAt: null }).where(eq(user.id, raceProbeId));
+
+      const refused = await anonymizeAccount(raced.value.requestId)
+        .then(() => "it returned normally")
+        .catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+
+      const [raceRow] = await db
+        .select({ anonymizedAt: user.anonymizedAt, name: user.name })
+        .from(user)
+        .where(eq(user.id, raceProbeId));
+      const [raceRequest] = await db
+        .select({ state: accountDeletionRequest.state })
+        .from(accountDeletionRequest)
+        .where(eq(accountDeletionRequest.id, raced.value.requestId));
+
+      check(
+        "a reactivated account is NOT stamped anonymized",
+        raceRow?.anonymizedAt === null,
+        `anonymized_at=${String(raceRow?.anonymizedAt)} — the scrub said: ${refused}`,
+      );
+      check(
+        "and its request is NOT marked completed",
+        raceRequest?.state !== "completed",
+        `state=${raceRequest?.state ?? "missing"}`,
+      );
+    }
+    await destroySmokeUser(raceProbeId);
 
     // --- 5 & 6. A fresh request, due immediately, then the scrub.
     const forScrub = await requestAccountDeletion(subjectId);
@@ -195,6 +296,19 @@ async function main(): Promise<void> {
         scheduledAnonymizationAt: new Date(Date.now() - 86_400_000),
       })
       .where(eq(accountDeletionRequest.id, forScrub.value.requestId));
+
+    /**
+     * A FORUM THREAD, so the tombstone written for D4 executes against a real row.
+     * `title` needs 8+ chars, `body` 20+, and the slug is globally unique — all three are
+     * constraints the tombstone has to satisfy, and none of them had ever been exercised.
+     */
+    const threadId = randomUUID();
+    await db.execute(sql`
+      INSERT INTO community_forum_thread
+        (id, slug, board, title, body, author_user_id, state, published_at)
+      VALUES (${threadId}, ${`smoke-thread-${threadId}`}, 'sourcing',
+              'A smoke thread title', 'A smoke thread body long enough to satisfy the check.',
+              ${subjectId}, 'open', now())`);
 
     const scrubbed = await anonymizeAccount(forScrub.value.requestId);
     check("the scrub ran", scrubbed.success, JSON.stringify(scrubbed));
@@ -239,6 +353,25 @@ async function main(): Promise<void> {
         finalRequest?.state === "completed",
         finalRequest?.state ?? "missing",
       );
+      const [threadAfter] = (
+        await db.execute<{
+          title: string;
+          body: string;
+          slug: string;
+          author_user_id: string | null;
+        }>(
+          sql`SELECT title, body, slug, author_user_id FROM community_forum_thread WHERE id = ${threadId}`,
+        )
+      ).rows;
+      check(
+        "a forum thread's text does not survive the erasure",
+        threadAfter?.title === "[removed]" &&
+          !(threadAfter.body ?? "").includes("smoke thread body") &&
+          !(threadAfter.slug ?? "").includes("smoke-thread") &&
+          threadAfter.author_user_id === null,
+        `title=${threadAfter?.title ?? "?"} slug=${threadAfter?.slug ?? "?"} author=${String(threadAfter?.author_user_id)}`,
+      );
+
       const burned = await db.execute(
         sql`SELECT expires_at FROM handle_reservations WHERE user_id = ${subjectId}`,
       );

@@ -83,12 +83,9 @@ export async function requestAccountDeletion(
        * for an account this transaction is about to deactivate.
        */
       const [subject] = await tx
-        .select({
-          email: user.email,
-          name: user.name,
-          platformRole: user.platformRole,
-          anonymizedAt: user.anonymizedAt,
-        })
+        // Only what the decision needs. The email is re-read after the commit by the
+        // notifier below, so selecting it here would be a value nothing reads.
+        .select({ platformRole: user.platformRole, anonymizedAt: user.anonymizedAt })
         .from(user)
         .where(eq(user.id, userId))
         .for("update");
@@ -153,8 +150,10 @@ export async function requestAccountDeletion(
      * caller is already signed out; a Brevo outage must not turn a completed closure into
      * a 500 that invites them to press it again.
      *
-     * The address is read inside the transaction above and used here rather than
-     * re-queried, because by now the caller has no session to re-authorize a read with.
+     * IT RE-QUERIES THE ADDRESS rather than reusing the one read inside the transaction —
+     * an earlier version of this comment claimed the opposite. Re-reading is correct here:
+     * the send happens after the commit, so the row it reads is the committed one, and the
+     * alternative would be threading a value through only to send it to the same place.
      */
     await sendDeletionScheduledEmail(userId, outcome.value).catch((emailError: unknown) => {
       logger.error("failed to send the deletion-scheduled email", {

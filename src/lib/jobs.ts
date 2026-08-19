@@ -1054,7 +1054,18 @@ export const JOB_DEFINITIONS = {
       retryDelay: 3_600,
       retryBackoff: true,
       retryDelayMax: 86_400,
-      expireInSeconds: 1_800,
+      /**
+       * ABOVE THE RUN'S OWN WORST CASE, which 30 minutes was not.
+       *
+       * The scrub issues ~76 steps, each with `SET LOCAL statement_timeout = '30s'`, so a
+       * fully contended run can legally take ~38 minutes. At 1_800 pg-boss could expire and
+       * REDELIVER the job while the first invocation was still executing — and since the
+       * guard's row lock does not outlive the guard's transaction, both copies would pass
+       * it and collide on `anonymization_step_log`'s unique index.
+       *
+       * 5_400 leaves headroom above the arithmetic worst case rather than sitting under it.
+       */
+      expireInSeconds: 5_400,
       deadLetter: deadLetterNameFor(JOB_NAMES.anonymizeAccount),
     },
   },

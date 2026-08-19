@@ -207,9 +207,20 @@ export async function readLatestDataExport(userId: string): Promise<DataExportRe
 export async function assembleDataExport(requestId: string): Promise<void> {
   const [claimed] = await db
     .update(dataExportRequest)
-    .set({ state: "running", startedAt: new Date() })
+    .set({
+      state: "running",
+      startedAt: new Date(),
+      // COUNTED AT THE CLAIM, so the catch below can tell a first failure from a last one.
+      // This column existed and was never written by anything — which is why a permanently
+      // failing export had no way to reach its own terminal state.
+      attemptCount: sql`${dataExportRequest.attemptCount} + 1`,
+    })
     .where(and(eq(dataExportRequest.id, requestId), eq(dataExportRequest.state, "pending")))
-    .returning({ id: dataExportRequest.id, userId: dataExportRequest.userId });
+    .returning({
+      id: dataExportRequest.id,
+      userId: dataExportRequest.userId,
+      attemptCount: dataExportRequest.attemptCount,
+    });
 
   if (!claimed) {
     logger.info("data export was already claimed or finished", { requestId });
@@ -247,7 +258,14 @@ export async function assembleDataExport(requestId: string): Promise<void> {
           completedAt.getTime() + DATA_EXPORT_RETENTION_DAYS * MILLISECONDS_PER_DAY,
         ),
       })
-      .where(eq(dataExportRequest.id, requestId));
+      /**
+       * `AND state = 'running'` IS NOT DECORATION. Without it, an export whose job was
+       * still building when the owner's anonymization purged their archives would upload
+       * the pre-erasure PII dump and then flip its own row back to `ready`, complete with
+       * a live object key and a fresh seven-day expiry. Narrow, but it is a
+       * PII-survives-erasure path and nothing downstream would report it.
+       */
+      .where(and(eq(dataExportRequest.id, requestId), eq(dataExportRequest.state, "running")));
 
     logger.info("data export ready", {
       requestId,
@@ -255,11 +273,29 @@ export async function assembleDataExport(requestId: string): Promise<void> {
     });
   } catch (error: unknown) {
     /**
-     * BACK TO `pending`, NOT TO `failed`, WHILE RETRIES REMAIN — and the distinction is
-     * what makes the claim above idempotent. `failed` is terminal and the panel renders it
-     * as "we could not build your file"; a transient storage blip must not say that while
-     * pg-boss is still going to try again.
+     * `pending` WHILE RETRIES REMAIN, `failed` ON THE LAST ONE — and getting that second
+     * half wrong is what made a single permanent failure unrecoverable.
+     *
+     * The old code reverted to `pending` on EVERY attempt including the final one. Because
+     * `data_export_request_active_uidx` covers `('pending','running')`, that stuck row then
+     * made every future `POST /users/me/export` from that person a 409 **forever**: their
+     * Art. 15 right, bricked by one bad build, with `markDataExportFailed` sitting
+     * uncalled two functions away and `failed` unreachable in the enum.
      */
+    const isLastAttempt = claimed.attemptCount >= DATA_EXPORT_MAX_ATTEMPTS;
+
+    if (isLastAttempt) {
+      await markDataExportFailed(requestId, describeCause(error));
+      logger.error("data export failed permanently", {
+        requestId,
+        attemptCount: claimed.attemptCount,
+        cause: describeCause(error),
+      });
+      // NOT RETHROWN. The row is terminal and the panel can render it; throwing would only
+      // buy a dead-letter entry for a failure already recorded where the user can see it.
+      return;
+    }
+
     await db
       .update(dataExportRequest)
       .set({ state: "pending", failureReason: describeCause(error).slice(0, 2000) })
@@ -268,13 +304,22 @@ export async function assembleDataExport(requestId: string): Promise<void> {
   }
 }
 
-/** Terminal failure, called once pg-boss has given up. */
+/**
+ * Terminal failure. Frees the partial unique index so the person can ask again.
+ *
+ * THE STATE MUST LEAVE `('pending','running')`, which is the whole point: while the row
+ * sits in either, `data_export_request_active_uidx` refuses every new request from that
+ * user with a 409.
+ */
 export async function markDataExportFailed(requestId: string, reason: string): Promise<void> {
   await db
     .update(dataExportRequest)
     .set({ state: "failed", failureReason: reason.slice(0, 2000) })
     .where(eq(dataExportRequest.id, requestId));
 }
+
+/** How many builds one request gets before it is called permanently failed. */
+const DATA_EXPORT_MAX_ATTEMPTS = 5;
 
 /**
  * Deletes archives past their retention, and every archive of an anonymized account.
@@ -313,6 +358,20 @@ export async function pruneExpiredDataExports(asOf: Date): Promise<number> {
   }
 
   return expired.length;
+}
+
+/**
+ * How many archives this person has, without touching any of them.
+ *
+ * FOR THE DRY RUN, which must report what it WOULD delete and delete nothing. Without a
+ * read-only counterpart the dry run would either lie (report zero) or not be dry.
+ */
+export async function countDataExportsForUser(userId: string): Promise<number> {
+  const owned = await db
+    .select({ id: dataExportRequest.id })
+    .from(dataExportRequest)
+    .where(eq(dataExportRequest.userId, userId));
+  return owned.length;
 }
 
 /**
@@ -436,6 +495,17 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     subscriptions: await collect(
       "subscriptions",
       sql`SELECT creator_id, created_at FROM creator_subscription WHERE subscriber_id = ${userId}`,
+    ),
+    /**
+     * BOTH HALVES OF A FORUM CONVERSATION. Replies were exported and THREADS WERE NOT —
+     * an Art. 15 completeness gap that came from the same oversight as the missing thread
+     * tombstone in `anonymize-account.service.ts`: the opening post is the longer, more
+     * self-identifying half, and it was the one being left out of both.
+     */
+    forumThreads: await collect(
+      "forumThreads",
+      sql`SELECT id, board, title, body, state, created_at
+          FROM community_forum_thread WHERE author_user_id = ${userId}`,
     ),
     forumReplies: await collect(
       "forumReplies",

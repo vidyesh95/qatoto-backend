@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
@@ -172,6 +172,37 @@ function planFreeTextSteps(userId: string): readonly StepPlan[] {
       applySql: sql`UPDATE community_forum_reply SET body = '[removed]'
                     WHERE author_user_id = ${userId} AND body <> '[removed]'`,
     },
+    {
+      /**
+       * THE ORIGINAL POST, AND THE ONE THIS FILE ORIGINALLY MISSED.
+       *
+       * `community_forum_thread.author_user_id` is a `null_out` in the manifest like the
+       * two above, so the same "find it before the link is severed" rule applies — but it
+       * was not in this list, which meant a departing person's opening posts kept their
+       * `title` and `body` forever. Threads are worse than replies for this: longer, more
+       * self-identifying, and the title is duplicated into a UNIQUE, publicly-routable
+       * `slug`, so leaving it would keep the text in a URL as well as in a column.
+       *
+       * THREE COLUMNS, THREE DIFFERENT CONSTRAINTS, and each literal below is chosen to
+       * satisfy one:
+       *   - `title` — CHECK `char_length BETWEEN 8 AND 200`. `'[removed]'` is 9.
+       *   - `body`  — CHECK `char_length BETWEEN 20 AND 20000`, so `'[removed]'` is too
+       *     short and a sentence is required.
+       *   - `slug`  — UNIQUE globally, CHECK `^[a-z0-9]+(-[a-z0-9]+)*$`, 3..120 chars.
+       *     Derived from the row's own uuid, which is already lowercase hex and hyphens:
+       *     unique by construction, valid by construction, and it carries none of the
+       *     title it replaces.
+       */
+      stepName: "tombstone:community_forum_thread",
+      tableName: "community_forum_thread",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM community_forum_thread
+                    WHERE author_user_id = ${userId} AND title <> '[removed]'`,
+      applySql: sql`UPDATE community_forum_thread
+                    SET title = '[removed]',
+                        body = '[This post was removed at its author''s request.]',
+                        slug = 'removed-' || id
+                    WHERE author_user_id = ${userId} AND title <> '[removed]'`,
+    },
   ];
 }
 
@@ -182,14 +213,18 @@ export async function anonymizeAccount(
 ): Promise<Result<AnonymizeAccountOutcome, AnonymizeAccountError>> {
   const isEnabled = config.ACCOUNT_ANONYMIZATION_ENABLED;
 
-  // --- 1. The guard, and the reactivation race's referee.
+  // --- 1. The guard.
   const guarded = await db.transaction(async (tx) => {
     /**
-     * `FOR UPDATE` on the request row is what settles the race with
-     * `databaseHooks.session.create.before`: the sign-in hook updates this same row, so
-     * whichever transaction commits first wins and the loser reads a state it must not
-     * act on. Without the lock, a sign-in during the scrub could cancel a deletion that
-     * had already erased half the account.
+     * `FOR UPDATE` HERE SETTLES ALMOST NOTHING, AND AN EARLIER VERSION OF THIS COMMENT
+     * CLAIMED OTHERWISE. The lock is released when this transaction commits, a few
+     * milliseconds from now — every one of the 74 steps below runs unlocked. So the
+     * sign-in hook can still cancel this request mid-run.
+     *
+     * What actually protects the account is the `assertStillPending` check before each
+     * step, plus the predicate on the final `user` UPDATE. This lock only makes the
+     * ENTRY decision atomic: two concurrent deliveries of the same job cannot both read
+     * `pending` and both start.
      */
     const [request] = await tx
       .select({
@@ -258,10 +293,49 @@ export async function anonymizeAccount(
   ];
 
   const completedSteps = await readCompletedSteps(requestId);
+
+  /**
+   * THE DRY RUN REPORTS ONCE, THEN LEAVES THE ACCOUNT ALONE.
+   *
+   * With the flag off nothing is written, so the request stays `pending` and keeps matching
+   * `account_deletion_request_due_idx` — which meant the sweep re-enqueued it EVERY NIGHT
+   * FOREVER, re-running ~76 `count(*)` scans against `video_view_session` and
+   * `commerce_order` per due account, with the set only ever growing. A year of dry-run
+   * operation would mean every account that ever asked to be deleted re-scanned nightly.
+   *
+   * The step log is the marker: a dry run records one row saying it reported, and every
+   * later dry run for the same request sees it and returns immediately. Turning the flag on
+   * ignores this entirely — `isEnabled` runs the real steps, which have their own log rows.
+   */
+  const DRY_RUN_MARKER = "dry_run_reported";
+  if (!isEnabled && completedSteps.has(DRY_RUN_MARKER)) {
+    logger.info("account anonymization DRY RUN already reported; skipping", { requestId, userId });
+    return {
+      success: true,
+      value: { requestId, userId, applied: false, rowsByStep: {}, totalRowsAffected: 0 },
+    };
+  }
+
   const rowsByStep: Record<string, number> = {};
 
   for (const step of steps) {
     if (completedSteps.has(step.stepName)) continue;
+
+    /**
+     * ⚠️ THE CHECK THAT STOPS A CANCELLED DELETION FROM ERASING ANYWAY.
+     *
+     * The guard's row lock is long gone (see its comment), so between any two steps the
+     * subject may have signed in and had this request moved to `cancelled`. Without this
+     * read, the loop would keep deleting — and the account would end up half-erased,
+     * marked `cancelled`, with the retry logging "anonymization skipped". The system
+     * would report success over destroyed data.
+     *
+     * One indexed primary-key read per step. That is the correct price for an operation
+     * with no undo, and it is the only thing standing between a mid-run sign-in and
+     * irreversible loss.
+     */
+    const stillPending = await assertStillPending(requestId);
+    if (!stillPending.success) return stillPending;
 
     const affected = await runStep(requestId, step, isEnabled);
     // NON-ZERO ONLY. Most of the 74 steps touch nothing for most accounts, and a summary
@@ -277,12 +351,43 @@ export async function anonymizeAccount(
     rowsByStep["burn_handle"] = await burnHandle(requestId, userId, originalHandle, isEnabled);
   }
 
-  // --- 4. The identity itself, last.
+  /**
+   * --- 4. The archives, BEFORE the point of no return.
+   *
+   * THIS USED TO RUN AFTER `scrubUserAndComplete`, WHICH MADE IT SKIPPABLE. Once the
+   * request reads `completed`, every retry aborts at the guard — so a worker that crashed
+   * or a pod that rotated between the scrub and this call meant the purge NEVER ran, and a
+   * complete PII dump (name, email, IP addresses, user agents, watch history, comment
+   * bodies) sat in the bucket forever while every row in the database read as correctly
+   * anonymized. Precisely the failure this step exists to prevent.
+   *
+   * Now it is a logged, resumable step like the other 75, positioned so that "the request
+   * is still pending" and "the archives are gone" cannot disagree.
+   */
+  if (!completedSteps.has("purge_data_exports")) {
+    const stillPending = await assertStillPending(requestId);
+    if (!stillPending.success) return stillPending;
+
+    rowsByStep["purge_data_exports"] = await purgeExportArchives(requestId, userId, isEnabled);
+  }
+
+  // --- 5. The identity itself, last.
   if (isEnabled) {
     await scrubUserAndComplete(requestId, userId);
   }
 
   const totalRowsAffected = Object.values(rowsByStep).reduce((sum, count) => sum + count, 0);
+
+  // The marker that stops tomorrow's sweep re-scanning this account. Written only in dry
+  // run; a real run leaves `state = 'completed'`, which the guard refuses on its own.
+  if (!isEnabled) {
+    await db.insert(anonymizationStepLog).values({
+      requestId,
+      stepName: DRY_RUN_MARKER,
+      tableName: "(dry run)",
+      rowsAffected: totalRowsAffected,
+    });
+  }
 
   logger.info(isEnabled ? "account anonymized" : "account anonymization DRY RUN", {
     requestId,
@@ -311,34 +416,77 @@ export async function anonymizeAccount(
       });
     }
 
-    /**
-     * THE STEP THAT STOPS AN EXPORT OUTLIVING THE ERASURE.
-     *
-     * A subject-access archive built the week before somebody asked to be deleted is a
-     * complete copy of everything the 74 steps above just erased — name, email, watch
-     * history, comments, the lot — sitting in object storage. Without this, every row in
-     * the database would read as correctly anonymized while the bucket still held the
-     * original, and nothing anywhere would say so.
-     *
-     * Imported lazily for the same reason the email below is: this module is loaded by the
-     * worker on every boot, and neither the storage client nor the mailer should be
-     * constructed to run a dry run that touches neither.
-     */
-    const { purgeDataExportsForUser } =
-      await import("#src/modules/auth/privacy/data-export.service.js");
-    const purgedArchiveCount = await purgeDataExportsForUser(userId);
-    if (purgedArchiveCount > 0) {
-      logger.info("purged data export archives during anonymization", {
-        userId,
-        purgedArchiveCount,
-      });
-    }
+    // THE ARCHIVE PURGE IS NOT HERE ANY MORE. It used to be, after the request was already
+    // `completed` — which meant a crash at the wrong moment skipped it forever and left a
+    // full PII dump in the bucket. It is now step 4 above: logged, resumable, and executed
+    // while the request is still `pending`.
   }
 
   return {
     success: true,
     value: { requestId, userId, applied: isEnabled, rowsByStep, totalRowsAffected },
   };
+}
+
+/**
+ * Deletes every subject-access archive this person ever had built, and records it.
+ *
+ * WHY THIS IS A STEP AND NOT A POST-COMMIT COURTESY. An archive is a complete copy of
+ * everything the other 75 steps just erased. If it survives, the erasure did not happen —
+ * it merely stopped being visible through the database. So it gets the same treatment as
+ * every destructive step: a `pending` precondition, a step-log row, and resumability.
+ *
+ * The import stays lazy so a dry-run worker never constructs an S3 client it will not use.
+ */
+async function purgeExportArchives(
+  requestId: string,
+  userId: string,
+  isEnabled: boolean,
+): Promise<number> {
+  const { purgeDataExportsForUser, countDataExportsForUser } =
+    await import("#src/modules/auth/privacy/data-export.service.js");
+
+  if (!isEnabled) return countDataExportsForUser(userId);
+
+  const purgedArchiveCount = await purgeDataExportsForUser(userId);
+
+  await db.insert(anonymizationStepLog).values({
+    requestId,
+    stepName: "purge_data_exports",
+    tableName: "data_export_request",
+    rowsAffected: purgedArchiveCount,
+  });
+
+  if (purgedArchiveCount > 0) {
+    logger.info("purged data export archives during anonymization", {
+      userId,
+      purgedArchiveCount,
+    });
+  }
+
+  return purgedArchiveCount;
+}
+
+/**
+ * Is this request still ours to act on?
+ *
+ * Called before EVERY step, because the guard's `FOR UPDATE` lock does not outlive the
+ * guard's own transaction and the sign-in hook can cancel a request at any moment. The
+ * returned error is the same shape the guard produces, so the caller's abort path is one
+ * branch rather than two.
+ */
+async function assertStillPending(requestId: string): Promise<Result<true, AnonymizeAccountError>> {
+  const [request] = await db
+    .select({ state: accountDeletionRequest.state })
+    .from(accountDeletionRequest)
+    .where(eq(accountDeletionRequest.id, requestId))
+    .limit(1);
+
+  if (!request) return { success: false, error: { type: "REQUEST_NOT_FOUND" } };
+  if (request.state !== "pending") {
+    return { success: false, error: { type: "REQUEST_NOT_PENDING", state: request.state } };
+  }
+  return { success: true, value: true };
 }
 
 /** Which steps a previous attempt already committed. Empty on a first run. */
@@ -385,9 +533,13 @@ async function runStep(requestId: string, step: StepPlan, isEnabled: boolean): P
       /**
        * AN IMMUTABILITY TRIGGER REFUSED THE WRITE, AND NO RETRY CAN CHANGE THAT.
        *
-       * `PermanentJobError` makes `runJob` record a `job_failure` row and dead-letter in
-       * one attempt instead of burning hours of exponential backoff against a rejection
-       * that is structural.
+       * `PermanentJobError` makes `runJob` write a `job_failure` row naming this step.
+       *
+       * IT DOES NOT SKIP THE RETRIES — an earlier version of this comment claimed it did.
+       * `runJob` records the failure and then rethrows UNCONDITIONALLY, so pg-boss applies
+       * the queue's full ladder regardless. What stops the ladder here is the handler:
+       * `anonymize-account.job.ts` catches this error, marks the request `failed`, and
+       * returns without throwing, so the doomed step is attempted exactly once.
        *
        * THE FIX IS ALWAYS A MANIFEST CHANGE — this entry becomes `retain` with a lawful
        * basis — and NEVER a trigger change. The triggers are what make the ledgers and
@@ -425,7 +577,7 @@ async function burnHandle(
   if (!isEnabled) return 1;
 
   return db.transaction(async (tx) => {
-    await tx
+    const reserved = await tx
       .insert(handleReservation)
       .values({
         reservedHandle: originalHandle,
@@ -441,16 +593,25 @@ async function burnHandle(
         userId,
         expiresAt: sql`'infinity'::timestamp`,
       })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning({ reservedHandle: handleReservation.reservedHandle });
+
+    /**
+     * THE REAL COUNT, NOT A HARDCODED 1. `onConflictDoNothing` means this can legitimately
+     * write nothing — and `anonymization_step_log` is the table the schema calls "THE ONLY
+     * EVIDENCE", where "`rows_affected` of 0 is a real answer and is recorded as one".
+     * This step was the single one lying to it.
+     */
+    const rowsAffected = reserved.length;
 
     await tx.insert(anonymizationStepLog).values({
       requestId,
       stepName: "burn_handle",
       tableName: "handle_reservations",
-      rowsAffected: 1,
+      rowsAffected,
     });
 
-    return 1;
+    return rowsAffected;
   });
 }
 
@@ -466,7 +627,25 @@ async function scrubUserAndComplete(requestId: string, userId: string): Promise<
   await db.transaction(async (tx) => {
     await tx.execute(STEP_STATEMENT_TIMEOUT_SQL);
 
-    await tx
+    /**
+     * RE-ASSERTED INSIDE THIS TRANSACTION, so the request row and the `user` row are
+     * decided together rather than separately. Locked, because between this read and the
+     * UPDATE below the sign-in hook could otherwise slip in and cancel.
+     */
+    const [stillPending] = await tx
+      .select({ state: accountDeletionRequest.state })
+      .from(accountDeletionRequest)
+      .where(eq(accountDeletionRequest.id, requestId))
+      .for("update");
+
+    if (stillPending?.state !== "pending") {
+      throw new Error(
+        `anonymize-account: refusing to scrub ${userId} — request ${requestId} is ` +
+          `${stillPending?.state ?? "missing"}, not pending. A sign-in cancelled it mid-run.`,
+      );
+    }
+
+    const scrubbed = await tx
       .update(user)
       .set({
         name: "Deleted user",
@@ -491,7 +670,28 @@ async function scrubUserAndComplete(requestId: string, userId: string): Promise<
         locationLabel: null,
         anonymizedAt: new Date(),
       })
-      .where(eq(user.id, userId));
+      /**
+       * THE PREDICATE IS THE LAST LINE OF DEFENCE, and its absence was the defect this
+       * whole function was rewritten for.
+       *
+       * `user_lifecycle_ck` forbids `anonymized_at` on a row whose `deactivated_at` is
+       * NULL. Without these two clauses, a sign-in that cleared `deactivated_at` mid-run
+       * made this UPDATE raise 23514 — which aborted THIS transaction while leaving the
+       * 74 destructive steps already committed. Half-erased account, request reading
+       * `cancelled`, retry logging "skipped": data destroyed and success reported.
+       *
+       * Matching zero rows is now the signal, not an exception, and the check below turns
+       * it into a loud failure before the request is marked `completed`.
+       */
+      .where(and(eq(user.id, userId), isNotNull(user.deactivatedAt), isNull(user.anonymizedAt)))
+      .returning({ id: user.id });
+
+    if (scrubbed.length === 0) {
+      throw new Error(
+        `anonymize-account: the scrub matched no row for ${userId} — it was reactivated or ` +
+          `already anonymized. Refusing to mark ${requestId} completed.`,
+      );
+    }
 
     await tx
       .update(accountDeletionRequest)

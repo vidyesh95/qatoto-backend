@@ -201,26 +201,43 @@ async function checkStepsAreExecutable(
 
   const failures: string[] = [];
 
-  for (const key of DELETE_ROW_KEYS) {
-    const { tableName, columnName } = parseUserReferenceKey(key);
+  /**
+   * ⚠️ THE SAVEPOINT IS NOT OPTIONAL, and leaving it out made this script useless in the one
+   * situation it exists for.
+   *
+   * Every probe below runs inside `main`'s single transaction. A failing statement puts that
+   * transaction into the aborted state, after which Postgres answers EVERY later statement
+   * with `25P02 current transaction is aborted`. So the first genuinely-wrong manifest entry
+   * used to produce one true error followed by ~150 fabricated ones, and it destroyed check 6
+   * as well — the output became unreadable at exactly the moment it mattered.
+   *
+   * `verify-watch-metrics-constraints.ts` brackets its probes the same way, for the same
+   * reason, after the same bug (commit `0ca2098`). The savepoint name is reused deliberately:
+   * each probe rolls back to it before the next issues its own.
+   */
+  const probeStatement = async (key: string, statement: string): Promise<void> => {
+    await client.query("SAVEPOINT coverage_probe");
     try {
-      // Identifiers come from this repo's own manifest, never a request; the VALUE is bound.
-      await client.query(`DELETE FROM "${tableName}" WHERE "${columnName}" = $1`, [probeUserId]);
+      await client.query(statement, [probeUserId]);
+      await client.query("RELEASE SAVEPOINT coverage_probe");
     } catch (error) {
+      await client.query("ROLLBACK TO SAVEPOINT coverage_probe");
       failures.push(`${key}: ${error instanceof Error ? error.message : String(error)}`);
     }
+  };
+
+  for (const key of DELETE_ROW_KEYS) {
+    const { tableName, columnName } = parseUserReferenceKey(key);
+    // Identifiers come from this repo's own manifest, never a request; the VALUE is bound.
+    await probeStatement(key, `DELETE FROM "${tableName}" WHERE "${columnName}" = $1`);
   }
 
   for (const key of NULL_OUT_KEYS) {
     const { tableName, columnName } = parseUserReferenceKey(key);
-    try {
-      await client.query(
-        `UPDATE "${tableName}" SET "${columnName}" = NULL WHERE "${columnName}" = $1`,
-        [probeUserId],
-      );
-    } catch (error) {
-      failures.push(`${key}: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    await probeStatement(
+      key,
+      `UPDATE "${tableName}" SET "${columnName}" = NULL WHERE "${columnName}" = $1`,
+    );
   }
 
   outcomes.push({

@@ -5,6 +5,10 @@ import { db } from "#src/db/index.js";
 import { account, user } from "#src/db/schema.js";
 import { deleteUserAvatar, uploadUserAvatar, type CloudinaryError } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeAvatar, type AvatarValidationError } from "#src/lib/image.js";
+import {
+  requirePlatformCapability,
+  type PlatformAccessError,
+} from "#src/modules/platform/roles/platform-role.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -63,21 +67,50 @@ export interface PublicUserListRow {
 }
 
 /**
- * Fetch all users from the database. Public, cross-user read.
+ * Every active user's id, email and join date. **STAFF ONLY.**
  *
- * SECURITY: the SELECT list is deliberately narrow (id, email, created_at). Do
- * NOT widen it to `SELECT *` or add owner-only columns — they would leak here.
- * New owner-only fields belong on PublicUser (returned by the session-guarded
- * /users/me* routes), never on this list.
+ * ## ⚠️ THIS WAS AN UNAUTHENTICATED ENDPOINT THAT RETURNED 100 REAL EMAIL ADDRESSES
  *
- * `deactivated_at IS NULL` (Privacy Part 3): an account inside its 30-day deletion
- * window stops being visible to other people, and this route plus {@link getUserById}
- * are the only cross-user, user-shaped reads on the platform. The many author joins
- * that project `user.name` are NOT filtered and deliberately so — attribution keeps
- * its name until the scrub, which is what makes the scrub the real event. The
- * `user_deactivatedAt_idx` partial index serves this predicate.
+ * `GET /users` needed no session and answered with the address of every account on the
+ * platform, a hundred at a time. That is a disclosure of personal data to anybody who
+ * knew the path, with no lawful basis and nothing in the logs to distinguish a crawler
+ * from an attacker. `docs/BACKEND_STRUCTURE.md` had it filed under "Later (NOT now)".
+ *
+ * ## WHY `view_platform_metrics` AND NOT A NEW CAPABILITY
+ *
+ * That capability already gates `GET /admin/metrics/users`, and its own definition
+ * explains the reasoning this route needs verbatim: it "answers 'who watches the most'
+ * and 'who has gone quiet' with NAMED ACCOUNTS… a behavioural dossier on identifiable
+ * people". A list of every address on the platform is the same kind of thing, so it
+ * belongs behind the same `admin`-only grant rather than a second one that would have to
+ * be kept in step with it.
+ *
+ * ## THE SELECT LIST STAYS NARROW
+ *
+ * Do NOT widen it to `SELECT *` or add owner-only columns. Staff access is a lawful basis
+ * for reading an address; it is not a reason to hand over everything else too. New
+ * owner-only fields belong on PublicUser, returned by the session-guarded `/users/me*`
+ * routes.
+ *
+ * `deactivated_at IS NULL` (Privacy Part 3): an account inside its 30-day deletion window
+ * stops being listed. The many author joins that project `user.name` are NOT filtered and
+ * deliberately so — attribution keeps its name until the scrub, which is what makes the
+ * scrub the real event. The `user_deactivatedAt_idx` partial index serves this predicate.
  */
-export async function getAllUsers(): Promise<readonly PublicUserListRow[]> {
+export async function listUsersForStaff(
+  callerUserId: string,
+): Promise<Result<readonly PublicUserListRow[], PlatformAccessError>> {
+  const authorized = await requirePlatformCapability(callerUserId, "view_platform_metrics");
+  if (!authorized.success) return authorized;
+
+  return { success: true, value: await getAllUsers() };
+}
+
+/**
+ * The raw read. NOT EXPORTED — every caller must come through
+ * {@link listUsersForStaff}, so the capability check cannot be forgotten at a new site.
+ */
+async function getAllUsers(): Promise<readonly PublicUserListRow[]> {
   const result = await query<PublicUserListRow>(
     'SELECT id, email, created_at FROM "user" WHERE deactivated_at IS NULL LIMIT 100',
   );
@@ -85,16 +118,25 @@ export async function getAllUsers(): Promise<readonly PublicUserListRow[]> {
 }
 
 /**
- * Fetch a single user by ID. Public, cross-user read.
- *
- * SECURITY: same narrow-SELECT invariant as {@link getAllUsers} — never add any
- * owner-only field to this projection.
+ * One user by id. **STAFF ONLY**, for the reason {@link listUsersForStaff} sets out — this
+ * leaked the same addresses, one row per request instead of a hundred.
  *
  * A DEACTIVATED ACCOUNT READS AS NOT FOUND, not as an empty profile. The distinction
- * matters: 404 is also what a never-existed id returns, so the response cannot be used
- * to probe whether a particular account is mid-deletion.
+ * matters: 404 is also what a never-existed id returns, so the response cannot be used to
+ * probe whether a particular account is mid-deletion.
  */
-export async function getUserById(id: string): Promise<PublicUserListRow | null> {
+export async function getUserByIdForStaff(
+  callerUserId: string,
+  id: string,
+): Promise<Result<PublicUserListRow | null, PlatformAccessError>> {
+  const authorized = await requirePlatformCapability(callerUserId, "view_platform_metrics");
+  if (!authorized.success) return authorized;
+
+  return { success: true, value: await getUserById(id) };
+}
+
+/** The raw read. NOT EXPORTED — see {@link getUserByIdForStaff}. */
+async function getUserById(id: string): Promise<PublicUserListRow | null> {
   const result = await query<PublicUserListRow>(
     'SELECT id, email, created_at FROM "user" WHERE id = $1 AND deactivated_at IS NULL',
     [id],

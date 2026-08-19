@@ -102,10 +102,26 @@ async function main(): Promise<void> {
       );
 
       const serialized = JSON.stringify(document);
+      /**
+       * SNAKE_CASE, BECAUSE `db.execute` RETURNS RAW COLUMN NAMES. The first version of this
+       * assertion looked for `"accessToken"`, which the export can never contain under any
+       * circumstance — so half the guard was a no-op that would have stayed green if
+       * somebody added `access_token` to the linked-accounts select.
+       */
+      const credentialColumns = [
+        '"password"',
+        '"access_token"',
+        '"refresh_token"',
+        '"id_token"',
+        '"public_key"',
+      ];
+      const leaked = credentialColumns.filter((column) => serialized.includes(column));
       check(
         "no credential leaked into the archive",
-        !serialized.includes('"password"') && !serialized.includes('"accessToken"'),
-        "no password or token keys",
+        leaked.length === 0,
+        leaked.length === 0
+          ? `none of ${credentialColumns.join(", ")}`
+          : `LEAKED: ${leaked.join(", ")}`,
       );
     }
 

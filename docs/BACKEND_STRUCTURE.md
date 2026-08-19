@@ -1028,12 +1028,12 @@ Done and live:
   still needs Better Auth's `phoneNumber` plugin, schema columns, and an SMS sender.
 - Managed Postgres + pooling for prod (Neon, RDS, Supabase). _(Current pool already
   hardened for Aiven: CA-cert TLS, idle recycling, keepAlive — see §5b.)_
-- **Shared rate-limit store for prod.** All limiters are **in-memory** (per-process).
-  Multi-instance/serverless lets attackers round-robin instances → move to a shared
-  store: Express limiters → `rate-limit-redis`; Better Auth → `rateLimit.storage:
-"database"` (adds a `rateLimit` table) or `"secondary-storage"`.
-- **Lock down `GET /users` / `GET /users/:id`** — currently public list/read endpoints
-  (they expose `id`, `email`, `created_at`).
+- ~~**Shared rate-limit store for prod.**~~ **DONE.** Express limiters run on a
+  Postgres-backed store (`rate_limit_bucket`, `src/middleware/rate-limit-store.ts`), shared
+  across instances, with a composite primary key rather than a concatenated namespace key.
+- ~~**Lock down `GET /users` / `GET /users/:id`**~~ **DONE (§11).** They were unauthenticated
+  and returned a hundred real email addresses; both now require `requireAuth` plus the
+  `view_platform_metrics` capability.
 - **API docs serving** — `redoc-express` / `swagger-ui-express` are installed but not
   imported anywhere yet (§2).
 
@@ -1054,6 +1054,74 @@ custom routes need their own):
   service (a domain rule, not an HTTP limiter) — see §5g.
 
 ---
+
+## 11. Privacy — account lifecycle, erasure and export
+
+GDPR Art. 15 (access), Art. 20 (portability) and Art. 17 (erasure), all self-serve.
+`docs/../qatoto-frontend/todo.md` §10 is the shipping record; this section is the contract.
+
+### The one fact everything else follows from
+
+**Account deletion is an ANONYMIZATION, and it cannot be anything else.** Cascade rule R2
+(`src/db/schema/rnd.ts`) puts `restrict` foreign keys on 73 of the 151 columns pointing at
+`user`, and 54 tables carry `BEFORE UPDATE OR DELETE` triggers. `DELETE FROM "user"`
+physically cannot succeed for anybody who has founded, joined or applied to a project,
+transacted, moderated or voted — which is the point: it is what stops one person's erasure
+destroying another person's financial record. Better Auth's `deleteUser` plugin stays
+**off**; it would attempt exactly that delete.
+
+**The consequence people miss:** because nothing is ever deleted, `ON DELETE cascade` and
+`ON DELETE set null` **fire zero times**. All 31 cascades and 43 set-nulls happen only
+because `anonymize-account.service.ts` issues the statement, driven by iterating
+`src/modules/auth/privacy/anonymization-manifest.ts` (151 entries: 31 `delete_rows`, 43
+`null_out`, 77 `retain` with a cited lawful basis).
+
+> **Run `pnpm db:verify-anonymization-coverage` after ANY migration that adds a `user`
+> reference.** A table missing from the manifest is personal data that survives an erasure
+> with nothing anywhere reporting it. The script fails on a missing entry, a stale entry, a
+> `null_out` on a NOT NULL column, an uncited `retain`, and on any statement that will not
+> execute.
+
+### Lifecycle
+
+`user.deactivated_at` (NULL = active) and `user.anonymized_at` (terminal), with
+`user_lifecycle_ck` enforcing the ordering.
+
+**SIGNING IN IS THE CANCEL.** `databaseHooks.session.create.before` in `src/lib/auth.ts`
+clears `deactivated_at` and moves the request to `cancelled` on any successful sign-in
+inside the 30-day window, and fails closed if that write errors. The invariant it
+establishes — **a live session implies an active account** — is why there is no cancel
+endpoint, no `GET /users/me/deletion-request`, and no pending-deletion UI. Do not add any of
+them; they would serve a state the system cannot enter.
+
+### Routes
+
+| route | guard | answer |
+|---|---|---|
+| `POST /users/me/deletion-request` | `requireAuth` + limiter | 200; `403 STAFF_ACCOUNT`; `409` if one is active |
+| `POST /users/me/export` | `requireAuth` + `requireIdentifiedUser` + limiter | **202** — a receipt, never a file |
+| `GET /users/me/export` | `requireAuth` + limiter | state, and a 300s presigned link once `ready` |
+
+Deletion takes `requireAuth` **only** — `requireIdentifiedUser` would 403 an anonymous
+account into a dead end where it cannot close itself.
+
+### Jobs and flags
+
+`anonymize-due-accounts-tick` at `30 5 * * *` fans out to one `anonymize-account` job per
+due request; `prune-expired-data-exports-tick` at `45 5 * * *` reaps archives past their
+seven-day retention. Two flags in `src/config/index.ts`, **both default false**:
+
+- `ACCOUNT_ANONYMIZATION_ENABLED` gates the JOB — off, it logs per-table counts and writes
+  nothing. It is the first irreversible scheduled job in this codebase.
+- `DATA_EXPORT_ENABLED` gates the ROUTE with a 503, because a dry-run export is not a safe
+  export, it is a broken one that polls forever.
+
+### Verified by
+
+`pnpm db:smoke-privacy` (add `ACCOUNT_ANONYMIZATION_ENABLED=true` for the destructive half)
+and `pnpm db:smoke-data-export` (real upload, real presigned download, real purge). The
+first signs in for real rather than simulating the hook, because the invariant above is the
+thing most worth proving.
 
 ## 10. Security checklist
 

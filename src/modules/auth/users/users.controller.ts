@@ -3,20 +3,50 @@ import type { Request, Response } from "express";
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
 import { UpdateMyProfileSchema } from "#src/modules/auth/users/users.schemas.js";
 import * as usersService from "#src/modules/auth/users/users.service.js";
-import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
+import {
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse } from "#src/types/index.js";
 
 /**
- * GET /users
- * List all users.
+ * A caller who is signed in but not staff.
+ *
+ * 403, NOT 404. Everywhere else in this codebase an authorization failure answers 404 so
+ * the existence of a resource is not leaked — but there is nothing to hide here. The route
+ * plainly exists, and "you are not staff" is the honest and actionable answer.
+ */
+function respondStaffOnly(res: Response): void {
+  res.status(403).json({
+    status: "error",
+    statusCode: 403,
+    message: "This endpoint is restricted to platform staff.",
+  } satisfies ApiResponse);
+}
+
+/**
+ * GET /users — every active account's id, email and join date. **STAFF ONLY.**
+ *
+ * This route used to be unauthenticated and returned a hundred real email addresses to
+ * anybody who asked. See `users.service.ts` for the full note.
  */
 export async function getUsers(req: Request, res: Response): Promise<void> {
-  const users = await usersService.getAllUsers();
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const listed = await usersService.listUsersForStaff(req.user.id);
+  if (!listed.success) {
+    respondStaffOnly(res);
+    return;
+  }
+
   const response: ApiResponse = {
     status: "success",
     statusCode: 200,
     message: "Users retrieved successfully",
-    data: users,
+    data: listed.value,
   };
   res.status(200).json(response);
 }
@@ -26,9 +56,21 @@ export async function getUsers(req: Request, res: Response): Promise<void> {
  * Get a single user by ID.
  */
 export async function getUserById(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
   const rawId = req.params.id;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
-  const user = await usersService.getUserById(id);
+  const read = await usersService.getUserByIdForStaff(req.user.id, id);
+
+  if (!read.success) {
+    respondStaffOnly(res);
+    return;
+  }
+
+  const user = read.value;
 
   if (!user) {
     res.status(404).json({

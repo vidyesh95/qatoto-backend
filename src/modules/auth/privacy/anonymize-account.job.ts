@@ -7,6 +7,7 @@ import {
   JOB_NAMES,
   JOB_PAYLOAD_SCHEMAS,
   parseJobPayload,
+  PermanentJobError,
   sendJob,
 } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
@@ -50,6 +51,30 @@ export async function handleAnonymizeDueAccounts(rawPayload: unknown): Promise<v
   logger.info("anonymization sweep found due accounts", { asOf: payload.asOf, count: due.length });
 
   for (const request of due) {
+    /**
+     * ADVANCED HERE, AT ENQUEUE, AND NOT IN THE HANDLER — which is where it used to live
+     * and where it could not do its job.
+     *
+     * The key below is `requestId:attemptCount` and becomes pg-boss's job id. If the
+     * counter only moved when the handler RAN, then any enqueue whose handler never
+     * executed — worker down all night, `expireInSeconds` elapsed, payload parse threw —
+     * left the counter untouched, so tomorrow's sweep minted the IDENTICAL key, pg-boss
+     * deduplicated it, and `sendJob` returned `{ jobId: null }`, which this codebase
+     * documents as success. The account was silently skipped until pg-boss reaped the old
+     * job row a week later.
+     *
+     * Incrementing at enqueue makes every night's key distinct by construction, whether or
+     * not anything ran.
+     */
+    const [bumped] = await db
+      .update(accountDeletionRequest)
+      .set({
+        attemptCount: sql`${accountDeletionRequest.attemptCount} + 1`,
+        lastAttemptAt: asOf,
+      })
+      .where(eq(accountDeletionRequest.id, request.id))
+      .returning({ attemptCount: accountDeletionRequest.attemptCount });
+
     const enqueued = await sendJob(
       JOB_NAMES.anonymizeAccount,
       { requestId: request.id },
@@ -60,7 +85,10 @@ export async function handleAnonymizeDueAccounts(rawPayload: unknown): Promise<v
          * only from the request would deduplicate a retry against the send that ALREADY
          * FAILED — and the retry would silently never run at all.
          */
-        idempotencyKey: idempotencyKeyFor.anonymizeAccount(request.id, request.attemptCount),
+        idempotencyKey: idempotencyKeyFor.anonymizeAccount(
+          request.id,
+          bumped?.attemptCount ?? request.attemptCount,
+        ),
       },
     );
 
@@ -89,20 +117,46 @@ export async function handleAnonymizeAccount(rawPayload: unknown): Promise<void>
     rawPayload,
   );
 
-  /**
-   * Stamped BEFORE the work, so the count is honest about attempts that crashed rather
-   * than only those that returned. It is also what the next sweep's idempotency key is
-   * built from, so a failed attempt gets a fresh job id rather than deduplicating away.
-   */
-  await db
-    .update(accountDeletionRequest)
-    .set({
-      attemptCount: sqlIncrement(),
-      lastAttemptAt: new Date(),
-    })
-    .where(eq(accountDeletionRequest.id, payload.requestId));
+  // THE COUNTER IS NOT TOUCHED HERE. It is advanced by the sweep at enqueue time, so that
+  // a job which never reaches this handler still rotates tomorrow's idempotency key.
+  let outcome: Awaited<ReturnType<typeof anonymizeAccount>>;
 
-  const outcome = await anonymizeAccount(payload.requestId);
+  try {
+    outcome = await anonymizeAccount(payload.requestId);
+  } catch (error: unknown) {
+    if (!(error instanceof PermanentJobError)) throw error;
+
+    /**
+     * A TRIGGER REFUSED A STEP, AND NO RETRY CAN CHANGE THAT — so this is where the retry
+     * ladder stops.
+     *
+     * `runJob` does NOT stop it: it writes a `job_failure` row and then rethrows
+     * unconditionally, so pg-boss applies this queue's full backoff (1h → 2h → 4h) to a
+     * rejection that is structural. Four attempts, seven hours, and the same doomed
+     * statement every time. Catching it here and returning normally means the step is
+     * attempted exactly once.
+     *
+     * The request is marked `failed` with the reason, because the fix is a manifest change
+     * — that entry becomes `retain` with a lawful basis — and a human has to make it. The
+     * account stays deactivated in the meantime, which is the correct holding state.
+     */
+    await db
+      .update(accountDeletionRequest)
+      .set({ state: "failed", failureReason: error.message.slice(0, 2000) })
+      .where(
+        and(
+          eq(accountDeletionRequest.id, payload.requestId),
+          eq(accountDeletionRequest.state, "pending"),
+        ),
+      );
+
+    logger.error("anonymization refused by a trigger; the manifest needs a change", {
+      requestId: payload.requestId,
+      reason: error.reason,
+      cause: error.message,
+    });
+    return;
+  }
 
   if (outcome.success) return;
 
@@ -148,9 +202,4 @@ export async function handleAnonymizeAccount(rawPayload: unknown): Promise<void>
       throw new Error(`Unhandled anonymization error: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
-}
-
-/** `attempt_count + 1`, in SQL, so two workers cannot both read 3 and both write 4. */
-function sqlIncrement() {
-  return sql`${accountDeletionRequest.attemptCount} + 1`;
 }
