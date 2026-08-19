@@ -6,6 +6,7 @@ import {
   boolean,
   integer,
   index,
+  uniqueIndex,
   check,
   primaryKey,
   pgEnum,
@@ -122,6 +123,14 @@ export const account = pgTable(
     id: text("id").primaryKey(),
     accountId: text("account_id").notNull(),
     providerId: text("provider_id").notNull(),
+    // The identity provider that issued this account, e.g. "local:credential" for
+    // email/password, "https://accounts.google.com" for Google, or
+    // "local:oauth:github" for providers (like GitHub) that don't expose their own
+    // issuer. Required by Better Auth 1.7's core account model — see
+    // findCredentialAccount / updatePassword / findAccountByKey in its
+    // internal-adapter, and account-key.ts's resolveOAuthAccountKey. Paired with
+    // accountId as the account's real unique key.
+    issuer: text("issuer").notNull(),
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
@@ -148,7 +157,11 @@ export const account = pgTable(
       .$onUpdate(() => /* @__PURE__ */ new Date())
       .notNull(),
   },
-  (table) => [index("account_userId_idx").on(table.userId)],
+  (table) => [
+    index("account_userId_idx").on(table.userId),
+    // Better Auth 1.7's real account key — see the `issuer` column comment above.
+    uniqueIndex("account_issuer_accountId_uidx").on(table.issuer, table.accountId),
+  ],
 );
 
 export const verification = pgTable(

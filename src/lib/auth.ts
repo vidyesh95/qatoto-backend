@@ -241,10 +241,14 @@ export const auth = betterAuth({
         return;
       }
 
+      // Better Auth 1.7 dropped `providerId` from /unlink-account's own body schema —
+      // it targets exactly one row by accountId now, never "every account under this
+      // provider". Match that here instead of trusting a client-claimed providerId
+      // (CLAUDE.md §1.1): a body that doesn't carry accountId can't target anything,
+      // so defer to Better Auth's own validation error.
       const UnlinkAccountBodySchema = z
         .object({
-          providerId: z.string().min(1),
-          accountId: z.string().min(1).optional(),
+          accountId: z.string().min(1),
         })
         .strip();
       const parsedBody = UnlinkAccountBodySchema.safeParse(ctx.body);
@@ -264,12 +268,7 @@ export const auth = betterAuth({
         return;
       }
 
-      // When accountId is supplied the request targets one specific row; otherwise it
-      // targets every account under providerId — which sweeps up the original if its
-      // provider matches. Reject either way when the original account is in scope.
-      const requestTargetsOriginalAccount = parsedBody.data.accountId
-        ? originalAccount.accountId === parsedBody.data.accountId
-        : originalAccount.providerId === parsedBody.data.providerId;
+      const requestTargetsOriginalAccount = originalAccount.accountId === parsedBody.data.accountId;
       if (requestTargetsOriginalAccount) {
         throw new APIError("FORBIDDEN", {
           message: "The original sign-in provider cannot be unlinked.",
