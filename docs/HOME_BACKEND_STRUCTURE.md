@@ -736,11 +736,13 @@ viewer→creator relation before them records what someone wants more of.
 | `PUT`/`DELETE`  | `/videos/:videoId/not-interested` | session, **not** full | `feedPreferenceLimiter` |
 | `PUT`/`DELETE`  | `/creators/:creatorId/mute`       | session, **not** full | `feedPreferenceLimiter` |
 | `GET`           | `/users/me/muted-creators`        | session               | —                       |
+| `GET`           | `/users/me/not-interested-videos` | session               | —                       |
 
 Tables `video_not_interested (viewer_id, video_id)` and `creator_mute (muter_id, creator_id)`,
 both the `creator_subscription` shape: composite PK, one index for the FK cascade, a self-check on
 the mute. The PK is what makes both verbs idempotent, so neither route carries an idempotency key
-and neither reads a body. Migration `0127_home_feed_preferences`.
+and neither reads a body. Migration `0127_home_feed_preferences`; `0130_not_interested_listing_index`
+adds the one index the dismissed-video listing needs, `(viewer_id, created_at DESC, video_id DESC)`.
 
 `PUT` sets, `DELETE` is Undo — the same one-resource-two-states idiom as §5.2a, not a `/restore`
 sub-path.
@@ -775,6 +777,29 @@ sub-path.
 > hidden. Without a list nothing anywhere could lift the mute, and a preference a viewer cannot
 > withdraw is a trap. Unpaginated: the list is bounded by how many channels one person muted by
 > hand. It sits on the users router beside `/users/me/watch-time`, declared before `/:id`.
+>
+> **`GET /users/me/not-interested-videos` IS THE SAME ARGUMENT, APPLIED TO THE HARDER HALF.** It
+> shipped later than the muted list and the gap was a real defect, not a phasing choice: a
+> dismissed video is hidden by the same §4.5 predicate, so its undo control also lives on the card
+> that is now gone — and unlike a mute, there was no second surface anywhere that could reach it.
+> A dismissal was permanent by accident.
+>
+> **PAGINATED, WHERE THE MUTED LIST IS NOT, AND THE ASYMMETRY IS DELIBERATE.** Muting is an act
+> against a whole channel and tops out in the tens, which is why a cursor there would be machinery
+> for a page that cannot exist. Dismissing is one tap on one card, done idly, and accumulates
+> without bound. Same test, opposite answer. Keyset on `(created_at, video_id)` through
+> `lib/instant-cursor.ts` — the tiebreak is not ceremony, since consecutive taps land in the same
+> millisecond and a cursor keyed on a non-unique column skips whichever row loses. A malformed
+> cursor is `422 CURSOR_MALFORMED`, never a silent first page. The arm is declared on
+> `FeedPreferenceError` with the same payload-free shape `VideoCommentError` uses, so the union
+> collapses it and the existing mapping answers it.
+>
+> **NO PUBLIC-VIDEO GATE ON THE READ, and this is the one place the module disagrees with itself.**
+> `setVideoNotInterested` gates on `findPublicVideo` so a preference is never stored against
+> something the viewer could not have seen. The listing must not: a video that went private or
+> unpublished AFTER being dismissed still has a row, and gating would hide exactly the rows nothing
+> else can reach — an unliftable preference, which is the trap this route exists to close. Videos
+> that are genuinely deleted are already absent, via the FK's `ON DELETE cascade`.
 
 ### 5.2c Video content reporting
 

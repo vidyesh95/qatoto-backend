@@ -15,6 +15,7 @@ import {
   CommentIdParamSchema,
   CreateCommentSchema,
   CreatorIdParamSchema,
+  ListNotInterestedVideosQuerySchema,
   ListVideoCommentsQuerySchema,
   RecordShareSchema,
   RecordViewBeaconSchema,
@@ -645,6 +646,50 @@ export async function listMyMutedCreators(req: Request, res: Response): Promise<
     data: mutedCreators,
   };
   res.status(200).json(response);
+}
+
+/**
+ * `GET /users/me/not-interested-videos`.
+ *
+ * Beside `listMyMutedCreators` above and for the same reason, but NOT the same response
+ * shape: this one is keyset-paginated, so it answers `data` plus a sibling `nextCursor`
+ * exactly as `listVideoComments` does, rather than a `PaginatedResponse` — a keyset read has
+ * no honest `total`, and producing one would mean counting every dismissal on every page.
+ *
+ * IT HAS AN ERROR ARM WHERE THE MUTED LIST HAS NONE. A viewer who has dismissed nothing still
+ * gets an empty array; the only thing that can fail here is a cursor the client made up, and
+ * that answers 422 rather than a silent first page.
+ */
+export async function listMyNotInterestedVideos(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = ListNotInterestedVideosQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const listResult = await feedPreferencesService.listNotInterestedVideos({
+    viewerId: req.user.id,
+    limit: parsedQuery.data.limit,
+    cursor: parsedQuery.data.cursor ?? null,
+  });
+
+  if (!listResult.success) {
+    respondEngagementError(res, listResult.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Videos you told us not to recommend.",
+    data: listResult.value.rows,
+    nextCursor: listResult.value.nextCursor,
+  });
 }
 
 /**

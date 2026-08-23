@@ -97,6 +97,23 @@ router.get("/me/watch-time", requireAuth, engagementController.getMyWatchTime);
 router.get("/me/muted-creators", requireAuth, engagementController.listMyMutedCreators);
 
 /**
+ * GET /users/me/not-interested-videos
+ * The videos the caller told the feed not to recommend. The other half of the pair directly
+ * above, and it exists for the same reason: the in-menu Undo lives on the card that is now
+ * hidden, so without a list a dismissal is permanent by accident.
+ *
+ * PAGINATED, WHERE `/me/muted-creators` IS NOT. Muting is a deliberate act against a channel
+ * and tops out in the tens; dismissing is one tap on one card and accumulates without limit.
+ * `?limit=` (1..50, default 20) and `?cursor=` — keyset, so a malformed cursor is a 422 and
+ * never a silent first page.
+ */
+router.get(
+  "/me/not-interested-videos",
+  requireAuth,
+  engagementController.listMyNotInterestedVideos,
+);
+
+/**
  * GET /users/me/video-reports
  * The caller's own content reports and how each was resolved — the data behind
  * `/report-history`. Third in this small family of self-reads, declared before `/:id`.

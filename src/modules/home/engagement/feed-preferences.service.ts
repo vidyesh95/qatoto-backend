@@ -1,7 +1,8 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { creatorMute, user, videoNotInterested } from "#src/db/schema.js";
+import { creatorMute, user, video, videoNotInterested } from "#src/db/schema.js";
+import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
 import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
 import type { Result } from "#src/types/index.js";
 
@@ -34,7 +35,13 @@ import type { Result } from "#src/types/index.js";
 export type FeedPreferenceError =
   | { readonly type: "VIDEO_NOT_FOUND"; readonly videoId: string }
   | { readonly type: "CREATOR_NOT_FOUND"; readonly creatorId: string }
-  | { readonly type: "SELF_MUTE_FORBIDDEN"; readonly creatorId: string };
+  | { readonly type: "SELF_MUTE_FORBIDDEN"; readonly creatorId: string }
+  // THE SAME PAYLOAD-FREE ARM `VideoCommentError` DECLARES, and declaring it again is
+  // correct rather than duplication: TypeScript collapses two arms whose payloads match, so
+  // `EngagementDomainError` still has ONE `CURSOR_MALFORMED` and the existing 422 case in
+  // `engagement-error-response.ts` already answers it. A differently-shaped arm here — say
+  // one carrying the raw cursor — would fork into a second literal needing its own mapping.
+  | { readonly type: "CURSOR_MALFORMED" };
 
 export interface NotInterestedOutcome {
   readonly isNotInterested: boolean;
@@ -51,6 +58,26 @@ export interface MutedCreatorRow {
   readonly name: string;
   readonly imageUrl: string | null;
   readonly mutedAt: Date;
+}
+
+/**
+ * One dismissed video, as `GET /users/me/not-interested-videos` returns it.
+ *
+ * TWO NULLABLE FIELDS, AND NEITHER IS AN OVERSIGHT. `video.thumbnailUrl` is nullable on the
+ * table — a video whose oEmbed lookup returned no image is a real video — and `creatorHandle`
+ * is nullable for the reason `MutedCreatorRow.handle` is: an account with no handle is a real
+ * account. A caller must branch rather than build `/channel/${handle}` from either.
+ *
+ * NO `viewerState`, NO COUNTS, NO CATEGORY LIST. This is a row in an undo list, not a feed
+ * card. Everything here exists to let somebody recognise which video they dismissed.
+ */
+export interface NotInterestedVideoRow {
+  readonly videoId: string;
+  readonly title: string;
+  readonly thumbnailUrl: string | null;
+  readonly creatorName: string;
+  readonly creatorHandle: string | null;
+  readonly dismissedAt: Date;
 }
 
 /**
@@ -175,4 +202,89 @@ export async function listMutedCreators(muterId: string): Promise<readonly Muted
     .orderBy(desc(creatorMute.createdAt));
 
   return rows;
+}
+
+/**
+ * The viewer's own dismissed videos — `GET /users/me/not-interested-videos`.
+ *
+ * THE SAME ARGUMENT `listMutedCreators` MAKES, applied to the harder half. A dismissed video
+ * never reaches the feed again, so the card carrying the undo control is exactly the card now
+ * hidden; the in-menu Undo only works while that card is still on screen, which stops being
+ * true the moment the reader scrolls. Without this route a dismissal is permanent by accident
+ * rather than by choice.
+ *
+ * PAGINATED, WHERE THE MUTED LIST IS NOT — and the asymmetry is the point rather than an
+ * inconsistency. Muting is a deliberate act against a whole channel and tops out in the tens.
+ * Dismissing is one tap on one card, done idly, thousands of times over a year. The same
+ * "machinery for a page that cannot exist" test that rules a cursor OUT there rules it IN
+ * here. Keyset on `(createdAt, videoId)` via the shared `instant-cursor` codec, because two
+ * dismissals seconds apart can land in the same millisecond and a cursor keyed on a
+ * non-unique column silently skips whichever row loses the tie.
+ *
+ * NO PUBLIC-VIDEO GATE, deliberately, and this is the one place this module disagrees with
+ * `setVideoNotInterested` directly above. That write gates on `findPublicVideo` so a
+ * preference is never stored against something the viewer could not have seen. This READ
+ * must not: a video that went private, or unpublished, AFTER being dismissed still has a row,
+ * and gating would hide exactly the rows a viewer cannot otherwise reach — an unliftable
+ * preference, which is the trap this whole route exists to close. Videos that are genuinely
+ * gone are already gone from here, by the `ON DELETE cascade` on the foreign key.
+ *
+ * The `innerJoin` on `user` is therefore the only row filter, and it drops nothing in
+ * practice: `video.creatorId` is `NOT NULL` and cascades with the account.
+ */
+export async function listNotInterestedVideos(input: {
+  readonly viewerId: string;
+  readonly limit: number;
+  readonly cursor: string | null;
+}): Promise<
+  Result<
+    { readonly rows: readonly NotInterestedVideoRow[]; readonly nextCursor: string | null },
+    FeedPreferenceError
+  >
+> {
+  const decodedCursor = input.cursor === null ? null : decodeInstantCursor(input.cursor);
+  if (input.cursor !== null && decodedCursor === null) {
+    return { success: false, error: { type: "CURSOR_MALFORMED" } };
+  }
+
+  // Newest first, so the dismissal somebody regrets — almost always the one they just made —
+  // is on the first page. The tiebreak sorts the same direction as the instant; a cursor
+  // whose two columns disagree on direction skips rows at every page boundary.
+  const cursorCondition =
+    decodedCursor === null
+      ? undefined
+      : or(
+          lt(videoNotInterested.createdAt, decodedCursor.instant),
+          and(
+            eq(videoNotInterested.createdAt, decodedCursor.instant),
+            lt(videoNotInterested.videoId, decodedCursor.id),
+          ),
+        );
+
+  // One extra row, exactly as the comment listing does it: its presence is what proves a next
+  // page exists, without a COUNT over every dismissal the viewer ever made.
+  const rows = await db
+    .select({
+      videoId: video.id,
+      title: video.title,
+      thumbnailUrl: video.thumbnailUrl,
+      creatorName: user.name,
+      creatorHandle: user.handle,
+      dismissedAt: videoNotInterested.createdAt,
+    })
+    .from(videoNotInterested)
+    .innerJoin(video, eq(video.id, videoNotInterested.videoId))
+    .innerJoin(user, eq(user.id, video.creatorId))
+    .where(and(eq(videoNotInterested.viewerId, input.viewerId), cursorCondition))
+    .orderBy(desc(videoNotInterested.createdAt), desc(videoNotInterested.videoId))
+    .limit(input.limit + 1);
+
+  const pageRows = rows.slice(0, input.limit);
+  const lastRow = pageRows.at(-1);
+  const nextCursor =
+    rows.length > input.limit && lastRow !== undefined
+      ? encodeInstantCursor({ instant: lastRow.dismissedAt, id: lastRow.videoId })
+      : null;
+
+  return { success: true, value: { rows: pageRows, nextCursor } };
 }

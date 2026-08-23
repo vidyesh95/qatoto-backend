@@ -134,6 +134,24 @@ export const ListVideoCommentsQuerySchema = z
   .strict();
 
 /**
+ * The viewer's own dismissed videos — `GET /users/me/not-interested-videos`.
+ *
+ * THE SAME TWO FIELDS AS THE COMMENT LISTING, and the same bounds, because it is the same
+ * keyset codec underneath. A `limit` ceiling of 50 is what keeps one request from asking for
+ * every dismissal an account ever made.
+ *
+ * NO `sort`, and no filter of any kind. This list has exactly one useful order — most recently
+ * dismissed first, which is what somebody looking to undo is reaching for — and a filter over a
+ * list whose whole purpose is to be emptied would be a control for a problem nobody has.
+ */
+export const ListNotInterestedVideosQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    cursor: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+
+/**
  * The viewer's own watch time — `GET /users/me/watch-time`. One optional field, and it decides
  * only where a day starts.
  *

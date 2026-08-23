@@ -478,6 +478,20 @@ export const videoNotInterested = pgTable(
     // FOR THE FOREIGN-KEY CASCADE, not for a query. Deleting a video has to find its rows
     // here, and without this that is a sequential scan of the whole table.
     index("video_not_interested_videoId_idx").on(table.videoId),
+    // FOR `GET /users/me/not-interested-videos`, and it is not served by either of the two
+    // above. The PK leads on `viewer_id` but its second column is `video_id`, so it answers
+    // the feed's point probe and nothing else; a viewer-scoped page ordered by
+    // `created_at DESC` would sort every one of that viewer's rows on each request.
+    //
+    // THE TIEBREAK COLUMN IS PART OF THE INDEX, not decoration. That listing is keyset —
+    // `(created_at, video_id)`, because two dismissals share a millisecond often enough
+    // (tap a card, tap the next) — and a cursor whose second column the index does not
+    // carry re-sorts on every page.
+    index("video_not_interested_viewer_recent_idx").on(
+      table.viewerId,
+      table.createdAt.desc(),
+      table.videoId.desc(),
+    ),
   ],
 );
 

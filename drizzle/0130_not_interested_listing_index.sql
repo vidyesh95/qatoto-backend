@@ -1,0 +1,29 @@
+-- ---------------------------------------------------------------------------
+-- ONE INDEX, FOR ONE NEW READ: `GET /users/me/not-interested-videos`.
+--
+-- 0127 gave `video_not_interested` a primary key on (viewer_id, video_id) and an index on
+-- (video_id), and its own comment says why: the PK serves the feed's per-viewer `NOT EXISTS`
+-- probe, and the single-column index exists for the foreign-key cascade. Neither was ever
+-- meant to back a LISTING, because until now there wasn't one — the "not interested" button
+-- was write-only, and the undo lived on the card that the button had just hidden.
+--
+-- That is what this route closes, and it changes the access pattern: a viewer-scoped page in
+-- `created_at DESC` order. The PK's second column is `video_id`, so it can find a viewer's
+-- rows but not return them in time order — Postgres would read every dismissal that viewer
+-- ever made and sort it, on every page.
+--
+-- THE THIRD COLUMN IS NOT DECORATION. The listing is keyset on (created_at, video_id),
+-- because two dismissals land in the same millisecond more often than the phrase suggests —
+-- it is one tap, then the next card's tap — and a cursor keyed on a non-unique column skips
+-- whichever row loses the tie. Both sort columns descend, matching the ORDER BY exactly; an
+-- index whose direction disagrees with the query's is an index the planner walks backwards
+-- at best and ignores at worst.
+--
+-- NOT `CONCURRENTLY`: this repo's migrations run in a transaction, which forbids it. The
+-- table is small enough today that the write lock is measured in milliseconds. If that stops
+-- being true, this is the statement to move to a concurrent build outside the migration.
+--
+-- RUN ORDER: indexes only. No tables, no enums, no constraints.
+-- ---------------------------------------------------------------------------
+
+CREATE INDEX "video_not_interested_viewer_recent_idx" ON "video_not_interested" USING btree ("viewer_id","created_at" DESC,"video_id" DESC);
