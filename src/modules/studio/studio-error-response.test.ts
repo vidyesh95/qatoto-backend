@@ -33,7 +33,9 @@ const CASES: ReadonlyArray<{ readonly error: StudioDomainError; readonly statusC
   { error: { type: "INVALID_CHAPTERS", reason: "NOT_ASCENDING", index: 2 }, statusCode: 422 },
   { error: { type: "PRODUCT_NOT_OWNED", productIds: ["a", "b"] }, statusCode: 422 },
   { error: { type: "PLAYLIST_NOT_OWNED", playlistIds: ["a"] }, statusCode: 422 },
-  { error: { type: "VIDEO_NOT_OWNED", videoIds: ["a"] }, statusCode: 422 },
+  // Renamed from `VIDEO_NOT_OWNED` when playlists stopped being owner-only: the refusal is
+  // now "that video is not available to add", not "that video is not yours".
+  { error: { type: "VIDEO_NOT_FOUND_FOR_PLAYLIST", videoIds: ["a"] }, statusCode: 422 },
   { error: { type: "ANIME_SERIES_NOT_FOUND", seriesId: "s1" }, statusCode: 422 },
   { error: { type: "ANIME_SEASON_NOT_FOUND", seasonId: "sn1" }, statusCode: 422 },
   { error: { type: "NOT_AN_ANIME_EPISODE" }, statusCode: 422 },

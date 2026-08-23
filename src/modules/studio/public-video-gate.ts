@@ -28,7 +28,8 @@ const PUBLICLY_SERVABLE = sql`${video.publishStatus} = 'published'
     AND ${video.visibility} = 'public'
     AND ${video.uploadStatus} = 'ready'
     AND ${video.isSourceVerified} = true
-    AND ${video.reviewStatus} IN ('not_required', 'approved')`;
+    AND ${video.reviewStatus} IN ('not_required', 'approved')
+    AND ${video.moderationVisibilityState} = 'visible'`;
 
 /** The little the engagement services need to know about a video they may write to. */
 export interface PublicVideoGateRow {

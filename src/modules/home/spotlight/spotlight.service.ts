@@ -64,6 +64,7 @@ function publicVideoPredicateSql(): ReturnType<typeof sql> {
         AND v.upload_status = 'ready'
         AND v.is_source_verified = true
         AND v.review_status IN ('not_required', 'approved')
+        AND v.moderation_visibility_state = 'visible'
         AND v.published_at IS NOT NULL AND v.published_at <= now()`;
 }
 

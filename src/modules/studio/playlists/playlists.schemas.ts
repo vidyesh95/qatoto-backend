@@ -56,6 +56,29 @@ export const ListMyPlaylistsQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
+    /**
+     * Optional. When present, every row answers `containsVideo` for this id.
+     *
+     * NO `.default()`, and that is the point — the parameter's ABSENCE is the signal that
+     * nobody asked about membership, and the service drops the key rather than answering
+     * `false`. A default here would make every plain list read claim that none of the
+     * caller's playlists contain some video nobody named.
+     */
+    videoId: z.string().min(1).max(64).optional(),
+  })
+  .strict();
+
+/**
+ * `PUT`/`DELETE /playlists/:playlistId/videos/:videoId`.
+ *
+ * Both ids in the path, neither in a body — so these routes read no body at all, which is
+ * why they carry no `compactBody` (a cap on a bodyless route fails `json-body-budget.test.ts`)
+ * and no idempotency key (`playlist_item_unq` already makes both verbs idempotent).
+ */
+export const PlaylistVideoParamsSchema = z
+  .object({
+    playlistId: z.string().min(1).max(64),
+    videoId: z.string().min(1).max(64),
   })
   .strict();
 

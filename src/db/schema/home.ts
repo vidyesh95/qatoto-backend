@@ -18,6 +18,10 @@ import {
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 import { user } from "#src/db/schema/_core.js";
+// A TABLE reference, so the import cycle is harmless: every cross-file foreign key here is
+// a thunk that resolves long after both modules finish evaluating. `_primitives.ts`'s header
+// is about eagerly-CALLED symbols, which this is not.
+import { platformAuditEntry } from "#src/db/schema/platform.js";
 import {
   animeAudioModeEnum,
   animeSeriesStatusEnum,
@@ -1112,6 +1116,174 @@ export const contentReviewAction = pgTable(
     // A rejection with no reason is unactionable for the creator and unauditable for
     // the next moderator.
     check("content_review_action_reason_ck", sql`(action <> 'reject') OR (reason IS NOT NULL)`),
+  ],
+);
+
+/*
+ * VIDEO CONTENT REPORTING — the fourth report fork, and the fourth is not an accident.
+ *
+ * `research_program_content_report`, `commerce_content_report` and
+ * `community_content_report` each exist because the surface before them refused to
+ * generalize, and each recorded why. The reason is always the same and it is worth stating
+ * once more: two report queues gated by DIFFERENT capabilities in one table is "the coupling
+ * capabilities exist to prevent". A commerce moderator working counterfeit listings and a
+ * content moderator judging a video are not the same shift.
+ *
+ * THIS ONE ALSO CANNOT REUSE `content_review_action` DIRECTLY ABOVE, which is the reuse that
+ * looks obvious — it is already the video moderation log. Two columns forbid it, and
+ * `commerce_content_report`'s own docblock predicted both:
+ *
+ *   `reviewerId` is NOT NULL. Fine for the anime queue, where a human always decides.
+ *   `videoId` is NOT NULL with a CASCADE, so a decision vanishes when its subject does —
+ *     the opposite of what an audit needs, and the reason the action table below uses
+ *     `set null` instead.
+ *
+ * WHAT THIS FORK DELIBERATELY DOES NOT COPY FROM COMMERCE: the automatic path. There is no
+ * `action_source`, no nullable moderator, no threshold. Commerce auto-hides a review at
+ * three reporters but NEVER a product, because "delisting a seller's listing is a commercial
+ * action against their livelihood and requires a human to take it". A video is a creator's
+ * livelihood by exactly that argument, so every hide here names a human — which is what lets
+ * `moderatorUserId` and `auditEntryId` both be NOT NULL, the community and R&D shape.
+ */
+
+/** Why someone reported a video. Video-specific, and NOT shared with the other three forks. */
+export const videoContentReportReasonEnum = pgEnum("video_content_report_reason", [
+  "sexual_content",
+  "violence",
+  "hateful_or_abusive",
+  "harassment",
+  "child_safety",
+  "spam_or_misleading",
+  "copyright",
+  "other",
+]);
+
+export const videoContentReportStatusEnum = pgEnum("video_content_report_status", [
+  "open",
+  "actioned",
+  "dismissed",
+]);
+
+export const videoModerationActionKindEnum = pgEnum("video_moderation_action_kind", [
+  "content_hidden",
+  "content_restored",
+  "report_dismissed",
+]);
+
+/**
+ * A viewer flagging a video.
+ *
+ * ONE TARGET, so none of commerce's XOR machinery: no five nullable foreign keys, no
+ * `num_nonnulls(...) = 1`, no per-kind biconditional. `videoId` is simply NOT NULL. That
+ * apparatus exists there because one queue covers five different things; this one covers a
+ * video, and inventing a `targetKind` column with a single member would be ceremony.
+ *
+ * ONE REPORT PER PERSON PER VIDEO, through the partial unique index below — so a brigading
+ * loop cannot inflate the queue and `409 ALREADY_REPORTED` is an honest answer rather than a
+ * silent second row.
+ */
+export const videoContentReport = pgTable(
+  "video_content_report",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    reason: videoContentReportReasonEnum("reason").notNull(),
+    detailText: text("detail_text"),
+    // `set null`, NOT cascade: a deleted account must not erase the report it filed. The
+    // report is evidence about the VIDEO, and it stays evidence once the reporter is gone.
+    reporterUserId: text("reporter_user_id").references(() => user.id, { onDelete: "set null" }),
+    status: videoContentReportStatusEnum("status").default("open").notNull(),
+    // `restrict`, unlike the reporter above, and the asymmetry is the point: a moderator
+    // cannot be deleted out from under a decision they made. Account deletion is an
+    // anonymization flow, not a DELETE — the same rule `content_review_action` follows.
+    resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    resolvedAt: timestamp("resolved_at", { precision: 3 }),
+    resolutionNote: text("resolution_note"),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    // `reporter_user_id IS NOT NULL` in the predicate because the column is nullable by the
+    // `set null` above: two reports whose reporters have both been deleted are two NULLs,
+    // and NULLs do not collide in a unique index anyway. Stating it keeps the index partial
+    // and small rather than indexing rows nothing will ever probe.
+    uniqueIndex("video_content_report_reporter_uidx")
+      .on(table.videoId, table.reporterUserId)
+      .where(sql`reporter_user_id IS NOT NULL`),
+    // The queue read: open reports, oldest first. `id` is the tiebreak that makes the
+    // keyset cursor total — `created_at` alone is not unique.
+    index("video_content_report_queue_idx").on(table.status, table.createdAt, table.id),
+    index("video_content_report_videoId_idx").on(table.videoId, table.status),
+    check(
+      "video_content_report_detail_ck",
+      sql`detail_text IS NULL OR char_length(detail_text) BETWEEN 1 AND 2000`,
+    ),
+    // Byte-identical to the same check in all three other forks. Both halves matter: a
+    // resolver with no timestamp is a half-written decision, and an `open` row carrying a
+    // resolution is a queue entry that will be handed to a moderator twice.
+    check(
+      "video_content_report_resolution_ck",
+      sql`(resolved_by_user_id IS NULL) = (resolved_at IS NULL)
+          AND (status = 'open') = (resolved_at IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * What staff DID, kept apart from what was reported.
+ *
+ * TARGETS ARE `set null`, the opposite of the report table's cascade, and deliberately so: a
+ * report about a deleted video is noise, but a record that staff hid something is exactly
+ * what an audit needs to still find afterwards.
+ *
+ * `moderatorUserId`, `moderatorRoleSnapshot` and `auditEntryId` are ALL NOT NULL, unlike
+ * commerce's nullable trio — see the block above `videoContentReport`. No automatic path
+ * exists here, so there is no authorless row to accommodate and no `action_source` column
+ * needed to tell the two apart.
+ *
+ * THE ROLE IS A SNAPSHOT, NEVER A JOIN. Roles are revocable; "who was this person when they
+ * decided" is not a question `user.platformRole` can answer later.
+ */
+export const videoModerationAction = pgTable(
+  "video_moderation_action",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    actionKind: videoModerationActionKindEnum("action_kind").notNull(),
+    videoId: text("video_id").references(() => video.id, { onDelete: "set null" }),
+    reportId: text("report_id").references(() => videoContentReport.id, { onDelete: "set null" }),
+    moderatorUserId: text("moderator_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    moderatorRoleSnapshot: text("moderator_role_snapshot").notNull(),
+    reasonNote: text("reason_note").notNull(),
+    // The hash-chain entry. NOT NULL because every action here has a human behind it, so
+    // every one of them belongs in the chain — an unlogged staff action is the thing the
+    // chain exists to make impossible.
+    auditEntryId: text("audit_entry_id")
+      .notNull()
+      .references(() => platformAuditEntry.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    // One action per chain entry, both directions.
+    uniqueIndex("video_moderation_action_audit_uidx").on(table.auditEntryId),
+    index("video_moderation_action_timeline_idx").on(table.createdAt, table.id),
+    index("video_moderation_action_video_idx").on(table.videoId, table.createdAt),
+    check(
+      "video_moderation_action_reason_ck",
+      sql`char_length(reason_note) BETWEEN 1 AND 2000`,
+    ),
+    check(
+      "video_moderation_action_role_ck",
+      sql`char_length(moderator_role_snapshot) BETWEEN 1 AND 40`,
+    ),
   ],
 );
 

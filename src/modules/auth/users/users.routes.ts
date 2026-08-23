@@ -13,6 +13,7 @@ import * as privacyController from "#src/modules/auth/privacy/privacy.controller
 import { uploadAvatarPhoto } from "#src/modules/auth/users/upload-avatar.js";
 import * as usersController from "#src/modules/auth/users/users.controller.js";
 import * as engagementController from "#src/modules/home/engagement/engagement.controller.js";
+import * as videoContentReportsController from "#src/modules/studio/video-content-reports.controller.js";
 
 const router = express.Router();
 
@@ -94,6 +95,19 @@ router.get("/me/watch-time", requireAuth, engagementController.getMyWatchTime);
  * the service for why a cursor here would be machinery for a page that cannot exist.
  */
 router.get("/me/muted-creators", requireAuth, engagementController.listMyMutedCreators);
+
+/**
+ * GET /users/me/video-reports
+ * The caller's own content reports and how each was resolved — the data behind
+ * `/report-history`. Third in this small family of self-reads, declared before `/:id`.
+ *
+ * IT IS HERE RATHER THAN ON THE REPORTS ROUTER because `GET /videos/reports` would be one
+ * segment deep and permanently shadowed by the studio router's `GET /:videoId`.
+ *
+ * NO CAPABILITY, and the projection is deliberately narrow: the reporter learns their
+ * report's status and nothing about who decided it or who else reported the same video.
+ */
+router.get("/me/video-reports", requireAuth, videoContentReportsController.listMyVideoReports);
 
 /**
  * POST /users/me/deletion-request

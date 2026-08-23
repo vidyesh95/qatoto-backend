@@ -78,6 +78,7 @@ import commerceProductQaRouter from "#src/modules/store/trust/commerce-product-q
 import commerceTrustRouter from "#src/modules/store/trust/commerce-trust.routes.js";
 import playlistsRouter from "#src/modules/studio/playlists/playlists.routes.js";
 import seriesRouter from "#src/modules/studio/series/series.routes.js";
+import videoContentReportsRouter from "#src/modules/studio/video-content-reports.routes.js";
 import videosRouter from "#src/modules/studio/videos/videos.routes.js";
 import indexRouter from "#src/routes/index.js";
 
@@ -344,6 +345,12 @@ app.use("/videos", videosRouter);
 // Every route in engagementRouter is therefore two segments deep or more, and
 // engagement.routes.order.test.ts asserts exactly that.
 app.use("/videos", engagementRouter);
+// The third router on this prefix, and it obeys the same two-segment rule for the same
+// reason: `POST /:videoId/reports` and `/admin/content-reports` both clear `GET /:videoId`.
+// Reporting is not on videosRouter because that router is owner-scoped throughout — every
+// route there answers 404 for a video you did not upload, which is the opposite of what a
+// report route needs.
+app.use("/videos", videoContentReportsRouter);
 // Root-mounted, like notificationsRouter and applicationInboxRouter: a comment id and a
 // creator id are globally unique and come from a listing, so nesting them under the
 // owning video would make the client assert a pairing the server re-checks anyway.

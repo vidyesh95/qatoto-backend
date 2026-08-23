@@ -228,6 +228,15 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
    * and stamping the chain on every dashboard refresh would bury the entries that name a person.
    */
   "platform_metrics_user_segment_viewed",
+  // Video content moderation — `video-content-reports`. Staff decisions only, and unlike
+  // the commerce block above there is NO automatic counterpart to exclude: video reporting
+  // has no threshold hide, because taking down a video is an action against a creator's
+  // livelihood and commerce already made that call for products. So every hide of a video
+  // names a human and every one of them is in this chain — there is no second table of
+  // authorless actions the way `commerce_moderation_action` needed.
+  "video_content_hidden",
+  "video_content_restored",
+  "video_content_report_dismissed",
 ]);
 
 /**

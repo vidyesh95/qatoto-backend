@@ -108,6 +108,26 @@ export const contentReviewStatusEnum = pgEnum("content_review_status", [
   "approved",
   "rejected",
 ]);
+/**
+ * A FOURTH ORTHOGONAL STATUS ON `video`, and the reason it is a new column rather than a
+ * value on one of the three that already exist.
+ *
+ * `review_status: 'rejected'` is the ANIME QUEUE's verdict — an episode that never came out
+ * of pre-publication review. Reusing it for "a moderator took this down after a report"
+ * would merge two facts a creator experiences completely differently and would put reported
+ * videos into the anime review queue's `pending`/`rejected` counts. `publish_status: 'draft'`
+ * is worse: it says the CREATOR chose not to publish, and handing a moderator the creator's
+ * own switch loses the distinction the moment anyone looks at the row.
+ *
+ * TWO VALUES, not commerce's four. `commerce_ugc_visibility_state` needs
+ * `hidden_pending_review` because a threshold can hide something with no human involved, and
+ * `removed_by_author` because a review's author can retract it. Neither exists here: every
+ * hide names a moderator, and a creator retracting their own video is `publish_status`.
+ */
+export const videoModerationVisibilityStateEnum = pgEnum("video_moderation_visibility_state", [
+  "visible",
+  "hidden_by_moderator",
+]);
 
 export const videoLicenseEnum = pgEnum("video_license", ["standard", "creative_commons"]);
 
@@ -286,6 +306,25 @@ export const video = pgTable(
     publishedAt: timestamp("published_at"),
     reviewStatus: contentReviewStatusEnum("review_status").default("not_required").notNull(),
     rejectionReason: text("rejection_reason"),
+    /**
+     * A FOURTH ORTHOGONAL STATUS, and rule 3 above is exactly why it is its own column: the
+     * three beside it are the media lifecycle, the CREATOR's distribution choice, and the
+     * PRE-publication verdict. This is a POST-publication one, taken by staff on a video
+     * that was already live, and folding it into any of the three loses who decided what.
+     *
+     * WRITTEN ONLY BY `video-content-reports.service.ts`, never by a creator route. A
+     * creator cannot clear it — that is the point of a takedown — and the restore route is
+     * the only path back to `visible`.
+     *
+     * EVERY PUBLIC READ MUST FILTER ON IT. There are three copies of that predicate in this
+     * codebase and all three carry this term: `PUBLICLY_SERVABLE` (public-video-gate.ts),
+     * `publicVideoPredicate()` (feed.service.ts) and `publicVideoPredicateSql()`
+     * (spotlight.service.ts). A new read that forgets it serves hidden content, and nothing
+     * will fail to tell you.
+     */
+    moderationVisibilityState: videoModerationVisibilityStateEnum("moderation_visibility_state")
+      .default("visible")
+      .notNull(),
 
     // --- "Show more" advanced fields ---
     license: videoLicenseEnum("license").default("standard").notNull(),

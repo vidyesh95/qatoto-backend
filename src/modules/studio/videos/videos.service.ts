@@ -633,10 +633,15 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
       .from(videoDocument)
       .where(eq(videoDocument.videoId, row.id))
       .orderBy(asc(videoDocument.position)),
+    // SCOPED TO THE VIDEO'S OWNER, who is the only person this projection is ever built
+    // for. Unscoped — as it was — this hands a creator the ids of every STRANGER'S playlist
+    // that holds their video, which is neither theirs to know nor anything the picker can
+    // do something with: `setVideoPlaylists` writes only within their own playlists.
     db
       .select({ playlistId: playlistItem.playlistId })
       .from(playlistItem)
-      .where(eq(playlistItem.videoId, row.id)),
+      .innerJoin(playlist, eq(playlist.id, playlistItem.playlistId))
+      .where(and(eq(playlistItem.videoId, row.id), eq(playlist.creatorId, row.creatorId))),
     // Ordered by the taxonomy's own sortOrder rather than by insertion: video_category has
     // no position column on purpose, so the only ordering available is the global one, and
     // an arbitrary order would render two chips differently on two page loads.
@@ -1680,7 +1685,26 @@ export async function setVideoPlaylists(
   }
 
   await db.transaction(async (tx) => {
-    await tx.delete(playlistItem).where(eq(playlistItem.videoId, videoId));
+    // THE `creatorId` TERM IS LOAD-BEARING AND MUST NOT BE DROPPED.
+    //
+    // This used to be `where(eq(playlistItem.videoId, videoId))` — scoped by video and
+    // nothing else. That was safe only while a video could sit in no playlist but its own
+    // uploader's. Now that any viewer may add a public video to their own playlist, the
+    // unscoped form means: a creator opens their own upload's playlist picker, presses
+    // Save, and SILENTLY EVICTS THAT VIDEO FROM EVERY STRANGER'S PLAYLIST — transactionally,
+    // with no error and nothing to undo it from.
+    //
+    // The subquery is the caller's own playlists, so this endpoint keeps meaning "set which
+    // of MY playlists hold this video" and stops meaning "set which playlists anywhere do".
+    await tx.delete(playlistItem).where(
+      and(
+        eq(playlistItem.videoId, videoId),
+        inArray(
+          playlistItem.playlistId,
+          tx.select({ id: playlist.id }).from(playlist).where(eq(playlist.creatorId, creatorId)),
+        ),
+      ),
+    );
     for (const playlistId of uniquePlaylistIds) {
       const [tail] = await tx
         .select({ nextPosition: sql<number>`coalesce(max(${playlistItem.position}), -1) + 1` })

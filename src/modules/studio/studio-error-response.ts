@@ -205,10 +205,16 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
         message: "You can only add this video to your own playlists.",
         errors: { playlistIds: [...error.playlistIds] },
       };
-    case "VIDEO_NOT_OWNED":
+    case "VIDEO_NOT_FOUND_FOR_PLAYLIST":
+      // REPLACED `VIDEO_NOT_OWNED`, which no longer exists: a playlist may now hold anyone's
+      // publicly-servable video. What is left is not an ownership refusal but a lookup one —
+      // the id names a video that is private, unpublished, rejected, or nothing at all — so
+      // the message must not say "yours", which would send a viewer looking for a permission
+      // they do not need. 422 rather than 404 because these ids arrive in a body or a path
+      // alongside a playlist id that DID resolve.
       return {
         statusCode: 422,
-        message: "You can only add your own videos to a playlist.",
+        message: "That video is not available to add.",
         errors: { videoIds: [...error.videoIds] },
       };
     case "ANIME_SERIES_NOT_FOUND":

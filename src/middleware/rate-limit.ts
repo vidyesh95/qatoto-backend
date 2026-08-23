@@ -1083,6 +1083,43 @@ export const feedPreferenceLimiter = createLimiter({
 });
 
 /**
+ * PUT · DELETE /playlists/:playlistId/videos/:videoId — save-to-playlist from a card menu.
+ *
+ * THE FIRST LIMITER ON THE PLAYLIST ROUTER, and it is these two routes rather than the
+ * older five because these are the ones reachable from every card in the feed; the rest are
+ * one studio screen. `rate-limit-coverage.test.ts` keeps the unlimited ones in a snapshot
+ * and says "the right direction for this list is DOWN" — this is that direction.
+ *
+ * Same budget as like/save, and the same reasoning: `playlist_item_unq` already makes both
+ * verbs idempotent, so this bounds scripted churn rather than someone curating a playlist
+ * by hand, which is a slower activity than tapping a heart.
+ */
+export const playlistMutationLimiter = createLimiter({
+  namespace: "playlistMutation",
+  windowMs: ONE_MINUTE_MS,
+  limit: 120,
+});
+
+/**
+ * POST /videos/:videoId/reports.
+ *
+ * ITS OWN NAMESPACE rather than sharing `contentReportLimiter` with R&D or
+ * `commerceContentReportLimiter` with the store — the policy that file already states: a
+ * shared budget means abuse of one product's report surface silently exhausts the other's,
+ * and the reporter populations have nothing to do with each other.
+ *
+ * TIGHT, and tighter in effect than commerce's despite the same numbers. The partial unique
+ * index already caps one person at one report per video, so this bounds someone reporting
+ * many DIFFERENT videos — which is exactly the shape a brigading attempt takes, and the only
+ * shape left once the index has done its work.
+ */
+export const videoContentReportLimiter = createLimiter({
+  namespace: "videoContentReport",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/**
  * PUT · DELETE /watch-history/videos/:videoId, and DELETE /watch-history.
  *
  * Same budget as like and save, and for the same reason: both verbs are idempotent —

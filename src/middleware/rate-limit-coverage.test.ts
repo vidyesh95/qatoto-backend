@@ -50,6 +50,11 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/feed", specifier: "#src/modules/home/feed/feed.routes.js", exportName: "default" },
   { mountPath: "/videos", specifier: "#src/modules/studio/videos/videos.routes.js", exportName: "default" },
   { mountPath: "/videos", specifier: "#src/modules/home/engagement/engagement.routes.js", exportName: "default" },
+  {
+    mountPath: "/videos",
+    specifier: "#src/modules/studio/video-content-reports.routes.js",
+    exportName: "default",
+  },
   { mountPath: "/", specifier: "#src/modules/home/engagement/engagement.routes.js", exportName: "commentRouter" },
   { mountPath: "/", specifier: "#src/modules/home/engagement/engagement.routes.js", exportName: "creatorRouter" },
   { mountPath: "/playlists", specifier: "#src/modules/studio/playlists/playlists.routes.js", exportName: "default" },

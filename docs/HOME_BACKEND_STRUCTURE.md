@@ -495,6 +495,7 @@ AND (publishedAt > now() - interval '180 days' OR id IN (SELECT video_id FROM tr
 AND NOT EXISTS (counted view by this viewer in the last 30 days)
 AND NOT EXISTS (video_not_interested row for this viewer)      -- §5.2b, never relaxed
 AND NOT EXISTS (creator_mute row for this viewer × this creator) -- §5.2b, never relaxed
+AND moderation_visibility_state = 'visible'                      -- §5.2c, staff takedown
 ```
 
 The 180-day window is what stops this becoming a full-table scan as the catalog grows; the
@@ -775,6 +776,66 @@ sub-path.
 > withdraw is a trap. Unpaginated: the list is bounded by how many channels one person muted by
 > hand. It sits on the users router beside `/users/me/watch-time`, declared before `/:id`.
 
+### 5.2c Video content reporting
+
+The fourth report fork on this platform, after R&D, commerce and community. Each of those
+records why it refused to generalize the last, and the reason is always the same: two queues
+gated by different capabilities in one table is the coupling capabilities exist to prevent.
+
+| Method | Path                                                    | Auth                          | Limiter                    |
+| ------ | ------------------------------------------------------- | ----------------------------- | -------------------------- |
+| `POST` | `/videos/:videoId/reports`                              | full account                  | `videoContentReportLimiter` |
+| `GET`  | `/videos/admin/content-reports`                         | `moderate_content` in-service | `contentReviewLimiter`     |
+| `POST` | `/videos/admin/content-reports/:reportId/decisions`     | `moderate_content` in-service | `contentReviewLimiter`     |
+| `POST` | `/videos/admin/content/restore`                         | `moderate_content` in-service | `contentReviewLimiter`     |
+| `GET`  | `/users/me/video-reports`                               | session                       | —                          |
+
+Tables `video_content_report` and `video_moderation_action`, plus
+`video.moderation_visibility_state`. Migrations `0128_video_moderation_enums` (split for
+`ALTER TYPE … ADD VALUE`) and `0129_video_content_reports`.
+
+> **NOTHING AUTO-HIDES, AND THAT IS THE DECISION THE WHOLE FORK TURNS ON.** Commerce hides a
+> review, question or answer at three distinct reporters, counted inside the insert's own
+> transaction — and never does that to a product, because "delisting a seller's listing is a
+> commercial action against their livelihood and requires a human to take it". A video is a
+> creator's livelihood by exactly that argument.
+>
+> So there is no threshold, and the schema is simpler for it: no `action_source` column, no
+> nullable moderator, no three-way biconditional CHECK keeping an authorless row honest.
+> `moderator_user_id`, `moderator_role_snapshot` and `audit_entry_id` are all NOT NULL, and
+> every action is in the platform hash chain — where commerce had to keep automatic hides OUT
+> of it, `platform_audit_entry.actor_user_id` being NOT NULL. This is the community/R&D shape,
+> chosen on the merits rather than copied.
+>
+> **NOT A REUSE OF `content_review_action`**, which is already the video moderation log and is
+> the reuse that looks obvious. Its `reviewer_id` is NOT NULL, and its `video_id` is NOT NULL
+> with a CASCADE — so a decision vanishes when its subject does, which is backwards for an
+> audit. `commerce_content_report`'s docblock predicted this failing.
+>
+> **THE COLUMN ONLY HIDES ANYTHING BECAUSE THREE PREDICATES SAY SO**, and a new read that
+> forgets the term serves hidden content with nothing failing: `PUBLICLY_SERVABLE`
+> (public-video-gate.ts — every engagement write and the watch payload), `publicVideoPredicate()`
+> (feed.service.ts — feed AND search) and `publicVideoPredicateSql()` (spotlight.service.ts).
+> `video_feed_candidate_idx` is NOT rebuilt: adding a conjunct still implies its predicate, and
+> rebuilding takes a lock over every write to `video`.
+>
+> **DISMISSING DOES NOT RESTORE**, unlike commerce. There, dismissal must un-hide because a
+> threshold could have hidden content with nobody deciding. Here nothing hides a video except a
+> moderator, so a dismissal has nothing to undo — and quietly reversing a different moderator's
+> decision as a side effect of closing an unrelated report is not a dismissal's job.
+> `POST /admin/content/restore` is that, and it exists because a video can be hidden with no
+> open report left to dismiss: hidden, reports actioned, later reconsidered. Its `reasonNote` is
+> REQUIRED where a decision note is optional — an un-hide with no stated reason is not a record.
+>
+> **ACTIONING CLOSES EVERY OPEN REPORT ON THE VIDEO**, not only the one clicked. Leaving
+> siblings open means the next reviewer re-decides a settled case and the queue never drains.
+>
+> **`GET /users/me/video-reports` HAS NO PRECEDENT** — commerce, community and R&D all let
+> someone file a report and then tell them nothing. Its projection is deliberately narrow: the
+> reporter learns their own report's status and nothing about who decided it or how many others
+> reported the same video. Naming the moderator makes a takedown personal; exposing the count
+> makes brigading measurable.
+
 ### 5.3 `live` is not a mode
 
 The chip exists in `filter.tsx` today. Nothing backs it: there is no stream table, no ingest, no
@@ -872,7 +933,11 @@ tightest on the platform, it is the only unauthenticated write) · `playbackErro
 `commentUpdateLimiter` · `commentLikeLimiter` · `subscribeLimiter` · `watchHistoryLimiter` ·
 `feedPreferenceLimiter` (60/min — half like/save, because §5.2b's four routes are the only
 engagement writes reachable without a full account, so this bounds storage growth from throwaway
-identities where `requireIdentifiedUser` bounds it everywhere else).
+identities where `requireIdentifiedUser` bounds it everywhere else) · `videoContentReportLimiter`
+(20/15min — its OWN namespace, never shared with the R&D or commerce report limiters: a shared
+budget means abuse of one product's report surface silently exhausts the other's. The partial
+unique index already caps one person at one report per video, so this bounds someone reporting
+many DIFFERENT videos, which is the shape brigading takes) · `playlistMutationLimiter`.
 
 > **SHIPPED AS.** `viewBeaconLimiter` is TWO chained limiters, because `LimiterSpec` carries one
 > window and `createRateLimitStore` is keyed to it. Burst is declared first so a burst violator's

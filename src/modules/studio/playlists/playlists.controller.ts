@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import {
   CreatePlaylistSchema,
   ListMyPlaylistsQuerySchema,
+  PlaylistVideoParamsSchema,
   ReplacePlaylistVideosSchema,
   UpdatePlaylistSchema,
 } from "#src/modules/studio/playlists/playlists.schemas.js";
@@ -60,6 +61,7 @@ export async function getMyPlaylists(req: Request, res: Response): Promise<void>
     req.user.id,
     parsedQuery.data.page,
     parsedQuery.data.limit,
+    parsedQuery.data.videoId,
   );
 
   const response: PaginatedResponse = {
@@ -189,4 +191,64 @@ export async function replacePlaylistVideos(req: Request, res: Response): Promis
     data: replaceResult.value,
   };
   res.status(200).json(response);
+}
+
+/**
+ * `PUT`/`DELETE /playlists/:playlistId/videos/:videoId` — one video, the card menu's verb.
+ *
+ * Both handlers answer the WHOLE playlist rather than an acknowledgement, so the picker can
+ * settle its checked state and its count on the server's answer instead of guessing which
+ * of the two it just changed.
+ */
+async function respondToPlaylistVideoToggle(
+  req: Request,
+  res: Response,
+  shouldBeInPlaylist: boolean,
+): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedParams = PlaylistVideoParamsSchema.safeParse({
+    playlistId: firstParam(req.params.playlistId ?? ""),
+    videoId: firstParam(req.params.videoId ?? ""),
+  });
+  if (!parsedParams.success) {
+    respondValidationFailed(res, parsedParams.error);
+    return;
+  }
+
+  const toggleResult = shouldBeInPlaylist
+    ? await playlistsService.addVideoToPlaylist(
+        req.user.id,
+        parsedParams.data.playlistId,
+        parsedParams.data.videoId,
+      )
+    : await playlistsService.removeVideoFromPlaylist(
+        req.user.id,
+        parsedParams.data.playlistId,
+        parsedParams.data.videoId,
+      );
+
+  if (!toggleResult.success) {
+    respondStudioError(res, toggleResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: shouldBeInPlaylist ? "Added to playlist." : "Removed from playlist.",
+    data: toggleResult.value,
+  };
+  res.status(200).json(response);
+}
+
+export function addVideoToPlaylist(req: Request, res: Response): Promise<void> {
+  return respondToPlaylistVideoToggle(req, res, true);
+}
+
+export function removeVideoFromPlaylist(req: Request, res: Response): Promise<void> {
+  return respondToPlaylistVideoToggle(req, res, false);
 }
