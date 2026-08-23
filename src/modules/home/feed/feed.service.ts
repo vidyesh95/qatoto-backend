@@ -289,6 +289,22 @@ async function computeAnonymousTopicAffinity(
         likeCount: 0,
         saveCount: 0,
         isSubscribedToCreator: false,
+        // THESE TWO ZEROES ARE NOT THE SAME KIND OF ZERO as the three above, and the
+        // difference is worth stating rather than letting the shared line imply otherwise.
+        // Like and save are gated by `requireIdentifiedUser`, so an anonymous session
+        // genuinely CANNOT have them. The two feed preferences are deliberately NOT gated
+        // that way — an anonymous session can dismiss a video and mute a creator — so a
+        // nonzero count may really exist and this zero is a limitation, not a fact.
+        //
+        // It is the right limitation to accept here. This function is keyed on a
+        // FINGERPRINT, which is all §4.4's cold start has; the preferences are keyed on a
+        // user id, and threading one in would mean two different identity models deciding
+        // one score. Nothing is lost that the viewer can see: §4.5's `NOT EXISTS` still
+        // removes the dismissed video and the muted creator from the candidate pool for
+        // anyone carrying a session. Only the topic DAMPING is skipped, which is the
+        // softer half and the half that needs a durable profile to be worth computing.
+        dismissalCount: 0,
+        isCreatorMuted: false,
       }).totalPoints,
     ]),
   );

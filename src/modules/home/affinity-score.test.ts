@@ -14,6 +14,8 @@ function engagedViewer(overrides: Partial<AffinityScoreInputs> = {}): AffinitySc
     likeCount: 3,
     saveCount: 1,
     isSubscribedToCreator: false,
+    dismissalCount: 0,
+    isCreatorMuted: false,
     ...overrides,
   };
 }
@@ -21,10 +23,14 @@ function engagedViewer(overrides: Partial<AffinityScoreInputs> = {}): AffinitySc
 describe("computeAffinityScorePoints", () => {
   it("keeps the components summing to the total and inside 0..100", () => {
     const breakdown = computeAffinityScorePoints(engagedViewer());
+    // The SAME identity both snapshot tables enforce as a CHECK — the negative component is
+    // subtracted, not added, so a version of this sum that omitted it would pass here and be
+    // refused by Postgres.
     const componentSum =
       breakdown.watchCountComponentPoints +
       breakdown.meanCompletionComponentPoints +
-      breakdown.explicitSignalComponentPoints;
+      breakdown.explicitSignalComponentPoints -
+      breakdown.negativeSignalComponentPoints;
 
     expect(componentSum).toBe(breakdown.totalPoints);
     expect(breakdown.totalPoints).toBeLessThanOrEqual(100);
@@ -61,6 +67,8 @@ describe("computeAffinityScorePoints", () => {
       likeCount: 0,
       saveCount: 0,
       isSubscribedToCreator: false,
+      dismissalCount: 0,
+      isCreatorMuted: false,
     });
     expect(breakdown.totalPoints).toBe(0);
   });
@@ -73,6 +81,8 @@ describe("computeAffinityScorePoints", () => {
       likeCount: 50,
       saveCount: 50,
       isSubscribedToCreator: true,
+      dismissalCount: 0,
+      isCreatorMuted: false,
     });
     expect(breakdown.totalPoints).toBe(100);
     expect(breakdown.watchCountComponentPoints).toBe(AFFINITY_SCORE_COMPONENT_BUDGETS.watchCount);

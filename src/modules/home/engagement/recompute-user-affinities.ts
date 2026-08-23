@@ -6,6 +6,7 @@ import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.j
 import { logger } from "#src/lib/logger.js";
 import { utcTimestamp } from "#src/lib/sql-time.js";
 import {
+  AFFINITY_SCORE_ALGORITHM_VERSION,
   AFFINITY_WINDOW_DAYS,
   computeAffinityScorePoints,
 } from "#src/modules/home/affinity-score.js";
@@ -43,6 +44,7 @@ type TopicAffinityRow = {
   readonly completion_sample_count: number;
   readonly like_count: number;
   readonly save_count: number;
+  readonly dismissal_count: number;
 };
 
 type CreatorAffinityRow = {
@@ -54,6 +56,8 @@ type CreatorAffinityRow = {
   readonly like_count: number;
   readonly save_count: number;
   readonly is_subscribed: boolean;
+  readonly dismissal_count: number;
+  readonly is_muted: boolean;
 };
 
 export async function handleRecomputeUserAffinities(rawPayload: unknown): Promise<void> {
@@ -86,7 +90,20 @@ export async function handleRecomputeUserAffinities(rawPayload: unknown): Promis
         JOIN video_category AS sc ON sc.video_id = sv.video_id
         WHERE sv.user_id = s.viewer_id AND sc.category_id = vc.category_id
           AND sv.created_at < ${utcTimestamp(asOf)}
-      ) AS save_count
+      ) AS save_count,
+      -- The NEGATIVE signal, counted exactly the way likes and saves are: upper-bounded at
+      -- asOf, with no lower bound. A dismissal is a standing request the viewer never
+      -- withdrew, and GET /users/me/not-interested-videos is now the surface that lets them
+      -- withdraw it — before that route existed, honouring an old one would have been a trap.
+      --
+      -- NO creator_mute TERM HERE. Muting one channel is not a statement about its subject
+      -- matter; see MUTE_SIGNAL_WEIGHT. The creator query below is where a mute belongs.
+      (
+        SELECT count(*)::int FROM video_not_interested AS ni
+        JOIN video_category AS nc ON nc.video_id = ni.video_id
+        WHERE ni.viewer_id = s.viewer_id AND nc.category_id = vc.category_id
+          AND ni.created_at < ${utcTimestamp(asOf)}
+      ) AS dismissal_count
     FROM video_view_session AS s
     JOIN video_category AS vc ON vc.video_id = s.video_id
     WHERE s.viewer_id IS NOT NULL
@@ -120,7 +137,22 @@ export async function handleRecomputeUserAffinities(rawPayload: unknown): Promis
         SELECT 1 FROM creator_subscription AS cs
         WHERE cs.subscriber_id = s.viewer_id AND cs.creator_id = v.creator_id
           AND cs.created_at < ${utcTimestamp(asOf)}
-      ) AS is_subscribed
+      ) AS is_subscribed,
+      (
+        SELECT count(*)::int FROM video_not_interested AS ni
+        JOIN video AS niv ON niv.id = ni.video_id
+        WHERE ni.viewer_id = s.viewer_id AND niv.creator_id = v.creator_id
+          AND ni.created_at < ${utcTimestamp(asOf)}
+      ) AS dismissal_count,
+      -- The mirror of is_subscribed directly above, and the one place a mute is a ranking
+      -- input. Largely belt-and-braces: a muted creator is already outside the candidate pool
+      -- via §4.5's NOT EXISTS, so this row rarely gets read. It earns its place for the day
+      -- the mute is lifted and the dismissals underneath it are still standing.
+      EXISTS (
+        SELECT 1 FROM creator_mute AS cm
+        WHERE cm.muter_id = s.viewer_id AND cm.creator_id = v.creator_id
+          AND cm.created_at < ${utcTimestamp(asOf)}
+      ) AS is_muted
     FROM video_view_session AS s
     JOIN video AS v ON v.id = s.video_id
     WHERE s.viewer_id IS NOT NULL
@@ -149,6 +181,11 @@ export async function handleRecomputeUserAffinities(rawPayload: unknown): Promis
               saveCount: row.save_count,
               // A category cannot be subscribed to.
               isSubscribedToCreator: false,
+              dismissalCount: row.dismissal_count,
+              // A category cannot be muted either, and this `false` is load-bearing rather
+              // than symmetric with the line above: letting a mute reach the topic penalty
+              // would demote a whole subject because one channel was silenced.
+              isCreatorMuted: false,
             });
             return {
               userId: row.user_id,
@@ -158,9 +195,12 @@ export async function handleRecomputeUserAffinities(rawPayload: unknown): Promis
               countedViewCount: row.counted_view_count,
               meanCompletionBasisPoints: breakdown.meanCompletionBasisPoints,
               explicitSignalCount: breakdown.explicitSignalCount,
+              negativeSignalCount: breakdown.negativeSignalCount,
               watchCountComponentPoints: breakdown.watchCountComponentPoints,
               meanCompletionComponentPoints: breakdown.meanCompletionComponentPoints,
               explicitSignalComponentPoints: breakdown.explicitSignalComponentPoints,
+              negativeSignalComponentPoints: breakdown.negativeSignalComponentPoints,
+              scoreAlgorithmVersion: AFFINITY_SCORE_ALGORITHM_VERSION,
             };
           }),
         )
@@ -185,6 +225,8 @@ export async function handleRecomputeUserAffinities(rawPayload: unknown): Promis
               likeCount: row.like_count,
               saveCount: row.save_count,
               isSubscribedToCreator: row.is_subscribed,
+              dismissalCount: row.dismissal_count,
+              isCreatorMuted: row.is_muted,
             });
             return {
               userId: row.user_id,
@@ -194,9 +236,12 @@ export async function handleRecomputeUserAffinities(rawPayload: unknown): Promis
               countedViewCount: row.counted_view_count,
               meanCompletionBasisPoints: breakdown.meanCompletionBasisPoints,
               explicitSignalCount: breakdown.explicitSignalCount,
+              negativeSignalCount: breakdown.negativeSignalCount,
               watchCountComponentPoints: breakdown.watchCountComponentPoints,
               meanCompletionComponentPoints: breakdown.meanCompletionComponentPoints,
               explicitSignalComponentPoints: breakdown.explicitSignalComponentPoints,
+              negativeSignalComponentPoints: breakdown.negativeSignalComponentPoints,
+              scoreAlgorithmVersion: AFFINITY_SCORE_ALGORITHM_VERSION,
             };
           }),
         )

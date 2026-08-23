@@ -448,6 +448,67 @@ back on the next page request. This is what makes exploration deterministic — 
 `Math.random()`, and it would be wrong here anyway: a random exploration term reshuffles the feed
 between page 1 and page 2 and shows the same video twice.
 
+### 4.3b The negative signal — what "not interested" teaches the ranker
+
+Shipped in `0131_affinity_negative_signal`. Until then the two feed preferences (§5.2b) were a
+query-time `NOT EXISTS` and **nothing else**: the dismissed video vanished and the ranker learned
+nothing from the dismissal, so the feed kept serving the same kind of video. The hard filter is
+unchanged — this is additive.
+
+| Table column | Meaning |
+| --- | --- |
+| `negative_signal_count` | dismissals in this category / on this creator, **plus `MUTE_SIGNAL_WEIGHT` per mute** |
+| `negative_signal_component_points` | the penalty **actually applied**, already clamped |
+
+**It is a SUBTRAHEND, not a fourth component.** `AFFINITY_SCORE_COMPONENT_BUDGETS` still holds
+three entries summing to 100 and `assertBudgetsSumTo` still passes; `NEGATIVE_SIGNAL_BUDGET_POINTS`
+(40) is separate and claws back from that ceiling. Both snapshot CHECKs were rewritten to
+`watch + completion + explicit − negative = affinity_points`, so the identity is enforced at rest:
+an insert that gets the arithmetic wrong is a `23514`, not a bad recommendation discovered months
+later.
+
+**Stored already clamped** — `min(rawLadderPoints, positiveTotal)`. That is what keeps the identity
+exact for a viewer whose penalty exceeds their positives, and it makes the floor a real zero rather
+than a negative score. Zero is not nothing here: §4.4's fallback is a `COALESCE`, so a stored 0
+suppresses HARDER than an absent row, which reaches damped popularity instead.
+
+> **THE LADDER IS DELIBERATELY SHALLOW AT THE BOTTOM.** One dismissal costs 2 points of 100; it
+> takes about a dozen in one category to spend the 40. The shape follows the only public
+> measurement of these controls anywhere — Mozilla's RegretsReporter (Sept 2022) found YouTube's
+> "don't recommend channel" cut unwanted recommendations ~43% while "not interested" managed
+> ~11%. A single idle tap must not visibly reshape a feed: the person who made it cannot tell
+> which tap did what, and a control whose effect they cannot predict is one they stop trusting.
+>
+> **A MUTE NEVER TOUCHES TOPIC AFFINITY, and this is the load-bearing rule.** `MUTE_SIGNAL_WEIGHT`
+> is 12 — the ladder's top rung — so one mute spends the whole budget, mirroring
+> `SUBSCRIPTION_SIGNAL_WEIGHT` with the sign flipped. But it is only ever set on a CREATOR row.
+> Muting one anime channel is not a statement about anime, and demoting someone's whole subject
+> matter because they silenced one loud channel is a control that lied about what it does. The
+> topic call passes `isCreatorMuted: false` exactly as it already passes
+> `isSubscribedToCreator: false`. The commerce side holds the same line: blocking a supplier does
+> not hide their product category.
+>
+> **NO LOWER TIME BOUND**, matching `like_count` / `save_count` rather than the 90-day view window.
+> A dismissal is a standing request the viewer never withdrew — and since
+> `GET /users/me/not-interested-videos` now exists, they CAN withdraw it. Honouring an old request
+> is correct once withdrawing it is possible; before that route it would have been a trap.
+>
+> **TWO LIMITS, ACCEPTED.** A penalty only lands where a snapshot row already exists, because the
+> job's `FROM` is `video_view_session` — a category dismissed but never watched gets no damping,
+> and widening that `FROM` would start writing rows whose only evidence is negative, which given
+> the `COALESCE` above is a much larger ranking change than it looks. And un-muting takes up to one
+> nightly cycle to stop damping; the hard filter lifts instantly, which is the half the viewer sees.
+>
+> The anonymous in-request path (§4.4) passes `dismissalCount: 0` — **a limitation, not a fact**,
+> unlike the `likeCount: 0` beside it. Like and save are gated by `requireIdentifiedUser` so an
+> anonymous session truly cannot have them; the preferences are not, so it can. That path is keyed
+> on a fingerprint and the preferences are keyed on a user id, and one score must not consult two
+> identity models. The `NOT EXISTS` still hides the videos themselves.
+
+`score_algorithm_version` is written as **2** by the job from here on, explicitly rather than via
+the column default. The default stays **1** because that is what the existing rows were computed
+with, and moving it would retroactively relabel them.
+
 ### 4.4 Cold start, all three kinds
 
 **Signed-in viewer with no history.** Affinity components `COALESCE` to

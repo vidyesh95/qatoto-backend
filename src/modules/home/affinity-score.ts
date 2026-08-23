@@ -112,6 +112,67 @@ const EXPLICIT_SIGNAL_LADDER: readonly ScoreLadderRung[] = [
   { threshold: 1, points: 4 },
 ];
 
+/**
+ * The NEGATIVE budget — "not interested" and "don't recommend channel", as a ranking input.
+ *
+ * ## It is NOT part of `AFFINITY_SCORE_COMPONENT_BUDGETS`, and must not become one
+ *
+ * That table declares the three POSITIVE components and `assertBudgetsSumTo` holds it to
+ * exactly 100. A fourth entry would break that assertion, and adding a negative number to a
+ * sum-to-100 table would make "budget" mean two different things in one object. This is a
+ * SUBTRAHEND, not a component: the positives still define the ceiling and this claws back
+ * from it.
+ *
+ * ## Why 40
+ *
+ * Enough to erase the entire `watchCount` budget (45) on its own, and not enough to bury a
+ * category the viewer demonstrably likes — someone who watches a topic constantly AND
+ * occasionally dismisses one still scores well above a topic they have never opened. A
+ * negative signal that can zero out a strong positive one is not a preference any more, it
+ * is a second hard filter, and there is already a hard filter (§4.5's `NOT EXISTS`) doing
+ * that job properly.
+ */
+export const NEGATIVE_SIGNAL_BUDGET_POINTS = 40;
+
+/**
+ * Which formula produced a snapshot row — written explicitly by the job rather than left to
+ * the column's `DEFAULT 1`.
+ *
+ * VERSION 1 was the three positive components alone. VERSION 2 subtracts the negative
+ * signal. The distinction matters because rows from both versions coexist in the same table
+ * forever: the nightly job writes a new `as_of` rather than rewriting history, so a v1 row
+ * scored 60 and a v2 row scored 60 do not mean the same thing, and anything comparing across
+ * a date range has to know which formula it is looking at.
+ *
+ * The DEFAULT stays at 1 deliberately. It describes what the existing rows were computed
+ * with, and moving it would retroactively relabel them as something they are not.
+ */
+export const AFFINITY_SCORE_ALGORITHM_VERSION = 2;
+
+/**
+ * DELIBERATELY SHALLOW AT THE BOTTOM. One dismissal is worth 2 points out of 100 — close to
+ * nothing — and it takes about a dozen in one category to spend the whole budget.
+ *
+ * That shape is copied from the only public measurement of these controls anywhere.
+ * Mozilla's RegretsReporter study (Sept 2022) found YouTube's "Don't recommend channel" cut
+ * unwanted recommendations by roughly 43%, while "Not interested" managed only about 11% —
+ * a single dismissal is near-noise there BY DESIGN, and repetition is what carries the
+ * signal. One idle tap must not visibly reshape a feed, because the person who made it
+ * cannot tell which of their taps did what, and a control whose effect they cannot predict
+ * is one they stop trusting.
+ *
+ * The same rule holds on the commerce side of this platform for the same reason: hiding one
+ * supplier is not an instruction to stop showing that product category.
+ */
+const NEGATIVE_SIGNAL_LADDER: readonly ScoreLadderRung[] = [
+  { threshold: 12, points: 40 },
+  { threshold: 8, points: 30 },
+  { threshold: 5, points: 20 },
+  { threshold: 3, points: 12 },
+  { threshold: 2, points: 6 },
+  { threshold: 1, points: 2 },
+];
+
 assertLadderIsWellFormed(
   "WATCH_COUNT_LADDER",
   WATCH_COUNT_LADDER,
@@ -130,6 +191,12 @@ assertLadderIsWellFormed(
   "atLeastThreshold",
   AFFINITY_SCORE_COMPONENT_BUDGETS.explicitSignals,
 );
+assertLadderIsWellFormed(
+  "NEGATIVE_SIGNAL_LADDER",
+  NEGATIVE_SIGNAL_LADDER,
+  "atLeastThreshold",
+  NEGATIVE_SIGNAL_BUDGET_POINTS,
+);
 
 /**
  * A subscription is worth more than a like because it is a standing statement rather than
@@ -138,6 +205,27 @@ assertLadderIsWellFormed(
  */
 export const SUBSCRIPTION_SIGNAL_WEIGHT = 4;
 
+/**
+ * The mirror image of `SUBSCRIPTION_SIGNAL_WEIGHT`, and set to the ladder's top rung so ONE
+ * mute spends the entire negative budget by itself.
+ *
+ * A mute is the same KIND of thing a subscription is — a standing statement about a channel
+ * rather than a reaction to a single video — so it gets the same treatment with the sign
+ * flipped. The magnitude is where the asymmetry lives: RegretsReporter's ~43% for "don't
+ * recommend channel" against ~11% for "not interested" is one deliberate act versus one idle
+ * tap, and this constant against `NEGATIVE_SIGNAL_LADDER`'s bottom rung of 2 encodes exactly
+ * that gap.
+ *
+ * ONLY EVER SET ON A CREATOR AFFINITY, and this is the load-bearing half of the rule. A mute
+ * must never reach the TOPIC penalty: muting one anime channel is not a statement about
+ * anime, and a viewer who found their whole subject matter quietly demoted because they
+ * silenced one loud channel has been handed a control that lied about what it does. On
+ * YouTube the 43% is channel-scoped for the same reason, and blocking a supplier here does
+ * not hide their product category either. The topic call passes `isCreatorMuted: false`
+ * exactly as it already passes `isSubscribedToCreator: false`.
+ */
+export const MUTE_SIGNAL_WEIGHT = 12;
+
 export interface AffinityScoreInputs {
   readonly countedViewCount: number;
   readonly completionBasisPointsSum: number;
@@ -145,6 +233,15 @@ export interface AffinityScoreInputs {
   readonly likeCount: number;
   readonly saveCount: number;
   readonly isSubscribedToCreator: boolean;
+  /**
+   * "Not interested" rows — in this category, or on this creator's videos.
+   *
+   * A COUNT, not a flag, because that is the whole design: the ladder is shallow at the
+   * bottom so that repetition, rather than any single tap, is what moves the score.
+   */
+  readonly dismissalCount: number;
+  /** "Don't recommend channel". NEVER true on a topic call — see `MUTE_SIGNAL_WEIGHT`. */
+  readonly isCreatorMuted: boolean;
 }
 
 export interface AffinityScoreBreakdown {
@@ -152,8 +249,18 @@ export interface AffinityScoreBreakdown {
   readonly watchCountComponentPoints: number;
   readonly meanCompletionComponentPoints: number;
   readonly explicitSignalComponentPoints: number;
+  /**
+   * The penalty ACTUALLY APPLIED, already clamped to what the positives could pay.
+   *
+   * Stored rather than recomputed because the snapshot tables carry a CHECK asserting
+   * `watch + completion + explicit - negative = affinity_points`. Storing the raw ladder
+   * output instead would break that identity for anyone whose penalty exceeded their
+   * positive total, and Postgres would refuse the row.
+   */
+  readonly negativeSignalComponentPoints: number;
   readonly meanCompletionBasisPoints: number;
   readonly explicitSignalCount: number;
+  readonly negativeSignalCount: number;
 }
 
 export function computeAffinityScorePoints(inputs: AffinityScoreInputs): AffinityScoreBreakdown {
@@ -174,6 +281,11 @@ export function computeAffinityScorePoints(inputs: AffinityScoreInputs): Affinit
   );
   assertNonNegativeIntegerInput("computeAffinityScorePoints", "likeCount", inputs.likeCount);
   assertNonNegativeIntegerInput("computeAffinityScorePoints", "saveCount", inputs.saveCount);
+  assertNonNegativeIntegerInput(
+    "computeAffinityScorePoints",
+    "dismissalCount",
+    inputs.dismissalCount,
+  );
 
   const meanCompletionBasisPoints =
     inputs.completionSampleCount === 0
@@ -198,8 +310,28 @@ export function computeAffinityScorePoints(inputs: AffinityScoreInputs): Affinit
     explicitSignalCount,
   );
 
-  const totalPoints =
+  const positiveTotalPoints =
     watchCountComponentPoints + meanCompletionComponentPoints + explicitSignalComponentPoints;
+
+  // A mute counts as `MUTE_SIGNAL_WEIGHT` dismissals rather than as its own component, so the
+  // two negative signals share ONE ladder and one budget. Two parallel penalties would need
+  // two budgets, and their sum could exceed what the positives can pay in ways neither one
+  // predicts on its own.
+  const negativeSignalCount =
+    inputs.dismissalCount + (inputs.isCreatorMuted ? MUTE_SIGNAL_WEIGHT : 0);
+
+  // CLAMPED TO WHAT THE POSITIVES CAN PAY. The stored value is the penalty actually applied,
+  // which is what keeps the snapshot CHECK's sum identity exact — see the field's doc. It also
+  // means the floor is a genuine zero rather than a negative score: the ranker reads
+  // `affinity_points` through a `max(COALESCE(...))`, where a stored 0 already suppresses
+  // harder than no row at all, because COALESCE takes the non-null zero and never reaches the
+  // cold-start popularity fallback.
+  const negativeSignalComponentPoints = Math.min(
+    pointsForAtLeastLadder(NEGATIVE_SIGNAL_LADDER, negativeSignalCount),
+    positiveTotalPoints,
+  );
+
+  const totalPoints = positiveTotalPoints - negativeSignalComponentPoints;
 
   if (totalPoints < 0 || totalPoints > AFFINITY_SCORE_MAXIMUM_POINTS) {
     throw new Error(
@@ -212,8 +344,10 @@ export function computeAffinityScorePoints(inputs: AffinityScoreInputs): Affinit
     watchCountComponentPoints,
     meanCompletionComponentPoints,
     explicitSignalComponentPoints,
+    negativeSignalComponentPoints,
     meanCompletionBasisPoints,
     explicitSignalCount,
+    negativeSignalCount,
   };
 }
 

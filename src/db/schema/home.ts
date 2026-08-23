@@ -800,9 +800,15 @@ export const userTopicAffinitySnapshot = pgTable(
     countedViewCount: integer("counted_view_count").notNull(),
     meanCompletionBasisPoints: integer("mean_completion_basis_points").notNull(),
     explicitSignalCount: integer("explicit_signal_count").notNull(),
+    // "Not interested" rows in this category, plus `MUTE_SIGNAL_WEIGHT` per mute — which is
+    // always zero here, because a category cannot be muted. See `affinity-score.ts`.
+    negativeSignalCount: integer("negative_signal_count").default(0).notNull(),
     watchCountComponentPoints: integer("watch_count_component_points").notNull(),
     meanCompletionComponentPoints: integer("mean_completion_component_points").notNull(),
     explicitSignalComponentPoints: integer("explicit_signal_component_points").notNull(),
+    // SUBTRACTED, not added, and stored ALREADY CLAMPED to the positive total so the CHECK's
+    // sum identity below stays exact. The raw ladder output is never stored.
+    negativeSignalComponentPoints: integer("negative_signal_component_points").default(0).notNull(),
     scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -815,12 +821,14 @@ export const userTopicAffinitySnapshot = pgTable(
       "user_topic_affinity_snapshot_score_ck",
       sql`affinity_points BETWEEN 0 AND 100
           AND watch_count_component_points >= 0 AND mean_completion_component_points >= 0
-          AND explicit_signal_component_points >= 0
+          AND explicit_signal_component_points >= 0 AND negative_signal_component_points >= 0
           AND watch_count_component_points + mean_completion_component_points
-              + explicit_signal_component_points = affinity_points
+              + explicit_signal_component_points - negative_signal_component_points
+              = affinity_points
           AND counted_view_count >= 0
           AND mean_completion_basis_points BETWEEN 0 AND 10000
-          AND explicit_signal_count >= 0`,
+          AND explicit_signal_count >= 0
+          AND negative_signal_count >= 0`,
     ),
   ],
 );
@@ -843,9 +851,13 @@ export const userCreatorAffinitySnapshot = pgTable(
     countedViewCount: integer("counted_view_count").notNull(),
     meanCompletionBasisPoints: integer("mean_completion_basis_points").notNull(),
     explicitSignalCount: integer("explicit_signal_count").notNull(),
+    // Dismissals of this creator's videos, plus `MUTE_SIGNAL_WEIGHT` if this viewer muted
+    // them. Unlike the topic table, the mute term is genuinely reachable here.
+    negativeSignalCount: integer("negative_signal_count").default(0).notNull(),
     watchCountComponentPoints: integer("watch_count_component_points").notNull(),
     meanCompletionComponentPoints: integer("mean_completion_component_points").notNull(),
     explicitSignalComponentPoints: integer("explicit_signal_component_points").notNull(),
+    negativeSignalComponentPoints: integer("negative_signal_component_points").default(0).notNull(),
     scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -864,12 +876,14 @@ export const userCreatorAffinitySnapshot = pgTable(
       "user_creator_affinity_snapshot_score_ck",
       sql`affinity_points BETWEEN 0 AND 100
           AND watch_count_component_points >= 0 AND mean_completion_component_points >= 0
-          AND explicit_signal_component_points >= 0
+          AND explicit_signal_component_points >= 0 AND negative_signal_component_points >= 0
           AND watch_count_component_points + mean_completion_component_points
-              + explicit_signal_component_points = affinity_points
+              + explicit_signal_component_points - negative_signal_component_points
+              = affinity_points
           AND counted_view_count >= 0
           AND mean_completion_basis_points BETWEEN 0 AND 10000
-          AND explicit_signal_count >= 0`,
+          AND explicit_signal_count >= 0
+          AND negative_signal_count >= 0`,
     ),
   ],
 );
