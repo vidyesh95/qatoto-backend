@@ -1060,6 +1060,29 @@ export const videoSaveLimiter = createLimiter({
 });
 
 /**
+ * PUT · DELETE /videos/:videoId/not-interested and /creators/:creatorId/mute.
+ *
+ * HALF like/save's budget, because these are the only engagement writes on this router
+ * reachable WITHOUT a full account. What that buys and what it costs:
+ *
+ * Nothing here moves a ranking input or a public number — both tables are per-viewer
+ * preferences read by one `NOT EXISTS` in that viewer's own candidate pool — so
+ * `requireIdentifiedUser` would buy no protection against manipulation, only a dead
+ * button for signed-out viewers whose feed the ranker already personalizes. What is left
+ * to bound is storage growth from throwaway identities, and that is a rate problem, which
+ * is this limiter's job. Same trade `videoShareLimiter` makes one entry down.
+ *
+ * 60/minute rather than something tighter because the realistic user is tidying a feed by
+ * hand, card after card, and a viewer who dismisses thirty in a sitting is enthusiastic
+ * rather than hostile.
+ */
+export const feedPreferenceLimiter = createLimiter({
+  namespace: "feedPreference",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
  * PUT · DELETE /watch-history/videos/:videoId, and DELETE /watch-history.
  *
  * Same budget as like and save, and for the same reason: both verbs are idempotent —

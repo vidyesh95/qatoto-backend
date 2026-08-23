@@ -23,6 +23,7 @@ import {
   VideoIdParamSchema,
   WatchTimeQuerySchema,
 } from "#src/modules/home/engagement/engagement.schemas.js";
+import * as feedPreferencesService from "#src/modules/home/engagement/feed-preferences.service.js";
 import * as commentsService from "#src/modules/home/engagement/video-comments.service.js";
 import * as engagementService from "#src/modules/home/engagement/video-engagement.service.js";
 import { getViewerWatchTime } from "#src/modules/home/engagement/watch-time.service.js";
@@ -513,6 +514,137 @@ export function subscribeToCreator(req: Request, res: Response): Promise<void> {
 
 export function unsubscribeFromCreator(req: Request, res: Response): Promise<void> {
   return respondToSubscription(req, res, false);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Feed preferences — the two negative signals                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * `PUT`/`DELETE /videos/:videoId/not-interested`.
+ *
+ * THESE FOUR HANDLERS DO NOT RUN BEHIND `requireIdentifiedUser`, alone on this router.
+ * The rule the rest of the surface follows exists because Better Auth's `anonymous()`
+ * mints real sessions, so `requireAuth` alone would admit unlimited throwaway identities
+ * into counters that feed ranking. Neither of these writes has a counter and neither
+ * changes any feed but the caller's own, so there is nothing to inflate — see the route
+ * definitions for the full argument and the limiter that carries the weight instead.
+ */
+async function respondToNotInterested(
+  req: Request,
+  res: Response,
+  shouldBeSet: boolean,
+): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const videoId = parseVideoIdParam(req, res);
+  if (videoId === null) return;
+
+  const preferenceResult = await feedPreferencesService.setVideoNotInterested({
+    viewerId: req.user.id,
+    videoId,
+    shouldBeSet,
+  });
+
+  if (!preferenceResult.success) {
+    respondEngagementError(res, preferenceResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: shouldBeSet ? "We won't recommend this video." : "That video can be recommended again.",
+    data: preferenceResult.value,
+  };
+  res.status(200).json(response);
+}
+
+export function markVideoNotInterested(req: Request, res: Response): Promise<void> {
+  return respondToNotInterested(req, res, true);
+}
+
+export function unmarkVideoNotInterested(req: Request, res: Response): Promise<void> {
+  return respondToNotInterested(req, res, false);
+}
+
+/** `PUT`/`DELETE /creators/:creatorId/mute`. */
+async function respondToCreatorMute(
+  req: Request,
+  res: Response,
+  shouldBeSet: boolean,
+): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedParams = CreatorIdParamSchema.safeParse({
+    creatorId: firstParam(req.params.creatorId ?? ""),
+  });
+  if (!parsedParams.success) {
+    respondValidationFailed(res, parsedParams.error);
+    return;
+  }
+
+  const muteResult = await feedPreferencesService.setCreatorMute({
+    muterId: req.user.id,
+    creatorId: parsedParams.data.creatorId,
+    shouldBeSet,
+  });
+
+  if (!muteResult.success) {
+    respondEngagementError(res, muteResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: shouldBeSet
+      ? "We won't recommend this channel."
+      : "That channel can be recommended again.",
+    data: muteResult.value,
+  };
+  res.status(200).json(response);
+}
+
+export function muteCreator(req: Request, res: Response): Promise<void> {
+  return respondToCreatorMute(req, res, true);
+}
+
+export function unmuteCreator(req: Request, res: Response): Promise<void> {
+  return respondToCreatorMute(req, res, false);
+}
+
+/**
+ * `GET /users/me/muted-creators`.
+ *
+ * Lives on the users router beside `/users/me/watch-time`, and for the same reason that
+ * one does: the id comes from the session, there is deliberately no `/:id` counterpart,
+ * and a client looking for facts about itself looks there.
+ *
+ * NO ERROR ARM. A viewer who has muted nobody gets an empty array, which is the honest
+ * answer rather than a 404 — there is no resource here that can fail to exist.
+ */
+export async function listMyMutedCreators(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const mutedCreators = await feedPreferencesService.listMutedCreators(req.user.id);
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Muted channels.",
+    data: mutedCreators,
+  };
+  res.status(200).json(response);
 }
 
 /**

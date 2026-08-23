@@ -427,6 +427,80 @@ export const creatorSubscription = pgTable(
   ],
 );
 
+/*
+ * THE TWO NEGATIVE VIEWER SIGNALS. Everything above this point records what a viewer
+ * WANTS more of; these two record what they want less of, and they are the only such
+ * tables in the schema.
+ *
+ * NEITHER HAS A COUNTER, and that is not an omission. `creatorSubscription` moves
+ * `creatorStats.subscriberCount` because a subscriber count is public social proof; a
+ * public "muted by N people" number is the opposite — it is a stick handed to anyone who
+ * wants to demoralise a creator, and no route reads it.
+ *
+ * NEITHER IS EVER RELAXED. The feed's relaxation ladder (feed.service.ts) drops the
+ * already-watched exclusion and the recency window when the candidate pool runs thin.
+ * These two sit OUTSIDE it: they are stated preferences, not heuristics, and a dismiss
+ * button that quietly stops working on a thin catalog is worse than a short feed.
+ */
+
+/**
+ * "Not interested" — one viewer, one video, permanently out of that viewer's feed.
+ *
+ * NOT A `video_view_session` STAMP, which is the reuse the shape invites and which would
+ * be wrong three times over. That table's grain is (video, fingerprint, UTC day) and its
+ * unique key is the anti-replay mechanism for view counting, so a row here for a video
+ * the viewer never watched would have to invent a `pinned_duration_seconds` and a
+ * fingerprint — evidence of a view that did not happen. Worse, `hidden_from_history_at`
+ * means the OPPOSITE of this table: hiding from history makes a video recommendable
+ * again (see the note on that column), so one button would carry two contradictory
+ * meanings. And that table is pruned at 90 days, where a preference must be durable.
+ */
+export const videoNotInterested = pgTable(
+  "video_not_interested",
+  {
+    viewerId: text("viewer_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    videoId: text("video_id")
+      .notNull()
+      .references(() => video.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    // VIEWER LEADS, unlike `videoLike`'s `(videoId, userId)`. The only read is the feed's
+    // per-viewer `NOT EXISTS` probe, keyed (viewer, video) — this PK serves it alone, and
+    // it is also what makes PUT and DELETE idempotent.
+    primaryKey({ columns: [table.viewerId, table.videoId] }),
+    // FOR THE FOREIGN-KEY CASCADE, not for a query. Deleting a video has to find its rows
+    // here, and without this that is a sequential scan of the whole table.
+    index("video_not_interested_videoId_idx").on(table.videoId),
+  ],
+);
+
+/** "Don't recommend channel" — every video by one creator, out of one viewer's feed. */
+export const creatorMute = pgTable(
+  "creator_mute",
+  {
+    muterId: text("muter_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    creatorId: text("creator_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.muterId, table.creatorId] }),
+    // FOR THE CASCADE ONLY, and deliberately NOT the mirror of
+    // `creator_subscription_creatorId_idx`. That index exists partly to answer "who
+    // subscribes to me"; this one must never back "who muted me" — see the header.
+    index("creator_mute_creatorId_idx").on(table.creatorId),
+    // Muting yourself is already what the feed's creator self-exclusion does, and a row
+    // for it would outlive that predicate's last relaxation stage. Refused at rest.
+    check("creator_mute_self_ck", sql`muter_id <> creator_id`),
+  ],
+);
+
 /**
  * The §8.2 fast dead-player path.
  *
@@ -1101,6 +1175,16 @@ export const videoLikeRelations = relations(videoLike, ({ one }) => ({
 export const videoSaveRelations = relations(videoSave, ({ one }) => ({
   video: one(video, { fields: [videoSave.videoId], references: [video.id] }),
   user: one(user, { fields: [videoSave.userId], references: [user.id] }),
+}));
+
+export const videoNotInterestedRelations = relations(videoNotInterested, ({ one }) => ({
+  video: one(video, { fields: [videoNotInterested.videoId], references: [video.id] }),
+  viewer: one(user, { fields: [videoNotInterested.viewerId], references: [user.id] }),
+}));
+
+export const creatorMuteRelations = relations(creatorMute, ({ one }) => ({
+  muter: one(user, { fields: [creatorMute.muterId], references: [user.id] }),
+  creator: one(user, { fields: [creatorMute.creatorId], references: [user.id] }),
 }));
 
 export const videoCommentRelations = relations(videoComment, ({ one, many }) => ({

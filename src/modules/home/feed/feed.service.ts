@@ -176,6 +176,13 @@ const DIVERSIFIED_PREFIX_ROWS = 96;
  * for the young-catalog case it was found in: a solo creator whose feed is empty because
  * every video in the catalog is their own. At any real catalog size the page fills long
  * before stage 3 and nobody is ever shown their own uploads.
+ *
+ * WHAT THE LADDER DOES NOT REACH: the two feed-preference exclusions — `video_not_interested`
+ * and `creator_mute` — are pushed OUTSIDE every stage gate and no stage drops them. Every
+ * filter listed above is a heuristic, a guess about what a viewer would enjoy, and a guess is
+ * worth abandoning to avoid an empty page. Those two are stated preferences, and a dismiss
+ * button that silently stops working on a thin catalog is worse than a short feed — the
+ * viewer cannot tell it apart from a broken one.
  */
 const RELAXATION_STAGES = [
   "full filter",
@@ -458,8 +465,32 @@ function candidatePoolPredicate(input: {
   readonly viewerFingerprint: string;
   readonly categorySlug: string | null;
   readonly relaxationStage: number;
+  readonly mode: FeedMode;
 }): SQL {
   const conditions: SQL[] = [publicVideoPredicate()];
+
+  // THE TWO STATED PREFERENCES, and the only conditions here with no stage gate — see the
+  // note on RELAXATION_STAGES for why the ladder must not reach them.
+  //
+  // `mode=watched` IS EXEMPT, and the exemption is the whole reason `mode` is a parameter.
+  // This function is shared by every mode including the one that renders /history, and watch
+  // history is a RECORD rather than a recommendation: a video the viewer dismissed is still
+  // a video they watched. Suppressing it here would make "not interested" quietly rewrite
+  // their history, which the button does not claim and no viewer would expect.
+  //
+  // Anonymous viewers are skipped because there is nothing to key on — a better-auth
+  // anonymous SESSION carries a real `user.id` and does get these exclusions; only a caller
+  // with no session at all falls through, and they have written no preference to honour.
+  if (input.viewerUserId !== null && input.mode !== "watched") {
+    conditions.push(sql`NOT EXISTS (
+      SELECT 1 FROM video_not_interested AS ni
+      WHERE ni.video_id = v.id AND ni.viewer_id = ${input.viewerUserId}
+    )`);
+    conditions.push(sql`NOT EXISTS (
+      SELECT 1 FROM creator_mute AS cm
+      WHERE cm.creator_id = v.creator_id AND cm.muter_id = ${input.viewerUserId}
+    )`);
+  }
 
   // A creator's own videos are never in their feed. Nothing enforces this downstream, and
   // without it the highest-affinity creator for any creator is themselves.
@@ -732,6 +763,7 @@ export async function listFeedVideos(
       viewerFingerprint: input.viewerFingerprint,
       categorySlug: input.categorySlug,
       relaxationStage,
+      mode: input.mode,
     })}${modePredicate === null ? sql`` : sql` AND ${modePredicate}`}`;
 
     const fetchLimit = isInsideDiversifiedPrefix ? DIVERSIFIED_PREFIX_ROWS : input.limit;
@@ -908,6 +940,9 @@ async function fetchFreshCandidateIds(input: ListFeedVideosInput): Promise<Reado
       // widen the exploration pool as a side effect of the page being short, which is a
       // different decision than the one the ladder is making.
       relaxationStage: 0,
+      // Threaded, unlike the stage above, so a dismissed video or a muted creator is never
+      // promoted into the exploration quota by a probe that did not know about them.
+      mode: input.mode,
     })}
       AND v.published_at > now() - make_interval(hours => ${EXPLORATION_FRESHNESS_HOURS})
       AND COALESCE(vs.view_count, 0) < ${EXPLORATION_MAXIMUM_COUNTED_VIEWS}

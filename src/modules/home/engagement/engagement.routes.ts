@@ -7,6 +7,7 @@ import {
   commentCreateLimiter,
   commentLikeLimiter,
   commentUpdateLimiter,
+  feedPreferenceLimiter,
   feedReadLimiter,
   playbackErrorLimiter,
   subscribeLimiter,
@@ -148,6 +149,45 @@ router.delete(
   engagementController.unsaveVideo,
 );
 
+/**
+ * PUT · DELETE /videos/:videoId/not-interested — hide one video from this viewer's feed.
+ *
+ * NO `requireIdentifiedUser`, ALONE ON THIS ROUTER, AND ON PURPOSE.
+ *
+ * The header states the rule and — read closely — states its reason: anonymous sessions
+ * are real sessions, so `requireAuth` alone admits unlimited throwaway identities into
+ * counters that feed ranking. Every route it names moves such a counter. `likeCount`,
+ * `commentCount` and `saveCount` land in §4.1's engagement rate; `subscriberCount` is
+ * public social proof.
+ *
+ * This write moves nothing. `video_not_interested` has no counter column, is read by
+ * exactly one `NOT EXISTS` inside the writer's own candidate pool, and cannot be observed
+ * by anyone else at all. There is no ranking input to inflate and no number to farm, so
+ * the guard would buy no protection — it would only 403 the signed-out viewers whose feed
+ * the ranker already personalizes through `computeAnonymousTopicAffinity`, leaving them a
+ * dead control on a surface that is otherwise theirs to use.
+ *
+ * `feedPreferenceLimiter` carries the weight instead, at half like/save's budget — the
+ * same trade `videoShareLimiter` makes for the one other route reachable without a full
+ * account. The precedent for omitting the guard WITH A STATED REASON rather than by
+ * oversight is `POST /users/me/deletion-request` (users.routes.ts).
+ *
+ * No body, no cap, no key: the composite primary key makes both verbs idempotent, and
+ * `json-body-budget.test.ts` fails the build for a cap on a route that reads no body.
+ */
+router.put(
+  "/:videoId/not-interested",
+  requireAuth,
+  feedPreferenceLimiter,
+  engagementController.markVideoNotInterested,
+);
+router.delete(
+  "/:videoId/not-interested",
+  requireAuth,
+  feedPreferenceLimiter,
+  engagementController.unmarkVideoNotInterested,
+);
+
 /** POST /videos/:videoId/share — optional auth; see the counter note in the header. */
 router.post(
   "/:videoId/share",
@@ -232,6 +272,30 @@ creatorRouter.delete(
   subscribeLimiter,
   requireIdentifiedUser,
   engagementController.unsubscribeFromCreator,
+);
+
+/**
+ * PUT · DELETE /creators/:creatorId/mute — "don't recommend this channel".
+ *
+ * THE INVERSE OF SUBSCRIBE, AND NOT ITS MIRROR. Note what is missing next to the pair
+ * above: no `requireIdentifiedUser`, and a different limiter. Subscribe carries the guard
+ * because it moves `creatorStats.subscriberCount`, which is public social proof and
+ * therefore worth farming. A mute moves nothing — there is deliberately no mute count,
+ * because a visible "hidden by N people" is a stick handed to anyone who wants to
+ * demoralise a creator. See the not-interested pair on the video router for the full
+ * argument; it applies here unchanged.
+ */
+creatorRouter.put(
+  "/creators/:creatorId/mute",
+  requireAuth,
+  feedPreferenceLimiter,
+  engagementController.muteCreator,
+);
+creatorRouter.delete(
+  "/creators/:creatorId/mute",
+  requireAuth,
+  feedPreferenceLimiter,
+  engagementController.unmuteCreator,
 );
 
 export default router;

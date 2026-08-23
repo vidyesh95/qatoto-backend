@@ -184,6 +184,8 @@ be `isActive`. See [STUDIO_BACKEND_STRUCTURE.md](STUDIO_BACKEND_STRUCTURE.md) §
 | `videoPlaybackError`  | `id`; unique `(videoId, viewerFingerprint, reportDayBucket)`                                                  | Feeds the fast dead-player path, §8.2.                                                                                                          |
 | `videoStats`          | PK `videoId`                                                                                                  | Counter cache. §3.4.                                                                                                                            |
 | `creatorStats`        | PK `userId`                                                                                                   | `subscriberCount`, `publishedVideoCount`, `totalViewCount`.                                                                                     |
+| `videoNotInterested`  | PK `(viewerId, videoId)`, index `(videoId)` for the FK cascade                                                | §5.2b. **Viewer leads**, unlike `videoLike` — the only read is the feed's per-viewer probe. No counter, by design.                              |
+| `creatorMute`         | PK `(muterId, creatorId)`, index `(creatorId)` for the cascade, CHECK `muter <> creator`                       | §5.2b. The inverse of `creatorSubscription` and NOT its mirror: no `creatorStats` counter moves, because a public mute count is hostile.        |
 
 New enums, snake_case labels per the repo rule:
 
@@ -491,6 +493,8 @@ AND isSourceVerified = true
 AND creatorId <> :viewerId
 AND (publishedAt > now() - interval '180 days' OR id IN (SELECT video_id FROM trending_video_snapshot WHERE as_of = :asOf))
 AND NOT EXISTS (counted view by this viewer in the last 30 days)
+AND NOT EXISTS (video_not_interested row for this viewer)      -- §5.2b, never relaxed
+AND NOT EXISTS (creator_mute row for this viewer × this creator) -- §5.2b, never relaxed
 ```
 
 The 180-day window is what stops this becoming a full-table scan as the catalog grows; the
@@ -555,6 +559,13 @@ re-runs deterministically:
 
 The stage reached is recorded in the structured log, **never in the response body** — it is an
 operational fact about the catalog, not something a client should branch on.
+
+> **WHAT THE LADDER DOES NOT REACH.** §5.2b's two exclusions — `video_not_interested` and
+> `creator_mute` — are pushed outside every stage gate and no stage drops them. Everything in the
+> table above is a HEURISTIC, a guess about what a viewer would enjoy, and a guess is worth
+> abandoning to avoid an empty page. Those two are stated preferences. A dismiss button that
+> silently stops working once the catalog runs thin is worse than a short feed, because the viewer
+> cannot tell it apart from a broken one.
 
 ### 4.8 Modes
 
@@ -714,6 +725,56 @@ every card the viewer removed on purpose over the previous 90 days.
 > have aged past the 90-day prune between the hide and the undo, in which case the card is gone for
 > good.
 
+### 5.2b Feed preferences — "not interested" and "don't recommend channel"
+
+The two NEGATIVE viewer signals, and the first in the schema: every viewer→content and
+viewer→creator relation before them records what someone wants more of.
+
+| Method          | Path                              | Auth                  | Limiter                 |
+| --------------- | --------------------------------- | --------------------- | ----------------------- |
+| `PUT`/`DELETE`  | `/videos/:videoId/not-interested` | session, **not** full | `feedPreferenceLimiter` |
+| `PUT`/`DELETE`  | `/creators/:creatorId/mute`       | session, **not** full | `feedPreferenceLimiter` |
+| `GET`           | `/users/me/muted-creators`        | session               | —                       |
+
+Tables `video_not_interested (viewer_id, video_id)` and `creator_mute (muter_id, creator_id)`,
+both the `creator_subscription` shape: composite PK, one index for the FK cascade, a self-check on
+the mute. The PK is what makes both verbs idempotent, so neither route carries an idempotency key
+and neither reads a body. Migration `0127_home_feed_preferences`.
+
+`PUT` sets, `DELETE` is Undo — the same one-resource-two-states idiom as §5.2a, not a `/restore`
+sub-path.
+
+> **NO `requireIdentifiedUser`, ALONE ON THIS ROUTER.** The rule everywhere else exists because
+> better-auth's `anonymous()` mints real sessions, so `requireAuth` alone would admit unlimited
+> throwaway identities into counters that feed ranking — `likeCount`, `saveCount`,
+> `subscriberCount`. Neither of these writes has a counter, and neither changes any feed but the
+> caller's own, so the guard would buy no protection: it would only 403 the signed-out viewers
+> whose feed §4.4 already personalizes through anonymous topic affinity. `feedPreferenceLimiter`
+> carries the weight instead at half like/save's budget — the trade `videoShareLimiter` already
+> makes for the one other route reachable without a full account.
+>
+> **NO COUNTER COLUMN ON EITHER TABLE, and no route reads them in the creator direction.**
+> `creator_subscription` moves `creator_stats.subscriber_count` because a subscriber count is
+> public social proof a creator benefits from; the mirror image is not a mirror. A visible "hidden
+> by N people" is a stick handed to anyone wanting to demoralise a creator, and trivially farmable
+> besides. `creator_mute_creatorId_idx` exists for the FK cascade **alone** — a future query using
+> it to answer "who muted me" is the thing that note refuses.
+>
+> **`mode=watched` IS EXEMPT, and the exemption is load-bearing.** §4.5's predicate is shared by
+> every mode including the one that renders `/history`. Watch history is a RECORD, not a
+> recommendation — a video the viewer dismissed is still a video they watched. Without the
+> exemption "not interested" would quietly rewrite their history, which the button does not claim.
+>
+> **SEARCH IS UNTOUCHED.** `GET /feed/search` carries no per-viewer exclusion by design, and these
+> two do not change that: a search is an explicit request for a specific thing, and hiding a result
+> someone typed the title of reads as broken rather than as a preference being honoured.
+>
+> **`GET /users/me/muted-creators` IS WHAT MAKES THE MUTE REVERSIBLE.** A muted creator's videos
+> never reach the feed again, so the card carrying the undo control is exactly the card now
+> hidden. Without a list nothing anywhere could lift the mute, and a preference a viewer cannot
+> withdraw is a trap. Unpaginated: the list is bounded by how many channels one person muted by
+> hand. It sits on the users router beside `/users/me/watch-time`, declared before `/:id`.
+
 ### 5.3 `live` is not a mode
 
 The chip exists in `filter.tsx` today. Nothing backs it: there is no stream table, no ingest, no
@@ -808,7 +869,10 @@ namespace** — reusing a store instance throws `ERR_ERL_STORE_REUSE`:
 `feedReadLimiter` · `viewBeaconBurstLimiter` + `viewBeaconSustainedLimiter` (60/min AND 200/hr —
 tightest on the platform, it is the only unauthenticated write) · `playbackErrorLimiter` ·
 `videoLikeLimiter` · `videoSaveLimiter` · `videoShareLimiter` · `commentCreateLimiter` ·
-`commentUpdateLimiter` · `commentLikeLimiter` · `subscribeLimiter`.
+`commentUpdateLimiter` · `commentLikeLimiter` · `subscribeLimiter` · `watchHistoryLimiter` ·
+`feedPreferenceLimiter` (60/min — half like/save, because §5.2b's four routes are the only
+engagement writes reachable without a full account, so this bounds storage growth from throwaway
+identities where `requireIdentifiedUser` bounds it everywhere else).
 
 > **SHIPPED AS.** `viewBeaconLimiter` is TWO chained limiters, because `LimiterSpec` carries one
 > window and `createRateLimitStore` is keyed to it. Burst is declared first so a burst violator's

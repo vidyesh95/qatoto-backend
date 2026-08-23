@@ -1,6 +1,7 @@
 import type { Response } from "express";
 
 import type { CreatorSubscriptionError } from "#src/modules/home/engagement/creator-subscriptions.service.js";
+import type { FeedPreferenceError } from "#src/modules/home/engagement/feed-preferences.service.js";
 import type { VideoCommentError } from "#src/modules/home/engagement/video-comments.service.js";
 import type { VideoEngagementError } from "#src/modules/home/engagement/video-engagement.service.js";
 import type { VideoWatchError } from "#src/modules/home/engagement/video-watch.service.js";
@@ -60,7 +61,8 @@ export type EngagementDomainError =
   | VideoEngagementError
   | VideoCommentError
   | VideoWatchError
-  | CreatorSubscriptionError;
+  | CreatorSubscriptionError
+  | FeedPreferenceError;
 
 export function mapEngagementErrorToResponse(error: EngagementDomainError): {
   readonly statusCode: number;
@@ -89,6 +91,12 @@ export function mapEngagementErrorToResponse(error: EngagementDomainError): {
       // 403 rather than 422: there is no input to correct, and the caller learns
       // nothing they did not already know about themselves.
       return { statusCode: 403, message: "You cannot subscribe to your own channel." };
+    case "SELF_MUTE_FORBIDDEN":
+      // Same 403 and the same reasoning as the line above. Note it is NOT a silent success:
+      // the feed's creator self-exclusion already keeps your uploads out of your own feed,
+      // so accepting the row would store a preference that changes nothing and can never be
+      // observed to have worked.
+      return { statusCode: 403, message: "You cannot hide your own channel." };
 
     // --- 409: lifecycle.
     case "COMMENTS_DISABLED":

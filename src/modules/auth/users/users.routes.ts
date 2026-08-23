@@ -82,6 +82,20 @@ router.get("/me/linked-accounts", requireAuth, usersController.getLinkedAccounts
 router.get("/me/watch-time", requireAuth, engagementController.getMyWatchTime);
 
 /**
+ * GET /users/me/muted-creators
+ * The channels the caller has told the feed not to recommend. Same arrangement as
+ * `/me/watch-time` directly above: an engagement-module controller on this router,
+ * because this is where a client looks for facts about itself, and declared before `/:id`
+ * so "me" is never swallowed as an id param.
+ *
+ * THIS ROUTE IS WHAT MAKES THE MUTE REVERSIBLE. A muted creator's videos never reach the
+ * feed again, so the card carrying the undo control is exactly the card now hidden —
+ * without a list, nothing anywhere could lift the mute. Read-only and unpaginated; see
+ * the service for why a cursor here would be machinery for a page that cannot exist.
+ */
+router.get("/me/muted-creators", requireAuth, engagementController.listMyMutedCreators);
+
+/**
  * POST /users/me/deletion-request
  * Deactivate the caller's own account NOW and schedule its anonymization 30 days out.
  *
