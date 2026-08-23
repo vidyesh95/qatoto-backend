@@ -122,12 +122,12 @@
     "gate": "pnpm check:specifiers && pnpm typecheck && pnpm fmt:check && pnpm lint; pnpm test"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1112.0",
-    "@aws-sdk/s3-request-presigner": "^3.1112.0",
-    "@better-auth/passkey": "^1.7.0",
+    "@aws-sdk/client-s3": "^3.1116.0",
+    "@aws-sdk/s3-request-presigner": "^3.1116.0",
+    "@better-auth/passkey": "^1.7.1",
     "@node-rs/argon2": "^2.1.0",
-    "better-auth": "^1.7.0",
-    "cloudinary": "^2.10.0",
+    "better-auth": "^1.7.1",
+    "cloudinary": "^2.10.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "debug": "^4.4.3",
@@ -157,13 +157,13 @@
     "@types/supertest": "^6.0.3",
     "@types/swagger-ui-express": "^4.1.8",
     "drizzle-kit": "^0.31.10",
-    "oxfmt": "^0.63.0",
-    "oxlint": "^1.78.0",
+    "oxfmt": "^0.64.0",
+    "oxlint": "^1.79.0",
     "oxlint-tsgolint": "^0.23.0",
     "supertest": "^7.2.2",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=24.0.0"
