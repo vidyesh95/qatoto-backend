@@ -48,20 +48,36 @@ pgTypes.setTypeParser(pgTypes.builtins.TIMESTAMP, (rawValue: string) =>
   rawValue === null ? null : new Date(`${rawValue.replace(" ", "T")}Z`),
 );
 
-const ssl = config.DATABASE_CA_CERT_PATH
-  ? {
+/**
+ * Aiven (and the same class of managed Postgres) puts `sslmode=require` on the
+ * URL. pg-connection-string treats that as verify-full, and Aiven's cert is not
+ * in the public trust store, so a missing CA dies with SELF_SIGNED_CERT_IN_CHAIN.
+ *
+ * With a CA we verify. Without one we still encrypt, but we do not verify the
+ * server — that is what lets Dokploy boot when DATABASE_CA_CERT_PATH is unset.
+ */
+function postgresPoolSslOption():
+  | { readonly rejectUnauthorized: true; readonly ca: string }
+  | { readonly rejectUnauthorized: false }
+  | undefined {
+  if (config.DATABASE_CA_CERT_PATH) {
+    return {
       rejectUnauthorized: true,
       ca: readFileSync(config.DATABASE_CA_CERT_PATH).toString(),
-    }
-  : undefined;
+    };
+  }
+  if (/[?&]sslmode=/i.test(config.DATABASE_URL)) {
+    return { rejectUnauthorized: false };
+  }
+  return undefined;
+}
 
-// When we supply our own CA, drop any `sslmode` from the connection string.
-// pg-connection-string treats `sslmode=require` as `verify-full` and builds its
-// own ssl config that overrides our `ssl` object, breaking CA verification with
-// SELF_SIGNED_CERT_IN_CHAIN. Our explicit `ssl` is the single source of truth.
-const connectionString = ssl
-  ? config.DATABASE_URL.replace(/([?&])sslmode=[^&]*&?/, "$1").replace(/[?&]$/, "")
-  : config.DATABASE_URL;
+function stripSslModeQueryParameter(databaseUrl: string): string {
+  return databaseUrl.replace(/([?&])sslmode=[^&]*&?/, "$1").replace(/[?&]$/, "");
+}
+
+const ssl = postgresPoolSslOption();
+const connectionString = ssl ? stripSslModeQueryParameter(config.DATABASE_URL) : config.DATABASE_URL;
 
 /**
  * Shared pool tuning.

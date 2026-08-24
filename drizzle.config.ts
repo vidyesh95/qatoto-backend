@@ -14,23 +14,29 @@ if (caCertPath && !existsSync(caCertPath)) {
   );
 }
 
-// drizzle-kit's pg connector ignores the `ssl` config whenever `url` is present
-// (it builds `new Pool({ connectionString })` and drops `ssl`). When we supply a
-// CA we therefore pass discrete connection fields instead of a URL, which makes
-// drizzle-kit take the `{ ...credentials, ssl }` branch and honor our CA.
-const databaseCredentials = caCertPath
-  ? (() => {
-      const parsedUrl = new URL(process.env.DATABASE_URL);
-      return {
-        host: parsedUrl.hostname,
-        port: parsedUrl.port ? Number(parsedUrl.port) : 5432,
-        user: decodeURIComponent(parsedUrl.username),
-        password: decodeURIComponent(parsedUrl.password),
-        database: parsedUrl.pathname.replace(/^\//, ""),
-        ssl: { rejectUnauthorized: true, ca: readFileSync(caCertPath).toString() },
-      };
-    })()
-  : { url: process.env.DATABASE_URL };
+function postgresMigrateCredentials(databaseUrl: string, caCertificatePath: string | undefined) {
+  const urlRequestsTls = /[?&]sslmode=/i.test(databaseUrl);
+  if (!caCertificatePath && !urlRequestsTls) {
+    return { url: databaseUrl };
+  }
+
+  // drizzle-kit's pg connector ignores `ssl` whenever `url` is present, so TLS
+  // settings have to be discrete fields. Without a CA, encrypt but do not verify
+  // — Aiven's cert is not in the public trust store (SELF_SIGNED_CERT_IN_CHAIN).
+  const parsedUrl = new URL(databaseUrl);
+  return {
+    host: parsedUrl.hostname,
+    port: parsedUrl.port ? Number(parsedUrl.port) : 5432,
+    user: decodeURIComponent(parsedUrl.username),
+    password: decodeURIComponent(parsedUrl.password),
+    database: parsedUrl.pathname.replace(/^\//, ""),
+    ssl: caCertificatePath
+      ? { rejectUnauthorized: true, ca: readFileSync(caCertificatePath).toString() }
+      : { rejectUnauthorized: false },
+  };
+}
+
+const databaseCredentials = postgresMigrateCredentials(process.env.DATABASE_URL, caCertPath);
 
 const schemaPath = "./src/db/schema.ts";
 
