@@ -15,7 +15,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 FROM deps AS build
 
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.node.json ./
 COPY src ./src
 # Skip source maps and incremental state — both inflate RSS on a small VPS.
 # node_modules stay in this stage so the runner cannot COPY them in parallel with tsc.
