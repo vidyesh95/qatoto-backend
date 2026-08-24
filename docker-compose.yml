@@ -29,9 +29,7 @@ services:
     <<: *qatoto-app
     restart: "on-failure:3"
     command:
-      - sh
-      - -c
-      - pnpm db:migrate && pnpm jobs:install:prod
+      - /migrate.sh
 
   api:
     <<: *qatoto-app

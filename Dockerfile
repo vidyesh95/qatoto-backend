@@ -38,8 +38,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY drizzle ./drizzle
 COPY drizzle.config.ts ./
 COPY docker/entrypoint.sh /entrypoint.sh
+COPY docker/migrate.sh /migrate.sh
 
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /migrate.sh
 
 USER node
 EXPOSE 8000

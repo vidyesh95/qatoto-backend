@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import "dotenv/config";
 import { defineConfig } from "drizzle-kit";
@@ -6,6 +6,13 @@ import { defineConfig } from "drizzle-kit";
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
 
 const caCertPath = process.env.DATABASE_CA_CERT_PATH;
+
+if (caCertPath && !existsSync(caCertPath)) {
+  throw new Error(
+    `DATABASE_CA_CERT_PATH=${caCertPath} is not a file. ` +
+      "Paste the Aiven CA PEM into DATABASE_CA_CERT, or mount the cert at that path.",
+  );
+}
 
 // drizzle-kit's pg connector ignores the `ssl` config whenever `url` is present
 // (it builds `new Pool({ connectionString })` and drops `ssl`). When we supply a
@@ -25,9 +32,13 @@ const databaseCredentials = caCertPath
     })()
   : { url: process.env.DATABASE_URL };
 
+const schemaPath = "./src/db/schema.ts";
+
 export default defineConfig({
   dialect: "postgresql",
-  schema: "./src/db/schema.ts",
+  // The production image ships SQL under `out/` and does not copy `src/`. `migrate`
+  // only reads those SQL files; `schema` is for generate/push on a developer machine.
+  ...(existsSync(schemaPath) ? { schema: schemaPath } : {}),
   out: "./drizzle",
   dbCredentials: databaseCredentials,
   // Drizzle owns `public` and NOTHING else. pg-boss creates and migrates its own
