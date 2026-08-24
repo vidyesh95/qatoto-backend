@@ -47,7 +47,7 @@ import * as suppliersController from "#src/modules/rnd/suppliers/suppliers.contr
  * is none here.
  */
 
-export const supplierRouter = express.Router();
+const supplierRouter = express.Router();
 
 // --- The capability vocabulary. Seeded; there is no POST, so no spam surface and hence no
 //     moderation state — `discovery_skill`'s reasoning verbatim.

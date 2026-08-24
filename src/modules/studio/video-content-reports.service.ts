@@ -217,15 +217,14 @@ export async function listVideoReports(
       return { success: false, error: { type: "INVALID_CURSOR" } };
     }
     // Strictly after (createdAt, id), which is why the tiebreak is in the key at all.
-    filters.push(
-      or(
-        gt(videoContentReport.createdAt, decodedCursor.createdAt),
-        and(
-          eq(videoContentReport.createdAt, decodedCursor.createdAt),
-          gt(videoContentReport.id, decodedCursor.id),
-        ),
-      ) as SQL,
+    const keyset = or(
+      gt(videoContentReport.createdAt, decodedCursor.createdAt),
+      and(
+        eq(videoContentReport.createdAt, decodedCursor.createdAt),
+        gt(videoContentReport.id, decodedCursor.id),
+      ),
     );
+    if (keyset) filters.push(keyset);
   }
 
   const rows = await db
