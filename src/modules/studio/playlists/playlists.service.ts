@@ -356,7 +356,10 @@ export async function replacePlaylistVideos(
   const uniqueVideoIds = [...new Set(videoIds)];
   const unaddableVideoIds = await findUnaddableVideoIds(creatorId, uniqueVideoIds);
   if (unaddableVideoIds.length > 0) {
-    return { success: false, error: { type: "VIDEO_NOT_FOUND_FOR_PLAYLIST", videoIds: unaddableVideoIds } };
+    return {
+      success: false,
+      error: { type: "VIDEO_NOT_FOUND_FOR_PLAYLIST", videoIds: unaddableVideoIds },
+    };
   }
 
   await db.transaction(async (tx) => {
@@ -399,7 +402,10 @@ export async function addVideoToPlaylist(
 
   const unaddableVideoIds = await findUnaddableVideoIds(creatorId, [videoId]);
   if (unaddableVideoIds.length > 0) {
-    return { success: false, error: { type: "VIDEO_NOT_FOUND_FOR_PLAYLIST", videoIds: unaddableVideoIds } };
+    return {
+      success: false,
+      error: { type: "VIDEO_NOT_FOUND_FOR_PLAYLIST", videoIds: unaddableVideoIds },
+    };
   }
 
   await db.transaction(async (tx) => {

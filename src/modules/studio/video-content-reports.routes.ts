@@ -71,7 +71,12 @@ router.post(
  * staff bucket, generous on purpose because a moderator legitimately works a queue quickly.
  * It exists to bound a COMPROMISED staff session, not to pace an honest one.
  */
-router.get("/admin/content-reports", requireAuth, contentReviewLimiter, reportsController.listVideoReports);
+router.get(
+  "/admin/content-reports",
+  requireAuth,
+  contentReviewLimiter,
+  reportsController.listVideoReports,
+);
 
 /**
  * POST /videos/admin/content-reports/:reportId/decisions

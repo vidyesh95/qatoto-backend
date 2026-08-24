@@ -558,7 +558,9 @@ async function respondToNotInterested(
   const response: ApiResponse = {
     status: "success",
     statusCode: 200,
-    message: shouldBeSet ? "We won't recommend this video." : "That video can be recommended again.",
+    message: shouldBeSet
+      ? "We won't recommend this video."
+      : "That video can be recommended again.",
     data: preferenceResult.value,
   };
   res.status(200).json(response);

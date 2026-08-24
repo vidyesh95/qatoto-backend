@@ -18,10 +18,6 @@ import {
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 import { user } from "#src/db/schema/_core.js";
-// A TABLE reference, so the import cycle is harmless: every cross-file foreign key here is
-// a thunk that resolves long after both modules finish evaluating. `_primitives.ts`'s header
-// is about eagerly-CALLED symbols, which this is not.
-import { platformAuditEntry } from "#src/db/schema/platform.js";
 import {
   animeAudioModeEnum,
   animeSeriesStatusEnum,
@@ -29,6 +25,10 @@ import {
   playlistVideoOrderEnum,
   playlistVisibilityEnum,
 } from "#src/db/schema/_primitives.js";
+// A TABLE reference, so the import cycle is harmless: every cross-file foreign key here is
+// a thunk that resolves long after both modules finish evaluating. `_primitives.ts`'s header
+// is about eagerly-CALLED symbols, which this is not.
+import { platformAuditEntry } from "#src/db/schema/platform.js";
 import { product } from "#src/db/schema/store.js";
 import {
   contentCategory,
@@ -1304,10 +1304,7 @@ export const videoModerationAction = pgTable(
     uniqueIndex("video_moderation_action_audit_uidx").on(table.auditEntryId),
     index("video_moderation_action_timeline_idx").on(table.createdAt, table.id),
     index("video_moderation_action_video_idx").on(table.videoId, table.createdAt),
-    check(
-      "video_moderation_action_reason_ck",
-      sql`char_length(reason_note) BETWEEN 1 AND 2000`,
-    ),
+    check("video_moderation_action_reason_ck", sql`char_length(reason_note) BETWEEN 1 AND 2000`),
     check(
       "video_moderation_action_role_ck",
       sql`char_length(moderator_role_snapshot) BETWEEN 1 AND 40`,

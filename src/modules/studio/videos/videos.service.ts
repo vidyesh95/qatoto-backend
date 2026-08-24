@@ -1696,15 +1696,17 @@ export async function setVideoPlaylists(
     //
     // The subquery is the caller's own playlists, so this endpoint keeps meaning "set which
     // of MY playlists hold this video" and stops meaning "set which playlists anywhere do".
-    await tx.delete(playlistItem).where(
-      and(
-        eq(playlistItem.videoId, videoId),
-        inArray(
-          playlistItem.playlistId,
-          tx.select({ id: playlist.id }).from(playlist).where(eq(playlist.creatorId, creatorId)),
+    await tx
+      .delete(playlistItem)
+      .where(
+        and(
+          eq(playlistItem.videoId, videoId),
+          inArray(
+            playlistItem.playlistId,
+            tx.select({ id: playlist.id }).from(playlist).where(eq(playlist.creatorId, creatorId)),
+          ),
         ),
-      ),
-    );
+      );
     for (const playlistId of uniquePlaylistIds) {
       const [tail] = await tx
         .select({ nextPosition: sql<number>`coalesce(max(${playlistItem.position}), -1) + 1` })

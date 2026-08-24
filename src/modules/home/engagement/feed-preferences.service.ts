@@ -168,7 +168,9 @@ export async function setCreatorMute(input: {
   } else {
     await db
       .delete(creatorMute)
-      .where(and(eq(creatorMute.muterId, input.muterId), eq(creatorMute.creatorId, input.creatorId)));
+      .where(
+        and(eq(creatorMute.muterId, input.muterId), eq(creatorMute.creatorId, input.creatorId)),
+      );
   }
 
   return { success: true, value: { isMuted: input.shouldBeSet } };
