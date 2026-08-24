@@ -15,11 +15,11 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 FROM deps AS build
 
-COPY tsconfig.json tsconfig.node.json ./
+COPY scripts/emit-javascript.mjs ./scripts/emit-javascript.mjs
 COPY src ./src
-# Skip source maps and incremental state — both inflate RSS on a small VPS.
-# node_modules stay in this stage so the runner cannot COPY them in parallel with tsc.
-RUN pnpm exec tsc --pretty false --incremental false --sourceMap false
+# Do not run `tsc` here. Hundreds of strict files peak well over 1 GB and the
+# Dokploy VPS SIGKILLs the process (exit 137). esbuild strips types file-by-file.
+RUN node scripts/emit-javascript.mjs
 
 FROM base AS runner
 
@@ -30,7 +30,7 @@ ENV PORT=8000
 RUN mkdir -p /certs \
   && chown node:node /certs
 
-# Copy from `build` (not `deps`) so BuildKit cannot copy node_modules while tsc is running.
+# Copy from `build` (not `deps`) so BuildKit cannot copy node_modules while emit runs.
 # Do not --chown these trees: Docker copies then chowns in memory and OOM-kills the build.
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
