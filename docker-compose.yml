@@ -5,14 +5,15 @@
 # unused by this codebase). Put DATABASE_URL and the Aiven CA in Dokploy's
 # Environment tab, then attach this stack to the existing dokploy-network bridge.
 #
+# Only `api` has a `build:` so Dokploy cannot compile the image three times in
+# parallel (that OOM-kills tsc with exit 137). migrate and worker reuse the tag.
+#
 # Deploy order is encoded below: migrate → jobs:install → api + worker.
 # Point the Compose Path at ./docker-compose.yml and add the API domain in the
 # Dokploy Domains tab (service `api`, port 8000). Do not set container_name.
 
 x-qatoto-app: &qatoto-app
-  build:
-    context: .
-    dockerfile: Dockerfile
+  image: qatoto-backend:latest
   env_file:
     - .env
   environment:
@@ -34,6 +35,9 @@ services:
 
   api:
     <<: *qatoto-app
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     command: ["node", "dist/index.js"]
     expose:

@@ -11,14 +11,15 @@ FROM base AS deps
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-  pnpm install --frozen-lockfile
+  pnpm install --frozen-lockfile --network-concurrency 1
 
 FROM deps AS build
 
-COPY tsconfig.json tsconfig.node.json drizzle.config.ts ./
+COPY tsconfig.json ./
 COPY src ./src
-COPY drizzle ./drizzle
-RUN pnpm build
+# Skip source maps and incremental state — both inflate RSS on a small VPS.
+# node_modules stay in this stage so the runner cannot COPY them in parallel with tsc.
+RUN pnpm exec tsc --pretty false --incremental false --sourceMap false
 
 FROM base AS runner
 
@@ -29,12 +30,14 @@ ENV PORT=8000
 RUN mkdir -p /certs \
   && chown node:node /certs
 
-COPY --from=deps --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/dist ./dist
-COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY --chown=node:node drizzle ./drizzle
-COPY --chown=node:node drizzle.config.ts ./
-COPY --chown=node:node docker/entrypoint.sh /entrypoint.sh
+# Copy from `build` (not `deps`) so BuildKit cannot copy node_modules while tsc is running.
+# Do not --chown these trees: Docker copies then chowns in memory and OOM-kills the build.
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY drizzle ./drizzle
+COPY drizzle.config.ts ./
+COPY docker/entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh
 
