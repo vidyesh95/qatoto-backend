@@ -1,0 +1,74 @@
+# Qatoto on Dokploy (Compose type: Docker Compose).
+#
+# Postgres and Redis are NOT in this file: both live on Aiven. The API and
+# sidecar worker share that Postgres (pg-boss uses the same database; Redis is
+# unused by this codebase). Put DATABASE_URL and the Aiven CA in Dokploy's
+# Environment tab, then attach this stack to the existing dokploy-network bridge.
+#
+# Deploy order is encoded below: migrate → jobs:install → api + worker.
+# Point the Compose Path at ./docker-compose.yml and add the API domain in the
+# Dokploy Domains tab (service `api`, port 8000). Do not set container_name.
+
+x-qatoto-app: &qatoto-app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  environment:
+    NODE_ENV: production
+    TZ: UTC
+    PORT: "8000"
+  init: true
+  networks:
+    - dokploy-network
+
+services:
+  migrate:
+    <<: *qatoto-app
+    restart: "on-failure:3"
+    command:
+      - sh
+      - -c
+      - pnpm db:migrate && pnpm jobs:install:prod
+
+  api:
+    <<: *qatoto-app
+    restart: unless-stopped
+    command: ["node", "dist/index.js"]
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8000/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.services.qatoto-api.loadbalancer.server.port=8000
+
+  worker:
+    <<: *qatoto-app
+    restart: unless-stopped
+    command: ["node", "dist/worker.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 35s
+
+networks:
+  dokploy-network:
+    external: true
+    name: dokploy-network
