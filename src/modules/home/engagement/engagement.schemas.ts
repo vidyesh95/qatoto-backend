@@ -166,6 +166,22 @@ export const ListNotInterestedVideosQuerySchema = z
   .strict();
 
 /**
+ * The three library reads — `GET /users/me/liked-videos`, `/saved-videos` and
+ * `/subscriptions`. Byte-identical to the two keyset query schemas above.
+ *
+ * ONE SCHEMA FOR THREE ROUTES, where those two are separate objects with the same fields.
+ * The duplication above is historical rather than deliberate; three more copies of it would
+ * be five ways to change a bound that must move together. There is nothing route-specific
+ * to say here — a cursor is opaque and a limit is a limit.
+ */
+export const ListLibraryQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    cursor: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+
+/**
  * The viewer's own watch time — `GET /users/me/watch-time`. One optional field, and it decides
  * only where a day starts.
  *

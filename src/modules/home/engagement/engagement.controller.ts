@@ -4,6 +4,7 @@ import { logger } from "#src/lib/logger.js";
 import { utcHourOf } from "#src/lib/utc-day.js";
 import { computeViewerFingerprint, utcDayStringOf } from "#src/lib/viewer-fingerprint.js";
 import * as subscriptionsService from "#src/modules/home/engagement/creator-subscriptions.service.js";
+import type { EngagementDomainError } from "#src/modules/home/engagement/engagement-error-response.js";
 import {
   firstParam,
   optionalBody,
@@ -16,6 +17,7 @@ import {
   CreateCommentSchema,
   CreatorIdParamSchema,
   ListCreatorInboxCommentsQuerySchema,
+  ListLibraryQuerySchema,
   ListNotInterestedVideosQuerySchema,
   ListVideoCommentsQuerySchema,
   RecordShareSchema,
@@ -29,7 +31,7 @@ import * as feedPreferencesService from "#src/modules/home/engagement/feed-prefe
 import * as commentsService from "#src/modules/home/engagement/video-comments.service.js";
 import * as engagementService from "#src/modules/home/engagement/video-engagement.service.js";
 import { getViewerWatchTime } from "#src/modules/home/engagement/watch-time.service.js";
-import type { ApiResponse } from "#src/types/index.js";
+import type { ApiResponse, Result } from "#src/types/index.js";
 
 /**
  * The client IP, for the fingerprint hash and nothing else.
@@ -730,6 +732,90 @@ export async function listMyNotInterestedVideos(req: Request, res: Response): Pr
     message: "Videos you told us not to recommend.",
     data: listResult.value.rows,
     nextCursor: listResult.value.nextCursor,
+  });
+}
+
+/**
+ * The three library reads — `GET /users/me/liked-videos`, `/saved-videos`, `/subscriptions`.
+ *
+ * ONE HELPER, THREE HANDLERS. Each differs only in which service call it makes and what the
+ * message says; the session check, the query parse, the tagged-result branch and the
+ * `nextCursor` envelope are identical, and three hand-copied versions of that would be three
+ * places for the cursor to stop being returned.
+ */
+async function respondToLibraryList(
+  req: Request,
+  res: Response,
+  input: {
+    readonly message: string;
+    readonly load: (page: {
+      readonly userId: string;
+      readonly limit: number;
+      readonly cursor: string | null;
+    }) => Promise<
+      Result<
+        { readonly rows: readonly unknown[]; readonly nextCursor: string | null },
+        EngagementDomainError
+      >
+    >;
+  },
+): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = ListLibraryQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const listResult = await input.load({
+    userId: req.user.id,
+    limit: parsedQuery.data.limit,
+    cursor: parsedQuery.data.cursor ?? null,
+  });
+
+  if (!listResult.success) {
+    respondEngagementError(res, listResult.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: input.message,
+    data: listResult.value.rows,
+    nextCursor: listResult.value.nextCursor,
+  });
+}
+
+export function listMyLikedVideos(req: Request, res: Response): Promise<void> {
+  return respondToLibraryList(req, res, {
+    message: "Videos you liked.",
+    load: (page) => engagementService.listLikedVideos(page),
+  });
+}
+
+export function listMySavedVideos(req: Request, res: Response): Promise<void> {
+  return respondToLibraryList(req, res, {
+    message: "Videos you saved for later.",
+    load: (page) => engagementService.listSavedVideos(page),
+  });
+}
+
+export function listMySubscriptions(req: Request, res: Response): Promise<void> {
+  return respondToLibraryList(req, res, {
+    message: "Channels you subscribe to.",
+    // The service names its caller `subscriberId` rather than `userId` — it is one side of a
+    // user-to-user relation, and calling both ends "user" is how the wrong one gets passed.
+    load: (page) =>
+      subscriptionsService.listMySubscriptions({
+        subscriberId: page.userId,
+        limit: page.limit,
+        cursor: page.cursor,
+      }),
   });
 }
 

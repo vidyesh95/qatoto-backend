@@ -175,12 +175,12 @@ be `isActive`. See [STUDIO_BACKEND_STRUCTURE.md](STUDIO_BACKEND_STRUCTURE.md) §
 | Table                 | Key                                                                                                           | Notes                                                                                                                                           |
 | --------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `videoViewSession`    | `id`; **unique `(videoId, viewerFingerprint, viewDayBucket)`**                                                | One row per viewer, per video, per UTC day. That constraint is the anti-replay boundary — see §3.2.                                             |
-| `videoLike`           | PK `(videoId, userId)`, **reverse index `(userId, videoId)`**                                                 | The reverse index is what turns "which of these 24 cards have I liked?" into one join. Copies `researchProgramPostReaction` (`schema.ts:8621`). |
-| `videoSave`           | same                                                                                                          | Watch-later.                                                                                                                                    |
+| `videoLike`           | PK `(videoId, userId)`, **reverse index `(userId, videoId)`**, listing index `(userId, createdAt DESC, videoId DESC)` | The reverse index is what turns "which of these 24 cards have I liked?" into one join. Copies `researchProgramPostReaction` (`schema.ts:8621`). The listing index carries `createdAt`, which the reverse one does not — §5.2d. |
+| `videoSave`           | PK `(videoId, userId)`, index `(userId, createdAt, videoId)`                                                  | Watch-later. Its viewer index leads with `createdAt` where `videoLike`'s does not, because a saved list is RENDERED and a like set is only probed — which is why §5.2d's listing needed no new index here. |
 | `videoComment`        | `id`; index `(videoId, createdAt DESC) WHERE parent_comment_id IS NULL`, index `(parentCommentId, createdAt)` | One level of threading only. `isDeleted` + `deletedAt` tombstone so deleting a parent does not orphan its replies. `body` CHECK length 1..2000. |
 | `videoCommentLike`    | PK `(commentId, userId)`                                                                                      |                                                                                                                                                 |
 | `videoShare`          | `id`; index `(videoId, createdAt)`                                                                            | `channel` enum, `userId` nullable.                                                                                                              |
-| `creatorSubscription` | PK `(subscriberId, creatorId)`, reverse index, CHECK `subscriber <> creator`                                  |                                                                                                                                                 |
+| `creatorSubscription` | PK `(subscriberId, creatorId)`, reverse index, listing index `(subscriberId, createdAt DESC, creatorId DESC)`, CHECK `subscriber <> creator` | The listing index is §5.2d's; neither the PK nor the reverse index carries `createdAt`.                                                          |
 | `videoPlaybackError`  | `id`; unique `(videoId, viewerFingerprint, reportDayBucket)`                                                  | Feeds the fast dead-player path, §8.2.                                                                                                          |
 | `videoStats`          | PK `videoId`                                                                                                  | Counter cache. §3.4.                                                                                                                            |
 | `creatorStats`        | PK `userId`                                                                                                   | `subscriberCount`, `publishedVideoCount`, `totalViewCount`.                                                                                     |
@@ -921,6 +921,72 @@ Tables `video_content_report` and `video_moderation_action`, plus
 > reporter learns their own report's status and nothing about who decided it or how many others
 > reported the same video. Naming the moderator makes a takedown personal; exposing the count
 > makes brigading measurable.
+
+### 5.2d The library reads — liked, watch later, subscriptions
+
+The three POSITIVE collections, read back. §5.2b's two negative signals shipped with their
+listings; these three shipped their WRITE halves in §3.1 and had no listing at all until now.
+
+| Method | Path                       | Auth    | Limiter |
+| ------ | -------------------------- | ------- | ------- |
+| `GET`  | `/users/me/liked-videos`   | session | —       |
+| `GET`  | `/users/me/saved-videos`   | session | —       |
+| `GET`  | `/users/me/subscriptions`  | session | —       |
+
+No new table. `video_like`, `video_save` and `creator_subscription` have been filling since
+§3.1 through `PUT`/`DELETE /videos/:videoId/like`, `.../save` and `/creators/:creatorId/subscribe`,
+and **nothing read a row back** — a viewer could like a video and then have no way to find it
+again. `/library` rendered a panel saying exactly that rather than three dead tabs.
+
+Migration `0137_library_reads` adds **two** indexes, not three: `video_like_user_recent_idx`
+`(user_id, created_at DESC, video_id DESC)` and `creator_subscription_subscriber_recent_idx`
+`(subscriber_id, created_at DESC, creator_id DESC)`.
+
+> **`video_save` DELIBERATELY GETS NO INDEX, and this is the part not to "fix" later.**
+> `video_save_userId_idx` is already `(user_id, created_at, video_id)` — it leads with
+> `created_at`, unlike `video_like`'s, because §3.1 records that a saved list is RENDERED where a
+> like set is only probed for membership. It is ASC where the query is DESC, and that is not a
+> mismatch: with `user_id` pinned by equality the planner walks the remaining suffix BACKWARDS,
+> which is a complete reverse of every sort column. `EXPLAIN` confirms it — `Index Only Scan
+> Backward using video_save_userId_idx`, no Sort node. A duplicate DESC copy would buy nothing and
+> cost a write on every save.
+>
+> **THE TWO VIDEO LISTS ARE PUBLIC-GATED, AND §5.2b's LISTING IS NOT.** That is the sharpest
+> disagreement between two functions of the same shape on this surface, and it is the decision
+> rather than an inconsistency. A DISMISSAL hides content, so gating its undo list would hide
+> exactly the rows a viewer needs to lift the preference — unliftable, which is the trap that
+> route exists to close. A LIKE is the opposite signal: a like row for a video the creator has
+> since made private hides nothing from anyone, so there is no trap, and rendering its title and
+> thumbnail would turn a self-read into an oracle over a creator's WITHDRAWN catalogue. Both lists
+> filter on `PUBLICLY_SERVABLE AND published_at <= now()`, passed as the imported fragment so the
+> partial index still applies. The membership row survives the filter; un-privating restores the
+> card.
+>
+> **ALL THREE PAGINATE, INCLUDING SUBSCRIPTIONS, WHERE `/me/muted-creators` DOES NOT.** §5.2b's
+> test is the one applied: muting is an act against a whole channel and tops out in the tens, so a
+> cursor there is machinery for a page that cannot exist. Subscribing is equally deliberate but
+> accumulates for years and routinely reaches the hundreds — the same test rules a cursor IN.
+> Keyset on `(created_at, id)` through `instant-cursor`, because two rows share a millisecond more
+> often than that sounds and a cursor on a non-unique column skips whichever loses the tie.
+>
+> **NO EXISTENCE GATE AND NO PUBLISHED-VIDEO REQUIREMENT ON THE SUBSCRIPTION LIST.**
+> `setCreatorSubscription` checks `user` because storing a subscription to a nonexistent id would
+> follow nothing forever; the read needs no check, since `ON DELETE cascade` on both FKs means a
+> deleted account takes its rows with it. And a channel with no videos yet is a real thing to
+> follow — §3.1 says so — so hiding those rows would make the subscription unliftable from the one
+> surface that lists it. `subscriberCount` comes from `leftJoin(creator_stats)` + `COALESCE(…, 0)`:
+> a creator whose stats row was never minted is a real creator with zero subscribers, and an
+> `innerJoin` would silently drop them out of somebody's list.
+>
+> **ONE ROW SHAPE FOR THE TWO VIDEO LISTS, with `addedAt` rather than `likedAt`/`savedAt`.** They
+> are the same card behind two tabs, and two field names for one instant would fork the client's
+> card component to no purpose. Wider than `NotInterestedVideoRow`, which is a recognition row in
+> an undo list — these carry `durationSeconds` and `viewCount` because they are cards somebody
+> clicks.
+>
+> **THE FRONTEND IS NOT WIRED YET.** `/library`'s "Not here yet" panel still names all three. That
+> is tracked in the frontend `todo.md`; the panel's claim is now false about the backend and true
+> about the page.
 
 ### 5.3 `live` is not a mode
 

@@ -1,0 +1,41 @@
+-- ---------------------------------------------------------------------------
+-- TWO INDEXES, FOR THREE NEW READS: `GET /users/me/liked-videos`,
+-- `/users/me/saved-videos` and `/users/me/subscriptions`.
+--
+-- THE WRITE SIDE HAS SHIPPED THE WHOLE TIME. `PUT`/`DELETE /videos/:videoId/like`,
+-- `.../save` and `/creators/:creatorId/subscribe` have been filling `video_like`,
+-- `video_save` and `creator_subscription` since §3.1, and NOTHING read any of them back.
+-- A viewer could like a video and then never find it again; `/library` rendered a panel
+-- saying so in as many words. These indexes are what let the three lists be range scans
+-- instead of sorts over a viewer's entire history.
+--
+-- WHY `video_like` NEEDS ONE. `video_like_userId_idx` is `(user_id, video_id)` and carries
+-- NO `created_at` at all — deliberately, because its stated job is the feed's "which of
+-- these 24 cards have I liked?" membership probe, which never orders by time. A
+-- newest-first list over it is a full scan of the viewer's likes plus a sort.
+--
+-- WHY `creator_subscription` NEEDS ONE. Same shape of gap: the only viewer-side path is the
+-- primary key `(subscriber_id, creator_id)`, and `creator_subscription_creatorId_idx` runs
+-- the other direction ("who subscribes to this creator?"). Neither can order by time.
+--
+-- WHY `video_save` GETS NOTHING, and this is the part not to "fix" later. Its
+-- `video_save_userId_idx` is already `(user_id, created_at, video_id)` — the schema comment
+-- on it says it leads with `created_at`, unlike video_like's, precisely because "a saved
+-- list is RENDERED". It is ASC where the new query is DESC, and that is fine rather than a
+-- mismatch: with `user_id` pinned by equality, the planner walks the `(created_at,
+-- video_id)` suffix BACKWARDS, which is a complete reverse of every remaining sort column.
+-- A btree serves that at the same cost as forward. A duplicate DESC copy would buy nothing
+-- and cost a write on every save.
+--
+-- DESC ON BOTH SORT COLUMNS in the two indexes that ARE created, matching each query's
+-- ORDER BY exactly — the same rule `0136` states. The trailing id/creator_id is what makes
+-- the keyset cursor total: two likes land in the same millisecond more often than that
+-- sounds, and a cursor keyed on a non-unique column skips whichever row loses the tie.
+--
+-- NOT `CONCURRENTLY`: this repo's migrations run inside a transaction, which forbids it.
+--
+-- RUN ORDER: two indexes. No tables, no columns, no constraints.
+-- ---------------------------------------------------------------------------
+
+CREATE INDEX "video_like_user_recent_idx" ON "video_like" USING btree ("user_id","created_at" DESC,"video_id" DESC);--> statement-breakpoint
+CREATE INDEX "creator_subscription_subscriber_recent_idx" ON "creator_subscription" USING btree ("subscriber_id","created_at" DESC,"creator_id" DESC);

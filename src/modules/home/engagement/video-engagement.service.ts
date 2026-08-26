@@ -1,9 +1,10 @@
-import { and, countDistinct, eq, inArray, sql } from "drizzle-orm";
+import { and, countDistinct, desc, eq, inArray, lt, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 import { db } from "#src/db/index.js";
 import {
   creatorStats,
+  user,
   userActivityHour,
   video,
   videoLike,
@@ -13,11 +14,12 @@ import {
   videoStats,
   videoViewSession,
 } from "#src/db/schema.js";
+import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
 import {
   applyViewBeacon,
   pinReportedDurationSeconds,
 } from "#src/modules/home/view-beacon-clamp.js";
-import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
+import { findPublicVideo, PUBLICLY_SERVABLE } from "#src/modules/studio/public-video-gate.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -29,7 +31,13 @@ import type { Result } from "#src/types/index.js";
  * job we are trying not to need.
  */
 
-export type VideoEngagementError = { readonly type: "VIDEO_NOT_FOUND"; readonly videoId: string };
+export type VideoEngagementError =
+  | { readonly type: "VIDEO_NOT_FOUND"; readonly videoId: string }
+  // THE SAME PAYLOAD-FREE ARM `FeedPreferenceError` AND `VideoCommentError` DECLARE, and
+  // declaring it a third time is correct rather than duplication: TypeScript collapses arms
+  // whose payloads match, so `EngagementDomainError` still has ONE `CURSOR_MALFORMED` and the
+  // existing 422 in `engagement-error-response.ts` already answers it.
+  | { readonly type: "CURSOR_MALFORMED" };
 
 /** `+ n`, as SQL, so two concurrent writers cannot read-modify-write over each other. */
 function increment(column: AnyPgColumn, amount = 1): ReturnType<typeof sql> {
@@ -508,6 +516,167 @@ export async function recordShare(input: {
     return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId: input.videoId } };
   }
   return { success: true, value: { shareCount: outcome.shareCount } };
+}
+
+// ---------------------------------------------------------------------------
+// Reading the two collections back
+// ---------------------------------------------------------------------------
+
+/**
+ * One row of `GET /users/me/liked-videos` or `GET /users/me/saved-videos`.
+ *
+ * ONE SHAPE FOR BOTH LISTS, because they are the same card: a viewer's own collection of
+ * videos, rendered by one component behind two tabs. `addedAt` rather than `likedAt`/`savedAt`
+ * for the same reason — the tab already says which collection this is, and two field names for
+ * one instant would fork the client's card component to no purpose.
+ *
+ * WIDER THAN `NotInterestedVideoRow`, deliberately. That one is a recognition row in an undo
+ * list — enough to know which video you dismissed, and nothing more. These are cards somebody
+ * clicks, so they carry the duration and view count a video card renders.
+ *
+ * THREE NULLABLE FIELDS, none an oversight. `thumbnailUrl` is nullable on the table (a video
+ * whose oEmbed returned no image is a real video); `durationSeconds` is null until
+ * `recompute-video-durations` has five independent samples, and is never substituted with a
+ * client-reported number; `creatorHandle` is null for an account that has not set one. A caller
+ * must branch rather than build `/channel/${handle}` from it.
+ */
+export interface LibraryVideoRow {
+  readonly videoId: string;
+  readonly title: string;
+  readonly thumbnailUrl: string | null;
+  readonly durationSeconds: number | null;
+  readonly viewCount: number;
+  readonly creatorId: string;
+  readonly creatorName: string;
+  readonly creatorHandle: string | null;
+  readonly addedAt: Date;
+}
+
+export interface LibraryVideoPage {
+  readonly rows: readonly LibraryVideoRow[];
+  readonly nextCursor: string | null;
+}
+
+/**
+ * The body of both list reads. `video_like` and `video_save` are the same three columns —
+ * `(video_id, user_id, created_at)` — with the same primary key, so one query serves both and
+ * the two exported functions differ only in which table they hand it.
+ *
+ * THIS LIST IS PUBLIC-GATED, AND `listNotInterestedVideos` IS NOT. That is the one place this
+ * module disagrees with the feed-preferences one, and the disagreement is the decision:
+ *
+ *   A DISMISSAL HIDES CONTENT, so gating its undo list would hide exactly the rows a viewer
+ *   needs in order to lift the preference — an unliftable preference, which is the trap that
+ *   route exists to close.
+ *
+ *   A LIKE IS THE OPPOSITE SIGNAL. A like row for a video the creator has since made private
+ *   hides nothing from anybody, so there is no trap to close; rendering its title and thumbnail
+ *   would turn a self-read into an oracle over a creator's WITHDRAWN catalogue — the single
+ *   thing `PUBLICLY_SERVABLE` exists to prevent on every other public route here.
+ *
+ * The membership row survives the filter. Un-privating a video brings it straight back, and no
+ * total is exposed anywhere, so there is no count for the silent omission to disagree with.
+ *
+ * `PUBLICLY_SERVABLE` IS PASSED AS THE IMPORTED FRAGMENT, never re-typed. Postgres uses the
+ * partial `video_feed_candidate_idx` only when it can prove the query's WHERE implies the index
+ * predicate, and that proof works on literals — a re-worded copy produces no error, just a
+ * sequential scan.
+ */
+async function listCollectedVideos(input: {
+  readonly userId: string;
+  readonly limit: number;
+  readonly cursor: string | null;
+  readonly membership: typeof videoLike | typeof videoSave;
+}): Promise<Result<LibraryVideoPage, VideoEngagementError>> {
+  const decodedCursor = input.cursor === null ? null : decodeInstantCursor(input.cursor);
+  if (input.cursor !== null && decodedCursor === null) {
+    return { success: false, error: { type: "CURSOR_MALFORMED" } };
+  }
+
+  // Newest first, and the tiebreak sorts the SAME direction as the instant — a cursor whose two
+  // columns disagree on direction skips rows at every page boundary.
+  const cursorCondition =
+    decodedCursor === null
+      ? undefined
+      : or(
+          lt(input.membership.createdAt, decodedCursor.instant),
+          and(
+            eq(input.membership.createdAt, decodedCursor.instant),
+            lt(input.membership.videoId, decodedCursor.id),
+          ),
+        );
+
+  // One extra row, exactly as `listNotInterestedVideos` does it: its presence is what proves a
+  // next page exists, without a COUNT over every like the viewer ever made.
+  const rows = await db
+    .select({
+      videoId: video.id,
+      title: video.title,
+      thumbnailUrl: video.thumbnailUrl,
+      durationSeconds: video.durationSeconds,
+      viewCount: sql<number>`COALESCE(${videoStats.viewCount}, 0)`,
+      creatorId: video.creatorId,
+      creatorName: user.name,
+      creatorHandle: user.handle,
+      addedAt: input.membership.createdAt,
+    })
+    .from(input.membership)
+    .innerJoin(video, eq(video.id, input.membership.videoId))
+    // `video.creatorId` is NOT NULL and cascades with the account, so this drops nothing —
+    // it is here for the name and handle, not as a filter.
+    .innerJoin(user, eq(user.id, video.creatorId))
+    // LEFT, not inner: a video with no `video_stats` row has never been counted, which is a
+    // view count of zero rather than a reason to omit the card. `ensureVideoStatsRows` mints
+    // one at create, and an innerJoin would make any gap in that invisible instead of harmless.
+    .leftJoin(videoStats, eq(videoStats.videoId, video.id))
+    .where(
+      and(
+        eq(input.membership.userId, input.userId),
+        PUBLICLY_SERVABLE,
+        lte(video.publishedAt, sql`now()`),
+        cursorCondition,
+      ),
+    )
+    .orderBy(desc(input.membership.createdAt), desc(input.membership.videoId))
+    .limit(input.limit + 1);
+
+  const pageRows = rows.slice(0, input.limit);
+  const lastRow = pageRows.at(-1);
+  const nextCursor =
+    rows.length > input.limit && lastRow !== undefined
+      ? encodeInstantCursor({ instant: lastRow.addedAt, id: lastRow.videoId })
+      : null;
+
+  return { success: true, value: { rows: pageRows, nextCursor } };
+}
+
+/**
+ * `GET /users/me/liked-videos` — the collection the like button has been filling since §3.1.
+ *
+ * THE READ THAT WAS MISSING. `PUT /videos/:videoId/like` shipped with the rest of §3 and
+ * nothing ever listed the rows back, so a viewer could like a video and then have no way to
+ * find it again; `/library` rendered a panel saying exactly that rather than a dead tab.
+ *
+ * PAGINATED, WHERE `listMutedCreators` IS NOT, on that function's own test. Muting is a
+ * deliberate act against a whole channel and tops out in the tens, so a cursor there is
+ * machinery for a page that cannot exist. Liking is one tap on one card, done idly, and
+ * accumulates for years — the same test rules a cursor in.
+ */
+export function listLikedVideos(input: {
+  readonly userId: string;
+  readonly limit: number;
+  readonly cursor: string | null;
+}): Promise<Result<LibraryVideoPage, VideoEngagementError>> {
+  return listCollectedVideos({ ...input, membership: videoLike });
+}
+
+/** `GET /users/me/saved-videos` — watch later. The like list, against the other table. */
+export function listSavedVideos(input: {
+  readonly userId: string;
+  readonly limit: number;
+  readonly cursor: string | null;
+}): Promise<Result<LibraryVideoPage, VideoEngagementError>> {
+  return listCollectedVideos({ ...input, membership: videoSave });
 }
 
 // ---------------------------------------------------------------------------

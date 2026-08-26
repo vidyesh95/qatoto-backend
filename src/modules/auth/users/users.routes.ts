@@ -128,6 +128,36 @@ router.get(
 router.get("/me/video-reports", requireAuth, videoContentReportsController.listMyVideoReports);
 
 /**
+ * GET /users/me/liked-videos
+ * GET /users/me/saved-videos
+ * GET /users/me/subscriptions
+ *
+ * THE LIBRARY READS — the three collections `/library` could not render because nothing listed
+ * them. Their WRITE halves have shipped since §3.1: `PUT`/`DELETE /videos/:videoId/like`,
+ * `.../save` and `/creators/:creatorId/subscribe` have been filling `video_like`, `video_save`
+ * and `creator_subscription` the whole time, and no route anywhere read a row back. A viewer
+ * could like a video and then have no way to find it again.
+ *
+ * ON THIS ROUTER, LIKE THE REST OF THE `/me` FAMILY, and declared before `/:id` so "me" is
+ * never swallowed as an id param. The controllers are engagement-module ones, the same seam
+ * `/me/watch-time` above documents: the reads are engagement-domain, the paths belong where a
+ * client already looks for facts about itself.
+ *
+ * ALL THREE ARE PAGINATED — `?limit=` (1..50, default 20) and `?cursor=`, keyset, so a
+ * malformed cursor is a 422 and never a silent first page. That includes subscriptions, where
+ * `/me/muted-creators` above is deliberately unpaginated; the service explains why the same
+ * test lands on opposite sides for the two.
+ *
+ * THE TWO VIDEO LISTS ARE PUBLIC-GATED and `/me/not-interested-videos` above is not — a like
+ * hides nothing, so its list must not become an oracle over a creator's withdrawn catalogue,
+ * while a dismissal DOES hide content and gating its undo list would make the preference
+ * unliftable. `listCollectedVideos` states the whole argument.
+ */
+router.get("/me/liked-videos", requireAuth, engagementController.listMyLikedVideos);
+router.get("/me/saved-videos", requireAuth, engagementController.listMySavedVideos);
+router.get("/me/subscriptions", requireAuth, engagementController.listMySubscriptions);
+
+/**
  * GET /users/me/creator-summary
  * The caller's own lifetime totals — subscribers, published videos, views — behind
  * `/studio/analytics`.
