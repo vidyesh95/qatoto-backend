@@ -46,8 +46,12 @@ async function requireRoleOrRespond(
  * route, so reading roles cannot be used to confirm a draft slug exists. Extracted rather
  * than repeated because the two routes must never disagree about it: a detail read with a
  * laxer gate than its list is a way to enumerate drafts one role id at a time.
+ *
+ * EXPORTED for the venture reel (`GET /:projectSlug/videos`), which is a third read of the
+ * same project-scoped, draft-sensitive kind. The rule above is the reason it is shared and
+ * not copied: three gates that must agree are three chances for one of them to drift.
  */
-async function resolveRoleVisibleProjectOrRespond(
+export async function resolveRoleVisibleProjectOrRespond(
   req: Request,
   res: Response,
 ): Promise<membershipService.ProjectRef | null> {

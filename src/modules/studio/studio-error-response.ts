@@ -167,6 +167,28 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
               : [`Chapter ${error.index + 1}: ${CHAPTER_RULE_MESSAGES[error.reason]}`],
         },
       };
+    case "RESEARCH_PROJECT_NOT_JOINABLE":
+      // 422 AND NOT 403, deliberately, and this file's own status policy is the reason.
+      // 403 is reserved for the platform-capability refusal because that one is decided
+      // BEFORE any id is read. This refusal is ABOUT an id the caller supplied, so a
+      // distinct status would answer "that project exists but is not yours" — an oracle
+      // for enumerating project ids. Same shape and same reasoning as PRODUCT_NOT_OWNED
+      // directly below.
+      return {
+        statusCode: 422,
+        message: "You can only attach a video to a venture you are a member of.",
+        errors: { researchProjectSlug: [error.researchProjectSlug] },
+      };
+    case "OPEN_ROLE_NOT_IN_PROJECT":
+      // 422 with the whole list, same as PRODUCT_NOT_OWNED. Three facts collapse into this
+      // one message on purpose — the role does not exist, it belongs to another venture, or
+      // this video names no venture at all — because distinguishing them would let a creator
+      // probe other projects' vacancies one id at a time.
+      return {
+        statusCode: 422,
+        message: "You can only link roles from the venture this video belongs to.",
+        errors: { openRoles: [...error.openRoleIds] },
+      };
     case "PRODUCT_NOT_OWNED":
       // Names EVERY offending id, not the first: a client sends up to 50 and must be
       // able to strike them all at once (the SKILL_NOT_FOUND precedent).

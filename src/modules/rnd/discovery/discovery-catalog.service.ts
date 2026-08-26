@@ -269,6 +269,19 @@ export interface DemandSignalView {
   readonly distinctReporterCount: number;
   readonly relatedProjectCount: number;
   readonly openRoleCount: number;
+  /**
+   * The store's evidence for this cell (§22): units sold and visible reviews in the window, on
+   * listings the cell's ventures actually shipped.
+   *
+   * NOT part of `demandScorePoints`, deliberately — see `ScoredDemandCell` in
+   * `recompute-demand-signals.ts` for why the weighting question was left open. A reader can
+   * see them and weigh them; the rank does not.
+   *
+   * 0 is a real zero on every row written before this landed: nothing looked, so nothing was
+   * attributed. It is not a null dressed up as a number.
+   */
+  readonly soldUnitCount: number;
+  readonly productReviewCount: number;
   /** ISO-8601 UTC. Returned so clients render "as of" and never imply live numbers. */
   readonly asOf: string;
 }
@@ -326,6 +339,8 @@ export async function listDemandSignals(filter: DemandSignalFilter): Promise<Dem
         distinctReporterCount: demandSignalSnapshot.distinctReporterCount,
         relatedProjectCount: demandSignalSnapshot.relatedProjectCount,
         openRoleCount: demandSignalSnapshot.openRoleCount,
+        soldUnitCount: demandSignalSnapshot.soldUnitCount,
+        productReviewCount: demandSignalSnapshot.productReviewCount,
         asOf: demandSignalSnapshot.asOf,
       })
       .from(demandSignalSnapshot)

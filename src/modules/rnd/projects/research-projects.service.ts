@@ -40,7 +40,7 @@ const COVER_IMAGE_OUTPUT_MAX_DIMENSION_PX = 1600;
  * unreachable, because `/research-projects/mine` matches the literal route declared
  * before `/:projectSlug`.
  */
-const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set(["mine", "slugs", "new"]);
+const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set(["mine", "slugs", "new", "attachable"]);
 
 /** Max collision suffixes tried before giving up (-2 … -50). */
 const MAX_SLUG_ATTEMPTS = 50;
@@ -641,6 +641,52 @@ export async function listMyProjects(
     .offset(offset);
 
   const [totals] = await db.select({ value: count() }).from(researchProject).where(predicate);
+
+  return { rows, total: totals?.value ?? 0 };
+}
+
+/**
+ * The projects this caller may attach a video to — the READ that mirrors the studio's write
+ * gate on `video.researchProjectId` exactly.
+ *
+ * NOT `listMyProjects`, and the difference is the whole point of a separate function.
+ * That one filters on `founderUserId` and includes drafts, which is right for "projects I
+ * own". This one filters on ACTIVE MEMBERSHIP and `status = 'active'`, because those are
+ * the two conditions `canAttachToResearchProject` enforces on write. A picker that offered
+ * anything else would either dangle an option the server refuses, or hide a project a
+ * contributor is entitled to link — and a contributor who is not the founder is the common
+ * case this exists for.
+ *
+ * Membership subsumes founding: every founder gets a `projectMember` row at create, so
+ * this is a strict superset of the founder-only list for any project that is published.
+ */
+export async function listAttachableProjects(
+  userId: string,
+  filter: { readonly page: number; readonly limit: number },
+): Promise<ResearchProjectPage> {
+  const predicate = and(
+    eq(researchProject.status, "active"),
+    eq(projectMember.userId, userId),
+    eq(projectMember.status, "active"),
+  );
+
+  const rows = await db
+    .select(PROJECT_LIST_COLUMNS)
+    .from(researchProject)
+    .innerJoin(researchCategory, eq(researchCategory.id, researchProject.categoryId))
+    .innerJoin(projectStats, eq(projectStats.projectId, researchProject.id))
+    .innerJoin(projectMember, eq(projectMember.projectId, researchProject.id))
+    .where(predicate)
+    // Ends in a unique column (§4c rule 4).
+    .orderBy(desc(researchProject.updatedAt), desc(researchProject.id))
+    .limit(filter.limit)
+    .offset((filter.page - 1) * filter.limit);
+
+  const [totals] = await db
+    .select({ value: count() })
+    .from(researchProject)
+    .innerJoin(projectMember, eq(projectMember.projectId, researchProject.id))
+    .where(predicate);
 
   return { rows, total: totals?.value ?? 0 };
 }

@@ -106,6 +106,18 @@ export const ListMyProjectsQuerySchema = z
   .strict();
 
 /**
+ * `GET /:projectSlug/videos`. Page and limit only — the reel shows what the venture has
+ * published and there is nothing to facet on. `.strict()`, so a client that invents a filter
+ * gets a 422 rather than a silently ignored key.
+ */
+export const ListProjectVideosQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(50).default(12),
+  })
+  .strict();
+
+/**
  * §11k.2. `insightId` is the ONLY key: `createdAt` and `linkedByUserId` are server-owned, and
  * the table carries no `source` column to assert (schema.ts records why it does not).
  *

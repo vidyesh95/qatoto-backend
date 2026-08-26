@@ -5,14 +5,20 @@ import {
   contentCategory,
   creatorStats,
   creatorSubscription,
+  researchProject,
   user,
   video,
   videoCategory,
   videoChapter,
   videoLike,
+  videoOpenRole,
   videoSave,
   videoStats,
 } from "#src/db/schema.js";
+import {
+  listOpenRolesByIds,
+  type OpenRoleView,
+} from "#src/modules/rnd/projects/project-roles.service.js";
 import { PUBLICLY_SERVABLE } from "#src/modules/studio/public-video-gate.js";
 import type { Result } from "#src/types/index.js";
 
@@ -79,6 +85,40 @@ export interface WatchPayload {
   };
   /** Always false (§5.3). Nothing backs live streaming and this doc says so. */
   readonly isChannelLive: false;
+  /**
+   * THE VENTURE BEHIND THIS VIDEO (§11i), or null — the watch-page half of the R&D link.
+   *
+   * A BADGE, NOT A CARD. The store's product page carries proof counts because a buyer is
+   * deciding whether to spend money; a viewer is deciding whether to click through, so this
+   * carries identity and nothing else. No counts, no equity, no roster.
+   *
+   * SLUG ONLY, never the id — same rule as every other R&D read. Null covers three cases the
+   * client must not distinguish: no venture, a venture that is not `active`, and a row that
+   * is gone. A draft venture must not be nameable from a public watch page.
+   */
+  readonly builtInTheOpen: {
+    readonly projectSlug: string;
+    readonly projectName: string;
+    readonly stage: (typeof researchProject.$inferSelect)["stage"];
+  } | null;
+  /**
+   * THE RECRUITING BLOCK — what the video says it is hiring for (§12).
+   *
+   * `roleTitle` is what the creator typed and is always present. `linkedRole` is the REAL
+   * `projectOpenRole` behind it when the creator picked one, carrying the skills, commitment
+   * and remaining slots the R&D surface renders — which is what lets a viewer apply from here
+   * rather than read a label. Null means free text: anime, unaffiliated videos, and every row
+   * written before the link existed.
+   *
+   * A CLOSED OR FULL ROLE STILL APPEARS, with its real `status` and slot counts. Hiding it
+   * would leave the creator's own blurb on screen with nothing behind it; showing the true
+   * state is what tells a viewer the door is shut.
+   */
+  readonly openRoles: readonly {
+    readonly roleTitle: string;
+    readonly roleDescription: string | null;
+    readonly linkedRole: OpenRoleView | null;
+  }[];
 }
 
 export async function getWatchPayload(
@@ -138,11 +178,22 @@ export async function getWatchPayload(
       hasLiked: viewerLiked,
       hasSaved: viewerSaved,
       isSubscribedToCreator: viewerSubscribed,
+      ventureSlug: researchProject.slug,
+      ventureName: researchProject.name,
+      ventureStage: researchProject.stage,
     })
     .from(video)
     .innerJoin(user, eq(user.id, video.creatorId))
     .leftJoin(videoStats, eq(videoStats.videoId, video.id))
     .leftJoin(creatorStats, eq(creatorStats.userId, video.creatorId))
+    // THE STATUS TERM BELONGS IN THE JOIN, NOT THE WHERE. In a WHERE it would filter the
+    // VIDEO out whenever its venture is a draft, 404ing a perfectly public video because of
+    // a fact about something else. Here it only nulls the venture columns, which is exactly
+    // the intended answer: the video renders, the badge does not.
+    .leftJoin(
+      researchProject,
+      and(eq(researchProject.id, video.researchProjectId), eq(researchProject.status, "active")),
+    )
     .where(and(eq(video.id, videoId), PUBLICLY_SERVABLE, lte(video.publishedAt, sql`now()`)))
     .limit(1);
 
@@ -152,7 +203,7 @@ export async function getWatchPayload(
 
   // Two small ordered reads rather than json aggregation in the main query: both are
   // index scans on `video_id`, and keeping them separate keeps the row above flat.
-  const [categories, chapters] = await Promise.all([
+  const [categories, chapters, openRoleRows] = await Promise.all([
     db
       .select({ slug: contentCategory.slug, label: contentCategory.label })
       .from(videoCategory)
@@ -164,7 +215,25 @@ export async function getWatchPayload(
       .from(videoChapter)
       .where(eq(videoChapter.videoId, videoId))
       .orderBy(asc(videoChapter.position)),
+    db
+      .select({
+        roleTitle: videoOpenRole.roleTitle,
+        roleDescription: videoOpenRole.roleDescription,
+        openRoleId: videoOpenRole.openRoleId,
+      })
+      .from(videoOpenRole)
+      .where(eq(videoOpenRole.videoId, videoId))
+      .orderBy(asc(videoOpenRole.position)),
   ]);
+
+  // Resolved in ONE query rather than per blurb. Every id here was scoped to this video's own
+  // venture when it was written, which is why the batch read does not re-scope it.
+  const linkedRoles = await listOpenRolesByIds(
+    openRoleRows
+      .map((openRoleRow) => openRoleRow.openRoleId)
+      .filter((openRoleId): openRoleId is string => openRoleId !== null),
+  );
+  const linkedRolesById = new Map(linkedRoles.map((linkedRole) => [linkedRole.id, linkedRole]));
 
   return {
     success: true,
@@ -208,6 +277,26 @@ export async function getWatchPayload(
         isSubscribedToCreator: row.isSubscribedToCreator,
       },
       isChannelLive: false,
+      openRoles: openRoleRows.map((openRoleRow) => ({
+        roleTitle: openRoleRow.roleTitle,
+        roleDescription: openRoleRow.roleDescription,
+        // Null when the blurb is free text, AND when the linked row has since been deleted —
+        // the FK is `restrict` so that should not happen, but the fallback is the text either
+        // way rather than a half-rendered apply control.
+        linkedRole:
+          openRoleRow.openRoleId === null
+            ? null
+            : (linkedRolesById.get(openRoleRow.openRoleId) ?? null),
+      })),
+      // Null unless the join found an ACTIVE venture — see the join comment above.
+      builtInTheOpen:
+        row.ventureSlug === null || row.ventureName === null || row.ventureStage === null
+          ? null
+          : {
+              projectSlug: row.ventureSlug,
+              projectName: row.ventureName,
+              stage: row.ventureStage,
+            },
     },
   };
 }

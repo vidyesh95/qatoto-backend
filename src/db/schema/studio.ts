@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   pgTable,
   text,
   timestamp,
@@ -17,6 +18,9 @@ import {
 
 import { user } from "#src/db/schema/_core.js";
 import { citext, tsvector } from "#src/db/schema/_primitives.js";
+// FIRST EDGE FROM STUDIO TO R&D. `store.ts` and `platform.ts` already import
+// `researchProject`; this is the third. The FK direction is video -> project.
+import { projectOpenRole, researchProject } from "#src/db/schema/rnd.js";
 import { product } from "#src/db/schema/store.js";
 
 // ---------------------------------------------------------------------------
@@ -294,6 +298,27 @@ export const video = pgTable(
     // domain does not exist yet (§12). Accepting it today would store an unvalidated
     // client string that the eventual FK migration would choke on.
     attachedPitchId: text("attached_pitch_id"),
+    /**
+     * THE VENTURE THIS VIDEO BELONGS TO — the mirror of `product.researchProjectId` (§11i).
+     *
+     * Unlike `attachedPitchId` directly above, this one IS a foreign key and IS client-settable,
+     * because the thing it points at exists. Null means unaffiliated content — anime, general
+     * creator uploads — so those surfaces are untouched.
+     *
+     * `restrict`: a venture with videos attached is not silently deletable. The edge points
+     * video -> project, which is why it carries none of the delete-semantics hazard that ruled
+     * out a `dailyLog.videoId` edge — a user account still cascades into its own videos, and no
+     * effort evidence ends up behind a possession.
+     *
+     * WHO MAY SET IT IS A SERVICE CONCERN. `creatorId` is a plain `user`; venture identity is a
+     * `projectMember`. The write path re-verifies active membership and that the project is
+     * `active` before accepting a value, the same shape as `videoAttachedProduct` re-verifying
+     * product ownership. A column cannot express that, so do not read this FK as authorization.
+     */
+    researchProjectId: text("research_project_id").references(
+      (): AnyPgColumn => researchProject.id,
+      { onDelete: "restrict" },
+    ),
     hasFundingCallToAction: boolean("has_funding_cta").default(false).notNull(),
 
     // --- Visibility step ---
@@ -418,6 +443,13 @@ export const video = pgTable(
     // founders each linking the launch video. Abuse is bounded by the per-user rate
     // limiter on POST /videos, not by a constraint that also blocks the honest case.
     index("video_youtubeVideoId_idx").on(table.youtubeVideoId),
+    // PARTIAL, matching `product_researchProjectId_idx`. Two reads use it — the venture's
+    // own reel and the watch page's badge — and both ask only about rows that HAVE a
+    // venture. Anime and general uploads are NULL forever and are the large majority, so
+    // indexing them would be paying for the rows no query names.
+    index("video_research_project_idx")
+      .on(table.researchProjectId)
+      .where(sql`research_project_id IS NOT NULL`),
     // Partial on purpose. Postgres treats NULLs as distinct, so a plain unique index
     // over an all-NULL column is harmless today — but the WHERE states the intent,
     // and the intent is what has to survive the switch to self-hosting.
@@ -620,10 +652,36 @@ export const videoOpenRole = pgTable(
       .references(() => video.id, { onDelete: "cascade" }),
     roleTitle: text("role_title").notNull(),
     roleDescription: text("role_description"),
+    /**
+     * THE REAL ROLE THIS BLURB ADVERTISES, or null.
+     *
+     * Null keeps today's behaviour exactly: free text that points at nothing, which is right
+     * for anime and for any video with no venture. When set, the watch page stops rendering a
+     * typed label and starts rendering a projection of the actual `projectOpenRole` — its
+     * skills, its commitment, its remaining slots — with an Apply control wired to the R&D
+     * application flow that already exists.
+     *
+     * `roleTitle` STAYS NOT NULL beside it, as the fallback and as what the creator typed.
+     *
+     * THIS DOES NOT MAKE THE TWO TABLES ONE. The note at the top of this file still holds:
+     * `videoOpenRole` carries no equity, no slot counter and no status. It POINTS at the row
+     * that does. The service refuses an id that does not belong to the video's own
+     * `researchProjectId`, so a video cannot advertise a vacancy at some other venture.
+     */
+    openRoleId: text("open_role_id").references((): AnyPgColumn => projectOpenRole.id, {
+      onDelete: "restrict",
+    }),
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (table) => [index("video_open_role_videoId_idx").on(table.videoId)],
+  (table) => [
+    index("video_open_role_videoId_idx").on(table.videoId),
+    // Partial: the reverse question — "which videos advertise this role" — only ever asks
+    // about linked rows, and unlinked ones are the majority.
+    index("video_open_role_open_role_idx")
+      .on(table.openRoleId)
+      .where(sql`open_role_id IS NOT NULL`),
+  ],
 );
 
 // A display credit on the watch page. `linkedUserId` ties it to a real account when

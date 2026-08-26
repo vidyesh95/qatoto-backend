@@ -604,6 +604,33 @@ export async function listOpenRolesForProject(projectId: string): Promise<readon
   return attachCompensation(rows);
 }
 
+/**
+ * A batch of roles by id, for the watch page's recruiting block.
+ *
+ * ONE QUERY, NOT N — a video may advertise up to twenty blurbs and each one carrying its own
+ * round trip would put the R&D tables on the critical path of a public video read.
+ *
+ * NOT SCOPED TO A PROJECT, and that is safe HERE only because the caller has already proved
+ * scope: `video_open_role.open_role_id` is refused at write time unless it belongs to the
+ * video's own venture, so every id reaching this function was checked against that project
+ * when it was stored. Any NEW caller must do its own scoping — `findProjectOpenRoleView` is
+ * the one to reach for, and its doc says why.
+ */
+export async function listOpenRolesByIds(
+  roleIds: readonly string[],
+): Promise<readonly OpenRoleView[]> {
+  if (roleIds.length === 0) return [];
+
+  const rows = await db
+    .select(OPEN_ROLE_VIEW_COLUMNS)
+    .from(projectOpenRole)
+    .innerJoin(researchProject, eq(researchProject.id, projectOpenRole.projectId))
+    .where(inArray(projectOpenRole.id, [...roleIds]))
+    .orderBy(projectOpenRole.createdAt, projectOpenRole.id);
+
+  return attachCompensation(rows);
+}
+
 export interface ListOpenRolesFilter {
   readonly commitment?: (typeof projectOpenRole.$inferSelect)["commitment"] | undefined;
   readonly skill?: string | undefined;

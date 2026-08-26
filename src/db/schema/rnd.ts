@@ -1871,6 +1871,30 @@ export const demandSignalSnapshot = pgTable(
     distinctReporterCount: integer("distinct_reporter_count").notNull(),
     relatedProjectCount: integer("related_project_count").notNull(),
     openRoleCount: integer("open_role_count").notNull(),
+    /**
+     * THE STORE'S CONTRIBUTION — units sold in the window through listings this cell's
+     * ventures actually shipped (§22, Appendix B4). The one input here that is not R&D
+     * talking to itself, and the only evidence on the row that somebody paid.
+     *
+     * Attributed through the cluster, not the store taxonomy:
+     * `commerce_order_product_line -> product -> research_project ->
+     * problem_cluster_project_link -> problem_cluster`, which carries both the region and the
+     * category. There is no `commerce_category` to `research_category` mapping and the store
+     * has no region at all, so no other route exists that does not invent one.
+     *
+     * DEFAULT 0, so the column is additive and every pre-version-2 row reads as a real zero —
+     * which it is: no sale was attributed to those cells because nothing looked.
+     */
+    soldUnitCount: integer("sold_unit_count").default(0).notNull(),
+    /**
+     * Visible reviews on those same listings. RECORDED AND DISPLAYED, NOT SCORED.
+     *
+     * A review needs a completion, which needs an order — so every review counted here
+     * corroborates a sale `soldUnitCount` has already counted, and weighting both would let
+     * one transaction earn points twice. Stored because it is the qualitative half of the same
+     * evidence and because a later version can weight it without a migration.
+     */
+    productReviewCount: integer("product_review_count").default(0).notNull(),
     scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
@@ -1897,6 +1921,7 @@ export const demandSignalSnapshot = pgTable(
       "demand_signal_snapshot_counts_ck",
       sql`cluster_count >= 0 AND distinct_reporter_count >= 0
           AND related_project_count >= 0 AND open_role_count >= 0
+          AND sold_unit_count >= 0 AND product_review_count >= 0
           AND (previous_demand_score_points IS NULL
                OR previous_demand_score_points BETWEEN 0 AND 100)`,
     ),
@@ -3181,6 +3206,15 @@ export const dailyLog = pgTable(
     check("daily_log_narrative_ck", sql`narrative IS NULL OR char_length(narrative) <= 10000`),
     // A YouTube log has an id; a log without one is `none` or the deferred `hosted`.
     check("daily_log_video_ck", sql`(video_source = 'youtube') = (youtube_video_id IS NOT NULL)`),
+    // THIS IS A SECURITY CONSTRAINT, not tidiness — the same one `video` has carried since
+    // 0012, and for the same reason. The id is interpolated into the outbound oEmbed URL and
+    // into every embed URL emitted from it; the charset contains no ".", "/", ":", "@" or "%",
+    // which is what closes SSRF at the storage layer even if a write path forgets to parse.
+    // The check above pairs source and id; it says nothing about the id's CONTENT.
+    check(
+      "daily_log_youtube_id_format_ck",
+      sql`youtube_video_id IS NULL OR youtube_video_id ~ '^[A-Za-z0-9_-]{11}$'`,
+    ),
     check("daily_log_submitted_ck", sql`(status = 'submitted') = (submitted_at IS NOT NULL)`),
     // A draft has asked nothing of the model; a completed analysis reached a terminal
     // state. Neither half can be half-true.

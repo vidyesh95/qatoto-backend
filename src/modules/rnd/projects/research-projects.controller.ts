@@ -96,6 +96,42 @@ export async function listProjectSlugs(_req: Request, res: Response): Promise<vo
   res.status(200).json(response);
 }
 
+/**
+ * GET /research-projects/attachable — the projects this caller may link a video to.
+ *
+ * Session-scoped like `/mine`, but a different question: active MEMBERSHIP of an ACTIVE
+ * project, mirroring the studio's write gate rather than founder ownership.
+ */
+export async function listAttachableProjects(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = ListMyProjectsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const { page, limit } = parsedQuery.data;
+  const projectsPage = await projectsService.listAttachableProjects(req.user.id, { page, limit });
+
+  const response: PaginatedResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Projects retrieved successfully",
+    data: [...projectsPage.rows],
+    pagination: {
+      page,
+      limit,
+      total: projectsPage.total,
+      totalPages: Math.ceil(projectsPage.total / limit),
+    },
+  };
+  res.status(200).json(response);
+}
+
 /** GET /research-projects/mine — filtered by the SESSION id; no userId param exists. */
 export async function listMyProjects(req: Request, res: Response): Promise<void> {
   if (!req.user) {

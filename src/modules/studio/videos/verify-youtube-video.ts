@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
-import { video } from "#src/db/schema.js";
+import { dailyLog, video } from "#src/db/schema.js";
 import {
   JOB_NAMES,
   JOB_PAYLOAD_SCHEMAS,
@@ -41,6 +41,16 @@ export async function handleVerifyYoutubeVideo(rawPayload: unknown): Promise<voi
     JOB_PAYLOAD_SCHEMAS[JOB_NAMES.verifyYoutubeVideo],
     rawPayload,
   );
+
+  // TWO TABLES, ONE QUEUE (R&D §22). The daily-log arm is delegated whole rather than
+  // interleaved with the video arm: the two rows record the same fact in different shapes —
+  // `video.isSourceVerified` is a boolean, `daily_log.video_verified_at` a nullable timestamp —
+  // and a single body branching on every read and every write would be harder to prove correct
+  // than two short ones that each say what they do.
+  if ("dailyLogId" in payload) {
+    await verifyDailyLogVideo(payload.dailyLogId);
+    return;
+  }
 
   const [existingVideoRow] = await db
     .select({
@@ -120,4 +130,89 @@ export async function handleVerifyYoutubeVideo(rawPayload: unknown): Promise<voi
     // strength of an OLD id's proof — and the new id's own job, keyed on (video, youtubeId),
     // would then find the flag already true and return early, so nothing would ever check it.
     .where(and(eq(video.id, existingVideoRow.id), eq(video.youtubeVideoId, youtubeVideoId)));
+}
+
+/**
+ * The daily-log arm. Same primitive, same retry rules, same compare-and-swap guard — a
+ * different table and a different way of recording "verified".
+ *
+ * WHY DAILY LOGS ARE HERE AT ALL. `createDailyLog` used to call oEmbed on the request path and
+ * return the error, writing NO ROW. A member who recorded their day's work and pasted a link
+ * lost the whole submission to a transient YouTube outage — the exact failure the studio moved
+ * away from, still live on the surface where the lost row is EFFORT EVIDENCE feeding
+ * `effort_claim` and the slice ledger. The id is stored either way (the format CHECK added
+ * alongside this closes SSRF at the storage layer), and this proves it afterwards.
+ *
+ * `video_verified_at` IS THE FLAG, and it is a timestamp rather than a boolean because that is
+ * what the column already was. Null means unproven, which is what a deferred row is born as.
+ */
+async function verifyDailyLogVideo(dailyLogId: string): Promise<void> {
+  const [existingLogRow] = await db
+    .select({
+      id: dailyLog.id,
+      videoSource: dailyLog.videoSource,
+      youtubeVideoId: dailyLog.youtubeVideoId,
+      videoVerifiedAt: dailyLog.videoVerifiedAt,
+      youtubeThumbnailUrl: dailyLog.youtubeThumbnailUrl,
+    })
+    .from(dailyLog)
+    .where(eq(dailyLog.id, dailyLogId))
+    .limit(1);
+
+  // Deleted between enqueue and dequeue — nothing to verify, nothing to alarm about.
+  if (!existingLogRow) return;
+  // Already terminal. The timestamp never goes back to null, so this is an exit, not a race.
+  if (existingLogRow.videoVerifiedAt !== null) return;
+  // Detached, or never had a video. An enqueue for a row that has since been cleared is a
+  // no-op rather than a crash.
+  if (existingLogRow.videoSource !== "youtube" || !existingLogRow.youtubeVideoId) return;
+
+  const youtubeVideoId = existingLogRow.youtubeVideoId;
+  const verificationResult = await verifyYoutubeVideo(youtubeVideoId, {
+    timeoutMs: config.YOUTUBE_OEMBED_TIMEOUT_MS,
+  });
+
+  if (!verificationResult.success) {
+    switch (verificationResult.error.type) {
+      case "YOUTUBE_VERIFY_FAILED":
+        throw new Error(
+          `verify-youtube-video: YouTube did not answer for daily log ${existingLogRow.id}`,
+        );
+      case "YOUTUBE_VIDEO_UNAVAILABLE":
+        throw new PermanentJobError(
+          "YOUTUBE_VIDEO_UNAVAILABLE",
+          `verify-youtube-video: ${youtubeVideoId} is deleted, private, or not embeddable ` +
+            `(daily log ${existingLogRow.id})`,
+        );
+      case "INVALID_YOUTUBE_URL":
+        throw new PermanentJobError(
+          "INVALID_YOUTUBE_URL",
+          `verify-youtube-video: stored id ${youtubeVideoId} is not a well-formed YouTube id ` +
+            `(daily log ${existingLogRow.id})`,
+        );
+      default: {
+        const exhaustiveCheck: never = verificationResult.error;
+        throw new Error(
+          `verify-youtube-video: unhandled verification error ${JSON.stringify(exhaustiveCheck)}`,
+        );
+      }
+    }
+  }
+
+  await db
+    .update(dailyLog)
+    .set({
+      videoVerifiedAt: new Date(),
+      // Daily logs have no `hasCustomThumbnail` — a member cannot upload one — so the oEmbed
+      // thumbnail is the only one there will ever be, and writing it is unconditional except
+      // for YouTube declining to give us one.
+      ...(verificationResult.value.thumbnailUrl === null
+        ? {}
+        : { youtubeThumbnailUrl: verificationResult.value.thumbnailUrl }),
+    })
+    // THE SECOND PREDICATE IS LOAD-BEARING, exactly as on the video arm. The member may have
+    // PATCHed the link between the SELECT above and this UPDATE; without it we would stamp a
+    // NEW id as verified on an OLD id's proof, and the new id's own job would then find
+    // `video_verified_at` already set and return early — so nothing would ever check it.
+    .where(and(eq(dailyLog.id, existingLogRow.id), eq(dailyLog.youtubeVideoId, youtubeVideoId)));
 }

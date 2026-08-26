@@ -80,6 +80,15 @@ export interface DailyLogView {
   /** Rebuilt server-side from the stored id; a client string never becomes an iframe src. */
   readonly videoEmbedUrl: string | null;
   readonly videoThumbnailUrl: string | null;
+  /**
+   * Whether YouTube has confirmed the linked video exists and embeds (§22).
+   *
+   * DERIVED from `videoVerifiedAt`, never stored. False with a `youtube` source means
+   * verification is still deferred — the row is real, the embed URL is real, and the thumbnail
+   * is null because oEmbed has not answered yet. Without this the client cannot distinguish
+   * that from "this log has no video", since both present as a null thumbnail.
+   */
+  readonly isVideoVerified: boolean;
   readonly analysisStatus: DailyLogAnalysisStatus;
   readonly analysisFailureReason: string | null;
   readonly analysisCompletedAt: Date | null;
@@ -200,6 +209,10 @@ function toLogView(row: {
     videoEmbedUrl:
       row.log.youtubeVideoId === null ? null : buildYoutubeEmbedUrl(row.log.youtubeVideoId),
     videoThumbnailUrl: row.log.youtubeThumbnailUrl,
+    // Derived, never stored — the same shape as `isEffortVerified` below. A youtube row whose
+    // verification is still deferred has a real embed URL and NO thumbnail, and without this
+    // the client cannot tell that from "no video": both look like a null thumbnail.
+    isVideoVerified: row.log.videoVerifiedAt !== null,
     analysisStatus: row.log.analysisStatus,
     analysisFailureReason: row.log.analysisFailureReason,
     analysisCompletedAt: row.log.analysisCompletedAt,
@@ -610,6 +623,60 @@ export async function findDailyLogDetail(
  * would price it. The bound is generous by a day because the project's own zone may be
  * ahead of the server's UTC.
  */
+/**
+ * The CREATE-path variant, which tolerates a YouTube outage (§22).
+ *
+ * Same parse, same verify, one difference in what it does with the failure — and the split is
+ * copied deliberately from `parseAndVerifyYoutubeUrlForCreate` in the studio, because the studio
+ * already worked out where the line goes:
+ *
+ *   INVALID_YOUTUBE_URL       -> still a hard error. Parsing is the SSRF boundary and it never
+ *                                degrades; a string that is not a YouTube link has no id to
+ *                                store in the first place.
+ *   YOUTUBE_VIDEO_UNAVAILABLE -> still a hard error. Deleted, private or not embeddable is a
+ *                                link the member must FIX, and deferring would store a
+ *                                known-bad id while telling them nothing.
+ *   YOUTUBE_VERIFY_FAILED     -> DEFERRED. YouTube did not answer. Nothing about the
+ *                                submission is wrong, so the row lands unverified and the job
+ *                                takes the question.
+ *
+ * WHY THIS MATTERS MORE HERE THAN IT DID IN THE STUDIO. A lost upload is a lost upload; a lost
+ * daily log is lost EFFORT EVIDENCE — the row feeds `effort_claim` and the slice ledger, and it
+ * is keyed on a claimed DAY that a member cannot re-live. `parseAndVerifyYoutubeUrl` above keeps
+ * the hard failure on all three and stays the UPDATE-path function: deferring on PATCH would let
+ * an outage silently un-verify a row and swap in an id nothing has ever proven.
+ */
+async function parseAndVerifyYoutubeUrlForCreate(
+  rawYoutubeUrl: string,
+  fetchImplementation?: FetchImplementation,
+): Promise<Result<{ youtubeVideoId: string; facts: VerifiedVideo | null }, YoutubeSourceError>> {
+  const youtubeVideoId = extractYoutubeVideoId(rawYoutubeUrl);
+  if (!youtubeVideoId) {
+    return { success: false, error: { type: "INVALID_YOUTUBE_URL" } };
+  }
+
+  const verified = await verifyYoutubeVideo(youtubeVideoId, {
+    timeoutMs: config.YOUTUBE_OEMBED_TIMEOUT_MS,
+    ...(fetchImplementation === undefined ? {} : { fetchImplementation }),
+  });
+
+  if (verified.success) {
+    return {
+      success: true,
+      value: {
+        youtubeVideoId,
+        facts: { youtubeVideoId, thumbnailUrl: verified.value.thumbnailUrl },
+      },
+    };
+  }
+
+  if (verified.error.type === "YOUTUBE_VERIFY_FAILED") {
+    return { success: true, value: { youtubeVideoId, facts: null } };
+  }
+
+  return { success: false, error: verified.error };
+}
+
 export async function createDailyLog(
   projectId: string,
   authorMemberId: string,
@@ -621,37 +688,76 @@ export async function createDailyLog(
     return { success: false, error: { type: "LOG_DATE_IN_FUTURE", logDate: input.logDate } };
   }
 
-  let verifiedVideo: VerifiedVideo | null = null;
+  // THE ONE OUTBOUND REQUEST, and the only failure here that is now survivable is "YouTube
+  // did not answer" (§22). A null `facts` with a non-null id is the deferred shape.
+  let parsedYoutubeVideoId: string | null = null;
+  let verifiedFacts: VerifiedVideo | null = null;
   if (input.youtubeUrl !== undefined && input.youtubeUrl !== "") {
-    const verified = await parseAndVerifyYoutubeUrl(input.youtubeUrl, fetchImplementation);
+    const verified = await parseAndVerifyYoutubeUrlForCreate(input.youtubeUrl, fetchImplementation);
     if (!verified.success) {
       return { success: false, error: verified.error };
     }
-    verifiedVideo = verified.value;
+    parsedYoutubeVideoId = verified.value.youtubeVideoId;
+    verifiedFacts = verified.value.facts;
   }
 
   try {
-    const [inserted] = await db
-      .insert(dailyLog)
-      .values({
-        projectId,
-        authorMemberId,
-        logDate: input.logDate,
-        narrative: input.narrative ?? null,
-        ...(verifiedVideo === null
-          ? { videoSource: "none" as const }
-          : {
-              videoSource: "youtube" as const,
-              youtubeVideoId: verifiedVideo.youtubeVideoId,
-              youtubeThumbnailUrl: verifiedVideo.thumbnailUrl,
-              videoVerifiedAt: new Date(),
-            }),
-      })
-      .returning();
+    const inserted = await db.transaction(async (tx) => {
+      const [insertedRow] = await tx
+        .insert(dailyLog)
+        .values({
+          projectId,
+          authorMemberId,
+          logDate: input.logDate,
+          narrative: input.narrative ?? null,
+          ...(parsedYoutubeVideoId === null
+            ? { videoSource: "none" as const }
+            : {
+                videoSource: "youtube" as const,
+                // The id is stored either way — the charset CHECK closes SSRF at the storage
+                // layer. `videoVerifiedAt` records only whether YouTube confirmed it.
+                youtubeVideoId: parsedYoutubeVideoId,
+                youtubeThumbnailUrl: verifiedFacts?.thumbnailUrl ?? null,
+                videoVerifiedAt: verifiedFacts === null ? null : new Date(),
+              }),
+        })
+        .returning();
 
-    if (!inserted) {
-      throw new Error("createDailyLog: insert returned no row");
-    }
+      if (!insertedRow) {
+        throw new Error("createDailyLog: insert returned no row");
+      }
+
+      // ENQUEUED INSIDE THE TRANSACTION, on the transaction's own connection — the same
+      // contract the studio's create follows. pg-boss's send is an INSERT, so it can join this
+      // transaction, and it must: an enqueue AFTER the commit can be lost with no error surface
+      // anywhere, leaving a row nothing will ever verify; an enqueue BEFORE it can announce a
+      // row that rolled back.
+      //
+      // A failed enqueue THROWS, taking the log row with it. A create the member can retry is
+      // strictly better than effort evidence nothing will ever prove.
+      if (parsedYoutubeVideoId !== null && verifiedFacts === null) {
+        const enqueueResult = await sendJob(
+          JOB_NAMES.verifyYoutubeVideo,
+          { dailyLogId: insertedRow.id },
+          {
+            idempotencyKey: idempotencyKeyFor.verifyDailyLogVideo(
+              insertedRow.id,
+              parsedYoutubeVideoId,
+            ),
+            db: fromDrizzle(tx, sql),
+          },
+        );
+        if (!enqueueResult.success) {
+          throw new Error(
+            `createDailyLog: could not queue source verification for ${insertedRow.id} ` +
+              `(${enqueueResult.error.type})`,
+          );
+        }
+      }
+
+      return insertedRow;
+    });
+
     return { success: true, value: await attachAuthor(inserted) };
   } catch (error: unknown) {
     // UNIQUE (project_id, author_member_id, log_date): one log per member per claimed

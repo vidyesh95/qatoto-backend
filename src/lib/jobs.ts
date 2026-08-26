@@ -276,14 +276,31 @@ const ProgramScopedAsOfPayloadSchema = z
   .strict();
 
 /**
- * The video id and NOTHING else — the same rule as every payload above.
+ * ONE ROW ID AND NOTHING ELSE — the same rule as every payload above — for either of the two
+ * tables that hold a YouTube id.
  *
- * The 11-character YouTube id is read from the ROW inside the handler. Carrying it in the
- * payload would put a forgeable field between the id we stored and the id we verify, and an
- * operator with a queue dashboard could edit it to mark one video verified on the strength
- * of a different video's proof. `video.id` is a randomUUID, so `z.uuid()` is exact.
+ * TWO PIPELINES BECAME ONE QUEUE. R&D's daily log and the studio's video both store an
+ * 11-character id and both prove it with the same `verifyYoutubeVideo` primitive; what
+ * differed was DELIVERY — the studio deferred to this job, while daily logs called oEmbed on
+ * the request path and threw the member's submission away whenever YouTube blinked. They now
+ * share this queue, this retry ladder and this dead-letter, and the handler branches on which
+ * arm arrived.
+ *
+ * A PLAIN `z.union`, NOT `z.discriminatedUnion`, and that choice is load-bearing. A rolling
+ * deploy guarantees old-shaped `{ videoId }` payloads are in flight while the new code runs,
+ * and a payload that fails its schema throws `PermanentJobError` and dead-letters on the FIRST
+ * attempt. Requiring a new discriminator key would kill every studio verification in flight.
+ * The legacy shape IS the first arm, unchanged.
+ *
+ * The 11-character YouTube id is read from the ROW inside the handler, never carried here.
+ * Carrying it would put a forgeable field between the id we stored and the id we verify, and
+ * an operator with a queue dashboard could edit it to mark one row verified on the strength of
+ * a different row's proof. Both ids are `randomUUID()`, so `z.uuid()` is exact.
  */
-const VerifyYoutubeVideoPayloadSchema = z.object({ videoId: z.uuid() }).strict();
+const VerifyYoutubeVideoPayloadSchema = z.union([
+  z.object({ videoId: z.uuid() }).strict(),
+  z.object({ dailyLogId: z.uuid() }).strict(),
+]);
 
 /**
  * Store search document refresh. Carries the target identity only — eligibility and
@@ -1875,7 +1892,12 @@ export const idempotencyKeyFor = {
   // and leave the row unverifiable with nothing in the queue. Same shape as
   // finalizeVerdict's `generation`, for the same reason.
   verifyYoutubeVideo: (videoId: string, youtubeVideoId: string): string =>
-    `${JOB_NAMES.verifyYoutubeVideo}:${videoId}:${youtubeVideoId}`,
+    `${JOB_NAMES.verifyYoutubeVideo}:video:${videoId}:${youtubeVideoId}`,
+  // The daily-log arm of the same queue. NAMESPACED SEPARATELY from the video arm above: both
+  // ids are randomUUIDs so a collision is not the worry — legibility is. An operator reading a
+  // key off a queue dashboard must be able to tell which table it points at.
+  verifyDailyLogVideo: (dailyLogId: string, youtubeVideoId: string): string =>
+    `${JOB_NAMES.verifyYoutubeVideo}:daily-log:${dailyLogId}:${youtubeVideoId}`,
   // --- Home feed ranking. Keyed on the asOf alone, because each job is global: two ticks
   // --- firing for the same UTC boundary (a redeploy, a clock nudge) must produce ONE run.
   recomputeVideoDurations: (asOfIso: string): string =>

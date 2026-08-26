@@ -139,6 +139,23 @@ export const videoFieldShapes = {
   hasAgeRestriction: z.boolean(),
   relatedVideoUrl: HttpUrlSchema,
   hasFundingCallToAction: z.boolean(),
+  /**
+   * The venture this video belongs to (§11i).
+   *
+   * A SLUG, NOT AN ID, and that is not a style choice. R&D's public identity is the slug —
+   * no route is keyed on a project id, and neither `ResearchProjectListRow` nor
+   * `ResearchProjectDetailView` carries one — so a client has no id to send and should
+   * never be given one. The service resolves the slug and stores the id in the column.
+   *
+   * NULLABLE, and the null is load-bearing on PATCH: it is how a creator DETACHES a video
+   * from a venture. An omitted key leaves the link alone. No `.default()`, per this map's
+   * standing warning.
+   *
+   * The server re-verifies active membership AND that the project is `active` before
+   * accepting a value — a client sending this field is making a request, not a statement.
+   * Unlike `attachedPitchId`, which is still absent below, the thing this points at exists.
+   */
+  researchProjectSlug: z.string().min(1).max(200).nullable(),
   visibility: z.enum(["private", "unlisted", "public", "investor_only"]),
   isNdaRequired: z.boolean(),
   scheduledPublishAt: z.coerce.date(),
@@ -185,7 +202,29 @@ export const videoFieldShapes = {
   categoryIds: z.array(z.string().min(1).max(64)).max(3),
   attachedProductIds: z.array(z.string().min(1).max(64)).max(50),
   milestones: z.array(z.string().trim().min(1).max(200)).max(20),
-  openRoles: z.array(z.string().trim().min(1).max(120)).max(20),
+  /**
+   * Recruiting blurbs. OBJECTS, NOT STRINGS, since the venture link landed.
+   *
+   * `openRoleId` is optional and, when present, must name a `projectOpenRole` belonging to
+   * THIS video's own `researchProjectSlug` — the service re-verifies it with the same
+   * `and(id, projectId)` predicate the R&D apply gate uses, so a role id from another venture
+   * is indistinguishable from a nonexistent one. Without it the blurb stays what it has always
+   * been: text that points at nothing, which is correct for anime and unaffiliated videos.
+   *
+   * `roleDescription` is accepted here for the first time. The column has existed since the
+   * table did and no endpoint ever wrote it.
+   */
+  openRoles: z
+    .array(
+      z
+        .object({
+          roleTitle: z.string().trim().min(1).max(120),
+          roleDescription: z.string().trim().max(2000).optional(),
+          openRoleId: z.string().min(1).max(64).optional(),
+        })
+        .strict(),
+    )
+    .max(20),
   teamMemberNames: z.array(z.string().trim().min(1).max(120)).max(50),
   collaboratorEmails: z.array(z.email().max(320)).max(50),
 };

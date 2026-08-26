@@ -925,6 +925,34 @@
       "when": 1787466179803,
       "tag": "0131_affinity_negative_signal",
       "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1787466180803,
+      "tag": "0132_video_research_project",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1787466181803,
+      "tag": "0133_video_open_role_link",
+      "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1787466182803,
+      "tag": "0134_daily_log_youtube_format",
+      "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1787466183803,
+      "tag": "0135_demand_signal_store_inputs",
+      "breakpoints": true
     }
   ]
 }

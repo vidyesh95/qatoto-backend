@@ -14,6 +14,7 @@ import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as applicationsController from "#src/modules/rnd/projects/project-applications.controller.js";
 import * as rolesController from "#src/modules/rnd/projects/project-roles.controller.js";
+import * as projectVideosController from "#src/modules/rnd/projects/project-videos.controller.js";
 import * as projectsController from "#src/modules/rnd/projects/research-projects.controller.js";
 import { uploadProjectCover } from "#src/modules/rnd/projects/upload-project-cover.js";
 
@@ -58,6 +59,14 @@ router.get("/slugs", projectsController.listProjectSlugs);
 
 /** GET /research-projects/mine — the caller's own, drafts included. */
 router.get("/mine", requireAuth, projectsController.listMyProjects);
+
+/**
+ * GET /research-projects/attachable — what the studio's venture picker offers.
+ *
+ * A LITERAL SEGMENT, so it is in RESERVED_PROJECT_SLUGS beside `mine`, `slugs` and `new`;
+ * without that a project could take the slug and shadow this route forever.
+ */
+router.get("/attachable", requireAuth, projectsController.listAttachableProjects);
 
 // --- Single project.
 
@@ -123,6 +132,12 @@ router.delete("/:projectSlug/members/:memberId", requireAuth, projectsController
 
 /** GET /research-projects/:projectSlug/roles */
 router.get("/:projectSlug/roles", attachOptionalUser, rolesController.listRoles);
+
+/**
+ * GET /:projectSlug/videos — the venture reel. Same draft gate as the roles routes above,
+ * through the same shared helper, so the three cannot disagree about draft visibility.
+ */
+router.get("/:projectSlug/videos", attachOptionalUser, projectVideosController.listProjectVideos);
 
 /**
  * GET /research-projects/:projectSlug/roles/:roleId — `attachOptionalUser`, matching the

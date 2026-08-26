@@ -1,11 +1,15 @@
-import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
+  commerceOrder,
+  commerceOrderProductLine,
+  commerceReview,
   demandSignalSnapshot,
   problemCluster,
   problemClusterProjectLink,
   problemSubmission,
+  product,
   projectOpenRole,
   researchProject,
 } from "#src/db/schema.js";
@@ -40,6 +44,29 @@ interface DemandCellInputs {
 
 interface ScoredDemandCell extends DemandCellInputs {
   readonly demandScorePoints: number;
+  /**
+   * THE STORE'S EVIDENCE — units sold and visible reviews in the window, on listings this
+   * cell's ventures actually shipped (§22, Appendix B4).
+   *
+   * On the SCORED cell rather than on `DemandCellInputs`, and that placement is the decision.
+   * These two counts are written to the row and rendered on the leaderboard, but they do not
+   * feed `computeDemandScorePoints` — so they are not score inputs, and putting them in that
+   * function's input type would say they were.
+   *
+   * WHY THEY ARE NOT SCORED, since the obvious next question is why not. Finding a sale 15 or
+   * 20 points means taking them from the four component budgets, which are this module's
+   * editorial claim about what "demand" means — asserted at module load, pinned by every
+   * ladder's top rung, and covered by a test suite that checks each component directly.
+   * Re-weighting reranks every cell on the board; that is a product decision, not a side
+   * effect of teaching this job a new join. There is also a real argument the weight should be
+   * small or zero: this hub surfaces demand that is NOT YET SERVED, and a cell with heavy
+   * sales is being served — the inverted scarcity component already docks it for that.
+   *
+   * So the numbers reach the surface as evidence a reader can weigh, and the question of what
+   * they are WORTH stays open and visible.
+   */
+  readonly soldUnitCount: number;
+  readonly productReviewCount: number;
 }
 
 /**
@@ -138,6 +165,62 @@ export async function handleRecomputeDemandSignals(rawPayload: unknown): Promise
         ),
       );
 
+    // THE STORE'S CONTRIBUTION (§22). Attributed through the CLUSTER, not the store taxonomy:
+    // `problem_cluster` carries both the region and the category, while `commerce_category` has
+    // no mapping to `research_category` and the store has no region concept at all. This is the
+    // same join `relatedProjectCount` above already walks, one table further along.
+    //
+    // `completed_at`, NOT `confirmed_at` — the schema calls the first the order-level roll-up
+    // clock, and the second is NULL for every order predating Phase 13 with nothing backfilling
+    // it. `quantity_fulfilled` rather than `quantity_ordered`: a unit that was cancelled or
+    // never shipped is not evidence anybody received anything.
+    const [soldUnitCounts] = await db
+      .select({
+        soldUnitCount: sql<number>`COALESCE(sum(${commerceOrderProductLine.quantityFulfilled}), 0)::int`,
+      })
+      .from(commerceOrderProductLine)
+      .innerJoin(commerceOrder, eq(commerceOrder.id, commerceOrderProductLine.orderId))
+      .innerJoin(product, eq(product.id, commerceOrderProductLine.productId))
+      .innerJoin(researchProject, eq(researchProject.id, product.researchProjectId))
+      .innerJoin(
+        problemClusterProjectLink,
+        eq(problemClusterProjectLink.projectId, researchProject.id),
+      )
+      .innerJoin(problemCluster, eq(problemCluster.id, problemClusterProjectLink.clusterId))
+      .where(
+        and(
+          eq(problemCluster.regionId, cell.regionId),
+          eq(problemCluster.categoryId, cell.categoryId),
+          inArray(commerceOrder.state, ["completed", "partially_completed"]),
+          isNotNull(commerceOrder.completedAt),
+          gte(commerceOrder.completedAt, windowStartsAt),
+          lt(commerceOrder.completedAt, windowEndsAt),
+        ),
+      );
+
+    // Visible reviews on those same listings. Recorded, displayed, and deliberately NOT scored —
+    // see the column comment: a review corroborates a sale already counted above.
+    const [reviewCounts] = await db
+      .select({ productReviewCount: sql<number>`count(*)::int` })
+      .from(commerceReview)
+      .innerJoin(product, eq(product.id, commerceReview.productId))
+      .innerJoin(researchProject, eq(researchProject.id, product.researchProjectId))
+      .innerJoin(
+        problemClusterProjectLink,
+        eq(problemClusterProjectLink.projectId, researchProject.id),
+      )
+      .innerJoin(problemCluster, eq(problemCluster.id, problemClusterProjectLink.clusterId))
+      .where(
+        and(
+          eq(problemCluster.regionId, cell.regionId),
+          eq(problemCluster.categoryId, cell.categoryId),
+          // Every public read filters on this; a hidden review is not evidence.
+          eq(commerceReview.visibility, "visible"),
+          gte(commerceReview.createdAt, windowStartsAt),
+          lt(commerceReview.createdAt, windowEndsAt),
+        ),
+      );
+
     const inputs: DemandCellInputs = {
       regionId: cell.regionId,
       categoryId: cell.categoryId,
@@ -149,6 +232,12 @@ export async function handleRecomputeDemandSignals(rawPayload: unknown): Promise
 
     scoredCells.push({
       ...inputs,
+      // RECORDED, NOT SCORED, and kept out of `computeDemandScorePoints`'s argument entirely
+      // rather than passed and ignored — a value that cannot affect a result does not belong
+      // in that function's input type. See the columns' own comments for why the weighting
+      // question was left open instead of answered here.
+      soldUnitCount: soldUnitCounts?.soldUnitCount ?? 0,
+      productReviewCount: reviewCounts?.productReviewCount ?? 0,
       demandScorePoints: computeDemandScorePoints(inputs).totalPoints,
     });
   }
@@ -197,6 +286,11 @@ export async function handleRecomputeDemandSignals(rawPayload: unknown): Promise
             distinctReporterCount: cell.distinctReporterCount,
             relatedProjectCount: cell.relatedProjectCount,
             openRoleCount: cell.openRoleCount,
+            soldUnitCount: cell.soldUnitCount,
+            productReviewCount: cell.productReviewCount,
+            // scoreAlgorithmVersion stays at its default of 1, deliberately: the two counts
+            // above are recorded evidence, not score inputs, so the formula did NOT change and
+            // these rows remain comparable to every row before them. See `DemandScoreInputs`.
           };
         }),
       )

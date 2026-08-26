@@ -12,6 +12,8 @@ import {
   playlist,
   playlistItem,
   product,
+  projectOpenRole,
+  researchProject,
   video,
   videoAttachedProduct,
   videoCategory,
@@ -40,6 +42,9 @@ import {
   type YoutubeVideoFacts,
 } from "#src/lib/youtube.js";
 import { ensureVideoStatsRows } from "#src/modules/home/engagement/video-engagement.service.js";
+// The venture gate's membership half. `isActiveProjectMember` is the only exported R&D
+// membership helper keyed on a projectId rather than a slug, which is what studio holds.
+import { isActiveProjectMember } from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   DEFAULT_CONTENT_CATEGORY_SLUG,
   findUnavailableCategoryIds,
@@ -156,6 +161,15 @@ export type VideoError =
   // Carries the WHOLE offending list, not the first one: a client sends up to 50 ids and
   // must be able to strike every bad chip at once rather than one round-trip each.
   | { type: "PRODUCT_NOT_OWNED"; productIds: readonly string[] }
+  // The venture link (§11i). NOT a 403, and the naming says why: three different facts —
+  // no such project, a project you are not an active member of, and a project that is not
+  // `active` — collapse into one literal on purpose, exactly as PRODUCT_NOT_OWNED collapses
+  // "no such product" into "not yours". Splitting them would make the status an oracle for
+  // which project ids exist. See studio-error-response.ts's status policy.
+  | { type: "RESEARCH_PROJECT_NOT_JOINABLE"; researchProjectSlug: string }
+  // Same collapse-into-one rule as the arms around it: "no such role", "a role at another
+  // venture" and "this video has no venture" are one answer. Carries the WHOLE offending list.
+  | { type: "OPEN_ROLE_NOT_IN_PROJECT"; openRoleIds: readonly string[] }
   // Same rule, for categories. Named NOT_AVAILABLE rather than NOT_FOUND because unknown
   // and retired collapse into it deliberately (see findUnavailableCategoryIds), and
   // because a distinct literal cannot collide with another union's arm inside the studio
@@ -350,6 +364,8 @@ export interface VideoOpenRoleView {
   readonly id: string;
   readonly roleTitle: string;
   readonly roleDescription: string | null;
+  /** The real `projectOpenRole` this blurb advertises, or null for free text. */
+  readonly openRoleId: string | null;
   readonly position: number;
 }
 
@@ -447,6 +463,11 @@ export interface PublicVideo {
   readonly hasAgeRestriction: boolean;
   readonly relatedVideoUrl: string | null;
   readonly hasFundingCallToAction: boolean;
+  /**
+   * The venture link (§11i), as a SLUG — the id never leaves the server, matching every
+   * other R&D read. Null is unaffiliated content, not missing data.
+   */
+  readonly researchProjectSlug: string | null;
 
   readonly visibility: VideoVisibility;
   readonly isNdaRequired: boolean;
@@ -565,6 +586,7 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     playlistRows,
     categories,
     episodeRows,
+    researchProjectRows,
   ] = await Promise.all([
     db
       .select({
@@ -599,6 +621,7 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
         id: videoOpenRole.id,
         roleTitle: videoOpenRole.roleTitle,
         roleDescription: videoOpenRole.roleDescription,
+        openRoleId: videoOpenRole.openRoleId,
         position: videoOpenRole.position,
       })
       .from(videoOpenRole)
@@ -678,6 +701,17 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
       .innerJoin(animeSeries, eq(animeSeries.id, animeSeason.seriesId))
       .where(eq(animeEpisode.videoId, row.id))
       .limit(1),
+    // The venture link resolved back to its SLUG. `row` holds the id, and the id is exactly
+    // what must not reach a client — every R&D read is slug-addressed. One extra select
+    // rather than a join on the parent read, because it is null for the large majority of
+    // videos and this Promise.all is already the place child facts are gathered.
+    row.researchProjectId === null
+      ? Promise.resolve([])
+      : db
+          .select({ slug: researchProject.slug })
+          .from(researchProject)
+          .where(eq(researchProject.id, row.researchProjectId))
+          .limit(1),
   ]);
 
   const episode = episodeRows[0] ?? null;
@@ -715,6 +749,7 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     hasAgeRestriction: row.hasAgeRestriction,
     relatedVideoUrl: row.relatedVideoUrl,
     hasFundingCallToAction: row.hasFundingCallToAction,
+    researchProjectSlug: researchProjectRows[0]?.slug ?? null,
 
     visibility: row.visibility,
     isNdaRequired: row.isNdaRequired,
@@ -878,6 +913,40 @@ async function findUnownedProductIds(
   return productIds.filter((productId) => !ownedIds.has(productId));
 }
 
+/**
+ * Resolves a venture SLUG to its id, but only if this creator may attach a video to it —
+ * the write-side gate on `video.researchProjectId` (§11i).
+ *
+ * Returns the id on success and `null` on refusal, so the one call answers both "may I" and
+ * "what do I store". The slug/id asymmetry is the point: the slug is what a client can name,
+ * the id is what the column holds, and the translation happens here and nowhere else.
+ *
+ * TWO CONDITIONS, AND THE SECOND IS NOT REDUNDANT. `isActiveProjectMember` answers only
+ * "is this user an active member", and it returns TRUE for a member of a `draft` project —
+ * it never looks at `researchProject.status`. A draft project 404s for non-members
+ * everywhere else in R&D, so letting a member attach a PUBLIC video to one would make the
+ * watch page name an unpublished venture to anyone: the same disclosure the store's venture
+ * block closes with its own `status = 'active'` predicate. Founders publish, then link.
+ *
+ * THE THREE FAILURES ARE ONE ANSWER. No such project, not a member, and not active are
+ * indistinguishable to the caller by design — all three return `null` — see
+ * `RESEARCH_PROJECT_NOT_JOINABLE`.
+ */
+async function resolveAttachableResearchProjectId(
+  creatorId: string,
+  researchProjectSlug: string,
+): Promise<string | null> {
+  const [activeProjectRow] = await db
+    .select({ id: researchProject.id })
+    .from(researchProject)
+    .where(and(eq(researchProject.slug, researchProjectSlug), eq(researchProject.status, "active")))
+    .limit(1);
+  if (!activeProjectRow) return null;
+
+  const isMember = await isActiveProjectMember(activeProjectRow.id, creatorId);
+  return isMember ? activeProjectRow.id : null;
+}
+
 async function findUnownedPlaylistIds(
   creatorId: string,
   playlistIds: readonly string[],
@@ -898,13 +967,83 @@ function dedupe(values: readonly string[]): readonly string[] {
 
 type TransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-/** Replaces the simple label-style child sets that create and PATCH both rewrite. */
+/** One recruiting blurb as the wire sends it. `openRoleId` is optional and verified. */
+export interface VideoOpenRoleInput {
+  readonly roleTitle: string;
+  readonly roleDescription?: string;
+  readonly openRoleId?: string;
+}
+
+/**
+ * Open-role ids in this set that this video may NOT advertise.
+ *
+ * SCOPED ON BOTH COLUMNS, exactly as the R&D apply gate scopes its own lookup: a role id
+ * belonging to another venture must be indistinguishable from one that does not exist, or
+ * the studio becomes an oracle for enumerating other projects' vacancies.
+ *
+ * A video with NO venture may not link any role at all — `researchProjectId === null` makes
+ * every supplied id unlinkable, which is the honest answer: there is no project whose roles
+ * it could be advertising.
+ */
+async function findUnlinkableOpenRoleIds(
+  researchProjectId: string | null,
+  openRoleIds: readonly string[],
+): Promise<readonly string[]> {
+  if (openRoleIds.length === 0) return [];
+  if (researchProjectId === null) return openRoleIds;
+
+  const linkableRows = await db
+    .select({ id: projectOpenRole.id })
+    .from(projectOpenRole)
+    .where(
+      and(
+        eq(projectOpenRole.projectId, researchProjectId),
+        inArray(projectOpenRole.id, [...openRoleIds]),
+      ),
+    );
+  const linkableIds = new Set(linkableRows.map((row) => row.id));
+  return openRoleIds.filter((openRoleId) => !linkableIds.has(openRoleId));
+}
+
+/**
+ * Replaces the recruiting blurbs. Split from `replaceSimpleChildSets` because these rows
+ * carry a foreign key and that helper deliberately validates none.
+ *
+ * Ids are re-verified BEFORE the transaction opens, by the caller — this function only
+ * writes, matching every other replace-set in this file.
+ */
+async function replaceVideoOpenRoles(
+  tx: TransactionClient,
+  videoId: string,
+  openRoles: readonly VideoOpenRoleInput[],
+): Promise<void> {
+  await tx.delete(videoOpenRole).where(eq(videoOpenRole.videoId, videoId));
+  if (openRoles.length === 0) return;
+
+  await tx.insert(videoOpenRole).values(
+    openRoles.map((openRole, index) => ({
+      videoId,
+      roleTitle: openRole.roleTitle,
+      roleDescription: openRole.roleDescription ?? null,
+      openRoleId: openRole.openRoleId ?? null,
+      position: index,
+    })),
+  );
+}
+
+/**
+ * Replaces the simple label-style child sets that create and PATCH both rewrite.
+ *
+ * `openRoles` IS NO LONGER ONE OF THEM. This helper writes label rows from plain strings and
+ * has no foreign key to validate — the same property that has always kept `videoCategory` out
+ * of it. Now that a blurb may carry an `openRoleId`, it needs a cross-table check against the
+ * video's own venture, so it moved to `replaceVideoOpenRoles` below.
+ */
 async function replaceSimpleChildSets(
   tx: TransactionClient,
   videoId: string,
   input: {
     readonly milestones?: readonly string[];
-    readonly openRoles?: readonly string[];
     readonly teamMemberNames?: readonly string[];
     readonly collaboratorEmails?: readonly string[];
   },
@@ -915,17 +1054,6 @@ async function replaceSimpleChildSets(
       await tx
         .insert(videoMilestone)
         .values(input.milestones.map((label, index) => ({ videoId, label, position: index })));
-    }
-  }
-
-  if (input.openRoles !== undefined) {
-    await tx.delete(videoOpenRole).where(eq(videoOpenRole.videoId, videoId));
-    if (input.openRoles.length > 0) {
-      await tx
-        .insert(videoOpenRole)
-        .values(
-          input.openRoles.map((roleTitle, index) => ({ videoId, roleTitle, position: index })),
-        );
     }
   }
 
@@ -1008,6 +1136,42 @@ export async function createVideo(
     return { success: false, error: { type: "PRODUCT_NOT_OWNED", productIds: unownedProductIds } };
   }
 
+  // 3a. The venture link — membership re-verified, same rule and same slot as products.
+  //     A client sends a project id; the server decides whether it may be used.
+  let resolvedResearchProjectId: string | null = null;
+  if (input.researchProjectSlug !== undefined && input.researchProjectSlug !== null) {
+    resolvedResearchProjectId = await resolveAttachableResearchProjectId(
+      creatorId,
+      input.researchProjectSlug,
+    );
+    if (resolvedResearchProjectId === null) {
+      return {
+        success: false,
+        error: {
+          type: "RESEARCH_PROJECT_NOT_JOINABLE",
+          researchProjectSlug: input.researchProjectSlug,
+        },
+      };
+    }
+  }
+
+  // 3a-ii. Linked open roles — every id must belong to the venture resolved just above.
+  //     Runs after 3a because it depends on its answer, and before the network call like
+  //     everything else cheap.
+  const suppliedOpenRoleIds = (input.openRoles ?? [])
+    .map((openRole) => openRole.openRoleId)
+    .filter((openRoleId): openRoleId is string => openRoleId !== undefined);
+  const unlinkableOpenRoleIds = await findUnlinkableOpenRoleIds(
+    resolvedResearchProjectId,
+    suppliedOpenRoleIds,
+  );
+  if (unlinkableOpenRoleIds.length > 0) {
+    return {
+      success: false,
+      error: { type: "OPEN_ROLE_NOT_IN_PROJECT", openRoleIds: unlinkableOpenRoleIds },
+    };
+  }
+
   // 3b. Categories — existence and activeness checked before the network call, like
   //     products above. Cross-table, so it cannot live in the Zod schema.
   const categoryIds = dedupe(input.categoryIds ?? []);
@@ -1076,6 +1240,9 @@ export async function createVideo(
           hasAgeRestriction: input.hasAgeRestriction,
           relatedVideoUrl: input.relatedVideoUrl,
           hasFundingCallToAction: input.hasFundingCallToAction,
+          // Resolved from the slug and membership-verified in step 3a. Null when the field
+          // was omitted or explicitly null — both mean "unaffiliated", the column's default.
+          researchProjectId: resolvedResearchProjectId,
           visibility: input.visibility,
           isNdaRequired: input.isNdaRequired,
           scheduledPublishAt: input.scheduledPublishAt,
@@ -1152,6 +1319,9 @@ export async function createVideo(
       }
 
       await replaceSimpleChildSets(tx, videoId, input);
+      if (input.openRoles !== undefined) {
+        await replaceVideoOpenRoles(tx, videoId, input.openRoles);
+      }
 
       if (input.anime) {
         // Create the series when the creator did not pick one. Zod's superRefine has
@@ -1359,6 +1529,49 @@ export async function updateVideo(
     }
   }
 
+  // The venture link, re-verified on PATCH exactly as on create. A creator who left a
+  // project must not keep re-pointing videos at it, and `null` (detach) needs no check —
+  // dropping a link asks nothing of the venture.
+  let patchedResearchProjectId: string | null | undefined;
+  if (patch.researchProjectSlug === null) {
+    patchedResearchProjectId = null;
+  } else if (patch.researchProjectSlug !== undefined) {
+    patchedResearchProjectId = await resolveAttachableResearchProjectId(
+      creatorId,
+      patch.researchProjectSlug,
+    );
+    if (patchedResearchProjectId === null) {
+      return {
+        success: false,
+        error: {
+          type: "RESEARCH_PROJECT_NOT_JOINABLE",
+          researchProjectSlug: patch.researchProjectSlug,
+        },
+      };
+    }
+  }
+
+  // Linked open roles, checked against the venture this video will have AFTER the patch —
+  // `patchedResearchProjectId` when the patch moves it, the existing column otherwise.
+  // Checking against the old venture would let one PATCH detach a project and keep its roles.
+  const effectiveResearchProjectId =
+    patchedResearchProjectId === undefined ? existing.researchProjectId : patchedResearchProjectId;
+  if (patch.openRoles !== undefined) {
+    const suppliedOpenRoleIds = patch.openRoles
+      .map((openRole) => openRole.openRoleId)
+      .filter((openRoleId): openRoleId is string => openRoleId !== undefined);
+    const unlinkableOpenRoleIds = await findUnlinkableOpenRoleIds(
+      effectiveResearchProjectId,
+      suppliedOpenRoleIds,
+    );
+    if (unlinkableOpenRoleIds.length > 0) {
+      return {
+        success: false,
+        error: { type: "OPEN_ROLE_NOT_IN_PROJECT", openRoleIds: unlinkableOpenRoleIds },
+      };
+    }
+  }
+
   // REPLACE semantics, like every other array on this patch: `undefined` means untouched,
   // any array means "this is now the whole set", and `[]` means remove all. Merge
   // semantics would leave a creator no way to remove a category.
@@ -1433,6 +1646,11 @@ export async function updateVideo(
     if (patch.relatedVideoUrl !== undefined) scalarUpdates.relatedVideoUrl = patch.relatedVideoUrl;
     if (patch.hasFundingCallToAction !== undefined) {
       scalarUpdates.hasFundingCallToAction = patch.hasFundingCallToAction;
+    }
+    // Tri-state, like attachedProductIds: undefined leaves the link alone, null DETACHES.
+    // Membership for a non-null value was re-verified before the transaction opened.
+    if (patchedResearchProjectId !== undefined) {
+      scalarUpdates.researchProjectId = patchedResearchProjectId;
     }
     if (patch.visibility !== undefined) scalarUpdates.visibility = patch.visibility;
     if (patch.isNdaRequired !== undefined) scalarUpdates.isNdaRequired = patch.isNdaRequired;
@@ -1516,6 +1734,25 @@ export async function updateVideo(
     }
 
     await replaceSimpleChildSets(tx, videoId, patch);
+    if (patch.openRoles !== undefined) {
+      await replaceVideoOpenRoles(tx, videoId, patch.openRoles);
+    } else if (
+      patchedResearchProjectId !== undefined &&
+      patchedResearchProjectId !== existing.researchProjectId
+    ) {
+      // THE VENTURE MOVED AND THE BLURBS DID NOT. Every surviving `openRoleId` was validated
+      // against the OLD venture, so each one now points at a role this video has no
+      // relationship to — and the watch page would advertise another project's vacancy, or a
+      // detached video would keep advertising one at all. Null the links and keep the text:
+      // that is exactly the fallback state `roleTitle` stays NOT NULL for.
+      //
+      // Nulling ALL of them is correct rather than blunt: they were all checked against the
+      // old id, so after a real change none of them can still be valid.
+      await tx
+        .update(videoOpenRole)
+        .set({ openRoleId: null })
+        .where(eq(videoOpenRole.videoId, videoId));
+    }
 
     // The episode's OWN metadata is patchable; re-linking it to another series or season
     // is deliberately not (that is the /series router's job), so UpdateVideoAnimeSchema
