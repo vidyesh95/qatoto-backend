@@ -105,6 +105,7 @@
     "db:smoke-compensation": "tsx --conditions=development scripts/smoke-compensation.ts",
     "db:smoke-object-storage": "tsx --conditions=development scripts/smoke-object-storage.ts",
     "db:expire-stale-project-requests": "tsx --conditions=development scripts/expire-stale-project-requests.ts",
+    "db:reconcile-creator-stats": "tsx --conditions=development scripts/reconcile-creator-stats.ts",
     "db:reconcile-project-stats": "tsx --conditions=development scripts/reconcile-project-stats.ts",
     "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",
     "db:cleanup-rate-limit-buckets": "tsx --conditions=development scripts/cleanup-expired-rate-limit-buckets.ts",

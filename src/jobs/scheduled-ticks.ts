@@ -141,6 +141,35 @@ export async function handleRecomputeDailyLogStreaksTick(
  * against this instant, and the 24-hour window is a MINIMUM (§9.8), so a slightly stale
  * asOf can only ever leave a window open a little longer — the safe direction.
  */
+/**
+ * The scheduled-publish sweep's tick.
+ *
+ * Same second-truncation as the dispute sweep below, and for the same reason: the day and hour
+ * as-of helpers are far too coarse for a per-minute sweep, and zeroing the milliseconds is what
+ * makes two firings inside one second dedup on the idempotency key.
+ *
+ * The `asOf` is the CUTOFF, not a quantized bucket — the job publishes everything whose
+ * `scheduled_publish_at` is at or before it.
+ */
+export async function handlePublishScheduledVideosTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const now = readClock();
+  const asOf = new Date(Math.floor(now.getTime() / 1_000) * 1_000);
+  const asOfIso = asOf.toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.publishScheduledVideos,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.publishScheduledVideos(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(`publish-scheduled-videos-tick: enqueue failed (${enqueueResult.error.type})`);
+  }
+}
+
 export async function handleSweepDisputeWindowsTick(
   _rawPayload: unknown,
   readClock: ClockReader = systemClock,

@@ -18,6 +18,7 @@ import {
   handleRecomputeInvestorConfidenceTick,
   handleRecomputeOpportunityScoresTick,
   handleRefreshTalentProjectionsTick,
+  handlePublishScheduledVideosTick,
   handleSweepDisputeWindowsTick,
   handlePruneEngagementDataTick,
   handleRecomputePlatformCategoryPopularityTick,
@@ -89,6 +90,7 @@ import { handleReconcileCommercePayments } from "#src/modules/store/orders/recon
 import { handleReleaseExpiredInventoryReservations } from "#src/modules/store/orders/release-expired-inventory-reservations.js";
 import { handleExpireCommerceQuotes } from "#src/modules/store/procurement/expire-commerce-quotes.js";
 import { handleDispatchCommerceWebhookEvent } from "#src/modules/store/storefront/dispatch-commerce-webhook-event.js";
+import { handlePublishScheduledVideos } from "#src/modules/studio/videos/publish-scheduled-videos.js";
 import { handleRecomputeTrendingVideos } from "#src/modules/studio/videos/recompute-trending-videos.js";
 import { handleRecomputeVideoDurations } from "#src/modules/studio/videos/recompute-video-durations.js";
 import { handleRecomputeVideoQualityScores } from "#src/modules/studio/videos/recompute-video-quality-scores.js";
@@ -489,6 +491,20 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.verifyYoutubeVideo,
     workOptions,
     runJob(JOB_NAMES.verifyYoutubeVideo, handleVerifyYoutubeVideo),
+  );
+
+  // The scheduled-publish sweep. A TICK PLUS A JOB, unlike `verify-youtube-video` above: this one
+  // is driven by the clock rather than by a row being written, and the tick is what carries the
+  // run's cutoff instant into the payload.
+  await boss.work(
+    JOB_NAMES.publishScheduledVideosTick,
+    workOptions,
+    runJob(JOB_NAMES.publishScheduledVideosTick, handlePublishScheduledVideosTick),
+  );
+  await boss.work(
+    JOB_NAMES.publishScheduledVideos,
+    workOptions,
+    runJob(JOB_NAMES.publishScheduledVideos, handlePublishScheduledVideos),
   );
 
   // STORE Phase 1/2 — denormalized public search document refresh. ON DEMAND only;

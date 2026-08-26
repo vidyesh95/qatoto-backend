@@ -1,4 +1,4 @@
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -6,6 +6,7 @@ import {
   animeSeason,
   animeSeries,
   contentReviewAction,
+  creatorStats,
   user,
   video,
 } from "#src/db/schema.js";
@@ -187,6 +188,8 @@ async function loadPendingEpisode(videoId: string): Promise<
       premiereDate: Date | null;
       isSourceVerified: boolean;
       youtubeVideoId: string | null;
+      /** Needed by the approve path, which increments this creator's published-video counter. */
+      creatorId: string;
     },
     ContentReviewError
   >
@@ -194,6 +197,7 @@ async function loadPendingEpisode(videoId: string): Promise<
   const [row] = await db
     .select({
       videoType: video.videoType,
+      creatorId: video.creatorId,
       reviewStatus: video.reviewStatus,
       isSourceVerified: video.isSourceVerified,
       youtubeVideoId: video.youtubeVideoId,
@@ -226,6 +230,7 @@ async function loadPendingEpisode(videoId: string): Promise<
       premiereDate: row.premiereDate,
       isSourceVerified: row.isSourceVerified,
       youtubeVideoId: row.youtubeVideoId,
+      creatorId: row.creatorId,
     },
   };
 }
@@ -291,6 +296,28 @@ export async function approveAnimeEpisode(
         publishedAt: video.publishedAt,
         rejectionReason: video.rejectionReason,
       });
+
+    // THE COUNTER, ON THE SECOND DOOR INTO PUBLISH. The comment above already names this path as
+    // publish's other entrance and gates it accordingly — but it did not MAINTAIN what publishing
+    // maintains, so approving an episode published a video and left
+    // `creator_stats.published_video_count` untouched. That drifted the count DOWNWARD, the
+    // opposite direction to the delete bug, and the two could mask each other on one account.
+    //
+    // Only when it actually becomes published: an embargoed episode goes to `scheduled`, and
+    // `publishVideo` does not count a scheduled video either.
+    //
+    // The row is minted first because a moderator can approve the first video a creator ever
+    // published, in which case no `creator_stats` row exists yet — same order `publishVideo` uses.
+    if (!isEmbargoed) {
+      await tx
+        .insert(creatorStats)
+        .values({ userId: pending.value.creatorId })
+        .onConflictDoNothing();
+      await tx
+        .update(creatorStats)
+        .set({ publishedVideoCount: sql`${creatorStats.publishedVideoCount} + 1` })
+        .where(eq(creatorStats.userId, pending.value.creatorId));
+    }
 
     const [releasedEpisode] = await tx
       .update(animeEpisode)

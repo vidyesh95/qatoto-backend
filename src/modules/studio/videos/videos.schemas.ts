@@ -312,6 +312,21 @@ export const ReplacePlaylistsSchema = z
   .object({ playlistIds: z.array(z.string().min(1).max(64)).max(50) })
   .strict();
 
+/**
+ * `GET /users/me/video-analytics`.
+ *
+ * PAGE AND LIMIT ONLY. There is no `?sort=`, and its absence is the same refusal
+ * `ListVideoCommentsQuerySchema` makes about `?sort=top`: `video_stats` carries a primary key and
+ * no secondary index, so ordering a creator's videos by view count would sort after the join with
+ * nothing behind it. Accepting the parameter would advertise storage that does not exist.
+ */
+export const ListVideoAnalyticsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+
 export const ListMyVideosQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),

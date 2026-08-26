@@ -144,6 +144,20 @@ export const ListVideoCommentsQuerySchema = z
  * dismissed first, which is what somebody looking to undo is reaching for — and a filter over a
  * list whose whole purpose is to be emptied would be a control for a problem nobody has.
  */
+/**
+ * `GET /users/me/video-comments` — the creator's inbox.
+ *
+ * Keyset like its siblings, and NO `sort` for the same reason `ListVideoCommentsQuerySchema`
+ * above refuses one: `video.commentSortOrder` is still an unbacked preference column, and a
+ * like-count sort breaks the cursor's stable key regardless.
+ */
+export const ListCreatorInboxCommentsQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+    cursor: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+
 export const ListNotInterestedVideosQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).default(20),

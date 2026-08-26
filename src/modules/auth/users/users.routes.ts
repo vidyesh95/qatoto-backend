@@ -14,6 +14,7 @@ import { uploadAvatarPhoto } from "#src/modules/auth/users/upload-avatar.js";
 import * as usersController from "#src/modules/auth/users/users.controller.js";
 import * as engagementController from "#src/modules/home/engagement/engagement.controller.js";
 import * as videoContentReportsController from "#src/modules/studio/video-content-reports.controller.js";
+import * as creatorAnalyticsController from "#src/modules/studio/videos/creator-analytics.controller.js";
 
 const router = express.Router();
 
@@ -125,6 +126,44 @@ router.get(
  * report's status and nothing about who decided it or who else reported the same video.
  */
 router.get("/me/video-reports", requireAuth, videoContentReportsController.listMyVideoReports);
+
+/**
+ * GET /users/me/creator-summary
+ * The caller's own lifetime totals — subscribers, published videos, views — behind
+ * `/studio/analytics`.
+ *
+ * IT IS HERE RATHER THAN ON THE VIDEOS ROUTER for the reason `/me/video-reports` directly above
+ * records: `app.ts` mounts `videosRouter` at `/videos` first, so any two-segment `/videos/X` is
+ * permanently shadowed by that router's `GET /:videoId`.
+ *
+ * ZERO, NOT NULL, for a creator with no stats row — see the service, which explains why this is
+ * the opposite call to `/me/watch-time` and why both are right.
+ */
+router.get("/me/creator-summary", requireAuth, creatorAnalyticsController.getCreatorSummary);
+
+/**
+ * GET /users/me/video-analytics
+ * Per-video counters for the caller's own videos. Page and limit only — there is no `?sort=`,
+ * because `video_stats` has no index to order by.
+ *
+ * The counters are QATOTO-SIDE. A YouTube-hosted video's own views live in the creator's YouTube
+ * Studio; these count watching that happened here, through the §3.3 beacon.
+ */
+router.get("/me/video-analytics", requireAuth, creatorAnalyticsController.listVideoAnalytics);
+
+/**
+ * GET /users/me/video-comments
+ * Every comment across the caller's own videos, newest first — the data behind
+ * `/studio/comments`. Fifth in this family of self-reads, declared before `/:id`.
+ *
+ * IT ADDS NO AUTHORIZATION. `DELETE /comments/:commentId` has always allowed the video's creator
+ * as well as the comment's author (HOME §8.4); this is the read that finally lets them find the
+ * comment without opening each video in turn.
+ *
+ * INCLUDES REPLIES, which is why `0136` adds a non-partial index — the public thread's index
+ * covers top-level comments only, and an inbox built on it would silently hide most of them.
+ */
+router.get("/me/video-comments", requireAuth, engagementController.listMyVideoComments);
 
 /**
  * POST /users/me/deletion-request

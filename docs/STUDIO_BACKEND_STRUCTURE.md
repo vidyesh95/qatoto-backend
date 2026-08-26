@@ -305,7 +305,13 @@ can't exist (Pattern 1, CLAUDE.md):
   private, §5). The `uploading` → `processing` transitions belong to the deferred hosted path and
   never occur today. The client never sets this.
 - `publishStatus` — the **distribution** state the creator controls: `draft` → `scheduled` →
-  `published`.
+  `published`. The `scheduled` → `published` hop is made by the `publish-scheduled-videos` job on
+  a one-minute cron, and until that job existed it was **never made at all** — two paths set
+  `scheduled` (`publishVideo` with a future date, `approveAnimeEpisode` with a later premiere) and
+  nothing moved either on, so a scheduled video stayed permanently invisible. The job re-runs
+  publish's own gates rather than trusting the schedule, leaves a row that no longer qualifies
+  `scheduled` rather than draughting it, and increments `creator_stats.published_video_count` in
+  the same transaction — it is the third door into publish and maintains what the other two do.
 - `reviewStatus` — the **moderation** state for gated content: `not_required` (normal videos) /
   `pending` / `approved` / `rejected`. Defaults to `not_required`; set to `pending` when
   `videoType = anime_episode` on publish.

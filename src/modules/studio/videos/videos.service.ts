@@ -2129,6 +2129,32 @@ export async function deleteVideo(
     if (!deletedAsset.success) return { success: false, error: deletedAsset.error };
   }
 
-  await db.delete(video).where(ownedVideoPredicate(creatorId, videoId));
+  // THE COUNTER COMES DOWN HERE TOO, and its absence was a real bug rather than a deliberate
+  // omission. `publishVideo` increments `publishedVideoCount` and `unpublishVideo` decrements it,
+  // but deleting a PUBLISHED video removed the row and left the count where it was — so the number
+  // drifted upward by one for every published video its creator ever deleted, permanently.
+  //
+  // It went unnoticed for as long as it did because nothing read the column: `/users/me/creator-
+  // summary` is its first consumer anywhere in the codebase, and a counter with no reader is a
+  // counter nobody can see breaking.
+  //
+  // `GREATEST(… - 1, 0)` and the `wasPublished` guard both mirror `unpublishVideo` exactly: the
+  // count only comes down if it went up, so deleting a draft cannot drive it negative and a
+  // double-delete cannot either.
+  const wasPublished = existing.publishStatus === "published";
+
+  await db.transaction(async (tx) => {
+    await tx.delete(video).where(ownedVideoPredicate(creatorId, videoId));
+
+    if (wasPublished) {
+      await tx
+        .update(creatorStats)
+        .set({
+          publishedVideoCount: sql`GREATEST(${creatorStats.publishedVideoCount} - 1, 0)`,
+        })
+        .where(eq(creatorStats.userId, creatorId));
+    }
+  });
+
   return { success: true, value: { deleted: true } };
 }

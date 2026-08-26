@@ -1,0 +1,37 @@
+-- ---------------------------------------------------------------------------
+-- ONE INDEX, FOR ONE NEW READ: `GET /users/me/video-comments`.
+--
+-- The creator's comment inbox — every comment across every one of their videos, newest first.
+-- Until now a creator could moderate their own comment section only from the public thread, one
+-- video at a time, because `listVideoComments` takes a single REQUIRED `videoId` and has no
+-- creator filter. The authorization for it has existed and been correct the whole time:
+-- `deleteVideoComment` already permits the author OR the video's creator.
+--
+-- WHY THE EXISTING INDEX CANNOT SERVE THIS, and it is not a performance argument — it is a
+-- correctness one. `video_comment_thread_idx` is on (video_id, created_at, id) but is PARTIAL:
+--
+--     WHERE parent_comment_id IS NULL
+--
+-- It indexes top-level comments only, because the public thread reads roots and replies in two
+-- separate queries. An inbox built on it would silently omit every REPLY — and on this database
+-- today 8 of 12 comments are replies. A creator would be shown a third of their comments and told
+-- it was all of them, which is worse than having no inbox.
+--
+-- WHAT THIS DOES NOT DO, stated so the next person does not assume otherwise. `video_comment`
+-- carries no `creator_id`, so the inbox is still a MERGE across the creator's videos: the planner
+-- resolves the video set through `video_creatorId_idx`, then walks this index once per video and
+-- merges the ordered streams. That is the right trade at this size — denormalising `creator_id`
+-- onto every comment row would mean a write-path change plus a backfill of every existing row, to
+-- buy a single range scan. Revisit if a creator ever has thousands of videos rather than tens.
+--
+-- DESC ON BOTH SORT COLUMNS, matching the query's ORDER BY exactly. An index whose direction
+-- disagrees with the query's is one the planner walks backwards at best and ignores at worst. The
+-- `id` tiebreak is what makes the keyset cursor total — two comments land in the same millisecond
+-- more often than that sounds, and a cursor keyed on a non-unique column skips whichever row loses.
+--
+-- NOT `CONCURRENTLY`: this repo's migrations run inside a transaction, which forbids it.
+--
+-- RUN ORDER: one index. No tables, no columns, no constraints.
+-- ---------------------------------------------------------------------------
+
+CREATE INDEX "video_comment_video_recent_idx" ON "video_comment" USING btree ("video_id","created_at" DESC,"id" DESC);

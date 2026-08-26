@@ -96,6 +96,144 @@ export interface ListCommentsInput {
  * detach its replies from the thread and the conversation would stop making sense. A
  * tombstoned leaf is dropped — there is nothing left of it to render.
  */
+/** One comment in the creator's inbox, with the video it sits on. */
+export interface CreatorInboxComment {
+  readonly commentId: string;
+  readonly parentCommentId: string | null;
+  readonly body: string;
+  readonly likeCount: number;
+  readonly replyCount: number;
+  readonly createdAt: Date;
+  readonly author: {
+    readonly id: string;
+    readonly handle: string | null;
+    readonly name: string;
+    readonly imageUrl: string | null;
+  } | null;
+  readonly video: {
+    readonly videoId: string;
+    readonly title: string;
+    readonly thumbnailUrl: string | null;
+  };
+}
+
+/**
+ * EVERY COMMENT ACROSS THE CALLER'S OWN VIDEOS, newest first — `/studio/comments`.
+ *
+ * NO NEW AUTHORIZATION AND NO NEW WRITE. `deleteVideoComment` below has always permitted the
+ * author OR the video's creator, and §8.4 calls that "the only moderation v1 has". The creator
+ * could already remove any comment on their video; what they could not do was SEE them without
+ * opening each video in turn. This is the missing read, and nothing else.
+ *
+ * SCOPED THROUGH `video.creatorId`, NEVER A PARAMETER. There is no creator id on the wire — it
+ * comes from the session, the same rule the whole studio follows.
+ *
+ * TOMBSTONES ARE EXCLUDED OUTRIGHT, unlike the public thread which keeps them while they hold
+ * replies up. The CHECK erases `body_text` to `''` on delete, so a tombstone here would be a
+ * blank row offering the creator a delete they have already performed. `replyCount` on the parent
+ * still counts them, so a thread's shape is not misreported.
+ *
+ * REPLIES ARE INCLUDED, and that is the reason this needed its own index. The public thread's
+ * `video_comment_thread_idx` is partial on `parent_comment_id IS NULL`; building on it would have
+ * hidden every reply, which is most comments in practice. See `0136`.
+ *
+ * A NULL AUTHOR IS A REAL ROW. `author_user_id` is `set null`, so a comment outlives the account
+ * that wrote it — the client renders "deleted account" rather than dropping the row, because the
+ * comment is still on the creator's video and still theirs to act on.
+ */
+export async function listCreatorInboxComments(input: {
+  readonly creatorUserId: string;
+  readonly limit: number;
+  readonly cursor: string | null;
+}): Promise<
+  Result<
+    { readonly rows: readonly CreatorInboxComment[]; readonly nextCursor: string | null },
+    VideoCommentError
+  >
+> {
+  const decodedCursor = input.cursor === null ? null : decodeInstantCursor(input.cursor);
+  if (input.cursor !== null && decodedCursor === null) {
+    return { success: false, error: { type: "CURSOR_MALFORMED" } };
+  }
+
+  // Newest first, so the keyset walks backwards — identical shape to the top-level thread listing.
+  const cursorCondition =
+    decodedCursor === null
+      ? undefined
+      : or(
+          lt(videoComment.createdAt, decodedCursor.instant),
+          and(
+            eq(videoComment.createdAt, decodedCursor.instant),
+            lt(videoComment.id, decodedCursor.id),
+          ),
+        );
+
+  const rows = await db
+    .select({
+      commentId: videoComment.id,
+      parentCommentId: videoComment.parentCommentId,
+      bodyText: videoComment.bodyText,
+      likeCount: videoComment.likeCount,
+      replyCount: videoComment.replyCount,
+      createdAt: videoComment.createdAt,
+      authorId: user.id,
+      authorHandle: user.handle,
+      authorName: user.name,
+      authorImageUrl: user.image,
+      videoId: video.id,
+      videoTitle: video.title,
+      videoThumbnailUrl: video.thumbnailUrl,
+    })
+    .from(videoComment)
+    .innerJoin(video, eq(video.id, videoComment.videoId))
+    .leftJoin(user, eq(user.id, videoComment.authorUserId))
+    .where(
+      and(
+        eq(video.creatorId, input.creatorUserId),
+        eq(videoComment.isDeleted, false),
+        cursorCondition,
+      ),
+    )
+    .orderBy(desc(videoComment.createdAt), desc(videoComment.id))
+    .limit(input.limit + 1);
+
+  const pageRows = rows.slice(0, input.limit);
+  const lastRow = pageRows.at(-1);
+  const nextCursor =
+    rows.length > input.limit && lastRow !== undefined
+      ? encodeInstantCursor({ instant: lastRow.createdAt, id: lastRow.commentId })
+      : null;
+
+  return {
+    success: true,
+    value: {
+      rows: pageRows.map((row) => ({
+        commentId: row.commentId,
+        parentCommentId: row.parentCommentId,
+        body: row.bodyText,
+        likeCount: row.likeCount,
+        replyCount: row.replyCount,
+        createdAt: row.createdAt,
+        author:
+          row.authorId === null
+            ? null
+            : {
+                id: row.authorId,
+                handle: row.authorHandle,
+                name: row.authorName ?? "",
+                imageUrl: row.authorImageUrl,
+              },
+        video: {
+          videoId: row.videoId,
+          title: row.videoTitle,
+          thumbnailUrl: row.videoThumbnailUrl,
+        },
+      })),
+      nextCursor,
+    },
+  };
+}
+
 export async function listVideoComments(
   input: ListCommentsInput,
 ): Promise<

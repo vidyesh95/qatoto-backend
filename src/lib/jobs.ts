@@ -104,6 +104,11 @@ export const JOB_NAMES = {
   // --- TIME, NOT BY CODE — see SCHEDULED_JOB_CRONS below. Durations must precede quality
   // --- (completion has no denominator without one), quality must precede popularity, and
   // --- popularity must precede affinities.
+  // The scheduled-publish sweep. A creator (or a moderator approving an embargoed anime
+  // episode) can set a video to `scheduled` with a future `scheduled_publish_at` — and until
+  // this existed, NOTHING ever moved it on. A scheduled video simply never published.
+  publishScheduledVideosTick: "publish-scheduled-videos-tick",
+  publishScheduledVideos: "publish-scheduled-videos",
   recomputeVideoDurationsTick: "recompute-video-durations-tick",
   recomputeVideoDurations: "recompute-video-durations",
   recomputeVideoQualityScoresTick: "recompute-video-quality-scores-tick",
@@ -628,6 +633,35 @@ export const JOB_DEFINITIONS = {
       ...STANDARD_RETRY,
       expireInSeconds: 120,
       deadLetter: deadLetterNameFor(JOB_NAMES.finalizeVerdict),
+    },
+  },
+
+  [JOB_NAMES.publishScheduledVideosTick]: {
+    name: JOB_NAMES.publishScheduledVideosTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 30,
+      retryBackoff: false,
+      expireInSeconds: 45,
+      deadLetter: deadLetterNameFor(JOB_NAMES.publishScheduledVideosTick),
+    },
+  },
+  [JOB_NAMES.publishScheduledVideos]: {
+    name: JOB_NAMES.publishScheduledVideos,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      // `singleton`, like the dispute sweep. Two concurrent sweeps are SAFE — each row is
+      // taken `FOR UPDATE SKIP LOCKED` and its status re-asserted inside the transaction, so
+      // a video cannot be published twice or counted twice — but they would contend for
+      // nothing.
+      policy: "singleton",
+      retryLimit: 3,
+      retryDelay: 30,
+      retryBackoff: false,
+      expireInSeconds: 300,
+      deadLetter: deadLetterNameFor(JOB_NAMES.publishScheduledVideos),
     },
   },
 
@@ -1379,6 +1413,10 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // leaves a window open longer, which is always the safe direction, and the sweep reads
   // persisted state rather than a timer — so a worker down six hours locks six hours of
   // backlog on restart, all at correct amounts. NEVER pre-lock.
+  // EVERY MINUTE, like the dispute sweep beside it. A creator announces a publish time to an
+  // audience; missing it by up to an hour because the sweep runs hourly is a broken promise,
+  // and the sweep is a single indexed range scan that finds nothing almost every time.
+  [JOB_NAMES.publishScheduledVideosTick]: "* * * * *",
   [JOB_NAMES.sweepDisputeWindowsTick]: "* * * * *",
   // After the streak decay, so the nightly cap table is computed over a settled ledger.
   [JOB_NAMES.recomputeEquitySnapshotTick]: "45 3 * * *",
@@ -1728,6 +1766,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.analyzeSubstance]: VerificationStagePayloadSchema,
   [JOB_NAMES.analyzeTemporal]: VerificationStagePayloadSchema,
   [JOB_NAMES.finalizeVerdict]: VerificationStagePayloadSchema,
+  [JOB_NAMES.publishScheduledVideosTick]: TickPayloadSchema,
+  [JOB_NAMES.publishScheduledVideos]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.sweepDisputeWindowsTick]: TickPayloadSchema,
   [JOB_NAMES.sweepDisputeWindows]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.recomputeEquitySnapshotTick]: TickPayloadSchema,
@@ -1853,6 +1893,8 @@ export const idempotencyKeyFor = {
   analyzeTemporal: (runId: string): string => `${JOB_NAMES.analyzeTemporal}:${runId}`,
   finalizeVerdict: (runId: string, generation: number): string =>
     `${JOB_NAMES.finalizeVerdict}:${runId}:${generation}`,
+  publishScheduledVideos: (asOfIso: string): string =>
+    `${JOB_NAMES.publishScheduledVideos}:${asOfIso}`,
   sweepDisputeWindows: (asOfIso: string): string => `${JOB_NAMES.sweepDisputeWindows}:${asOfIso}`,
   recomputeEquitySnapshot: (asOfIso: string, projectId: string | null): string =>
     `${JOB_NAMES.recomputeEquitySnapshot}:${asOfIso}:${projectId ?? "all"}`,

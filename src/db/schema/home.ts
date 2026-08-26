@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { relations, sql } from "drizzle-orm";
+import { desc, relations, sql } from "drizzle-orm";
 import {
   pgTable,
   text,
@@ -327,6 +327,23 @@ export const videoComment = pgTable(
       .where(sql`parent_comment_id IS NULL`),
     // A comment's replies, oldest first.
     index("video_comment_parent_idx").on(table.parentCommentId, table.createdAt, table.id),
+    /**
+     * THE CREATOR INBOX INDEX — `GET /users/me/video-comments`.
+     *
+     * Same leading column as `video_comment_thread_idx` above and deliberately NOT partial. That
+     * one is `WHERE parent_comment_id IS NULL` because the public thread reads roots and replies
+     * separately; an inbox built on it would omit every reply, which is most of them. A creator
+     * shown a third of their comments and told it was all of them is worse served than one with
+     * no inbox at all.
+     *
+     * DESC on both sort columns to match the query's ORDER BY, and `id` as the tiebreak so the
+     * keyset cursor is total.
+     */
+    index("video_comment_video_recent_idx").on(
+      table.videoId,
+      desc(table.createdAt),
+      desc(table.id),
+    ),
     index("video_comment_authorUserId_idx").on(table.authorUserId, table.id),
     // Depth and parenthood are one fact stated twice, and they must agree.
     check(

@@ -15,6 +15,7 @@ import {
   CommentIdParamSchema,
   CreateCommentSchema,
   CreatorIdParamSchema,
+  ListCreatorInboxCommentsQuerySchema,
   ListNotInterestedVideosQuerySchema,
   ListVideoCommentsQuerySchema,
   RecordShareSchema,
@@ -662,6 +663,44 @@ export async function listMyMutedCreators(req: Request, res: Response): Promise<
  * gets an empty array; the only thing that can fail here is a cursor the client made up, and
  * that answers 422 rather than a silent first page.
  */
+/**
+ * GET /users/me/video-comments
+ *
+ * Every comment on the caller's own videos. Scoped through `video.creatorId` from the session —
+ * there is no creator id on the wire to tamper with.
+ */
+export async function listMyVideoComments(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = ListCreatorInboxCommentsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const listResult = await commentsService.listCreatorInboxComments({
+    creatorUserId: req.user.id,
+    limit: parsedQuery.data.limit,
+    cursor: parsedQuery.data.cursor ?? null,
+  });
+
+  if (!listResult.success) {
+    respondEngagementError(res, listResult.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Comments on your videos.",
+    data: listResult.value.rows,
+    nextCursor: listResult.value.nextCursor,
+  });
+}
+
 export async function listMyNotInterestedVideos(req: Request, res: Response): Promise<void> {
   if (!req.user) {
     respondUnauthenticated(res);
