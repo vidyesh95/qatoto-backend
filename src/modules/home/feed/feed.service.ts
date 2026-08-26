@@ -455,7 +455,17 @@ function creatorAffinityExpression(input: {
  * must return an eight-month-old video the viewer already watched and uploaded themselves,
  * because they typed its title.
  */
-function publicVideoPredicate(): SQL {
+/*
+ * EXPORTED FOR `channels.service.ts`, along with `feedSelectClause`, `toFeedVideoItem` and
+ * `FeedRow` below. A channel page is "one creator's public videos, newest first" — the same
+ * card, the same gate, the same viewer flags as this file already builds, and the only thing
+ * it does differently is the WHERE and the ORDER BY.
+ *
+ * COPYING THE PROJECTION WOULD HAVE BEEN THE BUG. Forty lines of select clause duplicated is
+ * two places for a card to start disagreeing with itself — and this file's own ⚠️ note is that
+ * getting the status literals wrong produces no error, just a sequential scan. One copy.
+ */
+export function publicVideoPredicate(): SQL {
   return sql`v.publish_status = 'published'
         AND v.visibility = 'public'
         AND v.upload_status = 'ready'
@@ -566,7 +576,7 @@ function candidatePoolPredicate(input: {
   return sql.join(conditions, sql` AND `);
 }
 
-type FeedRow = {
+export type FeedRow = {
   readonly video_id: string;
   readonly youtube_video_id: string | null;
   readonly title: string;
@@ -603,7 +613,7 @@ type FeedRow = {
 
 type TotalRow = { readonly total: number };
 
-function toFeedVideoItem(row: FeedRow): FeedVideoItem {
+export function toFeedVideoItem(row: FeedRow): FeedVideoItem {
   const slugs = row.category_slugs ?? [];
   const labels = row.category_labels ?? [];
   return {
@@ -656,7 +666,7 @@ function toFeedVideoItem(row: FeedRow): FeedVideoItem {
  * Selecting it unconditionally is a `relation "watched" does not exist` on every other
  * call, including search.
  */
-function feedSelectClause(viewerUserId: string | null, isWatchHistory = false): SQL {
+export function feedSelectClause(viewerUserId: string | null, isWatchHistory = false): SQL {
   const viewerFlag = (tableName: SQL, userColumn: SQL): SQL =>
     viewerUserId === null
       ? sql`false`

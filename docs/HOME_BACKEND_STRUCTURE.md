@@ -723,6 +723,8 @@ twenty-five requests.
 | `PUT` / `DELETE`   | `/comments/:commentId/like`       | required               | `commentLikeLimiter`   |
 | `PUT` / `DELETE`   | `/creators/:creatorId/subscribe`  | required               | `subscribeLimiter`     |
 | `GET`              | `/feed/watch/:videoId`            | optional               | `feedReadLimiter`      |
+| `GET`              | `/channels/:handle`               | optional               | `feedReadLimiter`      |
+| `GET`              | `/channels/:handle/videos`        | optional               | `feedReadLimiter`      |
 
 Comment create is wrapped in `src/middleware/idempotency.ts` — a double-tapped submit button must
 not post twice.
@@ -1021,6 +1023,63 @@ Migration `0137_library_reads` adds **two** indexes, not three: `video_like_user
 > **THE FRONTEND IS NOT WIRED YET.** `/library`'s "Not here yet" panel still names all three. That
 > is tracked in the frontend `todo.md`; the panel's claim is now false about the backend and true
 > about the page.
+
+### 5.2e The channel page — `src/modules/home/channels/`
+
+**THIS SHIPPED AS A BUG FIX, not a feature request**, and the bug is worth recording because it
+survived every review of the components that carried it.
+
+`VideoCard` renders a creator's avatar and name as **two separate links** to `/channel/{handle}`,
+and `venture-video-reel.tsx` linked the same creator to `/@{handle}`. **Neither route existed.**
+Every card in every feed — the home page, the watch page's recommended rail — carried two dead
+links, confirmed in a browser as Next's 404 page. The frontend's own library surface had to render
+subscribed creators as unclickable text to avoid joining them. Two URL shapes for one destination
+is the tell: nobody could have been right, because there was nothing to be right about.
+
+| Method | Path | Auth | Limiter |
+| --- | --- | --- | --- |
+| `GET` | `/channels/:handle` | optional | `feedReadLimiter` |
+| `GET` | `/channels/:handle/videos` | optional | `feedReadLimiter` |
+
+Migration `0138_channel_video_listing` adds one partial index,
+`video_creator_recent_idx (creator_id, published_at DESC, id DESC)`.
+
+> **`/channels`, NOT `/creators/:handle`.** `creatorRouter` already owns
+> `/creators/:creatorId/subscribe`, which takes an **id**; hanging a **handle** off the same prefix
+> would put two identifier types on one path and leave the next person to add a route there
+> guessing which. Both routes are two segments deep, which §5.2's ⚠️ banner requires — the studio
+> router mounts first and its `GET /:videoId` permanently shadows any public single-segment route,
+> producing a 401 that reads as an auth bug.
+>
+> **NOTHING HERE HAS ITS OWN VIDEO PROJECTION.** `feed.service.ts` exports `publicVideoPredicate`,
+> `feedSelectClause`, `toFeedVideoItem` and `FeedRow` for this module, so the rows are the feed's
+> own `FeedVideoItem` — which is why the frontend renders the grid with `toVideoCardProps` and
+> `VideoCard` unchanged. Copying forty lines of select clause would have been two places for a card
+> to start disagreeing with itself, on a file whose own note is that getting the status literals
+> wrong produces no error, just a sequential scan.
+>
+> **IT IS A CATALOGUE, NOT A FEED, and every difference is deliberate.** `listFeedVideos` excludes
+> what the viewer already watched, drops the viewer's own uploads, applies a recency window and
+> relaxes each in stages. All wrong here: a channel shows what the creator published, in publication
+> order, to everybody the same. It also applies **no `creator_mute` or `video_not_interested`
+> exclusion** — those suppress a creator from a RECOMMENDATION, and arriving at a channel page is
+> an explicit request for that creator. `GET /feed/search` makes the same call for the same reason.
+>
+> **ONE COUNTER ON THE HEADER, and the other two are refused.** `subscriberCount` is already public
+> on every watch payload. `publishedVideoCount` counts `publish_status = 'published'` REGARDLESS OF
+> VISIBILITY, so it would routinely exceed the grid beneath it and read as a bug — and explaining
+> the gap would mean explaining which videos are private. `totalViewCount` is a lifetime figure
+> including views of videos since made private or deleted, which is a fact about withdrawn content.
+>
+> **A CREATOR WITH NO HANDLE HAS NO CHANNEL PAGE**, and that is consistent rather than a gap:
+> `toVideoCardProps` already omits `channelHref` entirely for them rather than building
+> `/channel/null`. One 404 covers both "no such handle" and "unclaimed handle", so the status is
+> not an oracle for which handles exist.
+>
+> **THE INDEX PREDICATE IS BYTE-IDENTICAL TO `video_feed_candidate_idx`'s**, five terms where the
+> application gate has six — `moderation_visibility_state` filters above the index, exactly as it
+> already does for the feed. `EXPLAIN` confirms an `Index Scan using video_creator_recent_idx` with
+> that column as a `Filter`, and no Sort node.
 
 ### 5.3 `live` is not a mode
 

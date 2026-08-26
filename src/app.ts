@@ -15,6 +15,7 @@ import { requestLog } from "#src/middleware/request-log.js";
 import handlesRouter from "#src/modules/auth/handles/handles.routes.js";
 import authRouter from "#src/modules/auth/session/auth.routes.js";
 import usersRouter from "#src/modules/auth/users/users.routes.js";
+import channelsRouter from "#src/modules/home/channels/channels.routes.js";
 import engagementRouter, {
   commentRouter,
   creatorRouter,
@@ -291,6 +292,13 @@ app.use("/spotlight", spotlightRouter);
 // stack below, ordering here is NOT load-bearing: /feed is a single-segment prefix that no
 // other router shares, so nothing can swallow or be swallowed by it.
 app.use("/feed", feedRouter);
+// The channel page (§5.2e) — `GET /channels/:handle` and `/channels/:handle/videos`.
+//
+// ITS OWN PREFIX, and that is the decision. The obvious home was `creatorRouter`, which is
+// root-mounted and already owns `/creators/:creatorId/subscribe` — but that route takes an ID
+// and these take a HANDLE, and two identifier types on one prefix is a trap for whoever adds
+// the third route. `/channels` collides with nothing here, so ordering is not load-bearing.
+app.use("/channels", channelsRouter);
 app.use("/research-projects", researchProjectsRouter);
 // Same prefix, declared AFTER: the workshop router owns /:projectSlug/workshop/* and
 // /:projectSlug/daily-logs/* (§8). No collision — researchProjectsRouter's "/:projectSlug"
