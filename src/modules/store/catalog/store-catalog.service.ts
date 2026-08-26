@@ -18,6 +18,10 @@ import {
   type ProductEngagementProjection,
 } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
 import {
+  loadProductVentureProvenance,
+  type ProductVentureProvenanceProjection,
+} from "#src/modules/store/catalog/commerce-product-venture.service.js";
+import {
   tradingOrganizationCountryCode,
   withTradingOrganizationCountryCode,
 } from "#src/modules/store/commerce-organization-country.js";
@@ -231,6 +235,19 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
    * incomplete picture and putting a button in front of a wall.
    */
   readonly contactAffordance: ProductContactAffordance;
+  /**
+   * The venture that built this listing, or `null` — the read side of
+   * `product.researchProjectId` (§11i, Appendix B4).
+   *
+   * DETAIL-ONLY, DELIBERATELY. This is not on `StoreProductCardProjection`: the card shape feeds
+   * every list and search endpoint, and a per-card venture join would be N joins on a grid to
+   * render a line nobody reads at that size. It is also why the raw FK stays out of
+   * `productSelectFields` — a card payload has no use for it.
+   *
+   * `null` is the common case AND covers a non-`active` venture. See
+   * `commerce-product-venture.service.ts` for what the shape deliberately omits.
+   */
+  readonly builtInTheOpen: ProductVentureProvenanceProjection | null;
 }
 
 export interface StoreCategoryFacetBucket {
@@ -1117,6 +1134,10 @@ export async function getPublicProductBySlug(
       packageHeightMm: product.packageHeightMm,
       packageGrossWeightGrams: product.packageGrossWeightGrams,
       unitsPerPackage: product.unitsPerPackage,
+      // Selected to DRIVE THE JOIN BELOW AND THEN DROPPED — it is never on the returned
+      // projection. Same discipline as `suppliers.service.ts:576`: R&D's internal id is not a
+      // buyer's business, and the venture block carries `projectSlug` instead.
+      researchProjectId: product.researchProjectId,
     })
     .from(product)
     .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
@@ -1141,6 +1162,7 @@ export async function getPublicProductBySlug(
     organizationFulfillmentMetrics,
     variantAggregates,
     productEngagements,
+    builtInTheOpen,
   ] = await Promise.all([
     db
       .select({
@@ -1234,6 +1256,9 @@ export async function getPublicProductBySlug(
     loadOrganizationFulfillmentMetrics([row.organizationId]),
     loadVariantAggregates([row.id]),
     loadProductEngagements([row.id], viewerUserId),
+    // Rides in the existing fan-out rather than adding a serial hop. Returns `null` without
+    // querying when the listing has no venture, which is most of them.
+    loadProductVentureProvenance(row.researchProjectId),
   ]);
 
   const sharedImages = allImages.filter((media) => media.variantId === null).map(toMediaProjection);
@@ -1323,6 +1348,7 @@ export async function getPublicProductBySlug(
         viewerMemberRole: viewer.memberRole,
         sellerOrganizationId: row.organizationId,
       }),
+      builtInTheOpen,
     },
   };
 }

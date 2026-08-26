@@ -4695,3 +4695,66 @@ its media check needs, and reports the outbox's `last_error` verbatim if the pay
 `smoke-store-phase-14` passes 34/34 — its eight failures were the missing
 `SMOKE14_ESCROW_WEBHOOK_SECRET` in the server's environment, which that file's own header documents,
 and not this defect.
+
+---
+
+### A42. The R&D → Store link existed and reached no wire — **SHIPPED (Phase 25, no migration)**
+
+**Needed by:** `components/home/store/product-detail.tsx` — the buyer's answer to "who built this,
+and what is the record?" (frontend `todo.md` §19).
+
+**What was wrong.** `product.researchProjectId` has been a real, nullable, `restrict` FK since the
+go-to-market handoff landed (§11i, migration `0020`), and it is indexed
+(`product_researchProjectId_idx`). It was serialized **nowhere**. It is not in
+`productSelectFields`, not in the detail select, and in no OpenAPI doc. Its only two readers were
+internal: a `count(*)` in `launch-readiness.service.ts` driving the `store_listing_exists`
+checklist item, and `suppliers.service.ts`, which selects it to group the launch-ready rail's
+products by project and then **strips it** before returning.
+
+So the one direction that shipped — project → its listings, on `GET /launch-ready-projects` — was
+R&D-facing. The reverse, listing → the venture that built it, did not exist at any layer. The
+column the whole handoff was built around went unread by every buyer surface.
+
+**What exists now.** `loadProductVentureProvenance` in
+`store/catalog/commerce-product-venture.service.ts`, joined into `getPublicProductBySlug`'s
+existing child-read fan-out and returned as `builtInTheOpen` on the detail projection. `null` when
+the listing has no venture, which costs no query.
+
+**The id never leaves, and that is not a stylistic choice.** Every R&D read surface — route,
+service view, and the frontend's Zod schema — is addressed by SLUG and exposes no `id`.
+`ResearchProjectListRow` and `ResearchProjectDetailView` both begin at `slug`, and there is no
+by-id project route anywhere. A client holding a raw `researchProjectId` therefore could not call
+R&D with it even if it wanted to. Joining server-side sidesteps the whole problem: the projection
+carries `projectSlug`, and the FK is selected only to drive the join, then dropped — the same
+discipline `suppliers.service.ts` already follows.
+
+**`status = 'active'` is a disclosure boundary, not a tidiness filter.** `findResearchProjectBySlug`
+404s a `draft` project for non-members; an `archived` one was withdrawn from public view. Without
+that predicate the product page becomes a side channel naming an unpublished venture to anonymous
+buyers. A non-active venture yields `null` and the product renders without the block.
+
+**What the buyer projection deliberately does not carry.** This is the public read, not the member
+read — `ResearchProjectDetailView` fires nine member-scoped child reads a buyer gets none of. Out:
+`allocatedEquityBasisPoints` (public on `/launch-ready-projects`, which is a contributor-facing R&D
+surface; beside a price it reads as a claim about the transaction), `pendingApplicationCount`
+(`project_stats` marks it founder-facing), milestones (`listProjectMilestones` is member-scoped and
+`milestone` rows carry `plannedPayoutInCents`; there is also no product→milestone link to hang "the
+milestone that shipped it" on), and anything `investor_only`. In: slug, name, tagline, cover, stage,
+`verifiedEffortMinutesTotal`, `teamMemberCount`, `statsComputedAt`.
+
+**`project_stats` is LEFT-joined, and that differs from the launch-ready rail on purpose.**
+`listLaunchReadyProjects` inner-joins it, which is right there: a project missing its cache merely
+drops off a list of many. Here the venture is the only one there is, so an inner join would make the
+whole block VANISH — telling a buyer that nothing built this listing because a counter cache is
+absent. That is not hypothetical: 15 of the 41 active projects have no `project_stats` row. A
+missing cache therefore costs the COUNTS, not the credit, and `teamMemberCount` is nullable to the
+wire even though its column is `notNull`.
+
+**Both stats stay nullable to the wire.** They are NULL until §9's jobs have run. Coercing either to
+`0` would assert "this venture has no verified effort" about a venture that is shipping — the same
+rule the R&D rail states on its side. `statsComputedAt` rides along so the client renders an "as of"
+and never implies a live number.
+
+**A READ crossing only.** The boundary comment on the column forbids a WRITE crossing — "a research
+route that proxied a product create" — and says nothing against reads. The reverse direction already
+existed: `launch-readiness.service.ts`, an R&D module, reads the `product` table.
