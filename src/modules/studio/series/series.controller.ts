@@ -12,6 +12,7 @@ import {
 import * as seriesService from "#src/modules/studio/series/series.service.js";
 import {
   firstParam,
+  respondFieldRefusal,
   respondStudioError,
   respondUnauthenticated,
   respondValidationFailed,
@@ -53,6 +54,50 @@ export async function createSeries(req: Request, res: Response): Promise<void> {
     return;
   }
   respondSeries(res, 201, "Series created successfully", createResult.value);
+}
+
+/**
+ * POST /series/:seriesId/poster — multipart `image`.
+ *
+ * Mirrors `videos.controller.ts`'s `uploadThumbnail` down to the refusal copy: naming the
+ * multipart field is the difference between a request a client can fix and a guess.
+ */
+export async function uploadPoster(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+  if (!req.file) {
+    respondFieldRefusal(res, "image", "An image file is required (multipart field 'image').");
+    return;
+  }
+  const replaceResult = await seriesService.replaceSeriesPoster(
+    req.user.id,
+    firstParam(req.params.seriesId ?? ""),
+    req.file.buffer,
+  );
+  if (!replaceResult.success) {
+    respondStudioError(res, replaceResult.error);
+    return;
+  }
+  respondSeries(res, 200, "Poster updated successfully", replaceResult.value);
+}
+
+/** DELETE /series/:seriesId/poster */
+export async function deletePoster(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+  const removeResult = await seriesService.removeSeriesPoster(
+    req.user.id,
+    firstParam(req.params.seriesId ?? ""),
+  );
+  if (!removeResult.success) {
+    respondStudioError(res, removeResult.error);
+    return;
+  }
+  respondSeries(res, 200, "Poster removed successfully", removeResult.value);
 }
 
 /** GET /series/mine */

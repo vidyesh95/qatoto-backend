@@ -719,6 +719,94 @@ export async function deleteVideoThumbnail(
   }
 }
 
+const SERIES_POSTER_FOLDER = "qatoto/series-posters";
+
+/** The stable, deterministic public id for a series poster. */
+export function seriesPosterPublicId(seriesId: string): string {
+  return `${SERIES_POSTER_FOLDER}/${seriesId}/poster`;
+}
+
+/**
+ * Upload a series poster from an already-validated/re-encoded buffer. Same contract as
+ * `uploadVideoThumbnail` directly above — the caller normalizes, this layer trusts.
+ *
+ * ITS OWN FOLDER AND ITS OWN FUNCTION rather than a shared image uploader, which is the
+ * convention every asset in this file follows: one entity, one deterministic public id, one
+ * pair of calls. A poster is also PORTRAIT where a thumbnail is landscape, so the two would
+ * disagree about output dimensions the moment either changed.
+ */
+export async function uploadSeriesPoster(
+  seriesId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: seriesPosterPublicId(seriesId),
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Delete a series poster. Already-gone counts as success — the desired end state is reached
+ * either way, and a creator removing a poster twice must not see an error.
+ */
+export async function deleteSeriesPoster(
+  seriesId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
+      seriesPosterPublicId(seriesId),
+      { invalidate: true },
+    );
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
+
 /**
  * §9 physical-work receipts. UNLIKE every other asset in this file, a receipt is
  * CONTENT-ADDRESSED rather than entity-addressed: its public id is derived from the

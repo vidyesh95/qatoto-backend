@@ -8,6 +8,7 @@ import {
   researchProject,
   user,
   video,
+  videoAttachedProduct,
   videoCategory,
   videoChapter,
   videoLike,
@@ -19,7 +20,15 @@ import {
   listOpenRolesByIds,
   type OpenRoleView,
 } from "#src/modules/rnd/projects/project-roles.service.js";
+import {
+  resolveEligibleProductCardsByIds,
+  type StoreProductCardProjection,
+} from "#src/modules/store/catalog/store-catalog.service.js";
 import { PUBLICLY_SERVABLE } from "#src/modules/studio/public-video-gate.js";
+import {
+  loadPublicSeasonsForVideo,
+  type PublicSeasonSummary,
+} from "#src/modules/studio/series/public-series.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -119,6 +128,38 @@ export interface WatchPayload {
     readonly roleDescription: string | null;
     readonly linkedRole: OpenRoleView | null;
   }[];
+  /**
+   * THE SERIES THIS EPISODE BELONGS TO, or `null` when the video is not an anime episode.
+   *
+   * `null` AND `[]` ARE BOTH REACHABLE AND MEAN DIFFERENT THINGS. Null is "not part of a
+   * series" — every pitch, demo and unaffiliated video. An empty array is a series none of
+   * whose episodes are public yet. The client hides the picker for the first and renders an
+   * empty catalogue for the second, so a single sentinel would lose a real distinction.
+   *
+   * Only publicly-servable episodes appear, so episode numbers can have gaps. See
+   * `loadPublicSeasonsForVideo` for why that visible consequence is the intended one.
+   */
+  readonly seasons: readonly PublicSeasonSummary[] | null;
+  /**
+   * THE SHOPPABLE PRODUCTS UNDER THE PLAYER. Written by `PUT /videos/:videoId/products`, which
+   * re-verifies the creator owns each product; this is the read half, which had never existed —
+   * the note at the bottom of this file called it a follow-up and this is it.
+   *
+   * `[]` RATHER THAN `null`, unlike `seasons` directly above, and the asymmetry is deliberate.
+   * Every video CAN carry attached products, so "none" is an empty list rather than an absent
+   * capability; there is no second state for a sentinel to distinguish.
+   *
+   * EACH ENTRY IS RE-CHECKED FOR PUBLIC ELIGIBILITY AT READ TIME, not trusted from the join
+   * row. A creator can attach a product and the seller can then unpublish it, delist the
+   * organization or have the listing moderated down — none of which touches
+   * `video_attached_product`. `resolveEligibleProductCardsByIds` drops those ids, so the list
+   * gets shorter rather than growing a dead card. The join row survives, so re-publishing the
+   * product brings the card straight back.
+   */
+  readonly attachedProducts: readonly {
+    readonly product: StoreProductCardProjection;
+    readonly pinnedAtSeconds: number | null;
+  }[];
 }
 
 export async function getWatchPayload(
@@ -201,9 +242,14 @@ export async function getWatchPayload(
     return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
   }
 
-  // Two small ordered reads rather than json aggregation in the main query: both are
-  // index scans on `video_id`, and keeping them separate keeps the row above flat.
-  const [categories, chapters, openRoleRows] = await Promise.all([
+  // Small ordered reads rather than json aggregation in the main query: each is an index scan
+  // on `video_id`, and keeping them separate keeps the row above flat.
+  //
+  // `loadPublicSeasonsForVideo` RIDES IN THE SAME `Promise.all`, not after it. It is two
+  // queries of its own and depends on nothing the others return, so awaiting it separately
+  // would add its full latency to a route that already refuses a second round trip on
+  // principle.
+  const [categories, chapters, openRoleRows, attachedProductRows, seasons] = await Promise.all([
     db
       .select({ slug: contentCategory.slug, label: contentCategory.label })
       .from(videoCategory)
@@ -224,6 +270,17 @@ export async function getWatchPayload(
       .from(videoOpenRole)
       .where(eq(videoOpenRole.videoId, videoId))
       .orderBy(asc(videoOpenRole.position)),
+    db
+      .select({
+        productId: videoAttachedProduct.productId,
+        pinnedAtSeconds: videoAttachedProduct.pinnedAtSeconds,
+      })
+      .from(videoAttachedProduct)
+      .where(eq(videoAttachedProduct.videoId, videoId))
+      // The creator's order, which is what `PUT /videos/:videoId/products` stored. No
+      // server-side re-sort: rearranging somebody's carousel is a change they did not ask for.
+      .orderBy(asc(videoAttachedProduct.position)),
+    loadPublicSeasonsForVideo(videoId),
   ]);
 
   // Resolved in ONE query rather than per blurb. Every id here was scoped to this video's own
@@ -234,6 +291,20 @@ export async function getWatchPayload(
       .filter((openRoleId): openRoleId is string => openRoleId !== null),
   );
   const linkedRolesById = new Map(linkedRoles.map((linkedRole) => [linkedRole.id, linkedRole]));
+
+  // ONE batch read for the whole carousel, and it applies the store's own eligibility rule
+  // rather than a copy of it — `publicProductEligibility` covers active, approved, slugged, the
+  // organization trading and public, and the category active. Ineligible ids are dropped and
+  // the caller's order is preserved, which is exactly the contract this helper exists to give.
+  const productCards = await resolveEligibleProductCardsByIds(
+    attachedProductRows.map((attachedProductRow) => attachedProductRow.productId),
+  );
+  const pinnedSecondsByProductId = new Map(
+    attachedProductRows.map((attachedProductRow) => [
+      attachedProductRow.productId,
+      attachedProductRow.pinnedAtSeconds,
+    ]),
+  );
 
   return {
     success: true,
@@ -297,6 +368,15 @@ export async function getWatchPayload(
               projectName: row.ventureName,
               stage: row.ventureStage,
             },
+      seasons,
+      // Mapped from the CARDS, not from the join rows, so the two lists cannot disagree about
+      // what survived the eligibility filter. `?? null` covers a product whose card came back
+      // without a matching join row, which the ordered resolve makes impossible today and which
+      // would otherwise be an unpinned card rather than a crash.
+      attachedProducts: productCards.map((productCard) => ({
+        product: productCard,
+        pinnedAtSeconds: pinnedSecondsByProductId.get(productCard.id) ?? null,
+      })),
     },
   };
 }
@@ -313,6 +393,12 @@ export async function getWatchPayload(
  *      concept exists in the schema (`talent_profile_skill.is_verified` is a skill
  *      badge on a different subsystem). Omitted rather than hard-coded, because a
  *      constant `false` on a trust signal is a claim we cannot support.
- *   `products` — the studio owns `PUT /videos/:videoId/products`; surfacing them here
- *      is a follow-up, and saying so beats a silently missing key.
+ *   `isPremium` on an episode — the column exists on `anime_episode`; no entitlement model,
+ *      tier or paywall does. A lock icon over an episode that plays for free is a claim this
+ *      backend cannot support. `loadPublicSeasonsForVideo` records the same rule.
+ *   `transcript`, `isPremium` on the video, product reviews, trending search terms — each
+ *      needs a table, a job or a model that does not exist, not a projection.
+ *
+ * `products` LEFT THIS LIST. It was recorded here as a follow-up and is now `attachedProducts`
+ * above, read through the store's own eligibility helper.
  */

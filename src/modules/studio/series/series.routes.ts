@@ -1,8 +1,10 @@
 import express from "express";
 
 import { longFormBody } from "#src/middleware/json-body.js";
+import { seriesPosterUploadLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import * as seriesController from "#src/modules/studio/series/series.controller.js";
+import { uploadSeriesPoster } from "#src/modules/studio/series/upload-series-poster.js";
 
 const router = express.Router();
 
@@ -37,6 +39,37 @@ router.patch("/:seriesId", requireAuth, longFormBody, seriesController.updateSer
 
 /** DELETE /series/:seriesId — cascades to seasons and episodes; videos survive. */
 router.delete("/:seriesId", requireAuth, seriesController.deleteSeries);
+
+/**
+ * POST /series/:seriesId/poster — multipart `image`, replaces the poster.
+ * DELETE /series/:seriesId/poster — takes it down.
+ *
+ * DECLARED BEFORE THE NESTED SEASON ROUTES for readability only, not for correctness — the
+ * literal `poster` segment cannot collide with `:seasonId`, because those paths are one
+ * segment deeper. The pair ships together: an asset a creator can put on a public catalogue
+ * page and cannot remove is the wrong half of a feature to ship alone, and `PATCH` cannot
+ * clear the column (`posterUrl` is `HttpUrlSchema`, so there is no null to send).
+ *
+ * The multer middleware runs INSIDE the route so the global express.json() never sees a
+ * multipart body — the same arrangement as POST /videos/:videoId/thumbnail.
+ *
+ * BOTH CARRY `seriesPosterUploadLimiter`. `rate-limit-coverage.test.ts` catches a mutating
+ * route that has neither a limiter nor an entry on its known-debt list, and it caught these
+ * two — correctly, because each is a Cloudinary round-trip behind a 5 MB decode.
+ */
+router.post(
+  "/:seriesId/poster",
+  requireAuth,
+  seriesPosterUploadLimiter,
+  uploadSeriesPoster,
+  seriesController.uploadPoster,
+);
+router.delete(
+  "/:seriesId/poster",
+  requireAuth,
+  seriesPosterUploadLimiter,
+  seriesController.deletePoster,
+);
 
 /** POST /series/:seriesId/seasons */
 router.post("/:seriesId/seasons", requireAuth, longFormBody, seriesController.createSeason);

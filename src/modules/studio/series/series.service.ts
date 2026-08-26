@@ -2,6 +2,12 @@ import { and, asc, count, countDistinct, desc, eq } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { animeEpisode, animeSeason, animeSeries } from "#src/db/schema.js";
+import {
+  deleteSeriesPoster as deleteSeriesPosterAsset,
+  uploadSeriesPoster as uploadSeriesPosterAsset,
+  type CloudinaryError,
+} from "#src/lib/cloudinary.js";
+import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import type {
   CreateEpisodeInput,
@@ -41,7 +47,13 @@ export type AnimeSeriesError =
   // Same literal AND same payload as the videos service's variant, so the two collapse
   // into one arm in the mapper. Deliberate: a duplicate episode number means the same
   // thing and must render identically whichever route produced it.
-  | { type: "EPISODE_NUMBER_TAKEN"; episodeNumber: number };
+  | { type: "EPISODE_NUMBER_TAKEN"; episodeNumber: number }
+  // The poster upload's two failure families, and they collapse into `VideoError`'s copies
+  // for the same reason `EPISODE_NUMBER_TAKEN` does — an unreadable image and a storage
+  // outage mean one thing whichever studio surface produced them, and the mapper already
+  // renders both. Adding them here needed no new case in `studio-error-response.ts`.
+  | ImageValidationError
+  | CloudinaryError;
 
 type SeriesRow = typeof animeSeries.$inferSelect;
 
@@ -293,6 +305,100 @@ export async function deleteSeries(
   if (deleted.length === 0)
     return { success: false, error: { type: "SERIES_NOT_FOUND", seriesId } };
   return { success: true, value: { deleted: true } };
+}
+
+/**
+ * The poster's longest edge after re-encode. ITS OWN CONSTANT, not the thumbnail's 1280.
+ *
+ * A poster is PORTRAIT and is rendered as a catalogue tile; a thumbnail is landscape behind a
+ * player. Sharing one number would mean the next person tuning either silently changes the
+ * other, and the two have no reason to move together.
+ */
+const SERIES_POSTER_OUTPUT_MAX_DIMENSION_PX = 1080;
+
+/**
+ * `POST /series/:seriesId/poster` — replaces the poster from an uploaded image.
+ *
+ * WHY THIS ROUTE HAD TO EXIST. `anime_series.poster_url` has been a plain column since the
+ * catalog shipped and NOTHING could set it to an asset this platform owns. `PATCH /series/:id`
+ * accepts a `posterUrl` string, which means the only way to have a poster was to host it
+ * somewhere else and paste a link — a third-party URL on a public catalogue page, which can be
+ * swapped or deleted by someone who does not work here. The studio's poster picker was a
+ * labelled layout study for exactly this reason.
+ *
+ * THE PATCH PATH STAYS. It is not removed here, and that is deliberate rather than an
+ * oversight: an existing series may already carry a pasted URL, and taking the field away
+ * would strand it with no way to change it. The two are reconciled by `removeSeriesPoster`
+ * below, which clears the column whatever wrote it.
+ *
+ * NORMALIZED BEFORE IT IS STORED, exactly as `replaceVideoThumbnail` does it. The storage
+ * layer's docblock says it trusts its buffer, so the check has to be here: `sharp` re-encodes
+ * to avif, which is also what strips a polyglot file's non-image tail.
+ */
+export async function replaceSeriesPoster(
+  ownerId: string,
+  seriesId: string,
+  rawImageBytes: Buffer,
+): Promise<Result<PublicSeries, AnimeSeriesError>> {
+  const existing = await loadOwnedSeries(ownerId, seriesId);
+  if (!existing) return { success: false, error: { type: "SERIES_NOT_FOUND", seriesId } };
+
+  const normalized = await validateAndNormalizeImage(rawImageBytes, {
+    outputMaxDimensionPx: SERIES_POSTER_OUTPUT_MAX_DIMENSION_PX,
+    outputFormat: "avif",
+  });
+  if (!normalized.success) return { success: false, error: normalized.error };
+
+  const uploaded = await uploadSeriesPosterAsset(seriesId, normalized.value.buffer);
+  if (!uploaded.success) return { success: false, error: uploaded.error };
+
+  await db
+    .update(animeSeries)
+    .set({ posterUrl: uploaded.value.secureUrl })
+    .where(ownedSeriesPredicate(ownerId, seriesId));
+
+  const updated = await loadOwnedSeries(ownerId, seriesId);
+  if (!updated) return { success: false, error: { type: "SERIES_NOT_FOUND", seriesId } };
+  return { success: true, value: updated };
+}
+
+/**
+ * `DELETE /series/:seriesId/poster` — takes the poster down.
+ *
+ * IT SHIPS WITH THE UPLOAD, NOT AFTER IT. An asset a creator can put on a public catalogue
+ * page and cannot remove is the wrong half of a feature to ship alone, and `PATCH` cannot do
+ * it — `posterUrl` is `HttpUrlSchema`, so there is no null to send.
+ *
+ * THE COLUMN IS CLEARED EVEN WHEN THE STORAGE CALL FAILS, and the order below is the reason:
+ * the row is what the catalogue renders, and the bytes are a copy. Refusing to clear the
+ * column because Cloudinary is unreachable would leave the poster visible for exactly as long
+ * as the outage lasts, which is the opposite of what "take it down" means. A failed destroy
+ * therefore leaves an orphaned asset nothing references — a cleanup problem, where the
+ * alternative is a takedown that did not take.
+ */
+export async function removeSeriesPoster(
+  ownerId: string,
+  seriesId: string,
+): Promise<Result<PublicSeries, AnimeSeriesError>> {
+  const cleared = await db
+    .update(animeSeries)
+    .set({ posterUrl: null })
+    .where(ownedSeriesPredicate(ownerId, seriesId))
+    .returning({ id: animeSeries.id });
+
+  if (cleared.length === 0) {
+    return { success: false, error: { type: "SERIES_NOT_FOUND", seriesId } };
+  }
+
+  // Ignored on purpose, and it is the only ignored Result in this file. `deleteSeriesPoster`
+  // already treats an absent asset as success, so the remaining failures are transport ones —
+  // and by the time control reaches here the poster is gone from the catalogue, which is what
+  // the caller asked for. Returning a 502 would report a failure for a takedown that worked.
+  await deleteSeriesPosterAsset(seriesId);
+
+  const updated = await loadOwnedSeries(ownerId, seriesId);
+  if (!updated) return { success: false, error: { type: "SERIES_NOT_FOUND", seriesId } };
+  return { success: true, value: updated };
 }
 
 export async function createSeason(

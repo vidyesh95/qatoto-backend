@@ -145,6 +145,18 @@ export interface StoreSearchHit {
   readonly providerVerificationState: StoreSearchVerificationState | null;
   readonly leadTimeMaxDays: number | null;
   readonly relevanceScore: number | null;
+  /**
+   * WHEN THIS DOCUMENT LAST CHANGED, and it is a real content clock rather than a refresh
+   * timestamp. `refresh-store-search-document` is enqueued after a product, offering or
+   * organization MUTATION and re-reads the authoritative row; there is no nightly sweep that
+   * would move every document's stamp daily. Both upsert branches set it explicitly.
+   *
+   * IT EXISTS FOR THE FRONTEND'S `sitemap.ts`, which states in its own header that nothing
+   * there may call `new Date()` — a manufactured `lastModified` is a lie a crawler believes.
+   * Before this field NO store list projection carried a timestamp at all, so a sitemap of 128
+   * entries could date 6 of them and every product page looked equally stale to a crawler.
+   */
+  readonly updatedAt: Date;
 }
 
 export type StoreSearchError = { type: "INVALID_CURSOR" };
@@ -397,6 +409,7 @@ async function searchByDiscoveryRank(context: StoreSearchPageContext): Promise<
       condition: storeSearchDocument.condition,
       providerVerificationState: storeSearchDocument.providerVerificationState,
       leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
+      updatedAt: storeSearchDocument.updatedAt,
       discoveryScorePoints: storeSearchDocument.discoveryScorePoints,
     })
     .from(storeSearchDocument)
@@ -439,6 +452,7 @@ async function searchByDiscoveryRank(context: StoreSearchPageContext): Promise<
         condition: row.condition,
         providerVerificationState: row.providerVerificationState,
         leadTimeMaxDays: row.leadTimeMaxDays,
+        updatedAt: row.updatedAt,
         // NULL, not the discovery score. `relevanceScore` means "how well did this match
         // the words you typed", and this sort did not ask that question.
         relevanceScore: null,
@@ -505,6 +519,7 @@ async function searchByTitle(context: StoreSearchPageContext): Promise<
       condition: storeSearchDocument.condition,
       providerVerificationState: storeSearchDocument.providerVerificationState,
       leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
+      updatedAt: storeSearchDocument.updatedAt,
       id: storeSearchDocument.id,
     })
     .from(storeSearchDocument)
@@ -544,6 +559,7 @@ async function searchByTitle(context: StoreSearchPageContext): Promise<
         condition: row.condition,
         providerVerificationState: row.providerVerificationState,
         leadTimeMaxDays: row.leadTimeMaxDays,
+        updatedAt: row.updatedAt,
         relevanceScore: null,
       })),
       page: { nextCursor, hasMore: nextCursor !== null },
@@ -613,6 +629,7 @@ async function searchByRelevance(context: StoreSearchPageContext): Promise<
       condition: storeSearchDocument.condition,
       providerVerificationState: storeSearchDocument.providerVerificationState,
       leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
+      updatedAt: storeSearchDocument.updatedAt,
       id: storeSearchDocument.id,
       relevanceScore: sql<number>`${rankExpression}`.mapWith(Number),
     })
@@ -656,6 +673,7 @@ async function searchByRelevance(context: StoreSearchPageContext): Promise<
         condition: row.condition,
         providerVerificationState: row.providerVerificationState,
         leadTimeMaxDays: row.leadTimeMaxDays,
+        updatedAt: row.updatedAt,
         relevanceScore: row.relevanceScore,
       })),
       page: { nextCursor, hasMore: nextCursor !== null },
