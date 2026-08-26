@@ -776,6 +776,21 @@ commerce object.
 filters `priceMinInCents`, `priceMaxInCents`, `stockState`, `samplePolicy`, `condition`,
 `verificationState` and `leadTimeMaxDays` (A25). `/store/categories/:slug` carries `ancestors[]`.
 
+> **EVERY HIT CARRIES `updatedAt`, and it exists for one consumer: the frontend's `sitemap.ts`.**
+> No store list projection carried a timestamp before it, so a sitemap of 128 entries could date 6
+> of them and every product page looked equally stale to a crawler.
+>
+> **IT IS A CONTENT CLOCK, NOT A REFRESH STAMP**, which is what makes handing it to a crawler
+> honest. `refresh-store-search-document` is enqueued after a product, offering or organization
+> MUTATION and re-reads the authoritative row; there is no nightly sweep that would move every
+> document's date at once. Both upsert branches set it explicitly.
+>
+> The frontend emits it on `/store/product/:slug` and `/store/services/:slug` only. Storefront
+> entries stay undated deliberately: their slugs are DERIVED from the hits, so the only available
+> date is the newest of a storefront's listings — and a storefront changes for reasons no listing
+> records. `sitemap.ts`'s own header refuses a manufactured `lastModified`, and dating by proxy is
+> that, arrived at more slowly.
+
 Reads that admit an optional session project a `viewer` member when one resolves and `null`
 otherwise — never a defaulted `false` (A11, A24). Public product detail carries
 `customizationOptions[]` (A23) and `leadTimeDays` on each pricing tier (A27).

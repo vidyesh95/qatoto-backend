@@ -966,6 +966,28 @@ order). All `requireAuth`, owner-scoped, `404` on non-owner.
 with nested `POST /series/:id/seasons` and `POST /seasons/:id/episodes`. Owner-scoped. (Episodes are
 normally created via the upload flow; these exist for catalog management at `/studio/series`.)
 
+**`POST` / `DELETE /series/:seriesId/poster`** — multipart `image`, `seriesPosterUploadLimiter`.
+
+> **WHY IT WAS ADDED.** `anime_series.poster_url` had been a plain column since the catalog shipped
+> with NO route that could set it to an asset this platform owns. `PATCH /series/:id` accepts a
+> `posterUrl` string, so the only way to have a poster was to host it elsewhere and paste a link —
+> a third-party URL on a public catalogue page, swappable or deletable by someone who does not work
+> here. The studio's poster picker was a labelled layout study for exactly that reason.
+>
+> The whole pipeline is the thumbnail's: `createSingleFileUpload` (5 MB, `image/*`) →
+> `validateAndNormalizeImage` (sharp, avif, re-encode is what strips a polyglot's tail) →
+> `uploadSeriesPoster`. The one number that is NOT shared is the output dimension: a poster is
+> portrait at 1080, a thumbnail landscape at 1280, and they have no reason to move together.
+>
+> **THE PATCH PATH STAYS.** Removing `posterUrl` from `UpdateSeriesSchema` would strand every
+> series already carrying a pasted URL with no way to change it.
+>
+> **THE DELETE SHIPS WITH THE UPLOAD, and `PATCH` cannot substitute** — `posterUrl` is
+> `HttpUrlSchema`, so there is no null to send. It clears the column **even when the Cloudinary
+> destroy fails**: the row is what the catalogue renders and the bytes are a copy, so refusing to
+> clear it during an outage would leave the poster visible for exactly as long as the outage lasts.
+> An orphaned asset is a cleanup problem; a takedown that did not take is not.
+
 ### No webhook endpoint
 
 The old `POST /webhooks/livepeer` route is **deleted from the active spec** — there is no

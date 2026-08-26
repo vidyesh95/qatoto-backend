@@ -743,6 +743,40 @@ not post twice.
 `GET /feed/watch/:videoId` is the public watch payload. It replaces the frontend's legacy
 `src/lib/videos.ts` / `QATOTO_VIDEO_API_URL` path entirely (frontend §8).
 
+> **TWO FIELDS LANDED AFTER §14: `seasons` AND `attachedProducts`.** Both close the same shape of
+> gap — data this platform already held, reachable through no public read.
+>
+> **`seasons` — the anime catalogue, and it needed a NEW public read.** All eleven `/series` routes
+> are `requireAuth` and owner-scoped, correctly: `getSeries` returns unreleased episode titles,
+> premiere dates and the production schedule. So a viewer on a watch page had no way to learn the
+> episode belonged to a series at all, which is why the frontend's season picker was a hardcoded
+> placeholder. `loadPublicSeasonsForVideo` is that read, and it is deliberately NOT a route: this
+> payload is assembled in one round trip, and the watch page does not learn the series id until the
+> first read returns — a `GET /series/:seriesId` would leave the picker permanently one request
+> behind its own player.
+>
+> **`null` and `[]` both mean something.** Null is "not part of a series" — every pitch, demo and
+> unaffiliated video. `[]` is a series none of whose episodes are public yet. The client hides the
+> picker for one and renders an empty catalogue for the other.
+>
+> **ONLY PUBLICLY-SERVABLE EPISODES ARE LISTED, and the visible consequence is intended.** An
+> episode in review, hidden by a moderator, or with no video yet is omitted entirely — not greyed,
+> not titled-without-a-link. Titles are content, and a season picker naming next week's episode is
+> an oracle over an unreleased catalogue, which is precisely what this route's 404-covers-everything
+> gate exists to prevent. So episode numbers can have gaps. `isPremium` is NOT projected either:
+> the column exists, no entitlement model does, and a lock over an episode that plays for free is a
+> claim this backend cannot support.
+>
+> **`attachedProducts` — the read half of a write that already shipped.** `PUT /videos/:videoId/products`
+> has written `video_attached_product` with ownership re-verified since the studio landed, and the
+> old "deliberately absent" note at the foot of `video-watch.service.ts` recorded surfacing it as a
+> follow-up. Each entry is **re-checked for public eligibility at read time** through the store's own
+> `resolveEligibleProductCardsByIds`, not trusted from the join row: a seller can unpublish the
+> listing, delist the organization or be moderated down, none of which touches the join table. The
+> list gets shorter rather than growing a dead card, and the join row survives so re-publishing
+> brings it back. `[]` rather than `null` here, unlike `seasons` — every video can carry products,
+> so there is no absent-versus-empty distinction to make.
+
 ### 5.2a Watch history — `src/modules/home/engagement/watch-history.routes.ts`
 
 The write half of `mode=watched`: a viewer editing their own history, behind `/history`.
