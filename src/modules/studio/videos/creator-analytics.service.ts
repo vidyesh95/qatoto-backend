@@ -1,4 +1,4 @@
-import { count, desc, eq } from "drizzle-orm";
+import { count, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { creatorStats, video, videoStats } from "#src/db/schema.js";
@@ -126,8 +126,12 @@ export interface VideoAnalyticsPage {
  * sorts after the join with nothing to support it. This file will not offer a control the storage
  * cannot serve — the same refusal `ListVideoCommentsQuerySchema` makes about `?sort=top`.
  *
- * Ordered by `publishedAt` with `id` as the tiebreak, so the page boundary is total. Drafts have a
- * null `publishedAt` and sort last under `desc` — correct, since a draft has no numbers yet.
+ * NULLS LAST IS LOAD-BEARING, and the naive `desc()` gets it backwards. Postgres puts NULLs FIRST
+ * under DESC, and a draft has a null `publishedAt` — so the obvious ordering floats every draft to
+ * the top and a creator with thirty of them opens this page to twenty all-zero rows, with their
+ * real numbers on page two. `problem-clusters.service.ts` states the same rule for the same reason.
+ *
+ * The chain ends in `id`, which is unique, so the page boundary is total (§4c rule 4).
  */
 export async function listVideoAnalytics(
   creatorUserId: string,
@@ -157,7 +161,7 @@ export async function listVideoAnalytics(
       .from(video)
       .leftJoin(videoStats, eq(videoStats.videoId, video.id))
       .where(predicate)
-      .orderBy(desc(video.publishedAt), desc(video.id))
+      .orderBy(sql`${video.publishedAt} DESC NULLS LAST`, desc(video.id))
       .limit(filters.limit)
       .offset((filters.page - 1) * filters.limit),
     db.select({ value: count() }).from(video).where(predicate),
@@ -203,5 +207,12 @@ function meanCompletionBasisPoints(
 ): number | null {
   if (completionBasisPointsSum === null || completionSampleCount === null) return null;
   if (completionSampleCount === 0) return null;
-  return Math.round(completionBasisPointsSum / completionSampleCount);
+
+  // HALF AWAY FROM ZERO, written out rather than left to `Math.round`. The two agree on every
+  // input this function can receive today — both operands are non-negative by CHECK — but
+  // `Math.round` is half-toward-POSITIVE-INFINITY, so `-0.5` rounds to `-0` rather than `-1`. The
+  // docblock above promises a rule; this is that rule, so the promise survives a signed input
+  // arriving later.
+  const quotient = completionBasisPointsSum / completionSampleCount;
+  return Math.sign(quotient) * Math.round(Math.abs(quotient));
 }

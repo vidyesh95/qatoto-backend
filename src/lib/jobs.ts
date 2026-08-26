@@ -109,6 +109,12 @@ export const JOB_NAMES = {
   // this existed, NOTHING ever moved it on. A scheduled video simply never published.
   publishScheduledVideosTick: "publish-scheduled-videos-tick",
   publishScheduledVideos: "publish-scheduled-videos",
+  // The daily-log verification re-sweep. Deferring verification means a row can outlive a failed
+  // check — if the job dead-letters, `video_verified_at` stays NULL and, before this, nothing ever
+  // looked again. `revalidate-youtube-embeds` cannot serve here: it filters `is_source_verified =
+  // true` on the `video` table and never touches `daily_log`.
+  resweepUnverifiedDailyLogsTick: "resweep-unverified-daily-logs-tick",
+  resweepUnverifiedDailyLogs: "resweep-unverified-daily-logs",
   recomputeVideoDurationsTick: "recompute-video-durations-tick",
   recomputeVideoDurations: "recompute-video-durations",
   recomputeVideoQualityScoresTick: "recompute-video-quality-scores-tick",
@@ -633,6 +639,33 @@ export const JOB_DEFINITIONS = {
       ...STANDARD_RETRY,
       expireInSeconds: 120,
       deadLetter: deadLetterNameFor(JOB_NAMES.finalizeVerdict),
+    },
+  },
+
+  [JOB_NAMES.resweepUnverifiedDailyLogsTick]: {
+    name: JOB_NAMES.resweepUnverifiedDailyLogsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: false,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.resweepUnverifiedDailyLogsTick),
+    },
+  },
+  [JOB_NAMES.resweepUnverifiedDailyLogs]: {
+    name: JOB_NAMES.resweepUnverifiedDailyLogs,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      // `singleton`: it only enqueues other jobs, so a second concurrent run would just re-derive
+      // the same idempotency keys and dedup against itself.
+      policy: "singleton",
+      retryLimit: 3,
+      retryDelay: 60,
+      retryBackoff: false,
+      expireInSeconds: 300,
+      deadLetter: deadLetterNameFor(JOB_NAMES.resweepUnverifiedDailyLogs),
     },
   },
 
@@ -1416,6 +1449,10 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // EVERY MINUTE, like the dispute sweep beside it. A creator announces a publish time to an
   // audience; missing it by up to an hour because the sweep runs hourly is a broken promise,
   // and the sweep is a single indexed range scan that finds nothing almost every time.
+  // NIGHTLY, not per-minute. Unlike the publish sweep this is a repair pass, not a promise to an
+  // audience: a verification that failed an hour ago is no more likely to succeed a minute later,
+  // and the retry ladder inside `verify-youtube-video` already covers the short-outage case.
+  [JOB_NAMES.resweepUnverifiedDailyLogsTick]: "20 4 * * *",
   [JOB_NAMES.publishScheduledVideosTick]: "* * * * *",
   [JOB_NAMES.sweepDisputeWindowsTick]: "* * * * *",
   // After the streak decay, so the nightly cap table is computed over a settled ledger.
@@ -1766,6 +1803,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.analyzeSubstance]: VerificationStagePayloadSchema,
   [JOB_NAMES.analyzeTemporal]: VerificationStagePayloadSchema,
   [JOB_NAMES.finalizeVerdict]: VerificationStagePayloadSchema,
+  [JOB_NAMES.resweepUnverifiedDailyLogsTick]: TickPayloadSchema,
+  [JOB_NAMES.resweepUnverifiedDailyLogs]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.publishScheduledVideosTick]: TickPayloadSchema,
   [JOB_NAMES.publishScheduledVideos]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.sweepDisputeWindowsTick]: TickPayloadSchema,
@@ -1895,6 +1934,8 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.finalizeVerdict}:${runId}:${generation}`,
   publishScheduledVideos: (asOfIso: string): string =>
     `${JOB_NAMES.publishScheduledVideos}:${asOfIso}`,
+  resweepUnverifiedDailyLogs: (asOfIso: string): string =>
+    `${JOB_NAMES.resweepUnverifiedDailyLogs}:${asOfIso}`,
   sweepDisputeWindows: (asOfIso: string): string => `${JOB_NAMES.sweepDisputeWindows}:${asOfIso}`,
   recomputeEquitySnapshot: (asOfIso: string, projectId: string | null): string =>
     `${JOB_NAMES.recomputeEquitySnapshot}:${asOfIso}:${projectId ?? "all"}`,

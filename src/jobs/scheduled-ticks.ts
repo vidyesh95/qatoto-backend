@@ -151,6 +151,29 @@ export async function handleRecomputeDailyLogStreaksTick(
  * The `asOf` is the CUTOFF, not a quantized bucket — the job publishes everything whose
  * `scheduled_publish_at` is at or before it.
  */
+/**
+ * The daily-log verification re-sweep's tick. Day-grained, because the job it enqueues is a nightly
+ * repair pass rather than a per-minute promise.
+ */
+export async function handleResweepUnverifiedDailyLogsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.resweepUnverifiedDailyLogs,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.resweepUnverifiedDailyLogs(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `resweep-unverified-daily-logs-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
 export async function handlePublishScheduledVideosTick(
   _rawPayload: unknown,
   readClock: ClockReader = systemClock,

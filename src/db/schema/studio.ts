@@ -639,8 +639,10 @@ export const videoMilestone = pgTable(
   (table) => [index("video_milestone_videoId_idx").on(table.videoId)],
 );
 
-// Recruiting blurbs attached to a video. Viewers APPLYING to one is a future feature
-// (§12) and lives in the R&D application tables when it lands, not here.
+// Recruiting blurbs attached to a video. Viewers APPLYING to one SHIPS — see `openRoleId`
+// below: a blurb that points at a real `projectOpenRole` puts an Apply control under the
+// video, wired to the R&D application flow. The application rows live in the R&D tables, not
+// here; this table only carries the pointer.
 export const videoOpenRole = pgTable(
   "video_open_role",
   {

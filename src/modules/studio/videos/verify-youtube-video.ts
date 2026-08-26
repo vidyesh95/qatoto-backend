@@ -42,7 +42,7 @@ export async function handleVerifyYoutubeVideo(rawPayload: unknown): Promise<voi
     rawPayload,
   );
 
-  // TWO TABLES, ONE QUEUE (R&D §22). The daily-log arm is delegated whole rather than
+  // TWO TABLES, ONE QUEUE. The daily-log arm is delegated whole rather than
   // interleaved with the video arm: the two rows record the same fact in different shapes —
   // `video.isSourceVerified` is a boolean, `daily_log.video_verified_at` a nullable timestamp —
   // and a single body branching on every read and every write would be harder to prove correct

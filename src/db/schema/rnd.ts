@@ -1873,7 +1873,7 @@ export const demandSignalSnapshot = pgTable(
     openRoleCount: integer("open_role_count").notNull(),
     /**
      * THE STORE'S CONTRIBUTION — units sold in the window through listings this cell's
-     * ventures actually shipped (§22, Appendix B4). The one input here that is not R&D
+     * ventures actually shipped (Appendix B4). The one input here that is not R&D
      * talking to itself, and the only evidence on the row that somebody paid.
      *
      * Attributed through the cluster, not the store taxonomy:

@@ -3700,9 +3700,10 @@ never depended on it — that lives in the keyset predicate — and the old inde
 reads `commerce-trust-metrics` does.
 
 **Corrected while here:** `attachReviewVideo`'s docblock credited "the shipped
-`verify-youtube-video` oEmbed job" with checking whether a review's video exists. That job reads the
-`video` table alone and has never touched `commerce_review_media`, so a well-formed id pointing at a
-deleted or private video is stored and rendered indefinitely. The comment now says so.
+`verify-youtube-video` oEmbed job" with checking whether a review's video exists. That job verifies
+`video` rows — and, since the R&D workshop arm landed, `daily_log` rows — and has never touched
+`commerce_review_media`, so a well-formed id pointing at a deleted or private video is stored and
+rendered indefinitely. The comment now says so.
 
 **That last note is CLOSED in Phase 23; see A40.** The design it recorded — a dead video hides its
 media row and leaves the review standing, because a buyer's testimony must not be deleted when a

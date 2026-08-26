@@ -573,6 +573,33 @@ async function loadOwnedVideoRow(creatorId: string, videoId: string): Promise<Vi
   return row ?? null;
 }
 
+/**
+ * Re-reads this video's publish state INSIDE a transaction, holding the row.
+ *
+ * WHY THE PRE-TRANSACTION READ IS NOT ENOUGH. `loadOwnedVideoRow` above is a plain SELECT taken
+ * before `db.transaction` opens, and every counter decision used to be made from it. Two requests
+ * racing on one video therefore both saw the same "before" state and both moved the counter: a
+ * double-clicked Delete on a published video read `published` twice, deleted once, and decremented
+ * TWICE. `GREATEST(… - 1, 0)` kept that non-negative, which is not the same as correct.
+ *
+ * Taking the row `FOR UPDATE` serialises them — the second request blocks until the first commits,
+ * then re-reads the state the first left behind and decides again from that. Returns null when the
+ * row is gone, which is the honest answer for the loser of a delete race.
+ */
+async function lockOwnedVideoPublishState(
+  tx: TransactionClient,
+  creatorId: string,
+  videoId: string,
+): Promise<VideoPublishStatus | null> {
+  const [locked] = await tx
+    .select({ publishStatus: video.publishStatus })
+    .from(video)
+    .where(ownedVideoPredicate(creatorId, videoId))
+    .for("update")
+    .limit(1);
+  return locked?.publishStatus ?? null;
+}
+
 /** Assembles the full projection from an already-ownership-checked row. */
 async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicVideo> {
   const [
@@ -1697,6 +1724,14 @@ export async function updateVideo(
       if (!existing.hasCustomThumbnail) scalarUpdates.thumbnailUrl = verifiedYoutube.thumbnailUrl;
     }
 
+    // THE FOURTH DOOR OUT OF PUBLISHED, and it had no counter write at all — `updateVideo`
+    // contained none. An approved anime episode is `published`; editing its title sends it back to
+    // `draft`/`pending` here, and the count stayed where it was. An anime creator hits this on
+    // every edit after approval, so it drifted upward faster than any other path.
+    // From the LOCKED row, not the pre-transaction read — same race as publish/unpublish/delete.
+    const lockedStatus = await lockOwnedVideoPublishState(tx, creatorId, videoId);
+    const leavesPublishedByReviewReset = shouldResetReview && lockedStatus === "published";
+
     if (shouldResetReview) {
       scalarUpdates.reviewStatus = "pending";
       scalarUpdates.rejectionReason = null;
@@ -1707,6 +1742,15 @@ export async function updateVideo(
 
     if (Object.keys(scalarUpdates).length > 0) {
       await tx.update(video).set(scalarUpdates).where(ownedVideoPredicate(creatorId, videoId));
+    }
+
+    if (leavesPublishedByReviewReset) {
+      await tx
+        .update(creatorStats)
+        .set({
+          publishedVideoCount: sql`GREATEST(${creatorStats.publishedVideoCount} - 1, 0)`,
+        })
+        .where(eq(creatorStats.userId, creatorId));
     }
 
     if (attachedProductIds !== undefined) {
@@ -2028,10 +2072,21 @@ export async function publishVideo(
   // The counter moves in the SAME transaction as the status change (HOME §3.4). It
   // moves ONLY on a real transition to `published`: an anime episode goes to `pending`
   // review and a future-dated one goes to `scheduled`, and neither is a published video.
-  const becomesPublished =
-    !isAnimeEpisode && !shouldSchedule && existing.publishStatus !== "published";
+  // BOTH DIRECTIONS ARE DECIDED INSIDE THE TRANSACTION, from the locked row — see below. The
+  // second of them had no branch at all until now: re-publishing an already-published video with a
+  // future `scheduledPublishAt` sends it BACK to `scheduled`, the video goes dark, and the counter
+  // did not follow it. Reachable entirely through public routes — publish, PATCH a future date,
+  // publish again — and the sweep then increments when it fires, so the count ended one high per
+  // round trip.
 
   await db.transaction(async (tx) => {
+    // Re-read under the lock: two concurrent publishes on one draft both saw `draft` before the
+    // transaction and both incremented. The second now waits, sees `published`, and does not.
+    const lockedStatus = await lockOwnedVideoPublishState(tx, creatorId, videoId);
+    if (lockedStatus === null) return;
+    const becomesPublished = !isAnimeEpisode && !shouldSchedule && lockedStatus !== "published";
+    const leavesPublished = !isAnimeEpisode && shouldSchedule && lockedStatus === "published";
+
     await tx
       .update(video)
       .set(
@@ -2048,6 +2103,15 @@ export async function publishVideo(
       await tx
         .update(creatorStats)
         .set({ publishedVideoCount: sql`${creatorStats.publishedVideoCount} + 1` })
+        .where(eq(creatorStats.userId, creatorId));
+    }
+
+    if (leavesPublished) {
+      await tx
+        .update(creatorStats)
+        .set({
+          publishedVideoCount: sql`GREATEST(${creatorStats.publishedVideoCount} - 1, 0)`,
+        })
         .where(eq(creatorStats.userId, creatorId));
     }
   });
@@ -2067,9 +2131,12 @@ export async function unpublishVideo(
 
   // Mirrors publishVideo: the counter comes back down only if it went up, so a
   // repeated unpublish on a draft cannot drive it toward zero.
-  const wasPublished = existing.publishStatus === "published";
-
   await db.transaction(async (tx) => {
+    // Locked, so two concurrent unpublishes decrement once between them rather than once each.
+    const lockedStatus = await lockOwnedVideoPublishState(tx, creatorId, videoId);
+    if (lockedStatus === null) return;
+    const wasPublished = lockedStatus === "published";
+
     await tx
       .update(video)
       .set({ publishStatus: "draft", publishedAt: null, scheduledPublishAt: null })
@@ -2141,9 +2208,12 @@ export async function deleteVideo(
   // `GREATEST(… - 1, 0)` and the `wasPublished` guard both mirror `unpublishVideo` exactly: the
   // count only comes down if it went up, so deleting a draft cannot drive it negative and a
   // double-delete cannot either.
-  const wasPublished = existing.publishStatus === "published";
-
   await db.transaction(async (tx) => {
+    // Locked, so a double-clicked Delete decrements once rather than twice.
+    const lockedStatus = await lockOwnedVideoPublishState(tx, creatorId, videoId);
+    if (lockedStatus === null) return;
+    const wasPublished = lockedStatus === "published";
+
     await tx.delete(video).where(ownedVideoPredicate(creatorId, videoId));
 
     if (wasPublished) {

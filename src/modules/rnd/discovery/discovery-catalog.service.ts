@@ -270,7 +270,7 @@ export interface DemandSignalView {
   readonly relatedProjectCount: number;
   readonly openRoleCount: number;
   /**
-   * The store's evidence for this cell (§22): units sold and visible reviews in the window, on
+   * The store's evidence for this cell: units sold and visible reviews in the window, on
    * listings the cell's ventures actually shipped.
    *
    * NOT part of `demandScorePoints`, deliberately — see `ScoredDemandCell` in

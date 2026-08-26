@@ -1296,9 +1296,9 @@ export async function attachReviewPhoto(
  * video reference.
  *
  * WHETHER THE VIDEO EXISTS IS NOT CHECKED, and this comment used to claim otherwise —
- * it credited "the shipped `verify-youtube-video` oEmbed job", which operates on the
- * `video` table alone (`src/modules/studio/videos/verify-youtube-video.ts`) and has never read
- * `commerce_review_media`. A well-formed id pointing at a deleted or private video is
+ * it credited "the shipped `verify-youtube-video` oEmbed job", which
+ * (`src/modules/studio/videos/verify-youtube-video.ts`) verifies `video` rows and, since the
+ * R&D workshop arm landed, `daily_log` rows — and has never read `commerce_review_media`. A well-formed id pointing at a deleted or private video is
  * therefore stored and rendered indefinitely. A false comment about a verification is
  * worse than a missing one, so it says the true thing now.
  *

@@ -43,7 +43,8 @@ interface DriftRow extends Record<string, unknown> {
    * next reader re-introducing. Coerce before comparing.
    */
   readonly stored_total_views: string;
-  readonly summed_video_views: number;
+  /** Also a STRING — `::bigint`, for the same node-postgres reason as the field above. */
+  readonly summed_video_views: string;
 }
 
 async function main(): Promise<void> {
@@ -63,18 +64,24 @@ async function main(): Promise<void> {
       (SELECT count(*) FROM creator_subscription c WHERE c.creator_id = s.user_id)::int
                                     AS actual_subscribers,
       s.total_view_count            AS stored_total_views,
+      -- ::bigint, NOT ::int. sum() over an integer column returns bigint, and a creator past
+      -- 2.1 billion lifetime views would raise an integer-out-of-range error and take down the
+      -- whole script, including the published_video_count repair that has nothing to do with views.
       (SELECT COALESCE(sum(st.view_count), 0) FROM video v
         JOIN video_stats st ON st.video_id = v.id
-        WHERE v.creator_id = s.user_id)::int
+        WHERE v.creator_id = s.user_id)::bigint
                                     AS summed_video_views
     FROM creator_stats s
     JOIN "user" u ON u.id = s.user_id
+    -- ONLY THE TWO DERIVABLE COUNTERS DECIDE WHAT IS "DRIFT". total_view_count is deliberately
+    -- absent from this predicate: the module comment says it is EXPECTED to exceed the sum over
+    -- surviving videos after any delete, so including it reported every creator who has ever
+    -- deleted a video, on every run, forever — which is how a real mismatch gets lost in the noise.
+    -- It is still SELECTed and still printed, as context on a row that drifted for another reason.
     WHERE s.published_video_count <> (SELECT count(*) FROM video v
             WHERE v.creator_id = s.user_id AND v.publish_status = 'published')
        OR s.subscriber_count <> (SELECT count(*) FROM creator_subscription c
             WHERE c.creator_id = s.user_id)
-       OR s.total_view_count <> (SELECT COALESCE(sum(st.view_count), 0) FROM video v
-            JOIN video_stats st ON st.video_id = v.id WHERE v.creator_id = s.user_id)
     ORDER BY u.email
   `);
 
@@ -99,11 +106,11 @@ async function main(): Promise<void> {
         `    subscriberCount      ${String(row.stored_subscribers)} → ${String(row.actual_subscribers)}`,
       );
     }
-    if (Number(row.stored_total_views) !== row.summed_video_views) {
+    if (Number(row.stored_total_views) !== Number(row.summed_video_views)) {
       // REPORTED, NOT REPAIRED — see the module comment. A lifetime view count legitimately
       // exceeds the sum over surviving videos, because a deleted video's views still happened.
       console.log(
-        `    totalViewCount       ${row.stored_total_views} vs ${String(row.summed_video_views)} summed over surviving videos — expected to differ after a delete; INVESTIGATE only if lower`,
+        `    totalViewCount       ${row.stored_total_views} vs ${row.summed_video_views} summed over surviving videos — expected to differ after a delete; INVESTIGATE only if lower`,
       );
     }
   }
@@ -113,16 +120,46 @@ async function main(): Promise<void> {
     return;
   }
 
-  // The two derivable counters only. `total_view_count` is deliberately absent from this UPDATE.
-  await db.execute(sql`
-    UPDATE creator_stats s SET
-      published_video_count = (SELECT count(*) FROM video v
-        WHERE v.creator_id = s.user_id AND v.publish_status = 'published'),
-      subscriber_count      = (SELECT count(*) FROM creator_subscription c
-        WHERE c.creator_id = s.user_id)
-  `);
+  // SCOPED TO THE DRIFTED ROWS, AND LOCKED FIRST. Both halves matter.
+  //
+  // An unscoped `UPDATE creator_stats SET x = (subquery)` rewrites every row from the statement's
+  // snapshot, and that can INTRODUCE the drift this script exists to remove: a concurrent
+  // `publishVideo` committing 5 -> 6 before the scan reaches that row is simply overwritten back
+  // to 5, with no lock to wait on and no re-evaluation. Taking `FOR UPDATE` on the rows first
+  // inverts it — the increment path's `UPDATE … SET x = x + 1` takes the same row lock, so it
+  // blocks until this transaction commits and then applies on top of the corrected value.
+  //
+  // Scoping also means clean rows are not rewritten, which is the difference between one dead
+  // tuple per drifted creator and one per creator on the platform.
+  const repairedRowCount = await db.transaction(async (tx) => {
+    const driftedUserIds = drift.rows.map((row) => row.user_id);
+    await tx.execute(sql`
+      SELECT 1 FROM creator_stats
+      WHERE user_id IN (${sql.join(
+        driftedUserIds.map((id) => sql`${id}`),
+        sql`, `,
+      )})
+      FOR UPDATE
+    `);
+    await tx.execute(sql`
+      UPDATE creator_stats s SET
+        published_video_count = (SELECT count(*) FROM video v
+          WHERE v.creator_id = s.user_id AND v.publish_status = 'published'),
+        subscriber_count      = (SELECT count(*) FROM creator_subscription c
+          WHERE c.creator_id = s.user_id)
+      WHERE s.user_id IN (${sql.join(
+        driftedUserIds.map((id) => sql`${id}`),
+        sql`, `,
+      )})
+    `);
+    return driftedUserIds.length;
+  });
 
-  console.log(`\nRepaired ${String(repairableCount)} counter(s).`);
+  // Rows, not columns — the previous count summed per-column mismatches and printed them as a
+  // number of rows, which bore no relation to what the UPDATE touched.
+  console.log(
+    `\nRepaired ${String(repairedRowCount)} creator row(s); ${String(repairableCount)} counter(s) were wrong.`,
+  );
 }
 
 main()

@@ -46,7 +46,7 @@ interface ScoredDemandCell extends DemandCellInputs {
   readonly demandScorePoints: number;
   /**
    * THE STORE'S EVIDENCE — units sold and visible reviews in the window, on listings this
-   * cell's ventures actually shipped (§22, Appendix B4).
+   * cell's ventures actually shipped (Appendix B4).
    *
    * On the SCORED cell rather than on `DemandCellInputs`, and that placement is the decision.
    * These two counts are written to the row and rendered on the leaderboard, but they do not
@@ -165,7 +165,7 @@ export async function handleRecomputeDemandSignals(rawPayload: unknown): Promise
         ),
       );
 
-    // THE STORE'S CONTRIBUTION (§22). Attributed through the CLUSTER, not the store taxonomy:
+    // THE STORE'S CONTRIBUTION. Attributed through the CLUSTER, not the store taxonomy:
     // `problem_cluster` carries both the region and the category, while `commerce_category` has
     // no mapping to `research_category` and the store has no region concept at all. This is the
     // same join `relatedProjectCount` above already walks, one table further along.

@@ -19,6 +19,7 @@ import {
   handleRecomputeOpportunityScoresTick,
   handleRefreshTalentProjectionsTick,
   handlePublishScheduledVideosTick,
+  handleResweepUnverifiedDailyLogsTick,
   handleSweepDisputeWindowsTick,
   handlePruneEngagementDataTick,
   handleRecomputePlatformCategoryPopularityTick,
@@ -76,6 +77,7 @@ import {
 } from "#src/modules/rnd/proof-of-effort/verify-effort-claim.js";
 import { handleAnalyzeDailyLog } from "#src/modules/rnd/workshop/analyze-daily-log.js";
 import { handleRecomputeDailyLogStreaks } from "#src/modules/rnd/workshop/recompute-daily-log-streaks.js";
+import { handleResweepUnverifiedDailyLogs } from "#src/modules/rnd/workshop/resweep-unverified-daily-logs.js";
 import { handleDeriveProductRelations } from "#src/modules/store/catalog/derive-product-relations.js";
 import { handleRecomputeCommerceCategoryDemand } from "#src/modules/store/catalog/recompute-commerce-category-demand.js";
 import { handleRecomputeCommerceProductTrending } from "#src/modules/store/catalog/recompute-commerce-product-trending.js";
@@ -505,6 +507,19 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.publishScheduledVideos,
     workOptions,
     runJob(JOB_NAMES.publishScheduledVideos, handlePublishScheduledVideos),
+  );
+
+  // The daily-log verification re-sweep — nightly, and the repair half of the deferred-verification
+  // trade. See the handler for why `revalidate-youtube-embeds` cannot cover it.
+  await boss.work(
+    JOB_NAMES.resweepUnverifiedDailyLogsTick,
+    workOptions,
+    runJob(JOB_NAMES.resweepUnverifiedDailyLogsTick, handleResweepUnverifiedDailyLogsTick),
+  );
+  await boss.work(
+    JOB_NAMES.resweepUnverifiedDailyLogs,
+    workOptions,
+    runJob(JOB_NAMES.resweepUnverifiedDailyLogs, handleResweepUnverifiedDailyLogs),
   );
 
   // STORE Phase 1/2 — denormalized public search document refresh. ON DEMAND only;

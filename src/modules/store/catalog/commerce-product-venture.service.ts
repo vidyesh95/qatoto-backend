@@ -6,7 +6,7 @@ import { projectStats, researchProject } from "#src/db/schema.js";
 /**
  * THE R&D → STORE HANDOFF, READ SIDE (§11i, Appendix B4; frontend todo §19).
  *
- * `product.researchProjectId` (`store.ts:2762-2784`) has existed since the handoff landed and
+ * `product.researchProjectId` (`src/db/schema/store.ts:2781`) has existed since the handoff landed and
  * until now reached NO wire at all. Its only two readers were a count inside
  * `launch-readiness.service.ts` and `suppliers.service.ts`, which selects it purely to group by
  * and then strips it (`suppliers.service.ts:576`). This module is what finally lets a BUYER see

@@ -81,7 +81,7 @@ export interface DailyLogView {
   readonly videoEmbedUrl: string | null;
   readonly videoThumbnailUrl: string | null;
   /**
-   * Whether YouTube has confirmed the linked video exists and embeds (§22).
+   * Whether YouTube has confirmed the linked video exists and embeds.
    *
    * DERIVED from `videoVerifiedAt`, never stored. False with a `youtube` source means
    * verification is still deferred — the row is real, the embed URL is real, and the thumbnail
@@ -624,7 +624,7 @@ export async function findDailyLogDetail(
  * ahead of the server's UTC.
  */
 /**
- * The CREATE-path variant, which tolerates a YouTube outage (§22).
+ * The CREATE-path variant, which tolerates a YouTube outage.
  *
  * Same parse, same verify, one difference in what it does with the failure — and the split is
  * copied deliberately from `parseAndVerifyYoutubeUrlForCreate` in the studio, because the studio
@@ -689,7 +689,7 @@ export async function createDailyLog(
   }
 
   // THE ONE OUTBOUND REQUEST, and the only failure here that is now survivable is "YouTube
-  // did not answer" (§22). A null `facts` with a non-null id is the deferred shape.
+  // did not answer". A null `facts` with a non-null id is the deferred shape.
   let parsedYoutubeVideoId: string | null = null;
   let verifiedFacts: VerifiedVideo | null = null;
   if (input.youtubeUrl !== undefined && input.youtubeUrl !== "") {

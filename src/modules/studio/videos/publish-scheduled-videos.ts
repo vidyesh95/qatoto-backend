@@ -1,9 +1,10 @@
-import { and, eq, isNotNull, lte, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, lte, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { animeEpisode, creatorStats, video } from "#src/db/schema.js";
 import { JOB_NAMES, JOB_PAYLOAD_SCHEMAS, parseJobPayload } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
+import { assertGatingSupported } from "#src/modules/studio/videos/videos.service.js";
 
 /**
  * Publishes videos whose scheduled time has arrived.
@@ -31,6 +32,12 @@ import { logger } from "#src/lib/logger.js";
  * was wrong for months because nothing read it. This is a third door into publish and it maintains
  * what the other two maintain.
  */
+/**
+ * One tick's worth. The cron runs every minute, so this drains 3,000 an hour — fast enough that a
+ * backlog is temporary, small enough that one run cannot exceed the queue's 300-second expiry.
+ */
+const PUBLISH_BATCH_LIMIT = 50;
+
 export async function handlePublishScheduledVideos(rawPayload: unknown): Promise<void> {
   const payload = parseJobPayload(
     JOB_NAMES.publishScheduledVideos,
@@ -39,6 +46,16 @@ export async function handlePublishScheduledVideos(rawPayload: unknown): Promise
   );
   const asOf = new Date(payload.asOf);
 
+  // BOUNDED AND ORDERED, and both matter for a backlog.
+  //
+  // Each row costs its own transaction — BEGIN, SELECT FOR UPDATE, two to four UPDATEs, an INSERT,
+  // COMMIT — so an unbounded sweep over a large backlog runs past this job's 300-second expiry,
+  // gets reclaimed mid-loop, and after three retries dead-letters. `singleton` means no second
+  // worker arrives to help.
+  //
+  // Oldest first, so a backlog drains in the order it was promised and each run makes deterministic
+  // forward progress: published rows leave the predicate, so the next tick picks up where this one
+  // stopped rather than re-scanning the same head.
   const dueRows = await db
     .select({ id: video.id })
     .from(video)
@@ -48,10 +65,16 @@ export async function handlePublishScheduledVideos(rawPayload: unknown): Promise
         isNotNull(video.scheduledPublishAt),
         lte(video.scheduledPublishAt, asOf),
       ),
-    );
+    )
+    .orderBy(asc(video.scheduledPublishAt), asc(video.id))
+    .limit(PUBLISH_BATCH_LIMIT);
 
   let publishedCount = 0;
   let skippedCount = 0;
+  // Counted separately from `skippedCount`: a row someone else holds is a row this sweep will see
+  // again next minute, whereas a `notQualified` row needs a human. Folding them together hid a
+  // sweep that skipped every row behind a log line that never fired.
+  let lockedCount = 0;
 
   for (const dueRow of dueRows) {
     // ONE TRANSACTION PER VIDEO, not one for the batch. A single row that cannot publish must
@@ -73,6 +96,8 @@ export async function handlePublishScheduledVideos(rawPayload: unknown): Promise
           reviewStatus: video.reviewStatus,
           moderationVisibilityState: video.moderationVisibilityState,
           videoType: video.videoType,
+          visibility: video.visibility,
+          isNdaRequired: video.isNdaRequired,
           videoSource: video.videoSource,
           youtubeVideoId: video.youtubeVideoId,
           title: video.title,
@@ -102,6 +127,16 @@ export async function handlePublishScheduledVideos(rawPayload: unknown): Promise
       }
       // A moderator hid it after it was scheduled. Publishing would undo a takedown on a timer.
       if (lockedRow.moderationVisibilityState !== "visible") return "notQualified" as const;
+
+      // `publishVideo` calls this "the backstop re-check … even if some future write path sets the
+      // columns", and this file promises the clock gets no weaker gate than the creator. It was
+      // missing. Unreachable today because `video_gating_ck` refuses the same combination at the
+      // storage layer, but a stated invariant with a hole in it is how the next one gets through.
+      if (
+        assertGatingSupported(lockedRow.videoSource, lockedRow.visibility, lockedRow.isNdaRequired)
+      ) {
+        return "notQualified" as const;
+      }
 
       // THE COMPLETENESS LIST, re-run for the same reason as the gates above: a PATCH between
       // scheduling and firing can empty a title or clear `isMadeForKids`, and `publishVideo`
@@ -157,6 +192,7 @@ export async function handlePublishScheduledVideos(rawPayload: unknown): Promise
     });
 
     if (outcome === "published") publishedCount += 1;
+    if (outcome === "skipped") lockedCount += 1;
     if (outcome === "notQualified") {
       skippedCount += 1;
       // Named rather than counted silently: a video stuck past its own publish time is a thing
@@ -167,10 +203,14 @@ export async function handlePublishScheduledVideos(rawPayload: unknown): Promise
     }
   }
 
-  if (publishedCount > 0 || skippedCount > 0) {
+  if (publishedCount > 0 || skippedCount > 0 || lockedCount > 0) {
     logger.info("publish-scheduled-videos: sweep complete", {
       publishedCount,
       skippedCount,
+      lockedCount,
+      dueCount: dueRows.length,
+      // A full batch means there is more behind it; the next tick continues from here.
+      hasMoreLikely: dueRows.length === PUBLISH_BATCH_LIMIT,
       asOf: payload.asOf,
     });
   }
