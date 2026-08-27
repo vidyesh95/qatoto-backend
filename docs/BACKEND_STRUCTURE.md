@@ -1086,12 +1086,20 @@ because `anonymize-account.service.ts` issues the statement, driven by iterating
 `src/modules/auth/privacy/anonymization-manifest.ts` (163 entries: 35 `delete_rows`, 46
 `null_out`, 82 `retain` with a cited lawful basis).
 
-**Two things the verifier cannot see, and one it now covers.** `user_profile_link.user_id` is a
+**THREE things the verifier cannot see, and one it now covers.** `user_profile_link.user_id` is a
 foreign key, so it is in the manifest (`delete_rows`) and the script checks it. **`user.bio` is a
 SCALAR COLUMN and therefore invisible to that script** — it is scrubbed by one explicit line in
 `anonymize-account.service.ts`, and if that line were deleted nothing would turn red. Its only
 executable guard is the `"the identity is gone"` assertion in `scripts/smoke-privacy.ts`; the two
 belong together. `user_profile_link` rows also ride in the Art. 15 export beside the bio.
+
+**`user.is_channel_listed` IS THE THIRD, AND IT IS THE SAME SHAPE AS `bio`.** A scalar column, so
+the manifest cannot hold it and the verifier stays green whether or not the scrub clears it. It is
+the creator's consent to appear in `GET /channels`, which builds the public sitemap — so leaving it
+`true` through an erasure would keep advertising a handle to search engines for somebody who asked
+to be deleted. The scrub sets it `false` by one explicit line, and `scripts/smoke-privacy.ts` now
+creates its probe user with the flag ALREADY TRUE so that assertion can actually fail; asserting
+`false` against a column that defaults `false` would have been a guard that could only ever pass.
 
 **A THIRD THING THE VERIFIER CANNOT SEE, AND IT IS NOT A COLUMN — IT IS BYTES.** `video_document`
 rows hold decks and whitepapers in Backblaze object storage, and the table has **no foreign key into

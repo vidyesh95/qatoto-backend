@@ -44,6 +44,14 @@ export interface ChannelProfileView {
    * technically true sentence describing a dead end.
    */
   readonly profileModerationState: typeof user.$inferSelect.profileModerationState;
+  /**
+   * Whether this creator has asked to be listed in the public sitemap.
+   *
+   * ON THIS READ RATHER THAN A SETTINGS ROUTE OF ITS OWN, because being findable is a
+   * channel-profile decision and this is the route that owns the public-profile columns. A separate
+   * endpoint would mean two writes for one screen and two chances for them to disagree.
+   */
+  readonly isChannelListed: boolean;
 }
 
 export type ChannelProfileError = { readonly type: "USER_NOT_FOUND" };
@@ -52,7 +60,11 @@ export async function getMyChannelProfile(
   userId: string,
 ): Promise<Result<ChannelProfileView, ChannelProfileError>> {
   const [row] = await db
-    .select({ bio: user.bio, profileModerationState: user.profileModerationState })
+    .select({
+      bio: user.bio,
+      profileModerationState: user.profileModerationState,
+      isChannelListed: user.isChannelListed,
+    })
     .from(user)
     .where(eq(user.id, userId))
     .limit(1);
@@ -68,7 +80,12 @@ export async function getMyChannelProfile(
   // could not fix the thing they were asked to fix. What the state changes is that they are TOLD.
   return {
     success: true,
-    value: { bio: row.bio, links, profileModerationState: row.profileModerationState },
+    value: {
+      bio: row.bio,
+      links,
+      profileModerationState: row.profileModerationState,
+      isChannelListed: row.isChannelListed,
+    },
   };
 }
 
@@ -77,12 +94,13 @@ export async function replaceMyChannelProfile(
   input: {
     readonly bio: string | null;
     readonly links: readonly { readonly label: string; readonly url: string }[];
+    readonly isChannelListed: boolean;
   },
 ): Promise<Result<ChannelProfileView, ChannelProfileError>> {
   const outcome = await db.transaction(async (transaction) => {
     const [updated] = await transaction
       .update(user)
-      .set({ bio: input.bio })
+      .set({ bio: input.bio, isChannelListed: input.isChannelListed })
       // SCOPED TO A LIVE ACCOUNT, not to an id alone. An anonymized row must never accept new
       // public text — the scrub is the one write that outranks this one, and a race between an
       // in-flight edit and the erasure must resolve in the erasure's favour. Unreachable in

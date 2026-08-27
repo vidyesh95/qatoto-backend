@@ -823,6 +823,56 @@ export async function listMyPledges(
 }
 
 /**
+ * `GET /funding-rounds/mine` — every round across every project the caller FOUNDS.
+ *
+ * WHY IT EXISTS, and it is a gap the studio's own placeholder page named before this shipped:
+ * `listProjectFundingRounds` above is scoped to ONE project and `listMyPledges` below is
+ * BACKER-side, so a founder with three ventures raising at once had no way to see them together —
+ * they opened three project pages. `/studio/funding` promised "pledges and backers across all of
+ * your projects at once" and had nothing behind it.
+ *
+ * FOUNDER ONLY, VIA `researchProject.founderUserId`, and that is the same gate the round WRITES
+ * use — `createFundingRound` is founder-only. A read that showed maintainers rounds they cannot
+ * open, close or edit would be a second, looser rule wearing the same name, and the account-level
+ * framing ("your projects") is a claim about ownership rather than membership.
+ *
+ * PAGINATED, unlike `listProjectFundingRounds`, and the asymmetry is the point: a per-project list
+ * is bounded by one project, an account-level one is bounded by nothing.
+ *
+ * `projectName` RIDES ALONG BECAUSE THE SLUG IS NOT A LABEL. Every other funding read is reached
+ * THROUGH a project, so the reader already knows which one they are looking at; here a row is
+ * meaningless without saying which venture it belongs to, and rendering `solar-cold-storage` as a
+ * heading would be showing a URL where a name belongs.
+ */
+export async function listMyFoundedFundingRounds(
+  founderUserId: string,
+  options: { readonly page?: number | undefined; readonly limit?: number | undefined } = {},
+): Promise<readonly (FundingRoundView & { readonly projectName: string })[]> {
+  const limit = Math.min(options.limit ?? 25, 100);
+  const page = Math.max(options.page ?? 1, 1);
+
+  const rows = await db
+    .select({
+      round: fundingRound,
+      projectSlug: researchProject.slug,
+      projectName: researchProject.name,
+    })
+    .from(fundingRound)
+    .innerJoin(researchProject, eq(researchProject.id, fundingRound.projectId))
+    .where(eq(researchProject.founderUserId, founderUserId))
+    // §4c rule 4: the ordering ends in a unique column, or a page skips rows. Newest first, which
+    // for an account-level list means the round most likely to be acted on is at the top.
+    .orderBy(desc(fundingRound.createdAt), desc(fundingRound.id))
+    .limit(limit)
+    .offset((page - 1) * limit);
+
+  return rows.map((row) => ({
+    ...toRoundView(row.round, row.projectSlug),
+    projectName: row.projectName,
+  }));
+}
+
+/**
  * `POST /pledges/:id/cancel` — the backer's own, and only while it is still pending.
  *
  * A settled pledge is not cancellable and never becomes so: money that reached the pool

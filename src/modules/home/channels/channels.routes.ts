@@ -24,6 +24,15 @@ import * as channelsController from "#src/modules/home/channels/channels.control
  */
 const channelsRouter = express.Router();
 
+/**
+ * `GET /channels` — the opted-in directory the sitemap crawls.
+ *
+ * DECLARED BEFORE `/:handle` FOR READABILITY, NOT FOR CORRECTNESS: a bare `/` and a one-segment
+ * `/:handle` differ in depth, so Express cannot confuse them the way it confuses `/mine` with an
+ * id. Shallow-first is the convention this router already states.
+ */
+channelsRouter.get("/", attachOptionalUser, feedReadLimiter, channelsController.listPublicChannels);
+
 channelsRouter.get("/:handle", attachOptionalUser, feedReadLimiter, channelsController.getChannel);
 
 channelsRouter.get(

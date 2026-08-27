@@ -109,6 +109,24 @@ export const user = pgTable(
     profileModerationState: userProfileModerationStateEnum("profile_moderation_state")
       .default("visible")
       .notNull(),
+    /**
+     * Whether this creator has asked to be listed in Qatoto's public sitemap.
+     *
+     * DISCOVERABILITY, NOT VISIBILITY. `/channel/:handle` is public either way — every feed card
+     * links to it — and this only decides whether `GET /channels` announces the handle to a
+     * crawler. Copy that implies switching it off makes a channel private is a claim this column
+     * cannot keep.
+     *
+     * DEFAULTS FALSE, because a directory of PEOPLE is not a directory of products. The cofounder
+     * directory made the argument first: "a directory of people who did not consent to being in
+     * it" is a decision, not a default.
+     *
+     * ⚠️ SCALAR, SO THE ANONYMIZATION VERIFIER CANNOT SEE IT — the same trap as `bio` directly
+     * above. It is set FALSE by one explicit line in `anonymize-account.service.ts`, and nothing
+     * will turn red if that line is deleted; `scripts/smoke-privacy.ts` is its only executable
+     * guard. An anonymized account must leave the directory rather than keep being advertised.
+     */
+    isChannelListed: boolean("is_channel_listed").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()

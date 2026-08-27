@@ -28,3 +28,17 @@ export const ListChannelVideosQuerySchema = z
     cursor: z.string().trim().min(1).max(200).optional(),
   })
   .strict();
+
+/**
+ * Query for `GET /channels` — the public directory the sitemap crawls.
+ *
+ * A HIGHER CEILING THAN THE VIDEO GRID ABOVE, and a higher default, because this list has no
+ * viewport: its only consumer walks every page to build a sitemap, so a small page size means more
+ * round trips for the same answer. 200 matches the store's own directory reads.
+ */
+export const ListPublicChannelsQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(200).default(100),
+    cursor: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();

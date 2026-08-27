@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import {
   ChannelHandleParamSchema,
   ListChannelVideosQuerySchema,
+  ListPublicChannelsQuerySchema,
 } from "#src/modules/home/channels/channels.schemas.js";
 import * as channelsService from "#src/modules/home/channels/channels.service.js";
 import {
@@ -102,6 +103,39 @@ export async function listChannelVideos(req: Request, res: Response): Promise<vo
     status: "success",
     statusCode: 200,
     message: "Channel videos retrieved successfully",
+    data: listResult.value.rows,
+    nextCursor: listResult.value.nextCursor,
+  });
+}
+
+/**
+ * `GET /channels` — the opted-in public directory.
+ *
+ * NO `attachOptionalUser` USE HERE: the response is identical for everybody, because a directory
+ * that changed shape per viewer would be a directory a crawler and a person disagree about. The
+ * router still runs it so the limiter keys a signed-in caller by id rather than dropping them into
+ * the shared NAT bucket, which is the same reason every other read on this router carries it.
+ */
+export async function listPublicChannels(req: Request, res: Response): Promise<void> {
+  const parsedQuery = ListPublicChannelsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const listResult = await channelsService.listPublicChannels({
+    limit: parsedQuery.data.limit,
+    cursor: parsedQuery.data.cursor ?? null,
+  });
+  if (!listResult.success) {
+    respondChannelError(res, listResult.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Channels retrieved successfully",
     data: listResult.value.rows,
     nextCursor: listResult.value.nextCursor,
   });

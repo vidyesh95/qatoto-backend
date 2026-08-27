@@ -307,6 +307,31 @@ export async function createPledge(req: Request, res: Response): Promise<void> {
   } satisfies ApiResponse);
 }
 
+/**
+ * `GET /funding-rounds/mine` — the filter is `req.user.id`. No `founderUserId` parameter exists.
+ *
+ * The cross-project view behind `/studio/funding`. Founder-scoped, matching the round writes: a
+ * maintainer sees nothing here, which is the same answer they get from `POST …/funding-rounds`.
+ */
+export async function listMyFoundedRounds(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = PaginationQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  respondOk(
+    res,
+    "Funding rounds loaded.",
+    await roundsService.listMyFoundedFundingRounds(req.user.id, parsedQuery.data),
+  );
+}
+
 /** `GET /pledges/mine` — the filter is `req.user.id`. No `userId` parameter exists. */
 export async function listMyPledges(req: Request, res: Response): Promise<void> {
   if (!req.user) {

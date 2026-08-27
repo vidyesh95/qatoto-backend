@@ -292,3 +292,102 @@ export async function listChannelVideos(input: {
 
   return { success: true, value: { rows: pageRows, nextCursor } };
 }
+
+/**
+ * One row of the public channel directory — a handle and nothing more than a crawler needs.
+ */
+export interface ListedChannel {
+  readonly handle: string;
+  readonly name: string;
+}
+
+export interface ListedChannelPage {
+  readonly rows: readonly ListedChannel[];
+  readonly nextCursor: string | null;
+}
+
+/**
+ * `GET /channels` — the handles their owners asked to have listed.
+ *
+ * WHAT IT IS FOR. `src/app/sitemap.ts` announces every other public surface on the platform and
+ * announced no channel at all, because there was no public handle-enumeration read to build a list
+ * from. This is that read, and its only consumer is the sitemap.
+ *
+ * ⚠️ IT IS OPT-IN, AND THAT IS THE WHOLE DESIGN. `is_channel_listed` defaults FALSE. A channel page
+ * is public either way — every feed card links to one — so this flag governs DISCOVERABILITY, not
+ * visibility, and the distinction is what makes the default defensible: a directory of PEOPLE is
+ * not a directory of products, and the cofounder directory already argued that a directory of
+ * people who did not consent to being in it is a decision rather than a default.
+ *
+ * ⚠️ THE VIDEO TERM JOINS `video` UNDER `publicVideoPredicate()` AND DOES NOT READ
+ * `creator_stats.published_video_count`. Two reasons, and the second is the one that bites:
+ *
+ *  1. It is a COUNTER CACHE. `project_stats` is LEFT-joined on the product page precisely because
+ *     15 of 41 projects had no row at all, and a missing cache must cost a count rather than a
+ *     surface.
+ *  2. It counts the WRONG THING. That column counts `publish_status = 'published'` REGARDLESS OF
+ *     VISIBILITY — its own comment in `home.ts` says so — so a creator whose videos are all
+ *     unlisted has a positive count and an empty channel page. Announcing that page puts a soft
+ *     404 in the sitemap, which `sitemap.ts`'s header calls worse for the whole domain than never
+ *     having announced it.
+ *
+ * `EXISTS` RATHER THAN A JOIN + DISTINCT: the question is "has at least one", and a join would
+ * multiply a creator by their catalogue before collapsing it again.
+ *
+ * `anonymizedAt IS NULL` is belt-and-braces beside the handle check — the scrub nulls the handle
+ * AND clears the flag — but an erased person appearing in a public directory is the one failure
+ * worth being redundant about.
+ *
+ * KEYSET ON `(created_at, id)` rather than on the handle: a handle is renameable and a rename
+ * mid-crawl would move a row across a page boundary, which is exactly what a keyset cursor exists
+ * to prevent.
+ */
+export async function listPublicChannels(input: {
+  readonly limit: number;
+  readonly cursor: string | null;
+}): Promise<Result<ListedChannelPage, ChannelError>> {
+  const decodedCursor = input.cursor === null ? null : decodeInstantCursor(input.cursor);
+  if (input.cursor !== null && decodedCursor === null) {
+    return { success: false, error: { type: "CURSOR_MALFORMED" } };
+  }
+
+  const cursorCondition =
+    decodedCursor === null
+      ? sql`true`
+      : sql`(u.created_at, u.id) < (${decodedCursor.instant.toISOString()}::timestamp, ${decodedCursor.id})`;
+
+  const result = await db.execute<{
+    id: string;
+    handle: string;
+    name: string;
+    created_at: Date;
+  }>(sql`
+    SELECT u.id, u.handle, u.name, u.created_at
+    FROM "user" AS u
+    WHERE u.is_channel_listed = true
+      AND u.handle IS NOT NULL
+      AND u.anonymized_at IS NULL
+      AND EXISTS (
+        SELECT 1 FROM video AS v
+        WHERE v.creator_id = u.id AND ${publicVideoPredicate()}
+      )
+      AND ${cursorCondition}
+    ORDER BY u.created_at DESC, u.id DESC
+    LIMIT ${input.limit + 1}
+  `);
+
+  const pageRows = result.rows.slice(0, input.limit);
+  const lastRow = pageRows.at(-1);
+  const nextCursor =
+    result.rows.length > input.limit && lastRow !== undefined
+      ? encodeInstantCursor({ instant: new Date(lastRow.created_at), id: lastRow.id })
+      : null;
+
+  return {
+    success: true,
+    value: {
+      rows: pageRows.map((row) => ({ handle: row.handle, name: row.name })),
+      nextCursor,
+    },
+  };
+}

@@ -62,6 +62,17 @@ const router = express.Router();
 /** `GET /funding/deals` — investor deal flow, filtered by ENABLED_FUNDING_ROUND_TYPES. */
 router.get("/funding/deals", requireAuth, fundingController.listFundingDeals);
 
+/**
+ * `GET /funding-rounds/mine` — every round across every project the caller founds.
+ *
+ * ⚠️ DECLARED BEFORE `/funding-rounds/:roundId`, AND THAT IS LOAD-BEARING. Express matches in
+ * declaration order, so with these two the other way round the literal `mine` is captured as a
+ * round id and this route becomes unreachable — answering 404 for every founder rather than
+ * failing loudly. Same rule as `/videos/mine`, `/research-projects/mine` and the `/users/me/*`
+ * family, which has its own ordering test for exactly this reason.
+ */
+router.get("/funding-rounds/mine", requireAuth, fundingController.listMyFoundedRounds);
+
 /** `GET /funding-rounds/:roundId` — public for an open round; 404 for a draft. */
 router.get("/funding-rounds/:roundId", requireAuth, fundingController.getFundingRound);
 

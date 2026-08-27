@@ -76,13 +76,16 @@ export const ProfileLinkSchema = z
  * `sortOrder` from the array index. That is the same shape `PUT /products/:id/variants` uses, and it
  * is why this needs no idempotency key — sending it twice produces the same rows.
  *
- * BOTH FIELDS ARE REQUIRED KEYS. `bio: null` clears the description and `links: []` clears the
+ * ALL THREE FIELDS ARE REQUIRED KEYS. `bio: null` clears the description and `links: []` clears the
  * links; omitting either would make "leave it alone" and "clear it" indistinguishable on the one
- * write that can do both.
+ * write that can do both. `isChannelListed` is required for the same reason and one more: it is a
+ * CONSENT flag, and a body that can omit it is a body that can flip it by accident on a save that
+ * meant to change a bio.
  */
 export const UpdateMyChannelProfileSchema = z
   .object({
     bio: ChannelBioSchema,
     links: z.array(ProfileLinkSchema).max(10, "At most 10 links."),
+    isChannelListed: z.boolean(),
   })
   .strict();

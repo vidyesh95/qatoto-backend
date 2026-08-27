@@ -56,6 +56,11 @@ async function createSmokeUser(options: { readonly isStaff: boolean }): Promise<
     emailVerified: false,
     handle: `smoke_${id.slice(-12)}`,
     locationLabel: "Nowhere",
+    // SET TRUE ON PURPOSE. The column defaults to false, so an assertion that it is false after
+    // the scrub would pass without the scrub having done anything — a guard that can only ever
+    // succeed. Opting the probe in first is what makes "an anonymized account leaves the public
+    // directory" a claim this script can actually fail.
+    isChannelListed: true,
     platformRole: options.isStaff ? "moderator" : null,
   });
 
@@ -326,6 +331,7 @@ async function main(): Promise<void> {
         handle: user.handle,
         locationLabel: user.locationLabel,
         bio: user.bio,
+        isChannelListed: user.isChannelListed,
         anonymizedAt: user.anonymizedAt,
       })
       .from(user)
@@ -333,12 +339,14 @@ async function main(): Promise<void> {
 
     if (config.ACCOUNT_ANONYMIZATION_ENABLED) {
       /**
-       * `bio` IS IN HERE BECAUSE NOTHING ELSE CHECKS IT.
+       * `bio` AND `isChannelListed` ARE IN HERE BECAUSE NOTHING ELSE CHECKS THEM.
        *
-       * `db:verify-anonymization-coverage` walks foreign keys into `user`; `bio` is a scalar
-       * column, so it is invisible to that script and the scrub's single `bio: null` line could be
-       * deleted without turning anything red. This assertion is the only thing standing between
-       * that and public free text surviving an erasure.
+       * `db:verify-anonymization-coverage` walks foreign keys into `user`; both of these are
+       * SCALAR columns, so they are invisible to that script and the scrub's single line for each
+       * could be deleted without turning anything red. This assertion is the only thing standing
+       * between that and public free text surviving an erasure — and, for `isChannelListed`,
+       * between that and an erased person's handle still being advertised to search engines by
+       * `GET /channels`.
        */
       check(
         "the identity is gone",
@@ -346,8 +354,9 @@ async function main(): Promise<void> {
           afterScrub.handle === null &&
           afterScrub.locationLabel === null &&
           afterScrub.bio === null &&
+          !afterScrub.isChannelListed &&
           (afterScrub.email ?? "").endsWith("@deleted.qatoto.invalid"),
-        `name=${afterScrub?.name ?? "?"} handle=${afterScrub?.handle ?? "null"} bio=${afterScrub?.bio ?? "null"} email=${afterScrub?.email ?? "?"}`,
+        `name=${afterScrub?.name ?? "?"} handle=${afterScrub?.handle ?? "null"} bio=${afterScrub?.bio ?? "null"} listed=${String(afterScrub?.isChannelListed)} email=${afterScrub?.email ?? "?"}`,
       );
       check(
         "anonymized_at is stamped",

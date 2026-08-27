@@ -751,6 +751,18 @@ async function scrubUserAndComplete(requestId: string, userId: string): Promise<
          * `scripts/smoke-privacy.ts`; keep them together.
          */
         bio: null,
+        /**
+         * ⚠️ THE SAME BLIND SPOT AS `bio` DIRECTLY ABOVE, and for the same reason: a scalar column
+         * cannot appear in a foreign-key-keyed manifest, so `db:verify-anonymization-coverage`
+         * stays green whether or not this line exists.
+         *
+         * IT IS NOT COSMETIC. `GET /channels` reads this flag to build the public sitemap, so
+         * leaving it `true` would keep advertising a handle to search engines for a person who
+         * asked to be erased — an erasure that ends with the subject still being indexed. The
+         * handle itself is nulled two lines up, which makes the row unreachable, but consent to be
+         * listed is its own fact and it dies with the account.
+         */
+        isChannelListed: false,
         anonymizedAt: new Date(),
       })
       /**

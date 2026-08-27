@@ -1,0 +1,37 @@
+-- ---------------------------------------------------------------------------
+-- Channel listing — the creator's own decision to be findable.
+--
+-- WHY IT EXISTS. `/channel/:handle` is public and has been since it shipped: every feed card links
+-- to it and the library's subscription list joins it. But it is in NO sitemap, so the only way to
+-- reach one is to already have a link — which is the slowest discovery path there is, and the exact
+-- problem `src/app/sitemap.ts` was written to fix for every other public surface.
+--
+-- The reason it was left out was never technical. There was no public handle-enumeration read to
+-- build a list from, and building one raises a question the code cannot answer: a directory of
+-- PEOPLE is not the same object as a directory of products. The cofounder directory already made
+-- this argument — "a directory of people who did not consent to being in it" is a decision, not a
+-- default — so this column is the consent, and it DEFAULTS FALSE.
+--
+-- ## WHAT IT DOES AND DOES NOT DO
+--
+-- It governs DISCOVERABILITY, not visibility. The channel page is public either way; the flag only
+-- decides whether `GET /channels` announces the handle to a crawler. Any copy that implies
+-- switching it off makes a channel private would be a lie the backend cannot keep.
+--
+-- ## ⚠️ A SCALAR COLUMN ON `user` IS INVISIBLE TO THE ANONYMIZATION VERIFIER — THE THIRD TIME
+--
+-- `scripts/verify-anonymization-coverage.ts` walks FOREIGN KEY columns into `user`. A scalar has
+-- none, so this column can never appear in the manifest and the verifier will stay green whether or
+-- not the scrub clears it. `user.bio` has exactly this problem and carries a comment saying so;
+-- `video_document`'s object keys had the same shape last migration.
+--
+-- So: `anonymize-account.service.ts` sets it FALSE explicitly, and the only executable guard on that
+-- line is `scripts/smoke-privacy.ts`. An anonymized account must leave the directory — otherwise a
+-- person who asked to be erased keeps being advertised to search engines, which is the failure this
+-- comment exists to prevent somebody re-introducing.
+--
+-- NOT NULL WITH A DEFAULT, so existing rows land on `false` without a backfill and without a window
+-- in which the column is nullable — a nullable consent flag has three states and consent has two.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE "user" ADD COLUMN "is_channel_listed" boolean DEFAULT false NOT NULL;

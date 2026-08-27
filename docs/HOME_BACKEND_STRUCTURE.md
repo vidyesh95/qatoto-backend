@@ -1055,8 +1055,35 @@ is the tell: nobody could have been right, because there was nothing to be right
 
 | Method | Path | Auth | Limiter |
 | --- | --- | --- | --- |
+| `GET` | `/channels` | optional | `feedReadLimiter` |
 | `GET` | `/channels/:handle` | optional | `feedReadLimiter` |
 | `GET` | `/channels/:handle/videos` | optional | `feedReadLimiter` |
+
+**`GET /channels` — the OPT-IN public directory, and its only consumer is `sitemap.ts`.** The
+channel page is public and was announced in no sitemap for one reason: there was no public
+handle-enumeration read to build a list from. Building one raises a question the code cannot answer,
+so migration `0144` adds `user.is_channel_listed` and it **defaults FALSE** — a directory of PEOPLE
+is not a directory of products, and the cofounder directory already argued that a directory of
+people who did not consent to being in it is a decision rather than a default.
+
+> **IT GOVERNS DISCOVERABILITY, NOT VISIBILITY.** The channel page is reachable either way. Any copy
+> implying that switching the flag off makes a channel private is a promise this column cannot keep.
+>
+> **⚠️ THE VIDEO TERM JOINS `video` UNDER `publicVideoPredicate()` AND DOES NOT READ
+> `creator_stats.published_video_count`.** Two reasons, and the second is the one that bites: it is a
+> counter cache (`project_stats` is LEFT-joined on the product page precisely because 15 of 41
+> projects had no row), and it counts the WRONG THING — `publish_status = 'published'` REGARDLESS OF
+> VISIBILITY, per its own comment in this file. A creator whose videos are all unlisted has a
+> positive count and an empty channel page, and announcing that page files a soft 404, which
+> `sitemap.ts`'s header calls worse for the domain than never announcing it. **Verified live**: a
+> creator who opted in with no public video was excluded; one with public videos appeared.
+>
+> **KEYSET ON `(created_at, id)`, not on the handle.** A handle is renameable, and a rename
+> mid-crawl would move a row across a page boundary — which is what a keyset cursor exists to stop.
+>
+> **⚠️ THE SCRUB CLEARS IT, AND NOTHING STRUCTURAL WOULD NOTICE IF IT STOPPED.** `is_channel_listed`
+> is a scalar, so `db:verify-anonymization-coverage` cannot see it — see BACKEND_STRUCTURE.md §11's
+> "three things the verifier cannot see". An erased account must leave the directory.
 
 Migration `0138_channel_video_listing` adds one partial index,
 `video_creator_recent_idx (creator_id, published_at DESC, id DESC)`.
