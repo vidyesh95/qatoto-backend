@@ -341,3 +341,13 @@ export const ListMyVideosQuerySchema = z
 export type CreateVideoInput = z.infer<typeof CreateVideoSchema>;
 
 export type UpdateVideoInput = z.infer<typeof UpdateVideoSchema>;
+
+/**
+ * Body for `POST /videos/:videoId/collaborators/respond`.
+ *
+ * TWO VALUES, NO THIRD. There is no "un-answer": a decline is an answer the creator can see, and
+ * reverting to `invited` would erase a decision somebody made. Re-inviting is the creator's move.
+ */
+export const RespondToCollaborationSchema = z
+  .object({ response: z.enum(["accepted", "declined"]) })
+  .strict();

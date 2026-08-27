@@ -13,6 +13,7 @@ import {
   ReplaceChaptersSchema,
   ReplacePlaylistsSchema,
   ReplaceProductsSchema,
+  RespondToCollaborationSchema,
   UpdateVideoSchema,
 } from "#src/modules/studio/videos/videos.schemas.js";
 import * as videosService from "#src/modules/studio/videos/videos.service.js";
@@ -468,4 +469,77 @@ export async function downloadDocument(req: Request, res: Response): Promise<voi
 
   res.setHeader("Cache-Control", "no-store");
   res.redirect(302, downloadResult.value.downloadUrl);
+}
+
+// --------------------------------------------------------------------------------
+// Collaborator credits
+// --------------------------------------------------------------------------------
+
+/** `GET /users/me/collaborations` — invites addressed to the caller. Filter is their own email. */
+export async function listMyCollaborations(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Collaboration invites loaded.",
+    data: await videosService.listMyCollaborationInvites(req.user.id),
+  };
+  res.status(200).json(response);
+}
+
+/** `GET /users/me/collaborators` — everyone the caller has invited, across their own videos. */
+export async function listMyCollaborators(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Collaborators loaded.",
+    data: await videosService.listMyVideoCollaborators(req.user.id),
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * `POST /videos/:videoId/collaborators/respond` — the invitee answers.
+ *
+ * ⚠️ THE ONE WRITE ON THIS ROUTER THE VIDEO'S OWNER MAY NOT MAKE. Every other `/videos/:videoId/*`
+ * route re-checks ownership and 404s a stranger; this one is the mirror image — the caller is a
+ * stranger to the video by definition, and their claim is on the invited ADDRESS. The service's
+ * predicate is the whole authorization; there is deliberately no ownership check to add here.
+ */
+export async function respondToCollaboration(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const body = RespondToCollaborationSchema.safeParse(req.body);
+  if (!body.success) {
+    respondValidationFailed(res, body.error);
+    return;
+  }
+
+  const result = await videosService.respondToCollaborationInvite(
+    req.user.id,
+    firstParam(req.params.videoId ?? ""),
+    body.data.response,
+  );
+  if (!result.success) {
+    respondStudioError(res, result.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: `Collaboration ${result.value.status}.`,
+    data: result.value,
+  };
+  res.status(200).json(response);
 }

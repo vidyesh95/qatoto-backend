@@ -20,6 +20,7 @@ import {
   videoAttachedProduct,
   videoCategory,
   videoChapter,
+  user,
   videoCollaborator,
   videoDocument,
   videoMilestone,
@@ -1145,12 +1146,60 @@ async function replaceSimpleChildSets(
   }
 
   if (input.collaboratorEmails !== undefined) {
-    await tx.delete(videoCollaborator).where(eq(videoCollaborator.videoId, videoId));
     const uniqueEmails = dedupe(input.collaboratorEmails);
-    if (uniqueEmails.length > 0) {
+
+    /**
+     * ⚠️ NOT A DELETE-ALL-AND-REINSERT, UNLIKE ITS SIBLINGS ABOVE, AND THE DIFFERENCE IS THE WHOLE
+     * REASON A COLLABORATOR INVITE MEANS ANYTHING.
+     *
+     * The other child sets here are LABELS the creator owns — milestones, team-member names. Wiping
+     * and rewriting them is free because nothing outside this row ever touched them.
+     *
+     * A collaborator row is not a label. It carries a `status` the INVITEE sets by accepting or
+     * declining, so a blind delete-and-reinsert would erase somebody else's answer every time the
+     * creator pressed Save — an invite accepted on Monday would silently read `invited` again after
+     * an unrelated title edit on Tuesday. That is the bug this shape prevents, and it only became
+     * reachable when the accept/decline routes shipped; before that every row was `invited` forever
+     * and the delete was harmless.
+     *
+     * So: remove only the emails that left the list, and leave the survivors untouched — including
+     * their status, their `userId` link and their `createdAt`. Re-adding an email that is already
+     * there is a no-op rather than a reset, which is what `onConflictDoNothing` buys against
+     * `video_collaborator_unq (video_id, invited_email)`.
+     */
+    if (uniqueEmails.length === 0) {
+      await tx.delete(videoCollaborator).where(eq(videoCollaborator.videoId, videoId));
+    } else {
+      // THE REMOVALS ARE COMPUTED HERE RATHER THAN WITH `notInArray`, because `invitedEmail` is
+      // `citext` — a custom column type drizzle's array helpers do not narrow — and because the
+      // comparison must be CASE-INSENSITIVE to match that column's own semantics. Reading the
+      // existing rows first makes both explicit instead of relying on a helper to get them right.
+      const existingRows = await tx
+        .select({ invitedEmail: videoCollaborator.invitedEmail })
+        .from(videoCollaborator)
+        .where(eq(videoCollaborator.videoId, videoId));
+      const keptEmails = new Set(uniqueEmails.map((email) => email.toLowerCase()));
+      const removedEmails = existingRows
+        .map((row) => row.invitedEmail)
+        .filter((email) => !keptEmails.has(email.toLowerCase()));
+
+      for (const removedEmail of removedEmails) {
+        await tx
+          .delete(videoCollaborator)
+          .where(
+            and(
+              eq(videoCollaborator.videoId, videoId),
+              eq(videoCollaborator.invitedEmail, removedEmail),
+            ),
+          );
+      }
+
       await tx
         .insert(videoCollaborator)
-        .values(uniqueEmails.map((invitedEmail) => ({ videoId, invitedEmail })));
+        .values(uniqueEmails.map((invitedEmail) => ({ videoId, invitedEmail })))
+        .onConflictDoNothing({
+          target: [videoCollaborator.videoId, videoCollaborator.invitedEmail],
+        });
     }
   }
 }
@@ -2608,4 +2657,155 @@ export async function resolveVideoDocumentDownload(
     return { success: false, error: asVideoDocumentStorageError(presigned.error) };
   }
   return { success: true, value: presigned.value };
+}
+
+// --------------------------------------------------------------------------------
+// Collaborator credits — the invite, and the answer to it
+// --------------------------------------------------------------------------------
+//
+// WHAT THIS IS, AND WHAT IT IS NOT. A collaborator row is a CREDIT: "this person worked on this
+// video", confirmed by that person. It grants NOTHING — no access to the video, the account or the
+// studio. Nothing in this codebase authorizes off `video_collaborator`, and nothing should start
+// without a deliberate design pass; `/studio/team`'s roadmap line promised "who else can act on
+// this account", and that is ACCOUNT-LEVEL DELEGATION, which remains unbuilt. Do not let this table
+// quietly become it.
+//
+// WHY IT NEEDED BUILDING. `video_collaborator.status` has had `invited | accepted | declined` since
+// the table existed, and **no route could ever write anything but `invited`** — there was no
+// accept, no decline, and no read by which an invitee could even learn they had been named. So the
+// two other enum values were unreachable and a "collaborator" was an email address a creator typed
+// into a box. The handshake is what makes the credit worth more than the typing.
+//
+// KEYED ON EMAIL, RESOLVED TO A USER ON ANSWER. The creator invites an address, because they may not
+// know whether that person has an account. `userId` is filled in when the invite is answered, which
+// is the first moment a real identity is attached to it.
+
+export interface CollaborationInviteView {
+  readonly videoId: string;
+  readonly videoTitle: string;
+  readonly creatorName: string;
+  readonly status: (typeof videoCollaborator.$inferSelect)["status"];
+  readonly invitedAt: Date;
+}
+
+export interface VideoCollaboratorRosterEntry {
+  readonly videoId: string;
+  readonly videoTitle: string;
+  readonly invitedEmail: string;
+  readonly status: (typeof videoCollaborator.$inferSelect)["status"];
+  readonly invitedAt: Date;
+  /** Non-null once the invite has been answered — before that nobody is attached to the address. */
+  readonly userId: string | null;
+}
+
+/**
+ * `GET /users/me/collaborations` — the invitations addressed to ME.
+ *
+ * MATCHED ON THE CALLER'S EMAIL, NOT ON `userId`, and that is the whole reason this read exists.
+ * `userId` is null until an invite is answered, so matching on it would return nothing to exactly
+ * the people who have not answered yet — the only ones with anything to do.
+ *
+ * `citext` DOES THE CASE-FOLDING. `invitedEmail` and `user.email` are both `citext`, so
+ * `Alice@x.com` finds an invite typed as `alice@x.com` without either side lowercasing anything.
+ *
+ * DECLINED INVITES STAY IN THE LIST. Declining is an answer, not a delete — hiding it would let a
+ * creator re-invite into what looks to the invitee like the same unanswered row, and the person
+ * would have no record of having said no.
+ */
+export async function listMyCollaborationInvites(
+  userId: string,
+): Promise<readonly CollaborationInviteView[]> {
+  const [caller] = await db
+    .select({ email: user.email })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
+  if (!caller) return [];
+
+  const rows = await db
+    .select({
+      videoId: videoCollaborator.videoId,
+      videoTitle: video.title,
+      creatorName: user.name,
+      status: videoCollaborator.status,
+      invitedAt: videoCollaborator.createdAt,
+    })
+    .from(videoCollaborator)
+    .innerJoin(video, eq(video.id, videoCollaborator.videoId))
+    .innerJoin(user, eq(user.id, video.creatorId))
+    .where(eq(videoCollaborator.invitedEmail, caller.email))
+    .orderBy(desc(videoCollaborator.createdAt), desc(videoCollaborator.videoId));
+
+  return rows;
+}
+
+/**
+ * `GET /users/me/collaborators` — everyone I have invited, across every video I own.
+ *
+ * THE ACCOUNT-LEVEL VIEW THAT DID NOT EXIST. `video_collaborator` was written by the per-video save
+ * and read only into that one video's projection, so a creator with twelve videos had to open
+ * twelve pages to see who they had named. Same gap `/studio/funding` had over funding rounds, and
+ * the same shape of fix: one read across the owner's own rows.
+ */
+export async function listMyVideoCollaborators(
+  creatorId: string,
+): Promise<readonly VideoCollaboratorRosterEntry[]> {
+  const rows = await db
+    .select({
+      videoId: videoCollaborator.videoId,
+      videoTitle: video.title,
+      invitedEmail: videoCollaborator.invitedEmail,
+      status: videoCollaborator.status,
+      invitedAt: videoCollaborator.createdAt,
+      userId: videoCollaborator.userId,
+    })
+    .from(videoCollaborator)
+    .innerJoin(video, eq(video.id, videoCollaborator.videoId))
+    .where(eq(video.creatorId, creatorId))
+    .orderBy(desc(videoCollaborator.createdAt), desc(videoCollaborator.videoId));
+
+  return rows;
+}
+
+/**
+ * `POST /videos/:videoId/collaborators/respond` — the invitee accepts or declines.
+ *
+ * THE FIRST WRITER OF `accepted` AND `declined` ANYWHERE. Both enum values shipped with the table
+ * and had no route that could produce them.
+ *
+ * ⚠️ THE PREDICATE IS THE AUTHORIZATION. There is no ownership check and there should not be — the
+ * caller is not the video's owner, they are the person whose ADDRESS was invited. Matching on
+ * `(videoId, invitedEmail = caller's email)` is what proves they are answering their own invite,
+ * and a caller who was never invited matches nothing and gets the same `VIDEO_NOT_FOUND` an absent
+ * video gives. Splitting those two would make this route an oracle for who is invited to what.
+ *
+ * `userId` IS STAMPED ON THE ANSWER, not at invite time: it is the first moment an account is
+ * provably behind the address. It is `set null` on user delete, so the credit survives the account
+ * as a typed email — which is the honest degradation for a record about who did work.
+ */
+export async function respondToCollaborationInvite(
+  userId: string,
+  videoId: string,
+  response: "accepted" | "declined",
+): Promise<Result<{ status: "accepted" | "declined" }, VideoError>> {
+  const [caller] = await db
+    .select({ email: user.email })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
+  if (!caller) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+
+  const [updated] = await db
+    .update(videoCollaborator)
+    .set({ status: response, userId })
+    .where(
+      and(
+        eq(videoCollaborator.videoId, videoId),
+        eq(videoCollaborator.invitedEmail, caller.email),
+      ),
+    )
+    .returning({ status: videoCollaborator.status });
+
+  if (!updated) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+  return { success: true, value: { status: response } };
 }

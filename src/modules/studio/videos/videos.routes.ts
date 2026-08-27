@@ -3,6 +3,7 @@ import express from "express";
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { longFormBody } from "#src/middleware/json-body.js";
 import {
+  collaborationResponseLimiter,
   contentReviewLimiter,
   videoCreateLimiter,
   videoDocumentDeleteLimiter,
@@ -11,6 +12,7 @@ import {
   videoThumbnailUploadLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as adminReviewController from "#src/modules/studio/admin-review.controller.js";
 import { uploadVideoDocumentFile } from "#src/modules/studio/videos/upload-video-document.js";
 import { uploadVideoThumbnail } from "#src/modules/studio/videos/upload-video-thumbnail.js";
@@ -135,6 +137,26 @@ router.get(
   attachOptionalUser,
   videoDocumentDownloadLimiter,
   videosController.downloadDocument,
+);
+
+/**
+ * POST /videos/:videoId/collaborators/respond — the INVITEE accepts or declines.
+ *
+ * ⚠️ THE ONE `/videos/:videoId/*` ROUTE THAT IS NOT OWNER-SCOPED, and the exception is the point:
+ * the caller is a stranger to this video by definition. Their claim is on the invited ADDRESS, and
+ * the service matches `(videoId, invitedEmail = caller's email)` — that predicate IS the
+ * authorization. A caller who was never invited matches nothing and gets the same 404 an absent
+ * video gives, so the route cannot be used to discover who is invited to what.
+ *
+ * `requireIdentifiedUser` because answering attaches a real account to a credit about who did work.
+ */
+router.post(
+  "/:videoId/collaborators/respond",
+  requireAuth,
+  requireIdentifiedUser,
+  collaborationResponseLimiter,
+  longFormBody,
+  videosController.respondToCollaboration,
 );
 
 /** PUT /videos/:videoId/chapters — replaces the whole chapter set. */

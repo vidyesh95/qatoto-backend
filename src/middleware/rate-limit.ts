@@ -751,6 +751,22 @@ export const videoDocumentUploadLimiter = createLimiter({
 });
 
 /**
+ * POST /videos/:videoId/collaborators/respond (§11k).
+ *
+ * ⚠️ KEYED BY THE ANSWERING USER, NOT BY THE VIDEO'S OWNER, because this is the one write on that
+ * router the owner cannot make. The budget guards a probe rather than a cost: the route answers an
+ * identical 404 whether an invite exists or was never sent, so the only thing volume could buy an
+ * attacker is a scan across video ids looking for a timing difference. Answering an invite is
+ * something a person does once, so 20 in fifteen minutes is far past normal use and far under
+ * useful for a scan.
+ */
+export const collaborationResponseLimiter = createLimiter({
+  namespace: "collaborationResponse",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+/**
  * DELETE /videos/:videoId/documents/:documentId (§11j).
  *
  * ITS SIBLING `DELETE /videos/:videoId` IS ON THE KNOWN-DEBT LIST AND THIS IS NOT, which looks

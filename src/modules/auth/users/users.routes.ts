@@ -18,6 +18,7 @@ import * as usersController from "#src/modules/auth/users/users.controller.js";
 import * as engagementController from "#src/modules/home/engagement/engagement.controller.js";
 import * as videoContentReportsController from "#src/modules/studio/video-content-reports.controller.js";
 import * as creatorAnalyticsController from "#src/modules/studio/videos/creator-analytics.controller.js";
+import * as videosController from "#src/modules/studio/videos/videos.controller.js";
 
 const router = express.Router();
 
@@ -241,6 +242,31 @@ router.get("/me/video-analytics", requireAuth, creatorAnalyticsController.listVi
  * covers top-level comments only, and an inbox built on it would silently hide most of them.
  */
 router.get("/me/video-comments", requireAuth, engagementController.listMyVideoComments);
+
+/**
+ * GET /users/me/collaborations
+ * Invitations addressed to the CALLER, across anybody's videos — the read behind `/studio/team`'s
+ * "invitations to you" half.
+ *
+ * ⚠️ MATCHED ON THE CALLER'S EMAIL, NOT ON A USER ID, and that is not an implementation detail:
+ * `video_collaborator.user_id` is NULL until an invite is answered, so a `userId` match would
+ * return nothing to precisely the people who have not answered yet — the only ones with anything
+ * to do. Both columns are `citext`, so the case-folding is the database's.
+ *
+ * It is HERE rather than on the videos router for the reason `/me/creator-summary` records: the
+ * videos router mounts first and its `GET /:videoId` permanently shadows any two-segment
+ * `/videos/X`.
+ */
+router.get("/me/collaborations", requireAuth, videosController.listMyCollaborations);
+
+/**
+ * GET /users/me/collaborators
+ * Everyone the caller has invited, across every video they own — the account-level roster that did
+ * not exist. `video_collaborator` was written by the per-video save and read only into that one
+ * video's projection, so a creator with twelve videos opened twelve pages to see who they had
+ * named. Same gap `/studio/funding` closed over funding rounds.
+ */
+router.get("/me/collaborators", requireAuth, videosController.listMyCollaborators);
 
 /**
  * POST /users/me/deletion-request
