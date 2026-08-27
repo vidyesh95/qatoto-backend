@@ -2972,8 +2972,7 @@ Two smaller consequences of the same reasoning:
 #### What was deliberately not done
 
 **No index.** Both are platform reference tables, staff-read only, at tens to low hundreds of rows,
-where a scan and sort cost nothing; migrations here are hand-written, so an index is real cost against
-no measurable gain. If `commerce_freight_rate_card` ever passes a few thousand rows,
+where a scan and sort cost nothing, so an index is real cost against no measurable gain. If `commerce_freight_rate_card` ever passes a few thousand rows,
 `(valid_from DESC, id)` on each table is the change.
 
 **No service-level test.** The route suite stubs the service wholesale, so what it proves is the

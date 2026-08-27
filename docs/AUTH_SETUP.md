@@ -96,7 +96,7 @@ and these scripts:
         "start": "node dist/index.js",
         "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p tsconfig.test.json",
         "test": "vitest run",
-        "db:generate": "drizzle-kit generate", // ⚠️ does not work — see §6
+        "db:generate": "drizzle-kit generate", // schema → SQL + snapshot; see §6
         "db:migrate": "drizzle-kit migrate", // apply migration
         "db:cleanup-orphans": "tsx --conditions=development scripts/cleanup-orphan-signups.ts",
         "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",
@@ -112,13 +112,14 @@ and these scripts:
 | -------------------------------- | ------------------------------------------------------------------------------------ |
 | `dev`                            | Auto-restarts on save, runs TS directly via `tsx` — no build step.                   |
 | `build`                          | `tsc` → plain JS in `dist/` for deploy.                                              |
-| `db:generate`                    | ⚠️ **DOES NOT WORK — see §6.** Kept in `package.json` so the failure is a prompt rather than "command not found". |
+| `db:generate`                    | Diffs `src/db/schema.ts` against the newest snapshot in `drizzle/meta/` and writes the SQL, the next snapshot and the journal entry. **Broken for migrations 0126–0146 and repaired by the `0146` baseline — see §6.** |
 | `db:migrate`                     | Applies pending migrations to Postgres.                                              |
 | `db:backfill-*` / `db:cleanup-*` | One-off / cron maintenance scripts — see §11 and BACKEND_STRUCTURE §5g.              |
 
 > **Changed from the old flow:** the schema is **not** generated from `auth.ts` by the
-> Better Auth CLI anymore. `src/db/schema.ts` is committed and edited by hand — and turning it into
-> SQL is **not** `db:generate`, which no longer works. See §6 for the workflow that does.
+> Better Auth CLI anymore. `src/db/schema.ts` is committed and edited by hand, and `db:generate`
+> turns it into SQL. It could not, for twenty-one migrations; §6 explains why and what the fix
+> costs you if it regresses.
 
 Then create `tsconfig.json` (+ `tsconfig.scripts.json`, `tsconfig.test.json`),
 `drizzle.config.ts`, and `.env` (§12).
@@ -344,30 +345,59 @@ Sanity check: `GET http://localhost:8000/health` → `{ status: "success", ... }
 You **do** maintain the schema by hand — it lives committed in `src/db/schema.ts` (not
 CLI-generated from `auth.ts` anymore).
 
-### ⚠️ `pnpm db:generate` DOES NOT WORK. Migrations are hand-written.
+### ⚠️ EVERY MIGRATION MUST LEAVE A SNAPSHOT BEHIND
 
-This is the single most expensive thing to get wrong here, because the failure is a wall of
-interactive prompts rather than an error. **The snapshots in `drizzle/meta/` stop at `0054`**, so
-drizzle-kit diffs today's schema against a state four phases old, decides most of the database needs
-recreating, and asks a stream of "is this table renamed or created?" questions nobody can answer
-correctly. Every migration since `0046` has been written by hand for this reason.
+`db:generate` works. It stopped working for migrations `0126`–`0146` and the cause is worth
+knowing, because the same omission re-breaks it in one commit.
 
-The workflow that works, and that every migration through `0144` used:
+`drizzle-kit` picks its diff baseline by taking the **last snapshot file in `drizzle/meta/` by name
+sort** (`prepareOutFolder`, `drizzle-kit/bin.cjs`) — not the head of `_journal.json`. Migrations
+written by hand skip `generate`, so they add a journal entry and no snapshot. Twenty-one of them in
+a row left the newest snapshot at `0125` while the journal ran to `0146`, and `generate` then
+diffed today's schema against a state 77 tables behind. Created and deleted tables were both
+non-empty, so `tablesResolver` asked "renamed or created?" per table — a wall of prompts nobody can
+answer correctly, or, piped, `Error: Interactive prompts require a TTY terminal`.
+
+`drizzle/meta/0146_snapshot.json` is the repair: a full snapshot of `src/db/schema.ts` chained to
+`0125`'s `id`, verified against the live database before it was committed. It applies no SQL.
+
+**The normal workflow, which now works:**
 
 ```bash
-pnpm exec drizzle-kit export --sql     # canonical DDL, no database connection needed
-# extract the new statements by hand into drizzle/NNNN_name.sql,
-#   separated by `--> statement-breakpoint`
-# append an entry to drizzle/meta/_journal.json
-pnpm db:migrate                        # applies pending migrations to Postgres
+pnpm db:generate     # writes drizzle/NNNN_name.sql + meta/NNNN_snapshot.json + the journal entry
+# review the SQL — see below — and edit it in place if it needs more than Drizzle can express
+pnpm db:migrate      # applies pending migrations to Postgres
 ```
 
-Two details that are not obvious and both bite:
+**Edit the generated `.sql`; never hand-roll the trio.** Drizzle cannot express triggers, functions,
+RLS policies, `CHECK`s over expressions, or backfill `UPDATE`s, and twenty-seven migrations here
+carry them (`0049`, `0053`, `0065`, `0081`, `0084`, `0087`, `0093`, …). Add those statements to the
+file `generate` wrote, separated by `--> statement-breakpoint`, and leave the snapshot and journal
+entry it wrote alone. That is what keeps the baseline current. Writing the `.sql` and the journal
+entry by hand — the old workflow — is what put the baseline 21 migrations behind.
+
+If you must write a migration with no `generate` run at all, re-baseline afterwards: run `generate`
+into an empty out dir (no prior snapshot ⇒ everything is a create ⇒ no prompts), set the resulting
+`0000_snapshot.json`'s `prevId` to the previous snapshot's `id`, and commit it as
+`meta/NNNN_snapshot.json` for the journal entry it matches. `--out` must be a **relative** path;
+drizzle-kit prefixes `./` to it and an absolute path fails `ENOENT`.
+
+Three details that are not obvious and all bite:
 
 - **`drizzle/meta/_journal.json` has NO trailing newline. Keep it that way** — an editor that adds
-  one puts a spurious diff on every migration that follows.
+  one puts a spurious diff on every migration that follows. Snapshot files have none either.
 - **`.oxfmtrc.json` ignores `drizzle/`.** Without that, `pnpm fmt` reformats the snapshot files and
-  buries a twenty-line hand-written migration in 5,000 lines of churn.
+  buries a twenty-line migration in 5,000 lines of churn.
+- **Some live objects are invisible to Drizzle and always will be**, so `generate` neither creates
+  nor drops them: the triggers/functions/policies above, eight expression indexes and one unique
+  constraint created by hand, and two forward-reference foreign keys
+  (`commerce_order.checkout_group_id`, `community_forum_thread.accepted_reply_id`) whose columns are
+  declared in `schema.ts` without `.references()`. A `drizzle-kit pull` will report all of them as
+  drift. They are not drift; they are the parts Drizzle does not model.
+
+`pnpm exec drizzle-kit export --sql` still composes the canonical DDL from `schema.ts` with no
+database connection and without reading `drizzle/meta/`. It is the right tool for proving a schema
+edit is organization-only (see the header of `src/db/schema.ts`), not for authoring migrations.
 
 Before writing a `NOT NULL` column with no default, **check the row count first**. `0143` and `0144`
 were both safe only because their tables were empty, and that was verified rather than assumed.
@@ -386,8 +416,7 @@ Tables (auth-owned + the identity columns/table we own):
 > **Migrations gotcha (TLS):** `drizzle-kit migrate` does **not** read the app pool. With
 > a CA-cert managed DB it can fail **silently** if you hand it the CA-cert connection URL.
 > In `drizzle.config.ts`, use **discrete** credentials (`host`/`port`/`user`/`password`/
-> `database` + `ssl`), not the `url`. Re-run the hand-written-migration workflow above after any
-> schema change.
+> `database` + `ssl`), not the `url`. Re-run the workflow above after any schema change.
 
 ---
 

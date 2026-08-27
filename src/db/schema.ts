@@ -6,8 +6,9 @@
  * `#src/db/schema.js` and is otherwise untouched, and `drizzle.config.ts` still points
  * here. The split follows the 27 section rules the monolith had already drawn for itself.
  *
- * HOW TO PROVE A CHANGE HERE IS ORGANIZATION-ONLY, which matters because this repo's
- * migrations are hand-written and `db:generate` cannot be trusted to tell you:
+ * HOW TO PROVE A CHANGE HERE IS ORGANIZATION-ONLY. `db:generate` answers a different
+ * question — it diffs against `drizzle/meta/`'s newest snapshot, so it tells you what SQL a
+ * change needs, not whether the change was a change at all:
  *
  *     drizzle-kit export --sql
  *
