@@ -345,6 +345,19 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "capabilities_changed",
     "certification_submitted",
     "certification_decided",
+    /**
+     * Phase 13, added to the TYPE by `0073_store_phase_13_enums.sql` and missing from this
+     * list until the 0146 snapshot re-baseline compared the enum against the live database.
+     * A moderator resolving a ranking appeal or overriding an automatic enforcement lands on
+     * the organization chain, beside `certification_decided`, because the suppressed product
+     * always has an owning organization. Nothing writes it yet.
+     *
+     * Payloads for this kind must dodge `FORBIDDEN_PAYLOAD_KEY` in
+     * `commerce-organization-audit.service.ts`, which matches `filename` and `object.*key`
+     * and THROWS: carry productId / action / penaltyKinds, never a fingerprint, a subnet
+     * hash or a raw address.
+     */
+    "ranking_enforcement_decided",
     /** Phase 17. The manufacturer directory's two seller-owned collections (§16.3). */
     "production_lines_changed",
     "sites_changed",
