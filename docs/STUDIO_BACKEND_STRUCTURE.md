@@ -49,9 +49,9 @@
 > Appendix A becomes a re-read, not a redesign: **no table drop, no rename, no frontend rewrite.**
 >
 > **Status:** the frontend upload flow ([create-studio-page.tsx](src/components/studio/pages/create-studio-page.tsx)
-> → [upload-modal.tsx](src/components/studio/upload/upload-modal.tsx) →
-> [studio-videos-context.tsx](src/state/studio-videos-context.tsx)) is **pure UI + mock data**
-> today — saves push into a React `useState` store, nothing is submitted, the video list is a
+> → [upload-modal.tsx](src/components/studio/upload/upload-modal.tsx) → a React `useState` store)
+> was **pure UI + mock data** when this was written — saves pushed into that store, nothing was
+> submitted, the video list was a
 > seeded array. The YouTube path is already wired on the frontend: `create-studio-page.tsx` has an
 > "Add a video from YouTube" URL field validated live by
 > [src/lib/youtube.ts](src/lib/youtube.ts), and **the file dropzone below it is deliberately
@@ -137,9 +137,13 @@ The creator surface is two pages plus a modal:
   title, visibility, date, and — for anime — a read-only review badge (Pending / Approved /
   Rejected + reason). Per-row **Edit** re-opens the modal.
 
-The shared shape is `StudioVideo` in
-[studio-videos-context.tsx](src/state/studio-videos-context.tsx) — every field below maps to a
-column or child table in §4.
+The shared shape is the upload draft in `src/lib/videos/studio-view.ts` (frontend repo) — every
+field below maps to a column or child table in §4.
+
+> ⚠️ **IT WAS `studio-videos-context.tsx` AND THAT FILE NO LONGER EXISTS.** The context was replaced
+> by a typed draft plus real mutations when the studio stopped being mock data; `src/state/` now
+> holds four unrelated contexts. Corrected rather than left, because a doc naming a file that is not
+> there sends a reader looking for a bug.
 
 ### Field mapping (form → contract)
 
@@ -263,7 +267,8 @@ qatoto-backend/
 │   │   ├── cloudinary.ts                   # + uploadVideoThumbnail / deleteVideoThumbnail
 │   │   └── image.ts                         # (reused) validateAndNormalizeImage
 │   ├── scripts/
-│   │   └── seed-admin.ts                    # NEW — first-admin seed from env (§10)
+│   │   └── grant-platform-role.ts           # staff capability grant (§10) — this shipped
+│   │                                        #   instead of the planned seed-admin.ts
 │   └── app.ts                               # + mount the new routers
 ```
 
@@ -1330,9 +1335,11 @@ through staff review before appearing in `/anime` — the boundary specced in
     The role is loaded onto `req.user` from the session in `requireAuth` (extend the ambient
     `express.d.ts` type). **A client-claimed role is never trusted** (admin doc §2).
 
-- **First admin — seed script** `scripts/seed-admin.ts`: if no `admin` exists, create/promote one
-  from `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` (admin doc §7). Day-to-day promotion is a
-  future `/admin/users` action; recovery is re-running the seed.
+- **First staff account — `pnpm db:grant-platform-role`** (`scripts/grant-platform-role.ts`). ⚠️ This
+  paragraph planned a `scripts/seed-admin.ts` reading `INITIAL_ADMIN_EMAIL` /
+  `INITIAL_ADMIN_PASSWORD`; **that script was never written** and the grant script shipped instead,
+  which takes an existing account rather than minting one from env. Recovery is re-running the
+  grant. Day-to-day promotion is still a future `/admin/users` action.
 - The admin **open decision** ("keep anime **and** videos for approval") extends by defaulting
   `reviewStatus: pending` for other `videoType`s too — **no schema change**, just a flipped default.
 
@@ -1404,10 +1411,21 @@ authoritative on the source question until it is refreshed.
 
 ---
 
-## 13. Verification (when the backend phase begins)
+## 13. Verification
 
-1. `pnpm db:generate && pnpm db:migrate` — apply the new tables + enums + `user.role`.
-2. Run `tsx scripts/seed-admin.ts`. **No provider credentials to configure** — that is the point.
+> ⚠️ **THIS SECTION WAS WRITTEN IN THE FUTURE TENSE AND TWO OF ITS STEPS POINTED AT FILES THAT DO
+> NOT EXIST.** The phase shipped; the heading said "when the backend phase begins", step 2 named
+> `scripts/seed-admin.ts` and step 6 named `src/state/studio-videos-context.tsx`. Neither is in the
+> repo. Following the recipe therefore looked like finding a bug, which is worse than having no
+> recipe — corrected 2026-08-27, and the rest of it was re-checked rather than assumed: the create
+> response really does still carry `suggestedTitle`, and the URL-shape and negative checks below
+> still describe what the routes do.
+
+1. `pnpm db:generate && pnpm db:migrate`. **`db:generate` works again** — it was unusable for
+   migrations `0126`–`0146` because the snapshots in `drizzle/meta/` were frozen at `0054`, and the
+   `0146` baseline repaired it. See `AUTH_SETUP.md` §6.
+2. Grant yourself the staff capability with `pnpm db:grant-platform-role` — there is no
+   `seed-admin.ts`. **No provider credentials to configure**, which is the point.
 3. Sign in (get a session cookie), then exercise the flow:
 
     ```bash
@@ -1436,8 +1454,9 @@ authoritative on the source question until it is refreshed.
    but the backend rejects is the bug this check exists to catch (§3).
 5. **Cost check** — confirm no video bytes touched the server at all, and that create made exactly
    **one** outbound request (the oEmbed call). No provider API key was read.
-6. **Field coverage** — every `StudioVideo` field in
-   [studio-videos-context.tsx](src/state/studio-videos-context.tsx) maps to a column/child table
+6. **Field coverage** — every field the studio upload modal collects
+   (`src/lib/videos/studio-view.ts`'s `UploadDraft` in the frontend repo, which replaced the
+   `studio-videos-context.tsx` this step used to name) maps to a column/child table
    (§4); every modal step (Details / Video elements / Checks / Visibility + anime branch) is covered.
 7. **Negative checks:**
     - a non-YouTube URL (`https://vimeo.com/123`) → `422 INVALID_YOUTUBE_URL`

@@ -93,13 +93,27 @@ export const user = pgTable(
      */
     bio: text("bio"),
     /**
-     * Whether a moderator has hidden this person's PROFILE TEXT — the bio and the links, and
-     * nothing else.
+     * Whether a moderator has hidden this person's PROFILE TEXT — the free text they wrote about
+     * themselves, wherever it is published.
      *
-     * DELIBERATELY NARROW. There is no platform-wide "hidden user" state here and this is not
-     * one: `name`, `image` and every video stay visible. A real account-level suspension would
-     * need a `public-user-gate.ts` and an audit of every public read of a user, and nothing would
-     * fail if one were missed — that is a separate piece of work, not a column.
+     * ⚠️ IT NOW COVERS THREE FIELDS, NOT TWO. It began as the channel bio and `user_profile_link`;
+     * `talent_profile.bio` joined them because it was the one other public self-description a
+     * person controls and it had no lever at all — so somebody whose channel description was
+     * hidden could paste the same text into their talent profile and have it render. Two fields,
+     * one author, one of them moderated is a hole rather than a difference.
+     *
+     * THE GATE LIVES IN EACH READ'S MAPPER, not in a shared predicate, because the reads are in
+     * different domains: `channels.service.ts` for the channel, `talent-profiles.service.ts` for
+     * the talent directory. **A FOURTH PUBLIC SELF-DESCRIPTION MUST GATE ITSELF HERE TOO** — there
+     * is nothing structural that would fail if one were added and forgot to.
+     * `community_cofounder_profile` does not need it: it defaults to `draft` behind its own
+     * moderation, which is a different mechanism reaching the same place.
+     *
+     * STILL DELIBERATELY NARROW. There is no platform-wide "hidden user" state here and this is
+     * not one: `name`, `image`, every video, and everything on a talent profile that is not free
+     * text stay visible. A real account-level suspension would need a `public-user-gate.ts` and an
+     * audit of every public read of a user, and nothing would fail if one were missed — that is a
+     * separate piece of work, not a column.
      *
      * IT IS NOT `deactivatedAt`, AND MUST NOT BECOME IT. That column's invariant is that a live
      * session implies NULL, so a moderator writing it would be undone by the user signing in.

@@ -915,6 +915,49 @@ sub-path.
 > else can reach — an unliftable preference, which is the trap this route exists to close. Videos
 > that are genuinely deleted are already absent, via the FK's `ON DELETE cascade`.
 
+### 5.2b2 Profile-text reporting
+
+The FIFTH report fork, after R&D, commerce, community and video (§5.2c). Same reasoning each time,
+and it holds here too: two queues gated by different capabilities in one table is the coupling
+capabilities exist to prevent.
+
+**Why it had to exist at all.** `0139` made `user.bio` and `user_profile_link` public the moment they
+are written, which diverges from every other public profile text in the schema — `talent_profile`
+defaults to `private`, `community_cofounder_profile` to `draft` behind moderation. That divergence is
+only defensible with a reactive path, and this is it.
+
+| Method | Path                                 | Auth                          | Limiter               |
+| ------ | ------------------------------------ | ----------------------------- | --------------------- |
+| `POST` | `/users/:userId/reports`             | full account                  | `userReportLimiter`   |
+| `GET`  | `/users/admin/reports`               | `moderate_content` in-service | `contentReviewLimiter` |
+| `POST` | `/users/admin/reports/:reportId/decisions` | `moderate_content` in-service | `contentReviewLimiter` |
+| `POST` | `/users/admin/profile-text/restore`  | `moderate_content` in-service | `contentReviewLimiter` |
+| `GET`  | `/users/me/profile-reports`          | session                       | —                     |
+
+Both `admin` writes take `idempotency({ required: true, scope: "user" })`. Tables `user_report` and
+`user_moderation_action`, plus `user.profile_moderation_state`. Migrations `0140_user_report_enums`
+(split for `ALTER TYPE … ADD VALUE`), `0141_user_reports` and `0142_user_report_severe_harm`.
+
+> **⚠️ `profile_moderation_state` NOW GOVERNS THREE FIELDS, NOT TWO.** It began as the channel bio
+> and `user_profile_link`. `talent_profile.bio` joined them because it was the one other public
+> self-description a person controls with no lever over it — so somebody whose channel description
+> was hidden could paste the same text into their talent profile and have it render.
+>
+> **THE GATE IS PER-READ, IN EACH MAPPER**, because the reads live in different domains:
+> `channels.service.ts` and `talent-profiles.service.ts`. **A fourth public self-description must
+> gate itself** — nothing structural fails if one is added and forgets.
+> `community_cofounder_profile` needs no change; its `draft` default reaches the same place by a
+> different mechanism.
+>
+> **THE SUBJECT IS TOLD.** `profileModerationState` rides on the OWNER's read
+> (`GET /users/me/channel-profile`) because upholding a report writes an audit entry and an action
+> row and reaches the person not at all. Without it, somebody asked to fix a problem would not know
+> there was one.
+>
+> **THE PUBLIC READS SAY NOTHING.** A hidden bio is `null`, indistinguishable from one never
+> written. Saying "this description was hidden" hands a reporter a receipt and the subject a
+> notification, neither of which a public surface owes anybody.
+
 ### 5.2c Video content reporting
 
 The fourth report fork on this platform, after R&D, commerce and community. Each of those

@@ -214,6 +214,14 @@ const TALENT_PROFILE_COLUMNS = {
   name: user.name,
   handle: user.handle,
   avatarImageUrl: user.image,
+  /**
+   * ⚠️ SELECTED SO `toTalentProfileView` CAN HIDE THE BIO. Not projected to any client — the state
+   * itself is the moderator's business, and a public read that exposed it would tell a stranger
+   * that somebody has been actioned.
+   *
+   * `user` is already `innerJoin`ed at all three read sites, so this costs no extra query.
+   */
+  profileModerationState: user.profileModerationState,
   region: DISCOVERY_REGION_REF_COLUMNS,
 } as const;
 
@@ -278,6 +286,8 @@ interface TalentProfileRow {
   readonly name: string;
   readonly handle: string | null;
   readonly avatarImageUrl: string | null;
+  /** Joined from `user`. Consumed by the gate in `toTalentProfileView`; never projected. */
+  readonly profileModerationState: (typeof user.$inferSelect)["profileModerationState"];
   readonly region: DiscoveryRegionRef | null;
 }
 
@@ -292,13 +302,36 @@ function toTalentProfileView(
     if (view) compensationAsks.push(view);
   }
 
+  /**
+   * ⚠️ THE MODERATION GATE, AND IT IS DELIBERATELY IN THE MAPPER RATHER THAN IN EACH QUERY.
+   *
+   * WHY THIS EXISTS. `user.profileModerationState` hid the CHANNEL bio and links, and
+   * `talent_profile.bio` was the one other public self-description a person controls with no lever
+   * over it at all — so somebody whose channel description was hidden could paste the same text
+   * here and have it render. Two fields, one author, one of them moderated: that is a hole, not a
+   * difference.
+   *
+   * ONE MAPPER, ONE GATE. Every read of a talent profile — the list, the search and the detail —
+   * comes through here, so a fourth read added later inherits the rule instead of having to
+   * remember it. Putting the predicate in the three queries would have been three places to forget.
+   *
+   * NULL, NOT A TOMBSTONE. The channel read refuses to say "this description was hidden", because
+   * doing so hands a reporter a receipt and the subject a notification, neither of which a public
+   * surface owes anybody. A hidden bio here is indistinguishable from one never written.
+   *
+   * IT HIDES THE FREE TEXT AND NOTHING ELSE. Name, headline, skills, availability and the verified
+   * effort figures all survive — this is a lever over what a person WROTE, not over whether they
+   * exist. Same narrowness the channel lever has.
+   */
+  const isProfileTextHidden = row.profileModerationState === "hidden_by_moderator";
+
   return {
     userId: row.userId,
     name: row.name,
     handle: row.handle,
     avatarImageUrl: row.avatarImageUrl,
     headlineRole: row.headlineRole,
-    bio: row.bio,
+    bio: isProfileTextHidden ? null : row.bio,
     availability: row.availability,
     commitment: row.commitment,
     locationLabel: row.locationLabel,
