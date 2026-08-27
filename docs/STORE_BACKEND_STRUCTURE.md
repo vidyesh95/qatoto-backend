@@ -3935,6 +3935,41 @@ The queue row is lighter than `ShipmentProjection` — no product lines, no even
 forty-row page does not fan out into eighty child queries. `GET /commerce/shipments/:shipmentId`
 remains the detail.
 
+### A30b. A PROVIDER could not attach a file to a quote — **SHIPPED (`0146`)**
+
+A30 gave the buyer half. The provider half stayed unbuilt long enough for the register to record it
+as "there is no route to attach one" — **which had stopped being true**: the route A30 shipped is
+document-kind agnostic, so what was missing was only somewhere for a quote to point. Attachments on
+both sides of a quote are table stakes for a B2B procurement marketplace; Alibaba has had them for
+as long as it has had RFQs.
+
+**`commerce_quote_revision_document`**, mirroring `commerce_rfq_document` exactly — unique on
+`(revision_id, encrypted_document_id)`, both foreign keys `restrict`, cascade from its parent —
+plus `documentIds` on the revision-append body with the same `.max(50)` cap.
+
+> **⚠️ KEYED ON THE REVISION, NOT THE QUOTE, AND THAT IS THE WHOLE DESIGN.** A revision is the
+> immutable submitted offer — `commerce_prevent_submitted_quote_revision_mutation` freezes its
+> commercial terms on submit — and the documents supporting it are part of that offer. Keying on
+> `commerce_quote` would give one document set to every revision, so a provider could swap the
+> drawing behind an offer a buyer had already read and priced against. A revised offer gets revised
+> documents; the superseded revision keeps what it was judged on. The same argument
+> `commerce_order_product_line` makes for snapshotting its own title and price.
+>
+> **THE OWNERSHIP ASSERT IS SCOPED TO THE PROVIDER**, where A30's is scoped to the buyer, and it
+> requires `state = 'available'` — a document still being virus-scanned is refused. One literal,
+> `DOCUMENT_NOT_OWNED`, covers "no such document", "somebody else's" and "still scanning", the same
+> collapse A30 makes, so the response cannot enumerate document ids.
+>
+> **THE UPLOAD STILL ANSWERS 202**, so a client that attaches an id it has just minted is refused.
+> The picker offers only what `GET /commerce/documents` returns, and that route lists `available`
+> documents alone — which is the readiness signal rather than a filter the client re-applies.
+
+**The read** adds `documents` to the quote detail's latest revision: `documentId`, `mediaType`,
+`fileByteSize`, `fileName` and `attachedAt`. `fileName` is NULLABLE because names are encrypted at
+rest and null means the stored name could not be decrypted — the same fallback the download takes.
+No URL is minted; downloading goes through `GET /commerce/documents/:documentId`, which re-checks
+access per request.
+
 ### A30. A buyer could not attach a file to anything — **SHIPPED (`0097`)**
 
 `CreateDraftRfqSchema` accepted `documentIds` and `assertOwnedDocuments` required every id to name a

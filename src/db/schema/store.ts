@@ -5355,6 +5355,48 @@ export const commerceRfqDocument = pgTable(
   ],
 );
 
+/**
+ * Documents attached to ONE submitted quote revision (A30's provider half).
+ *
+ * ⚠️ KEYED ON THE REVISION, NOT THE QUOTE, AND THAT IS THE WHOLE DESIGN. A revision is the
+ * immutable submitted offer — `commerce_prevent_submitted_quote_revision_mutation` freezes its
+ * commercial terms the moment it is submitted — and its supporting documents are part of that
+ * offer. Keying on `commerce_quote` would give one document set to every revision, so a provider
+ * could swap the spec sheet behind an offer a buyer had already read and judged. A revised offer
+ * gets revised documents; the old revision keeps the ones it was accepted or rejected with.
+ *
+ * The same argument `commerce_order_product_line` makes for snapshotting its title and price.
+ *
+ * MIRRORS `commerce_rfq_document` EXACTLY — the buyer's half of the same feature — including both
+ * `restrict` foreign keys: a document that is cited by an offer must stay resolvable, and so must
+ * the member who attached it.
+ */
+export const commerceQuoteRevisionDocument = pgTable(
+  "commerce_quote_revision_document",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    revisionId: text("revision_id")
+      .notNull()
+      .references(() => commerceQuoteRevision.id, { onDelete: "cascade" }),
+    encryptedDocumentId: text("encrypted_document_id")
+      .notNull()
+      .references(() => commerceEncryptedDocument.id, { onDelete: "restrict" }),
+    attachedByMemberId: text("attached_by_member_id")
+      .notNull()
+      .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_quote_revision_document_uidx").on(
+      table.revisionId,
+      table.encryptedDocumentId,
+    ),
+    index("commerce_quote_revision_document_revision_idx").on(table.revisionId),
+  ],
+);
+
 export const commerceQuote = pgTable(
   "commerce_quote",
   {

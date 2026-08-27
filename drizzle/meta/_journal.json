@@ -1016,6 +1016,20 @@
       "when": 1787466192803,
       "tag": "0144_channel_listing_opt_in",
       "breakpoints": true
+    },
+    {
+      "idx": 145,
+      "version": "7",
+      "when": 1787466193803,
+      "tag": "0145_channel_listing_default_on",
+      "breakpoints": true
+    },
+    {
+      "idx": 146,
+      "version": "7",
+      "when": 1787466194803,
+      "tag": "0146_quote_revision_documents",
+      "breakpoints": true
     }
   ]
 }

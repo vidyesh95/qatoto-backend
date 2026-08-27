@@ -96,7 +96,7 @@ and these scripts:
         "start": "node dist/index.js",
         "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json && tsc --noEmit -p tsconfig.test.json",
         "test": "vitest run",
-        "db:generate": "drizzle-kit generate", // schema.ts → SQL migration
+        "db:generate": "drizzle-kit generate", // ⚠️ does not work — see §6
         "db:migrate": "drizzle-kit migrate", // apply migration
         "db:cleanup-orphans": "tsx --conditions=development scripts/cleanup-orphan-signups.ts",
         "db:cleanup-handle-reservations": "tsx --conditions=development scripts/cleanup-expired-handle-reservations.ts",
@@ -112,13 +112,13 @@ and these scripts:
 | -------------------------------- | ------------------------------------------------------------------------------------ |
 | `dev`                            | Auto-restarts on save, runs TS directly via `tsx` — no build step.                   |
 | `build`                          | `tsc` → plain JS in `dist/` for deploy.                                              |
-| `db:generate`                    | Diffs the **hand-maintained** `src/db/schema.ts` into a SQL migration (drizzle-kit). |
+| `db:generate`                    | ⚠️ **DOES NOT WORK — see §6.** Kept in `package.json` so the failure is a prompt rather than "command not found". |
 | `db:migrate`                     | Applies pending migrations to Postgres.                                              |
 | `db:backfill-*` / `db:cleanup-*` | One-off / cron maintenance scripts — see §11 and BACKEND_STRUCTURE §5g.              |
 
 > **Changed from the old flow:** the schema is **not** generated from `auth.ts` by the
-> Better Auth CLI anymore. `src/db/schema.ts` is committed and edited by hand; `db:generate`
-> only turns it into SQL. See §6.
+> Better Auth CLI anymore. `src/db/schema.ts` is committed and edited by hand — and turning it into
+> SQL is **not** `db:generate`, which no longer works. See §6 for the workflow that does.
 
 Then create `tsconfig.json` (+ `tsconfig.scripts.json`, `tsconfig.test.json`),
 `drizzle.config.ts`, and `.env` (§12).
@@ -342,12 +342,35 @@ Sanity check: `GET http://localhost:8000/health` → `{ status: "success", ... }
 ## 6. The schema + migrate
 
 You **do** maintain the schema by hand — it lives committed in `src/db/schema.ts` (not
-CLI-generated from `auth.ts` anymore). Edit it, then:
+CLI-generated from `auth.ts` anymore).
+
+### ⚠️ `pnpm db:generate` DOES NOT WORK. Migrations are hand-written.
+
+This is the single most expensive thing to get wrong here, because the failure is a wall of
+interactive prompts rather than an error. **The snapshots in `drizzle/meta/` stop at `0054`**, so
+drizzle-kit diffs today's schema against a state four phases old, decides most of the database needs
+recreating, and asks a stream of "is this table renamed or created?" questions nobody can answer
+correctly. Every migration since `0046` has been written by hand for this reason.
+
+The workflow that works, and that every migration through `0144` used:
 
 ```bash
-pnpm db:generate   # drizzle-kit diffs schema.ts → a SQL migration file
-pnpm db:migrate    # applies pending migrations to Postgres
+pnpm exec drizzle-kit export --sql     # canonical DDL, no database connection needed
+# extract the new statements by hand into drizzle/NNNN_name.sql,
+#   separated by `--> statement-breakpoint`
+# append an entry to drizzle/meta/_journal.json
+pnpm db:migrate                        # applies pending migrations to Postgres
 ```
+
+Two details that are not obvious and both bite:
+
+- **`drizzle/meta/_journal.json` has NO trailing newline. Keep it that way** — an editor that adds
+  one puts a spurious diff on every migration that follows.
+- **`.oxfmtrc.json` ignores `drizzle/`.** Without that, `pnpm fmt` reformats the snapshot files and
+  buries a twenty-line hand-written migration in 5,000 lines of churn.
+
+Before writing a `NOT NULL` column with no default, **check the row count first**. `0143` and `0144`
+were both safe only because their tables were empty, and that was verified rather than assumed.
 
 Tables (auth-owned + the identity columns/table we own):
 
@@ -363,7 +386,8 @@ Tables (auth-owned + the identity columns/table we own):
 > **Migrations gotcha (TLS):** `drizzle-kit migrate` does **not** read the app pool. With
 > a CA-cert managed DB it can fail **silently** if you hand it the CA-cert connection URL.
 > In `drizzle.config.ts`, use **discrete** credentials (`host`/`port`/`user`/`password`/
-> `database` + `ssl`), not the `url`. Re-run `db:generate` + `db:migrate` after any schema change.
+> `database` + `ssl`), not the `url`. Re-run the hand-written-migration workflow above after any
+> schema change.
 
 ---
 
@@ -594,7 +618,7 @@ Each step is a small, runnable win.
 2. **Database + Drizzle.** Start Postgres, add `pg` + `drizzle-orm`, write `db/index.ts`,
    `drizzle.config.ts`, and `db/schema.ts`.
 3. **Better Auth, email+password.** Write `lib/auth.ts`, mount in `app.ts` (§5c), run
-   `db:generate` + `db:migrate`, hit `/health` + `/api/auth/get-session`.
+   the §6 migration workflow, hit `/health` + `/api/auth/get-session`.
 4. **Password login + session.** Test `sign-in/email`, then `requireAuth` (§8) on a route.
 5. **OTP plugin + OTP-gated signup.** `/signup/start` → `/signup/complete` (the only
    user-creating path). `disableSignUp: true`.

@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
+import { decryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import {
   commerceEngagementDeliverable,
   commerceOrder,
@@ -11,7 +12,9 @@ import {
   commerceProviderKindLink,
   commerceQuote,
   commerceQuoteProductLine,
+  commerceEncryptedDocument,
   commerceQuoteRevision,
+  commerceQuoteRevisionDocument,
   commerceQuoteServiceDeliverablePlan,
   commerceQuoteServiceLine,
   commerceRfq,
@@ -80,6 +83,14 @@ export type CommerceQuotesError =
   | { type: "ORGANIZATION_NOT_ACTIVE" }
   | { type: "CONFLICTING_ACCEPTANCE"; orderId: string }
   | { type: "INVALID_STATE" }
+  /**
+   * A30. An id that does not name an `available` document owned by the provider's organization.
+   *
+   * ONE LITERAL FOR THREE FACTS — no such document, somebody else's document, and one still being
+   * virus-scanned — deliberately, and the same collapse `DOCUMENT_NOT_OWNED` makes on the RFQ side.
+   * Distinguishing them would make the response an oracle for which document ids exist.
+   */
+  | { type: "DOCUMENT_NOT_OWNED" }
   | { type: "INSUFFICIENT_STOCK"; productId: string; availableQuantity: number }
   /**
    * STORE Phase 14. The buyer named settlement terms that can no longer be used.
@@ -240,6 +251,7 @@ export interface AppendRevisionInput {
   readonly notes?: string;
   readonly productLines: readonly QuoteProductLineInput[];
   readonly serviceLines: readonly QuoteServiceLineInput[];
+  readonly documentIds?: readonly string[];
 }
 
 export interface QuoteShellProjection {
@@ -335,6 +347,22 @@ export interface QuoteDetailProjection {
             readonly dueAt: Date | null;
           }[];
           readonly siblingOrder: number;
+        }[];
+        /**
+         * A30. The documents attached to THIS revision — file name and size, never bytes and never
+         * an object key. Downloading goes through the existing `GET /commerce/documents/:id`
+         * route, which re-checks access on every request.
+         *
+         * ⚠️ THEY BELONG TO THE REVISION, so a superseded offer keeps the drawings it was judged
+         * on. See the table comment for why this is not keyed on the quote.
+         */
+        readonly documents: readonly {
+          readonly documentId: string;
+          readonly mediaType: string;
+          readonly fileByteSize: number;
+          /** NULL when the stored name cannot be decrypted — the same fallback the download takes. */
+          readonly fileName: string | null;
+          readonly attachedAt: Date;
         }[];
       })
     | null;
@@ -999,6 +1027,36 @@ export async function appendRevision(
       throw new Error("Quote revision insert returned no row.");
     }
 
+    // A30. ATTACHED TO THIS REVISION, and validated before anything else is written for it —
+    // a revision that ends up with an unattachable document is a revision that should not exist.
+    const documentIds = [...new Set(input.documentIds ?? [])];
+    if (documentIds.length > 0) {
+      const ownedDocuments = await transaction
+        .select({ id: commerceEncryptedDocument.id })
+        .from(commerceEncryptedDocument)
+        .where(
+          and(
+            inArray(commerceEncryptedDocument.id, documentIds),
+            // SCOPED TO THE PROVIDER, unlike the RFQ half's buyer scope. `actor.organizationId` is
+            // the quote's own provider organization, already checked against `quote` above.
+            eq(commerceEncryptedDocument.organizationId, actor.organizationId),
+            // `available` EXCLUDES A DOCUMENT STILL BEING VIRUS-SCANNED. Attaching one would put an
+            // unscanned file behind a commercial offer a buyer is invited to open.
+            eq(commerceEncryptedDocument.state, "available"),
+          ),
+        );
+      if (ownedDocuments.length !== documentIds.length) {
+        return { status: "document_not_owned" as const };
+      }
+      await transaction.insert(commerceQuoteRevisionDocument).values(
+        documentIds.map((encryptedDocumentId) => ({
+          revisionId: revision.id,
+          encryptedDocumentId,
+          attachedByMemberId: actor.memberId,
+        })),
+      );
+    }
+
     for (const productLine of input.productLines) {
       const lineTotalInCents = productLine.quantity * productLine.unitPriceInCents;
       await transaction.insert(commerceQuoteProductLine).values({
@@ -1080,6 +1138,10 @@ export async function appendRevision(
       return { success: false, error: { type: "INVALID_STATE" } };
     case "validation":
       return validationFailed(outcome.message);
+    // The transaction has already rolled back by the time this is read — returning the status
+    // rather than throwing is what makes the revision insert and the attach one atomic unit.
+    case "document_not_owned":
+      return { success: false, error: { type: "DOCUMENT_NOT_OWNED" } };
     case "created":
       return {
         success: true,
@@ -1779,11 +1841,53 @@ export async function getQuote(
         deliverablePlansByServiceLineId.set(deliverablePlan.quoteServiceLineId, existingPlans);
       }
 
+      // A30. `fileName` and `byteSize` come from `commerce_encrypted_document`; the object key and
+      // the bytes stay on the server. `documentId` is what the existing download route takes, and
+      // that route re-checks access per request rather than trusting this projection.
+      // ⚠️ THE FILE NAME IS ENCRYPTED AT REST and has to be decrypted here — `originalFileNameEncrypted`
+      // is ciphertext, and selecting it as a display string would put base64 on a buyer's screen.
+      // The object key and the bytes never leave the server; downloading goes through
+      // `GET /commerce/documents/:documentId`, which re-checks access on every request rather than
+      // trusting this projection. Shape copied from `TradeDocumentListItem` so the two lists of the
+      // same objects cannot disagree, including its `fileName: null` fallback.
+      const attachedDocumentRows = await db
+        .select({
+          documentId: commerceEncryptedDocument.id,
+          mediaType: commerceEncryptedDocument.mediaType,
+          fileByteSize: commerceEncryptedDocument.fileByteSize,
+          originalFileNameEncrypted: commerceEncryptedDocument.originalFileNameEncrypted,
+          attachedAt: commerceQuoteRevisionDocument.createdAt,
+        })
+        .from(commerceQuoteRevisionDocument)
+        .innerJoin(
+          commerceEncryptedDocument,
+          eq(commerceEncryptedDocument.id, commerceQuoteRevisionDocument.encryptedDocumentId),
+        )
+        .where(eq(commerceQuoteRevisionDocument.revisionId, revisionForViewer.id))
+        .orderBy(asc(commerceQuoteRevisionDocument.createdAt));
+
+      const attachedDocuments = attachedDocumentRows.map((documentRow) => {
+        const decryptedFileName =
+          documentRow.originalFileNameEncrypted === null
+            ? null
+            : decryptCommercePii(documentRow.originalFileNameEncrypted);
+        return {
+          documentId: documentRow.documentId,
+          mediaType: documentRow.mediaType,
+          fileByteSize: documentRow.fileByteSize,
+          // NULL rather than the id: an opaque uuid shown as a file name is worse than none.
+          fileName:
+            decryptedFileName !== null && decryptedFileName.success ? decryptedFileName.value : null,
+          attachedAt: documentRow.attachedAt,
+        };
+      });
+
       latestRevisionProjection = {
         ...projectRevisionMoney(revisionForViewer),
         paymentTerms: revisionForViewer.paymentTerms,
         incoterm: revisionForViewer.incoterm,
         notes: revisionForViewer.notes,
+        documents: attachedDocuments,
         productLines: productLines.map((line) => ({
           id: line.id,
           rfqProductLineId: line.rfqProductLineId,

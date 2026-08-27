@@ -165,6 +165,15 @@ function mapQuotesError(res: Response, error: CommerceQuotesError): void {
         message: "Invalid cursor.",
       } satisfies ApiResponse);
       return;
+    // 422 naming the field, not 404: the caller sent ids in a body we are refusing, and the
+    // message must not say WHICH id failed or why — see the error's own note on the collapse.
+    case "DOCUMENT_NOT_OWNED":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Every attached document must be one your organization uploaded and finished processing.",
+      } satisfies ApiResponse);
+      return;
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled commerce quotes error: ${JSON.stringify(exhaustiveCheck)}`);

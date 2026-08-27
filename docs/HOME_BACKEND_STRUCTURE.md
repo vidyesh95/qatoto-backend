@@ -1059,18 +1059,30 @@ is the tell: nobody could have been right, because there was nothing to be right
 | `GET` | `/channels/:handle` | optional | `feedReadLimiter` |
 | `GET` | `/channels/:handle/videos` | optional | `feedReadLimiter` |
 
-**`GET /channels` — the OPT-IN public directory, and its only consumer is `sitemap.ts`.** The
+**`GET /channels` — the public channel directory, and its only consumer is `sitemap.ts`.** The
 channel page is public and was announced in no sitemap for one reason: there was no public
-handle-enumeration read to build a list from. Building one raises a question the code cannot answer,
-so migration `0144` adds `user.is_channel_listed` and it **defaults FALSE** — a directory of PEOPLE
-is not a directory of products, and the cofounder directory already argued that a directory of
-people who did not consent to being in it is a decision rather than a default.
+handle-enumeration read to build a list from. Migration `0144` added `user.is_channel_listed` and
+`0145` flipped it to **default TRUE**.
 
+> **THE OPT-IN WAS REVERSED, AND THE REASONING IS WORTH KEEPING BECAUSE IT WAS NOT OVERRULED.**
+> `0144` defaulted FALSE on the cofounder directory's argument — a directory of people who did not
+> consent to being in it is a decision, not a default. That question is real and this is not it:
+> consent matters when publishing facts about somebody who never chose to be listed, whereas a
+> channel page is a thing its owner chose to create, is already public, and is already linked from
+> every feed card. Indexing it reveals nothing a visitor cannot already reach by clicking.
+>
+> Opt-in also produced precisely what it predicted: **zero listed channels**, because nobody ticks a
+> box they are never shown. The control remains as an opt-OUT, which is stricter than YouTube — it
+> indexes channel pages by default with no per-channel toggle.
+>
 > **IT GOVERNS DISCOVERABILITY, NOT VISIBILITY.** The channel page is reachable either way. Any copy
 > implying that switching the flag off makes a channel private is a promise this column cannot keep.
 >
 > **⚠️ THE VIDEO TERM JOINS `video` UNDER `publicVideoPredicate()` AND DOES NOT READ
-> `creator_stats.published_video_count`.** Two reasons, and the second is the one that bites: it is a
+> `creator_stats.published_video_count`.** ⚠️ **This is now the ONLY thing that filters the
+> directory** — the flag used to exclude nearly everyone and since `0145` excludes almost nobody, so
+> the whole defence against a sitemap full of soft 404s rests here. Two reasons, and the second is
+> the one that bites: it is a
 > counter cache (`project_stats` is LEFT-joined on the product page precisely because 15 of 41
 > projects had no row), and it counts the WRONG THING — `publish_status = 'published'` REGARDLESS OF
 > VISIBILITY, per its own comment in this file. A creator whose videos are all unlisted has a

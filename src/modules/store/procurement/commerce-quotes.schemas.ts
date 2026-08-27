@@ -249,6 +249,18 @@ export const AppendQuoteRevisionSchema = z
     notes: z.string().trim().max(10_000).optional(),
     productLines: z.array(QuoteProductLineSchema).max(200),
     serviceLines: z.array(QuoteServiceLineSchema).max(200),
+    /**
+     * A30's provider half — drawings, spec sheets, certificates supporting THIS offer.
+     *
+     * Same shape and cap as `CreateDraftRfqSchema.documentIds`, the buyer's half, so the two sides
+     * of one feature cannot drift apart. Each id must name a `commerce_encrypted_document` the
+     * PROVIDER's organization owns and that is `available` — a document still being virus-scanned
+     * is not attachable.
+     *
+     * THEY BELONG TO THE REVISION, NOT THE QUOTE. Each revision carries its own set, because a
+     * revision is the immutable offer and its documents are part of what a buyer judged.
+     */
+    documentIds: z.array(z.string().uuid()).max(50).optional(),
   })
   .strict()
   .superRefine((revision, refinementContext) => {

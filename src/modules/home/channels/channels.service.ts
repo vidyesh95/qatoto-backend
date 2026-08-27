@@ -314,11 +314,12 @@ export interface ListedChannelPage {
  * announced no channel at all, because there was no public handle-enumeration read to build a list
  * from. This is that read, and its only consumer is the sitemap.
  *
- * ⚠️ IT IS OPT-IN, AND THAT IS THE WHOLE DESIGN. `is_channel_listed` defaults FALSE. A channel page
- * is public either way — every feed card links to one — so this flag governs DISCOVERABILITY, not
- * visibility, and the distinction is what makes the default defensible: a directory of PEOPLE is
- * not a directory of products, and the cofounder directory already argued that a directory of
- * people who did not consent to being in it is a decision rather than a default.
+ * ⚠️ IT IS OPT-OUT SINCE `0145`. `is_channel_listed` defaults TRUE, reversing the opt-in `0144`
+ * shipped. The flag governs DISCOVERABILITY, not visibility — a channel page is public either way,
+ * and every feed card already links to one — so indexing it reveals nothing a visitor could not
+ * already reach. Opt-in produced zero listed channels, because nobody ticks a box they never see.
+ * The control still exists, which leaves this stricter than YouTube: it indexes channel pages by
+ * default and offers no per-channel toggle at all.
  *
  * ⚠️ THE VIDEO TERM JOINS `video` UNDER `publicVideoPredicate()` AND DOES NOT READ
  * `creator_stats.published_video_count`. Two reasons, and the second is the one that bites:
@@ -337,7 +338,8 @@ export interface ListedChannelPage {
  *
  * `anonymizedAt IS NULL` is belt-and-braces beside the handle check — the scrub nulls the handle
  * AND clears the flag — but an erased person appearing in a public directory is the one failure
- * worth being redundant about.
+ * worth being redundant about. It matters more now the flag defaults true: `0145`'s backfill is
+ * scoped to live accounts for the same reason, so a blanket UPDATE cannot re-list a scrubbed row.
  *
  * KEYSET ON `(created_at, id)` rather than on the handle: a handle is renameable and a rename
  * mid-crawl would move a row across a page boundary, which is exactly what a keyset cursor exists

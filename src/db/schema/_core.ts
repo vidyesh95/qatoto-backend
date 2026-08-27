@@ -110,23 +110,27 @@ export const user = pgTable(
       .default("visible")
       .notNull(),
     /**
-     * Whether this creator has asked to be listed in Qatoto's public sitemap.
+     * Whether this creator's channel page is announced in Qatoto's public sitemap.
      *
      * DISCOVERABILITY, NOT VISIBILITY. `/channel/:handle` is public either way — every feed card
-     * links to it — and this only decides whether `GET /channels` announces the handle to a
-     * crawler. Copy that implies switching it off makes a channel private is a claim this column
-     * cannot keep.
+     * renders the creator's avatar and name as links to it — so this decides only whether a crawler
+     * is pointed at a page anyone can already click through to. Copy implying that switching it off
+     * makes a channel private is a claim this column cannot keep.
      *
-     * DEFAULTS FALSE, because a directory of PEOPLE is not a directory of products. The cofounder
-     * directory made the argument first: "a directory of people who did not consent to being in
-     * it" is a decision, not a default.
+     * DEFAULTS TRUE (`0145`), REVERSING `0144`. It shipped opt-in on the argument that a directory
+     * of PEOPLE is not a directory of products — the cofounder directory's argument. That question
+     * is a real one and this is not it: consent matters when publishing facts about somebody who
+     * never chose to be listed, whereas a channel page is a thing its owner chose to create and is
+     * already public. Opt-in also produced exactly what it predicted — **zero listed channels**,
+     * because nobody ticks a box they are never shown. The control remains, as an opt-OUT, which
+     * is stricter than YouTube: it indexes channel pages by default and offers no toggle at all.
      *
-     * ⚠️ SCALAR, SO THE ANONYMIZATION VERIFIER CANNOT SEE IT — the same trap as `bio` directly
-     * above. It is set FALSE by one explicit line in `anonymize-account.service.ts`, and nothing
-     * will turn red if that line is deleted; `scripts/smoke-privacy.ts` is its only executable
-     * guard. An anonymized account must leave the directory rather than keep being advertised.
+     * ⚠️ SCALAR, SO THE ANONYMIZATION VERIFIER CANNOT SEE IT — the same trap as `bio` above. It is
+     * forced FALSE by one explicit line in `anonymize-account.service.ts`, nothing turns red if that
+     * line is deleted, and `scripts/smoke-privacy.ts` is its only executable guard. An erased
+     * account must leave the directory rather than keep being advertised.
      */
-    isChannelListed: boolean("is_channel_listed").default(false).notNull(),
+    isChannelListed: boolean("is_channel_listed").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
