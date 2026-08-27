@@ -13,6 +13,7 @@ export const UserReportReasonSchema = z.enum([
   "abusive_profile_text",
   "misleading_links",
   "spam",
+  "severe_harm_escalation",
   "other",
 ]);
 

@@ -995,6 +995,13 @@
       "when": 1787466189803,
       "tag": "0141_user_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 142,
+      "version": "7",
+      "when": 1787466190803,
+      "tag": "0142_user_report_severe_harm",
+      "breakpoints": true
     }
   ]
 }

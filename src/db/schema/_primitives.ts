@@ -96,6 +96,11 @@ export const userReportReasonEnum = pgEnum("user_report_reason", [
   "abusive_profile_text",
   "misleading_links",
   "spam",
+  // THE ONE REASON WITH NO MATCHING ACTION, and it is deliberate. Hiding a description does not
+  // answer severe harm, so the queue marks these rows as needing something this product cannot do
+  // rather than letting a hide-or-dismiss choice imply either was appropriate. It must never
+  // acquire an automatic action — see `0142`.
+  "severe_harm_escalation",
   "other",
 ]);
 

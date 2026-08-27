@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { user, userModerationAction, userReport } from "#src/db/schema.js";
@@ -317,6 +317,67 @@ export async function decideUserReport(
       throw new Error(`Unhandled decideUserReport outcome: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
+}
+
+/**
+ * The reporter's own profile reports — `GET /users/me/profile-reports`.
+ *
+ * WHY IT EXISTS. `report-history-page.tsx` says it plainly for the video queue: "a report that
+ * vanishes is indistinguishable from one nobody read." Profile reporting shipped without this, so a
+ * reporter got a 201 and then silence forever — reintroducing exactly the failure that page was
+ * built to fix, on the newer of the two surfaces.
+ *
+ * NO CAPABILITY CHECK AND NO ERROR ARM. It is scoped to `reporterUserId` and answers an empty list
+ * to somebody who has reported nothing, which is honest — there is no resource here that can fail
+ * to exist.
+ *
+ * ## WHAT IT DELIBERATELY OMITS, copied from the video projection rather than re-decided
+ *
+ * The moderator's identity, their resolution note, and how many other people reported the same
+ * person. Naming the moderator makes a takedown personal; disclosing the count makes brigading
+ * measurable. A reporter learns the outcome of THEIR report and nothing about anyone else's.
+ *
+ * IT ALSO OMITS THE SUBJECT'S BIO, which the moderator queue does carry. A moderator needs to read
+ * the text under complaint; a reporter has no business being re-served text that may since have
+ * been hidden — least of all by the machinery that hid it.
+ *
+ * UNPAGINATED UNDER A HARD CAP, like the video list and the muted-creators list: bounded by how many
+ * people one person reported by hand, and capped so a pathological account cannot make it unbounded.
+ */
+const MY_PROFILE_REPORTS_LIMIT = 200;
+
+export interface MyProfileReportRow {
+  readonly id: string;
+  readonly reportedUserId: string;
+  readonly reportedName: string;
+  readonly reportedHandle: string | null;
+  readonly reason: typeof userReport.$inferSelect.reason;
+  readonly detailText: string | null;
+  readonly status: typeof userReport.$inferSelect.status;
+  readonly createdAt: Date;
+  readonly resolvedAt: Date | null;
+}
+
+export async function listMyProfileReports(
+  reporterUserId: string,
+): Promise<readonly MyProfileReportRow[]> {
+  return db
+    .select({
+      id: userReport.id,
+      reportedUserId: userReport.reportedUserId,
+      reportedName: user.name,
+      reportedHandle: user.handle,
+      reason: userReport.reason,
+      detailText: userReport.detailText,
+      status: userReport.status,
+      createdAt: userReport.createdAt,
+      resolvedAt: userReport.resolvedAt,
+    })
+    .from(userReport)
+    .innerJoin(user, eq(user.id, userReport.reportedUserId))
+    .where(eq(userReport.reporterUserId, reporterUserId))
+    .orderBy(desc(userReport.createdAt))
+    .limit(MY_PROFILE_REPORTS_LIMIT);
 }
 
 /** Puts a hidden profile's text back. The only path from `hidden_by_moderator` to `visible`. */

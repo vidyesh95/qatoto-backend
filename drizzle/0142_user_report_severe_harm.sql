@@ -1,0 +1,29 @@
+-- ---------------------------------------------------------------------------
+-- One more `user_report_reason`: `severe_harm_escalation`.
+--
+-- TYPES ONLY, and the split is the same rule 0128 and 0140 follow — Postgres refuses
+-- `ALTER TYPE ... ADD VALUE` inside a transaction block that later uses the new value, and
+-- drizzle-kit runs each migration file as one transaction.
+--
+-- ## WHY A REASON WITH NO MATCHING ACTION IS THE HONEST ANSWER
+--
+-- The other five reasons name things the one available lever can address: upholding hides a
+-- person's description and links. Severe harm is not one of those. The choice was between three
+-- bad options and one adequate one:
+--
+--   - Offer `child_safety` like the video enum. Upholding it could only hide a bio, which reads as
+--     the platform having acted on a child-safety report when it has not. Worst of the three.
+--   - Offer nothing, and let somebody reporting real harm pick `other`. The report then arrives
+--     indistinguishable from a spam complaint and is triaged like one.
+--   - Build an account-level lever first. That needs a public-user gate and an audit of every
+--     public read of a person, with nothing failing if one is missed — a separate piece of work.
+--
+-- So the value exists to be VISIBLE IN THE QUEUE as something the in-product actions do not
+-- answer. The moderator's options are unchanged; what changes is that the row says so, rather than
+-- letting a hide-or-dismiss choice imply those were the appropriate responses.
+--
+-- ⚠️ IT MUST NOT ACQUIRE AN AUTOMATIC ACTION. A reason that triggers a hide on a count would make
+-- brigading measurable and then effective, which every report surface in this codebase refuses.
+-- ---------------------------------------------------------------------------
+
+ALTER TYPE "public"."user_report_reason" ADD VALUE IF NOT EXISTS 'severe_harm_escalation';

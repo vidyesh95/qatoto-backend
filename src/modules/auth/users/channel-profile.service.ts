@@ -34,6 +34,16 @@ import type { Result } from "#src/types/index.js";
 export interface ChannelProfileView {
   readonly bio: string | null;
   readonly links: readonly { readonly label: string; readonly url: string }[];
+  /**
+   * Whether a moderator has hidden this text from the public channel page.
+   *
+   * ⚠️ IT IS ON THE OWNER'S READ BECAUSE OTHERWISE NOBODY EVER TELLS THEM. Upholding a report
+   * flips the state, writes an audit entry and an action row — and reaches the person not at all.
+   * Without this field the editor renders their description exactly as it did before, so somebody
+   * asked to fix a problem would not know there was one, and "they can still edit it" would be a
+   * technically true sentence describing a dead end.
+   */
+  readonly profileModerationState: typeof user.$inferSelect.profileModerationState;
 }
 
 export type ChannelProfileError = { readonly type: "USER_NOT_FOUND" };
@@ -41,7 +51,11 @@ export type ChannelProfileError = { readonly type: "USER_NOT_FOUND" };
 export async function getMyChannelProfile(
   userId: string,
 ): Promise<Result<ChannelProfileView, ChannelProfileError>> {
-  const [row] = await db.select({ bio: user.bio }).from(user).where(eq(user.id, userId)).limit(1);
+  const [row] = await db
+    .select({ bio: user.bio, profileModerationState: user.profileModerationState })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
   if (!row) return { success: false, error: { type: "USER_NOT_FOUND" } };
 
   const links = await db
@@ -50,7 +64,12 @@ export async function getMyChannelProfile(
     .where(eq(userProfileLink.userId, userId))
     .orderBy(asc(userProfileLink.sortOrder));
 
-  return { success: true, value: { bio: row.bio, links } };
+  // THE OWNER SEES THEIR OWN TEXT WHATEVER THE STATE — hiding it from them too would mean they
+  // could not fix the thing they were asked to fix. What the state changes is that they are TOLD.
+  return {
+    success: true,
+    value: { bio: row.bio, links, profileModerationState: row.profileModerationState },
+  };
 }
 
 export async function replaceMyChannelProfile(

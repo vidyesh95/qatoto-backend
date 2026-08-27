@@ -72,6 +72,16 @@ Flows the backend supports:
 - **Claim / change handle:** live availability probe (`GET /handles/availability`) plus
   an authoritative set/revert (`PATCH /users/me/handle`), with a panel bootstrap
   (`GET /users/me/handle`). Every new user is auto-seeded a placeholder handle on signup.
+- **Channel profile (description + links):** `GET /users/me/channel-profile` reads the caller's own
+  copy, `PATCH` replaces both. The links half is a **replace-the-set** write — the body carries the
+  complete ordered list and the server assigns each row's position — which is why the route needs no
+  idempotency key. `bio` is public the moment it is written, unlike every other public profile text
+  in this schema; the reactive half is `user_report` plus `user.profile_moderation_state`.
+  The owner's read carries that state, because upholding a report notifies nobody and without it the
+  editor would render hidden text as though it were live.
+- **Your own reports:** `GET /users/me/video-reports` and `GET /users/me/profile-reports`. Both are
+  deliberately narrow — no moderator identity, no resolution note, no count of who else reported the
+  same target. Naming the moderator makes a takedown personal; the count makes brigading measurable.
 - **Switch accounts (multi-session):** `authClient.multiSession.listDeviceSessions()` /
   `.setActive()` / `.revoke()` — one browser can hold up to **5** concurrent signed-in
   sessions (see §7).
@@ -1074,7 +1084,20 @@ destroying another person's financial record. Better Auth's `deleteUser` plugin 
 `ON DELETE set null` **fire zero times**. All 35 cascades and 46 set-nulls happen only
 because `anonymize-account.service.ts` issues the statement, driven by iterating
 `src/modules/auth/privacy/anonymization-manifest.ts` (163 entries: 35 `delete_rows`, 46
-`null_out`, 79 `retain` with a cited lawful basis).
+`null_out`, 82 `retain` with a cited lawful basis).
+
+**Two things the verifier cannot see, and one it now covers.** `user_profile_link.user_id` is a
+foreign key, so it is in the manifest (`delete_rows`) and the script checks it. **`user.bio` is a
+SCALAR COLUMN and therefore invisible to that script** — it is scrubbed by one explicit line in
+`anonymize-account.service.ts`, and if that line were deleted nothing would turn red. Its only
+executable guard is the `"the identity is gone"` assertion in `scripts/smoke-privacy.ts`; the two
+belong together. `user_profile_link` rows also ride in the Art. 15 export beside the bio.
+
+**`user_report.reported_user_id` is `retain`, and the reasoning is worth keeping.** A report filed
+ABOUT somebody survives that person's erasure. If it did not, requesting deletion would erase the
+enforcement history against you — deletion would become a ban-evasion route, and the record a future
+moderator needs would be the thing it destroyed. The reporter's own id is `null_out` and the
+resolving moderator's is `retain`, matching `commerce_content_report` exactly.
 
 > **Run `pnpm db:verify-anonymization-coverage` after ANY migration that adds a `user`
 > reference.** A table missing from the manifest is personal data that survives an erasure

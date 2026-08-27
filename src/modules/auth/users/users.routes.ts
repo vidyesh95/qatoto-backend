@@ -12,6 +12,7 @@ import { requireIdentifiedUser } from "#src/middleware/require-identified-user.j
 import * as handleController from "#src/modules/auth/handles/handle.controller.js";
 import * as privacyController from "#src/modules/auth/privacy/privacy.controller.js";
 import * as channelProfileController from "#src/modules/auth/users/channel-profile.controller.js";
+import * as userReportsController from "#src/modules/auth/users/user-reports.controller.js";
 import { uploadAvatarPhoto } from "#src/modules/auth/users/upload-avatar.js";
 import * as usersController from "#src/modules/auth/users/users.controller.js";
 import * as engagementController from "#src/modules/home/engagement/engagement.controller.js";
@@ -162,6 +163,20 @@ router.get(
  * report's status and nothing about who decided it or who else reported the same video.
  */
 router.get("/me/video-reports", requireAuth, videoContentReportsController.listMyVideoReports);
+
+/**
+ * GET /users/me/profile-reports
+ * The caller's own PROFILE reports — the other half of `/report-history`.
+ *
+ * IT SITS BESIDE THE VIDEO ONE rather than on `user-reports.routes.ts`, because the `/me/*` family
+ * is declared in this file and `users.routes.order.test.ts` guards its ordering against `/:id`
+ * here. Splitting it across two routers would put half the family outside the test that protects
+ * it.
+ *
+ * SAME NARROW PROJECTION as the video list: the reporter learns their own report's status and
+ * nothing about who decided it, what they wrote, or who else reported the same person.
+ */
+router.get("/me/profile-reports", requireAuth, userReportsController.listMyProfileReports);
 
 /**
  * GET /users/me/liked-videos

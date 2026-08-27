@@ -447,6 +447,20 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
         FROM "user" WHERE id = ${userId}`,
   );
 
+  /**
+   * The external links on the channel profile.
+   *
+   * THEY BELONG HERE FOR THE SAME REASON `bio` DOES — a person wrote them about themselves, so
+   * Art. 15 asks for them and Art. 20 asks for them in a portable form. They were nearly missed
+   * because the bio is a column on `user` and these are a table, so adding one did not surface the
+   * other.
+   */
+  const yourChannelLinks = await collect(
+    "yourChannelLinks",
+    sql`SELECT label, url, sort_order, created_at
+        FROM user_profile_link WHERE user_id = ${userId} ORDER BY sort_order`,
+  );
+
   const howYouSignIn = {
     // NEVER `password`, `access_token`, `refresh_token` or `id_token`. Those are
     // CREDENTIALS, not personal data about the subject, and Art. 15 does not ask for them
@@ -575,6 +589,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
       ],
     },
     whoYouAre,
+    yourChannelLinks,
     howYouSignIn,
     whatYouDoHere,
     howMuchYouWatch,

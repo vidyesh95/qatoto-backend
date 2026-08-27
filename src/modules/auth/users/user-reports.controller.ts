@@ -235,3 +235,22 @@ export async function restoreUserProfileText(req: Request, res: Response): Promi
     data: result.value,
   } satisfies ApiResponse);
 }
+
+/**
+ * `GET /users/me/profile-reports` — the reporter's own list.
+ *
+ * NO ERROR MAP NEEDED: the service is scoped to the caller and cannot fail to find a resource, so
+ * an empty array is the honest answer to somebody who has reported nothing.
+ */
+export async function listMyProfileReports(req: Request, res: Response): Promise<void> {
+  const reporterUserId = requireSignedInUserId(req, res);
+  if (!reporterUserId) return;
+
+  const rows = await userReportsService.listMyProfileReports(reporterUserId);
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Your profile reports retrieved.",
+    data: rows,
+  } satisfies ApiResponse);
+}
