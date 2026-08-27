@@ -3,7 +3,7 @@
 //
 // ## ⚠️ THE THING THIS FILE EXISTS BECAUSE OF
 //
-// Rule R2 (src/db/schema/rnd.ts) classified all 151 of these foreign keys for a
+// Rule R2 (src/db/schema/rnd.ts) classified all 157 of these foreign keys for a
 // `DELETE FROM "user"` — `cascade` for a preference that dies with the account, `set null`
 // for attribution that must never block one, `restrict` for anything bearing equity, effort
 // or audit weight.
@@ -12,8 +12,8 @@
 // BEFORE UPDATE OR DELETE triggers. Account closure here is an ANONYMIZATION, which is the
 // point — it is what stops one person's erasure destroying another person's financial record.
 //
-// So `ON DELETE cascade` and `ON DELETE set null` FIRE ZERO TIMES in this flow. All 31
-// cascades and all 47 set-nulls are decorative unless something issues the statement by
+// So `ON DELETE cascade` and `ON DELETE set null` FIRE ZERO TIMES in this flow. All 34
+// cascades and all set-nulls are decorative unless something issues the statement by
 // hand, and this manifest is that hand. A column missing from here is PII that survives an
 // erasure forever, silently. `idempotency_record.user_id` is the one to think about if that
 // sounds theoretical: it is `cascade`, and it caches whole response bodies.
@@ -273,6 +273,13 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 17(3)(e)",
       note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
     },
+    // A mute is a PREFERENCE, and the FK says so on both sides: `cascade` for the muter and for
+    // the creator alike. Both directions delete, and the second is the less obvious one — a mute of
+    // an account that is being erased is a preference about somebody who will not be recommended
+    // again, so keeping the row would preserve one person's id inside another person's settings for
+    // no remaining purpose.
+    "creator_mute.creator_id": { kind: "delete_rows" },
+    "creator_mute.muter_id": { kind: "delete_rows" },
     "creator_stats.user_id": { kind: "delete_rows" },
     "creator_subscription.creator_id": { kind: "delete_rows" },
     "creator_subscription.subscriber_id": { kind: "delete_rows" },
@@ -519,7 +526,24 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
     "video_collaborator.user_id": { kind: "null_out" },
     "video_comment.author_user_id": { kind: "null_out" },
     "video_comment_like.user_id": { kind: "delete_rows" },
+    // The reporter and the resolver are treated oppositely, and the asymmetry is the same one the
+    // schema states on the columns themselves. `commerce_content_report` reached the identical
+    // verdicts for the identical pair; this fork was simply never added.
+    "video_content_report.reporter_user_id": { kind: "null_out" },
+    "video_content_report.resolved_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
+    },
     "video_like.user_id": { kind: "delete_rows" },
+    "video_moderation_action.moderator_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "Hash-chained and NOT NULL: the row carries an audit_entry_id and the moderator is the human behind a takedown. A null_out is not merely wrong here, it is illegal — the column refuses NULL and the erasure would raise 23502 mid-run.",
+    },
+    // A dismissal is a preference, cascade on the FK, and it dies with the account like every other
+    // feed signal beside it.
+    "video_not_interested.viewer_id": { kind: "delete_rows" },
     "video_save.user_id": { kind: "delete_rows" },
     "video_share.user_id": { kind: "null_out" },
     "video_team_member.linked_user_id": { kind: "null_out" },

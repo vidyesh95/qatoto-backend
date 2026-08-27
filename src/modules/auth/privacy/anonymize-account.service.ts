@@ -34,11 +34,11 @@ import type { Result } from "#src/types/index.js";
  *
  * ## WHY THIS ITERATES A MANIFEST INSTEAD OF NAMING TABLES
  *
- * Rule R2 classified all 151 foreign keys into `user` for a `DELETE FROM "user"` that
+ * Rule R2 classified all 157 foreign keys into `user` for a `DELETE FROM "user"` that
  * never happens — 73 are `restrict` and 54 tables carry BEFORE UPDATE OR DELETE triggers,
  * so the delete cannot succeed and account closure is an anonymization instead. The
  * consequence people miss: `ON DELETE cascade` and `ON DELETE set null` therefore FIRE
- * ZERO TIMES here. All 31 cascades and all 43 remaining set-nulls only happen because
+ * ZERO TIMES here. All 34 cascades and all 44 remaining set-nulls only happen because
  * this file issues the statement.
  *
  * So the step list is DERIVED from `anonymization-manifest.ts` and no table name is
