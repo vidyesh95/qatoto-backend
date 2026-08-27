@@ -314,7 +314,14 @@ router.delete(
 );
 
 /**
- * The counterparty's own inbox, ROOT-MOUNTED (§11j.2).
+ * The cross-venture inbox, ROOT-MOUNTED (§11j.2) — BOTH DIRECTIONS.
+ *
+ * ⚠️ THIS ROUTER USED TO BE THE COUNTERPARTY'S SIDE ONLY, and the doc said so. It now carries
+ * the FOUNDER's side too, which is a different gate: `/applications/mine` and `/invites/mine`
+ * filter on `req.user.id` as the applicant or invitee, while `/applications/received` and
+ * `/open-roles/mine` filter through a membership join at `maintainer` or above. Reading the
+ * old sentence over the new routes would be reading the wrong scope onto them, which is why
+ * this paragraph exists rather than a one-line edit.
  *
  * A second router from this file, exactly as `funding.routes.ts` exports
  * `projectFundingRouter` and `compensation.routes.ts` exports `governanceRouter`. It is
@@ -326,8 +333,11 @@ router.delete(
  * maintainer-gated, so until now the only party who could act on an invite was the only
  * party who could not find it.
  *
- * Both paths are literal, so mount order among the root routers is not load-bearing — and
- * nothing else at the root owns `/applications` or `/invites`.
+ * ALL FOUR PATHS ARE LITERAL, so mount order among the root routers is not load-bearing.
+ * Nothing else at the root owns `/applications` or `/invites`, and `/open-roles/mine` is safe
+ * beside `researchCatalogRouter`'s `/open-roles` only because that one is an EXACT path with
+ * no `:roleId` sibling. Adding `GET /open-roles/:roleId` to that router — which mounts first
+ * — would swallow `/mine` and hand a founder the "role not found" branch instead of a list.
  */
 export const applicationInboxRouter = express.Router();
 
@@ -338,5 +348,26 @@ applicationInboxRouter.get(
 );
 
 applicationInboxRouter.get("/invites/mine", requireAuth, applicationsController.listMyInvites);
+
+// --- The founder's side of the same two questions, and the reads `/studio/team` is built on.
+//
+// Both are root-mounted for the reason the applicant's are: neither is about ONE project. A
+// founder running three ventures asks "who wants to join" once, not three times, and the
+// per-project inbox (`GET /:projectSlug/applications`) is maintainer-gated per project so it
+// can never answer across them. Same gap `GET /funding-rounds/mine` closed for rounds.
+//
+// NO `requireIdentifiedUser`: these are reads. The scope is proven by the membership join in
+// the service, not by the middleware.
+applicationInboxRouter.get(
+  "/applications/received",
+  requireAuth,
+  applicationsController.listReceivedApplications,
+);
+
+applicationInboxRouter.get(
+  "/open-roles/mine",
+  requireAuth,
+  applicationsController.listMaintainedOpenRoles,
+);
 
 export default router;

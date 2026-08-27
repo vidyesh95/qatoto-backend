@@ -341,6 +341,88 @@ export interface MyInviteView {
 }
 
 /**
+ * Projects where the caller is maintainer or above — the scope of every founder-side
+ * cross-venture read below.
+ *
+ * ⚠️ THE SCOPE IS THE SESSION, EXPRESSED AS A JOIN, and never a project id from a client. A
+ * `?projectId=` here would be a client-supplied authorization input, the same failure
+ * `/applications/mine` and `/pledges/mine` refuse by having no such parameter.
+ *
+ * `maintainer` is the floor because that is the floor on the per-project inbox this mirrors
+ * (`GET /:projectSlug/applications`). A contributor is a member of the team and still has no
+ * business reading who else applied — the two questions are different, and rank is what
+ * separates them.
+ *
+ * ARCHIVED PROJECTS ARE INCLUDED. A pending application against a venture that was archived
+ * still needs an answer, and dropping it here would strand the applicant with no counterparty
+ * — the same reasoning `listMyApplications` gives for keeping a draft project's row visible.
+ */
+function maintainedProjectPredicate(callerUserId: string) {
+  return and(
+    eq(projectMember.userId, callerUserId),
+    eq(projectMember.status, "active"),
+    sql`${projectMember.projectRole} IN ('maintainer', 'admin', 'founder')`,
+  );
+}
+
+/** One application on the founder's cross-venture queue. */
+export interface ReceivedApplicationView extends ApplicationView {
+  /** Which venture it is for — a cross-project row must name its own project (§11j.2). */
+  readonly projectSlug: string;
+  readonly projectName: string;
+}
+
+/**
+ * `GET /applications/received` — applications across EVERY venture the caller maintains.
+ *
+ * THE FOUNDER-SIDE MIRROR of `/applications/mine`, and the read that did not exist. The
+ * per-project inbox is `GET /:projectSlug/applications`, so a founder running three ventures
+ * had to open three project pages to answer "who wants to join". That is the same gap
+ * `GET /funding-rounds/mine` closed for rounds, answered the same way.
+ *
+ * `projectSlug` IS ON EVERY ROW ON PURPOSE. The accept and decline routes are project-scoped
+ * — `POST /research-projects/:slug/applications/:id/accept` — and duplicating that
+ * transaction at the root to save a path segment would mean two copies of the most
+ * concurrency-sensitive write in this domain. The row carries the slug; the client calls the
+ * route that already exists.
+ */
+export async function listReceivedApplications(
+  callerUserId: string,
+  filter: ListApplicationsFilter,
+): Promise<{ readonly rows: readonly ReceivedApplicationView[]; readonly total: number }> {
+  const conditions = [maintainedProjectPredicate(callerUserId)];
+  if (filter.status) {
+    conditions.push(eq(projectApplication.status, filter.status));
+  }
+  const predicate = and(...conditions);
+
+  const [rows, [totals]] = await Promise.all([
+    db
+      .select({
+        ...APPLICATION_VIEW_COLUMNS,
+        projectSlug: researchProject.slug,
+        projectName: researchProject.name,
+      })
+      .from(projectApplication)
+      .innerJoin(researchProject, eq(researchProject.id, projectApplication.projectId))
+      .innerJoin(projectMember, eq(projectMember.projectId, projectApplication.projectId))
+      .innerJoin(user, eq(user.id, projectApplication.applicantUserId))
+      .where(predicate)
+      // §4c rule 4 — ends in a unique column, or a page boundary skips rows.
+      .orderBy(desc(projectApplication.createdAt), desc(projectApplication.id))
+      .limit(filter.limit)
+      .offset((filter.page - 1) * filter.limit),
+    db
+      .select({ value: count() })
+      .from(projectApplication)
+      .innerJoin(projectMember, eq(projectMember.projectId, projectApplication.projectId))
+      .where(predicate),
+  ]);
+
+  return { rows, total: totals?.value ?? 0 };
+}
+
+/**
  * `GET /applications/mine` — everything the caller applied to (§11j.2).
  *
  * THERE IS NO `userId` PARAMETER AND THERE MUST NEVER BE ONE (§13). The filter is the

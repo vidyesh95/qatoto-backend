@@ -16,6 +16,7 @@ import {
   respondValidationFailed,
 } from "#src/modules/rnd/projects/project-error-response.js";
 import * as membershipService from "#src/modules/rnd/projects/project-membership.service.js";
+import * as rolesService from "#src/modules/rnd/projects/project-roles.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
 
 async function requireRoleOrRespond(
@@ -453,6 +454,73 @@ export async function listMyApplications(req: Request, res: Response): Promise<v
     },
   };
   res.status(200).json(response);
+}
+
+/**
+ * `GET /applications/received` — root-mounted, `requireAuth`.
+ *
+ * THE FOUNDER-SIDE MIRROR of `/applications/mine`, and the read `/studio/team` is built on.
+ * Scope is a membership join on the session at `maintainer` or above; there is no project
+ * parameter and there must never be one.
+ *
+ * A CALLER WHO MAINTAINS NOTHING GETS AN EMPTY LIST, NOT A 403. There is no resource being
+ * refused here — the question "which applications are waiting on me" has a correct answer
+ * for everyone, and for most people that answer is "none".
+ */
+export async function listReceivedApplications(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedQuery = ListApplicationsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const { status, page, limit } = parsedQuery.data;
+  const applicationsPage = await applicationsService.listReceivedApplications(req.user.id, {
+    status,
+    page,
+    limit,
+  });
+
+  const response: PaginatedResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Applications to your ventures retrieved successfully",
+    data: [...applicationsPage.rows],
+    pagination: {
+      page,
+      limit,
+      total: applicationsPage.total,
+      totalPages: Math.ceil(applicationsPage.total / limit),
+    },
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * `GET /open-roles/mine` — root-mounted, `requireAuth`.
+ *
+ * Every role advertised by a venture the caller maintains, in every status. Unpaginated,
+ * matching the project-scoped `…/roles` read it generalizes: a founder's role list is small
+ * and paging it would cost more than it saves.
+ */
+export async function listMaintainedOpenRoles(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const roles = await rolesService.listMaintainedOpenRoles(req.user.id);
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Your advertised roles retrieved successfully",
+    data: roles,
+  } satisfies ApiResponse);
 }
 
 /**

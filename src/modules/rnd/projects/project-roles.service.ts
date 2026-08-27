@@ -3,6 +3,7 @@ import { and, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import {
   openRoleCompensation,
+  projectMember,
   projectOpenRole,
   projectStats,
   researchCategory,
@@ -591,6 +592,38 @@ export async function findProjectOpenRoleView(
   }
   const [view] = await attachCompensation([row]);
   return view ?? null;
+}
+
+/**
+ * `GET /open-roles/mine` — every role advertised by a venture the caller MAINTAINS.
+ *
+ * NOT `listOpenRoles`, the public cross-project board, and the difference is the audience.
+ * That one serves candidates and shows only what is `open` and has a seat; this serves the
+ * founder and shows `closed` and `filled` roles too, because "why is nobody applying" is
+ * often answered by a role the founder forgot they closed.
+ *
+ * THE SCOPE IS A MEMBERSHIP JOIN ON THE SESSION, never a project id from the client — the
+ * same rule `listReceivedApplications` states at length. `maintainer` is the floor because
+ * creating and closing a role is a maintainer act.
+ */
+export async function listMaintainedOpenRoles(
+  callerUserId: string,
+): Promise<readonly OpenRoleView[]> {
+  const rows = await db
+    .select(OPEN_ROLE_VIEW_COLUMNS)
+    .from(projectOpenRole)
+    .innerJoin(researchProject, eq(researchProject.id, projectOpenRole.projectId))
+    .innerJoin(projectMember, eq(projectMember.projectId, projectOpenRole.projectId))
+    .where(
+      and(
+        eq(projectMember.userId, callerUserId),
+        eq(projectMember.status, "active"),
+        sql`${projectMember.projectRole} IN ('maintainer', 'admin', 'founder')`,
+      ),
+    )
+    .orderBy(desc(projectOpenRole.createdAt), desc(projectOpenRole.id));
+
+  return attachCompensation(rows);
 }
 
 export async function listOpenRolesForProject(projectId: string): Promise<readonly OpenRoleView[]> {
