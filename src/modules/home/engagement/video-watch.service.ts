@@ -11,6 +11,7 @@ import {
   videoAttachedProduct,
   videoCategory,
   videoChapter,
+  videoDocument,
   videoLike,
   videoOpenRole,
   videoSave,
@@ -29,6 +30,7 @@ import {
   loadPublicSeasonsForVideo,
   type PublicSeasonSummary,
 } from "#src/modules/studio/series/public-series.service.js";
+import { videoDocumentDownloadPath } from "#src/modules/studio/videos/videos.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -160,6 +162,33 @@ export interface WatchPayload {
     readonly product: StoreProductCardProjection;
     readonly pinnedAtSeconds: number | null;
   }[];
+  /**
+   * THE DECK OR WHITEPAPER SHOWN AS A DOWNLOAD UNDER THE VIDEO (§11j).
+   *
+   * WHY IT IS HERE AT ALL. `video_document` was read by the STUDIO owner projection and by nothing
+   * else, so even a populated row rendered nowhere a viewer could see. That is half of why the
+   * studio's "Attach documents" control was a promise nothing kept — the other half was that
+   * nothing wrote the table.
+   *
+   * ⚠️ `downloadPath` IS A PATH ON THIS API, NOT A LINK TO THE BYTES, and it must stay that way.
+   * The bucket is private and `object_storage_key` never leaves the server; every fetch of this
+   * path re-runs the same six-term public gate this payload was built under. Sending a presigned
+   * storage URL here instead would be a link that keeps working after the video is unpublished —
+   * `video_document` has no `url` column precisely so that shortcut is unavailable.
+   *
+   * `[]` RATHER THAN `null`, for the same reason as `attachedProducts` above: every video can
+   * carry documents, so "none" is an empty list rather than an absent capability.
+   *
+   * NO RE-ELIGIBILITY PASS, unlike `attachedProducts`. A document has no independent publication
+   * state that could drift out from under the join — it exists or it does not, and it dies with
+   * its video by cascade.
+   */
+  readonly documents: readonly {
+    readonly id: string;
+    readonly fileName: string;
+    readonly byteSize: number;
+    readonly downloadPath: string;
+  }[];
 }
 
 export async function getWatchPayload(
@@ -249,7 +278,8 @@ export async function getWatchPayload(
   // queries of its own and depends on nothing the others return, so awaiting it separately
   // would add its full latency to a route that already refuses a second round trip on
   // principle.
-  const [categories, chapters, openRoleRows, attachedProductRows, seasons] = await Promise.all([
+  const [categories, chapters, openRoleRows, attachedProductRows, seasons, documentRows] =
+    await Promise.all([
     db
       .select({ slug: contentCategory.slug, label: contentCategory.label })
       .from(videoCategory)
@@ -281,6 +311,17 @@ export async function getWatchPayload(
       // server-side re-sort: rearranging somebody's carousel is a change they did not ask for.
       .orderBy(asc(videoAttachedProduct.position)),
     loadPublicSeasonsForVideo(videoId),
+    // ⚠️ `objectStorageKey` IS SELECTED NOWHERE. It is an internal address into a private bucket,
+    // and a public payload is the last place it may appear. The path below is composed from ids.
+    db
+      .select({
+        id: videoDocument.id,
+        fileName: videoDocument.fileName,
+        byteSize: videoDocument.byteSize,
+      })
+      .from(videoDocument)
+      .where(eq(videoDocument.videoId, videoId))
+      .orderBy(asc(videoDocument.position)),
   ]);
 
   // Resolved in ONE query rather than per blurb. Every id here was scoped to this video's own
@@ -376,6 +417,10 @@ export async function getWatchPayload(
       attachedProducts: productCards.map((productCard) => ({
         product: productCard,
         pinnedAtSeconds: pinnedSecondsByProductId.get(productCard.id) ?? null,
+      })),
+      documents: documentRows.map((documentRow) => ({
+        ...documentRow,
+        downloadPath: videoDocumentDownloadPath(videoId, documentRow.id),
       })),
     },
   };

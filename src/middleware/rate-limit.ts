@@ -737,6 +737,50 @@ export const paperDownloadLimiter = createLimiter({
   limit: 120,
 });
 
+/**
+ * POST /videos/:videoId/documents (§11j).
+ *
+ * The same shape and the same cost as `paperUpload` above — up to 25 MB buffered, hashed and PUT —
+ * so it takes the same budget rather than a hand-tuned one. A creator attaching a deck does it once
+ * or twice per video; ten in fifteen minutes is generous for that and cheap to enforce.
+ */
+export const videoDocumentUploadLimiter = createLimiter({
+  namespace: "videoDocumentUpload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+});
+
+/**
+ * DELETE /videos/:videoId/documents/:documentId (§11j).
+ *
+ * ITS SIBLING `DELETE /videos/:videoId` IS ON THE KNOWN-DEBT LIST AND THIS IS NOT, which looks
+ * inconsistent and is deliberate: that list is "a SNAPSHOT OF EXISTING DEBT, not a blessing", and
+ * its own header says the right direction for it is DOWN. A new route joining it would be moving
+ * the wrong way. This delete also reaches OUT of the process — it issues a `DeleteObject` against
+ * Backblaze before touching the row — which the plain video delete does only when a custom
+ * thumbnail exists.
+ */
+export const videoDocumentDeleteLimiter = createLimiter({
+  namespace: "videoDocumentDelete",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});
+
+/**
+ * GET /videos/:videoId/documents/:documentId/file — mints a presigned URL.
+ *
+ * ⚠️ LOWER THAN `paperDownload` DESPITE BEING THE SAME OPERATION, because this one is the only
+ * storage route reachable WITHOUT A SESSION. `createLimiter` keys an anonymous caller by IP, so
+ * this is the budget that stands between the open internet and an enumeration of presigned URLs.
+ * Signing is cheap; a link is a capability, and 60 capabilities per IP per fifteen minutes is far
+ * more than a reader needs and far less than a scraper wants.
+ */
+export const videoDocumentDownloadLimiter = createLimiter({
+  namespace: "videoDocumentDownload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
 /** POST …/posts and …/posts/:postId/replies — the discussion surface (§11f). */
 export const programPostCreateLimiter = createLimiter({
   namespace: "programPostCreate",

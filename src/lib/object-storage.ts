@@ -48,6 +48,7 @@ import type { Result } from "#src/types/index.js";
 const PAPER_KEY_PREFIX = "research-programs";
 const COMMERCE_DOCUMENT_KEY_PREFIX = "commerce-organizations";
 const DATA_EXPORT_KEY_PREFIX = "data-exports";
+const VIDEO_DOCUMENT_KEY_PREFIX = "videos";
 
 export type ObjectStorageError =
   | { type: "NOT_CONFIGURED" }
@@ -57,6 +58,18 @@ export type ObjectStorageError =
 /** How long a download link lives. Long enough to click, short enough not to circulate. */
 export const PAPER_DOWNLOAD_URL_TTL_SECONDS = 300;
 export const PRIVATE_COMMERCE_DOCUMENT_URL_TTL_SECONDS = 300;
+
+/**
+ * Five minutes, matching its two siblings above rather than being tuned longer.
+ *
+ * A VIDEO DOCUMENT IS REACHED BY ANONYMOUS VISITORS, which is the one way it differs from a paper
+ * or a commerce document, and it argues for a SHORT life rather than a generous one. The download
+ * route re-checks the video's public gate on every request; the presigned URL is the only window in
+ * which that check is bypassed, because a presigned URL is a bearer capability. Five minutes is
+ * long enough to start a 25 MB download on a poor connection and short enough that a link pasted
+ * into a group chat is dead before it is read.
+ */
+export const VIDEO_DOCUMENT_URL_TTL_SECONDS = 300;
 /**
  * A subject-access archive's DOWNLOAD LINK. Same five minutes as its neighbours, and for a
  * sharper reason: this object is every piece of personal data we hold about one person, so
@@ -139,6 +152,24 @@ export function commerceDocumentObjectKey(input: {
   ].join("/");
 }
 
+/**
+ * The stable key this video's copy of these exact bytes always lives at.
+ *
+ * `encodeURIComponent` on the id, like `commerceDocumentObjectKey` and unlike `paperObjectKey`:
+ * both ids are generated UUIDs today, so neither can carry a separator, and encoding costs nothing
+ * to be right if that ever stops being true. `contentSha256` is NOT encoded because the column's
+ * CHECK constrains it to 64 hex characters — encoding a value that cannot contain a separator would
+ * imply the CHECK were not there.
+ */
+export function videoDocumentObjectKey(videoId: string, contentSha256: string): string {
+  return [
+    VIDEO_DOCUMENT_KEY_PREFIX,
+    encodeURIComponent(videoId),
+    "documents",
+    `${contentSha256}.pdf`,
+  ].join("/");
+}
+
 function describeCause(thrown: unknown): string {
   return thrown instanceof Error ? thrown.message : String(thrown);
 }
@@ -185,6 +216,92 @@ export async function uploadResearchPaper(input: {
   } catch (uploadError: unknown) {
     return { success: false, error: { type: "UPLOAD_FAILED", cause: describeCause(uploadError) } };
   }
+}
+
+/**
+ * Stores a video document's bytes and returns the key they live at.
+ *
+ * IDENTICAL INVARIANTS TO `uploadResearchPaper`, and they are restated rather than shared because
+ * each one is a decision about THESE bytes: the buffer must already have been validated by
+ * `src/modules/rnd/pdf.ts` and hashed by the caller; `ContentType` is pinned to `application/pdf`
+ * rather than echoing what the client claimed; `ContentDisposition: attachment` is set at PUT time
+ * so the object cannot be coaxed into rendering inline on our storage domain even if a presigned
+ * URL escapes; and `ChecksumSHA256` makes B2 reject a corrupted transfer rather than storing bad
+ * bytes under a key that claims to describe them.
+ *
+ * That last one matters more here than for a paper. The key is content-addressed AND the row is
+ * unique on the hash, so bytes stored under a key that does not describe them would make a retry
+ * converge on the WRONG object — silently serving one creator's deck from another's row.
+ */
+export async function uploadVideoDocument(input: {
+  readonly videoId: string;
+  readonly contentSha256: string;
+  readonly pdfBytes: Buffer;
+  /** Used only for the download filename. Sanitized here, never trusted. */
+  readonly downloadFileName: string;
+}): Promise<Result<{ objectKey: string }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  const objectKey = videoDocumentObjectKey(input.videoId, input.contentSha256);
+
+  try {
+    await storage.client.send(
+      new PutObjectCommand({
+        Bucket: storage.bucketName,
+        Key: objectKey,
+        Body: input.pdfBytes,
+        ContentType: "application/pdf",
+        // ⚠️ `sanitizePrivateFileName`, NOT `sanitizeDownloadFileName`. The latter is built for a
+        // paper TITLE and appends `.pdf`, so an uploaded `deck.pdf` would download as
+        // `deck.pdf.pdf`. This one receives a real file name and preserves its extension.
+        ContentDisposition: `attachment; filename="${sanitizePrivateFileName(input.downloadFileName)}"`,
+        ChecksumSHA256: Buffer.from(input.contentSha256, "hex").toString("base64"),
+      }),
+    );
+    return { success: true, value: { objectKey } };
+  } catch (uploadError: unknown) {
+    return { success: false, error: { type: "UPLOAD_FAILED", cause: describeCause(uploadError) } };
+  }
+}
+
+/**
+ * Deletes a video document's bytes.
+ *
+ * Idempotent, like `deleteResearchPaper` and for the same reason: S3 `DeleteObject` succeeds on an
+ * absent key, and the desired end state is reached either way. That property is what lets the two
+ * cascade-cleanup callers (`deleteVideo`, `anonymizeAccount`) run best-effort without a
+ * reconciliation pass — a key already gone is not an error to report to a creator deleting a video.
+ */
+export async function deleteVideoDocument(
+  objectKey: string,
+): Promise<Result<{ deleted: boolean }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  try {
+    await storage.client.send(
+      new DeleteObjectCommand({ Bucket: storage.bucketName, Key: objectKey }),
+    );
+    return { success: true, value: { deleted: true } };
+  } catch (deleteError: unknown) {
+    return { success: false, error: { type: "DELETE_FAILED", cause: describeCause(deleteError) } };
+  }
+}
+
+/**
+ * Mints a short-lived download URL for a video document.
+ *
+ * ⚠️ AUTHORIZATION HAPPENS BEFORE THIS IS CALLED. That warning is on `presignPaperDownload` too,
+ * and it carries more weight here: the paper route is `requireAuth`, this one is deliberately open
+ * to anonymous visitors, so the ONLY thing standing between the public and these bytes is the
+ * controller's re-check of the video's public gate. A presigned URL is a bearer capability and does
+ * not know what a video's visibility is.
+ */
+export async function presignVideoDocumentDownload(
+  objectKey: string,
+): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, ObjectStorageError>> {
+  return presignPrivateObjectDownload(objectKey, VIDEO_DOCUMENT_URL_TTL_SECONDS);
 }
 
 /**

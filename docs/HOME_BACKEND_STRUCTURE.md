@@ -779,6 +779,23 @@ not post twice.
 > brings it back. `[]` rather than `null` here, unlike `seasons` — every video can carry products,
 > so there is no absent-versus-empty distinction to make.
 
+> **`documents` — a third field, and the same shape of gap again.** `video_document` had existed
+> since the studio schema did and was read by the STUDIO owner projection and by nothing else, so a
+> viewer could never see one. That was half of why the studio's "Attach documents" control was a
+> promise nothing kept; the other half was that **nothing wrote the table** (0 rows). STUDIO §6's
+> three new document routes are the write half, and this is the read half.
+>
+> ⚠️ **`downloadPath` IS A PATH ON THIS API, NOT A LINK TO THE BYTES.** The bucket is private and
+> `object_storage_key` never reaches the wire. Fetching the path re-runs this same six-term public
+> gate and then `302`s to a presigned URL that lives 300 s — which is why the table has **no `url`
+> column**: a stored link would keep working after the creator unpublishes the video, because bytes
+> do not know a row's visibility changed. Verified live: a signed-out download 404s the moment the
+> video goes private, while the owner's still 302s.
+>
+> **No re-eligibility pass**, unlike `attachedProducts` directly above. A document has no
+> independent publication state that could drift out from under the join — it exists or it does not,
+> and it dies with its video by cascade. `[]` rather than `null`, for the same reason as products.
+
 ### 5.2a Watch history — `src/modules/home/engagement/watch-history.routes.ts`
 
 The write half of `mode=watched`: a viewer editing their own history, behind `/history`.

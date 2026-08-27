@@ -371,3 +371,101 @@ export async function deleteVideo(req: Request, res: Response): Promise<void> {
   };
   res.status(200).json(response);
 }
+
+// --------------------------------------------------------------------------------
+// Attached documents (§11j)
+// --------------------------------------------------------------------------------
+
+/** `POST /videos/:videoId/documents` — multipart field `document`, PDF, 25 MB. */
+export async function attachDocument(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  if (!req.file) {
+    respondFieldRefusal(res, "document", "A PDF is required (multipart field 'document').");
+    return;
+  }
+
+  const attachResult = await videosService.attachVideoDocument(
+    req.user.id,
+    firstParam(req.params.videoId ?? ""),
+    {
+      // `originalname` is a client-chosen string and is treated as one: the service sanitizes it
+      // before it reaches either the column or a `Content-Disposition` header.
+      fileName: req.file.originalname,
+      bytes: req.file.buffer,
+    },
+  );
+  if (!attachResult.success) {
+    respondStudioError(res, attachResult.error);
+    return;
+  }
+
+  // 201 even when a re-upload converged on the existing row. The distinction a 200 would draw —
+  // "these exact bytes were already here" — is one the creator cannot act on, and answering
+  // differently would leak whether a document existed before.
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 201,
+    message: "Document attached successfully",
+    data: attachResult.value,
+  };
+  res.status(201).json(response);
+}
+
+/** `DELETE /videos/:videoId/documents/:documentId`. */
+export async function detachDocument(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const detachResult = await videosService.detachVideoDocument(
+    req.user.id,
+    firstParam(req.params.videoId ?? ""),
+    firstParam(req.params.documentId ?? ""),
+  );
+  if (!detachResult.success) {
+    respondStudioError(res, detachResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Document removed successfully",
+    data: detachResult.value,
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * `GET /videos/:videoId/documents/:documentId/file` — 302 to a short-lived presigned URL.
+ *
+ * ⚠️ THE ONLY PUBLIC ROUTE ON THIS ROUTER. `req.user` is optional here rather than required, and
+ * the gate is the VIDEO's publicness, decided in the service. Do not add `requireAuth` to it: the
+ * copy under the studio control promises "shown as a download under the video", and a video shown
+ * to signed-out visitors whose document is not would not keep that promise.
+ *
+ * A REDIRECT RATHER THAN A PROXY. Streaming 25 MB through this process to add nothing would hold a
+ * connection for the length of the transfer; the redirect hands the client straight to storage.
+ * `Cache-Control: no-store` is set because the 302 carries a bearer capability in its `Location` —
+ * a cached redirect is a link that outlives the gate it was issued under, which is the whole thing
+ * this design exists to prevent.
+ */
+export async function downloadDocument(req: Request, res: Response): Promise<void> {
+  const downloadResult = await videosService.resolveVideoDocumentDownload(
+    firstParam(req.params.videoId ?? ""),
+    firstParam(req.params.documentId ?? ""),
+    req.user?.id ?? null,
+  );
+  if (!downloadResult.success) {
+    respondStudioError(res, downloadResult.error);
+    return;
+  }
+
+  res.setHeader("Cache-Control", "no-store");
+  res.redirect(302, downloadResult.value.downloadUrl);
+}

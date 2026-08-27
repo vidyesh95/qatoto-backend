@@ -604,7 +604,27 @@ export const videoAttachedProduct = pgTable(
   ],
 );
 
-// Pitch deck / whitepaper PDFs.
+/**
+ * Pitch deck / whitepaper PDFs, held in Backblaze object storage (`src/lib/object-storage.ts`).
+ *
+ * ⚠️ THERE IS NO `url` COLUMN, AND ADDING ONE WOULD BE A REGRESSION. A URL OUTLIVES THE GATE: a
+ * link handed out while the video was public keeps working after it is unpublished, made private
+ * or deleted, because the bytes do not know the row's visibility changed. The key is stored
+ * instead, and every download goes through `GET /videos/:videoId/documents/:documentId/file`,
+ * which re-checks the video's public gate on that request. The bucket stays private — see the
+ * module invariant in `object-storage.ts`.
+ *
+ * CONTENT-ADDRESSED. `objectStorageKey` is derived from `contentSha256`, so the same bytes always
+ * land at the same key, and `video_document_content_uidx` makes them at most one row per video. A
+ * retried upload converges rather than duplicating, which is why the upload route takes no
+ * `idempotency()` middleware — the same argument the research-paper route makes.
+ *
+ * ⚠️ THE CASCADE CLEANS ROWS, NOT BYTES. Deleting a video — or anonymizing its creator, since
+ * `video.creatorId` cascades from `user` — drops these rows and leaves the objects in the bucket.
+ * `deleteVideo` and `anonymizeAccount` delete them explicitly, beside the Cloudinary assets they
+ * already clean up. SQL cannot reach object storage, so this is a code obligation with no
+ * database-level backstop.
+ */
 export const videoDocument = pgTable(
   "video_document",
   {
@@ -614,12 +634,22 @@ export const videoDocument = pgTable(
     videoId: text("video_id")
       .notNull()
       .references(() => video.id, { onDelete: "cascade" }),
-    url: text("url").notNull(),
+    /** Where the bytes live. Derived from `contentSha256` — never client-supplied. */
+    objectStorageKey: text("object_storage_key").notNull(),
+    /** 64 lowercase hex characters, CHECK-enforced: the key is composed from this value. */
+    contentSha256: text("content_sha256").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    /** The uploader's own file name, sanitized. Display and download filename only. */
     fileName: text("file_name").notNull(),
     position: integer("position").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  (table) => [index("video_document_videoId_idx").on(table.videoId)],
+  (table) => [
+    index("video_document_videoId_idx").on(table.videoId),
+    uniqueIndex("video_document_content_uidx").on(table.videoId, table.contentSha256),
+    check("video_document_byte_size_ck", sql`${table.byteSize} > 0`),
+    check("video_document_content_sha256_ck", sql`${table.contentSha256} ~ '^[0-9a-f]{64}$'`),
+  ],
 );
 
 // Roadmap labels rendered under the video. Bears no money — see the naming note above.

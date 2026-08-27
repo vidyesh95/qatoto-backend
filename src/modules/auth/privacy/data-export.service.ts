@@ -461,6 +461,27 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
         FROM user_profile_link WHERE user_id = ${userId} ORDER BY sort_order`,
   );
 
+  /**
+   * The decks and whitepapers attached to the subject's own videos.
+   *
+   * FILE NAMES AND SIZES, NOT BYTES. Art. 15 asks what is held about the subject, and the metadata
+   * answers that; embedding up to 25 MB per document would turn a JSON archive into a multi-hundred
+   * megabyte one that the seven-day-retention purge then has to move around. `objectStorageKey` is
+   * deliberately NOT listed either — it is an internal address, not personal data, and printing it
+   * into a file that travels by email would hand out a pointer into the bucket.
+   *
+   * FOUND THE SAME WAY `yourChannelLinks` WAS: by asking what a new table means for this file
+   * rather than only for the scrub. The two obligations are separate and neither implies the other.
+   */
+  const yourVideoDocuments = await collect(
+    "yourVideoDocuments",
+    sql`SELECT d.video_id, d.file_name, d.byte_size, d.position, d.created_at
+        FROM video_document AS d
+        JOIN video AS v ON v.id = d.video_id
+        WHERE v.creator_id = ${userId}
+        ORDER BY d.video_id, d.position`,
+  );
+
   const howYouSignIn = {
     // NEVER `password`, `access_token`, `refresh_token` or `id_token`. Those are
     // CREDENTIALS, not personal data about the subject, and Art. 15 does not ask for them
@@ -590,6 +611,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     },
     whoYouAre,
     yourChannelLinks,
+    yourVideoDocuments,
     howYouSignIn,
     whatYouDoHere,
     howMuchYouWatch,

@@ -7,6 +7,8 @@ import {
   anonymizationStepLog,
   handleReservation,
   user,
+  video,
+  videoDocument,
 } from "#src/db/schema.js";
 import { deleteUserAvatar } from "#src/lib/cloudinary.js";
 import { PermanentJobError } from "#src/lib/jobs.js";
@@ -318,6 +320,36 @@ export async function anonymizeAccount(
 
   const rowsByStep: Record<string, number> = {};
 
+  /**
+   * --- 1.5. The video documents' BYTES, before the loop below deletes the rows that name them.
+   *
+   * ⚠️ POSITION IS THE WHOLE POINT, AND IT IS NOT NEGOTIABLE. `video_document` cascades from
+   * `video`, which cascades from `user`, so the manifest loop below deletes every one of this
+   * creator's documents as a side effect of deleting their videos. SQL cannot reach object
+   * storage, so after that loop there is no row left naming the object keys and no way to find
+   * them again — the decks and whitepapers would sit in the bucket forever while every row in
+   * the database read as correctly anonymized.
+   *
+   * That is the exact failure mode step 4's comment describes for the export archives, which is
+   * why this is shaped like step 4 rather than like the post-commit avatar delete: a logged,
+   * resumable step, guarded by `assertStillPending`, run while the request is still `pending`.
+   *
+   * ⚠️ AND IT IS WHY `video_document` HAS NO MANIFEST ENTRY. The manifest is keyed on foreign-key
+   * columns into `user`, and this table has none — it reaches a person only through
+   * `video.creator_id`. An entry would fail the verifier's check 2 as stale. The obligation is
+   * real and the manifest is simply not where it can live.
+   */
+  if (!completedSteps.has("purge_video_document_objects")) {
+    const stillPending = await assertStillPending(requestId);
+    if (!stillPending.success) return stillPending;
+
+    rowsByStep["purge_video_document_objects"] = await purgeVideoDocumentObjects(
+      requestId,
+      userId,
+      isEnabled,
+    );
+  }
+
   for (const step of steps) {
     if (completedSteps.has(step.stepName)) continue;
 
@@ -438,6 +470,48 @@ export async function anonymizeAccount(
  *
  * The import stays lazy so a dry-run worker never constructs an S3 client it will not use.
  */
+/**
+ * Deletes every stored video-document object this creator owns, and reports how many.
+ *
+ * DRY RUN COUNTS RATHER THAN DELETES, exactly like `purgeExportArchives`: with the flag off the
+ * operator must be able to see what an erasure WOULD remove without removing it.
+ *
+ * The import is deferred for the same reason step 4's is — `videos.service.ts` pulls in the studio
+ * dependency graph, and the privacy module must not carry it at load time.
+ */
+async function purgeVideoDocumentObjects(
+  requestId: string,
+  userId: string,
+  isEnabled: boolean,
+): Promise<number> {
+  const [countRow] = await db
+    .select({ documentCount: sql<number>`count(*)::int` })
+    .from(videoDocument)
+    .innerJoin(video, eq(video.id, videoDocument.videoId))
+    .where(eq(video.creatorId, userId));
+  const documentCount = countRow?.documentCount ?? 0;
+
+  if (!isEnabled) return documentCount;
+
+  const { deleteStoredVideoDocumentsForCreator } = await import(
+    "#src/modules/studio/videos/videos.service.js"
+  );
+  await deleteStoredVideoDocumentsForCreator(userId);
+
+  await db.insert(anonymizationStepLog).values({
+    requestId,
+    stepName: "purge_video_document_objects",
+    tableName: "video_document",
+    rowsAffected: documentCount,
+  });
+
+  if (documentCount > 0) {
+    logger.info("purged video document objects during anonymization", { userId, documentCount });
+  }
+
+  return documentCount;
+}
+
 async function purgeExportArchives(
   requestId: string,
   userId: string,

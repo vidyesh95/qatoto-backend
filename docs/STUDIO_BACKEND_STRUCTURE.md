@@ -933,6 +933,9 @@ literal segments (`/mine`) **before** `/:id` (same rule as the users/products ro
 | `GET /videos/:id`                | —                                                      | Full `PublicVideo` (chapters, products, attachments, anime). Owner only → `404` otherwise.                                                                                                                                                                                                                                       |
 | `PATCH /videos/:id`              | JSON `UpdateVideoSchema` (all optional)                | Partial update of mutable metadata. A changed `youtubeUrl` is **re-parsed and re-verified** exactly like create. `200 PublicVideo` · same YouTube statuses as `POST` · `422` · `404`.                                                                                                                                            |
 | `POST /videos/:id/thumbnail`     | `multipart/form-data`, field **`image`**               | sharp validate+normalize → Cloudinary → overwrite the oEmbed `thumbnailUrl`. `200` · image statuses (§8 map) · `413` (>5 MB) · `404`.                                                                                                                                                                                            |
+| `POST /videos/:id/documents`     | `multipart/form-data`, field **`document`**            | Attach a deck/whitepaper. PDF only, **25 MB**, at most **5 per video**. The mimetype gate is a first pass; `validatePdfBytes` reads the real header/version/trailer and decides. Bytes go to Backblaze at a **content-addressed** key, so a re-upload of the same file CONVERGES on the existing row and answers `201` with its id — which is why this route takes **no idempotency key**. `201` · `422 INVALID_PDF` · `422 TOO_MANY_VIDEO_DOCUMENTS` · `502`/`503` storage · `404`. |
+| `DELETE /videos/:id/documents/:documentId` | —                                            | Removes the stored object **first**, then the row: a row with no object is a broken download, an object with no row is a leak nothing finds. A storage failure REFUSES the delete rather than dropping the row anyway. `200` · `404` · `502`. |
+| `GET /videos/:id/documents/:documentId/file` | —                                          | ⚠️ **THE ONE ROUTE ON THIS ROUTER WITHOUT `requireAuth`** — `attachOptionalUser`. Gated on the **video's** public gate (`findPublicVideo`) OR ownership, then `302` to a presigned URL that lives **300 s**, with `Cache-Control: no-store`. This is why `video_document` has **no `url` column**: a stored link would keep working after an unpublish, whereas this re-checks the gate on every request. `302` · `404`. |
 | `PUT /videos/:id/chapters`       | JSON `{ chapters: [{ startSeconds, title }] }`         | Replace the chapter set. Validate: first `startSeconds = 0`, strictly ascending, ≥10 s apart, ≥3 to show. The `≤ durationSeconds` bound is **skipped for YouTube rows** (see below). `200` · `422` · `404`.                                                                                                                      |
 | `PUT /videos/:id/products`       | JSON `{ productIds: string[] }`                        | Replace attached products; **each product ownership re-verified** → `422 PRODUCT_NOT_OWNED`. `200` · `404`.                                                                                                                                                                                                                      |
 | `PUT /videos/:id/playlists`      | JSON `{ playlistIds: string[] }`                       | Set which of the caller's playlists contain this video. `200` · `404`.                                                                                                                                                                                                                                                           |
@@ -965,6 +968,20 @@ order). All `requireAuth`, owner-scoped, `404` on non-owner.
 `POST /series` · `GET /series/mine` · `GET /series/:id` · `PATCH /series/:id` · `DELETE /series/:id`,
 with nested `POST /series/:id/seasons` and `POST /seasons/:id/episodes`. Owner-scoped. (Episodes are
 normally created via the upload flow; these exist for catalog management at `/studio/series`.)
+
+**The three document routes** carry `videoDocumentUploadLimiter` (10 / 15 min, matching
+`paperUpload`'s budget because the cost is identical), `videoDocumentDeleteLimiter` (30 / 15 min) and
+`videoDocumentDownloadLimiter` (60 / 15 min).
+
+> **⚠️ THE DOWNLOAD BUDGET IS LOWER THAN `paperDownload`'s DESPITE BEING THE SAME OPERATION**, and
+> that is deliberate: it is the only storage route reachable WITHOUT a session, so `createLimiter`
+> keys an anonymous caller by IP and this is the budget standing between the open internet and an
+> enumeration of presigned URLs.
+>
+> **The DELETE is not on `rate-limit-coverage.test.ts`'s known-debt list even though its sibling
+> `DELETE /videos/:videoId` is.** That list is "a SNAPSHOT OF EXISTING DEBT, not a blessing" and its
+> own header says the right direction for it is DOWN; a new route joining it would be moving the
+> wrong way.
 
 **`POST` / `DELETE /series/:seriesId/poster`** — multipart `image`, `seriesPosterUploadLimiter`.
 

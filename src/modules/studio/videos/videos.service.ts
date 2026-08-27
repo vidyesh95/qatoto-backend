@@ -1,4 +1,6 @@
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
+
+import { and, asc, count, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { fromDrizzle } from "pg-boss";
 
 import { config } from "#src/config/index.js";
@@ -30,6 +32,13 @@ import {
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
+import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
+import {
+  deleteVideoDocument as deleteDocumentObject,
+  presignVideoDocumentDownload,
+  uploadVideoDocument as uploadDocumentObject,
+  type ObjectStorageError,
+} from "#src/lib/object-storage.js";
 import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
@@ -45,6 +54,11 @@ import { ensureVideoStatsRows } from "#src/modules/home/engagement/video-engagem
 // The venture gate's membership half. `isActiveProjectMember` is the only exported R&D
 // membership helper keyed on a projectId rather than a slug, which is what studio holds.
 import { isActiveProjectMember } from "#src/modules/rnd/projects/project-membership.service.js";
+import {
+  isPdfValidationError,
+  validatePdfBytes,
+  type PdfValidationError,
+} from "#src/modules/rnd/pdf.js";
 import {
   DEFAULT_CONTENT_CATEGORY_SLUG,
   findUnavailableCategoryIds,
@@ -182,6 +196,20 @@ export type VideoError =
   | { type: "NOT_AN_ANIME_EPISODE" }
   | { type: "EPISODE_NUMBER_TAKEN"; episodeNumber: number }
   | { type: "NO_TOKEN_REQUIRED" }
+  // --- Attached documents (§11j) ---------------------------------------------------
+  // The same collapse-into-one rule every id-bearing arm above follows: "no such document" and
+  // "a document on another video" are one answer, so the status cannot enumerate document ids.
+  | { type: "VIDEO_DOCUMENT_NOT_FOUND"; documentId: string }
+  | { type: "TOO_MANY_VIDEO_DOCUMENTS"; limit: number }
+  | { type: "INVALID_PDF"; reason: PdfValidationError["type"] }
+  // ⚠️ `ObjectStorageError` IS TRANSLATED, NOT MERGED, and the reason is a genuine collision:
+  // its three literals are byte-identical to `CloudinaryError`'s — `NOT_CONFIGURED`,
+  // `UPLOAD_FAILED`, `DELETE_FAILED` — so a merged union would be indistinguishable to the
+  // exhaustive switch in `studio-error-response.ts`, and a PDF that failed to store would answer
+  // "Could not store the image". Distinct arms keep the copy honest and the switch total.
+  | { type: "DOCUMENT_STORAGE_NOT_CONFIGURED" }
+  | { type: "DOCUMENT_STORAGE_UPLOAD_FAILED" }
+  | { type: "DOCUMENT_STORAGE_DELETE_FAILED" }
   | YoutubeSourceError
   | ImageValidationError
   | CloudinaryError;
@@ -382,11 +410,29 @@ export interface VideoCollaboratorView {
   readonly status: "invited" | "accepted" | "declined";
 }
 
+/**
+ * One attached deck or whitepaper, as it reaches a client.
+ *
+ * ⚠️ THERE IS NO `url`, AND THAT IS THE DESIGN RATHER THAN AN OMISSION. `downloadPath` is a path on
+ * THIS api, not a link to the bytes: every fetch of it re-checks the video's public gate, so the
+ * document stops being reachable the moment the video does. A presigned storage URL sent here would
+ * outlive an unpublish, and `object_storage_key` never leaves the server at all.
+ */
 export interface VideoDocumentView {
   readonly id: string;
-  readonly url: string;
   readonly fileName: string;
+  readonly byteSize: number;
   readonly position: number;
+  /** `/videos/:videoId/documents/:documentId/file` — 302s to a short-lived presigned URL. */
+  readonly downloadPath: string;
+}
+
+/** How many documents one video may carry. "Deck or whitepaper" is not a file manager. */
+export const MAX_VIDEO_DOCUMENTS = 5;
+
+/** Builds the download path. One place, so the route and the projection cannot drift apart. */
+export function videoDocumentDownloadPath(videoId: string, documentId: string): string {
+  return `/videos/${encodeURIComponent(videoId)}/documents/${encodeURIComponent(documentId)}/file`;
 }
 
 /**
@@ -676,8 +722,8 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     db
       .select({
         id: videoDocument.id,
-        url: videoDocument.url,
         fileName: videoDocument.fileName,
+        byteSize: videoDocument.byteSize,
         position: videoDocument.position,
       })
       .from(videoDocument)
@@ -810,7 +856,12 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
     openRoles,
     teamMembers,
     collaborators,
-    documents,
+    // The download path is COMPOSED, not selected: it is derived from two ids the row already
+    // carries, and storing it would be a second copy of the route's own shape.
+    documents: documents.map((documentRow) => ({
+      ...documentRow,
+      downloadPath: videoDocumentDownloadPath(row.id, documentRow.id),
+    })),
     playlistIds: playlistRows.map((playlistRow) => playlistRow.playlistId),
     animeEpisode: episode,
 
@@ -2196,6 +2247,19 @@ export async function deleteVideo(
     if (!deletedAsset.success) return { success: false, error: deletedAsset.error };
   }
 
+  // ⚠️ BEFORE THE ROW GOES, because `video_document` CASCADES from `video`: once the delete below
+  // commits there is nothing left to enumerate the object keys from, and the bytes stay in the
+  // bucket forever with no row pointing at them. SQL cannot reach object storage, so there is no
+  // database-level backstop for forgetting this — the same reason `deleteThumbnailAsset` sits
+  // immediately above.
+  //
+  // BEST-EFFORT, UNLIKE THE THUMBNAIL ABOVE, and the asymmetry is deliberate. A creator pressing
+  // Delete on their own video must not be blocked by a storage outage; `deleteObject` is
+  // idempotent, so a failure here leaks bytes rather than corrupting anything, and refusing the
+  // delete would leave them with a video they cannot remove. The failure is logged, loudly, with
+  // the key — which is what makes a later sweep possible.
+  await deleteStoredDocumentsForVideo(videoId);
+
   // THE COUNTER COMES DOWN HERE TOO, and its absence was a real bug rather than a deliberate
   // omission. `publishVideo` increments `publishedVideoCount` and `unpublishVideo` decrements it,
   // but deleting a PUBLISHED video removed the row and left the count where it was — so the number
@@ -2227,4 +2291,327 @@ export async function deleteVideo(
   });
 
   return { success: true, value: { deleted: true } };
+}
+
+// --------------------------------------------------------------------------------
+// Attached documents — the deck or whitepaper shown under a video (§11j)
+// --------------------------------------------------------------------------------
+//
+// WHY THIS SECTION EXISTS AT ALL. `video_document` has been in the schema since the studio was,
+// has been read by `buildStudioVideoView` above the whole time, and had NO WRITER — 0 rows. The
+// studio's "Attach documents" control collected a `File`, kept `file.name`, threw the bytes away
+// and dropped even the name at save. The copy under it promised "Deck or whitepaper shown as a
+// download under the video". A creator who used it lost their file silently. These four functions
+// and the three routes above them are that promise being kept.
+//
+// THE BYTES NEVER BECOME A URL. `object_storage_key` does not leave the server; a client receives
+// `downloadPath`, a path on this api, and every fetch of it re-runs the video's public gate. See
+// the schema comment on `videoDocument` for why a stored URL would be a regression rather than a
+// shortcut.
+
+/**
+ * The name a creator sees on the chip, and the name the file downloads as.
+ *
+ * ONE FUNCTION FOR BOTH, so the studio list and the browser's Save dialog cannot disagree — the
+ * same string is written to `file_name` and handed to storage for the `Content-Disposition`.
+ * `object-storage.ts` sanitizes again on its own side, which is not redundant: that layer must be
+ * safe against any caller, and a header-injection guard that trusts its caller is not a guard.
+ */
+function sanitizeStoredFileName(rawFileName: string): string {
+  const cleaned = rawFileName
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9 ._-]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return cleaned.length > 0 ? cleaned : "document.pdf";
+}
+
+/** Translates a storage failure into the studio's own arms. See `VideoError`'s note on the collision. */
+function asVideoDocumentStorageError(error: ObjectStorageError): VideoError {
+  switch (error.type) {
+    case "NOT_CONFIGURED":
+      return { type: "DOCUMENT_STORAGE_NOT_CONFIGURED" };
+    case "UPLOAD_FAILED":
+      return { type: "DOCUMENT_STORAGE_UPLOAD_FAILED" };
+    case "DELETE_FAILED":
+      return { type: "DOCUMENT_STORAGE_DELETE_FAILED" };
+    default: {
+      const exhaustiveCheck: never = error;
+      throw new Error(`Unhandled object storage error: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
+ * Deletes every stored object for a video, best-effort, and reports what it could not remove.
+ *
+ * CALLED BEFORE THE ROWS GO, from `deleteVideo` and from the account scrub. Both are cascade sites
+ * where the rows vanish on their own and the bytes do not.
+ *
+ * IT RETURNS NOTHING AND THROWS NOTHING. A caller who could act on a partial failure does not
+ * exist: the video is being deleted either way, and `DeleteObject` is idempotent so a retry is
+ * always safe. What a failure produces is a log line carrying the key, which is the only thing a
+ * later sweep could work from.
+ */
+async function deleteStoredDocumentsForVideo(videoId: string): Promise<void> {
+  const storedDocuments = await db
+    .select({ objectStorageKey: videoDocument.objectStorageKey })
+    .from(videoDocument)
+    .where(eq(videoDocument.videoId, videoId));
+
+  for (const storedDocument of storedDocuments) {
+    const deleted = await deleteDocumentObject(storedDocument.objectStorageKey);
+    if (!deleted.success) {
+      logger.error("videos: document object left in storage after video delete", {
+        videoId,
+        objectStorageKey: storedDocument.objectStorageKey,
+        reason: deleted.error.type,
+      });
+    }
+  }
+}
+
+/**
+ * The account-scrub half of the same obligation.
+ *
+ * `video.creatorId` cascades from `user`, so anonymizing an account deletes every video it owns and
+ * every document row under them — leaving the bytes. This enumerates them by creator, which is a
+ * join the per-video helper above cannot do, and it MUST run before the scrub touches `user`.
+ *
+ * Exported for `anonymize-account.service.ts` alone. It is not a general-purpose helper: it deletes
+ * objects for videos it does not delete, which is only correct because the caller is about to.
+ */
+export async function deleteStoredVideoDocumentsForCreator(creatorId: string): Promise<void> {
+  const storedDocuments = await db
+    .select({
+      videoId: videoDocument.videoId,
+      objectStorageKey: videoDocument.objectStorageKey,
+    })
+    .from(videoDocument)
+    .innerJoin(video, eq(video.id, videoDocument.videoId))
+    .where(eq(video.creatorId, creatorId));
+
+  for (const storedDocument of storedDocuments) {
+    const deleted = await deleteDocumentObject(storedDocument.objectStorageKey);
+    if (!deleted.success) {
+      logger.error("videos: document object left in storage after account anonymization", {
+        creatorId,
+        videoId: storedDocument.videoId,
+        objectStorageKey: storedDocument.objectStorageKey,
+        reason: deleted.error.type,
+      });
+    }
+  }
+}
+
+/**
+ * Attaches one PDF to a video the caller owns.
+ *
+ * ORDER IS THE WHOLE DESIGN, and each step is placed where it is for a reason:
+ *
+ * 1. **Ownership first**, and a miss is `VIDEO_NOT_FOUND` — never a 403. A 403 here would confirm
+ *    that a video id exists while refusing it, which is the oracle §0 forbids.
+ * 2. **Validate the bytes before hashing or storing them.** `file.mimetype` was already gated by
+ *    the multipart middleware, but that is a header the client chose; `validatePdfBytes` reads the
+ *    actual header, version and trailer, and it is the check that decides.
+ * 3. **Count under the cap**, taken inside the transaction rather than before it. Two uploads
+ *    racing on a video with four documents would both read four and both insert.
+ * 4. **Store, then insert.** An object with no row is a leak a sweep can find; a row with no object
+ *    is a download link that 502s. If the insert then fails, the object is deleted on the way out.
+ *
+ * ⚠️ A RE-UPLOAD OF THE SAME BYTES CONVERGES RATHER THAN DUPLICATING. `video_document_content_uidx`
+ * is unique on `(video_id, content_sha256)` and the object key is content-addressed, so a retried
+ * request rewrites the same object and hits the same row. That is why this route takes no
+ * idempotency key: the storage layer is idempotent by construction, which is stronger than a
+ * replayed response. The conflict is therefore answered as SUCCESS with the existing row, not as a
+ * 409 — a creator who double-clicked Attach has the outcome they asked for.
+ */
+export async function attachVideoDocument(
+  creatorId: string,
+  videoId: string,
+  input: { readonly fileName: string; readonly bytes: Buffer },
+): Promise<Result<{ document: VideoDocumentView }, VideoError>> {
+  const existing = await loadOwnedVideoRow(creatorId, videoId);
+  if (!existing) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+
+  const validated = validatePdfBytes(input.bytes);
+  if (isPdfValidationError(validated)) {
+    return { success: false, error: { type: "INVALID_PDF", reason: validated.type } };
+  }
+
+  const contentSha256 = createHash("sha256").update(input.bytes).digest("hex");
+
+  // THE CAP IS CHECKED BEFORE THE UPLOAD as well as inside the transaction below. This one saves a
+  // 25 MB round trip to storage that the insert would only reject; the one below is the one that
+  // is actually correct under concurrency. Both, not either.
+  const [preflightCount] = await db
+    .select({ documentCount: sql<number>`count(*)::int` })
+    .from(videoDocument)
+    .where(
+      and(eq(videoDocument.videoId, videoId), ne(videoDocument.contentSha256, contentSha256)),
+    );
+  if ((preflightCount?.documentCount ?? 0) >= MAX_VIDEO_DOCUMENTS) {
+    return {
+      success: false,
+      error: { type: "TOO_MANY_VIDEO_DOCUMENTS", limit: MAX_VIDEO_DOCUMENTS },
+    };
+  }
+
+  const stored = await uploadDocumentObject({
+    videoId,
+    contentSha256,
+    pdfBytes: input.bytes,
+    downloadFileName: input.fileName,
+  });
+  if (!stored.success) {
+    return { success: false, error: asVideoDocumentStorageError(stored.error) };
+  }
+
+  try {
+    const inserted = await db.transaction(async (tx) => {
+      // Re-counted under the transaction, EXCLUDING these bytes: a re-upload of a document the
+      // video already holds must not be refused for being the sixth when it is really the same
+      // one as before.
+      const [rowCount] = await tx
+        .select({ documentCount: sql<number>`count(*)::int` })
+        .from(videoDocument)
+        .where(
+          and(eq(videoDocument.videoId, videoId), ne(videoDocument.contentSha256, contentSha256)),
+        );
+      if ((rowCount?.documentCount ?? 0) >= MAX_VIDEO_DOCUMENTS) return null;
+
+      // `position` is the count, so documents render in attach order. It is not re-packed on
+      // delete: a gap in the sequence orders identically, and re-packing would rewrite rows a
+      // creator did not touch.
+      const [row] = await tx
+        .insert(videoDocument)
+        .values({
+          videoId,
+          objectStorageKey: stored.value.objectKey,
+          contentSha256,
+          byteSize: validated.byteSize,
+          fileName: sanitizeStoredFileName(input.fileName),
+          position: rowCount?.documentCount ?? 0,
+        })
+        .onConflictDoUpdate({
+          target: [videoDocument.videoId, videoDocument.contentSha256],
+          // The name is refreshed, nothing else: same bytes under a new file name is a rename, and
+          // the position must not jump because a creator re-attached what was already there.
+          set: { fileName: sanitizeStoredFileName(input.fileName) },
+        })
+        .returning({
+          id: videoDocument.id,
+          fileName: videoDocument.fileName,
+          byteSize: videoDocument.byteSize,
+          position: videoDocument.position,
+        });
+      return row ?? null;
+    });
+
+    if (inserted === null) {
+      // The cap won the race. The object is orphaned by this path alone, so it is removed here
+      // rather than left for a sweep that does not exist.
+      await deleteDocumentObject(stored.value.objectKey);
+      return {
+        success: false,
+        error: { type: "TOO_MANY_VIDEO_DOCUMENTS", limit: MAX_VIDEO_DOCUMENTS },
+      };
+    }
+
+    return {
+      success: true,
+      value: {
+        document: {
+          ...inserted,
+          downloadPath: videoDocumentDownloadPath(videoId, inserted.id),
+        },
+      },
+    };
+  } catch (insertError: unknown) {
+    // A row with no object is a broken download; an object with no row is a leak. Neither is good,
+    // but only the first is visible to a creator, so the object goes when the row could not land.
+    await deleteDocumentObject(stored.value.objectKey);
+    throw insertError;
+  }
+}
+
+/**
+ * Removes one attached document.
+ *
+ * THE OBJECT GOES FIRST, and the order is the opposite of the attach path's for the same reason it
+ * follows there: whichever operation can leave the more visible wreckage goes last. Deleting the
+ * object first can leave a row whose download 502s, which the very next statement removes; deleting
+ * the row first can leave bytes nothing points at, which nothing ever removes.
+ *
+ * A storage failure REFUSES the delete rather than dropping the row anyway. Unlike `deleteVideo`'s
+ * best-effort sweep, this caller is asking to remove one document and can retry — silently keeping
+ * the bytes while telling them it is gone is the one outcome to avoid.
+ */
+export async function detachVideoDocument(
+  creatorId: string,
+  videoId: string,
+  documentId: string,
+): Promise<Result<{ deleted: true }, VideoError>> {
+  const existing = await loadOwnedVideoRow(creatorId, videoId);
+  if (!existing) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+
+  // Scoped to the video as well as the id: a document id belonging to somebody else's video must
+  // be indistinguishable from one that does not exist.
+  const [row] = await db
+    .select({ objectStorageKey: videoDocument.objectStorageKey })
+    .from(videoDocument)
+    .where(and(eq(videoDocument.id, documentId), eq(videoDocument.videoId, videoId)))
+    .limit(1);
+  if (!row) return { success: false, error: { type: "VIDEO_DOCUMENT_NOT_FOUND", documentId } };
+
+  const deletedObject = await deleteDocumentObject(row.objectStorageKey);
+  if (!deletedObject.success) {
+    return { success: false, error: asVideoDocumentStorageError(deletedObject.error) };
+  }
+
+  await db
+    .delete(videoDocument)
+    .where(and(eq(videoDocument.id, documentId), eq(videoDocument.videoId, videoId)));
+
+  return { success: true, value: { deleted: true } };
+}
+
+/**
+ * Resolves one document to a short-lived download URL, for anyone allowed to have it.
+ *
+ * ⚠️ THIS IS THE ONLY GATE ON THESE BYTES, and unlike every other read in this file it serves
+ * ANONYMOUS callers. The bucket is private and the key never leaves the server, so the presigned
+ * URL this returns is the single window in which the gate is bypassed — which is why it lives 300
+ * seconds and why the check below is re-run on every request rather than cached anywhere.
+ *
+ * TWO WAYS IN, AND THEY ARE NOT THE SAME CHECK. `findPublicVideo` is the six-term public gate every
+ * public engagement route runs; the owner branch exists so a creator can verify their own upload
+ * before publishing. A viewer who is neither gets `VIDEO_NOT_FOUND` — the same answer an unpublished
+ * video, a private one and a nonexistent one all give.
+ */
+export async function resolveVideoDocumentDownload(
+  videoId: string,
+  documentId: string,
+  viewerId: string | null,
+): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, VideoError>> {
+  const publicVideo = await findPublicVideo(db, videoId);
+  const isViewerTheOwner =
+    viewerId !== null && (await loadOwnedVideoRow(viewerId, videoId)) !== null;
+  if (publicVideo === null && !isViewerTheOwner) {
+    return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
+  }
+
+  const [row] = await db
+    .select({ objectStorageKey: videoDocument.objectStorageKey })
+    .from(videoDocument)
+    .where(and(eq(videoDocument.id, documentId), eq(videoDocument.videoId, videoId)))
+    .limit(1);
+  if (!row) return { success: false, error: { type: "VIDEO_DOCUMENT_NOT_FOUND", documentId } };
+
+  const presigned = await presignVideoDocumentDownload(row.objectStorageKey);
+  if (!presigned.success) {
+    return { success: false, error: asVideoDocumentStorageError(presigned.error) };
+  }
+  return { success: true, value: presigned.value };
 }

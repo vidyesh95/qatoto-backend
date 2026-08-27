@@ -1,6 +1,7 @@
 import type { Response } from "express";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
+import type { PdfValidationError } from "#src/modules/rnd/pdf.js";
 import type { ContentReviewError } from "#src/modules/studio/content-review.service.js";
 import type { PlaylistError } from "#src/modules/studio/playlists/playlists.service.js";
 import type { AnimeSeriesError } from "#src/modules/studio/series/series.service.js";
@@ -309,6 +310,30 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
         message: `Image dimensions are too large (received ${error.width}x${error.height}).`,
       };
 
+    // --- Attached documents (§11j) -------------------------------------------------
+    // 404, not 403, and not 422 either: a document id the caller may not touch must be
+    // indistinguishable from one that does not exist, the same rule the ownership check above
+    // follows for the video itself.
+    case "VIDEO_DOCUMENT_NOT_FOUND":
+      return { statusCode: 404, message: "Document not found." };
+    case "TOO_MANY_VIDEO_DOCUMENTS":
+      return {
+        statusCode: 422,
+        message: `A video may carry at most ${String(error.limit)} documents. Remove one first.`,
+      };
+    case "INVALID_PDF":
+      return { statusCode: 422, message: describePdfRejection(error.reason) };
+
+    // ⚠️ THESE THREE ARE NOT THE CLOUDINARY THREE BELOW, despite naming the same failures.
+    // `ObjectStorageError`'s literals collide exactly with `CloudinaryError`'s, so the document
+    // path carries its own so that a PDF failure cannot answer "Could not store the image".
+    case "DOCUMENT_STORAGE_NOT_CONFIGURED":
+      return { statusCode: 503, message: "Document storage is not configured on this server." };
+    case "DOCUMENT_STORAGE_UPLOAD_FAILED":
+      return { statusCode: 502, message: "Could not store the document. Please try again." };
+    case "DOCUMENT_STORAGE_DELETE_FAILED":
+      return { statusCode: 502, message: "Could not remove the stored document. Please try again." };
+
     // --- Storage. 503 is "this deployment has no credentials", 502 is "the call failed".
     case "NOT_CONFIGURED":
       return { statusCode: 503, message: "Image uploads are not configured on this server." };
@@ -329,4 +354,40 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
 export function respondStudioError(res: Response, error: StudioDomainError): void {
   const { statusCode, message, errors } = mapStudioErrorToResponse(error);
   res.status(statusCode).json({ status: "error", statusCode, message, errors });
+}
+
+/**
+ * Turns a PDF rejection into something the uploader can act on.
+ *
+ * Each case has a different remedy — re-export, re-upload, pick a smaller file — so one generic
+ * "invalid PDF" would leave someone guessing at which. `TRUNCATED` in particular means "try
+ * again", and it is the only one that does.
+ *
+ * A SECOND COPY OF `research-program-error-response.ts`'s, DELIBERATELY. Sharing it would couple
+ * the studio's error mapper to an R&D module for six strings, and the two are free to diverge:
+ * this one says "document", that one says "research paper", and neither should have to hedge into
+ * "file" to stay shareable.
+ */
+function describePdfRejection(reason: PdfValidationError["type"]): string {
+  switch (reason) {
+    case "EMPTY":
+      return "The uploaded file was empty.";
+    case "TOO_SMALL":
+      return "That file is too small to be a document.";
+    case "TOO_LARGE":
+      return "Document exceeds the 25 MB size limit.";
+    case "NOT_A_PDF":
+      return "That file is not a PDF. Export your document as a PDF and upload it again.";
+    case "UNSUPPORTED_PDF_VERSION":
+      return "That PDF version is not supported. Re-export it as PDF 1.4 or later.";
+    case "TRUNCATED":
+      return "The upload was cut off before it finished. Please try again.";
+    default: {
+      // A `never` check is available here, unlike in the R&D copy: `reason` is typed off
+      // `PdfValidationError` rather than arriving as a plain string, so a new PDF rejection
+      // breaks the build instead of degrading to a generic message.
+      const exhaustiveCheck: never = reason;
+      throw new Error(`Unhandled PDF rejection: ${String(exhaustiveCheck)}`);
+    }
+  }
 }

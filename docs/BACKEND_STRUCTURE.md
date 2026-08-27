@@ -1093,6 +1093,22 @@ SCALAR COLUMN and therefore invisible to that script** — it is scrubbed by one
 executable guard is the `"the identity is gone"` assertion in `scripts/smoke-privacy.ts`; the two
 belong together. `user_profile_link` rows also ride in the Art. 15 export beside the bio.
 
+**A THIRD THING THE VERIFIER CANNOT SEE, AND IT IS NOT A COLUMN — IT IS BYTES.** `video_document`
+rows hold decks and whitepapers in Backblaze object storage, and the table has **no foreign key into
+`user`**: it reaches a person only through `video.creator_id`. So it is correctly ABSENT from the
+manifest — an entry would fail check 2 as stale, exactly as one for `user.bio` would — and the
+verifier stays green while saying nothing about it. Two consequences that must both be held:
+
+- **SQL cannot reach object storage.** `video_document` cascades from `video`, which cascades from
+  `user`, so an erasure deletes every row and leaves every byte. The obligation lives in
+  `purgeVideoDocumentObjects`, a logged, resumable step positioned **before** the manifest loop —
+  because after that loop there is no row left naming the keys. It is shaped like the export-archive
+  purge (step 4) rather than like the post-commit avatar delete, and for the same reason that step
+  was moved: a post-commit cleanup of something the commit already destroyed cannot run.
+- **They ride in the Art. 15 export**, as `yourVideoDocuments` — **file names and sizes, not bytes**,
+  and never `object_storage_key`, which is an internal address into a private bucket rather than
+  personal data.
+
 **`user_report.reported_user_id` is `retain`, and the reasoning is worth keeping.** A report filed
 ABOUT somebody survives that person's erasure. If it did not, requesting deletion would erase the
 enforcement history against you — deletion would become a ban-evasion route, and the record a future
