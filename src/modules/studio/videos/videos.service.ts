@@ -22,6 +22,8 @@ import {
   videoChapter,
   user,
   videoCollaborator,
+  videoContentReport,
+  videoModerationAction,
   videoDocument,
   videoMilestone,
   videoOpenRole,
@@ -331,6 +333,19 @@ export type StudioVideoStatusKind =
   | "approved"
   | "scheduled"
   | "published"
+  /**
+   * ⚠️ A MODERATOR HID THIS VIDEO. Added because its absence made this function LIE.
+   *
+   * `video.moderationVisibilityState` is set by the content-report queue and appeared nowhere in
+   * this file — not in the projection, not in this union, not in the input type below. So a video a
+   * moderator had hidden still derived as `"published"` for its own creator: the Studio told them
+   * it was live while the public gate served nobody. That is worse than saying nothing, because it
+   * is the one screen the person who could fix it would look at.
+   *
+   * It is checked BEFORE `publishStatus` for the same reason `rejected` is: the row really is
+   * `publishStatus: "published"`, and the moderation state is what overrides that reading.
+   */
+  | "hidden-by-moderator"
   | "draft";
 
 export interface StudioVideoStatusInput {
@@ -340,6 +355,14 @@ export interface StudioVideoStatusInput {
   readonly scheduledPublishAt: Date | null;
   /** Set on approval, when an anime episode actually goes live in /anime. */
   readonly episodeReleasedAt: Date | null;
+  /**
+   * Whether the content-report queue has hidden this video.
+   *
+   * OPTIONAL SO THE PURE HELPER STAYS CALLABLE from anywhere that has not loaded it, but every
+   * caller in this file passes it — an omitted value reads as `visible`, which is the safe default
+   * only because the alternative (defaulting to hidden) would blank a creator's Studio on a bug.
+   */
+  readonly moderationVisibilityState?: "visible" | "hidden_by_moderator";
 }
 
 export function deriveStudioVideoStatus(
@@ -353,6 +376,11 @@ export function deriveStudioVideoStatus(
   if (input.uploadStatus === "uploading" || input.uploadStatus === "processing") {
     return "processing";
   }
+
+  // BEFORE THE PUBLISH BRANCHES. A hidden video is still `publishStatus: "published"` in the row —
+  // moderation does not unpublish it, it withdraws it from the public gate — so reading publish
+  // state first is exactly how this came to report "published" for a video nobody can see.
+  if (input.moderationVisibilityState === "hidden_by_moderator") return "hidden-by-moderator";
 
   if (input.reviewStatus === "pending") return "pending-review";
   if (input.reviewStatus === "rejected") return "rejected";
@@ -869,6 +897,9 @@ async function toPublicVideo(row: VideoRow, nowEpochMs: number): Promise<PublicV
         reviewStatus: row.reviewStatus,
         scheduledPublishAt: row.scheduledPublishAt,
         episodeReleasedAt: episode?.releasedAt ?? null,
+        // WITHOUT THIS THE BRANCH NEVER FIRES. The status union grew a `hidden-by-moderator` arm;
+        // it is inert unless the state actually reaches the helper.
+        moderationVisibilityState: row.moderationVisibilityState,
       },
       nowEpochMs,
     ),
@@ -1560,6 +1591,10 @@ export async function listMyVideos(
         uploadStatus: video.uploadStatus,
         publishStatus: video.publishStatus,
         reviewStatus: video.reviewStatus,
+        // Selected for `deriveStudioVideoStatus`, so the LIST badge and the DETAIL badge cannot
+        // disagree about whether a video is hidden. It is the row's real state, not a projection
+        // of the report that caused it — the reports themselves stay out of this read.
+        moderationVisibilityState: video.moderationVisibilityState,
         rejectionReason: video.rejectionReason,
         scheduledPublishAt: video.scheduledPublishAt,
         createdAt: video.createdAt,
@@ -2808,4 +2843,77 @@ export async function respondToCollaborationInvite(
 
   if (!updated) return { success: false, error: { type: "VIDEO_NOT_FOUND", videoId } };
   return { success: true, value: { status: response } };
+}
+
+// --------------------------------------------------------------------------------
+// Moderation actions on YOUR videos — what `/studio/copyright` reads
+// --------------------------------------------------------------------------------
+//
+// WHY IT EXISTS. A moderator could hide a creator's video and the creator was told NOTHING.
+// `moderationVisibilityState` reached no read they could see, and `deriveStudioVideoStatus` had no
+// branch for it, so the Studio positively reported "published" for a video the public gate served
+// to nobody. The badge fix above stops the lie; this read is how they find out WHAT happened and
+// WHEN, which is what makes it actionable rather than merely honest.
+//
+// It is the video half of the lever `user.profileModerationState` already had on the profile side,
+// where the owner's read carries the state for exactly this reason — "otherwise nobody ever tells
+// them".
+
+export interface VideoModerationNoticeView {
+  readonly videoId: string;
+  readonly videoTitle: string;
+  readonly actionKind: (typeof videoModerationAction.$inferSelect)["actionKind"];
+  /** The report's CATEGORY, or null for an action taken without one. Never free text. */
+  readonly reason: (typeof videoContentReport.$inferSelect)["reason"] | null;
+  readonly decidedAt: Date;
+}
+
+/**
+ * `GET /users/me/video-moderation` — decisions taken on this creator's own videos.
+ *
+ * ## ⚠️ THREE THINGS THIS DELIBERATELY DOES NOT RETURN
+ *
+ * **The reporter.** Not their id, name, count, or anything from which one could be inferred.
+ * `video_content_report` carries `reporterUserId` and the moderator queue itself does not show it —
+ * "a moderator who can see who reported whom is a moderator who can be lobbied", and a CREATOR who
+ * can see it is a creator who can retaliate. With ten videos on the platform, a count alone would
+ * often be an identity.
+ *
+ * **Pending reports.** Only DECIDED actions appear. YouTube works this way too: community flags are
+ * invisible to the creator until action is taken, and only Content ID matches — an automated
+ * process, not a person — are surfaced while open. Showing a live report would tip somebody off
+ * mid-review and invite exactly the retaliation the paragraph above guards against.
+ *
+ * **`reasonNote`.** It is the moderator's own free-text justification, hash-chained into
+ * `platform_audit_entry` as an accountability record for STAFF. A moderator writing "reported by
+ * three people, one of them the seller in #4821" is writing an internal note, not creator-facing
+ * copy. The report's `reason` ENUM is projected instead: categorical, safe, and enough to act on —
+ * it is what a YouTube strike notice actually tells you.
+ *
+ * `report_dismissed` IS INCLUDED, and that is not noise: a creator who was told their video was
+ * hidden should also be told when a claim against it was thrown out. Reporting only the punishments
+ * would make this a record of accusations rather than of outcomes.
+ */
+export async function listMyVideoModerationNotices(
+  creatorId: string,
+): Promise<readonly VideoModerationNoticeView[]> {
+  const rows = await db
+    .select({
+      videoId: video.id,
+      videoTitle: video.title,
+      actionKind: videoModerationAction.actionKind,
+      reason: videoContentReport.reason,
+      decidedAt: videoModerationAction.createdAt,
+    })
+    .from(videoModerationAction)
+    // INNER on the video: `videoModerationAction.videoId` is `set null` on delete, and an action
+    // whose video is gone has nothing to show a creator about.
+    .innerJoin(video, eq(video.id, videoModerationAction.videoId))
+    // LEFT on the report: `reportId` is nullable and `set null`, so a staff-initiated action with
+    // no report behind it still reaches the creator — with `reason: null` rather than vanishing.
+    .leftJoin(videoContentReport, eq(videoContentReport.id, videoModerationAction.reportId))
+    .where(eq(video.creatorId, creatorId))
+    .orderBy(desc(videoModerationAction.createdAt), desc(videoModerationAction.id));
+
+  return rows;
 }

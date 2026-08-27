@@ -269,6 +269,22 @@ router.get("/me/collaborations", requireAuth, videosController.listMyCollaborati
 router.get("/me/collaborators", requireAuth, videosController.listMyCollaborators);
 
 /**
+ * GET /users/me/video-moderation
+ * What staff have DECIDED about the caller's own videos — the read behind `/studio/copyright`.
+ *
+ * ⚠️ IT EXISTS BECAUSE THE CREATOR WAS TOLD NOTHING. `video.moderation_visibility_state` reached no
+ * read they could see, and `deriveStudioVideoStatus` had no branch for it, so a hidden video
+ * reported itself as "published" to its own owner. The badge now says `hidden-by-moderator`; this
+ * is where they learn what happened and when.
+ *
+ * ⚠️ NO REPORTER, NO PENDING REPORTS, NO `reasonNote` — see the service for why each is withheld.
+ * The short version: the queue hides reporter identity from MODERATORS on purpose, so surfacing it
+ * to the accused would be worse; YouTube likewise shows community flags only once acted on; and
+ * `reasonNote` is staff-facing free text inside a hash-chained audit record.
+ */
+router.get("/me/video-moderation", requireAuth, videosController.listMyVideoModeration);
+
+/**
  * POST /users/me/deletion-request
  * Deactivate the caller's own account NOW and schedule its anonymization 30 days out.
  *

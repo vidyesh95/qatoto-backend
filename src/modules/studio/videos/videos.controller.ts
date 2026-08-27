@@ -543,3 +543,24 @@ export async function respondToCollaboration(req: Request, res: Response): Promi
   };
   res.status(200).json(response);
 }
+
+/**
+ * `GET /users/me/video-moderation` — decisions taken on the caller's own videos.
+ *
+ * No query, no filter, no pagination: a creator's moderation history is bounded by how often staff
+ * act on them, which is a number that should stay small. If it ever does not, that is a signal
+ * worth noticing rather than a page size worth adding.
+ */
+export async function listMyVideoModeration(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Moderation notices loaded.",
+    data: await videosService.listMyVideoModerationNotices(req.user.id),
+  };
+  res.status(200).json(response);
+}
