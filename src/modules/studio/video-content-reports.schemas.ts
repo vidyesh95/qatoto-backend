@@ -47,14 +47,38 @@ export const ReportVideoSchema = z
 export const DecideVideoReportSchema = z
   .object({
     /**
-     * `actioned` hides the video; `dismissed` closes the reports and leaves it alone.
+     * `actioned` hides the video. `dismissed` and `redirected_to_source` both close the reports
+     * and leave it alone — they differ in what the reporter is TOLD.
+     *
+     * `redirected_to_source` is the honest answer on a platform that hosts no bytes: the claim may
+     * be perfectly good and Qatoto is not who can act on it. Hiding the row withdraws Qatoto's copy
+     * while the video keeps playing on youtube.com, so a rights-holder's real remedy is a claim
+     * with the host. Filing that as a dismissal tells them they were wrong.
      *
      * DISMISSING DOES NOT RESTORE — see the service. That is the deliberate difference from
      * commerce, where dismissal must un-hide because a threshold could have hidden the
      * content with nobody deciding.
      */
-    decision: z.enum(["actioned", "dismissed"]),
+    decision: z.enum(["actioned", "dismissed", "redirected_to_source"]),
+    /**
+     * ⚠️ STAFF-ONLY. Goes to `video_moderation_action.reasonNote` and the hash-chained audit entry,
+     * and reaches NO user. This is where "reported by three people, one is the seller in #4821"
+     * legitimately belongs.
+     */
     note: z.string().trim().min(1).max(2000).optional(),
+    /**
+     * ⚠️ PUBLISHED TO THE REPORTER. Goes to `video_content_report.resolutionNote`, which the
+     * reporter's own list renders.
+     *
+     * **IT IS A SEPARATE FIELD BECAUSE `note` USED TO BE BOTH**, and that was a latent leak: one
+     * value was written to the staff audit note AND to the reporter-visible column, so the first
+     * read that surfaced `resolutionNote` would have published every internal note ever written.
+     * Nothing read it yet, which is the only reason it never fired.
+     *
+     * Optional, and never auto-filled from `note`. A bare outcome is the honest default; a
+     * template pretending to be a considered reply is worse than silence.
+     */
+    reporterNote: z.string().trim().min(1).max(2000).optional(),
   })
   .strict();
 

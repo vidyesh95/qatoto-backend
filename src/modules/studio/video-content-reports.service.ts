@@ -14,6 +14,10 @@ import type {
   ReportVideoInput,
   RestoreVideoInput,
 } from "#src/modules/studio/video-content-reports.schemas.js";
+import {
+  enqueueNotifications,
+  type NotificationInput,
+} from "#src/modules/platform/notifications/notifications.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -90,6 +94,34 @@ export interface MyVideoReportRow {
   readonly status: "open" | "actioned" | "dismissed";
   readonly createdAt: Date;
   readonly resolvedAt: Date | null;
+  /**
+   * The moderator's message to THIS reporter, or `null` when they wrote none.
+   *
+   * ⚠️ THIS IS `video_content_report.resolutionNote` AND IT IS NOT
+   * `videoModerationAction.reasonNote`. The two look interchangeable and are opposites:
+   * `reasonNote` is the staff record, hash-chained into the audit entry, and may name other
+   * reporters or a commercial motive behind a claim. It must never be selected here. A
+   * moderator who writes nothing sends a bare outcome, which is the honest default — a
+   * template pretending to be a considered reply is worse than silence.
+   */
+  readonly resolutionNote: string | null;
+  /**
+   * What was actually done, which the bare `status` cannot say.
+   *
+   * `redirected_to_source` and `report_dismissed` BOTH close the report as `dismissed` — no
+   * content action was taken in either case — but they mean opposite things to the person who
+   * filed it. One is "we looked, the claim does not hold"; the other is "the claim may well
+   * hold and Qatoto is not who can act on it, because the bytes are on youtube.com". Rendering
+   * the status alone files every redirect as a rejection.
+   *
+   * `null` while the report is open, and also on rows decided before this column was joined.
+   */
+  readonly outcomeKind:
+    | "content_hidden"
+    | "content_restored"
+    | "report_dismissed"
+    | "redirected_to_source"
+    | null;
 }
 
 /**
@@ -302,6 +334,19 @@ export async function decideVideoReport(
   const moderatorRoleSnapshot = moderator.value.platformRole;
 
   const shouldHide = input.decision === "actioned";
+  /**
+   * ⚠️ `redirected_to_source` CLOSES THE REPORT AS `dismissed`. No content action was taken, and a
+   * fourth report status would ripple through `video_content_report_resolution_ck` and every queue
+   * filter for nothing. The ACTION KIND below carries the distinction, and it is the action kind
+   * the reporter's page renders — not this status.
+   */
+  const reportStatus = input.decision === "actioned" ? "actioned" : ("dismissed" as const);
+  const actionKind =
+    input.decision === "actioned"
+      ? ("content_hidden" as const)
+      : input.decision === "redirected_to_source"
+        ? ("redirected_to_source" as const)
+        : ("report_dismissed" as const);
   const occurredAt = new Date();
 
   const outcome = await db.transaction(async (transaction) => {
@@ -342,14 +387,28 @@ export async function decideVideoReport(
         .where(eq(video.id, targetVideo.id));
     }
 
+    // CAPTURED BEFORE THE UPDATE, because the update below closes exactly these rows and there is
+    // no clean way to ask afterwards which ones it touched. Every open report on the video is
+    // closed, not only `reportId`, so every one of their authors is owed an answer.
+    const openReporterRows = await transaction
+      .select({ reporterUserId: videoContentReport.reporterUserId })
+      .from(videoContentReport)
+      .where(
+        and(eq(videoContentReport.videoId, targetVideo.id), eq(videoContentReport.status, "open")),
+      );
+
     // Every open report on the video, not only `reportId`.
     await transaction
       .update(videoContentReport)
       .set({
-        status: input.decision,
+        status: reportStatus,
         resolvedByUserId: moderatorUserId,
         resolvedAt: sql`now()`,
-        ...(input.note === undefined ? {} : { resolutionNote: input.note }),
+        // ⚠️ `reporterNote`, NOT `note`. This column is PUBLISHED to whoever filed the report, and
+        // it used to be fed from the same value as the staff audit note below — so the first read
+        // that surfaced it would have published every internal note ever written. Two inputs now,
+        // because one field cannot be both an internal record and a message somebody reads.
+        ...(input.reporterNote === undefined ? {} : { resolutionNote: input.reporterNote }),
       })
       .where(
         and(eq(videoContentReport.videoId, targetVideo.id), eq(videoContentReport.status, "open")),
@@ -367,16 +426,85 @@ export async function decideVideoReport(
     });
 
     await transaction.insert(videoModerationAction).values({
-      actionKind: shouldHide ? "content_hidden" : "report_dismissed",
+      actionKind,
       videoId: targetVideo.id,
       reportId: report.id,
       moderatorUserId,
       moderatorRoleSnapshot,
       // NOT NULL on the column, so a decision with no stated reason is refused at rest.
       // The schema requires it; this is where the requirement is honoured.
-      reasonNote: input.note ?? (shouldHide ? "Hidden after review." : "Report dismissed."),
+      // STAFF-ONLY, and never `reporterNote`. NOT NULL on the column, so a decision with no stated
+      // reason is refused at rest; the schema requires it and this is where that is honoured.
+      reasonNote:
+        input.note ??
+        (shouldHide
+          ? "Hidden after review."
+          : actionKind === "redirected_to_source"
+            ? "Closed: the host platform owns this content."
+            : "Report dismissed."),
       auditEntryId: auditEntry.id,
     });
+
+    /**
+     * ⚠️ ENQUEUED INSIDE THIS TRANSACTION, per the house rule that the notification row is written
+     * in the caller's transaction. An enqueue after the commit can be lost, which here means a
+     * decision nobody is ever told about — the exact gap this whole change exists to close.
+     *
+     * ## Who is told, and who is not
+     *
+     * **Every reporter on this video** gets `video_report_decided`. The update above closes EVERY
+     * open report on the video, not just `reportId`, so notifying only the one report's author
+     * would leave the others closed and unanswered.
+     *
+     * **The creator** gets `video_content_actioned` ONLY when their content actually moved.
+     *
+     * ⚠️ NOT ON A DISMISSAL OR A REDIRECT. Nothing happened to their video, and "you were reported
+     * and we let it go" hands somebody a grievance plus a very small suspect pool — the same
+     * retaliation risk that keeps reporter identity hidden from moderators in the first place.
+     *
+     * ## What the payload may not carry
+     *
+     * No reporter identity, no moderator identity, and **never `input.note`** — the staff note.
+     * `reporterNote` is the only free text that may travel, because it is the only one written to
+     * be read. The actor is passed as the moderator so `enqueueNotifications` suppresses a
+     * self-notification if a moderator ever reports something themselves.
+     */
+    const notificationInputs: NotificationInput[] = [];
+    // DEDUPED: one person cannot file twice on a video (`ALREADY_REPORTED`), but an anonymized
+    // reporter is a NULL and several of those must not become several notifications to nobody.
+    const notifiedReporterIds = new Set<string>();
+    for (const reporterRow of openReporterRows) {
+      if (reporterRow.reporterUserId === null) continue;
+      if (notifiedReporterIds.has(reporterRow.reporterUserId)) continue;
+      notifiedReporterIds.add(reporterRow.reporterUserId);
+      notificationInputs.push({
+        recipientUserId: reporterRow.reporterUserId,
+        kind: "video_report_decided",
+        // UNATTRIBUTED, and not an oversight: `null` overrides the moderator passed as the
+        // actor below. A moderator whose verdicts carry their name is a moderator who can be
+        // lobbied — the same rule the R&D verdict kinds state, and the reason a reporter sees
+        // "Qatoto reviewed this" rather than a person to argue with.
+        actorUserId: null,
+        payload: {
+          videoId: targetVideo.id,
+          outcome: actionKind,
+          ...(input.reporterNote === undefined ? {} : { reporterNote: input.reporterNote }),
+        },
+      });
+    }
+
+    if (actionKind === "content_hidden") {
+      notificationInputs.push({
+        recipientUserId: targetVideo.creatorId,
+        kind: "video_content_actioned",
+        // Unattributed for the same reason as above, and one more that is sharper here: this
+        // is the notification that goes to the person who was acted AGAINST.
+        actorUserId: null,
+        payload: { videoId: targetVideo.id, outcome: actionKind },
+      });
+    }
+
+    await enqueueNotifications(transaction, moderatorUserId, notificationInputs);
 
     return { kind: "decided", reportId: report.id } as const;
   });
@@ -522,9 +650,15 @@ export async function listMyVideoReports(
       status: videoContentReport.status,
       createdAt: videoContentReport.createdAt,
       resolvedAt: videoContentReport.resolvedAt,
+      resolutionNote: videoContentReport.resolutionNote,
+      outcomeKind: videoModerationAction.actionKind,
     })
     .from(videoContentReport)
     .innerJoin(video, eq(video.id, videoContentReport.videoId))
+    // LEFT, and joined on `reportId` rather than `videoId`: an open report has no action at
+    // all, and joining on the video would hand this reporter the outcome of somebody else's
+    // report on the same video.
+    .leftJoin(videoModerationAction, eq(videoModerationAction.reportId, videoContentReport.id))
     .where(eq(videoContentReport.reporterUserId, reporterUserId))
     .orderBy(desc(videoContentReport.createdAt))
     .limit(MY_REPORTS_LIMIT);

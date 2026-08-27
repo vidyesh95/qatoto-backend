@@ -72,6 +72,11 @@ const SUBJECT_BY_KIND: Readonly<Record<(typeof notification.$inferSelect)["kind"
   // §4a. Neither names the role: a subject line is the one part of this that lands on a
   // lock screen and in a mail server's logs, and which staff powers an account holds is
   // not a fact to put there. The app says what changed.
+  // §8.4. VAGUE ON PURPOSE, like the §10 lines above: a subject lands on a lock screen and in a
+  // mail server's logs. "Reviewed" rather than the verdict, and nothing about which video — a
+  // takedown is not a fact to leak to anyone who glances at a phone.
+  video_report_decided: "A video you reported has been reviewed",
+  video_content_actioned: "A decision was made about one of your videos",
   platform_role_change_proposed: "A staff role change is waiting for your countersignature",
   platform_role_changed: "Your staff access on Qatoto changed",
 };

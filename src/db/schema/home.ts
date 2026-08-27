@@ -1213,6 +1213,24 @@ export const videoModerationActionKindEnum = pgEnum("video_moderation_action_kin
   "content_hidden",
   "content_restored",
   "report_dismissed",
+  /**
+   * The claim may well be good, and **Qatoto is not who can act on it**.
+   *
+   * ⚠️ DISTINCT FROM `report_dismissed` ON PURPOSE. A dismissal says "we looked, the claim does not
+   * hold". For a YouTube-hosted video a copyright holder's real remedy is a YouTube claim: hiding
+   * the row here withdraws Qatoto's copy while the video keeps playing on youtube.com, so filing
+   * that answer as a dismissal tells a rights-holder they were wrong when the truth is that they
+   * asked the wrong platform.
+   *
+   * IT TOUCHES NO CONTENT. The report closes, `moderation_visibility_state` is untouched, and the
+   * video still serves. The report's own `status` stays `dismissed` — no content action was taken,
+   * and a fourth status would ripple through `video_content_report_resolution_ck` and every queue
+   * filter for nothing. This kind carries the meaning, and it is this that the reporter's page
+   * renders rather than the raw status.
+   *
+   * It becomes rare, not wrong, if Qatoto ever hosts its own bytes.
+   */
+  "redirected_to_source",
 ]);
 
 /**
@@ -1249,6 +1267,20 @@ export const videoContentReport = pgTable(
       onDelete: "restrict",
     }),
     resolvedAt: timestamp("resolved_at", { precision: 3 }),
+    /**
+     * What the REPORTER is told, in the moderator's own words. Nullable — a bare outcome is the
+     * honest default, and a template pretending to be a considered reply is worse than silence.
+     *
+     * ⚠️ THIS IS NOT `video_moderation_action.reasonNote`, AND THE TWO MUST NEVER BE MERGED. That
+     * one is STAFF-ONLY: an accountability record hash-chained into `platform_audit_entry`, where a
+     * moderator may legitimately write "reported by three people, one is the seller in #4821". This
+     * one is published to whoever filed the report. One field cannot be both an internal record and
+     * a message somebody reads, and collapsing them would turn every internal note into a leak.
+     *
+     * It exists so an answer like "we cannot remove a video hosted on YouTube — file a claim with
+     * them" can actually reach the person who asked. Before it, a reporter saw `dismissed` and a
+     * timestamp.
+     */
     resolutionNote: text("resolution_note"),
     createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
   },

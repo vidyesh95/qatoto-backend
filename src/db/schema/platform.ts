@@ -476,6 +476,20 @@ export const notificationKindEnum = pgEnum("notification_kind", [
   // record was an audit entry somebody had to think to read. The proposal goes to the
   // other admins because they are who can countersign it; the outcome goes to the
   // subject, who until now could be made a moderator without ever being told.
+  /**
+   * §8.4 — video moderation. Both were silent until now, and the §10 comment above describes the
+   * gap exactly: "the submitter has no way to learn the answer except by re-checking the page."
+   *
+   * TWO KINDS, TWO AUDIENCES, and they are not interchangeable. `video_report_decided` goes to the
+   * REPORTER on every close — they asked a question and get an answer. `video_content_actioned`
+   * goes to the CREATOR and **only when their content actually moved** (hidden or restored).
+   *
+   * ⚠️ A CREATOR IS NOT TOLD ABOUT A DISMISSED OR REDIRECTED REPORT. Nothing happened to their
+   * video, and "you were reported and we let it go" hands somebody a grievance plus a very small
+   * suspect pool — the same retaliation risk that keeps reporter identity hidden from moderators.
+   */
+  "video_report_decided",
+  "video_content_actioned",
   "platform_role_change_proposed",
   "platform_role_changed",
 ]);
