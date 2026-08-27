@@ -34,6 +34,10 @@ import {
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
 import {
+  MAX_VIDEO_DOCUMENTS,
+  videoDocumentDownloadPath,
+} from "#src/modules/studio/videos/video-document-paths.js";
+import {
   deleteVideoDocument as deleteDocumentObject,
   presignVideoDocumentDownload,
   uploadVideoDocument as uploadDocumentObject,
@@ -427,13 +431,6 @@ export interface VideoDocumentView {
   readonly downloadPath: string;
 }
 
-/** How many documents one video may carry. "Deck or whitepaper" is not a file manager. */
-export const MAX_VIDEO_DOCUMENTS = 5;
-
-/** Builds the download path. One place, so the route and the projection cannot drift apart. */
-export function videoDocumentDownloadPath(videoId: string, documentId: string): string {
-  return `/videos/${encodeURIComponent(videoId)}/documents/${encodeURIComponent(documentId)}/file`;
-}
 
 /**
  * One taxonomy row as it appears on a video (HOME_BACKEND_STRUCTURE.md §2).

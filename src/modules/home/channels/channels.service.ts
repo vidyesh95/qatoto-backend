@@ -3,6 +3,7 @@ import { asc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { creatorStats, creatorSubscription, user, userProfileLink } from "#src/db/schema.js";
 import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
+import { utcDateFromRow } from "#src/lib/sql-time.js";
 import {
   feedSelectClause,
   publicVideoPredicate,
@@ -356,11 +357,18 @@ export async function listPublicChannels(input: {
       ? sql`true`
       : sql`(u.created_at, u.id) < (${decodedCursor.instant.toISOString()}::timestamp, ${decodedCursor.id})`;
 
+  // ⚠️ `created_at` IS TYPED `string`, NOT `Date`, AND THAT IS NOT A DETAIL. `db.execute<T>` is a
+  // CLAIM, not a parse instruction: drizzle overrides `getTypeParser` to return the raw value for
+  // TIMESTAMP, and a raw query has no column whose codec could recover it — so this arrives as
+  // `2026-08-27 09:37:15.373`, with no `T` and no zone. Annotating it `Date` (as this did when it
+  // first shipped) makes the compiler agree with a lie, and `new Date()` on that string parses it
+  // as LOCAL time. See `src/lib/sql-time.ts`, which exists because the same mistake shipped in
+  // `GET /feed/videos`.
   const result = await db.execute<{
     id: string;
     handle: string;
     name: string;
-    created_at: Date;
+    created_at: string;
   }>(sql`
     SELECT u.id, u.handle, u.name, u.created_at
     FROM "user" AS u
@@ -378,9 +386,15 @@ export async function listPublicChannels(input: {
 
   const pageRows = result.rows.slice(0, input.limit);
   const lastRow = pageRows.at(-1);
+  // `utcDateFromRow`, NEVER `new Date()`. The cursor IS this instant, so a value read an offset
+  // away from the stored one makes page two start in the wrong place — skipping channels on a
+  // machine east of UTC and repeating them west of it. It is correct in production only because
+  // `TZ=UTC` is asserted there, which is exactly the kind of accident this helper exists to stop
+  // anyone relying on.
+  const lastCreatedAt = lastRow === undefined ? null : utcDateFromRow(lastRow.created_at);
   const nextCursor =
-    result.rows.length > input.limit && lastRow !== undefined
-      ? encodeInstantCursor({ instant: new Date(lastRow.created_at), id: lastRow.id })
+    result.rows.length > input.limit && lastRow !== undefined && lastCreatedAt !== null
+      ? encodeInstantCursor({ instant: lastCreatedAt, id: lastRow.id })
       : null;
 
   return {

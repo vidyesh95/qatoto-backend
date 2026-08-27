@@ -30,7 +30,10 @@ import {
   loadPublicSeasonsForVideo,
   type PublicSeasonSummary,
 } from "#src/modules/studio/series/public-series.service.js";
-import { videoDocumentDownloadPath } from "#src/modules/studio/videos/videos.service.js";
+// ⚠️ THE LEAF, NOT `videos.service.js`. That file is 2,600 lines and drags `@aws-sdk/client-s3`,
+// `cloudinary`, `sharp` and the job registry onto the public watch path for one string. It was the
+// first import written here and it was wrong; `video-document-paths.ts` holds the whole argument.
+import { videoDocumentDownloadPath } from "#src/modules/studio/videos/video-document-paths.js";
 import type { Result } from "#src/types/index.js";
 
 /**
