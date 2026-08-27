@@ -15,15 +15,16 @@
  * announces a verdict that may not exist.
  */
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, eq, lte, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { pitch, researchProject, user } from "#src/db/schema.js";
+import { pitch, researchProject, user, video } from "#src/db/schema.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { enqueueNotifications } from "#src/modules/platform/notifications/notifications.service.js";
 import type { PlatformStaffContext } from "#src/modules/platform/roles/platform-role.service.js";
 import type { ModeratePitchInput } from "#src/modules/rnd/pitches/pitches.schemas.js";
 import type { PitchStatus, PitchView } from "#src/modules/rnd/pitches/pitches.service.js";
+import { PUBLICLY_SERVABLE } from "#src/modules/studio/public-video-gate.js";
 import type { Result } from "#src/types/index.js";
 
 export type PitchModerationError =
@@ -39,7 +40,18 @@ export interface PitchReviewQueueEntry {
   readonly summary: string;
   readonly projectSlug: string;
   readonly projectName: string;
-  readonly pitchVideoId: string | null;
+  /**
+   * WHAT THE MODERATOR IS ACTUALLY JUDGING, alongside the two links. A pitch is a public
+   * solicitation and its video is the loudest thing on the page — reviewing the text while the
+   * video goes unseen is the check that matters least catching the thing that matters most.
+   * Null when there is no video, or when the one named is not publicly servable.
+   */
+  readonly pitchVideo: {
+    readonly videoId: string;
+    readonly youtubeVideoId: string | null;
+    readonly title: string;
+    readonly thumbnailUrl: string | null;
+  } | null;
   readonly externalFundingUrl: string | null;
   readonly externalContactUrl: string | null;
   readonly submittedByUserId: string;
@@ -70,10 +82,25 @@ export async function listPitchReviewQueue(options: {
         projectName: researchProject.name,
         founderUserId: researchProject.founderUserId,
         founderName: user.name,
+        videoId: video.id,
+        youtubeVideoId: video.youtubeVideoId,
+        videoTitle: video.title,
+        videoThumbnailUrl: video.thumbnailUrl,
       })
       .from(pitch)
       .innerJoin(researchProject, eq(researchProject.id, pitch.projectId))
       .innerJoin(user, eq(user.id, researchProject.founderUserId))
+      // LEFT JOIN with the public gate in the ON clause, matching every other pitch read: a
+      // pitch whose video is not servable must still reach the queue, or an unreviewable
+      // submission sits invisible forever.
+      .leftJoin(
+        video,
+        and(
+          eq(video.id, pitch.pitchVideoId),
+          PUBLICLY_SERVABLE,
+          lte(video.publishedAt, sql`now()`),
+        ),
+      )
       .where(eq(pitch.status, "pending"))
       .orderBy(pitch.updatedAt, pitch.id)
       .limit(options.limit)
@@ -92,7 +119,15 @@ export async function listPitchReviewQueue(options: {
       summary: entry.row.summary,
       projectSlug: entry.projectSlug,
       projectName: entry.projectName,
-      pitchVideoId: entry.row.pitchVideoId,
+      pitchVideo:
+        entry.videoId === null
+          ? null
+          : {
+              videoId: entry.videoId,
+              youtubeVideoId: entry.youtubeVideoId,
+              title: entry.videoTitle ?? "",
+              thumbnailUrl: entry.videoThumbnailUrl,
+            },
       externalFundingUrl: entry.row.externalFundingUrl,
       externalContactUrl: entry.row.externalContactUrl,
       submittedByUserId: entry.founderUserId,
@@ -207,7 +242,10 @@ export async function moderatePitch(input: {
         projectName: existing.projectName,
         title: updated.title,
         summary: updated.summary,
-        pitchVideoId: updated.pitchVideoId,
+        // The verdict response re-reads nothing, so it cannot cheaply resolve the video's
+        // public projection here. NULL is honest: the caller (the review queue) refetches, and
+        // the queue row carries the video it actually judged.
+        pitchVideo: null,
         externalFundingUrl: updated.externalFundingUrl,
         externalContactUrl: updated.externalContactUrl,
         status: updated.status,
@@ -220,31 +258,7 @@ export async function moderatePitch(input: {
   });
 }
 
-/** Newest decisions first — the "what did staff do here" read, gated on `moderate_content`. */
-export async function listRecentPitchDecisions(limit: number): Promise<readonly PitchView[]> {
-  const rows = await db
-    .select({ row: pitch, projectSlug: researchProject.slug, projectName: researchProject.name })
-    .from(pitch)
-    .innerJoin(researchProject, eq(researchProject.id, pitch.projectId))
-    .where(eq(pitch.status, "published"))
-    .orderBy(desc(pitch.publishedAt), desc(pitch.id))
-    .limit(limit);
-
-  return rows.map((entry) => ({
-    id: entry.row.id,
-    slug: entry.row.slug,
-    projectId: entry.row.projectId,
-    projectSlug: entry.projectSlug,
-    projectName: entry.projectName,
-    title: entry.row.title,
-    summary: entry.row.summary,
-    pitchVideoId: entry.row.pitchVideoId,
-    externalFundingUrl: entry.row.externalFundingUrl,
-    externalContactUrl: entry.row.externalContactUrl,
-    status: entry.row.status,
-    rejectionReason: entry.row.rejectionReason,
-    publishedAt: entry.row.publishedAt,
-    createdAt: entry.row.createdAt,
-    updatedAt: entry.row.updatedAt,
-  }));
-}
+// `listRecentPitchDecisions` LIVED HERE AND IS GONE. It was written for a "what did staff do"
+// panel that was never built, so nothing ever called it — and an uncalled export is unverified
+// code, the same rule the frontend hook audit enforces. The audit trail already answers the
+// question through `platform_audit_entry`, which is the durable record anyway.

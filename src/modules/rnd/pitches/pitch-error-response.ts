@@ -120,6 +120,18 @@ export function mapPitchErrorToResponse(error: PitchDomainError): {
           [error.missingField]: ["Add a funding link or a contact link before submitting."],
         },
       };
+    case "PITCH_VIDEO_NOT_ELIGIBLE":
+      // ONE SENTENCE FOR FOUR CAUSES — no such video, not public, not yours, not this
+      // venture's. Naming which one would let a caller probe video ids by watching the
+      // message change, so the copy describes the requirement instead of the failure.
+      return {
+        statusCode: 422,
+        message:
+          "Pick a published, public video that is attached to this venture. Attach it from the upload wizard first if it is not.",
+        errors: {
+          pitchVideoId: ["That video cannot be used on this pitch."],
+        },
+      };
     case "PITCH_LINK_INVALID": {
       const reason = describePitchLinkError(error);
       // ONE SENTENCE, BOTH PLACES — the same contract `fieldRefusal` follows, so a client

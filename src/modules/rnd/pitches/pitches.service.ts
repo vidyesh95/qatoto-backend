@@ -10,10 +10,10 @@
  * a payment provider, the §12 header in `src/db/schema/rnd.ts` is the argument against it.
  */
 
-import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, lte, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { pitch, researchProject } from "#src/db/schema.js";
+import { pitch, researchProject, video } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { normalizePitchLinks } from "#src/modules/rnd/pitches/pitch-link.js";
 import type { PitchLinkError } from "#src/modules/rnd/pitches/pitch-link.js";
@@ -21,6 +21,7 @@ import type {
   CreatePitchInput,
   UpdatePitchInput,
 } from "#src/modules/rnd/pitches/pitches.schemas.js";
+import { PUBLICLY_SERVABLE } from "#src/modules/studio/public-video-gate.js";
 import type { Result } from "#src/types/index.js";
 
 export type PitchStatus = (typeof pitch.$inferSelect)["status"];
@@ -40,6 +41,12 @@ export type PitchError =
   | { type: "PROJECT_NOT_PUBLIC"; status: string }
   /** A pitch with nowhere to send anyone is not a pitch. */
   | { type: "PITCH_INCOMPLETE"; missingField: string }
+  /**
+   * The chosen video is not one this pitch may embed. FOUR DISTINCT CAUSES, ONE ANSWER —
+   * no such video, not public, not this venture's, or someone else's entirely — because
+   * distinguishing them would turn this field into an oracle for video ids.
+   */
+  | { type: "PITCH_VIDEO_NOT_ELIGIBLE" }
   | PitchLinkError;
 
 /**
@@ -48,6 +55,25 @@ export type PitchError =
  * `externalFundingUrl` and `externalContactUrl` are the NORMALIZED values — what the parser
  * stored, not what was typed — so two clients rendering the same pitch render the same link.
  */
+/**
+ * The video a pitch embeds, as the public may see it.
+ *
+ * EVERY FIELD HERE IS ALREADY PUBLIC on `WatchPayload` and the feed item, so this projection
+ * exposes nothing new. What is DELIBERATELY ABSENT is the lifecycle set — `visibility`,
+ * `publishStatus`, `reviewStatus`, `uploadStatus`, `isSourceVerified` — which
+ * `video-watch.service.ts` calls "lifecycle facts the public has no claim on, and several of
+ * them are exactly what the 404-not-403 policy exists to hide".
+ */
+export interface PitchVideoView {
+  readonly videoId: string;
+  readonly videoSource: (typeof video.$inferSelect)["videoSource"];
+  readonly youtubeVideoId: string | null;
+  readonly title: string;
+  readonly thumbnailUrl: string | null;
+  /** NULL until the duration job has enough samples. An absence, never a zero. */
+  readonly durationSeconds: number | null;
+}
+
 export interface PitchView {
   readonly id: string;
   readonly slug: string;
@@ -56,7 +82,16 @@ export interface PitchView {
   readonly projectName: string;
   readonly title: string;
   readonly summary: string;
-  readonly pitchVideoId: string | null;
+  /**
+   * THE WRITE TAKES AN ID AND THE READ RETURNS AN OBJECT, deliberately. A client can only
+   * name a video it already has; everything else about it is the server's to say.
+   *
+   * NULL means "no video, or the video is no longer publicly servable" — the two are one
+   * answer on purpose. The join that fills this applies the public gate in its ON clause, so
+   * a video taken down after the pitch was published nulls this field rather than 404ing a
+   * live funding solicitation.
+   */
+  readonly pitchVideo: PitchVideoView | null;
   readonly externalFundingUrl: string | null;
   readonly externalContactUrl: string | null;
   readonly status: PitchStatus;
@@ -69,9 +104,66 @@ export interface PitchView {
 
 type PitchRow = typeof pitch.$inferSelect;
 
+/**
+ * The columns every pitch read selects for its embedded video.
+ *
+ * Declared once so the four reads cannot drift into projecting different fields — the drift
+ * that would matter is one of them leaking a lifecycle column.
+ */
+const PITCH_VIDEO_COLUMNS = {
+  videoId: video.id,
+  videoSource: video.videoSource,
+  youtubeVideoId: video.youtubeVideoId,
+  videoTitle: video.title,
+  thumbnailUrl: video.thumbnailUrl,
+  durationSeconds: video.durationSeconds,
+} as const;
+
+/**
+ * The ON clause for joining a pitch to its video.
+ *
+ * ⚠️ THE GATE LIVES IN THE JOIN, NOT THE WHERE, and the difference is the whole design.
+ * In a WHERE it would filter the PITCH out whenever its video stopped being public — a live
+ * funding solicitation vanishing because a moderator hid a video. Here it only nulls the
+ * video columns, which is the intended answer: the pitch renders, the player does not.
+ *
+ * This is `video-watch.service.ts`'s choice for its venture badge, and the OPPOSITE of
+ * `spotlight.service.ts`, which inner-joins so an ineligible slot drops out of the rail
+ * entirely. Both are right: there the row IS the video, here it is not.
+ */
+const PITCH_VIDEO_JOIN = and(
+  eq(video.id, pitch.pitchVideoId),
+  PUBLICLY_SERVABLE,
+  lte(video.publishedAt, sql`now()`),
+);
+
+/** The joined video columns as they come back — all null when the join found nothing. */
+interface JoinedPitchVideo {
+  readonly videoId: string | null;
+  readonly videoSource: (typeof video.$inferSelect)["videoSource"] | null;
+  readonly youtubeVideoId: string | null;
+  readonly videoTitle: string | null;
+  readonly thumbnailUrl: string | null;
+  readonly durationSeconds: number | null;
+}
+
+function toPitchVideoView(joined: JoinedPitchVideo | undefined): PitchVideoView | null {
+  if (!joined || joined.videoId === null || joined.videoSource === null) return null;
+  return {
+    videoId: joined.videoId,
+    videoSource: joined.videoSource,
+    youtubeVideoId: joined.youtubeVideoId,
+    // `title` is NOT NULL on the column; the null here is the LEFT JOIN's, not the data's.
+    title: joined.videoTitle ?? "",
+    thumbnailUrl: joined.thumbnailUrl,
+    durationSeconds: joined.durationSeconds,
+  };
+}
+
 function toPitchView(
   row: PitchRow,
   project: { readonly slug: string; readonly name: string },
+  joinedVideo?: JoinedPitchVideo,
 ): PitchView {
   return {
     id: row.id,
@@ -81,7 +173,7 @@ function toPitchView(
     projectName: project.name,
     title: row.title,
     summary: row.summary,
-    pitchVideoId: row.pitchVideoId,
+    pitchVideo: toPitchVideoView(joinedVideo),
     externalFundingUrl: row.externalFundingUrl,
     externalContactUrl: row.externalContactUrl,
     status: row.status,
@@ -110,6 +202,75 @@ export function slugifyPitchTitle(title: string): string {
 }
 
 /**
+ * Re-reads one pitch through the video join, by id.
+ *
+ * ⚠️ EVERY WRITE RETURNS THIS, NOT ITS OWN `.returning()` ROW. Found by the live run: an
+ * update's `returning()` gives back the pitch columns and nothing else, so `pitchVideo` came
+ * out NULL on the very response that had just attached a video. The row was right and the
+ * answer was wrong — the worst shape of bug, because the client caches the lie.
+ *
+ * The joined read is the only place that knows whether the video is publicly servable, so it
+ * is the only thing entitled to answer the question.
+ */
+async function readPitchViewById(pitchId: string): Promise<PitchView | null> {
+  const [found] = await db
+    .select({
+      row: pitch,
+      projectSlug: researchProject.slug,
+      projectName: researchProject.name,
+      ...PITCH_VIDEO_COLUMNS,
+    })
+    .from(pitch)
+    .innerJoin(researchProject, eq(researchProject.id, pitch.projectId))
+    .leftJoin(video, PITCH_VIDEO_JOIN)
+    .where(eq(pitch.id, pitchId));
+
+  if (!found) return null;
+  return toPitchView(found.row, { slug: found.projectSlug, name: found.projectName }, found);
+}
+
+/**
+ * Proves a video may be embedded by a pitch on this venture.
+ *
+ * ⚠️ THIS FUNCTION IS THE SECURITY BOUNDARY ON `pitch.pitch_video_id`, and it did not exist
+ * when the column shipped. The foreign key proves only that A VIDEO ROW EXISTS — not that the
+ * founder owns it, not that it is public, not that it has anything to do with this venture. A
+ * pitch could therefore name any video id in the system, and the moment the public pitch page
+ * renders a title and thumbnail, a stranger's private upload leaks. `studio.ts` warned about
+ * exactly this for `attached_pitch_id` ("accepting it today would store an unvalidated client
+ * string"); this is the check that stops the replacement column repeating it.
+ *
+ * TWO CONDITIONS, AND THE SECOND IS WHAT MAKES OWNERSHIP CHECKABLE WITHOUT A SECOND GATE:
+ *
+ *  1. The video passes `PUBLICLY_SERVABLE` — imported rather than re-typed, because three
+ *     byte-identical copies of that predicate already exist and a fourth that drifts would
+ *     serve hidden content with nothing failing to tell you. Plus `published_at <= now()`,
+ *     which every caller applies separately so a scheduled row is not readable early.
+ *  2. `video.research_project_id` is THIS pitch's project. Attaching a video to a venture
+ *     already went through `resolveAttachableResearchProjectId`, which proved active
+ *     membership of an active project. A video that names this venture has passed that gate,
+ *     so this one does not have to re-derive it.
+ *
+ * FOUR FAILURES, ONE ANSWER. No such video, not public, not this venture's, and not yours are
+ * indistinguishable to the caller — otherwise the field becomes an oracle for video ids.
+ */
+async function isVideoEmbeddableByPitch(projectId: string, videoId: string): Promise<boolean> {
+  const [eligible] = await db
+    .select({ id: video.id })
+    .from(video)
+    .where(
+      and(
+        eq(video.id, videoId),
+        eq(video.researchProjectId, projectId),
+        PUBLICLY_SERVABLE,
+        lte(video.publishedAt, sql`now()`),
+      ),
+    )
+    .limit(1);
+  return eligible !== undefined;
+}
+
+/**
  * Loads a pitch and proves the caller founds the project it belongs to.
  *
  * ONE QUERY, not two, so there is no window in which the pitch is read and the ownership
@@ -127,9 +288,11 @@ export async function findOwnedPitch(
       projectSlug: researchProject.slug,
       projectName: researchProject.name,
       founderUserId: researchProject.founderUserId,
+      ...PITCH_VIDEO_COLUMNS,
     })
     .from(pitch)
     .innerJoin(researchProject, eq(researchProject.id, pitch.projectId))
+    .leftJoin(video, PITCH_VIDEO_JOIN)
     .where(eq(pitch.id, pitchId));
 
   if (!found) return { success: false, error: { type: "PITCH_NOT_FOUND" } };
@@ -140,7 +303,7 @@ export async function findOwnedPitch(
     success: true,
     value: {
       row: found.row,
-      view: toPitchView(found.row, { slug: found.projectSlug, name: found.projectName }),
+      view: toPitchView(found.row, { slug: found.projectSlug, name: found.projectName }, found),
     },
   };
 }
@@ -179,6 +342,15 @@ export async function createPitch(
   });
   if (!links.success) return links;
 
+  // REFUSED UP FRONT rather than stored and silently dropped from the public read — the rule
+  // `spotlight.service.ts` states for its own video slots.
+  if (
+    input.pitchVideoId !== undefined &&
+    !(await isVideoEmbeddableByPitch(project.id, input.pitchVideoId))
+  ) {
+    return { success: false, error: { type: "PITCH_VIDEO_NOT_ELIGIBLE" } };
+  }
+
   const baseSlug = slugifyPitchTitle(input.title);
   if (baseSlug.length < 3) {
     // A title of pure punctuation or emoji cannot produce a usable public URL.
@@ -208,10 +380,9 @@ export async function createPitch(
         })
         .returning();
       if (!created) throw new Error("createPitch: insert returned no row");
-      return {
-        success: true,
-        value: toPitchView(created, { slug: project.slug, name: project.name }),
-      };
+      const createdView = await readPitchViewById(created.id);
+      if (!createdView) throw new Error("createPitch: re-read found no row");
+      return { success: true, value: createdView };
     } catch (insertError: unknown) {
       if (!isUniqueViolation(insertError)) throw insertError;
       // Slug taken — the next attempt appends a higher suffix.
@@ -243,6 +414,16 @@ export async function updatePitch(
     return { success: false, error: { type: "PITCH_NOT_EDITABLE", status: current.status } };
   }
 
+  // `null` clears the video and needs no gate; a non-null value is re-checked on every edit,
+  // because a video that was eligible when the draft was written may not be now.
+  if (
+    input.pitchVideoId !== undefined &&
+    input.pitchVideoId !== null &&
+    !(await isVideoEmbeddableByPitch(current.projectId, input.pitchVideoId))
+  ) {
+    return { success: false, error: { type: "PITCH_VIDEO_NOT_ELIGIBLE" } };
+  }
+
   const links = normalizePitchLinks({
     externalFundingUrl: input.externalFundingUrl,
     externalContactUrl: input.externalContactUrl,
@@ -268,13 +449,9 @@ export async function updatePitch(
     .returning();
 
   if (!updated) return { success: false, error: { type: "PITCH_NOT_FOUND" } };
-  return {
-    success: true,
-    value: toPitchView(updated, {
-      slug: owned.value.view.projectSlug,
-      name: owned.value.view.projectName,
-    }),
-  };
+  const refreshed = await readPitchViewById(updated.id);
+  if (!refreshed) throw new Error("pitch write: re-read found no row");
+  return { success: true, value: refreshed };
 }
 
 /**
@@ -330,13 +507,9 @@ export async function submitPitch(
   if (!updated) {
     return { success: false, error: { type: "PITCH_NOT_SUBMITTABLE", status: current.status } };
   }
-  return {
-    success: true,
-    value: toPitchView(updated, {
-      slug: owned.value.view.projectSlug,
-      name: owned.value.view.projectName,
-    }),
-  };
+  const refreshed = await readPitchViewById(updated.id);
+  if (!refreshed) throw new Error("pitch write: re-read found no row");
+  return { success: true, value: refreshed };
 }
 
 /**
@@ -372,13 +545,9 @@ export async function closePitch(
       error: { type: "PITCH_NOT_CLOSEABLE", status: owned.value.row.status },
     };
   }
-  return {
-    success: true,
-    value: toPitchView(updated, {
-      slug: owned.value.view.projectSlug,
-      name: owned.value.view.projectName,
-    }),
-  };
+  const refreshed = await readPitchViewById(updated.id);
+  if (!refreshed) throw new Error("pitch write: re-read found no row");
+  return { success: true, value: refreshed };
 }
 
 /**
@@ -432,9 +601,11 @@ export async function getPublicPitch(pitchSlug: string): Promise<Result<PitchVie
       row: pitch,
       projectSlug: researchProject.slug,
       projectName: researchProject.name,
+      ...PITCH_VIDEO_COLUMNS,
     })
     .from(pitch)
     .innerJoin(researchProject, eq(researchProject.id, pitch.projectId))
+    .leftJoin(video, PITCH_VIDEO_JOIN)
     .where(
       and(
         eq(pitch.slug, pitchSlug),
@@ -447,7 +618,7 @@ export async function getPublicPitch(pitchSlug: string): Promise<Result<PitchVie
   if (!found) return { success: false, error: { type: "PITCH_NOT_FOUND" } };
   return {
     success: true,
-    value: toPitchView(found.row, { slug: found.projectSlug, name: found.projectName }),
+    value: toPitchView(found.row, { slug: found.projectSlug, name: found.projectName }, found),
   };
 }
 
@@ -469,9 +640,15 @@ export async function listPublicPitches(options: {
 
   const [rows, [counted]] = await Promise.all([
     db
-      .select({ row: pitch, projectSlug: researchProject.slug, projectName: researchProject.name })
+      .select({
+        row: pitch,
+        projectSlug: researchProject.slug,
+        projectName: researchProject.name,
+        ...PITCH_VIDEO_COLUMNS,
+      })
       .from(pitch)
       .innerJoin(researchProject, eq(researchProject.id, pitch.projectId))
+      .leftJoin(video, PITCH_VIDEO_JOIN)
       .where(whereClause)
       // §4c rule 4: the ORDER BY that feeds pagination ends in a UNIQUE column, or a page
       // boundary silently skips rows.
@@ -487,7 +664,7 @@ export async function listPublicPitches(options: {
 
   return {
     rows: rows.map((entry) =>
-      toPitchView(entry.row, { slug: entry.projectSlug, name: entry.projectName }),
+      toPitchView(entry.row, { slug: entry.projectSlug, name: entry.projectName }, entry),
     ),
     total: counted?.total ?? 0,
   };
@@ -530,9 +707,15 @@ export async function listMyPitches(
 
   const [rows, [counted]] = await Promise.all([
     db
-      .select({ row: pitch, projectSlug: researchProject.slug, projectName: researchProject.name })
+      .select({
+        row: pitch,
+        projectSlug: researchProject.slug,
+        projectName: researchProject.name,
+        ...PITCH_VIDEO_COLUMNS,
+      })
       .from(pitch)
       .innerJoin(researchProject, eq(researchProject.id, pitch.projectId))
+      .leftJoin(video, PITCH_VIDEO_JOIN)
       .where(whereClause)
       .orderBy(desc(pitch.createdAt), desc(pitch.id))
       .limit(options.limit)
@@ -546,7 +729,7 @@ export async function listMyPitches(
 
   return {
     rows: rows.map((entry) =>
-      toPitchView(entry.row, { slug: entry.projectSlug, name: entry.projectName }),
+      toPitchView(entry.row, { slug: entry.projectSlug, name: entry.projectName }, entry),
     ),
     total: counted?.total ?? 0,
   };
