@@ -77,7 +77,9 @@ function stripSslModeQueryParameter(databaseUrl: string): string {
 }
 
 const ssl = postgresPoolSslOption();
-const connectionString = ssl ? stripSslModeQueryParameter(config.DATABASE_URL) : config.DATABASE_URL;
+const connectionString = ssl
+  ? stripSslModeQueryParameter(config.DATABASE_URL)
+  : config.DATABASE_URL;
 
 /**
  * Shared pool tuning.
