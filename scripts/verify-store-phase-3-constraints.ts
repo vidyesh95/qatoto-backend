@@ -169,6 +169,35 @@ async function verifyPhaseConstraints(): Promise<readonly CheckOutcome[]> {
     detail: `${String(duplicateRevisionNumbers)} duplicate(s)`,
   });
 
+  // A38. `commerce_quote.latest_revision_number` MUST NAME A REVISION THAT EXISTS.
+  //
+  // No CHECK constraint can express this — it spans two tables — so the invariant is service-side
+  // only, and this is the net under it. It is asserted here rather than left to reasoning because
+  // the failure is silent and total: `submitRevision` and `acceptQuote` both refuse unless the
+  // revision number EQUALS this counter, so a counter naming a row that no longer exists leaves a
+  // surviving SUBMITTED revision permanently unsubmittable and unacceptable. The expiry sweep keys
+  // on the same equality, so such a quote can never expire either — it simply stops, with nothing
+  // in any log to say why.
+  //
+  // Two writers move it and both must agree with the rows: `appendRevision` sets it to the number it
+  // just inserted, and `abandonRevision` rolls it back to `max(revision_number)` of the survivors.
+  // A quote shell with no revisions at all is `0`, which is what `COALESCE` covers.
+  const revisionCounterDrift = await countQuery(
+    `SELECT count(*) AS row_count
+       FROM commerce_quote AS q
+       LEFT JOIN (
+         SELECT quote_id, max(revision_number) AS highest_revision_number
+           FROM commerce_quote_revision
+          GROUP BY quote_id
+       ) AS r ON r.quote_id = q.id
+      WHERE q.latest_revision_number <> COALESCE(r.highest_revision_number, 0)`,
+  );
+  outcomes.push({
+    label: "quote latest_revision_number matches its revisions",
+    passed: revisionCounterDrift === 0,
+    detail: `${String(revisionCounterDrift)} drifted quote(s)`,
+  });
+
   const moneyMismatchCount = await countQuery(
     `SELECT count(*) AS row_count
        FROM commerce_quote_revision

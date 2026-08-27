@@ -1284,7 +1284,8 @@ export async function abandonRevision(
       .from(commerceQuoteRevision)
       .where(eq(commerceQuoteRevision.quoteId, quote.id));
     const restoredLatestRevisionNumber = survivingRevisions.reduce(
-      (highest, candidate) => (candidate.revisionNumber > highest ? candidate.revisionNumber : highest),
+      (highest, candidate) =>
+        candidate.revisionNumber > highest ? candidate.revisionNumber : highest,
       0,
     );
 
