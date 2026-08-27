@@ -1230,7 +1230,22 @@ and publish run inside a transaction so children stay consistent with the parent
 
 ## 9. The YouTube pipeline (parse → verify → store → publish)
 
-Three steps, all synchronous. There is no background job, no polling, no callback.
+Three steps. Two are always synchronous; the third has a deferred path.
+
+> ⚠️ **THIS SECTION USED TO OPEN "Three steps, all synchronous. There is no background job, no
+> polling, no callback." THAT IS NO LONGER TRUE**, and it was the first sentence a reader saw.
+> Deferred verification shipped (HOME §8.3): when the oEmbed call fails with
+> `YOUTUBE_VERIFY_FAILED`, the row is created `draft` with `isSourceVerified: false` and the
+> **`verify-youtube-video` worker job** retries with backoff, rather than the upload being thrown
+> away. Publish is refused while the flag is false and the feed candidate pool requires it true, so
+> the invariant "no unverified id in a published row" survives the change.
+>
+> The claim was accurate when written and is corrected here rather than deleted, because the
+> SYNCHRONOUS path below is still the normal one — a reader should not come away thinking every
+> upload waits on a queue.
+
+**The happy path is still fully synchronous**: parse, verify, store, and the video is ready
+immediately. The job exists for the outage case only.
 
 1. **Parse (`POST /videos`).** `extractYoutubeVideoId(youtubeUrl)` reduces the client string to an
    11-char id, rejecting anything whose hostname isn't on the allowlist. No id → `422

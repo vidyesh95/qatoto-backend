@@ -1363,13 +1363,19 @@ claim (Rule 1).
 
 `revalidate-youtube-embeds` stays as the backstop for videos nobody happens to be watching.
 
-### 8.3 oEmbed outage blocks uploads
+### 8.3 oEmbed outage blocks uploads — **SHIPPED**
 
-Today, `POST /videos` hard-fails with `502 YOUTUBE_VERIFY_FAILED` when the oEmbed call fails.
-That is the correct trade against storing an unverified id — but it means an outage at YouTube
-throws away the creator's work.
+> ⚠️ **THIS SECTION PROPOSED A FIX THAT HAS SINCE SHIPPED, AND READ AS FUTURE WORK UNTIL
+> 2026-08-27.** It opened "Today, `POST /videos` hard-fails … New column, new flow", which sent a
+> reader looking for work that is already done. All three pieces are live: `isSourceVerified` is on
+> `studio.video` (`schema/studio.ts:252`), `videos.service.ts` defers on `YOUTUBE_VERIFY_FAILED`
+> rather than hard-failing (`:957`), and `verify-youtube-video` is a registered worker job.
+> Rewritten in the present tense; the design below is unchanged because it is what was built.
 
-New column, new flow:
+The problem it solved: hard-failing with `502 YOUTUBE_VERIFY_FAILED` was the correct trade against
+storing an unverified id, but it threw away the creator's work whenever YouTube had an outage.
+
+The column that fixed it:
 
 ```ts
 isSourceVerified: boolean("is_source_verified").default(false).notNull(),
@@ -1377,7 +1383,11 @@ isSourceVerified: boolean("is_source_verified").default(false).notNull(),
 
 The 11-character id is parsed and stored regardless — the charset CHECK still applies, so SSRF is
 still closed at the storage layer. The row is created as `draft` with `isSourceVerified: false`,
-and a `verify-youtube-video` job retries with backoff. **Publish is refused while the flag is
+and the `verify-youtube-video` job retries with backoff.
+
+⚠️ **ONLY `YOUTUBE_VERIFY_FAILED` DEFERS.** A malformed URL and an unavailable video stay hard
+errors, because those are things the creator must fix — deferring them would queue a retry that can
+never succeed. `createDailyLog` copies this asymmetry deliberately (R&D §22). **Publish is refused while the flag is
 false**, and the candidate pool (§4.5) requires it true. The invariant "no unverified id in a
 published row" is preserved without discarding the upload.
 
