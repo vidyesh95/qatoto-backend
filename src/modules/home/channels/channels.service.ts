@@ -47,16 +47,35 @@ export type ChannelError =
 /**
  * The channel header.
  *
- * `subscriberCount` IS THE ONLY COUNTER, and it is not a new disclosure — every watch payload
- * already carries it for the video's creator. The two beside it in `creator_stats` are
- * deliberately absent:
+ * THE THREE COUNTERS, AND WHY TWO OF THEM ARE COMPUTED RATHER THAN READ.
  *
- *   `publishedVideoCount` counts `publish_status = 'published'` REGARDLESS OF VISIBILITY, so it
- *      would routinely exceed the number of videos this page lists. A header that says 12 over a
- *      grid of 9 reads as a bug, and explaining it would mean explaining which three are private.
- *   `totalViewCount` is a LIFETIME counter that includes views of videos since made private or
- *      deleted. It is therefore a fact about withdrawn content, which is the one thing every
- *      public read on this surface is built to avoid leaking.
+ * `subscriberCount` comes from `creator_stats`, which is right: it is derivable from
+ * `creator_subscription`, it is reconciled, and it is not a new disclosure — every watch payload
+ * already carries it for the video's creator.
+ *
+ * `publicVideoCount` AND `publicViewCount` DO NOT COME FROM `creator_stats`, and that is the
+ * important part. Its `published_video_count` and `total_view_count` were deliberately withheld
+ * from this projection, for two reasons that both still hold:
+ *
+ *   - `published_video_count` counts `publish_status = 'published'` REGARDLESS OF VISIBILITY, so
+ *     it routinely exceeds the number of videos this page lists. A header saying 12 over a grid
+ *     of 9 reads as a bug, and explaining it would mean explaining which three are private.
+ *   - `total_view_count` is a LIFETIME counter including views of videos since made private or
+ *     deleted. It is a fact about withdrawn content, which is the one thing every public read on
+ *     this surface is built to avoid leaking — a viewer could diff it against the visible grid and
+ *     infer that deleted videos existed and roughly how large they were. It is also never
+ *     repaired and is EXPECTED to disagree with the sum over surviving videos
+ *     (`scripts/reconcile-creator-stats.ts`).
+ *
+ * So both are aggregated HERE over `publicVideoPredicate()` — the very predicate the video list
+ * below uses. That is what makes them publishable: the count cannot exceed what the grid shows,
+ * because it is a count of exactly those rows. A creator with private videos has no discrepancy
+ * to explain, and neither number says anything about content that was withdrawn.
+ *
+ * `joinedAt` IS A NEW PUBLIC DISCLOSURE, stated rather than left to ride in. `user.created_at` has
+ * until now appeared only in the staff-only user listing. It dates the account, which is mild on
+ * its own; it is published because "joined" is what makes the other three legible as a rate rather
+ * than as bare totals.
  */
 export interface ChannelProfile {
   readonly creatorId: string;
@@ -64,6 +83,11 @@ export interface ChannelProfile {
   readonly name: string;
   readonly imageUrl: string | null;
   readonly subscriberCount: number;
+  /** Videos this page would list — counted over the grid's own predicate, never the cache. */
+  readonly publicVideoCount: number;
+  /** Views of those videos only. Deliberately not `creator_stats.total_view_count`. */
+  readonly publicViewCount: number;
+  readonly joinedAt: Date;
   readonly viewerState: {
     /** `false`, never null, for an anonymous viewer — definitionally true of them. */
     readonly isSubscribedToCreator: boolean;
@@ -99,6 +123,29 @@ export async function getChannelProfile(input: {
               AND ${creatorSubscription.subscriberId} = ${input.viewerUserId}
           )`;
 
+  // BOTH AGGREGATES ARE CORRELATED SUBQUERIES OVER `publicVideoPredicate()`, aliasing the video
+  // table as `v` because that predicate is written against that alias — it is shared verbatim with
+  // the feed and the video list below precisely so the three cannot drift apart.
+  //
+  // THE SUM IS CAST TO `bigint`, NOT `int`, AND ARRIVES AS A STRING. `video_stats.view_count` sums
+  // past 2^31 on a large enough catalogue, and `::int` would answer `integer out of range` — the
+  // exact failure `scripts/reconcile-creator-stats.ts` documents having hit. node-postgres hands
+  // back `int8` as a string to avoid a lossy `Number`, so it is coerced once, below, where the
+  // conversion is visible.
+  const publicVideoCount = sql<number>`(
+    SELECT COUNT(*)::int
+      FROM video AS v
+     WHERE v.creator_id = ${user.id}
+       AND ${publicVideoPredicate()}
+  )`;
+  const publicViewCount = sql<string>`(
+    SELECT COALESCE(SUM(vs.view_count), 0)::bigint
+      FROM video AS v
+      LEFT JOIN video_stats AS vs ON vs.video_id = v.id
+     WHERE v.creator_id = ${user.id}
+       AND ${publicVideoPredicate()}
+  )`;
+
   const [row] = await db
     .select({
       creatorId: user.id,
@@ -106,6 +153,9 @@ export async function getChannelProfile(input: {
       name: user.name,
       imageUrl: user.image,
       subscriberCount: sql<number>`COALESCE(${creatorStats.subscriberCount}, 0)`,
+      publicVideoCount,
+      publicViewCount,
+      joinedAt: user.createdAt,
       isSubscribedToCreator: isSubscribed,
     })
     .from(user)
@@ -128,6 +178,11 @@ export async function getChannelProfile(input: {
       name: row.name,
       imageUrl: row.imageUrl,
       subscriberCount: row.subscriberCount,
+      publicVideoCount: row.publicVideoCount,
+      // The one coercion, and the reason the field above it is typed `string` on the way out of
+      // the driver. `Number` is safe here in a way `::int` was not: it is lossless to 2^53.
+      publicViewCount: Number(row.publicViewCount),
+      joinedAt: row.joinedAt,
       viewerState: { isSubscribedToCreator: row.isSubscribedToCreator },
     },
   };
