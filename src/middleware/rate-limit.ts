@@ -870,6 +870,50 @@ export const programModerationLimiter = createLimiter({
 });
 
 /**
+ * §12 — creating, editing, submitting and closing a pitch.
+ *
+ * A SEPARATE NAMESPACE FROM `programCreate`, like every other limiter in this file: sharing
+ * one would let a burst of programme drafts spend the budget a founder needs to fix and
+ * resubmit a rejected pitch, and the two have nothing to do with each other.
+ *
+ * Room to iterate on a draft — a pitch is written, reworked and resubmitted after a
+ * rejection — but not room to mint slugs in bulk.
+ */
+export const pitchCreateLimiter = createLimiter({
+  namespace: "pitchCreate",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
+/**
+ * §12 — the moderator's verdict on a pitch.
+ *
+ * Mirrors `programModerationLimiter` exactly, including the reason for its placement:
+ * keyed on `req.user.id`, so it runs after `requireAuth` and BEFORE the in-controller
+ * capability check, and a non-moderator spends their own budget finding out they are not
+ * staff.
+ */
+export const pitchModerationLimiter = createLimiter({
+  namespace: "pitchModeration",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 200,
+});
+
+/**
+ * §12 — recording and confirming a self-reported funding outcome.
+ *
+ * TIGHTER THAN THE OTHERS, and not because of load. These rows are attestations about money
+ * that two people say changed hands; a caller who can write them quickly is a caller who can
+ * flood a pitch with claims faster than the counterparty can decline to confirm them. The
+ * honest rate for a human recording a real raise is a handful an hour.
+ */
+export const pitchOutcomeLimiter = createLimiter({
+  namespace: "pitchOutcome",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});
+
+/**
  * PUT /admin/platform-roles — granting and revoking staff roles.
  *
  * THE TIGHTEST LIMIT IN THIS FILE, and the reason is blast radius rather than abuse: the

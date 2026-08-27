@@ -4,6 +4,10 @@ import { db } from "#src/db/index.js";
 import { user, video, videoContentReport, videoModerationAction } from "#src/db/schema.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import {
+  enqueueNotifications,
+  type NotificationInput,
+} from "#src/modules/platform/notifications/notifications.service.js";
+import {
   requirePlatformCapability,
   type PlatformStaffContext,
 } from "#src/modules/platform/roles/platform-role.service.js";
@@ -14,10 +18,6 @@ import type {
   ReportVideoInput,
   RestoreVideoInput,
 } from "#src/modules/studio/video-content-reports.schemas.js";
-import {
-  enqueueNotifications,
-  type NotificationInput,
-} from "#src/modules/platform/notifications/notifications.service.js";
 import type { Result } from "#src/types/index.js";
 
 /**

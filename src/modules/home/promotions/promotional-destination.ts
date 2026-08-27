@@ -27,13 +27,11 @@
  * result out.
  */
 
+import { parseHttpsUrl } from "#src/lib/external-url.js";
 import type { Result } from "#src/types/index.js";
 
 /** Matches the internal arm of `promotional_slide_destination_ck`. */
 const MAX_INTERNAL_PATH_LENGTH = 512;
-
-/** Matches the external arm of `promotional_slide_destination_ck`. */
-const MAX_EXTERNAL_URL_LENGTH = 2048;
 
 /**
  * A base origin used only to resolve a relative path so it can be re-serialized and
@@ -131,58 +129,48 @@ function parseInternalPath(
 function parseExternalUrl(
   trimmedValue: string,
 ): Result<ParsedPromotionalDestination, PromotionalDestinationError> {
-  if (trimmedValue.length > MAX_EXTERNAL_URL_LENGTH) {
-    return {
-      success: false,
-      error: {
-        type: "DESTINATION_TOO_LONG",
-        length: trimmedValue.length,
-        maximum: MAX_EXTERNAL_URL_LENGTH,
-      },
-    };
+  // DELEGATES TO `src/lib/external-url.ts`, which holds the one implementation of this
+  // policy — https only, arbitrary host, no credentials, no control characters, fragment
+  // dropped, normalized on the way in. It moved out of this file when §12 pitches needed
+  // the identical rules for a founder's funding and contact links, and the alternative was
+  // a second copy of the check that decides whether a stranger's URL becomes an href.
+  //
+  // THE ERROR VOCABULARY STAYS LOCAL. `promotions-error-response.ts` maps these variants to
+  // HTTP responses and the internal arm shares three of them, so the shared parser's errors
+  // are translated back here rather than leaked outward. A slide's caller should not have to
+  // know which module parsed its string.
+  const parsed = parseHttpsUrl(trimmedValue);
+  if (parsed.success) {
+    return { success: true, value: { kind: "external_url", normalizedValue: parsed.value } };
   }
 
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(trimmedValue);
-  } catch {
-    // No schemeless fallback: guessing "https://" for a value that will become an href
-    // means guessing which host the admin meant.
-    return { success: false, error: { type: "EXTERNAL_URL_UNPARSEABLE" } };
+  switch (parsed.error.type) {
+    case "EXTERNAL_URL_EMPTY":
+      return { success: false, error: { type: "DESTINATION_EMPTY" } };
+    case "EXTERNAL_URL_HAS_ILLEGAL_CHARACTERS":
+      return { success: false, error: { type: "DESTINATION_HAS_ILLEGAL_CHARACTERS" } };
+    case "EXTERNAL_URL_TOO_LONG":
+      return {
+        success: false,
+        error: {
+          type: "DESTINATION_TOO_LONG",
+          length: parsed.error.length,
+          maximum: parsed.error.maximum,
+        },
+      };
+    case "EXTERNAL_URL_UNPARSEABLE":
+    case "EXTERNAL_URL_NOT_HTTPS":
+    case "EXTERNAL_URL_HOST_INVALID":
+    case "EXTERNAL_URL_HAS_CREDENTIALS":
+      // These four already carry this module's own names and their payloads match, so they
+      // pass through unchanged. Listed one per line rather than as a default so that adding
+      // a variant to `ExternalUrlError` breaks HERE at compile time.
+      return { success: false, error: parsed.error };
+    default: {
+      const exhaustiveCheck: never = parsed.error;
+      throw new Error(`Unhandled external URL error: ${JSON.stringify(exhaustiveCheck)}`);
+    }
   }
-
-  if (parsedUrl.protocol !== "https:") {
-    return {
-      success: false,
-      // `replace` drops the trailing colon so the message reads "http", not "http:".
-      error: { type: "EXTERNAL_URL_NOT_HTTPS", scheme: parsedUrl.protocol.replace(":", "") },
-    };
-  }
-
-  if (parsedUrl.username !== "" || parsedUrl.password !== "") {
-    return { success: false, error: { type: "EXTERNAL_URL_HAS_CREDENTIALS" } };
-  }
-
-  const host = parsedUrl.hostname.toLowerCase();
-  if (host.length === 0 || !host.includes(".") || host.startsWith(".") || host.endsWith(".")) {
-    return { success: false, error: { type: "EXTERNAL_URL_HOST_INVALID", host } };
-  }
-
-  parsedUrl.hash = "";
-  const normalizedValue = parsedUrl.toString();
-
-  if (normalizedValue.length > MAX_EXTERNAL_URL_LENGTH) {
-    return {
-      success: false,
-      error: {
-        type: "DESTINATION_TOO_LONG",
-        length: normalizedValue.length,
-        maximum: MAX_EXTERNAL_URL_LENGTH,
-      },
-    };
-  }
-
-  return { success: true, value: { kind: "external_url", normalizedValue } };
 }
 
 /**

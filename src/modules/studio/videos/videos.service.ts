@@ -2834,10 +2834,7 @@ export async function respondToCollaborationInvite(
     .update(videoCollaborator)
     .set({ status: response, userId })
     .where(
-      and(
-        eq(videoCollaborator.videoId, videoId),
-        eq(videoCollaborator.invitedEmail, caller.email),
-      ),
+      and(eq(videoCollaborator.videoId, videoId), eq(videoCollaborator.invitedEmail, caller.email)),
     )
     .returning({ status: videoCollaborator.status });
 

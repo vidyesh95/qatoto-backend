@@ -76,6 +76,12 @@ import {
   UploadReceiptSchema,
 } from "#src/modules/rnd/proof-of-effort/proof-of-effort.schemas.js";
 import {
+  CreatePitchSchema,
+  ModeratePitchSchema,
+  RecordPitchOutcomeSchema,
+  UpdatePitchSchema,
+} from "#src/modules/rnd/pitches/pitches.schemas.js";
+import {
   AttachPaperFileSchema,
   CreateBranchSchema,
   CreateOpportunitySchema,
@@ -504,4 +510,11 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   "post /suppliers": { schema: CreateSupplierSchema, required: true },
   "put /discovery/talent/me": { schema: TalentProfileSchema, required: true },
   "put /milestones/{milestoneId}/variance": { schema: MilestoneVarianceSchema, required: true },
+  // --- §12 pitches. `required` is a property of the ROUTE, not of the schema: every one of
+  // --- these handlers reads `optionalBody(req)`, and only the PATCH is meaningful with an
+  // --- empty body.
+  "post /research-projects/{projectSlug}/pitches": { schema: CreatePitchSchema, required: true },
+  "patch /pitches/{pitchId}": { schema: UpdatePitchSchema, required: false },
+  "post /pitches/{pitchId}/moderate": { schema: ModeratePitchSchema, required: true },
+  "post /pitches/{pitchId}/funding-outcomes": { schema: RecordPitchOutcomeSchema, required: true },
 };

@@ -69,6 +69,11 @@ const SUBJECT_BY_KIND: Readonly<Record<(typeof notification.$inferSelect)["kind"
   research_program_published: "Your research program is now public",
   research_program_rejected: "Your research program was not published",
   research_program_paper_moderated: "Your research paper was reviewed",
+  // §12. Same discipline as the §10 lines above — no pitch title, because a pitch is a
+  // funding solicitation and the title is often the venture's name. Whose pitch it was is
+  // not a thing to put on somebody else's lock screen preview.
+  pitch_published: "Your pitch is now public",
+  pitch_rejected: "Your pitch was not published",
   // §4a. Neither names the role: a subject line is the one part of this that lands on a
   // lock screen and in a mail server's logs, and which staff powers an account holds is
   // not a fact to put there. The app says what changed.

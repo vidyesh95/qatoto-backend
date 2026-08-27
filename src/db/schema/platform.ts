@@ -142,6 +142,12 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "research_program_post_hidden",
   "research_program_post_restored",
   "research_program_report_dismissed",
+  // Pitches — `pitch-moderation` (§12). A pitch is a public SOLICITATION: it points
+  // strangers at somebody's off-platform funding page. The decision to let it do that
+  // names an accountable human, which is the whole inclusion rule for this chain. An
+  // edit to a draft nobody can see is an ordinary member action and is not here.
+  "pitch_published",
+  "pitch_rejected",
   // The home-page promotional carousel — `promotions`. Every one of these puts a
   // link in front of every visitor to the front page, or takes one away, so all
   // five mutations are named here rather than only the destructive ones.
@@ -472,6 +478,12 @@ export const notificationKindEnum = pgEnum("notification_kind", [
   "research_program_published",
   "research_program_rejected",
   "research_program_paper_moderated",
+  // §12 — the same case as the two above, and the reason is identical: a pitch sits
+  // `pending` and invisible until a moderator rules, so the submitter has no way to
+  // learn the answer except by re-checking the page. A rejection carries a reason the
+  // person can act on, which makes silence here worse than for a publish.
+  "pitch_published",
+  "pitch_rejected",
   // §4a — staff roles. A grant was previously silent: nobody was told, and the only
   // record was an audit entry somebody had to think to read. The proposal goes to the
   // other admins because they are who can countersign it; the outcome goes to the

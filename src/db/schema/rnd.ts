@@ -20,6 +20,12 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { user } from "#src/db/schema/_core.js";
 import { platformAuditEntry } from "#src/db/schema/platform.js";
 import { commerceOrganization } from "#src/db/schema/store.js";
+// FIRST EDGE FROM R&D TO STUDIO, and it closes a cycle: `studio.ts` already imports
+// `researchProject` from here. That is fine and `_primitives.ts` says why — every
+// cross-file foreign key in this schema is a THUNK, `.references(() => other.id)`, so
+// it resolves long after both modules finish evaluating. The rule that would be broken
+// is about eagerly-CALLED symbols (an enum, a customType), and a table is not one.
+import { video } from "#src/db/schema/studio.js";
 
 // ---------------------------------------------------------------------------
 // Research & Development domain. See docs/R_AND_D_BACKEND_STRUCTURE.md.
@@ -8385,3 +8391,247 @@ export const researchProgramModerationActionRelations = relations(
     }),
   }),
 );
+
+// ===========================================================================
+// §12 — PITCHES. See docs/PITCHES_STRUCTURE.md in the frontend repo.
+//
+// A PITCH IS A PUBLISHED SOLICITATION, and it is deliberately the thinnest
+// table that can be one. A founder points at an idea they already own, adds a
+// video and a deck they already uploaded, and links OUT to wherever the money
+// actually happens. Qatoto lists it. That is the entire product.
+//
+// WHAT THIS TABLE MUST NEVER GROW, and each omission is load-bearing:
+//
+//  1. NO AMOUNT AND NO EQUITY PERCENTAGE. A page carrying "raising $X for Y%"
+//     is a general solicitation in the US sense, and `commerce_cofounder_*`
+//     already refused exactly this column pair on exactly this ground ("UNTIL
+//     DECIDED, THE BACKEND STORES NO CAPITAL FIGURE"). The ask lives on the
+//     third party's page, behind `external_funding_url`. Two places cannot
+//     answer this question differently.
+//  2. NO PLEDGE, NO CHARGE, NO CUSTODY. Qatoto operates no money rail — escrow
+//     left this domain (§7) and `PLATFORM_FEE_BASIS_POINTS` is 0. A pitch that
+//     accepted money here would make this codebase an intermediary.
+//  3. NO RECIPIENT AND NO THREAD. "Send a pitch to an investor" needs an
+//     investor entity, which does not exist and would drag KYC and
+//     accreditation in with it. Contact is a URL the founder owns.
+//
+// THE TWO URLS ARE HOSTILE INPUT RENDERED AS LINKS FOR OTHER PEOPLE. They are
+// parsed, normalized and refused by `src/lib/external-url.ts` before they are
+// stored — https only, no credentials, no protocol-relative authority. The
+// column stores the NORMALIZED form, never what was typed.
+// ===========================================================================
+
+/**
+ * A pitch's lifecycle.
+ *
+ * `pending` is where a submitted pitch waits, and it is absent from every write
+ * schema — `.strict()` turns an attempt to send `status` into a 422 rather than
+ * a moderation bypass, exactly as `research_program.status` does.
+ *
+ * THE GATE IS LIGHT AND IS NEVER ABOUT MERIT: spam, scams and illegal content
+ * only. Vetting a pitch on quality would read as an endorsement, which is the
+ * liability this whole surface is shaped to avoid. Kickstarter reviews every
+ * project and says in as many words that review is not endorsement; so does the
+ * disclaimer on the page this feeds.
+ */
+export const pitchStatusEnum = pgEnum("pitch_status", [
+  "draft",
+  "pending",
+  "published",
+  "rejected",
+  "closed",
+]);
+
+export const pitch = pgTable(
+  "pitch",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // PUBLIC identity. Server-derived from `title` with a -2/-3 collision suffix,
+    // never accepted in a request body, and immutable once minted: a published
+    // pitch has been linked to from somewhere Qatoto does not control.
+    slug: text("slug").notNull(),
+    // `restrict`, per rule R1 at the head of this file — and with an extra reason
+    // here. A pitch is the public record of a solicitation someone may later have
+    // a question about, so it must stay resolvable to the thing it solicited for.
+    projectId: text("project_id")
+      .notNull()
+      .references(() => researchProject.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    summary: text("summary").notNull(),
+    // `set null`, NOT restrict, and the asymmetry with `project_id` above is the
+    // point: `studio.ts` states that a video "bears no ledger, equity or audit
+    // weight, so it is a possession that dies with the account". A pitch outlives
+    // the video it embedded; it does not die with it.
+    pitchVideoId: text("pitch_video_id").references((): AnyPgColumn => video.id, {
+      onDelete: "set null",
+    }),
+    // Where the money actually happens — someone else's licensed platform.
+    // NORMALIZED by src/lib/external-url.ts before it lands here.
+    externalFundingUrl: text("external_funding_url"),
+    // How to reach the founder, on a surface the founder owns. Qatoto brokers no
+    // personal data and hosts no inbox, which is why this is a URL and not an
+    // email address.
+    externalContactUrl: text("external_contact_url"),
+    status: pitchStatusEnum("status").notNull().default("draft"),
+    // Staff-typed, and shown to the submitter — this is the one moderation note on
+    // the surface that is not staff-facing, because a rejected pitch with no reason
+    // is a wall rather than a decision.
+    rejectionReason: text("rejection_reason"),
+    publishedAt: timestamp("published_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("pitch_slug_unq").on(table.slug),
+    index("pitch_projectId_idx").on(table.projectId),
+    index("pitch_status_idx").on(table.status),
+    // §4c rule 4: the ORDER BY behind the public discovery list ends in a unique
+    // column, or a keyset cursor silently skips rows.
+    index("pitch_status_publishedAt_idx").on(table.status, table.publishedAt, table.id),
+    index("pitch_pitchVideoId_idx").on(table.pitchVideoId),
+    check("pitch_title_ck", sql`char_length(title) BETWEEN 3 AND 120`),
+    check("pitch_summary_ck", sql`char_length(summary) BETWEEN 20 AND 2000`),
+    // A rejection without a reason is the failure mode this refuses structurally,
+    // the same way `video_rejection_reason_ck` does one file over.
+    check(
+      "pitch_rejection_reason_ck",
+      sql`(status <> 'rejected') OR (rejection_reason IS NOT NULL)`,
+    ),
+    // A published row with no publishedAt sorts as NULL and drops out of every
+    // ORDER BY that lists it — published but invisible, with no error anywhere.
+    check("pitch_published_at_ck", sql`(status <> 'published') OR (published_at IS NOT NULL)`),
+    // Belt and braces over the parser in src/lib/external-url.ts. The service is
+    // the real check; this is what holds if a future write path forgets to call it.
+    check(
+      "pitch_external_urls_ck",
+      sql`(external_funding_url IS NULL OR (external_funding_url ~ '^https://' AND char_length(external_funding_url) <= 2048))
+          AND (external_contact_url IS NULL OR (external_contact_url ~ '^https://' AND char_length(external_contact_url) <= 2048))`,
+    ),
+  ],
+);
+
+/**
+ * One reported outcome of a pitch: money that changed hands SOMEWHERE ELSE.
+ *
+ * A RECORD OF WHAT TWO PEOPLE SAY HAPPENED, NOT A SETTLEMENT — the same contract
+ * `research_contribution_ledger_entry` and `compensation_payment_record` carry,
+ * and for the same reason: the parties transact off-platform and Qatoto records
+ * an attestation. Nothing here moved money, and no response built on this table
+ * may imply that Qatoto collected, held, released or escrowed anything.
+ *
+ * IT TAKES TWO. `recorded_by_user_id` is whoever typed it; `confirmed_by_user_id`
+ * is the counterparty agreeing. Until both exist the row is a claim by one side,
+ * and every read must render it as one — a single-signed outcome shown as a fact
+ * is a founder publishing their own funding announcement through Qatoto's voice.
+ *
+ * NO STATUS COLUMN AND NO STATE MACHINE, deliberately. Append-only: a correction
+ * is a new row, because an attestation somebody signed must not change under them.
+ *
+ * `funder_user_id` is NULLABLE because the whole design assumes the funder may be
+ * a stranger to this platform — an angel, a fund, a family member. `set null` on
+ * their account deletion, since the record of the funding outlives the account and
+ * `funder_name_text` still names who it was.
+ */
+export const pitchFundingOutcome = pgTable(
+  "pitch_funding_outcome",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    pitchId: text("pitch_id")
+      .notNull()
+      .references(() => pitch.id, { onDelete: "restrict" }),
+    /** bigint, never int4 — see §4b on the $21.5M ceiling. */
+    amountInCents: bigint("amount_in_cents", { mode: "number" }).notNull(),
+    /** ISO-4217, and it never travels without an amount. */
+    currencyCode: text("currency_code").notNull(),
+    fundedOnDate: date("funded_on_date").notNull(),
+    funderUserId: text("funder_user_id").references(() => user.id, { onDelete: "set null" }),
+    funderNameText: text("funder_name_text").notNull(),
+    note: text("note"),
+    recordedByUserId: text("recorded_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    confirmedByUserId: text("confirmed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    confirmedAt: timestamp("confirmed_at"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("pitch_funding_outcome_idempotency_unq").on(
+      table.recordedByUserId,
+      table.idempotencyKey,
+    ),
+    index("pitch_funding_outcome_pitchId_idx").on(table.pitchId, table.createdAt, table.id),
+    index("pitch_funding_outcome_funderUserId_idx").on(table.funderUserId),
+    check(
+      "pitch_funding_outcome_amount_ck",
+      sql`amount_in_cents > 0 AND currency_code ~ '^[A-Z]{3}$'`,
+    ),
+    // The two halves of a confirmation are set together or not at all. Without
+    // this a row could carry a confirmer and no timestamp, and "confirmed when?"
+    // would have no answer on a record whose whole value is being dated.
+    check(
+      "pitch_funding_outcome_confirmed_ck",
+      sql`(confirmed_by_user_id IS NULL) = (confirmed_at IS NULL)`,
+    ),
+    // Nobody countersigns their own attestation. Two signatures from one person
+    // is one signature wearing a hat.
+    check(
+      "pitch_funding_outcome_two_parties_ck",
+      sql`confirmed_by_user_id IS NULL OR confirmed_by_user_id <> recorded_by_user_id`,
+    ),
+    check(
+      "pitch_funding_outcome_funder_name_ck",
+      sql`char_length(funder_name_text) BETWEEN 1 AND 200`,
+    ),
+    check(
+      "pitch_funding_outcome_note_ck",
+      sql`note IS NULL OR char_length(note) BETWEEN 1 AND 1000`,
+    ),
+    check(
+      "pitch_funding_outcome_idempotency_ck",
+      sql`char_length(idempotency_key) BETWEEN 8 AND 128`,
+    ),
+  ],
+);
+
+// --- §12 relations. Child-side only, same convention as §5, §6, §7, §7A, §8,
+// --- §9 and §10: each table declares its own `one(...)` and no parent is edited
+// --- to add a matching `many(...)`.
+
+export const pitchRelations = relations(pitch, ({ one }) => ({
+  project: one(researchProject, {
+    fields: [pitch.projectId],
+    references: [researchProject.id],
+  }),
+}));
+
+export const pitchFundingOutcomeRelations = relations(pitchFundingOutcome, ({ one }) => ({
+  pitch: one(pitch, {
+    fields: [pitchFundingOutcome.pitchId],
+    references: [pitch.id],
+  }),
+  funder: one(user, {
+    fields: [pitchFundingOutcome.funderUserId],
+    references: [user.id],
+    relationName: "pitchOutcomeFunder",
+  }),
+  recordedBy: one(user, {
+    fields: [pitchFundingOutcome.recordedByUserId],
+    references: [user.id],
+    relationName: "pitchOutcomeRecorder",
+  }),
+  confirmedBy: one(user, {
+    fields: [pitchFundingOutcome.confirmedByUserId],
+    references: [user.id],
+    relationName: "pitchOutcomeConfirmer",
+  }),
+}));

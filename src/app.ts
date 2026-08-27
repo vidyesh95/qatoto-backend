@@ -34,6 +34,7 @@ import compensationRouter, {
 } from "#src/modules/rnd/compensation/compensation.routes.js";
 import discoveryRouter from "#src/modules/rnd/discovery/discovery.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/modules/rnd/funding/funding.routes.js";
+import pitchesRouter, { projectPitchRouter } from "#src/modules/rnd/pitches/pitches.routes.js";
 import researchCatalogRouter from "#src/modules/rnd/programs/research-catalog.routes.js";
 import researchProgramsRouter, {
   researchPaperCategoryRouter,
@@ -323,6 +324,9 @@ app.use("/research-projects", proofOfEffortRouter);
 // collision, for the same reason — a single-segment "/:projectSlug" never swallows a
 // deeper path.
 app.use("/research-projects", projectFundingRouter);
+// Same prefix again, and the same reasoning holds a sixth time: the pitch router owns only
+// /:projectSlug/pitches (§12), which is a deeper path than any single-segment route above.
+app.use("/research-projects", projectPitchRouter);
 // Same prefix a fifth time, declared AFTER all four: the compensation router owns
 // /:projectSlug/compensation-agreements/*, /compensation-periods/*,
 // /compensation-period-lines/* and /members/:memberUserId/compensation-agreement (§7A).
@@ -436,6 +440,12 @@ app.use("/", platformMetricsRouter);
 // (Appendix A3) and a raw-body branch for a route that does not exist is a security
 // surface bought for nothing.
 app.use("/", fundingRouter);
+// §12 pitches, root-mounted for the same reason as the funding router: a pitch is addressed
+// by its own slug or id (`/pitches/:pitchSlug`, `/funding-outcomes/:outcomeId/confirm`) once
+// it exists, and only its creation is project-scoped. NOTE there is NO payment webhook here
+// and no raw-body mount, because this domain moves no money at all — the funding link points
+// at somebody else's licensed platform.
+app.use("/", pitchesRouter);
 // The §9 integration callback. Root-mounted because a provider's redirect URI is fixed at
 // app-registration time and cannot carry a project slug; the project and the member come
 // out of the signed `state` instead (§9.10).

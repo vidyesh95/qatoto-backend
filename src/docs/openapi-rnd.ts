@@ -15,6 +15,7 @@ import {
 import compensationRouter, { governanceRouter } from "#src/modules/rnd/compensation/compensation.routes.js";
 import discoveryRouter from "#src/modules/rnd/discovery/discovery.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/modules/rnd/funding/funding.routes.js";
+import pitchesRouter, { projectPitchRouter } from "#src/modules/rnd/pitches/pitches.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";
 import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
@@ -74,6 +75,7 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/research-projects", router: projectFundingRouter },
   { mountPath: "/research-projects", router: compensationRouter },
   { mountPath: "/research-projects", router: projectGoToMarketRouter },
+  { mountPath: "/research-projects", router: projectPitchRouter },
   { mountPath: "/research-programs", router: researchProgramsRouter },
   { mountPath: "/discovery", router: discoveryRouter },
   { mountPath: "/promotions", router: promotionsRouter },
@@ -88,6 +90,7 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/", router: platformAuditRouter },
   { mountPath: "/", router: platformRolesRouter },
   { mountPath: "/", router: fundingRouter },
+  { mountPath: "/", router: pitchesRouter },
   { mountPath: "/", router: integrationCallbackRouter },
 ];
 
