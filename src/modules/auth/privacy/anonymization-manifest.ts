@@ -3,7 +3,7 @@
 //
 // ## ⚠️ THE THING THIS FILE EXISTS BECAUSE OF
 //
-// Rule R2 (src/db/schema/rnd.ts) classified all 157 of these foreign keys for a
+// Rule R2 (src/db/schema/rnd.ts) classified all 163 of these foreign keys for a
 // `DELETE FROM "user"` — `cascade` for a preference that dies with the account, `set null`
 // for attribution that must never block one, `restrict` for anything bearing equity, effort
 // or audit weight.
@@ -12,7 +12,7 @@
 // BEFORE UPDATE OR DELETE triggers. Account closure here is an ANONYMIZATION, which is the
 // point — it is what stops one person's erasure destroying another person's financial record.
 //
-// So `ON DELETE cascade` and `ON DELETE set null` FIRE ZERO TIMES in this flow. All 34
+// So `ON DELETE cascade` and `ON DELETE set null` FIRE ZERO TIMES in this flow. All 35
 // cascades and all set-nulls are decorative unless something issues the statement by
 // hand, and this manifest is that hand. A column missing from here is PII that survives an
 // erasure forever, silently. `idempotency_record.user_id` is the one to think about if that
@@ -515,6 +515,29 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
     "user_activity_hour.user_id": { kind: "delete_rows" },
     "user_creator_affinity_snapshot.creator_id": { kind: "delete_rows" },
     "user_creator_affinity_snapshot.user_id": { kind: "delete_rows" },
+    // A personal advertisement, not attribution — nobody else's record depends on these links, so
+    // none of the five retention bars is met. `cascade` on the FK, `delete_rows` here, exactly as
+    // `talent_profile.user_id` and `community_cofounder_profile.user_id` resolve the same shape.
+    // A moderator's decision about somebody else's profile, and the same asymmetry the video and
+    // commerce report tables already carry.
+    "user_moderation_action.moderator_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "Hash-chained and NOT NULL: the row carries an audit_entry_id and names the human behind a takedown. A null_out is not merely wrong, it is illegal — the column refuses NULL.",
+    },
+    "user_moderation_action.subject_user_id": { kind: "null_out" },
+    "user_profile_link.user_id": { kind: "delete_rows" },
+    "user_report.reported_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "The subject of a moderation record, kept deliberately. If an erasure deleted the reports filed AGAINST somebody, requesting deletion would become a ban-evasion route — and the enforcement history a future moderator needs would be the thing it destroyed.",
+    },
+    "user_report.reporter_user_id": { kind: "null_out" },
+    "user_report.resolved_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
+    },
     "user_topic_affinity_snapshot.user_id": { kind: "delete_rows" },
     "user_watch_daily.user_id": { kind: "delete_rows" },
     "verification_step.reviewed_by_user_id": {

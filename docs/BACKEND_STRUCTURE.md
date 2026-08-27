@@ -1063,7 +1063,7 @@ GDPR Art. 15 (access), Art. 20 (portability) and Art. 17 (erasure), all self-ser
 ### The one fact everything else follows from
 
 **Account deletion is an ANONYMIZATION, and it cannot be anything else.** Cascade rule R2
-(`src/db/schema/rnd.ts`) puts `restrict` foreign keys on 73 of the 157 columns pointing at
+(`src/db/schema/rnd.ts`) puts `restrict` foreign keys on 73 of the 163 columns pointing at
 `user`, and 54 tables carry `BEFORE UPDATE OR DELETE` triggers. `DELETE FROM "user"`
 physically cannot succeed for anybody who has founded, joined or applied to a project,
 transacted, moderated or voted — which is the point: it is what stops one person's erasure
@@ -1071,9 +1071,9 @@ destroying another person's financial record. Better Auth's `deleteUser` plugin 
 **off**; it would attempt exactly that delete.
 
 **The consequence people miss:** because nothing is ever deleted, `ON DELETE cascade` and
-`ON DELETE set null` **fire zero times**. All 34 cascades and 44 set-nulls happen only
+`ON DELETE set null` **fire zero times**. All 35 cascades and 46 set-nulls happen only
 because `anonymize-account.service.ts` issues the statement, driven by iterating
-`src/modules/auth/privacy/anonymization-manifest.ts` (157 entries: 34 `delete_rows`, 44
+`src/modules/auth/privacy/anonymization-manifest.ts` (163 entries: 35 `delete_rows`, 46
 `null_out`, 79 `retain` with a cited lawful basis).
 
 > **Run `pnpm db:verify-anonymization-coverage` after ANY migration that adds a `user`

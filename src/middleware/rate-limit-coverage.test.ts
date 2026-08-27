@@ -43,6 +43,11 @@ const MOUNTED_ROUTERS: readonly {
 }[] = [
   { mountPath: "/", specifier: "#src/modules/auth/session/auth.routes.js", exportName: "default" },
   { mountPath: "/users", specifier: "#src/modules/auth/users/users.routes.js", exportName: "default" },
+  {
+    mountPath: "/users",
+    specifier: "#src/modules/auth/users/user-reports.routes.js",
+    exportName: "default",
+  },
   { mountPath: "/handles", specifier: "#src/modules/auth/handles/handles.routes.js", exportName: "default" },
   { mountPath: "/products", specifier: "#src/modules/store/catalog/products.routes.js", exportName: "default" },
   { mountPath: "/promotions", specifier: "#src/modules/home/promotions/promotions.routes.js", exportName: "default" },

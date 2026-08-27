@@ -13,7 +13,7 @@ import type { Result } from "#src/types/index.js";
  *
  * ## THIS DEACTIVATES. IT DOES NOT DELETE, AND IT CANNOT.
  *
- * Cascade rule R2 (`src/db/schema/rnd.ts`) puts `restrict` foreign keys on 73 of the 157
+ * Cascade rule R2 (`src/db/schema/rnd.ts`) puts `restrict` foreign keys on 73 of the 163
  * columns pointing at `user`, and 54 tables carry BEFORE UPDATE OR DELETE triggers.
  * `DELETE FROM "user"` physically cannot succeed for anybody who has founded, joined or
  * applied to a project, transacted, moderated or voted — which is the POINT: it is what

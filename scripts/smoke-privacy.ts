@@ -325,19 +325,29 @@ async function main(): Promise<void> {
         email: user.email,
         handle: user.handle,
         locationLabel: user.locationLabel,
+        bio: user.bio,
         anonymizedAt: user.anonymizedAt,
       })
       .from(user)
       .where(eq(user.id, subjectId));
 
     if (config.ACCOUNT_ANONYMIZATION_ENABLED) {
+      /**
+       * `bio` IS IN HERE BECAUSE NOTHING ELSE CHECKS IT.
+       *
+       * `db:verify-anonymization-coverage` walks foreign keys into `user`; `bio` is a scalar
+       * column, so it is invisible to that script and the scrub's single `bio: null` line could be
+       * deleted without turning anything red. This assertion is the only thing standing between
+       * that and public free text surviving an erasure.
+       */
       check(
         "the identity is gone",
         afterScrub?.name === "Deleted user" &&
           afterScrub.handle === null &&
           afterScrub.locationLabel === null &&
+          afterScrub.bio === null &&
           (afterScrub.email ?? "").endsWith("@deleted.qatoto.invalid"),
-        `name=${afterScrub?.name ?? "?"} handle=${afterScrub?.handle ?? "null"} email=${afterScrub?.email ?? "?"}`,
+        `name=${afterScrub?.name ?? "?"} handle=${afterScrub?.handle ?? "null"} bio=${afterScrub?.bio ?? "null"} email=${afterScrub?.email ?? "?"}`,
       );
       check(
         "anonymized_at is stamped",

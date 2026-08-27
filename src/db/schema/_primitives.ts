@@ -75,6 +75,47 @@ export const playlistVideoOrderEnum = pgEnum("playlist_video_order", [
   "manual",
 ]);
 
+/**
+ * Whether a moderator has hidden a person's PROFILE TEXT — their bio and links.
+ *
+ * TWO VALUES, mirroring `video_moderation_visibility_state` rather than inventing a ladder. It
+ * gates the bio and the links and nothing else: the name, avatar and every video stay visible,
+ * because there is no public-user gate to hang a wider state on and a half-enforced one would be
+ * worse than none.
+ */
+/**
+ * Why somebody reported a person's profile.
+ *
+ * PROFILE-SCOPED, AND NOT A COPY OF `video_content_report_reason`. Every value here names something
+ * the only available lever can actually address — hiding a bio and its links. The video eight are
+ * about a video's CONTENT, and offering `child_safety` here would promise an action this system
+ * cannot take: answering it by hiding a description would be worse than not offering it.
+ */
+export const userReportReasonEnum = pgEnum("user_report_reason", [
+  "impersonation",
+  "abusive_profile_text",
+  "misleading_links",
+  "spam",
+  "other",
+]);
+
+export const userReportStatusEnum = pgEnum("user_report_status", [
+  "open",
+  "actioned",
+  "dismissed",
+]);
+
+export const userModerationActionKindEnum = pgEnum("user_moderation_action_kind", [
+  "profile_text_hidden",
+  "profile_text_restored",
+  "report_dismissed",
+]);
+
+export const userProfileModerationStateEnum = pgEnum("user_profile_moderation_state", [
+  "visible",
+  "hidden_by_moderator",
+]);
+
 export const animeAudioModeEnum = pgEnum("anime_audio_mode", ["subbed", "dubbed"]);
 
 export const animeSeriesStatusEnum = pgEnum("anime_series_status", [

@@ -1,7 +1,7 @@
-import { eq, sql, type SQL } from "drizzle-orm";
+import { asc, eq, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { creatorStats, creatorSubscription, user } from "#src/db/schema.js";
+import { creatorStats, creatorSubscription, user, userProfileLink } from "#src/db/schema.js";
 import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
 import {
   feedSelectClause,
@@ -83,6 +83,16 @@ export interface ChannelProfile {
   readonly name: string;
   readonly imageUrl: string | null;
   readonly subscriberCount: number;
+  /**
+   * The creator's own description, or null.
+   *
+   * NULL ALSO MEANS "A MODERATOR HID IT" — see the read below. The client is deliberately not told
+   * which, because a channel page that says "this description was hidden" hands a reporter a
+   * receipt and the subject a notification, neither of which this surface owes anybody.
+   */
+  readonly bio: string | null;
+  /** The creator's external links, in their chosen order. Empty when hidden or unset. */
+  readonly links: readonly { readonly label: string; readonly url: string }[];
   /** Videos this page would list — counted over the grid's own predicate, never the cache. */
   readonly publicVideoCount: number;
   /** Views of those videos only. Deliberately not `creator_stats.total_view_count`. */
@@ -153,6 +163,8 @@ export async function getChannelProfile(input: {
       name: user.name,
       imageUrl: user.image,
       subscriberCount: sql<number>`COALESCE(${creatorStats.subscriberCount}, 0)`,
+      bio: user.bio,
+      profileModerationState: user.profileModerationState,
       publicVideoCount,
       publicViewCount,
       joinedAt: user.createdAt,
@@ -170,6 +182,27 @@ export async function getChannelProfile(input: {
     return { success: false, error: { type: "CHANNEL_NOT_FOUND", handle: input.handle } };
   }
 
+  /**
+   * THE MODERATION GATE, and it is one place on purpose.
+   *
+   * `bio` and `links` are the only fields a moderator can hide, so this read is their only public
+   * consumer and therefore the only place the state has to be honoured. That is what makes the
+   * lever cheap: hiding a whole ACCOUNT would mean auditing every public read of a user across the
+   * feed, spotlight, comments, the store and R&D — with nothing failing if one were missed.
+   *
+   * Hidden reads as ABSENT rather than as a tombstone. The links query is skipped entirely, so a
+   * hidden profile costs one query fewer rather than fetching rows to throw away.
+   */
+  const isProfileTextVisible = row.profileModerationState === "visible";
+
+  const links = isProfileTextVisible
+    ? await db
+        .select({ label: userProfileLink.label, url: userProfileLink.url })
+        .from(userProfileLink)
+        .where(eq(userProfileLink.userId, row.creatorId))
+        .orderBy(asc(userProfileLink.sortOrder))
+    : [];
+
   return {
     success: true,
     value: {
@@ -178,6 +211,8 @@ export async function getChannelProfile(input: {
       name: row.name,
       imageUrl: row.imageUrl,
       subscriberCount: row.subscriberCount,
+      bio: isProfileTextVisible ? row.bio : null,
+      links,
       publicVideoCount: row.publicVideoCount,
       // The one coercion, and the reason the field above it is typed `string` on the way out of
       // the driver. `Number` is safe here in a way `::int` was not: it is lossless to 2^53.

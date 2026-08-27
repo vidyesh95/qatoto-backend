@@ -1,8 +1,9 @@
 import express from "express";
 
-import { longFormBody } from "#src/middleware/json-body.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
   accountDeletionRequestLimiter,
+  channelProfileWriteLimiter,
   dataExportRequestLimiter,
   dataExportStatusLimiter,
 } from "#src/middleware/rate-limit.js";
@@ -10,6 +11,7 @@ import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as handleController from "#src/modules/auth/handles/handle.controller.js";
 import * as privacyController from "#src/modules/auth/privacy/privacy.controller.js";
+import * as channelProfileController from "#src/modules/auth/users/channel-profile.controller.js";
 import { uploadAvatarPhoto } from "#src/modules/auth/users/upload-avatar.js";
 import * as usersController from "#src/modules/auth/users/users.controller.js";
 import * as engagementController from "#src/modules/home/engagement/engagement.controller.js";
@@ -36,6 +38,40 @@ router.get("/", requireAuth, usersController.getUsers);
  * `/:id` route so "me" is never swallowed as an id param.
  */
 router.patch("/me", requireAuth, longFormBody, usersController.updateMyProfile);
+
+/**
+ * GET|PATCH /users/me/channel-profile
+ *
+ * The caller's own public description and links, as rendered in the channel About panel.
+ *
+ * ITS OWN PATH RATHER THAN TWO MORE FIELDS ON `PATCH /users/me`. That body is `.strict()` with a
+ * REQUIRED `fullName`, so widening it would make every field optional — and at that point
+ * `updateUserName` no longer describes the handler and its "Name updated successfully" response
+ * stops being true. Every other capability on this router already owns its own path.
+ *
+ * `compactBody`, NOT `longFormBody`: a description capped at 5000 characters plus at most ten links
+ * is nowhere near the 128 KB budget the R&D payloads need.
+ *
+ * NO IDEMPOTENCY. `links` is a replace-the-set write and `sortOrder` is assigned server-side, so
+ * sending the same body twice produces the same rows — idempotent by construction rather than by
+ * key. The middleware here is honour-if-present anyway and the frontend mints no header.
+ *
+ * DECLARED BEFORE `/:id`, like every `/me/*` route above it — `users.routes.order.test.ts` fails the
+ * build if a `/me/*` route ever falls after a single-segment param route.
+ */
+router.get(
+  "/me/channel-profile",
+  requireAuth,
+  channelProfileController.getMyChannelProfile,
+);
+
+router.patch(
+  "/me/channel-profile",
+  requireAuth,
+  channelProfileWriteLimiter,
+  compactBody,
+  channelProfileController.updateMyChannelProfile,
+);
 
 /**
  * PATCH /users/me/photo  (multipart/form-data, field `photo`)

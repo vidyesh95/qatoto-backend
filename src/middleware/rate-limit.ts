@@ -331,6 +331,35 @@ export const problemReportLimiter = createLimiter({
  * flips a row into a directory other people read and invite from, so an unbounded
  * publish/unpublish loop is notification amplification once §5's invite flow reads it.
  */
+/**
+ * PATCH /users/me/channel-profile — the channel description and links.
+ *
+ * A CHEAP WRITE THAT PUBLISHES, which is the same reason `talentProfileWriteLimiter` beside it
+ * exists: the row it edits is rendered on a public page anyone can reach, so an unbounded
+ * edit loop is a way to cycle text past whoever is watching a channel. 30/min is generous for a
+ * person typing and useless for a script.
+ */
+/**
+ * POST /users/:userId/reports — reporting somebody's profile.
+ *
+ * ITS OWN NAMESPACE rather than sharing `videoContentReport`, for the reason that file already
+ * states: a shared budget means abuse of one product's report surface silently exhausts the other's.
+ *
+ * TIGHT, and tighter in effect than the number suggests — the partial unique index already caps one
+ * person at one report per subject, so this bounds somebody reporting many DIFFERENT people.
+ */
+export const userReportLimiter = createLimiter({
+  namespace: "userReport",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 20,
+});
+
+export const channelProfileWriteLimiter = createLimiter({
+  namespace: "channelProfileWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
 export const talentProfileWriteLimiter = createLimiter({
   namespace: "talentProfileWrite",
   windowMs: ONE_MINUTE_MS,

@@ -14,6 +14,7 @@ import { requestId } from "#src/middleware/request-id.js";
 import { requestLog } from "#src/middleware/request-log.js";
 import handlesRouter from "#src/modules/auth/handles/handles.routes.js";
 import authRouter from "#src/modules/auth/session/auth.routes.js";
+import userReportsRouter from "#src/modules/auth/users/user-reports.routes.js";
 import usersRouter from "#src/modules/auth/users/users.routes.js";
 import channelsRouter from "#src/modules/home/channels/channels.routes.js";
 import engagementRouter, {
@@ -188,6 +189,13 @@ app.use(cookieParser());
 app.use("/", indexRouter);
 app.use("/", authRouter);
 app.use("/users", usersRouter);
+/**
+ * MOUNTED AFTER `usersRouter`, AND THE ORDER IS DELIBERATE. That router declares `GET /:id` last,
+ * with every `/me/*` route above it — so mounting this one first would put `POST /:userId/reports`
+ * ahead of nothing that matters, but mounting it after keeps the whole `/users` declaration order
+ * readable in one file. Nothing here is single-segment, so neither router shadows the other.
+ */
+app.use("/users", userReportsRouter);
 app.use("/handles", handlesRouter);
 app.use("/commerce", commerceOrganizationsRouter);
 /**

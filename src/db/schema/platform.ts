@@ -237,6 +237,14 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "video_content_hidden",
   "video_content_restored",
   "video_content_report_dismissed",
+  // Profile-text moderation — `user-reports`. The lever is narrow on purpose: upholding a report
+  // hides a person's BIO AND LINKS and nothing else. There is no account-level suspension behind
+  // these labels, and none should be added without the public-user gate that would make it
+  // enforceable — every public read of a user would have to honour it, and nothing would fail if
+  // one were missed.
+  "user_profile_text_hidden",
+  "user_profile_text_restored",
+  "user_report_dismissed",
 ]);
 
 /**

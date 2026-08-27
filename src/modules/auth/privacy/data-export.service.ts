@@ -443,7 +443,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
 
   const whoYouAre = await collect(
     "whoYouAre",
-    sql`SELECT id, name, email, image, handle, location_label, created_at
+    sql`SELECT id, name, email, image, handle, location_label, bio, created_at
         FROM "user" WHERE id = ${userId}`,
   );
 

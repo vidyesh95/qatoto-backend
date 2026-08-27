@@ -34,11 +34,11 @@ import type { Result } from "#src/types/index.js";
  *
  * ## WHY THIS ITERATES A MANIFEST INSTEAD OF NAMING TABLES
  *
- * Rule R2 classified all 157 foreign keys into `user` for a `DELETE FROM "user"` that
+ * Rule R2 classified all 163 foreign keys into `user` for a `DELETE FROM "user"` that
  * never happens — 73 are `restrict` and 54 tables carry BEFORE UPDATE OR DELETE triggers,
  * so the delete cannot succeed and account closure is an anonymization instead. The
  * consequence people miss: `ON DELETE cascade` and `ON DELETE set null` therefore FIRE
- * ZERO TIMES here. All 34 cascades and all 44 remaining set-nulls only happen because
+ * ZERO TIMES here. All 35 cascades and all 46 remaining set-nulls only happen because
  * this file issues the statement.
  *
  * So the step list is DERIVED from `anonymization-manifest.ts` and no table name is
@@ -668,6 +668,15 @@ async function scrubUserAndComplete(requestId: string, userId: string): Promise<
         handleChangeCount: 0,
         handleWindowStartedAt: null,
         locationLabel: null,
+        /**
+         * ⚠️ NOT COVERED BY THE MANIFEST OR ITS VERIFIER. `anonymization-manifest.ts` is keyed on
+         * FOREIGN KEYS into `user`, and `bio` is a scalar — so `db:verify-anonymization-coverage`
+         * cannot see it and will stay green if this line is deleted. It is public free text the
+         * person wrote about themselves, which makes it exactly the kind of thing an erasure is
+         * for. The only executable guard is the "the identity is gone" assertion in
+         * `scripts/smoke-privacy.ts`; keep them together.
+         */
+        bio: null,
         anonymizedAt: new Date(),
       })
       /**

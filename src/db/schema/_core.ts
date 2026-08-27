@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { relations, sql } from "drizzle-orm";
 import {
   pgTable,
@@ -13,7 +15,14 @@ import {
 } from "drizzle-orm/pg-core";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
-import { citext, platformRoleEnum } from "#src/db/schema/_primitives.js";
+import {
+  citext,
+  platformRoleEnum,
+  userModerationActionKindEnum,
+  userProfileModerationStateEnum,
+  userReportReasonEnum,
+  userReportStatusEnum,
+} from "#src/db/schema/_primitives.js";
 import { commerceOrganization } from "#src/db/schema/store.js";
 
 // Provenance of `user.image`. "oauth" = seeded from a Google/GitHub profile;
@@ -63,6 +72,43 @@ export const user = pgTable(
     // discussion post can say where its author says they are — nothing else may read
     // it.
     locationLabel: text("location_label"),
+    /**
+     * The channel description — public free text, rendered on `/channel/:handle`.
+     *
+     * NULLABLE, AND NOT ONLY AS A STYLE CHOICE. `scripts/verify-anonymization-coverage.ts` seeds
+     * its probe user with a fixed column list, so a NOT NULL column with no default here breaks
+     * the verifier itself before it can check anything.
+     *
+     * IT IS PUBLIC THE MOMENT IT IS WRITTEN, which is a deliberate divergence from every other
+     * public profile text in this schema — `talent_profile.visibility` defaults to `private` and
+     * `community_cofounder_profile.state` defaults to `draft` behind moderation. The abuse path
+     * here is REACTIVE instead: `user_report` plus `profileModerationState` below, which is why
+     * those two must never be removed while this column is public.
+     *
+     * NOT IN THE ANONYMIZATION MANIFEST, because that file is keyed on FOREIGN KEYS into `user`
+     * and this is a scalar. It is scrubbed by the one explicit line in
+     * `anonymize-account.service.ts` beside `locationLabel`, and the ONLY executable guard on
+     * that line is `scripts/smoke-privacy.ts`'s "the identity is gone" assertion. Nothing else
+     * will notice if it is dropped.
+     */
+    bio: text("bio"),
+    /**
+     * Whether a moderator has hidden this person's PROFILE TEXT — the bio and the links, and
+     * nothing else.
+     *
+     * DELIBERATELY NARROW. There is no platform-wide "hidden user" state here and this is not
+     * one: `name`, `image` and every video stay visible. A real account-level suspension would
+     * need a `public-user-gate.ts` and an audit of every public read of a user, and nothing would
+     * fail if one were missed — that is a separate piece of work, not a column.
+     *
+     * IT IS NOT `deactivatedAt`, AND MUST NOT BECOME IT. That column's invariant is that a live
+     * session implies NULL, so a moderator writing it would be undone by the user signing in.
+     * This is the same argument `studio.ts` makes for `moderation_visibility_state` being its own
+     * column rather than a value on `publish_status`.
+     */
+    profileModerationState: userProfileModerationStateEnum("profile_moderation_state")
+      .default("visible")
+      .notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -114,6 +160,171 @@ export const user = pgTable(
       "user_lifecycle_ck",
       sql`anonymized_at IS NULL
           OR (deactivated_at IS NOT NULL AND anonymized_at >= deactivated_at)`,
+    ),
+  ],
+);
+
+/**
+ * A creator's external links, shown in the channel About panel.
+ *
+ * A CHILD TABLE RATHER THAN COLUMNS, because the set is ordered and variable — and because a
+ * replace-the-set write is a cleaner shape than N nullable columns nobody can reorder.
+ *
+ * `cascade`, per rule R2: these are a personal advertisement that dies with the account, the same
+ * verdict `community_cofounder_profile` reaches and for the same stated reason — "a cofounder
+ * profile IS a person, so a deleted account must take its own listing with it". The manifest
+ * carries `user_profile_link.user_id` as `delete_rows` to match.
+ *
+ * ⚠️ ANYTHING THAT LATER REFERENCES THIS TABLE MUST ALSO CASCADE. A `restrict` child would make
+ * the erasure's `DELETE FROM user_profile_link` raise `23503`, which is not one of the SQLSTATEs
+ * the anonymization job treats as a permanent refusal — so pg-boss would retry the whole ladder
+ * forever against something that can never succeed.
+ *
+ * `https://` ONLY, and it is not decoration: this URL is rendered as an href on a public page, so
+ * the check is what keeps a `javascript:` or `data:` scheme off it. Byte-identical in shape to
+ * `commerce_organization_url_ck`.
+ */
+export const userProfileLink = pgTable(
+  "user_profile_link",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    url: text("url").notNull(),
+    /** The creator's own ordering. Assigned from the submitted array's index on every write. */
+    sortOrder: integer("sort_order").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("user_profile_link_userId_idx").on(table.userId, table.sortOrder),
+    // One row per position, so a replace-the-set write cannot leave two links claiming the same
+    // slot and the channel page cannot render them in an order the creator did not choose.
+    uniqueIndex("user_profile_link_position_uidx").on(table.userId, table.sortOrder),
+    check(
+      "user_profile_link_text_ck",
+      sql`char_length(label) BETWEEN 1 AND 60
+          AND char_length(url) <= 2048
+          AND url LIKE 'https://%'
+          AND sort_order >= 0`,
+    ),
+  ],
+);
+
+/**
+ * A report about a PERSON's profile — `POST /users/:userId/reports`.
+ *
+ * ITS OWN TABLE, not a member on an existing report enum. This codebase already made that call
+ * once: each moderation queue gets its own table rather than a widened `target_kind`, because a
+ * queue's columns, its reasons and its verdict are its own.
+ *
+ * ## WHAT UPHOLDING ONE ACTUALLY DOES
+ *
+ * It flips `user.profile_moderation_state`, which hides the BIO AND LINKS and nothing else. Not the
+ * name, not the avatar, not a single video. That is a deliberately narrow lever: those two fields
+ * are new, so the channel read is their only public consumer and one enforcement point covers them.
+ * A platform-wide "hidden user" would need every public read of a person to honour a new predicate —
+ * six modules in `home/` alone before the feed, spotlight, store and R&D — with nothing failing if
+ * one were missed.
+ *
+ * ## THE THREE USER REFERENCES ARE THREE DIFFERENT DECISIONS
+ *
+ * `reported_user_id` is `restrict`, NOT cascade. `video_content_report` cascades on its video
+ * because "a report about a deleted video is noise"; a user row is never deleted here — closure is
+ * an anonymization — so cascade would be dead code pretending to be a policy. The manifest keeps
+ * this row through an erasure, and the reason is worth stating: if requesting deletion erased the
+ * reports filed against you, deletion would be a ban-evasion route.
+ *
+ * `reporter_user_id` is `set null` — a departing reporter must not erase the report they filed,
+ * because the report is evidence about somebody else.
+ *
+ * `resolved_by_user_id` is `restrict` — a moderator cannot be deleted out from under a decision
+ * they made. The same asymmetry `video_content_report` documents on the same pair.
+ *
+ * ONE REPORT PER PERSON PER SUBJECT, through the partial unique index below, so a brigading loop
+ * cannot inflate the queue and a `409` is an honest answer rather than a silent second row.
+ */
+export const userReport = pgTable(
+  "user_report",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    reportedUserId: text("reported_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    reason: userReportReasonEnum("reason").notNull(),
+    detailText: text("detail_text"),
+    reporterUserId: text("reporter_user_id").references(() => user.id, { onDelete: "set null" }),
+    status: userReportStatusEnum("status").default("open").notNull(),
+    resolvedByUserId: text("resolved_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    resolvedAt: timestamp("resolved_at"),
+    resolutionNote: text("resolution_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // Partial for the reason `video_content_report_reporter_uidx` states: `reporter_user_id` is
+    // nullable by the `set null` above, two erased reporters are two NULLs, and NULLs do not
+    // collide in a unique index anyway. Stating it keeps the index small.
+    uniqueIndex("user_report_reporter_uidx")
+      .on(table.reportedUserId, table.reporterUserId)
+      .where(sql`reporter_user_id IS NOT NULL`),
+    index("user_report_queue_idx").on(table.status, table.createdAt, table.id),
+    index("user_report_subject_idx").on(table.reportedUserId, table.status),
+    check(
+      "user_report_detail_ck",
+      sql`detail_text IS NULL OR char_length(detail_text) BETWEEN 1 AND 2000`,
+    ),
+    // Byte-identical to the same check in its four sibling forks. Both halves matter: a resolver
+    // with no timestamp is a half-written decision, and an `open` row carrying a resolution is a
+    // queue entry that will be handed to a moderator twice.
+    check(
+      "user_report_resolution_ck",
+      sql`(resolved_by_user_id IS NULL) = (resolved_at IS NULL)
+          AND (status = 'open') = (resolved_at IS NULL)`,
+    ),
+    // A person cannot report themselves. Enforced here as well as in the service, because the
+    // service check produces the useful message and this is what makes the rule true.
+    check("user_report_self_ck", sql`reported_user_id <> reporter_user_id`),
+  ],
+);
+
+/**
+ * Every profile-text moderation decision, with the human behind it.
+ *
+ * `moderator_user_id` is NOT NULL and `restrict`, and `audit_entry_id` ties each row to the
+ * hash chain — an unlogged staff action is what the chain exists to make impossible.
+ */
+export const userModerationAction = pgTable(
+  "user_moderation_action",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    actionKind: userModerationActionKindEnum("action_kind").notNull(),
+    subjectUserId: text("subject_user_id").references(() => user.id, { onDelete: "set null" }),
+    reportId: text("report_id").references(() => userReport.id, { onDelete: "set null" }),
+    moderatorUserId: text("moderator_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "restrict" }),
+    moderatorRoleSnapshot: text("moderator_role_snapshot").notNull(),
+    reasonNote: text("reason_note").notNull(),
+    auditEntryId: text("audit_entry_id").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("user_moderation_action_audit_uidx").on(table.auditEntryId),
+    index("user_moderation_action_timeline_idx").on(table.createdAt, table.id),
+    index("user_moderation_action_subject_idx").on(table.subjectUserId, table.createdAt),
+    check(
+      "user_moderation_action_text_ck",
+      sql`char_length(reason_note) BETWEEN 1 AND 2000
+          AND char_length(moderator_role_snapshot) BETWEEN 1 AND 40`,
     ),
   ],
 );
