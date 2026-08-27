@@ -66,6 +66,29 @@ router.patch(
 );
 
 /**
+ * A38. The author reading back their own review.
+ *
+ * THE ONLY AUTHOR-FACING REVIEW **READ**. Everything else on this surface is a write, so before this
+ * route a buyer could publish a review and its photos and then never see them again — closing the
+ * tab made the attachments unlistable and unremovable, and a YouTube video its host later deleted
+ * became invisible rather than reported.
+ *
+ * IT IS DELIBERATELY NOT THE PUBLIC READ. The product page filters `state = 'visible'` media out and
+ * carries no `state`; this one keeps both, because the author is the only party who can replace a
+ * dead attachment.
+ *
+ * ROUTE ORDER: declared before `/reviews/:reviewId/media` and friends, but the paths differ in depth
+ * so Express cannot confuse them. No limiter — `rate-limit-coverage.test.ts` scopes its bounds to
+ * mutating verbs, and this is a session-scoped single-row read.
+ */
+router.get(
+  "/reviews/:reviewId",
+  requireAuth,
+  requireActiveBuyerCommerceOrganization,
+  commerceTrustController.getOwnReview,
+);
+
+/**
  * Appendix A8 — review depth.
  *
  * ROUTE ORDER: `/reviews/:reviewId/media/:mediaId` is declared after

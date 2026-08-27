@@ -113,6 +113,7 @@ vi.mock("#src/modules/store/organizations/require-active-commerce-organization.j
 const serviceStubs = vi.hoisted(() => ({
   createReview: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   editOwnReview: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  getOwnReview: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   openDispute: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   addDisputeNote: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   listDisputesForModerator: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),

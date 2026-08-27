@@ -44,6 +44,37 @@ router.post(
 );
 
 /**
+ * A38. Discards an unsubmitted revision, and it is the missing half of a promise the API already
+ * made: `appendRevision` refuses a second draft with "Submit or abandon the existing unsubmitted
+ * revision before appending another", and nothing delivered the abandon.
+ *
+ * Without it the surface had a terminal state. A revision whose `validityDeadlineAt` passed could
+ * not be submitted (`QUOTE_EXPIRED`), could not be replaced (the guard above), and could not be
+ * started over (one quote per provider per RFQ, whatever its status) — so the quote was dead for
+ * that RFQ with no operator path out.
+ *
+ * **NO BODY MIDDLEWARE, deliberately, and it must stay that way.** The handler reads no `req.body`,
+ * and `json-body-budget.test.ts` fails the build for a declared cap that guards nothing — so adding
+ * `compactBody` here without also parsing a body would break CI. The three trust DELETEs document
+ * the same pairing.
+ *
+ * IDEMPOTENCY IS STILL REQUIRED. The middleware is verb-agnostic and fingerprints method + URL +
+ * body, so an undefined body hashes fine — and a retried discard that the server already applied
+ * must not be mistaken for a second, different discard once the numbering has moved.
+ *
+ * Declared here rather than at the end so the revision lifecycle reads append → submit → abandon in
+ * one block. Route ordering is not load-bearing: this is the router's only DELETE.
+ */
+router.delete(
+  "/quotes/:quoteId/revisions/:revision",
+  requireAuth,
+  requireActiveProviderCommerceOrganization,
+  commerceQuoteWriteLimiter,
+  idempotency({ required: true, scope: "active_organization" }),
+  commerceQuotesController.abandonRevision,
+);
+
+/**
  * A38. The provider's own bids across every RFQ, and the twin of `GET /commerce/provider/rfqs`.
  *
  * `requireActiveProviderCommerceOrganization`, matching the write routes above rather than the

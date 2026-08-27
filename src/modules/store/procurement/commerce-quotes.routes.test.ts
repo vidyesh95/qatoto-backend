@@ -114,6 +114,7 @@ const serviceStubs = vi.hoisted(() => ({
   createQuoteShell: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   appendRevision: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   submitRevision: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  abandonRevision: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   listQuotesForRfq: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getQuote: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   acceptQuote: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),

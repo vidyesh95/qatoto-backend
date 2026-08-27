@@ -264,6 +264,47 @@ export async function submitRevision(req: Request, res: Response): Promise<void>
 }
 
 /**
+ * `DELETE /commerce/quotes/:quoteId/revisions/:revision` — discards an unsubmitted revision.
+ *
+ * **IT DOES NOT READ `req.body`, AND THAT IS LOAD-BEARING RATHER THAN AN OMISSION.** Unlike
+ * `submitRevision` above, there is no `EmptyRequestBodySchema.safeParse` here and no `compactBody`
+ * on the route. `json-body-budget.test.ts` walks the built app and fails the build in BOTH
+ * directions — a body-reading route with no declared cap, and a declared cap on a route that reads
+ * no body — so these two decisions have to agree. `detachReviewMedia` is the precedent.
+ *
+ * Answers `200` with the updated quote shell rather than `204`, so the caller can see the rolled-back
+ * `latestRevisionNumber` without a second read. Same choice `detachReviewMedia` makes in returning
+ * the surviving count.
+ */
+export async function abandonRevision(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = QuoteRevisionParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceQuotesService.abandonRevision(
+    actor,
+    params.data.quoteId,
+    params.data.revision,
+  );
+  if (!result.success) {
+    mapQuotesError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Quote revision discarded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
  * GET /commerce/provider/quotes — a provider's own bids, across every RFQ (Appendix A38).
  *
  * The twin of `GET /commerce/provider/rfqs`, which lists the WORK. An RFQ leaves that queue

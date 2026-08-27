@@ -1147,6 +1147,20 @@ function projectReviewMedia(media: typeof commerceReviewMedia.$inferSelect): Rev
 /**
  * Loads a review the ACTOR AUTHORED, for a media write. Visible reviews only.
  */
+/**
+ * One review as its AUTHOR sees it: the review, its scores, and its media INCLUDING the state of
+ * each attachment.
+ *
+ * A38/A40. The public read on the product page cannot serve this. It filters
+ * `state = 'visible'` out of the media entirely and its projection carries no `state` at all,
+ * deliberately — a buyer browsing a product should not see a dead player where someone's video used
+ * to be. But the AUTHOR is the one person who needs to know, because they are the only person who
+ * can replace it.
+ */
+export interface OwnReviewDetailProjection extends ReviewProjection {
+  readonly media: readonly ReviewMediaProjection[];
+}
+
 async function loadOwnVisibleReview(
   executor: DatabaseTransaction | typeof db,
   reviewId: string,
@@ -1166,6 +1180,53 @@ async function loadOwnVisibleReview(
     .limit(1);
   const [review] = lockForUpdate ? await query.for("update") : await query;
   return review ?? null;
+}
+
+/**
+ * Reads back one review the caller wrote — `GET /commerce/reviews/:reviewId` (A38).
+ *
+ * **THE READ THAT MAKES A PUBLISHED REVIEW MANAGEABLE.** Every author-facing review route until now
+ * was a WRITE, so the only way to see a review's media was to still be holding the responses from
+ * attaching them. Close the tab and the attachments were unreachable: unlistable, unremovable, and
+ * — for a YouTube video the host later deleted — impossible to discover as broken.
+ *
+ * IT PROJECTS MEDIA `state`, WHICH IS THE ENTIRE REASON IT CANNOT REUSE THE PUBLIC READ.
+ * `store-reviews.service.ts` filters `state = 'visible'` in SQL and its projection has no `state`
+ * field, so an author reading through it would see a shorter list with no explanation of what left
+ * it.
+ *
+ * SCOPED TO THE REVIEWING ORGANIZATION, not the member. Every other author-facing write authorizes
+ * the same way — a review belongs to the organization that traded, and the individual who typed it
+ * may since have left.
+ *
+ * A REVIEW THE CALLER DID NOT WRITE IS `NOT_FOUND`, never `FORBIDDEN`, so the route cannot be used to
+ * discover which review ids exist. Same rule `getDisputeForParticipant` follows. A moderator-hidden
+ * review is also `NOT_FOUND` here, matching every other author-facing route.
+ */
+export async function getOwnReview(
+  actor: CommerceTrustActorContext,
+  reviewId: string,
+): Promise<Result<OwnReviewDetailProjection, CommerceTrustError>> {
+  const review = await loadOwnVisibleReview(db, reviewId, actor.organizationId, false);
+  if (!review) return { success: false, error: { type: "NOT_FOUND" } };
+
+  const [scores, mediaRows] = await Promise.all([
+    loadReviewScores(db, review.id),
+    db
+      .select()
+      .from(commerceReviewMedia)
+      .where(eq(commerceReviewMedia.reviewId, review.id))
+      .orderBy(asc(commerceReviewMedia.position)),
+  ]);
+
+  return {
+    success: true,
+    value: {
+      ...projectReview(review, scores),
+      // NO `state` FILTER. The unavailable rows are exactly what this read exists to surface.
+      media: mediaRows.map(projectReviewMedia),
+    },
+  };
 }
 
 /**

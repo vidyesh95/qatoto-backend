@@ -344,6 +344,38 @@ export async function editOwnReview(req: Request, res: Response): Promise<void> 
   } satisfies ApiResponse);
 }
 
+/**
+ * `GET /commerce/reviews/:reviewId` — the author reading back their own review, with its media.
+ *
+ * `parseNoQuery`, like every sibling in this file: the query schema is `.strict()` and an unexpected
+ * key is a 422 rather than an ignored parameter.
+ *
+ * A non-author gets the service's `NOT_FOUND` → 404, never 403, so this cannot enumerate review ids.
+ */
+export async function getOwnReview(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+
+  const params = ReviewIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceTrustService.getOwnReview(actor, params.data.reviewId);
+  if (!result.success) {
+    mapTrustError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Review loaded.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
 export async function openDispute(req: Request, res: Response): Promise<void> {
   const actor = requireCommerceActor(req, res);
   if (!actor) return;

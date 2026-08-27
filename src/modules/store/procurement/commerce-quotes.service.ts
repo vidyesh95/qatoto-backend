@@ -1202,6 +1202,120 @@ export async function submitRevision(
   }
 }
 
+/**
+ * Abandons an unsubmitted revision — `DELETE /commerce/quotes/:quoteId/revisions/:revision` (A38).
+ *
+ * **THIS CLOSES A TRAP THAT HAD NO WAY OUT.** `appendRevision` refuses a second unsubmitted revision
+ * with a 422 that says "Submit or abandon the existing unsubmitted revision before appending
+ * another" — and until now nothing delivered the abandon half. Combined with `validityDeadlineAt`,
+ * that was terminal: once a revision's deadline passed, `submitRevision` answered `QUOTE_EXPIRED`, a
+ * second append was refused by the guard above, and `createQuoteShell` was refused because exactly
+ * one quote exists per provider per RFQ regardless of status. The quote was dead for that RFQ.
+ *
+ * **THE DATABASE HAS ALLOWED THIS SINCE PHASE 3.** `commerce_quote_revision_append_only` fires
+ * `BEFORE UPDATE OR DELETE`, and its DELETE arm raises only when `submitted_at IS NOT NULL`,
+ * otherwise `RETURN OLD`. So this needed no migration — the schema anticipated the operation and
+ * only the route was missing.
+ *
+ * **THE SERVICE GUARDS `submittedAt`, NOT THE TRIGGER.** The trigger raises `23514`, which is
+ * indistinguishable from any other check violation, so relying on it would surface an unusable
+ * error. It stays the backstop that makes the rule true; this check is what produces a `409`. Same
+ * posture `setReviewHelpfulVote` documents for its own relationship guard.
+ *
+ * **ROLLING THE COUNTER BACK IS THE WHOLE RISK, and it is `max(...)` of the survivors rather than
+ * `latest - 1`.** A stale `latestRevisionNumber` does not merely skip a number:
+ * `submitRevision` and `acceptQuote` both refuse unless the revision number EQUALS it, so a counter
+ * naming a deleted row would make a surviving submitted revision permanently unsubmittable and
+ * unacceptable — and `sweepQuoteExpiries` only matches a quote whose latest revision row exists, so
+ * such a quote could never expire either. `latest - 1` happens to be correct only because append is
+ * the sole writer; `max` is correct because it is true by construction.
+ *
+ * NO AUDIT ENTRY, deliberately. The four `quote_*` audit kinds are all events the BUYER can observe;
+ * an unsubmitted revision was never visible to the counterparty, so discarding one is a provider
+ * editing their own draft. Auditing it would need a new enum value, which needs its own migration
+ * shipped ahead of the code — real cost for an event with no counterparty.
+ *
+ * `status` AND `submittedAt` ON THE QUOTE ARE LEFT ALONE. They record that the quote has at least one
+ * SUBMITTED revision, which abandoning a draft does not change. A quote whose only revision is
+ * abandoned returns to `latestRevisionNumber: 0, status: "draft", submittedAt: null` on its own.
+ */
+export async function abandonRevision(
+  actor: QuoteActorContext,
+  quoteId: string,
+  revisionNumber: number,
+): Promise<Result<QuoteShellProjection, CommerceQuotesError>> {
+  const outcome = await db.transaction(async (transaction) => {
+    // The same lock `appendRevision` takes, and for the same reason: a concurrent append and abandon
+    // would otherwise race on `latestRevisionNumber` and one would win with a stale read.
+    const [quote] = await transaction
+      .select()
+      .from(commerceQuote)
+      .where(eq(commerceQuote.id, quoteId))
+      .for("update");
+    if (!quote) return { status: "not_found" as const };
+    if (quote.providerOrganizationId !== actor.organizationId) {
+      return { status: "not_found" as const };
+    }
+    if (!MUTABLE_QUOTE_STATUSES.includes(quote.status)) {
+      return { status: "invalid_state" as const };
+    }
+
+    const [revision] = await transaction
+      .select()
+      .from(commerceQuoteRevision)
+      .where(
+        and(
+          eq(commerceQuoteRevision.quoteId, quote.id),
+          eq(commerceQuoteRevision.revisionNumber, revisionNumber),
+        ),
+      )
+      .for("update");
+    if (!revision) return { status: "not_found" as const };
+    if (revision.submittedAt !== null) return { status: "invalid_state" as const };
+
+    // One delete, and the cascade reaches eleven tables: product lines, service lines, their
+    // deliverable plans and the eight typed service-detail tables.
+    await transaction
+      .delete(commerceQuoteRevision)
+      .where(eq(commerceQuoteRevision.id, revision.id));
+
+    const survivingRevisions = await transaction
+      .select({ revisionNumber: commerceQuoteRevision.revisionNumber })
+      .from(commerceQuoteRevision)
+      .where(eq(commerceQuoteRevision.quoteId, quote.id));
+    const restoredLatestRevisionNumber = survivingRevisions.reduce(
+      (highest, candidate) => (candidate.revisionNumber > highest ? candidate.revisionNumber : highest),
+      0,
+    );
+
+    // The Drizzle builder rather than raw SQL: `commerce_quote.updatedAt` is `$onUpdate` in JS with
+    // no database trigger behind it, so a raw statement would leave the row's clock stale.
+    const [updatedQuote] = await transaction
+      .update(commerceQuote)
+      .set({ latestRevisionNumber: restoredLatestRevisionNumber })
+      .where(eq(commerceQuote.id, quote.id))
+      .returning();
+    if (!updatedQuote) {
+      throw new Error("Quote abandon update returned no row.");
+    }
+
+    return { status: "abandoned" as const, quote: updatedQuote };
+  });
+
+  switch (outcome.status) {
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "invalid_state":
+      return { success: false, error: { type: "INVALID_STATE" } };
+    case "abandoned":
+      return { success: true, value: projectQuoteShell(outcome.quote) };
+    default: {
+      const exhaustiveCheck: never = outcome;
+      throw new Error(`Unhandled abandonRevision outcome: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
 async function loadLatestSubmittedRevision(quoteId: string): Promise<RevisionRow | null> {
   const submitted = await db
     .select()
