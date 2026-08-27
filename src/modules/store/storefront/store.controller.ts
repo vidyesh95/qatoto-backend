@@ -560,11 +560,31 @@ export async function listProviders(req: Request, res: Response): Promise<void> 
     sendZodError(res, parsed.error);
     return;
   }
-  const result = await commerceProvidersService.listPublicProviders({
-    providerKind: parsed.data.providerKind,
-    limit: parsed.data.limit,
-    cursor: parsed.data.cursor,
-  });
+  // FETCHED ALONGSIDE THE PAGE, NOT AFTER IT. The facets describe the UNFILTERED directory, so they
+  // do not depend on this page's filters and must not be waterfalled behind it. They are also
+  // returned on every page rather than only on page one — a buyer who scrolls must not watch the
+  // filter chips vanish.
+  const [result, facets] = await Promise.all([
+    commerceProvidersService.listPublicProviders({
+      providerKind: parsed.data.providerKind,
+      originCountryCode: parsed.data.originCountryCode,
+      destinationCountryCode: parsed.data.destinationCountryCode,
+      transportMode: parsed.data.transportMode,
+      jurisdiction: parsed.data.jurisdiction,
+      standard: parsed.data.standard,
+      storageType: parsed.data.storageType,
+      currencyPair: parsed.data.currencyPair,
+      // `"true"`/`"false"` on the wire because a query string carries no booleans, and an absent key
+      // means "no filter" rather than "false" — which is why the enum has two members and not one.
+      acceptingRequests:
+        parsed.data.acceptingRequests === undefined
+          ? undefined
+          : parsed.data.acceptingRequests === "true",
+      limit: parsed.data.limit,
+      cursor: parsed.data.cursor,
+    }),
+    commerceProvidersService.getProviderDirectoryFacets(),
+  ]);
   if (!result.success) {
     res.status(422).json({
       status: "error",
@@ -577,7 +597,7 @@ export async function listProviders(req: Request, res: Response): Promise<void> 
     status: "success",
     statusCode: 200,
     message: "Providers.",
-    data: result.value,
+    data: { ...result.value, facets },
   } satisfies ApiResponse);
 }
 

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, gt, inArray, ne, or } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, ne, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -175,6 +175,27 @@ export interface PublicProviderCard {
    * read gets the full two-object split.
    */
   readonly declaredResponseTimeHours: number | null;
+  /**
+   * WHAT THIS ORGANIZATION ACTUALLY DOES, and its absence was the directory's real defect.
+   *
+   * `commerce_provider_kind_link` was filtered ON and never PROJECTED, so a card carried no kind:
+   * a buyer could narrow the list to customs brokers and then read a page of rows that did not say
+   * "customs broker". A filter whose result cannot be read back is worse than no filter, because it
+   * looks broken rather than absent.
+   *
+   * ⚠️ `verificationState` HERE IS PER-KIND AND IS NOT THE CARD'S `verificationState` ABOVE.
+   * That one is PROFILE-level — "we checked this company exists". This one is per-kind — "we
+   * approved them for THIS service". A13 forbids presenting one as the other, which is why every
+   * string in the frontend's `PROVIDER_VERIFICATION_LABELS` says "Profile", and why this is nested
+   * beside its kind rather than flattened into a second scalar the card would render identically.
+   *
+   * Only publicly-eligible links appear: a rejected or suspended kind is absent, not listed as
+   * unapproved. The organization is still public; that one service is not.
+   */
+  readonly providerKinds: readonly {
+    readonly kind: ProviderKind;
+    readonly verificationState: ProviderProfile["verificationState"];
+  }[];
   readonly reviewMetrics: {
     readonly averageRating: number | null;
     readonly reviewCount: number;
@@ -231,16 +252,56 @@ const publicProviderSelect = {
   declaredResponseTimeHours: commerceProviderProfile.averageResponseTimeHours,
 };
 
+/**
+ * The publicly-eligible kinds each organization holds, batched.
+ *
+ * ONE QUERY FOR THE WHOLE PAGE rather than one per card — the directory returns up to 48 rows and a
+ * per-row read would be 48 round trips for a label. Same shape as the two metric loaders beside it.
+ */
+async function loadPublicProviderKinds(
+  organizationIds: readonly string[],
+): Promise<Map<string, { kind: ProviderKind; verificationState: ProviderProfile["verificationState"] }[]>> {
+  const byOrganizationId = new Map<
+    string,
+    { kind: ProviderKind; verificationState: ProviderProfile["verificationState"] }[]
+  >();
+  if (organizationIds.length === 0) return byOrganizationId;
+
+  const rows = await db
+    .select({
+      organizationId: commerceProviderKindLink.organizationId,
+      kind: commerceProviderKindLink.providerKind,
+      verificationState: commerceProviderKindLink.verificationState,
+    })
+    .from(commerceProviderKindLink)
+    .where(and(inArray(commerceProviderKindLink.organizationId, [...organizationIds]), publicKindLinkEligibility))
+    .orderBy(asc(commerceProviderKindLink.providerKind));
+
+  for (const row of rows) {
+    const existing = byOrganizationId.get(row.organizationId) ?? [];
+    existing.push({ kind: row.kind, verificationState: row.verificationState });
+    byOrganizationId.set(row.organizationId, existing);
+  }
+  return byOrganizationId;
+}
+
 async function attachPublicProviderTrustMetrics(
-  rows: readonly Omit<PublicProviderCard, "reviewMetrics" | "fulfillmentMetrics">[],
+  rows: readonly Omit<
+    PublicProviderCard,
+    "reviewMetrics" | "fulfillmentMetrics" | "providerKinds"
+  >[],
 ): Promise<readonly PublicProviderCard[]> {
   const organizationIds = rows.map((row) => row.organizationId);
-  const [reviewMetrics, fulfillmentMetrics] = await Promise.all([
+  const [reviewMetrics, fulfillmentMetrics, providerKinds] = await Promise.all([
     loadOrganizationReviewMetrics(organizationIds),
     loadOrganizationFulfillmentMetrics(organizationIds),
+    loadPublicProviderKinds(organizationIds),
   ]);
   return rows.map((row) => ({
     ...row,
+    // EMPTY IS A REAL ANSWER: an organization with a provider profile but no approved kind link is
+    // public and does nothing yet. The card renders no kind chips rather than a placeholder.
+    providerKinds: providerKinds.get(row.organizationId) ?? [],
     reviewMetrics: reviewMetrics.get(row.organizationId) ?? {
       averageRating: null,
       reviewCount: 0,
@@ -1098,8 +1159,204 @@ export async function linkSupplierToCommerceOrganization(input: {
   return { success: true, value: updated };
 }
 
+/**
+ * The seven filters that are not `providerKind`, as EXISTS predicates over the organization's
+ * ACTIVE offerings.
+ *
+ * EXISTS RATHER THAN A JOIN, deliberately. The per-kind detail tables are keyed by offering, so a
+ * join would return one row per matching offering and a provider with three freight offerings would
+ * appear three times in a directory of organizations. `EXISTS` asks the only question a directory
+ * cares about — does this company do the thing — and answers it once per card.
+ *
+ * `state = 'active'` IS THE PUBLIC PREDICATE for an offering, the same term every other public read
+ * in this file uses. A draft or suspended offering must not make its provider findable.
+ */
+/**
+ * The organization's ACTIVE offerings, as a correlated subquery every filter below hangs its own
+ * EXISTS off. `state = 'active'` is the public predicate for an offering — a draft or suspended one
+ * must not make its provider findable.
+ */
+function activeOfferingForOrganization(): SQL {
+  return sql`SELECT 1 FROM commerce_service_offering AS o
+         WHERE o.provider_organization_id = ${commerceOrganization.id}
+           AND o.state = 'active'`;
+}
+
+function providerFilterPredicates(input: {
+  readonly originCountryCode?: string | undefined;
+  readonly destinationCountryCode?: string | undefined;
+  readonly transportMode?: string | undefined;
+  readonly jurisdiction?: string | undefined;
+  readonly standard?: string | undefined;
+  readonly storageType?: string | undefined;
+  readonly currencyPair?: string | undefined;
+  readonly acceptingRequests?: boolean | undefined;
+}): SQL[] {
+  const predicates: SQL[] = [];
+
+  if (input.originCountryCode !== undefined) {
+    predicates.push(
+      sql`EXISTS (${activeOfferingForOrganization()}
+            AND EXISTS (SELECT 1 FROM commerce_service_coverage AS c
+                         WHERE c.offering_id = o.id
+                           AND c.origin_country_code = ${input.originCountryCode}))`,
+    );
+  }
+  if (input.destinationCountryCode !== undefined) {
+    predicates.push(
+      sql`EXISTS (${activeOfferingForOrganization()}
+            AND EXISTS (SELECT 1 FROM commerce_service_coverage AS c
+                         WHERE c.offering_id = o.id
+                           AND c.destination_country_code = ${input.destinationCountryCode}))`,
+    );
+  }
+  if (input.transportMode !== undefined) {
+    // `= ANY(...)` rather than an overlap operator: the column is an enum array and the filter is
+    // one value, so membership is the question being asked.
+    predicates.push(
+      sql`EXISTS (${activeOfferingForOrganization()}
+            AND EXISTS (SELECT 1 FROM freight_offering_detail AS d
+                         WHERE d.offering_id = o.id
+                           AND ${input.transportMode}::text = ANY(d.transport_modes::text[])))`,
+    );
+  }
+  if (input.jurisdiction !== undefined) {
+    predicates.push(
+      sql`EXISTS (${activeOfferingForOrganization()}
+            AND EXISTS (SELECT 1 FROM customs_brokerage_offering_detail AS d
+                         WHERE d.offering_id = o.id
+                           AND ${input.jurisdiction} = ANY(d.jurisdictions)))`,
+    );
+  }
+  if (input.standard !== undefined) {
+    predicates.push(
+      sql`EXISTS (${activeOfferingForOrganization()}
+            AND EXISTS (SELECT 1 FROM testing_certification_offering_detail AS d
+                         WHERE d.offering_id = o.id
+                           AND ${input.standard} = ANY(d.standards)))`,
+    );
+  }
+  if (input.storageType !== undefined) {
+    predicates.push(
+      sql`EXISTS (${activeOfferingForOrganization()}
+            AND EXISTS (SELECT 1 FROM warehouse_offering_detail AS d
+                         WHERE d.offering_id = o.id
+                           AND ${input.storageType} = ANY(d.storage_types)))`,
+    );
+  }
+  if (input.currencyPair !== undefined) {
+    predicates.push(
+      sql`EXISTS (${activeOfferingForOrganization()}
+            AND EXISTS (SELECT 1 FROM foreign_exchange_offering_detail AS d
+                         WHERE d.offering_id = o.id
+                           AND ${input.currencyPair} = ANY(d.currency_pairs)))`,
+    );
+  }
+  if (input.acceptingRequests !== undefined) {
+    predicates.push(sql`${commerceProviderProfile.acceptingRequests} = ${input.acceptingRequests}`);
+  }
+  return predicates;
+}
+
+/**
+ * One facet bucket: the value as the database spells it, and how many providers carry it.
+ *
+ * SAME SHAPE `/store/search` ALREADY RETURNS — `StoreFacetBucketSchema` on the client is
+ * `{ value, count }`, and the rules that come with it apply here unchanged.
+ */
+export interface ProviderFacetBucket {
+  readonly value: string;
+  readonly count: number;
+}
+
+export interface ProviderDirectoryFacets {
+  readonly providerKinds: readonly ProviderFacetBucket[];
+  readonly transportModes: readonly ProviderFacetBucket[];
+  readonly originCountryCodes: readonly ProviderFacetBucket[];
+  readonly destinationCountryCodes: readonly ProviderFacetBucket[];
+}
+
+/**
+ * What a buyer can narrow to, and how many providers each choice would leave.
+ *
+ * **A BUCKET ABSENT IS NOT A BUCKET AT ZERO.** Values nothing carries are omitted rather than padded
+ * to `0`: a zero chip offers a click that returns an empty page. `catalog.schemas.ts` states the
+ * same rule for the search facets this copies.
+ *
+ * **COUNTS ARE OF PROVIDERS, NOT OF ROWS.** Every one is `COUNT(DISTINCT org.id)` — a forwarder with
+ * three sea offerings is ONE result under `transportMode=sea`, so a count of 3 beside a list of 1
+ * would be the facet lying about its own filter.
+ *
+ * **THEY DESCRIBE THE UNFILTERED DIRECTORY**, not the active result set. A buyer who has narrowed to
+ * `sea` still needs to know what `air` would give them; recomputing against the current filters
+ * would zero out every alternative and turn the chips into a dead end.
+ *
+ * ONLY FOUR DIMENSIONS ARE FACETED, and the other four filters deliberately are not. `jurisdiction`,
+ * `standard` and `storageType` are FREE TEXT arrays a provider types — their value space is
+ * unbounded, so a chip row over them would be a list of one provider's spellings rather than a
+ * vocabulary. `acceptingRequests` is a boolean and needs no count to be legible.
+ */
+export async function getProviderDirectoryFacets(): Promise<ProviderDirectoryFacets> {
+  const [kinds, modes, origins, destinations] = await Promise.all([
+    db.execute<{ value: string; count: number }>(sql`
+      SELECT link.provider_kind::text AS value, COUNT(DISTINCT org.id)::int AS count
+        FROM commerce_organization AS org
+        JOIN commerce_provider_profile AS prof ON prof.organization_id = org.id
+        JOIN commerce_provider_kind_link AS link ON link.organization_id = org.id
+       WHERE org.trade_state = 'active' AND org.visibility = 'public'
+         AND prof.verification_state NOT IN ('rejected', 'suspended')
+         AND link.verification_state NOT IN ('rejected', 'suspended')
+       GROUP BY 1 ORDER BY 1`),
+    db.execute<{ value: string; count: number }>(sql`
+      SELECT mode::text AS value, COUNT(DISTINCT org.id)::int AS count
+        FROM commerce_organization AS org
+        JOIN commerce_provider_profile AS prof ON prof.organization_id = org.id
+        JOIN commerce_service_offering AS o ON o.provider_organization_id = org.id AND o.state = 'active'
+        JOIN freight_offering_detail AS d ON d.offering_id = o.id
+        CROSS JOIN LATERAL unnest(d.transport_modes) AS mode
+       WHERE org.trade_state = 'active' AND org.visibility = 'public'
+         AND prof.verification_state NOT IN ('rejected', 'suspended')
+       GROUP BY 1 ORDER BY 1`),
+    db.execute<{ value: string; count: number }>(sql`
+      SELECT c.origin_country_code AS value, COUNT(DISTINCT org.id)::int AS count
+        FROM commerce_organization AS org
+        JOIN commerce_provider_profile AS prof ON prof.organization_id = org.id
+        JOIN commerce_service_offering AS o ON o.provider_organization_id = org.id AND o.state = 'active'
+        JOIN commerce_service_coverage AS c ON c.offering_id = o.id
+       WHERE org.trade_state = 'active' AND org.visibility = 'public'
+         AND prof.verification_state NOT IN ('rejected', 'suspended')
+         AND c.origin_country_code IS NOT NULL
+       GROUP BY 1 ORDER BY 1`),
+    db.execute<{ value: string; count: number }>(sql`
+      SELECT c.destination_country_code AS value, COUNT(DISTINCT org.id)::int AS count
+        FROM commerce_organization AS org
+        JOIN commerce_provider_profile AS prof ON prof.organization_id = org.id
+        JOIN commerce_service_offering AS o ON o.provider_organization_id = org.id AND o.state = 'active'
+        JOIN commerce_service_coverage AS c ON c.offering_id = o.id
+       WHERE org.trade_state = 'active' AND org.visibility = 'public'
+         AND prof.verification_state NOT IN ('rejected', 'suspended')
+         AND c.destination_country_code IS NOT NULL
+       GROUP BY 1 ORDER BY 1`),
+  ]);
+
+  return {
+    providerKinds: kinds.rows,
+    transportModes: modes.rows,
+    originCountryCodes: origins.rows,
+    destinationCountryCodes: destinations.rows,
+  };
+}
+
 export async function listPublicProviders(input: {
   readonly providerKind?: ProviderKind;
+  readonly originCountryCode?: string;
+  readonly destinationCountryCode?: string;
+  readonly transportMode?: string;
+  readonly jurisdiction?: string;
+  readonly standard?: string;
+  readonly storageType?: string;
+  readonly currencyPair?: string;
+  readonly acceptingRequests?: boolean;
   readonly limit: number;
   readonly cursor?: string;
 }): Promise<
@@ -1127,6 +1384,8 @@ export async function listPublicProviders(input: {
           ),
         );
 
+  const filterPredicates = providerFilterPredicates(input);
+
   const rows =
     input.providerKind === undefined
       ? await db
@@ -1136,7 +1395,7 @@ export async function listPublicProviders(input: {
             commerceProviderProfile,
             eq(commerceProviderProfile.organizationId, commerceOrganization.id),
           )
-          .where(and(publicProviderEligibility, cursorPredicate))
+          .where(and(publicProviderEligibility, cursorPredicate, ...filterPredicates))
           .orderBy(asc(commerceOrganization.displayName), asc(commerceOrganization.id))
           .limit(input.limit + 1)
       : await db
@@ -1154,7 +1413,7 @@ export async function listPublicProviders(input: {
               publicKindLinkEligibility,
             ),
           )
-          .where(and(publicProviderEligibility, cursorPredicate))
+          .where(and(publicProviderEligibility, cursorPredicate, ...filterPredicates))
           .orderBy(asc(commerceOrganization.displayName), asc(commerceOrganization.id))
           .limit(input.limit + 1);
 

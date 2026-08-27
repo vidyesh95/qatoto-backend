@@ -60,6 +60,7 @@ const providersStubs = vi.hoisted(() => ({
   listPublicProviders: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getPublicProviderByOrganizationSlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   getPublicServiceOfferingBySlug: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  getProviderDirectoryFacets: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
 }));
 
 vi.mock("#src/modules/store/catalog/store-catalog.service.js", () => catalogStubs);
@@ -171,6 +172,14 @@ describe("public store routes", () => {
     providersStubs.listPublicProviders.mockResolvedValue({
       success: true,
       value: { items: [], page: { nextCursor: null, hasMore: false } },
+    });
+    // THE FACET READ IS PART OF THE ROUTE, so it needs a stub — without one the controller's
+    // `Promise.all` rejects and the directory answers 500 rather than 200.
+    providersStubs.getProviderDirectoryFacets.mockResolvedValue({
+      providerKinds: [],
+      transportModes: [],
+      originCountryCodes: [],
+      destinationCountryCodes: [],
     });
 
     const response = await request(app).get("/store/providers");

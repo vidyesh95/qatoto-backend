@@ -1081,6 +1081,29 @@ Migration `0138_channel_video_listing` adds one partial index,
 > already does for the feed. `EXPLAIN` confirms an `Index Scan using video_creator_recent_idx` with
 > that column as a `Filter`, and no Sort node.
 
+### 5.2f The three creator self-reads — analytics and the comment inbox
+
+Three routes that shipped in code and appeared in no table until now. They are on the **users**
+router, not the videos router, and that placement is forced rather than chosen: `app.ts` mounts
+`videosRouter` at `/videos` first, so any two-segment `/videos/X` is permanently shadowed by that
+router's `GET /:videoId`. `/users/me/video-reports` records the same constraint.
+
+| Method | Path                       | Auth    | Limiter | Notes                                                                  |
+| ------ | -------------------------- | ------- | ------- | ---------------------------------------------------------------------- |
+| `GET`  | `/users/me/creator-summary` | session | —       | Lifetime totals behind `/studio/analytics`. **Zero, not null**, for a creator with no `creator_stats` row — see the service for why this is the opposite call to `/me/watch-time` and why both are right. |
+| `GET`  | `/users/me/video-analytics` | session | —       | Per-video counters, `?page&limit` only. ⚠️ **No `?sort=`** — `video_stats` has no index to order by, and the query schema is `.strict()`, so sending one is a `422`. |
+| `GET`  | `/users/me/video-comments`  | session | —       | Every comment across the caller's own videos, newest first — the data behind `/studio/comments`. |
+
+**THE COUNTERS ARE QATOTO-SIDE.** A YouTube-hosted video's own view count lives in that creator's
+YouTube Studio; these count watching that happened HERE, through the §3.3 beacon. Rendering one as
+the other would be a number the creator cannot reconcile against either source.
+
+**`/me/video-comments` ADDS NO AUTHORIZATION.** `DELETE /comments/:commentId` has always allowed the
+video's creator as well as the comment's author (§8.4); this is the read that finally lets them find
+the comment without opening each video in turn. It **includes replies**, which is why migration
+`0136` adds a non-partial index — the public thread's index covers top-level comments only, and an
+inbox built on it would silently hide most of them.
+
 ### 5.3 `live` is not a mode
 
 The chip exists in `filter.tsx` today. Nothing backs it: there is no stream table, no ingest, no
@@ -1128,6 +1151,7 @@ domain where `new Date()` is called.
 | `verify-youtube-video`                   | on demand, backoff | §8.3 deferred verification                                                                 |
 | `revalidate-youtube-embeds`              | `10 5 * * *`       | backstop for §8.2                                                                          |
 | `prune-engagement-data`                  | `55 4 * * *`       | snapshots at 14 days; `videoViewSession` dropped at 90. **Dry-run by default** — see below |
+| `publish-scheduled-videos`               | `* * * * *`        | the `scheduled` → `published` hop (STUDIO §4). **Every minute, deliberately**: a creator who set 09:00 does not accept 09:59, and the sweep is one indexed range scan over rows whose time has come |
 
 Ordering is expressed **by cron time**, not by code — same convention as
 `recompute-branch-signals` (`20 3`) running before `recompute-program-stats` (`35 3`).
