@@ -1,5 +1,6 @@
 import express from "express";
 
+import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { longFormBody } from "#src/middleware/json-body.js";
 import {
   contentReviewLimiter,
@@ -9,7 +10,6 @@ import {
   videoDocumentUploadLimiter,
   videoThumbnailUploadLimiter,
 } from "#src/middleware/rate-limit.js";
-import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import * as adminReviewController from "#src/modules/studio/admin-review.controller.js";
 import { uploadVideoDocumentFile } from "#src/modules/studio/videos/upload-video-document.js";

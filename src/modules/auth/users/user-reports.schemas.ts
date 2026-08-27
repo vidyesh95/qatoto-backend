@@ -17,9 +17,7 @@ export const UserReportReasonSchema = z.enum([
   "other",
 ]);
 
-export const UserIdParamsSchema = z
-  .object({ userId: z.string().trim().min(1).max(200) })
-  .strict();
+export const UserIdParamsSchema = z.object({ userId: z.string().trim().min(1).max(200) }).strict();
 
 export const ReportIdParamsSchema = z
   .object({ reportId: z.string().trim().min(1).max(200) })

@@ -332,7 +332,10 @@ export function mapStudioErrorToResponse(error: StudioDomainError): {
     case "DOCUMENT_STORAGE_UPLOAD_FAILED":
       return { statusCode: 502, message: "Could not store the document. Please try again." };
     case "DOCUMENT_STORAGE_DELETE_FAILED":
-      return { statusCode: 502, message: "Could not remove the stored document. Please try again." };
+      return {
+        statusCode: 502,
+        message: "Could not remove the stored document. Please try again.",
+      };
 
     // --- Storage. 503 is "this deployment has no credentials", 502 is "the call failed".
     case "NOT_CONFIGURED":

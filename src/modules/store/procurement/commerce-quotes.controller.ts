@@ -171,7 +171,8 @@ function mapQuotesError(res: Response, error: CommerceQuotesError): void {
       res.status(422).json({
         status: "error",
         statusCode: 422,
-        message: "Every attached document must be one your organization uploaded and finished processing.",
+        message:
+          "Every attached document must be one your organization uploaded and finished processing.",
       } satisfies ApiResponse);
       return;
     default: {

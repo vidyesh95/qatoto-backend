@@ -283,49 +283,49 @@ export async function getWatchPayload(
   // principle.
   const [categories, chapters, openRoleRows, attachedProductRows, seasons, documentRows] =
     await Promise.all([
-    db
-      .select({ slug: contentCategory.slug, label: contentCategory.label })
-      .from(videoCategory)
-      .innerJoin(contentCategory, eq(contentCategory.id, videoCategory.categoryId))
-      .where(eq(videoCategory.videoId, videoId))
-      .orderBy(asc(contentCategory.sortOrder), asc(contentCategory.slug)),
-    db
-      .select({ startSeconds: videoChapter.startSeconds, title: videoChapter.title })
-      .from(videoChapter)
-      .where(eq(videoChapter.videoId, videoId))
-      .orderBy(asc(videoChapter.position)),
-    db
-      .select({
-        roleTitle: videoOpenRole.roleTitle,
-        roleDescription: videoOpenRole.roleDescription,
-        openRoleId: videoOpenRole.openRoleId,
-      })
-      .from(videoOpenRole)
-      .where(eq(videoOpenRole.videoId, videoId))
-      .orderBy(asc(videoOpenRole.position)),
-    db
-      .select({
-        productId: videoAttachedProduct.productId,
-        pinnedAtSeconds: videoAttachedProduct.pinnedAtSeconds,
-      })
-      .from(videoAttachedProduct)
-      .where(eq(videoAttachedProduct.videoId, videoId))
-      // The creator's order, which is what `PUT /videos/:videoId/products` stored. No
-      // server-side re-sort: rearranging somebody's carousel is a change they did not ask for.
-      .orderBy(asc(videoAttachedProduct.position)),
-    loadPublicSeasonsForVideo(videoId),
-    // ⚠️ `objectStorageKey` IS SELECTED NOWHERE. It is an internal address into a private bucket,
-    // and a public payload is the last place it may appear. The path below is composed from ids.
-    db
-      .select({
-        id: videoDocument.id,
-        fileName: videoDocument.fileName,
-        byteSize: videoDocument.byteSize,
-      })
-      .from(videoDocument)
-      .where(eq(videoDocument.videoId, videoId))
-      .orderBy(asc(videoDocument.position)),
-  ]);
+      db
+        .select({ slug: contentCategory.slug, label: contentCategory.label })
+        .from(videoCategory)
+        .innerJoin(contentCategory, eq(contentCategory.id, videoCategory.categoryId))
+        .where(eq(videoCategory.videoId, videoId))
+        .orderBy(asc(contentCategory.sortOrder), asc(contentCategory.slug)),
+      db
+        .select({ startSeconds: videoChapter.startSeconds, title: videoChapter.title })
+        .from(videoChapter)
+        .where(eq(videoChapter.videoId, videoId))
+        .orderBy(asc(videoChapter.position)),
+      db
+        .select({
+          roleTitle: videoOpenRole.roleTitle,
+          roleDescription: videoOpenRole.roleDescription,
+          openRoleId: videoOpenRole.openRoleId,
+        })
+        .from(videoOpenRole)
+        .where(eq(videoOpenRole.videoId, videoId))
+        .orderBy(asc(videoOpenRole.position)),
+      db
+        .select({
+          productId: videoAttachedProduct.productId,
+          pinnedAtSeconds: videoAttachedProduct.pinnedAtSeconds,
+        })
+        .from(videoAttachedProduct)
+        .where(eq(videoAttachedProduct.videoId, videoId))
+        // The creator's order, which is what `PUT /videos/:videoId/products` stored. No
+        // server-side re-sort: rearranging somebody's carousel is a change they did not ask for.
+        .orderBy(asc(videoAttachedProduct.position)),
+      loadPublicSeasonsForVideo(videoId),
+      // ⚠️ `objectStorageKey` IS SELECTED NOWHERE. It is an internal address into a private bucket,
+      // and a public payload is the last place it may appear. The path below is composed from ids.
+      db
+        .select({
+          id: videoDocument.id,
+          fileName: videoDocument.fileName,
+          byteSize: videoDocument.byteSize,
+        })
+        .from(videoDocument)
+        .where(eq(videoDocument.videoId, videoId))
+        .orderBy(asc(videoDocument.position)),
+    ]);
 
   // Resolved in ONE query rather than per blurb. Every id here was scoped to this video's own
   // venture when it was written, which is why the batch read does not re-scope it.

@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 
-import * as userReportsService from "#src/modules/auth/users/user-reports.service.js";
 import {
   CreateUserReportSchema,
   DecideUserReportSchema,
@@ -10,6 +9,7 @@ import {
   RestoreUserProfileTextSchema,
   UserIdParamsSchema,
 } from "#src/modules/auth/users/user-reports.schemas.js";
+import * as userReportsService from "#src/modules/auth/users/user-reports.service.js";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse } from "#src/types/index.js";
 

@@ -1,7 +1,7 @@
 import express from "express";
 
-import { compactBody } from "#src/middleware/json-body.js";
 import { idempotency } from "#src/middleware/idempotency.js";
+import { compactBody } from "#src/middleware/json-body.js";
 import { contentReviewLimiter, userReportLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";

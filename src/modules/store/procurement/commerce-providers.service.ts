@@ -260,7 +260,9 @@ const publicProviderSelect = {
  */
 async function loadPublicProviderKinds(
   organizationIds: readonly string[],
-): Promise<Map<string, { kind: ProviderKind; verificationState: ProviderProfile["verificationState"] }[]>> {
+): Promise<
+  Map<string, { kind: ProviderKind; verificationState: ProviderProfile["verificationState"] }[]>
+> {
   const byOrganizationId = new Map<
     string,
     { kind: ProviderKind; verificationState: ProviderProfile["verificationState"] }[]
@@ -274,7 +276,12 @@ async function loadPublicProviderKinds(
       verificationState: commerceProviderKindLink.verificationState,
     })
     .from(commerceProviderKindLink)
-    .where(and(inArray(commerceProviderKindLink.organizationId, [...organizationIds]), publicKindLinkEligibility))
+    .where(
+      and(
+        inArray(commerceProviderKindLink.organizationId, [...organizationIds]),
+        publicKindLinkEligibility,
+      ),
+    )
     .orderBy(asc(commerceProviderKindLink.providerKind));
 
   for (const row of rows) {

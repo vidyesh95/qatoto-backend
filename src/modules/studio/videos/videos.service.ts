@@ -32,19 +32,14 @@ import {
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
-import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
-import {
-  MAX_VIDEO_DOCUMENTS,
-  videoDocumentDownloadPath,
-} from "#src/modules/studio/videos/video-document-paths.js";
+import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
+import { logger } from "#src/lib/logger.js";
 import {
   deleteVideoDocument as deleteDocumentObject,
   presignVideoDocumentDownload,
   uploadVideoDocument as uploadDocumentObject,
   type ObjectStorageError,
 } from "#src/lib/object-storage.js";
-import { idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
-import { logger } from "#src/lib/logger.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import {
   buildYoutubeEmbedUrl,
@@ -55,19 +50,24 @@ import {
   type YoutubeVideoFacts,
 } from "#src/lib/youtube.js";
 import { ensureVideoStatsRows } from "#src/modules/home/engagement/video-engagement.service.js";
-// The venture gate's membership half. `isActiveProjectMember` is the only exported R&D
-// membership helper keyed on a projectId rather than a slug, which is what studio holds.
-import { isActiveProjectMember } from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   isPdfValidationError,
   validatePdfBytes,
   type PdfValidationError,
 } from "#src/modules/rnd/pdf.js";
+// The venture gate's membership half. `isActiveProjectMember` is the only exported R&D
+// membership helper keyed on a projectId rather than a slug, which is what studio holds.
+import { isActiveProjectMember } from "#src/modules/rnd/projects/project-membership.service.js";
 import {
   DEFAULT_CONTENT_CATEGORY_SLUG,
   findUnavailableCategoryIds,
   resolveDefaultCategoryId,
 } from "#src/modules/studio/content-categories.service.js";
+import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
+import {
+  MAX_VIDEO_DOCUMENTS,
+  videoDocumentDownloadPath,
+} from "#src/modules/studio/videos/video-document-paths.js";
 import type {
   CreateVideoInput,
   UpdateVideoInput,
@@ -430,7 +430,6 @@ export interface VideoDocumentView {
   /** `/videos/:videoId/documents/:documentId/file` — 302s to a short-lived presigned URL. */
   readonly downloadPath: string;
 }
-
 
 /**
  * One taxonomy row as it appears on a video (HOME_BACKEND_STRUCTURE.md §2).
@@ -2445,9 +2444,7 @@ export async function attachVideoDocument(
   const [preflightCount] = await db
     .select({ documentCount: sql<number>`count(*)::int` })
     .from(videoDocument)
-    .where(
-      and(eq(videoDocument.videoId, videoId), ne(videoDocument.contentSha256, contentSha256)),
-    );
+    .where(and(eq(videoDocument.videoId, videoId), ne(videoDocument.contentSha256, contentSha256)));
   if ((preflightCount?.documentCount ?? 0) >= MAX_VIDEO_DOCUMENTS) {
     return {
       success: false,

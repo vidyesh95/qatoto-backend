@@ -104,11 +104,7 @@ export const userReportReasonEnum = pgEnum("user_report_reason", [
   "other",
 ]);
 
-export const userReportStatusEnum = pgEnum("user_report_status", [
-  "open",
-  "actioned",
-  "dismissed",
-]);
+export const userReportStatusEnum = pgEnum("user_report_status", ["open", "actioned", "dismissed"]);
 
 export const userModerationActionKindEnum = pgEnum("user_moderation_action_kind", [
   "profile_text_hidden",

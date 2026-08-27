@@ -1,7 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { decryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import {
   commerceEngagementDeliverable,
   commerceOrder,
@@ -41,6 +40,7 @@ import {
   warehouseEngagementDetail,
   warehouseQuoteServiceDetail,
 } from "#src/db/schema.js";
+import { decryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { deriveStockState } from "#src/modules/store/catalog/store-catalog.service.js";
 import {
@@ -1877,7 +1877,9 @@ export async function getQuote(
           fileByteSize: documentRow.fileByteSize,
           // NULL rather than the id: an opaque uuid shown as a file name is worse than none.
           fileName:
-            decryptedFileName !== null && decryptedFileName.success ? decryptedFileName.value : null,
+            decryptedFileName !== null && decryptedFileName.success
+              ? decryptedFileName.value
+              : null,
           attachedAt: documentRow.attachedAt,
         };
       });

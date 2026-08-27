@@ -12,8 +12,8 @@ import { requireIdentifiedUser } from "#src/middleware/require-identified-user.j
 import * as handleController from "#src/modules/auth/handles/handle.controller.js";
 import * as privacyController from "#src/modules/auth/privacy/privacy.controller.js";
 import * as channelProfileController from "#src/modules/auth/users/channel-profile.controller.js";
-import * as userReportsController from "#src/modules/auth/users/user-reports.controller.js";
 import { uploadAvatarPhoto } from "#src/modules/auth/users/upload-avatar.js";
+import * as userReportsController from "#src/modules/auth/users/user-reports.controller.js";
 import * as usersController from "#src/modules/auth/users/users.controller.js";
 import * as engagementController from "#src/modules/home/engagement/engagement.controller.js";
 import * as videoContentReportsController from "#src/modules/studio/video-content-reports.controller.js";
@@ -60,11 +60,7 @@ router.patch("/me", requireAuth, longFormBody, usersController.updateMyProfile);
  * DECLARED BEFORE `/:id`, like every `/me/*` route above it — `users.routes.order.test.ts` fails the
  * build if a `/me/*` route ever falls after a single-segment param route.
  */
-router.get(
-  "/me/channel-profile",
-  requireAuth,
-  channelProfileController.getMyChannelProfile,
-);
+router.get("/me/channel-profile", requireAuth, channelProfileController.getMyChannelProfile);
 
 router.patch(
   "/me/channel-profile",

@@ -493,9 +493,8 @@ async function purgeVideoDocumentObjects(
 
   if (!isEnabled) return documentCount;
 
-  const { deleteStoredVideoDocumentsForCreator } = await import(
-    "#src/modules/studio/videos/videos.service.js"
-  );
+  const { deleteStoredVideoDocumentsForCreator } =
+    await import("#src/modules/studio/videos/videos.service.js");
   await deleteStoredVideoDocumentsForCreator(userId);
 
   await db.insert(anonymizationStepLog).values({
