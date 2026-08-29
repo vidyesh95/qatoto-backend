@@ -2,23 +2,31 @@ name: Deploy to Dokploy
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Dokploy Deployment
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_APP_ID }}
         run: |
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ secrets.DOKPLOY_URL }}/api/application.deploy" \
+          BASE_URL="${DOKPLOY_URL%/}"
+
+          RESPONSE=$(curl -s -S -w "\n%{http_code}" -X POST "${BASE_URL}/api/compose.deploy" \
             -H "Content-Type: application/json" \
-            -H "x-api-key: ${{ secrets.DOKPLOY_API_KEY }}" \
-            -d '{"applicationId": "${{ secrets.DOKPLOY_APP_ID }}"}')
+            -H "x-api-key: ${DOKPLOY_API_KEY}" \
+            -d "{\"composeId\": \"${DOKPLOY_COMPOSE_ID}\"}")
 
           HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
 
+          echo "Status: $HTTP_STATUS"
           echo "Response: $BODY"
+
           if [ "$HTTP_STATUS" -ne 200 ] && [ "$HTTP_STATUS" -ne 201 ]; then
             echo "Deployment failed with status $HTTP_STATUS"
             exit 1
