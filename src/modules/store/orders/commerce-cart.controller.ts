@@ -81,6 +81,22 @@ function mapCartError(res: Response, error: CommerceCartError): void {
         message: "Not found.",
       } satisfies ApiResponse);
       return;
+    /**
+     * §21.2. 409 rather than the 422 its neighbours use: the request was well-formed and the
+     * listing is real and visible — the seller stopped selling it. The state rides along because
+     * the two answers point the buyer at different next moves.
+     */
+    case "PRODUCT_NOT_SELLING":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message:
+          error.sellingState === "discontinued"
+            ? "This listing has been discontinued and can no longer be ordered."
+            : "This listing is paused by its seller and cannot be ordered right now.",
+        data: { sellingState: error.sellingState },
+      } satisfies ApiResponse);
+      return;
     case "SAMPLE_NOT_AVAILABLE":
       res.status(422).json({
         status: "error",

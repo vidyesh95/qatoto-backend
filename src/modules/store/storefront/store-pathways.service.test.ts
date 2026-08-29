@@ -32,6 +32,7 @@ function buildProductCard(key: string): ProductCard {
     variantCount: 0,
     condition: "new",
     samplePolicy: "unavailable",
+    sellingState: "selling",
     leadTimeMinDays: null,
     leadTimeMaxDays: null,
     mainImageUrl: null,

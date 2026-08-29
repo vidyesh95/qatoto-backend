@@ -120,6 +120,9 @@ export type StoreSearchCondition = NonNullable<
 export type StoreSearchVerificationState = NonNullable<
   (typeof storeSearchDocument.$inferSelect)["providerVerificationState"]
 >;
+export type StoreSearchSellingState = NonNullable<
+  (typeof storeSearchDocument.$inferSelect)["sellingState"]
+>;
 
 export interface StoreSearchHit {
   readonly documentKind: StoreSearchDocumentKind;
@@ -142,6 +145,7 @@ export interface StoreSearchHit {
   readonly stockState: StoreSearchStockState | null;
   readonly samplePolicy: StoreSearchSamplePolicy | null;
   readonly condition: StoreSearchCondition | null;
+  readonly sellingState: StoreSearchSellingState | null;
   readonly providerVerificationState: StoreSearchVerificationState | null;
   readonly leadTimeMaxDays: number | null;
   readonly relevanceScore: number | null;
@@ -205,6 +209,13 @@ export interface StoreSearchFilterInput {
   readonly verificationState?: StoreSearchVerificationState | undefined;
   readonly leadTimeMaxDays?: number | undefined;
   /**
+   * §21.2. UNLIKE EVERY OTHER FILTER HERE, THIS ONE IS APPLIED WHEN IT IS ABSENT. Omitting it
+   * excludes `discontinued`; naming a value narrows to exactly that state, which is how a buyer
+   * asks to see dead listings on purpose. Anything else would make the default result set
+   * include items nobody can buy.
+   */
+  readonly sellingState?: StoreSearchSellingState | undefined;
+  /**
    * `discovery` is STORE Phase 13's ranked sort. IT NEVER TOUCHES `ts_rank_cd`, and
    * `relevance` never touches the discovery score — see `commerce-trending-score.ts` for
    * why the two must not blend. A combined sort would be a THIRD, explicitly named option
@@ -231,7 +242,8 @@ type StoreSearchFacetDimension =
   | "samplePolicy"
   | "condition"
   | "verificationState"
-  | "leadTimeMaxDays";
+  | "leadTimeMaxDays"
+  | "sellingState";
 
 /**
  * THE one WHERE. Both the result query and every facet query are built from this.
@@ -294,6 +306,22 @@ function buildStoreSearchFilters(
     input.leadTimeMaxDays === undefined || omit === "leadTimeMaxDays"
       ? undefined
       : lte(storeSearchDocument.leadTimeMaxDays, input.leadTimeMaxDays),
+    /**
+     * §21.2. THE ONE FILTER THAT DOES SOMETHING WHEN IT IS UNSET, and the asymmetry is the
+     * feature: an unfiltered search must not offer listings their own sellers have retired, but
+     * the listing has to stay reachable and countable for the buyer who asks for it.
+     *
+     * ⚠️ THE `IS NULL` ARM IS LOAD-BEARING. This table also holds provider offerings and
+     * organizations, and neither has a selling state. In SQL `NULL <> 'discontinued'` is NULL,
+     * not true — so a bare inequality would silently drop every supplier and every service from
+     * the default result set and from their own facet counts.
+     */
+    omit === "sellingState"
+      ? undefined
+      : input.sellingState === undefined
+        ? sql`(${storeSearchDocument.sellingState} IS NULL
+              OR ${storeSearchDocument.sellingState} <> 'discontinued')`
+        : eq(storeSearchDocument.sellingState, input.sellingState),
   ];
 }
 
@@ -407,6 +435,7 @@ async function searchByDiscoveryRank(context: StoreSearchPageContext): Promise<
       stockState: storeSearchDocument.stockState,
       samplePolicy: storeSearchDocument.samplePolicy,
       condition: storeSearchDocument.condition,
+      sellingState: storeSearchDocument.sellingState,
       providerVerificationState: storeSearchDocument.providerVerificationState,
       leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
       updatedAt: storeSearchDocument.updatedAt,
@@ -450,6 +479,7 @@ async function searchByDiscoveryRank(context: StoreSearchPageContext): Promise<
         stockState: row.stockState,
         samplePolicy: row.samplePolicy,
         condition: row.condition,
+        sellingState: row.sellingState,
         providerVerificationState: row.providerVerificationState,
         leadTimeMaxDays: row.leadTimeMaxDays,
         updatedAt: row.updatedAt,
@@ -517,6 +547,7 @@ async function searchByTitle(context: StoreSearchPageContext): Promise<
       stockState: storeSearchDocument.stockState,
       samplePolicy: storeSearchDocument.samplePolicy,
       condition: storeSearchDocument.condition,
+      sellingState: storeSearchDocument.sellingState,
       providerVerificationState: storeSearchDocument.providerVerificationState,
       leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
       updatedAt: storeSearchDocument.updatedAt,
@@ -557,6 +588,7 @@ async function searchByTitle(context: StoreSearchPageContext): Promise<
         stockState: row.stockState,
         samplePolicy: row.samplePolicy,
         condition: row.condition,
+        sellingState: row.sellingState,
         providerVerificationState: row.providerVerificationState,
         leadTimeMaxDays: row.leadTimeMaxDays,
         updatedAt: row.updatedAt,
@@ -627,6 +659,7 @@ async function searchByRelevance(context: StoreSearchPageContext): Promise<
       stockState: storeSearchDocument.stockState,
       samplePolicy: storeSearchDocument.samplePolicy,
       condition: storeSearchDocument.condition,
+      sellingState: storeSearchDocument.sellingState,
       providerVerificationState: storeSearchDocument.providerVerificationState,
       leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
       updatedAt: storeSearchDocument.updatedAt,
@@ -671,6 +704,7 @@ async function searchByRelevance(context: StoreSearchPageContext): Promise<
         stockState: row.stockState,
         samplePolicy: row.samplePolicy,
         condition: row.condition,
+        sellingState: row.sellingState,
         providerVerificationState: row.providerVerificationState,
         leadTimeMaxDays: row.leadTimeMaxDays,
         updatedAt: row.updatedAt,
@@ -747,6 +781,13 @@ export interface StoreSearchFacets {
   readonly stockStates: readonly StoreSearchFacetBucket[];
   readonly samplePolicies: readonly StoreSearchFacetBucket[];
   readonly conditions: readonly StoreSearchFacetBucket[];
+  /**
+   * §21.2. Counted with the selling-state filter OMITTED, like every facet here — which is
+   * what makes the `discontinued` bucket show its true count even though the default result
+   * set excludes those rows. A count of what you would get by clicking, not of what is on
+   * screen.
+   */
+  readonly sellingStates: readonly StoreSearchFacetBucket[];
   readonly verificationStates: readonly StoreSearchFacetBucket[];
   readonly documentKinds: readonly StoreSearchFacetBucket[];
   readonly providerKinds: readonly StoreSearchFacetBucket[];
@@ -767,6 +808,7 @@ const EMPTY_STORE_SEARCH_FACETS: StoreSearchFacets = {
   stockStates: [],
   samplePolicies: [],
   conditions: [],
+  sellingStates: [],
   verificationStates: [],
   documentKinds: [],
   providerKinds: [],
@@ -857,6 +899,7 @@ export async function computeStoreSearchFacets(
     stockStates,
     samplePolicies,
     conditions,
+    sellingStates,
     verificationStates,
     documentKinds,
     providerKinds,
@@ -871,6 +914,7 @@ export async function computeStoreSearchFacets(
     countByColumn(storeSearchDocument.stockState, scopedFor("stockState"), textPredicate),
     countByColumn(storeSearchDocument.samplePolicy, scopedFor("samplePolicy"), textPredicate),
     countByColumn(storeSearchDocument.condition, scopedFor("condition"), textPredicate),
+    countByColumn(storeSearchDocument.sellingState, scopedFor("sellingState"), textPredicate),
     countByColumn(
       storeSearchDocument.providerVerificationState,
       scopedFor("verificationState"),
@@ -917,6 +961,7 @@ export async function computeStoreSearchFacets(
     stockStates,
     samplePolicies,
     conditions,
+    sellingStates,
     verificationStates,
     documentKinds,
     providerKinds,
@@ -960,6 +1005,11 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
       stockQuantity: product.stockQuantity,
       samplePolicy: product.samplePolicy,
       condition: product.condition,
+      /**
+       * §21.2. A FACET COLUMN, NOT AN ELIGIBILITY TERM — see `isEligible` below, which
+       * deliberately does not read it.
+       */
+      sellingState: product.sellingState,
       leadTimeMinDays: product.leadTimeMinDays,
       leadTimeMaxDays: product.leadTimeMaxDays,
       organizationId: commerceOrganization.id,
@@ -1058,6 +1108,14 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
     ],
   );
 
+  /**
+   * ⚠️ `sellingState` IS DELIBERATELY ABSENT FROM THIS CONJUNCTION, and adding it would be a
+   * regression rather than a tightening. This flag is element [0] of `buildStoreSearchFilters`
+   * with no per-facet `omit` escape, so a discontinued listing would vanish from the results AND
+   * from every facet count — including the count on the very chip a buyer would use to ask for
+   * discontinued items. Selling state is a FACET COLUMN on this table (see the select above); the
+   * default exclusion lives in the filter builder, where it can be overridden.
+   */
   const isEligible =
     row.status === "active" &&
     row.moderationState === "approved" &&
@@ -1131,6 +1189,7 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
       stockState: searchStockState,
       samplePolicy: row.samplePolicy,
       condition: row.condition,
+      sellingState: row.sellingState,
       providerVerificationState: null,
       leadTimeMaxDays: row.leadTimeMaxDays,
       searchText,
@@ -1159,6 +1218,7 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
         stockState: searchStockState,
         samplePolicy: row.samplePolicy,
         condition: row.condition,
+        sellingState: row.sellingState,
         providerVerificationState: null,
         leadTimeMaxDays: row.leadTimeMaxDays,
         searchText,

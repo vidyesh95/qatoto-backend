@@ -192,6 +192,7 @@ export async function search(req: Request, res: Response): Promise<void> {
     stockState: parsed.data.stockState,
     samplePolicy: parsed.data.samplePolicy,
     condition: parsed.data.condition,
+    sellingState: parsed.data.sellingState,
     verificationState: parsed.data.verificationState,
     leadTimeMaxDays: parsed.data.leadTimeMaxDays,
     sort: parsed.data.sort ?? "relevance",

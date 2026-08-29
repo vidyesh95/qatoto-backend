@@ -81,6 +81,12 @@ export const productFieldShapes = {
     .optional(),
   unitOfMeasure: z.string().trim().min(1).max(40).optional(),
   samplePolicy: z.enum(["unavailable", "paid", "refundable"]).optional(),
+  /**
+   * §21.2. Optional on the way in: a listing being created is `selling` by the column default,
+   * and a seller retires it later. `paused` and `discontinued` are both unpurchasable — the
+   * difference is what the buyer is told, not what the cart does.
+   */
+  sellingState: z.enum(["selling", "paused", "discontinued"]).optional(),
   samplePriceInCents: z.number().int().positive().optional(),
   /**
    * A17. How many samples one line may hold. Bounded at 20 to match

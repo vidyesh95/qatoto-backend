@@ -93,6 +93,13 @@ export const SearchQuerySchema = z
     stockState: z.enum(["in_stock", "low_stock", "made_to_order", "unavailable"]).optional(),
     samplePolicy: z.enum(["unavailable", "paid", "refundable"]).optional(),
     condition: z.enum(["new", "refurbished", "used"]).optional(),
+    /**
+     * §21.2. OMITTING THIS IS NOT THE SAME AS NOT FILTERING. An absent `sellingState`
+     * excludes `discontinued`; naming one narrows to exactly that state. A buyer looking for
+     * a dead part asks for it explicitly, and everyone else is spared listings that cannot
+     * be bought.
+     */
+    sellingState: z.enum(["selling", "paused", "discontinued"]).optional(),
     verificationState: z
       .enum(["unverified", "documents_pending", "verified", "rejected", "suspended"])
       .optional(),

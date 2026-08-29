@@ -102,6 +102,12 @@ export type CommerceCheckoutError =
   /** The agreement was usable but the escrow session could not be opened locally. */
   | { type: "ESCROW_SESSION_FAILED"; sellerOrganizationId: string; reason: string }
   | { type: "PRODUCT_NOT_PURCHASABLE"; productId: string }
+  /**
+   * §21.2. The seller retired this listing. Distinct from PRODUCT_NOT_PURCHASABLE, which means
+   * the listing is not publicly visible at all — a buyer holding a cart line for a product they
+   * can still open needs to be told which of the two happened.
+   */
+  | { type: "PRODUCT_NOT_SELLING"; productId: string; sellingState: "paused" | "discontinued" }
   | { type: "BELOW_MINIMUM_ORDER_QUANTITY"; productId: string; minimumOrderQuantity: number }
   /**
    * A17. Reachable at prepare and confirm even though the cart refuses it on the way in: a
@@ -286,6 +292,8 @@ function mapPricingErrorToCheckoutError(
       // All three mean "the variant on this line cannot be bought". Splitting them
       // on the wire would let a buyer probe which variant ids exist.
       return { type: "VARIANT_NOT_PURCHASABLE", productId };
+    case "PRODUCT_NOT_SELLING":
+      return { type: "PRODUCT_NOT_SELLING", productId, sellingState: error.sellingState };
     case "SAMPLE_NOT_AVAILABLE":
       return { type: "SAMPLE_NOT_AVAILABLE", productId };
     case "ABOVE_MAXIMUM_SAMPLE_QUANTITY":

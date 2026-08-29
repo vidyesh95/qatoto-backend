@@ -58,6 +58,11 @@ export type CommerceCartError =
   | { type: "VALIDATION_FAILED"; message: string }
   /** A18. Passed through from the customization resolver so the client can act on it. */
   | { type: "CUSTOMIZATION_REJECTED"; customizationError: CommerceCustomizationError }
+  /**
+   * §21.2. The seller retired the listing. A top-level result for the same reason the variant
+   * tags above are: it can never become buyable by waiting.
+   */
+  | { type: "PRODUCT_NOT_SELLING"; sellingState: "paused" | "discontinued" }
   /** A17. The listing does not sell a sample, so a sample line can never be bought. */
   | { type: "SAMPLE_NOT_AVAILABLE" }
   /**
@@ -543,6 +548,28 @@ export async function setCartItem(
      * refused request into a partially applied one: the smoke run caught a cart line
      * whose quantity had changed to 20 on a request that answered 422.
      */
+    /**
+     * §21.2. A listing its seller has retired cannot be added, and it is refused HERE — before
+     * the first write — on the same criterion the sample check below states: this is not a stale
+     * line, it is an unbuyable request, and it can never become buyable by waiting.
+     *
+     * ⚠️ THIS DOES NOT TOUCH LINES ALREADY IN THE CART. `getCart` keeps an unpriceable line and
+     * attaches its `pricingError`, deliberately, so a buyer who added something last week and had
+     * it discontinued under them sees the line and the reason rather than a cart that quietly
+     * shrank. This gate is only about ADDING.
+     */
+    const [sellingRow] = await transaction
+      .select({ sellingState: product.sellingState })
+      .from(product)
+      .where(eq(product.id, productId))
+      .limit(1);
+    if (sellingRow && sellingRow.sellingState !== "selling") {
+      return {
+        status: "product_not_selling" as const,
+        sellingState: sellingRow.sellingState,
+      };
+    }
+
     if (isSample) {
       const [sampleRow] = await transaction
         .select({
@@ -670,6 +697,11 @@ export async function setCartItem(
       return { success: false, error: { type: "VARIANT_NOT_FOUND" } };
     case "variant_not_purchasable":
       return { success: false, error: { type: "VARIANT_NOT_PURCHASABLE" } };
+    case "product_not_selling":
+      return {
+        success: false,
+        error: { type: "PRODUCT_NOT_SELLING", sellingState: outcome.sellingState },
+      };
     case "sample_not_available":
       return { success: false, error: { type: "SAMPLE_NOT_AVAILABLE" } };
     case "above_maximum_sample_quantity":

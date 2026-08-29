@@ -100,6 +100,12 @@ export interface StoreProductCardProjection {
   /** A4. Stored since Phase 0, simply never projected until now. */
   readonly condition: (typeof product.$inferSelect)["condition"];
   readonly samplePolicy: (typeof product.$inferSelect)["samplePolicy"];
+  /**
+   * §21.2. On the CARD rather than only the detail, because a grid is where a buyer decides
+   * what to open — a discontinued listing that looks ordinary until the third click has wasted
+   * two of them.
+   */
+  readonly sellingState: (typeof product.$inferSelect)["sellingState"];
   readonly leadTimeMinDays: number | null;
   readonly leadTimeMaxDays: number | null;
   readonly mainImageUrl: string | null;
@@ -780,6 +786,7 @@ function mapProductCard(
     readonly stockQuantity: number;
     readonly condition: (typeof product.$inferSelect)["condition"];
     readonly samplePolicy: (typeof product.$inferSelect)["samplePolicy"];
+    readonly sellingState: (typeof product.$inferSelect)["sellingState"];
     readonly leadTimeMinDays: number | null;
     readonly leadTimeMaxDays: number | null;
     readonly organizationId: string;
@@ -823,6 +830,7 @@ function mapProductCard(
     variantCount: variantAggregate?.activeVariantCount ?? 0,
     condition: row.condition,
     samplePolicy: row.samplePolicy,
+    sellingState: row.sellingState,
     leadTimeMinDays: row.leadTimeMinDays,
     leadTimeMaxDays: row.leadTimeMaxDays,
     mainImageUrl,
@@ -848,6 +856,7 @@ const productSelectFields = {
   stockQuantity: product.stockQuantity,
   condition: product.condition,
   samplePolicy: product.samplePolicy,
+  sellingState: product.sellingState,
   leadTimeMinDays: product.leadTimeMinDays,
   leadTimeMaxDays: product.leadTimeMaxDays,
   publishedAt: product.publishedAt,

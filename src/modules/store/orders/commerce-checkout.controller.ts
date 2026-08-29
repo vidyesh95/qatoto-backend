@@ -153,6 +153,22 @@ function mapCheckoutError(res: Response, error: CommerceCheckoutError): void {
         data: { productId: error.productId },
       } satisfies ApiResponse);
       return;
+    /**
+     * §21.2. 409 like its neighbour, and the state is on the wire because the buyer's next move
+     * differs by cause: a paused listing is worth waiting for, a discontinued one is worth
+     * replacing — and its own page carries the `replaces` relations that say with what.
+     */
+    case "PRODUCT_NOT_SELLING":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message:
+          error.sellingState === "discontinued"
+            ? "A cart line has been discontinued by its seller."
+            : "A cart line has been paused by its seller.",
+        data: { productId: error.productId, sellingState: error.sellingState },
+      } satisfies ApiResponse);
+      return;
     case "BELOW_MINIMUM_ORDER_QUANTITY":
       res.status(409).json({
         status: "error",

@@ -518,6 +518,31 @@ export const productSamplePolicyEnum = pgEnum("product_sample_policy", [
   "refundable",
 ]);
 
+/**
+ * §21.2. Whether the SELLER still intends to sell this listing — a declaration about the future.
+ *
+ * ⚠️ THIS IS NOT `product_status` AND NOT `stock_state`, and collapsing it into either loses the
+ * only thing it says. `status` is `draft | active`, an AUTHORING state: whether the listing has
+ * been published. `stockState` is DERIVED from `stock_quantity` and the lead times by
+ * `deriveStockState`, a MEASUREMENT of what is on hand right now. Neither can express "this is
+ * finished and is not coming back", so before this column a buyer ordered a discontinued item and
+ * found out from a message.
+ *
+ * `paused` and `discontinued` are both unpurchasable; the difference is what the buyer is told.
+ * Paused is coming back. Discontinued is not, and its page exists to point somewhere else.
+ *
+ * ⚠️ IT DELIBERATELY DOES NOT GATE VISIBILITY. It is absent from `publicProductEligibility` and
+ * from the search document's `isEligible`, so a discontinued listing still answers 200 and still
+ * appears in search when asked for. That is the point of the field rather than an oversight: the
+ * inbound links keep working and the `replaces` relations stay reachable, which is the only place
+ * a buyer learns what to buy instead. Adding it to either predicate deletes the page.
+ */
+export const productSellingStateEnum = pgEnum("product_selling_state", [
+  "selling",
+  "paused",
+  "discontinued",
+]);
+
 export const productModerationStateEnum = pgEnum("product_moderation_state", [
   "pending",
   "approved",
@@ -2878,6 +2903,8 @@ export const product = pgTable(
     /** How many sellable units are inside one package. NULL means unstated, not 1. */
     unitsPerPackage: integer("units_per_package"),
     moderationState: productModerationStateEnum("moderation_state").default("pending").notNull(),
+    /** §21.2. The seller's own statement about whether this is still sold. See the enum. */
+    sellingState: productSellingStateEnum("selling_state").default("selling").notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -4648,6 +4675,18 @@ export const storeSearchDocument = pgTable(
     stockState: storeSearchStockStateEnum("stock_state"),
     samplePolicy: productSamplePolicyEnum("sample_policy"),
     condition: productConditionEnum("condition"),
+    /**
+     * §21.2. NULLABLE, unlike the column on `product`, because this table holds provider
+     * offerings and organizations too and neither has a selling state. The filter therefore has
+     * to read `IS NULL OR <> 'discontinued'` rather than a bare inequality — a bare one would
+     * drop every offering and supplier from an unfiltered search.
+     *
+     * ⚠️ IT IS A COLUMN HERE RATHER THAN A TERM IN `isEligible` ON PURPOSE. `isEligible` is
+     * element [0] of `buildStoreSearchFilters` with no `omit` escape, so folding selling state
+     * into it would remove a discontinued listing from the results AND from every facet count,
+     * which is the opposite of making it filterable.
+     */
+    sellingState: productSellingStateEnum("selling_state"),
     providerVerificationState: commerceProviderVerificationStateEnum("provider_verification_state"),
     leadTimeMaxDays: integer("lead_time_max_days"),
     searchText: text("search_text").notNull(),
@@ -4710,6 +4749,14 @@ export const storeSearchDocument = pgTable(
     index("store_search_document_fts_idx").using("gin", table.searchDocument),
     index("store_search_document_stock_idx")
       .on(table.isEligible, table.stockState, table.id)
+      .where(sql`is_eligible`),
+    /**
+     * §21.2. Mirrors the stock index above. Every search runs a selling-state predicate — the
+     * default one excludes `discontinued` even when the caller asked for nothing — so this is on
+     * the hot path rather than only on an explicit filter.
+     */
+    index("store_search_document_selling_idx")
+      .on(table.isEligible, table.sellingState, table.id)
       .where(sql`is_eligible`),
     index("store_search_document_price_idx")
       .on(table.isEligible, table.priceInCents, table.id)

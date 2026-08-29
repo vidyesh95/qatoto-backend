@@ -389,6 +389,11 @@ export interface PublicProduct {
   readonly unitsPerPackage: number | null;
   readonly moderationState: "pending" | "approved" | "rejected" | "suspended";
   /**
+   * §21.2. The seller's own statement about whether this is still sold. Distinct from
+   * `status` (draft/active, an authoring state) and from the derived stock state.
+   */
+  readonly sellingState: "selling" | "paused" | "discontinued";
+  /**
    * A5/§19.9. Why the Publish control is disabled, named field by field, so the seller learns it
    * from the form rather than from a 422 after they press the button.
    *
@@ -462,6 +467,7 @@ const PRODUCT_SCALAR_COLUMNS = {
   packageGrossWeightGrams: product.packageGrossWeightGrams,
   unitsPerPackage: product.unitsPerPackage,
   moderationState: product.moderationState,
+  sellingState: product.sellingState,
 } as const;
 
 const PRODUCT_IMAGE_VIEW_COLUMNS = {
@@ -589,6 +595,7 @@ function toPublicProduct(
     packageGrossWeightGrams: row.packageGrossWeightGrams,
     unitsPerPackage: row.unitsPerPackage,
     moderationState: row.moderationState,
+    sellingState: row.sellingState,
     listingCompleteness: projectListingCompleteness({
       title: row.title,
       priceInCents: row.priceInCents,
@@ -1385,6 +1392,7 @@ export async function updateProduct(
     scalarUpdates.countryOfOriginCode = patch.countryOfOriginCode;
   if (patch.unitOfMeasure !== undefined) scalarUpdates.unitOfMeasure = patch.unitOfMeasure;
   if (patch.samplePolicy !== undefined) scalarUpdates.samplePolicy = patch.samplePolicy;
+  if (patch.sellingState !== undefined) scalarUpdates.sellingState = patch.sellingState;
   if (patch.samplePriceInCents !== undefined)
     scalarUpdates.samplePriceInCents = patch.samplePriceInCents;
   if (patch.maximumSampleQuantity !== undefined)
