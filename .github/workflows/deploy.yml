@@ -8,14 +8,23 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Dokploy Deployment
+      - name: Create GitHub Deployment
+        uses: chrnorm/deployment-action@v2
+        id: deployment
+        with:
+          token: '${{ github.token }}'
+          environment-url: 'https://qatoto.com'
+          environment: production
+
+      - name: Trigger Dokploy Compose Deployment
+        id: dokploy_deploy
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
           DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
         run: |
           if [ -z "$DOKPLOY_COMPOSE_ID" ]; then
-            echo "Error: DOKPLOY_COMPOSE_ID secret is empty or not set in GitHub repository settings."
+            echo "Error: DOKPLOY_COMPOSE_ID secret is empty or not set."
             exit 1
           fi
 
@@ -36,3 +45,20 @@ jobs:
             echo "Deployment failed with status $HTTP_STATUS"
             exit 1
           fi
+
+      - name: Update Deployment Status (Success)
+        if: success()
+        uses: chrnorm/deployment-status@v2
+        with:
+          token: '${{ github.token }}'
+          environment-url: 'https://qatoto.com'
+          state: 'success'
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
+
+      - name: Update Deployment Status (Failure)
+        if: failure()
+        uses: chrnorm/deployment-status@v2
+        with:
+          token: '${{ github.token }}'
+          state: 'failure'
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
