@@ -490,6 +490,10 @@ The `moderate_commerce` check runs **inside the service, not as route middleware
 `Result` that takes part in the controller's exhaustive error switch, and so it can be proven to run
 before any id is read. This is the §11 rule about id oracles, applied.
 
+**The tree says what a category IS CALLED and nothing about what a listing inside it must
+STATE.** That second half is §20 — per-category attribute definitions, which hang off these
+same rows and inherit down this same `parentCategoryId` edge. It is not built.
+
 Eleven `platform_audit_event_kind` members ship with it: `commerce_category_created`,
 `commerce_category_updated`, `commerce_category_reordered`, `commerce_category_image_replaced`,
 `commerce_category_retired`, `commerce_category_request_approved`,
@@ -506,7 +510,8 @@ that a buyer contract needs:
 - optional server-owned `samplePriceInCents`
 - `product.leadTimeMinDays`, `leadTimeMaxDays`
 - `product.moderationState`: `pending | approved | rejected | suspended`
-- optional structured specification schema/value tables
+- optional structured specification schema/value tables — **this line is now §20**, and it is
+  the only item in this list still unbuilt
 
 An active seller status alone is insufficient for public visibility: product status, moderation,
 organization trade state, and category state must all be eligible.
@@ -1581,6 +1586,44 @@ Beyond the specification, this phase also added `lead_time_min_days_snapshot` to
 order lines (`0108`) — §19.4 reports manufacturing as a RANGE, and only the maximum had ever been
 snapshotted. Nothing is backfilled: an order placed before the column existed reports `daysMin: null`
 and says so.
+
+> **⚠️ THIS LIST STOPS AT 20 AND THE CODE DOES NOT.** Phases 21, 22 and 23 shipped and are
+> recorded where their arguments live — A37 (the buyer workspace, `0110`–`0111`), A39 (the
+> collection reads) and A40 (the incoterm vocabulary, `0115`/`0116`) — rather than here. Numbering
+> continues from the code, not from this list, which is why the next unbuilt phase is **24**.
+
+### Phase 24 — category attribute templates — **NOT BUILT, specified at §20**
+
+The parametric catalogue. One migration (`0150`) for
+`commerce_category_attribute`, `commerce_category_attribute_choice`,
+`commerce_product_attribute_value` and `commerce_category_attribute_request`; the resolved
+inherited read on `GET /store/categories/:slug/attributes`; admin CRUD and the request queue on
+the existing `commerce-categories.routes.ts`; a seller replace-set at
+`PUT /products/:productId/attributes` matching the shipped variants/highlights/customization
+shape; the `attribute` and `attributeRange` query keys with their `EXISTS` predicates; and
+`attributeFacets` on both `/store/search` and `/store/categories/:slug`.
+
+**The facets and the filters ship together or neither ships** (§20.6). Order within the phase:
+tables → admin authoring → seller write → public read → filter → facet. A seller cannot fill in a
+template that does not exist, and a facet counting rows nobody has written is a zero.
+
+⚠️ **The first thing to verify is not a route.** §20.1's premise is that
+`commerce_product_specification` is empty in production because no client ever wrote to it. Count
+the rows before building on it; a non-zero count means somebody wired the seller path and this
+section's opening paragraph is wrong.
+
+### Phase 25 — model number, selling state, product documents — **NOT BUILT, specified at §21**
+
+Three independent pieces, no shared migration:
+
+- `model_number` into `store_search_document` plus an exact-match rank branch — **no migration**;
+- `product_selling_state` enum and column, a filter and a facet bucket;
+- `commerce_product_document` on the public object-storage path, with the scan pipeline in front
+  of it and the explicit byte cleanup behind it.
+
+Each is independently shippable and none blocks §20. Take `model_number` first: it is the
+smallest, it needs no migration, and it is the one that makes an exact-part-code search work for
+every category rather than only for electronics.
 
 Each phase ships backend contracts before its frontend controls are presented as functional.
 
@@ -3050,6 +3093,326 @@ and a lane can be perfectly authored and still report them.
 It makes the tables **authorable**, not **filled**. A36's commercial half stays open: forwarders
 sell lane price lists, Qatoto has bought none, and until it does the freight surface answers
 `no_active_rate_card` on every lane no matter how well this sequence is documented.
+
+---
+
+## 20. Category attribute templates — the parametric half of the catalogue
+
+**NOT BUILT. This section is the design, not a description of code.** §12's Phase 24 is its
+delivery order. The frontend half is `qatoto-frontend/docs/CATEGORY_ATTRIBUTES_STRUCTURE.md`.
+
+### 20.1 What is wrong today, measured rather than asserted
+
+`commerce_product_specification` (§A3) is a free-text `specification_key` /
+`specification_value` pair with a free-text `specification_group`. Two sellers listing the same
+chair write `Material` / `Wood` and `material type` / `Solid oak`. Both are reasonable. Neither
+can be filtered, and the two rows cannot be put side by side in a comparison table.
+
+Worse, and this is what reorders the work: **the write surface has never been used.**
+`products.schemas.ts:103-120` accepts `specifications[]` on create and PATCH — 40 entries, keys
+1–80 chars, values 1–500, case-insensitive key uniqueness enforced by a `.refine()` — and no
+client has ever sent one. The seller wizard has five steps (identity, images, description,
+pricing, review) and none of them is a specification step. So the number of specification rows
+in production is expected to be **zero**, and the two buyer surfaces built to render them —
+the group-tabbed spec sheet and the comparison table that aligns rows on `key` — currently
+render nothing.
+
+That is the whole finding. Adding a spec step alone would fill those surfaces with free text
+that still cannot be filtered. Adding a vocabulary alone is impossible while nothing writes.
+Phase 24 is both.
+
+### 20.2 The data
+
+Three tables, plus a request table that mirrors `commerce_category_request` exactly.
+
+```ts
+export const commerceCategoryAttributeValueKindEnum = pgEnum(
+  "commerce_category_attribute_value_kind",
+  ["enum", "number", "text"],
+);
+
+commerce_category_attribute
+  id
+  categoryId            -> commerce_category   ON DELETE RESTRICT
+  attributeKey          snake_case, stable, the wire identity
+  label                 "Voltage"              -- display
+  groupLabel            "Electrical" | NULL    -- the spec-sheet tab
+  valueKind             enum | number | text
+  unitLabel             "V" | NULL             -- number kind only
+  numericScale          smallint               -- number kind only
+  isFilterable          boolean
+  isRequiredForPublish  boolean
+  position
+  createdAt, updatedAt
+  UNIQUE (categoryId, attributeKey)
+  UNIQUE (categoryId, position)
+  CHECK  unit_label IS NULL       OR value_kind = 'number'
+  CHECK  numeric_scale IS NULL    OR value_kind = 'number'
+  CHECK  value_kind = 'number'    = (numeric_scale IS NOT NULL)
+  CHECK  NOT (is_filterable AND value_kind = 'text')
+
+commerce_category_attribute_choice                 -- enum kind only
+  id
+  attributeId  -> commerce_category_attribute  ON DELETE CASCADE
+  choiceValue  snake_case
+  label
+  position
+  UNIQUE (attributeId, choiceValue)
+  UNIQUE (attributeId, position)
+
+commerce_product_attribute_value
+  id
+  productId    -> product                            ON DELETE CASCADE
+  attributeId  -> commerce_category_attribute        ON DELETE RESTRICT
+  choiceId     -> commerce_category_attribute_choice ON DELETE RESTRICT | NULL
+  numericValueScaled  bigint | NULL
+  textValue           text   | NULL
+  createdAt
+  UNIQUE (productId, attributeId)
+  INDEX  (attributeId, choiceId)                    -- the enum facet + filter
+  INDEX  (attributeId, numericValueScaled)          -- the range filter
+  CHECK  num_nonnulls(choice_id, numeric_value_scaled, text_value) = 1
+```
+
+**No jsonb, and that is not a preference.** `studio.ts:365-367` states the schema "has no jsonb
+column anywhere and rejects jsonb by name for exactly this shape", and §A3 already chose a table
+over a bag for the free-text specs. A jsonb attribute bag would also make every predicate in
+§20.5 an unindexable containment operator over a column whose keys nothing constrains.
+
+### 20.3 Attributes are INHERITED down the tree
+
+An attribute defined on `electronics` applies to every leaf beneath it. The resolved set for a
+product is the union of the attributes on its category and every ancestor, ordered by depth then
+`position`, with a nearer definition of the same `attributeKey` shadowing a farther one.
+
+Resolution walks upward from the leaf. **Reuse `buildCategoryTrail`**
+(`store-catalog.service.ts:691`) — it already walks `parentCategoryId` with a depth cap of 16 and
+is the function the breadcrumb trail uses, so the attribute set and the breadcrumb cannot
+disagree about the ancestry.
+
+⚠️ **Without inheritance this feature does not work.** An admin would author "voltage" once per
+leaf under Electronics, the copies would drift, and two leaves would end up with `voltage` and
+`voltage_volts` — the free-text problem re-created one level up, at the only place that was
+supposed to be canonical.
+
+### 20.4 Who authors them, and what a seller does when a field is missing
+
+The taxonomy's own answer, applied unchanged: **an admin holding `moderate_commerce` owns the
+definitions, and a seller whose field does not exist files a request.**
+`commerce_category_attribute_request` mirrors `commerce_category_request` (§4.3a) column for
+column — `proposedAttributeKey`, `proposedLabel`, `proposedValueKind`, `proposedUnitLabel`,
+`justification`, `state pending|approved|rejected`, `reviewedByUserId`, `reviewedAt`,
+`reviewNote`, `resultingAttributeId`, the `(state, createdAt, id)` queue index, the
+`CHECK (reviewed_at IS NULL) = (state = 'pending')` pair, and a verdict that is a discriminated
+union where **rejection requires a note and approval does not**.
+
+**A pending request never blocks a listing.** The seller types the value, it lands as an ordinary
+free-text `commerce_product_specification` row, and the listing publishes immediately. Approval
+promotes the vocabulary; it does not gate the catalogue. This is the same shape as a product
+parking in `misc` while its category request is pending, and it is why §20 can ship before any
+category has a single attribute defined.
+
+Two rules the authoring surface enforces:
+
+- **`attributeKey` is absent from the PATCH body**, which is `.strict()`, so sending it is a 422.
+  It is the wire identity a stored value points at through `attributeId` and a filter names in a
+  query string. An attribute that needs a different key is a new attribute.
+- **There is no DELETE while values exist.** `commerce_product_attribute_value.attributeId` is
+  `ON DELETE RESTRICT`. `isFilterable → false` removes it from browse and is reversible;
+  deletion is not.
+
+### 20.5 The query surface
+
+`SearchQuerySchema` (`storefront/store.schemas.ts:56`) is `.strict()`. An arbitrary `?voltage=5v`
+is therefore **a 422 that kills the entire read**, not an ignored parameter — the same trap A25
+recorded for the seven undeclared filters. So attribute filters travel as two bounded, repeatable
+keys rather than as one key per attribute:
+
+```
+?attribute=voltage_volts:5v            repeatable, max 6
+?attributeRange=capacitance_uf:100:470 repeatable, max 4, scaled integers
+```
+
+- `attribute` — `z.array(z.string().regex(/^[a-z0-9_]{1,64}:[a-z0-9_]{1,64}$/)).max(6)`.
+  **OR within one `attributeKey`, AND across different keys** — "5 V or 12 V, and SOP-8" is the
+  only reading a buyer means.
+- `attributeRange` — `z.array(z.string().regex(/^[a-z0-9_]{1,64}:-?\d{1,15}:-?\d{1,15}$/)).max(4)`.
+  The bounds are already scaled by the definition's `numericScale`; the server never parses a
+  decimal off a query string.
+- The caps are the point. An unbounded array of `EXISTS` subqueries is a query-cost hole a
+  crawler will find.
+- An attribute filter **forces `documentKind = "product"`**. A provider offering has no category
+  attributes, so a mixed result set could only ever answer "products matching, plus every
+  offering", which is not a filter.
+
+Execution: one `EXISTS` against `commerce_product_attribute_value` per requested `attributeKey`,
+correlated on `store_search_document.entity_id`, appended to the `baseFilters` array assembled at
+`store-search.service.ts:249-297`. **No new denormalized column and no second refresh path** —
+the search document already carries the product id, and `refresh-store-search-document` stays
+responsible only for text.
+
+⚠️ **`store_search_document` still needs the attribute VALUES in its indexed text**, for the same
+reason it already folds in specification keys, values and groups (`store-search.service.ts:1080-1083`).
+A buyer typing "5V regulator" in the free-text box must match a product whose voltage is a
+structured value; otherwise structuring a field would make it *less* findable than leaving it as
+free text, and sellers would rationally stop filling the form in.
+
+### 20.6 Facets, and the rule that keeps the UI quiet
+
+`computeStoreSearchFacets` (`store-search.service.ts:796-909`) gains `attributeFacets`, computed
+**only when `category` is set** and only for attributes in the resolved inherited set with
+`isFilterable = true`:
+
+| `valueKind` | Facet shape |
+| ----------- | ----------- |
+| `enum` | `{ attributeKey, label, groupLabel, buckets: [{ value, label, count }] }` |
+| `number` | `{ attributeKey, label, unitLabel, numericScale, minScaled, maxScaled, count }` |
+| `text` | **never** — a text attribute is display-only |
+
+**A category with no filterable attributes returns an empty array, and the client renders no new
+control.** That is the whole of the UI-complexity guarantee: Books & Media pays nothing,
+Electronics gets voltage, tolerance and package. Nothing about this is a client-side decision —
+the backend simply publishes fewer facets.
+
+The counts come from the same `store_search_document` join the filter reads, per §9's rule that
+a facet and its result set must be computed from one place. A count the query cannot act on is
+what A25 forbade, so **`attributeFacets` and the `attribute` / `attributeRange` keys ship in the
+same phase or neither ships.**
+
+### 20.7 `GET /store/categories/:slug` gains the filter surface
+
+The category detail read accepts exactly `limit` and `cursor` today, which is why its four facets
+are rendered as a read-only orientation summary with a filed `TODO(backend)` on the frontend. A
+category page is where a buyer has already chosen the category, so it is the **only** surface on
+which per-category attribute chips mean anything. Give it the `SearchQuerySchema` filter set
+minus `category` (which the path segment already carries) and minus `documentKind` (a category
+page lists products, per `getCategoryFacets`'s own comment at `store-catalog.service.ts:673-675`).
+
+### 20.8 What this deliberately does not do
+
+- **It does not replace `commerce_product_specification`.** That table stays as the fallback for
+  anything no definition covers, and the product detail renders **one** spec sheet: structured
+  values first, grouped by `groupLabel`, free-text rows after. Two separate sections labelled
+  "Specifications" and "Other specifications" would expose an implementation detail as a
+  taxonomy of truth.
+- **It is not a compliance record.** A `ce_marking: yes` enum attribute is a seller's claim about
+  a model, exactly like every other attribute. The moderated claim with evidence behind it is
+  `commerce_organization_certification` (§A13), which is organization-scoped and stays that way.
+  These two must never be rendered with the same affordance.
+- **It does not add axes to variants.** A26 defers multi-axis variants and this changes nothing
+  about that: an attribute describes the LISTING, and a variant that differs in voltage is still
+  a separate variant row.
+
+---
+
+## 21. Three listing facts the catalogue still cannot state
+
+**NOT BUILT.** §12's Phase 25. Each is small, each helps every category, and none of them needs a
+new router. Together with §20 they are what a buyer needs before "which of these do I buy" is a
+question the site can answer.
+
+### 21.1 `model_number` is on the row and reaches nobody
+
+`product.model_number` exists (`store.ts:2851`), has a CHECK (`product_model_unit_ck`), and is
+projected onto the buyer product detail. It is **not** in the seller wizard, **not** in
+`store_search_document`, and **not** a filter — so the one column that would let a buyer search
+by an exact part code is inert.
+
+Three edits, no migration:
+
+1. Let the seller type it. The label is category vocabulary, not a schema question — part number
+   for electronics, model number for furniture, style code for apparel — and that is the
+   frontend's problem, not this document's.
+2. `refresh-store-search-document.ts` — add `model_number` to the indexed text, beside the
+   specification key/value/group already folded in.
+3. `store-search.service.ts` — an exact-match branch ahead of the `websearch_to_tsquery` path
+   (`:328`) so a query equal to a `model_number` ranks that product first. `ts_rank_cd` will not
+   do this on its own: `LM358` is one lexeme among many and scores like any other.
+
+⚠️ **Do not add a UNIQUE constraint.** Two sellers legitimately list the same manufacturer part,
+and that is the entire premise of a parametric marketplace — Octopart's value is precisely that
+`LM358` returns many offers. Uniqueness belongs on `sku`, which is already unique per seller
+organization.
+
+### 21.2 Nothing on a listing can say "discontinued"
+
+`product.status` is `draft | active` — an **authoring** state. `deriveStockState`
+(`store-catalog.service.ts:383-398`) is a **measurement** of `stock_quantity` and lead time. A
+seller's **declaration about the future** — this is finished, or paused, or coming back — has no
+column, so a buyer orders a thing that no longer exists and finds out in a message.
+
+```ts
+export const productSellingStateEnum = pgEnum("product_selling_state", [
+  "selling",
+  "paused",
+  "discontinued",
+]);
+```
+
+Default `selling`, `NOT NULL`, on `product`. Filterable, and a facet bucket.
+
+⚠️ **A discontinued listing's page STAYS LIVE and answers 200.** This is the point of the field
+rather than a concession. The page suppresses the buy actions, renders the state plainly, and
+lists alternates — and the machinery for the alternates already shipped:
+`commerce_product_relation` (`store.ts:3262`) carries a `replaces` kind, authored through
+`PUT /products/:productId/relations` and derived nightly by `derive-product-relations`. Deleting
+or 404ing the listing would destroy the inbound links and the one place a buyer could learn what
+to buy instead.
+
+Search excludes `discontinued` by default, because a default that showed dead listings would make
+every unfiltered result set worse. `paused` stays visible — it is temporary by definition and the
+seller said so.
+
+### 21.3 There is no public document on a product
+
+`commerce_encrypted_document` is envelope-encrypted, organization-private, virus-scanned and
+linked to RFQs, quote revisions and thread messages. It is the right home for a business
+registration certificate and the wrong home for a datasheet, which is published material a buyer
+reads *before* deciding to talk to anybody.
+
+`commerce_product_document`, modelled on **`video_document`** (`studio.ts:628`) — the only public
+object-storage document in the codebase — rather than on the encrypted store:
+
+```
+commerce_product_document
+  id
+  productId          -> product ON DELETE CASCADE
+  documentKind       datasheet | manual | care_guide | certificate | other
+  objectStorageKey   derived from contentSha256, never client-supplied
+  contentSha256      64 lowercase hex, CHECK-enforced
+  byteSize           CHECK > 0
+  fileName           the uploader's own name, sanitized; display + download name only
+  state              pending_scan | available | quarantined | deleted
+  position
+  createdAt
+  UNIQUE (productId, contentSha256)
+```
+
+- **⚠️ THERE IS NO `url` COLUMN, AND ADDING ONE WOULD BE A REGRESSION.** A URL outlives the gate:
+  a link handed out while the listing was public keeps working after it is unpublished, suspended
+  by a moderator, or its organization's trade state changes, because the bytes do not know the
+  row's visibility changed. Downloads go through
+  `GET /store/products/:productSlug/documents/:documentId/file`, which re-checks the whole §4.4
+  eligibility chain — product status **and** `moderation_state` **and** organization trade state
+  **and** category state — on that request. The bucket stays private.
+- **Content-addressed**, so a retried upload converges on the same key instead of duplicating.
+  That is why the route takes no `idempotency()` middleware, the same argument the research-paper
+  and video-document routes make.
+- **PDF only, sniffed by magic bytes.** The mimetype gate in `src/middleware/upload.ts:35-45`
+  says of itself that it is not the validation, and a public download path is the worst place to
+  learn that lesson twice.
+- **Scanned before it is visible.** Reuse `document-scanner.adapter.ts` and
+  `sweep-pending-document-scans.ts`. The upload answers **202** with the row in `pending_scan`,
+  exactly as `POST /commerce/documents` does, and the product detail omits the document until it
+  is `available`. A 202 is not a result.
+- New `products` key prefix in `object-storage.ts:48-51` and a
+  `PRODUCT_DOCUMENT_URL_TTL_SECONDS` beside the other four.
+- **⚠️ THE CASCADE CLEANS ROWS, NOT BYTES.** `deleteProduct` must delete the objects explicitly,
+  beside the Cloudinary assets it already cleans up — SQL cannot reach object storage and there
+  is no database-level backstop. `deleteVideo` is the precedent to copy.
+
+One document per product is not enough and unbounded is a bucket-filling attack: cap at **five**,
+in the service, the way the nine-image cap is enforced.
 
 ---
 
