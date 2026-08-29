@@ -12,8 +12,13 @@ jobs:
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_APP_ID }}
+          DOKPLOY_COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
         run: |
+          if [ -z "$DOKPLOY_COMPOSE_ID" ]; then
+            echo "Error: DOKPLOY_COMPOSE_ID secret is empty or not set in GitHub repository settings."
+            exit 1
+          fi
+
           BASE_URL="${DOKPLOY_URL%/}"
 
           RESPONSE=$(curl -s -S -w "\n%{http_code}" -X POST "${BASE_URL}/api/compose.deploy" \
