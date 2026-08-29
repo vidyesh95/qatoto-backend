@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 // Pure projection — no database, no Cloudinary. The stubs exist only so importing the service
 // module does not open a pool.
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
+vi.mock("#src/lib/object-storage.js", () => ({
+  uploadProductDocument: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  deleteProductDocument: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
 vi.mock("#src/lib/cloudinary.js", () => ({
   deleteAllProductImages: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   deleteProductImage: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),

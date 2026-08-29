@@ -407,6 +407,17 @@ export const ProductImageParamsSchema = ProductParamsSchema.extend({
   imageId: z.string().trim().min(1).max(200),
 }).strict();
 
+/** §21.3. The multipart TEXT field beside the `document` file part. */
+export const UploadProductDocumentFieldsSchema = z
+  .object({
+    documentKind: z.enum(["datasheet", "manual", "care_guide", "other"]),
+  })
+  .strict();
+
+export const ProductDocumentParamsSchema = ProductParamsSchema.extend({
+  documentId: z.string().trim().min(1).max(200),
+}).strict();
+
 export const HighlightParamsSchema = ProductParamsSchema.extend({
   highlightId: z.string().trim().min(1).max(200),
 }).strict();

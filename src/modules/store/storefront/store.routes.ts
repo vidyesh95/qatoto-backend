@@ -1,7 +1,11 @@
 import express from "express";
 
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
-import { storeFactoryReadLimiter, storeReadLimiter } from "#src/middleware/rate-limit.js";
+import {
+  productDocumentDownloadLimiter,
+  storeFactoryReadLimiter,
+  storeReadLimiter,
+} from "#src/middleware/rate-limit.js";
 import * as categoryAttributesController from "#src/modules/store/catalog/commerce-category-attributes.controller.js";
 import * as communityCofounderController from "#src/modules/store/community/community-cofounder.controller.js";
 import * as communityForumController from "#src/modules/store/community/community-forum.controller.js";
@@ -40,6 +44,20 @@ storeRouter.get("/products/:productSlug", storeController.getProduct);
  * adjacent makes the pair obvious.
  */
 storeRouter.get("/products/:productSlug/companions", storeController.getProductCompanions);
+
+/**
+ * GET /store/products/:productSlug/documents/:documentId/file
+ *
+ * §21.3. 302 to a five-minute presigned URL after re-checking the whole eligibility chain. Its own
+ * limiter, LOWER than an authed download's: with `attachOptionalUser` this and the video document
+ * route are the only storage paths the open internet can start, and a presigned URL is a bearer
+ * capability that outlives the check that minted it.
+ */
+storeRouter.get(
+  "/products/:productSlug/documents/:documentId/file",
+  productDocumentDownloadLimiter,
+  storeController.downloadProductDocument,
+);
 /**
  * A16. Indicative only, and never a promise — see the controller. The destination is a
  * query parameter because the buyer has not chosen an address yet on a product page.

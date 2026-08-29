@@ -5,6 +5,7 @@ import {
   commerceCategory,
   commerceOrganization,
   commerceProductCustomizationOption,
+  commerceProductDocument,
   commerceProductHighlight,
   commerceProductSpecification,
   commerceProductVariant,
@@ -21,6 +22,7 @@ import {
   loadProductVentureProvenance,
   type ProductVentureProvenanceProjection,
 } from "#src/modules/store/catalog/commerce-product-venture.service.js";
+import { productDocumentDownloadPath } from "#src/modules/store/catalog/product-document-paths.js";
 import {
   tradingOrganizationCountryCode,
   withTradingOrganizationCountryCode,
@@ -161,6 +163,21 @@ export interface StoreProductPricingTierProjection {
 }
 
 /** A6. Richer than `keyFeatures`: a title, a body, and an image. */
+/**
+ * §21.3. One public document on a listing.
+ *
+ * ⚠️ NO `objectStorageKey` AND NO `url`. The key never leaves the server, and a URL would outlive
+ * the eligibility check — `downloadPath` sends the reader back through the gate every time.
+ */
+export interface StoreProductDocumentProjection {
+  readonly id: string;
+  readonly documentKind: "datasheet" | "manual" | "care_guide" | "other";
+  readonly fileName: string;
+  readonly byteSize: number;
+  readonly position: number;
+  readonly downloadPath: string;
+}
+
 export interface StoreProductHighlightProjection {
   readonly id: string;
   readonly title: string;
@@ -225,6 +242,8 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
   readonly pricingTiers: readonly StoreProductPricingTierProjection[];
   readonly variants: readonly StoreProductVariantProjection[];
   readonly highlights: readonly StoreProductHighlightProjection[];
+  /** §21.3. Public PDFs. `downloadPath` is a path on this API — never a storage URL. */
+  readonly documents: readonly StoreProductDocumentProjection[];
   readonly customizationOptions: readonly StoreProductCustomizationOptionProjection[];
   readonly specifications: readonly {
     readonly key: string;
@@ -376,6 +395,43 @@ export async function resolveEligibleProductRefBySlug(
     .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
     .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
     .where(and(publicProductEligibility, eq(product.publicSlug, productSlug)))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * §21.3. Resolves one public document's storage key, re-checking the WHOLE eligibility chain.
+ *
+ * ⚠️ THIS IS THE GATE THE MISSING `url` COLUMN EXISTS TO MAKE POSSIBLE. A stored URL would keep
+ * working after the listing is unpublished, its organization suspended or its category retired,
+ * because bytes do not know a row's visibility changed. This runs `publicProductEligibility` on
+ * every single file request, and only then is a five-minute presigned URL minted.
+ *
+ * ⚠️ `sellingState` IS DELIBERATELY ABSENT from that predicate, so a DISCONTINUED listing's
+ * documents stay downloadable. That is the same rule that keeps a discontinued page answering 200
+ * — and it is exactly right here: the buyer who most needs a manual is the one who already owns
+ * the thing the seller stopped making.
+ */
+export async function resolvePublicProductDocument(
+  productSlug: string,
+  documentId: string,
+): Promise<{ readonly objectStorageKey: string; readonly fileName: string } | null> {
+  const [row] = await db
+    .select({
+      objectStorageKey: commerceProductDocument.objectStorageKey,
+      fileName: commerceProductDocument.fileName,
+    })
+    .from(commerceProductDocument)
+    .innerJoin(product, eq(product.id, commerceProductDocument.productId))
+    .innerJoin(commerceOrganization, eq(commerceOrganization.id, product.sellerOrganizationId))
+    .innerJoin(commerceCategory, eq(commerceCategory.id, product.categoryId))
+    .where(
+      and(
+        publicProductEligibility,
+        eq(product.publicSlug, productSlug),
+        eq(commerceProductDocument.id, documentId),
+      ),
+    )
     .limit(1);
   return row ?? null;
 }
@@ -1185,6 +1241,7 @@ export async function getPublicProductBySlug(
     allPricingTiers,
     specifications,
     highlights,
+    documentRows,
     customizationOptions,
     variantRows,
     categoryTrail,
@@ -1241,6 +1298,21 @@ export async function getPublicProductBySlug(
       .from(commerceProductHighlight)
       .where(eq(commerceProductHighlight.productId, row.id))
       .orderBy(asc(commerceProductHighlight.position)),
+    /**
+     * §21.3. The public PDFs. ⚠️ `objectStorageKey` is NOT selected and must never be: the buyer
+     * gets a `downloadPath` on this API, and the key is the thing the gate protects.
+     */
+    db
+      .select({
+        id: commerceProductDocument.id,
+        documentKind: commerceProductDocument.documentKind,
+        fileName: commerceProductDocument.fileName,
+        byteSize: commerceProductDocument.byteSize,
+        position: commerceProductDocument.position,
+      })
+      .from(commerceProductDocument)
+      .where(eq(commerceProductDocument.productId, row.id))
+      .orderBy(asc(commerceProductDocument.position)),
     db
       .select({
         id: commerceProductCustomizationOption.id,
@@ -1376,6 +1448,21 @@ export async function getPublicProductBySlug(
       pricingTiers: sharedPricingTiers,
       variants,
       highlights,
+      /**
+       * §21.3. `downloadPath`, NEVER a URL — the buyer gets a path on this API which re-checks
+       * eligibility on every fetch and only then mints a five-minute presigned link. A stored URL
+       * would keep working after the listing was unpublished.
+       */
+      documents: documentRows.map((documentRow) => ({
+        id: documentRow.id,
+        documentKind: documentRow.documentKind,
+        fileName: documentRow.fileName,
+        byteSize: documentRow.byteSize,
+        position: documentRow.position,
+        // `productSlug`, the function's own parameter — `row.publicSlug` is typed nullable even
+        // though `publicProductEligibility` guarantees it is not, and this avoids asserting that.
+        downloadPath: productDocumentDownloadPath(productSlug, documentRow.id),
+      })),
       customizationOptions,
       specifications,
       categoryTrail,

@@ -184,6 +184,12 @@ describe("per-route body caps", () => {
       // Commerce verification evidence is multipart and bounded by its upload middleware,
       // not by the JSON parser's per-route budget.
       import("#src/modules/store/organizations/upload-commerce-verification-evidence.js"),
+      // §21.3's product-document PDF upload. It carries a TEXT PART (`documentKind`) alongside
+      // the file, so without this import `isMultipart()` would not recognize it, the sweep would
+      // treat it as a JSON body-reading route, and it would be reported as missing a cap. Its
+      // bytes are bounded by multer's 25 MB limit, imported from `src/modules/rnd/pdf.ts` so the
+      // two cannot disagree.
+      import("#src/modules/store/catalog/upload-product-document.js"),
       // The promotional-carousel image routes. The create route carries TEXT PARTS
       // alongside the file, so without this import `isMultipart()` would not recognize
       // it, the sweep would treat it as a JSON body-reading route, and it would be

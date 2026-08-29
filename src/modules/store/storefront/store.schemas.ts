@@ -39,6 +39,11 @@ export const ProductParamsSchema = z
   .object({ productSlug: z.string().trim().min(1).max(120) })
   .strict();
 
+/** §21.3. `GET /store/products/:productSlug/documents/:documentId/file`. */
+export const ProductDocumentFileParamsSchema = ProductParamsSchema.extend({
+  documentId: z.string().trim().min(1).max(200),
+}).strict();
+
 export const OrganizationParamsSchema = z
   .object({ organizationSlug: z.string().trim().min(1).max(100) })
   .strict();

@@ -38,6 +38,10 @@ const transactionMock = vi.fn<(callback: (transaction: unknown) => Promise<unkno
 vi.mock("#src/db/index.js", () => ({
   db: { transaction: transactionMock },
 }));
+vi.mock("#src/lib/object-storage.js", () => ({
+  uploadProductDocument: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  deleteProductDocument: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
 vi.mock("#src/lib/cloudinary.js", () => ({
   deleteAllProductImages: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
   deleteProductImage: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),

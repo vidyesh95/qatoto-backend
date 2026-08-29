@@ -3083,6 +3083,100 @@ export const commerceProductVariant = pgTable(
  * keyFeatures already anticipated this: "promote to a table only if features ever
  * grow attributes".
  */
+/**
+ * §21.3. What KIND of file a seller attached to a listing.
+ *
+ * ⚠️ A SEPARATE ENUM FROM `commerce_document_kind`, DELIBERATELY. That one belongs to
+ * `commerce_encrypted_document` — business registration, tax registration, identity, bank
+ * evidence — which is envelope-encrypted, organization-private and moderator-read. These are
+ * public marketing and support files a buyer downloads. Sharing one vocabulary between them
+ * would put a datasheet and a passport scan in the same list of words.
+ *
+ * ⚠️ THERE IS NO `certificate` VALUE, AND THE SPEC ASKED FOR ONE. §21.3 lists it, two
+ * paragraphs after §21.3 itself says `commerce_encrypted_document` "is the right home for a
+ * business registration certificate and the wrong home for a datasheet" — the spec contradicts
+ * itself, the same way its §21.1 "no migration" claim did. `commerce_organization_certification`
+ * already carries reviewed compliance claims: a three-way state, a reviewer who may not be the
+ * submitter, validity dates, and evidence that never rides the wire. A file a seller drops here
+ * labelled "certificate" would look identical to a buyer and have none of that behind it.
+ *
+ * The asymmetry settles it rather than taste: Postgres cannot DROP an enum value, but adding one
+ * is a one-line migration. Four kinds is reversible; five is not.
+ */
+export const commerceProductDocumentKindEnum = pgEnum("commerce_product_document_kind", [
+  "datasheet",
+  "manual",
+  "care_guide",
+  "other",
+]);
+
+/**
+ * §21.3. A public PDF a buyer can download from a listing — the assembly guide, the care card,
+ * the dimensional drawing, the datasheet.
+ *
+ * MODELLED ON `video_document` (`studio.ts`), NOT on `commerce_encrypted_document`. The latter is
+ * private, encrypted and scanned; this is published material a buyer reads BEFORE deciding to
+ * talk to anybody, which is a different thing with a different threat model.
+ *
+ * ⚠️ THERE IS NO `url` COLUMN, AND ADDING ONE WOULD BE A REGRESSION. A URL outlives the gate: a
+ * link handed out while the listing was public keeps working after it is unpublished, suspended
+ * by a moderator, or its organization's trade state changes, because the bytes do not know the
+ * row's visibility changed. Downloads go through
+ * `GET /store/products/:productSlug/documents/:documentId/file`, which re-checks the whole §4.4
+ * eligibility chain on that request and then 302s to a URL that lives five minutes. The bucket
+ * stays private.
+ *
+ * ⚠️ AND THERE IS NO `state` COLUMN, WHICH IS A DECISION AND NOT AN OMISSION. §21.3 left the scan
+ * model open. `video_document` — the precedent this copies — is not scanned at all, and the only
+ * working scanner is an EICAR-only fake whose `clamav` sibling returns `SCANNER_UNAVAILABLE`.
+ * Unlike the payment factory, that fake IS permitted in production, so a `pending_scan` gate here
+ * would stamp every upload `clean` and promote it while implying a review nobody performed. The
+ * route therefore answers 201, not 202, and NO COPY ANYWHERE MAY SAY THE FILE IS CHECKED.
+ *
+ * CONTENT-ADDRESSED: `object_storage_key` is derived from `content_sha256`, never client-supplied,
+ * so a retried upload converges on the same object instead of duplicating it. That is why the
+ * route carries no `idempotency()` middleware, the same argument the research-paper and
+ * video-document routes make.
+ *
+ * `position` is assigned at insert and NOT re-packed on delete — a gap orders identically, and
+ * re-packing would rewrite rows a seller did not touch. ⚠️ This deliberately diverges from
+ * `product_image`, which does re-pack and does have a reorder route: a nine-image gallery is
+ * curated presentation, five attached files are not.
+ */
+export const commerceProductDocument = pgTable(
+  "commerce_product_document",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    documentKind: commerceProductDocumentKindEnum("document_kind").notNull(),
+    /** Derived from `content_sha256`. Never client-supplied — see the table comment. */
+    objectStorageKey: text("object_storage_key").notNull(),
+    contentSha256: text("content_sha256").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    /** The uploader's own name, sanitized. Display and download filename only. */
+    fileName: text("file_name").notNull(),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("commerce_product_document_product_idx").on(table.productId),
+    /**
+     * The identity of a document is its bytes. A same-file re-upload converges on this row
+     * rather than adding a second copy, which is what makes the route safe without an
+     * idempotency key.
+     */
+    uniqueIndex("commerce_product_document_content_uidx").on(table.productId, table.contentSha256),
+    check("commerce_product_document_byte_size_ck", sql`byte_size > 0`),
+    check("commerce_product_document_sha_ck", sql`content_sha256 ~ '^[0-9a-f]{64}$'`),
+    check("commerce_product_document_position_ck", sql`position >= 0`),
+    check("commerce_product_document_file_name_ck", sql`char_length(file_name) BETWEEN 1 AND 120`),
+  ],
+);
+
 export const commerceProductHighlight = pgTable(
   "commerce_product_highlight",
   {

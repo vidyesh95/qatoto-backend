@@ -797,6 +797,46 @@ export const videoDocumentDownloadLimiter = createLimiter({
   limit: 60,
 });
 
+/**
+ * POST /products/:id/documents (§21.3) — multipart, then a Backblaze round-trip.
+ *
+ * Same budget as `videoDocumentUpload` and for the same reason: a 25 MB buffer plus a PUT is the
+ * expensive path on this router, and a seller attaches at most five files to a listing, so ten in
+ * fifteen minutes is past normal use and well under useful for filling a bucket.
+ */
+export const productDocumentUploadLimiter = createLimiter({
+  namespace: "productDocumentUpload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+});
+
+/**
+ * DELETE /products/:id/documents/:documentId (§21.3).
+ *
+ * Reaches OUT of the process — a `DeleteObject` against Backblaze before the row goes — which is
+ * why it carries its own budget rather than riding the generic write limiter.
+ */
+export const productDocumentDeleteLimiter = createLimiter({
+  namespace: "productDocumentDelete",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});
+
+/**
+ * GET /store/products/:productSlug/documents/:documentId/file (§21.3) — mints a presigned URL.
+ *
+ * ⚠️ THE SECOND STORAGE ROUTE IN THIS CODEBASE REACHABLE WITHOUT A SESSION, and it inherits
+ * `videoDocumentDownload`'s reasoning wholesale. `createLimiter` keys an anonymous caller by IP,
+ * so this is the budget standing between the open internet and an enumeration of presigned URLs.
+ * Signing is cheap; a link is a bearer capability that outlives the eligibility check that minted
+ * it, which is precisely why the TTL is five minutes and why this number is not generous.
+ */
+export const productDocumentDownloadLimiter = createLimiter({
+  namespace: "productDocumentDownload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
 /** POST …/posts and …/posts/:postId/replies — the discussion surface (§11f). */
 export const programPostCreateLimiter = createLimiter({
   namespace: "programPostCreate",

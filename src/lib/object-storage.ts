@@ -49,6 +49,7 @@ const PAPER_KEY_PREFIX = "research-programs";
 const COMMERCE_DOCUMENT_KEY_PREFIX = "commerce-organizations";
 const DATA_EXPORT_KEY_PREFIX = "data-exports";
 const VIDEO_DOCUMENT_KEY_PREFIX = "videos";
+const PRODUCT_DOCUMENT_KEY_PREFIX = "products";
 
 export type ObjectStorageError =
   | { type: "NOT_CONFIGURED" }
@@ -70,6 +71,18 @@ export const PRIVATE_COMMERCE_DOCUMENT_URL_TTL_SECONDS = 300;
  * into a group chat is dead before it is read.
  */
 export const VIDEO_DOCUMENT_URL_TTL_SECONDS = 300;
+
+/**
+ * §21.3. Five minutes, and for exactly the reason the video document above gives.
+ *
+ * A PRODUCT DOCUMENT IS REACHED BY ANONYMOUS VISITORS — it hangs off a public listing page with no
+ * session required, which makes this and the video route the only two storage paths the open
+ * internet can start. The download route re-checks the whole product eligibility chain on every
+ * request; the presigned URL is the only window in which that check is bypassed, because a
+ * presigned URL is a bearer capability. ⚠️ Do not tune this longer for convenience: a generous TTL
+ * turns "this listing was unpublished" into "this link still works for an hour".
+ */
+export const PRODUCT_DOCUMENT_URL_TTL_SECONDS = 300;
 /**
  * A subject-access archive's DOWNLOAD LINK. Same five minutes as its neighbours, and for a
  * sharper reason: this object is every piece of personal data we hold about one person, so
@@ -165,6 +178,23 @@ export function videoDocumentObjectKey(videoId: string, contentSha256: string): 
   return [
     VIDEO_DOCUMENT_KEY_PREFIX,
     encodeURIComponent(videoId),
+    "documents",
+    `${contentSha256}.pdf`,
+  ].join("/");
+}
+
+/**
+ * §21.3. Where one product document's bytes live.
+ *
+ * CONTENT-ADDRESSED, so a retried upload converges on the same object instead of duplicating it —
+ * the same shape `videoDocumentObjectKey` uses, and the reason neither route needs an idempotency
+ * key. The product id is encoded because it is a path segment built from a value this function
+ * does not own.
+ */
+export function productDocumentObjectKey(productId: string, contentSha256: string): string {
+  return [
+    PRODUCT_DOCUMENT_KEY_PREFIX,
+    encodeURIComponent(productId),
     "documents",
     `${contentSha256}.pdf`,
   ].join("/");
@@ -287,6 +317,80 @@ export async function deleteVideoDocument(
   } catch (deleteError: unknown) {
     return { success: false, error: { type: "DELETE_FAILED", cause: describeCause(deleteError) } };
   }
+}
+
+/**
+ * §21.3. Stores one product document's bytes.
+ *
+ * The `video_document` upload with a different key prefix. `ChecksumSHA256` makes the store verify
+ * the hash the key was built from, so a truncated upload fails at the bucket rather than becoming a
+ * row pointing at half a PDF.
+ */
+export async function uploadProductDocument(input: {
+  readonly productId: string;
+  readonly contentSha256: string;
+  readonly pdfBytes: Buffer;
+  /** Used only for the download filename. Sanitized here, never trusted. */
+  readonly downloadFileName: string;
+}): Promise<Result<{ objectKey: string }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  const objectKey = productDocumentObjectKey(input.productId, input.contentSha256);
+
+  try {
+    await storage.client.send(
+      new PutObjectCommand({
+        Bucket: storage.bucketName,
+        Key: objectKey,
+        Body: input.pdfBytes,
+        ContentType: "application/pdf",
+        // ⚠️ `sanitizePrivateFileName`, NOT `sanitizeDownloadFileName` — the same trap the video
+        // upload documents above. The latter is built for a paper TITLE and appends `.pdf`, so an
+        // uploaded `manual.pdf` would download as `manual.pdf.pdf`.
+        ContentDisposition: `attachment; filename="${sanitizePrivateFileName(input.downloadFileName)}"`,
+        ChecksumSHA256: Buffer.from(input.contentSha256, "hex").toString("base64"),
+      }),
+    );
+    return { success: true, value: { objectKey } };
+  } catch (uploadError: unknown) {
+    return { success: false, error: { type: "UPLOAD_FAILED", cause: describeCause(uploadError) } };
+  }
+}
+
+/**
+ * §21.3. Deletes a product document's bytes.
+ *
+ * Idempotent, like its siblings: S3 `DeleteObject` succeeds on an absent key. ⚠️ Unlike the video
+ * cascade, the `deleteProduct` caller REFUSES on failure rather than logging and continuing — see
+ * the comment there. This function's contract is the same either way; the caller decides.
+ */
+export async function deleteProductDocument(
+  objectKey: string,
+): Promise<Result<{ deleted: boolean }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  try {
+    await storage.client.send(
+      new DeleteObjectCommand({ Bucket: storage.bucketName, Key: objectKey }),
+    );
+    return { success: true, value: { deleted: true } };
+  } catch (deleteError: unknown) {
+    return { success: false, error: { type: "DELETE_FAILED", cause: describeCause(deleteError) } };
+  }
+}
+
+/**
+ * §21.3. Mints a short-lived download URL for a product document.
+ *
+ * ⚠️ THE CALLER MUST HAVE RE-CHECKED ELIGIBILITY FIRST. This function asks no questions — it is the
+ * bearer capability the gate protects, not the gate.
+ */
+export async function presignProductDocumentDownload(
+  objectKey: string,
+): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, ObjectStorageError>> {
+  return presignPrivateObjectDownload(objectKey, PRODUCT_DOCUMENT_URL_TTL_SECONDS);
 }
 
 /**

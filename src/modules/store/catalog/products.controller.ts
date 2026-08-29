@@ -9,6 +9,7 @@ import {
   HighlightParamsSchema,
   ListProductsQuerySchema,
   ProductImageParamsSchema,
+  ProductDocumentParamsSchema,
   ProductParamsSchema,
   ReorderImagesSchema,
   ReplaceProductCustomizationOptionsSchema,
@@ -16,6 +17,7 @@ import {
   ReplaceProductVariantsSchema,
   UpdateProductSchema,
   UploadImageFieldsSchema,
+  UploadProductDocumentFieldsSchema,
 } from "#src/modules/store/catalog/products.schemas.js";
 import * as productsService from "#src/modules/store/catalog/products.service.js";
 import type { ApiResponse, PaginatedResponse } from "#src/types/index.js";
@@ -82,6 +84,33 @@ function mapProductErrorToResponse(error: productsService.ProductError): {
       return {
         statusCode: 409,
         message: `A listing can have at most ${error.limit} images.`,
+      };
+    case "TOO_MANY_DOCUMENTS":
+      return {
+        statusCode: 409,
+        message: `A listing can have at most ${error.limit} documents.`,
+      };
+    /**
+     * §21.3. 422, because the file in front of the seller is the thing to change. The reason is
+     * the magic-byte verdict, not the mimetype header they sent — a `.pdf` that is not a PDF
+     * lands here rather than being stored and served to buyers.
+     */
+    case "DOCUMENT_REJECTED":
+      return {
+        statusCode: 422,
+        message: "That file could not be read as a PDF.",
+        errors: { document: [error.reason] },
+      };
+    case "DOCUMENT_NOT_FOUND":
+      return { statusCode: 404, message: "That document is not on this listing." };
+    /**
+     * 503, not 500: object storage refusing is a dependency being unavailable, and the seller's
+     * request was well-formed. Nothing was written — the row is only inserted after the bytes land.
+     */
+    case "DOCUMENT_STORAGE_UNAVAILABLE":
+      return {
+        statusCode: 503,
+        message: "Document storage is unavailable right now. Try again shortly.",
       };
     case "INCOMPLETE_FOR_PUBLISH":
       return {
@@ -323,6 +352,92 @@ export async function uploadImage(req: Request, res: Response): Promise<void> {
     data: uploadResult.value,
   };
   res.status(201).json(response);
+}
+
+/**
+ * POST /products/:id/documents  (multipart/form-data, field `document`)
+ *
+ * §21.3. Attach one public PDF. Buffered and size-capped by `uploadProductDocumentFile`, then the
+ * service re-reads the decoded bytes — the mimetype the client declared is not the validation.
+ *
+ * ⚠️ ANSWERS 201, NOT 202, AND THAT IS THE WHOLE POINT. There is no virus scan on this path, by
+ * decision rather than omission (see migration `0155`). A 202 would imply something is happening
+ * to the file afterwards. Nothing is. No copy on this route may say the file is being checked.
+ */
+export async function uploadDocument(req: Request, res: Response): Promise<void> {
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+
+  if (!req.file) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "A PDF file is required (multipart field 'document').",
+    });
+    return;
+  }
+
+  // A multipart text field, so it arrives as a string and is parsed rather than trusted.
+  const parsedFields = UploadProductDocumentFieldsSchema.safeParse(req.body);
+  if (!parsedFields.success) return respondValidationFailed(res, parsedFields.error);
+
+  const attachResult = await productsService.attachProductDocument(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+    {
+      documentKind: parsedFields.data.documentKind,
+      // The uploader's own name. Sanitized in the service and again by the storage layer.
+      fileName: req.file.originalname,
+      bytes: req.file.buffer,
+    },
+  );
+  if (!attachResult.success) {
+    respondProductError(res, attachResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 201,
+    message: "Document attached successfully",
+    data: { documents: attachResult.value },
+  };
+  res.status(201).json(response);
+}
+
+/**
+ * DELETE /products/:id/documents/:documentId
+ * §21.3. Remove one document. The bytes go before the row — see the service.
+ */
+export async function deleteDocument(req: Request, res: Response): Promise<void> {
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductDocumentParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+
+  const removeResult = await productsService.deleteProductDocumentById(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+    parsedParams.data.documentId,
+  );
+  if (!removeResult.success) {
+    respondProductError(res, removeResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "Document removed successfully",
+    data: { documents: removeResult.value },
+  };
+  res.status(200).json(response);
 }
 
 /**

@@ -1,12 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
   commerceCategory,
   commerceCategoryRequest,
   commerceProductCustomizationOption,
+  commerceProductDocument,
   commerceProductHighlight,
   commerceProductSpecification,
   commerceProductVariant,
@@ -25,7 +26,12 @@ import {
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
+import {
+  deleteProductDocument as deleteProductDocumentObject,
+  uploadProductDocument as uploadProductDocumentObject,
+} from "#src/lib/object-storage.js";
 import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
+import { isPdfValidationError, validatePdfBytes } from "#src/modules/rnd/pdf.js";
 import type { ProductAttributeValueView } from "#src/modules/store/catalog/commerce-category-attributes.service.js";
 import { ensureCommerceProductStatsRow } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
 import type {
@@ -38,6 +44,13 @@ import type { Result } from "#src/types/index.js";
 
 /** Max images per listing (the wizard's MAX_PRODUCT_IMAGES). Enforced here, not the DB. */
 const MAX_PRODUCT_IMAGES = 9;
+
+/**
+ * §21.3. Max public documents per listing, enforced here rather than in the DB, the way the image
+ * cap above is. One document is not enough for a product with a manual AND a care guide; unbounded
+ * is a bucket-filling attack against a private store nobody is metering per seller.
+ */
+const MAX_PRODUCT_DOCUMENTS = 5;
 
 /** Product listing images are re-encoded to AVIF, downscaled into this box. */
 const PRODUCT_IMAGE_OUTPUT_MAX_DIMENSION_PX = 1600;
@@ -69,6 +82,14 @@ export type ProductError =
    */
   | { type: "ACTIVE_LISTING_MISSING_PACKAGE_DIMENSIONS"; missing: readonly string[] }
   | { type: "IMAGE_ORDER_MISMATCH" }
+  /** §21.3. The listing already holds `limit` documents. */
+  | { type: "TOO_MANY_DOCUMENTS"; limit: number }
+  /** §21.3. The decoded bytes are not a PDF — the magic-byte check, not the mimetype header. */
+  | { type: "DOCUMENT_REJECTED"; reason: string }
+  /** §21.3. No such document on this listing. Indistinguishable from "not owned", like NOT_FOUND. */
+  | { type: "DOCUMENT_NOT_FOUND"; documentId: string }
+  /** §21.3. Object storage refused or is unconfigured; the row was never written. */
+  | { type: "DOCUMENT_STORAGE_UNAVAILABLE"; reason: string }
   | ImageValidationError
   | CloudinaryError;
 
@@ -452,6 +473,8 @@ export interface PublicProduct {
   readonly attributeValues: readonly ProductAttributeValueView[];
   readonly variants: readonly ProductVariantView[];
   readonly highlights: readonly ProductHighlightView[];
+  /** §21.3. The public PDFs on this listing, so the wizard can list and remove them. */
+  readonly documents: readonly ProductDocumentView[];
   readonly customizationOptions: readonly ProductCustomizationOptionView[];
 }
 
@@ -607,6 +630,8 @@ function toPublicProduct(
   variants: readonly ProductVariantView[] = [],
   highlights: readonly ProductHighlightView[] = [],
   customizationOptions: readonly ProductCustomizationOptionView[] = [],
+  /** §21.3. Defaulted like the collections above so the three call sites opt in one at a time. */
+  documents: readonly ProductDocumentView[] = [],
 ): PublicProduct {
   // The defensive `categoryId === null` throw that stood here is gone: migration 0063
   // made the column NOT NULL, so the case it guarded can no longer be represented.
@@ -662,6 +687,7 @@ function toPublicProduct(
     attributeValues,
     variants,
     highlights,
+    documents,
     customizationOptions,
   };
 }
@@ -771,6 +797,10 @@ async function loadOrganizationProduct(
     attributeValues.map((attributeValue) => attributeValue.attributeKey),
   );
 
+  // §21.3. The seller's own view of the files on this listing, so the wizard can list and remove
+  // them. Same read the public projection uses.
+  const documents = await listProductDocuments(productId);
+
   return toPublicProduct(
     row,
     images,
@@ -782,6 +812,7 @@ async function loadOrganizationProduct(
     variants,
     highlights,
     customizationOptions,
+    documents,
   );
 }
 
@@ -2252,6 +2283,248 @@ export async function unpublishProduct(
  * Delete a listing. Destroys ALL of its Cloudinary assets first (so nothing is
  * orphaned), then deletes the row — the FK cascade clears image and tier rows.
  */
+/** §21.3. What a listing's document looks like to its owner and to a buyer. */
+export interface ProductDocumentView {
+  readonly id: string;
+  readonly documentKind: "datasheet" | "manual" | "care_guide" | "other";
+  readonly fileName: string;
+  readonly byteSize: number;
+  readonly position: number;
+}
+
+/**
+ * §21.3. Reduces an uploader's file name to something safe to store and to hand a header.
+ *
+ * ⚠️ SANITIZED TWICE, ON PURPOSE. `object-storage.ts` runs its own pass building the
+ * `Content-Disposition` value, and that is not redundant: that layer must be safe against ANY
+ * caller, and a header-injection guard that trusts its caller is not a guard. This pass is about
+ * what lands in the column and comes back on the wire.
+ *
+ * An unescaped `"` closes the filename parameter early and a CR/LF splits the header, so a name is
+ * a header-injection vector until it is stripped. Everything outside a conservative allowlist
+ * becomes an underscore rather than being escaped — escaping a quote inside a header value is
+ * exactly the kind of thing that is easy to get wrong once and never revisited.
+ */
+function sanitizeStoredDocumentFileName(rawFileName: string): string {
+  const cleaned = rawFileName
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9 ._-]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return cleaned.length > 0 ? cleaned : "document.pdf";
+}
+
+/** §21.3. A listing's documents, in attach order. Shared by the owner read and the public one. */
+export async function listProductDocuments(
+  productId: string,
+): Promise<readonly ProductDocumentView[]> {
+  return db
+    .select({
+      id: commerceProductDocument.id,
+      documentKind: commerceProductDocument.documentKind,
+      fileName: commerceProductDocument.fileName,
+      byteSize: commerceProductDocument.byteSize,
+      position: commerceProductDocument.position,
+    })
+    .from(commerceProductDocument)
+    .where(eq(commerceProductDocument.productId, productId))
+    .orderBy(asc(commerceProductDocument.position));
+}
+
+/**
+ * §21.3. Attaches one public PDF to a listing.
+ *
+ * ⚠️ THE BYTES ARE VALIDATED, NOT THE HEADER. The multipart middleware already refused anything
+ * whose declared mimetype was not `application/pdf`, but that is a value the client chose.
+ * `validatePdfBytes` reads the decoded bytes, and it is the one that decides.
+ *
+ * ⚠️ NOTHING HERE CLAIMS THE FILE IS SAFE. There is no scan, deliberately — see the table comment
+ * and migration `0155`. The route answers 201 and no copy says otherwise.
+ *
+ * A RE-UPLOAD OF THE SAME BYTES IS SUCCESS, NOT A CONFLICT. The key is content-addressed and
+ * `commerce_product_document_content_uidx` makes the row converge, so a seller who double-clicked
+ * Attach gets the outcome they asked for. Only the file name is refreshed — same bytes under a new
+ * name is a rename, and the position must not jump because something already there was re-sent.
+ */
+export async function attachProductDocument(
+  sellerOrganizationId: string,
+  productId: string,
+  input: {
+    readonly documentKind: "datasheet" | "manual" | "care_guide" | "other";
+    readonly fileName: string;
+    readonly bytes: Buffer;
+  },
+): Promise<Result<readonly ProductDocumentView[], ProductError>> {
+  const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
+  if (!ownedId) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  const validated = validatePdfBytes(input.bytes);
+  if (isPdfValidationError(validated)) {
+    return { success: false, error: { type: "DOCUMENT_REJECTED", reason: validated.type } };
+  }
+
+  const contentSha256 = createHash("sha256").update(input.bytes).digest("hex");
+  const storedFileName = sanitizeStoredDocumentFileName(input.fileName);
+
+  /**
+   * Counted BEFORE the upload so an over-cap attempt does not pay for a round-trip it will
+   * refuse — and counted again under the transaction below, because this one can race.
+   */
+  const [preCount] = await db
+    .select({ documentCount: sql<number>`count(*)::int` })
+    .from(commerceProductDocument)
+    .where(
+      and(
+        eq(commerceProductDocument.productId, productId),
+        ne(commerceProductDocument.contentSha256, contentSha256),
+      ),
+    );
+  if ((preCount?.documentCount ?? 0) >= MAX_PRODUCT_DOCUMENTS) {
+    return { success: false, error: { type: "TOO_MANY_DOCUMENTS", limit: MAX_PRODUCT_DOCUMENTS } };
+  }
+
+  const stored = await uploadProductDocumentObject({
+    productId,
+    contentSha256,
+    pdfBytes: input.bytes,
+    downloadFileName: storedFileName,
+  });
+  if (!stored.success) {
+    return {
+      success: false,
+      error: { type: "DOCUMENT_STORAGE_UNAVAILABLE", reason: stored.error.type },
+    };
+  }
+
+  const inserted = await db.transaction(async (transaction) => {
+    // Re-counted under the transaction, EXCLUDING these bytes: a re-upload of a document the
+    // listing already holds must not be refused for being the sixth when it is really the same one.
+    const [rowCount] = await transaction
+      .select({ documentCount: sql<number>`count(*)::int` })
+      .from(commerceProductDocument)
+      .where(
+        and(
+          eq(commerceProductDocument.productId, productId),
+          ne(commerceProductDocument.contentSha256, contentSha256),
+        ),
+      );
+    if ((rowCount?.documentCount ?? 0) >= MAX_PRODUCT_DOCUMENTS) return null;
+
+    const [row] = await transaction
+      .insert(commerceProductDocument)
+      .values({
+        productId,
+        documentKind: input.documentKind,
+        objectStorageKey: stored.value.objectKey,
+        contentSha256,
+        byteSize: validated.byteSize,
+        fileName: storedFileName,
+        position: rowCount?.documentCount ?? 0,
+      })
+      .onConflictDoUpdate({
+        target: [commerceProductDocument.productId, commerceProductDocument.contentSha256],
+        // The name and the kind are refreshed, nothing else. Re-attaching the same PDF as a
+        // "manual" rather than a "datasheet" is a correction; the position must not move for it.
+        set: { fileName: storedFileName, documentKind: input.documentKind },
+      })
+      .returning({ id: commerceProductDocument.id });
+    return row ?? null;
+  });
+
+  if (inserted === null) {
+    // The cap won the race. The object is orphaned by this path alone, so it is removed here
+    // rather than left for a sweep that does not exist.
+    await deleteProductDocumentObject(stored.value.objectKey);
+    return { success: false, error: { type: "TOO_MANY_DOCUMENTS", limit: MAX_PRODUCT_DOCUMENTS } };
+  }
+
+  return { success: true, value: await listProductDocuments(productId) };
+}
+
+/**
+ * §21.3. Removes one document from a listing, bytes first.
+ *
+ * ⚠️ POSITIONS ARE NOT RE-PACKED. A gap in the sequence orders identically, and re-packing would
+ * rewrite rows the seller did not touch. This diverges from `deleteProductImageById`, which does
+ * re-pack — deliberately: a nine-image gallery is curated presentation and its indices are meaning,
+ * five attached files are a set.
+ */
+export async function deleteProductDocumentById(
+  sellerOrganizationId: string,
+  productId: string,
+  documentId: string,
+): Promise<Result<readonly ProductDocumentView[], ProductError>> {
+  const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
+  if (!ownedId) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  const [row] = await db
+    .select({ objectStorageKey: commerceProductDocument.objectStorageKey })
+    .from(commerceProductDocument)
+    .where(
+      and(
+        eq(commerceProductDocument.id, documentId),
+        eq(commerceProductDocument.productId, productId),
+      ),
+    );
+  if (!row) {
+    return { success: false, error: { type: "DOCUMENT_NOT_FOUND", documentId } };
+  }
+
+  // BYTES BEFORE THE ROW, and refused rather than best-effort — the same posture the two
+  // Cloudinary sweeps in `deleteProduct` take. Once the row is gone nothing names the object.
+  const removed = await deleteProductDocumentObject(row.objectStorageKey);
+  if (!removed.success) {
+    return {
+      success: false,
+      error: { type: "DOCUMENT_STORAGE_UNAVAILABLE", reason: removed.error.type },
+    };
+  }
+
+  await db
+    .delete(commerceProductDocument)
+    .where(
+      and(
+        eq(commerceProductDocument.id, documentId),
+        eq(commerceProductDocument.productId, productId),
+      ),
+    );
+
+  return { success: true, value: await listProductDocuments(productId) };
+}
+
+/**
+ * §21.3. Destroys every document object a listing owns, before its rows cascade away.
+ *
+ * ⚠️ REFUSES ON FAILURE rather than logging and continuing, matching the two Cloudinary sweeps it
+ * sits beside in `deleteProduct` — and deliberately NOT matching `deleteVideo`, which is
+ * best-effort. Inside one function three near-identical cleanups must behave the same way, and the
+ * posture already established here is that the row must not outlive its bytes.
+ */
+async function deleteAllProductDocumentObjects(
+  productId: string,
+): Promise<Result<{ deleted: number }, ProductError>> {
+  const rows = await db
+    .select({ objectStorageKey: commerceProductDocument.objectStorageKey })
+    .from(commerceProductDocument)
+    .where(eq(commerceProductDocument.productId, productId));
+
+  for (const row of rows) {
+    const removed = await deleteProductDocumentObject(row.objectStorageKey);
+    if (!removed.success) {
+      return {
+        success: false,
+        error: { type: "DOCUMENT_STORAGE_UNAVAILABLE", reason: removed.error.type },
+      };
+    }
+  }
+  return { success: true, value: { deleted: rows.length } };
+}
+
 export async function deleteProduct(
   sellerOrganizationId: string,
   productId: string,
@@ -2279,6 +2552,22 @@ export async function deleteProduct(
   const highlightAssetRemoval = await deleteAllProductHighlightImages(productId);
   if (!highlightAssetRemoval.success) {
     return { success: false, error: highlightAssetRemoval.error };
+  }
+
+  /**
+   * §21.3. A THIRD SWEEP, and this one reaches object storage rather than Cloudinary.
+   *
+   * The FK cascades `commerce_product_document` when the row below goes, and once it commits
+   * nothing names the object keys any more — so the bytes must go first, exactly as the two sweeps
+   * above do. SQL cannot reach a bucket and there is no database-level backstop.
+   *
+   * ⚠️ Refused rather than best-effort, matching its two siblings in this function rather than
+   * `deleteVideo`, which logs and continues. Three near-identical cleanups inside one function must
+   * behave the same way, and the posture here is that a row must not outlive its bytes.
+   */
+  const documentObjectRemoval = await deleteAllProductDocumentObjects(productId);
+  if (!documentObjectRemoval.success) {
+    return { success: false, error: documentObjectRemoval.error };
   }
 
   await db.transaction(async (transaction) => {

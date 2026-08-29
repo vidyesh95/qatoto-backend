@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 
+import { presignProductDocumentDownload } from "#src/lib/object-storage.js";
 import { respondValidationFailed } from "#src/modules/rnd/projects/project-error-response.js";
 import * as commerceProductRelationsService from "#src/modules/store/catalog/commerce-product-relations.service.js";
 import * as storeCatalogService from "#src/modules/store/catalog/store-catalog.service.js";
@@ -26,6 +27,7 @@ import {
   OfferingParamsSchema,
   OrganizationParamsSchema,
   PathwayParamsSchema,
+  ProductDocumentFileParamsSchema,
   ProductParamsSchema,
   ProvidersQuerySchema,
   RailParamsSchema,
@@ -273,6 +275,61 @@ export async function search(req: Request, res: Response): Promise<void> {
     // A39. Search had thirteen filters and no denominator until Phase 22.
     data: { ...result.value, facets },
   } satisfies ApiResponse);
+}
+
+/**
+ * GET /store/products/:productSlug/documents/:documentId/file
+ *
+ * §21.3. Hands a buyer one public PDF — the datasheet, manual or care guide on a listing.
+ *
+ * ⚠️ 302 TO A SHORT-LIVED PRESIGNED URL, NOT A STORED LINK, and the whole design turns on it. The
+ * bucket is private; `commerce_product_document` has no `url` column; and the eligibility chain is
+ * re-checked HERE, on every request, before a URL that lives five minutes is minted. A link pasted
+ * into a group chat is dead before it is read, and unpublishing the listing breaks every link that
+ * was ever handed out.
+ *
+ * ⚠️ NOTHING ON THIS PATH CLAIMS THE FILE WAS SCANNED, because it was not — see migration `0155`.
+ *
+ * `Cache-Control: no-store` because the redirect target expires; caching it would hand a stale
+ * capability to the next reader.
+ */
+export async function downloadProductDocument(req: Request, res: Response): Promise<void> {
+  const params = ProductDocumentFileParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const resolved = await storeCatalogService.resolvePublicProductDocument(
+    params.data.productSlug,
+    params.data.documentId,
+  );
+  /**
+   * ONE 404 FOR EVERY REASON: no such listing, listing not public, organization suspended,
+   * category retired, or no such document on it. Distinguishing them would let a caller probe
+   * which listings exist while unpublished (§11's id-oracle rule).
+   */
+  if (!resolved) {
+    res.status(404).json({
+      status: "error",
+      statusCode: 404,
+      message: "That document is not available.",
+    });
+    return;
+  }
+
+  const presigned = await presignProductDocumentDownload(resolved.objectStorageKey);
+  if (!presigned.success) {
+    res.status(503).json({
+      status: "error",
+      statusCode: 503,
+      message: "Document storage is unavailable right now. Try again shortly.",
+    });
+    return;
+  }
+
+  res.setHeader("Cache-Control", "no-store");
+  res.redirect(302, presigned.value.downloadUrl);
 }
 
 export async function getProduct(req: Request, res: Response): Promise<void> {

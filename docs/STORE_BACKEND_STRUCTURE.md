@@ -3426,6 +3426,25 @@ commerce_product_document
 - **PDF only, sniffed by magic bytes.** The mimetype gate in `src/middleware/upload.ts:35-45`
   says of itself that it is not the validation, and a public download path is the worst place to
   learn that lesson twice.
+- **⚠️ SCANNING WAS AN OPEN DECISION AND IS NOW MADE: SHIPPED UNSCANNED.** The route answers
+  **201**, there is **no `state` column**, and no copy anywhere says the file is checked. Two facts
+  decided it. `video_document` — the precedent this table copies — is not scanned at all. And the
+  only working scanner is an EICAR-only fake whose `clamav` sibling returns `SCANNER_UNAVAILABLE`;
+  ⚠️ unlike the payment and escrow factories, **that fake is permitted in production on purpose**,
+  so a `pending_scan` gate would have stamped every upload `clean` and promoted it while implying a
+  review nobody performed. A gate that passes everything is worse than an honest absence. The
+  original text below is kept because its reasoning is still the reason.
+
+- **⚠️ THE `certificate` KIND WAS DROPPED, AND THE SPEC CONTRADICTED ITSELF ABOUT IT.** The enum
+  ships as `datasheet | manual | care_guide | other`. Two paragraphs above, this same section says
+  `commerce_encrypted_document` "is the right home for a business registration certificate and the
+  wrong home for a datasheet" — and then lists `certificate` here.
+  `commerce_organization_certification` already carries reviewed compliance claims: a three-way
+  state, a reviewer who may not be the submitter, validity dates, and evidence that never rides the
+  wire. A seller-uploaded file labelled "certificate" would look identical to a buyer with none of
+  that behind it. The asymmetry settles it rather than taste: Postgres cannot DROP an enum value,
+  but adding one is a one-line migration.
+
 - **⚠️ SCANNING IS AN OPEN DECISION, NOT A REUSE. THIS BULLET USED TO SAY OTHERWISE AND WAS
   WRONG.** It read "reuse `document-scanner.adapter.ts` and `sweep-pending-document-scans.ts`",
   and only the first half of that is possible.
@@ -3454,7 +3473,12 @@ commerce_product_document
   `PRODUCT_DOCUMENT_URL_TTL_SECONDS` beside the other four.
 - **⚠️ THE CASCADE CLEANS ROWS, NOT BYTES.** `deleteProduct` must delete the objects explicitly,
   beside the Cloudinary assets it already cleans up — SQL cannot reach object storage and there
-  is no database-level backstop. `deleteVideo` is the precedent to copy.
+  is no database-level backstop. ~~`deleteVideo` is the precedent to copy.~~ ⚠️ **THAT CITATION WAS
+  WRONG.** `deleteVideo`'s cleanup is BEST-EFFORT: it logs a failure and continues. The two sweeps
+  already inside `deleteProduct` are the opposite — each returns a `Result` and the function
+  REFUSES before its transaction if either fails, because the row must not outlive its bytes. Three
+  near-identical cleanups inside one function must behave the same way, so the document sweep
+  matches its two siblings, not the video precedent.
 
 One document per product is not enough and unbounded is a bucket-filling attack: cap at **five**,
 in the service, the way the nine-image cap is enforced.

@@ -5,11 +5,14 @@ import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
   productCatalogDepthWriteLimiter,
   productCreateLimiter,
+  productDocumentDeleteLimiter,
+  productDocumentUploadLimiter,
   productImageUploadLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import * as categoryAttributesController from "#src/modules/store/catalog/commerce-category-attributes.controller.js";
 import * as productsController from "#src/modules/store/catalog/products.controller.js";
+import { uploadProductDocumentFile } from "#src/modules/store/catalog/upload-product-document.js";
 import { uploadProductHighlightImageFile } from "#src/modules/store/catalog/upload-product-highlight-image.js";
 import { uploadProductImage } from "#src/modules/store/catalog/upload-product-image.js";
 import { requireActiveSellerCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
@@ -153,6 +156,37 @@ router.post(
   uploadProductImage,
   idempotency({ scope: "active_organization" }),
   productsController.uploadImage,
+);
+
+/**
+ * POST /products/:id/documents  (multipart/form-data, field `document`)
+ *
+ * §21.3. Attach one public PDF — a datasheet, manual or care guide.
+ *
+ * ⚠️ NO `idempotency()` MIDDLEWARE, unlike the sibling image route above, and the difference is
+ * deliberate rather than an omission. A product image gets a fresh storage id on every upload, so a
+ * retry genuinely duplicates it. A document's storage key is derived from its content hash and
+ * `commerce_product_document_content_uidx` is unique on `(product_id, content_sha256)`, so a
+ * retried upload converges on the same object AND the same row — a stronger guarantee than a
+ * replayed response. It is the same argument the research-paper and video-document routes make.
+ */
+router.post(
+  "/:id/documents",
+  productDocumentUploadLimiter,
+  uploadProductDocumentFile,
+  productsController.uploadDocument,
+);
+
+/**
+ * DELETE /products/:id/documents/:documentId
+ * §21.3. Its own limiter because it reaches out of the process — a `DeleteObject` against
+ * Backblaze runs before the row is touched.
+ */
+router.delete(
+  "/:id/documents/:documentId",
+  productDocumentDeleteLimiter,
+  idempotency({ scope: "active_organization" }),
+  productsController.deleteDocument,
 );
 
 /**
