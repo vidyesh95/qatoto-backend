@@ -1616,7 +1616,9 @@ section's opening paragraph is wrong.
 
 Three independent pieces, no shared migration:
 
-- `model_number` into `store_search_document` plus an exact-match rank branch — **no migration**;
+- ~~`model_number` into `store_search_document` plus an exact-match rank branch — **no migration**~~
+  — **SHIPPED, migration `0154`.** The "no migration" claim contradicted this same bullet's own
+  instruction to put the column *into* `store_search_document`; §21.1 records what it cost;
 - `product_selling_state` enum and column, a filter and a facet bucket;
 - `commerce_product_document` on the public object-storage path, with the scan pipeline in front
   of it and the explicit byte cleanup behind it.
@@ -3318,16 +3320,39 @@ projected onto the buyer product detail. It is **not** in the seller wizard, **n
 `store_search_document`, and **not** a filter — so the one column that would let a buyer search
 by an exact part code is inert.
 
-Three edits, no migration:
+**SHIPPED, and this section said "no migration" — it was wrong.** Steps 1 and 2 needed none.
+Step 3 did: ranking an exact code first means comparing against the VALUE, and the value was not
+on `store_search_document`. Migration **`0154`** adds it.
 
-1. Let the seller type it. The label is category vocabulary, not a schema question — part number
-   for electronics, model number for furniture, style code for apparel — and that is the
-   frontend's problem, not this document's.
-2. `refresh-store-search-document.ts` — add `model_number` to the indexed text, beside the
-   specification key/value/group already folded in.
-3. `store-search.service.ts` — an exact-match branch ahead of the `websearch_to_tsquery` path
-   (`:328`) so a query equal to a `model_number` ranks that product first. `ts_rank_cd` will not
-   do this on its own: `LM358` is one lexeme among many and scores like any other.
+1. ~~Let the seller type it.~~ **Done.** The label is category vocabulary, not a schema question.
+2. ~~Add `model_number` to the indexed text.~~ **Done** — it sits in `search_text` beside the
+   specification key/value/group.
+3. ~~An exact-match branch.~~ **Done, via `0154`**: `model_number` plus a generated
+   `model_number_normalized` on `store_search_document`, a `CASE WHEN` inside the single
+   `rankExpression` const, and a widened membership arm. `ts_rank_cd` will not do this on its
+   own: `LM358` is one lexeme among many and scores like any other.
+
+⚠️ **AND MEMBERSHIP HAD TO WIDEN TOO, which this section did not anticipate.** A boost that only
+reorders is a no-op if the row it boosts was never in the result set. Measured on the live
+database:
+
+```
+to_tsvector('english','LM-358')         -> '-358':2 'lm':1
+websearch_to_tsquery('english','LM358') -> 'lm358'      (numnode = 1)
+... @@ ...                              -> FALSE
+```
+
+A stored `LM-358` yields the lexemes `lm` and `-358` and **never** `lm358`, so a buyer typing the
+code without its hyphen missed the listing entirely — and the `ILIKE` fallback in
+`buildStoreSearchTextPredicate` does not rescue it, because that arm fires only when the QUERY
+fails to parse and `LM358` parses fine. So the normalized equality is OR'd into the shared text
+predicate, which widens what matches for **all three sorts and every facet count** — deliberately,
+since A39's whole point is that a sort must not change what matches.
+
+⚠️ **`model_number_normalized` HAS A TWIN IN TYPESCRIPT.** The generated column and
+`normalizeModelNumberQuery` must stay byte-for-byte equivalent, and the order is load-bearing —
+both strip `[^a-zA-Z0-9]` **before** lowercasing, because characters like U+212A KELVIN SIGN only
+become `[a-z0-9]` after case folding.
 
 ⚠️ **Do not add a UNIQUE constraint.** Two sellers legitimately list the same manufacturer part,
 and that is the entire premise of a parametric marketplace — Octopart's value is precisely that

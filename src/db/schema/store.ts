@@ -4893,6 +4893,50 @@ export const storeSearchDocument = pgTable(
     sellingState: productSellingStateEnum("selling_state"),
     providerVerificationState: commerceProviderVerificationStateEnum("provider_verification_state"),
     leadTimeMaxDays: integer("lead_time_max_days"),
+    /**
+     * §21.1. The manufacturer part code, denormalized so an EXACT match can be RANKED rather
+     * than merely found.
+     *
+     * `model_number` is already folded into `search_text`, which made it FINDABLE — but
+     * `search_document` weights that whole blob at class `C`, so a listing whose TITLE happens
+     * to contain `LM358` still outranks the listing that actually carries it. Ranking the
+     * carrier first means comparing against the VALUE, and a comparison needs the value here:
+     * joining back to `product` would defeat every keyset index the three sort branches rely on,
+     * the same argument that put `discoveryScorePoints` and the A25 facet columns on this table.
+     *
+     * NULLABLE, like `categorySlug` and `sellingState` above and for the same reason: this table
+     * also holds provider offerings and organizations, and neither is a manufactured part.
+     *
+     * ⚠️ NEVER UNIQUE. Two sellers listing the same manufacturer part is the PREMISE of a
+     * parametric marketplace, not a data error — Octopart's whole value is that `LM358` returns
+     * many offers. Uniqueness belongs on `sku`, which already has it per seller organization.
+     *
+     * ⚠️ AND NOT A TERM IN `isEligible`, for the reason `sellingState` spells out above.
+     */
+    modelNumber: text("model_number"),
+    /**
+     * The comparison key for the boost: lowercased with every non-alphanumeric stripped, so
+     * `LM358`, `lm-358` and `LM 358` compare equal. Buyers type a part code with and without
+     * its separators, and those are the same part.
+     *
+     * ⚠️ GENERATED AND STORED, NOT COMPUTED PER ROW. `regexp_replace(model_number, ...)` in a
+     * predicate is a function-on-column: no plain btree can serve it, so every search would
+     * scan. Generating it pays the normalization once at write time, exactly as
+     * `search_document` already pays `to_tsvector` once.
+     *
+     * ⚠️ THIS EXPRESSION HAS A TWIN IN TYPESCRIPT — `normalizeModelNumberQuery` in
+     * `store-search.service.ts` normalizes the QUERY side and MUST stay byte-for-byte
+     * equivalent to it. A generated column cannot call application code, so one rule genuinely
+     * lives in two places here; drift between the two silently stops exact matches from
+     * matching. ASCII-only, deliberately: a non-ASCII part code normalizes to whatever survives
+     * `[^a-zA-Z0-9]`, which is a stated limit rather than a hidden one.
+     *
+     * `NULLIF(..., '')` so a code made entirely of punctuation collapses to NULL rather than to
+     * an empty string that would equal every other such code.
+     */
+    modelNumberNormalized: text("model_number_normalized").generatedAlwaysAs(
+      sql`NULLIF(lower(regexp_replace(model_number, '[^a-zA-Z0-9]', '', 'g')), '')`,
+    ),
     searchText: text("search_text").notNull(),
     /**
      * Weighted FTS document for `/store/search` relevance ranking.
@@ -4964,6 +5008,14 @@ export const storeSearchDocument = pgTable(
       .where(sql`is_eligible`),
     index("store_search_document_price_idx")
       .on(table.isEligible, table.priceInCents, table.id)
+      .where(sql`is_eligible`),
+    /**
+     * §21.1. Mirrors the stock and selling indexes: `isEligible` leads because every search and
+     * every facet count runs that gate first. The part-code arm of the membership predicate is
+     * an EQUALITY on the normalized column, which is what this serves.
+     */
+    index("store_search_document_model_number_idx")
+      .on(table.isEligible, table.modelNumberNormalized, table.id)
       .where(sql`is_eligible`),
     index("store_search_document_discovery_idx")
       .on(table.isEligible, table.discoveryScorePoints.desc().nullsLast(), table.id)

@@ -1345,6 +1345,47 @@ export async function deleteProductHighlightImage(
 }
 
 /**
+ * Destroy every highlight image a listing owns, before the listing itself is deleted.
+ *
+ * ⚠️ THIS EXISTS BECAUSE `deleteAllProductImages` DOES NOT COVER IT, AND THE BYTES LEAKED.
+ * Highlights live under `qatoto/commerce-product-highlights/<productId>/` while the gallery
+ * lives under `qatoto/products/<productId>/` — deliberately separate folders (see the note
+ * above `PRODUCT_HIGHLIGHT_FOLDER`), so a prefix delete of one cannot reach the other.
+ * `deleteProduct` called only the gallery sweep, which meant a deleted listing's highlight
+ * images stayed publicly served forever. Verified before the fix: the product row answered
+ * 404 while its highlight AVIF still answered 200.
+ *
+ * `replaceHighlights` already destroys individually dropped rows; only the whole-listing
+ * delete leaked, which is why this is a prefix sweep rather than a loop over ids — the rows
+ * are gone by the time anyone would ask what they were.
+ *
+ * A product with no highlights ("not found" / empty prefix) still resolves as success.
+ */
+export async function deleteAllProductHighlightImages(
+  productId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    await cloudinary.api.delete_resources_by_prefix(`${PRODUCT_HIGHLIGHT_FOLDER}/${productId}/`, {
+      resource_type: "image",
+      invalidate: true,
+    });
+    return { success: true, value: { deleted: true } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
+
+/**
  * A portrait of a named company officer (A13 item 4).
  *
  * The strongest EXIF case in this codebase, stronger than the factory photo

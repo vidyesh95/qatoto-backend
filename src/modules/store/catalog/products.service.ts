@@ -17,6 +17,7 @@ import {
 } from "#src/db/schema.js";
 import {
   deleteAllProductImages,
+  deleteAllProductHighlightImages,
   deleteProductHighlightImage,
   deleteProductImage,
   uploadProductHighlightImage,
@@ -2263,6 +2264,21 @@ export async function deleteProduct(
   const assetRemoval = await deleteAllProductImages(productId);
   if (!assetRemoval.success) {
     return { success: false, error: assetRemoval.error };
+  }
+
+  /**
+   * ⚠️ A SECOND SWEEP, BECAUSE HIGHLIGHTS LIVE IN A DIFFERENT FOLDER. The gallery sweep above
+   * covers `qatoto/products/<id>/` and cannot reach `qatoto/commerce-product-highlights/<id>/`.
+   * Without this the row went and the images stayed, publicly served, with no row left to name
+   * them — confirmed against the CDN before it was fixed.
+   *
+   * Refused the same way as the gallery sweep rather than best-effort: the whole point is that
+   * the row must not outlive its bytes, so a failed cleanup has to stop the delete rather than
+   * produce the exact orphan this prevents. The listing is still there to retry against.
+   */
+  const highlightAssetRemoval = await deleteAllProductHighlightImages(productId);
+  if (!highlightAssetRemoval.success) {
+    return { success: false, error: highlightAssetRemoval.error };
   }
 
   await db.transaction(async (transaction) => {

@@ -1079,6 +1079,13 @@
       "when": 1788002007424,
       "tag": "0153_drop_attribute_request",
       "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1788004972262,
+      "tag": "0154_model_number_rank_boost",
+      "breakpoints": true
     }
   ]
 }

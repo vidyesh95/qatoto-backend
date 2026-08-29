@@ -151,6 +151,14 @@ export interface StoreSearchHit {
   readonly sellingState: StoreSearchSellingState | null;
   readonly providerVerificationState: StoreSearchVerificationState | null;
   readonly leadTimeMaxDays: number | null;
+  /**
+   * §21.1. The manufacturer part code, so a result row can SHOW what a part-code search matched
+   * on. A buyer who typed `LM358` and got twelve rows needs to see which of them carries it.
+   *
+   * NULL on an offering and on an organization, like the A25 facets above — branch on
+   * `documentKind` rather than reading a null as a value.
+   */
+  readonly modelNumber: string | null;
   readonly relevanceScore: number | null;
   /**
    * WHEN THIS DOCUMENT LAST CHANGED, and it is a real content clock rather than a refresh
@@ -384,6 +392,39 @@ function buildStoreSearchFilters(
 }
 
 /**
+ * §21.1. What an exact `model_number` match adds to a row's relevance score.
+ *
+ * Sized against BOTH boundaries: six orders of magnitude above `ts_rank_cd(..., 32)`, which is
+ * bounded [0, 1), so no ordinary text match can ever reach a boosted row; and five orders of
+ * magnitude below the 10^11 ceiling imposed by `encodeRelevanceSortKey`'s fixed-width cursor
+ * encoding, leaving room for a second boost layer without revisiting the cursor.
+ */
+const MODEL_NUMBER_EXACT_MATCH_RANK_BOOST = 1_000_000;
+
+/**
+ * The QUERY side of the part-code comparison: lowercased, every non-alphanumeric stripped.
+ *
+ * ⚠️ THIS IS ONE HALF OF A RULE THAT LIVES IN TWO PLACES. The other half is the
+ * `model_number_normalized` generated column in `src/db/schema/store.ts`, which normalizes the
+ * STORED side with `lower(regexp_replace(model_number, '[^a-zA-Z0-9]', '', 'g'))`. A generated
+ * column cannot call application code, so the duplication is unavoidable — but the two must stay
+ * byte-for-byte equivalent, because drift does not raise anything. It silently stops exact part
+ * codes from matching, which looks exactly like the bug this whole change exists to fix.
+ *
+ * ASCII-only on purpose, and stated rather than hidden: a part code outside `[a-zA-Z0-9]`
+ * normalizes to whatever survives, and normalizes to the empty string if nothing does. Callers
+ * treat an empty result as "no part-code comparison to make" rather than as a value.
+ */
+function normalizeModelNumberQuery(rawQuery: string): string {
+  // STRIP FIRST, THEN LOWERCASE — the same order as the SQL, and the order is load-bearing.
+  // Lowercasing first would keep characters that only BECOME `[a-z0-9]` under case folding
+  // (U+212A KELVIN SIGN lowercases to "k"; U+0130 lowercases to "i" plus a combining dot),
+  // and Postgres, which strips before folding, would have dropped them. That is precisely the
+  // silent drift the docblock above warns about.
+  return rawQuery.replaceAll(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}
+
+/**
  * Whether a document MATCHES THE WORDS TYPED — membership, never ranking.
  *
  * A39. THIS USED TO BE THREE DIFFERENT EXPRESSIONS, one per sort branch, and they did not
@@ -402,8 +443,39 @@ function buildStoreSearchTextPredicate(input: {
   if (input.trimmedQuery.length === 0) return undefined;
 
   const likePattern = `%${escapeLikePattern(input.trimmedQuery)}%`;
+
+  /**
+   * §21.1. AN EXACT PART CODE MATCHES EVEN WHEN THE TEXT SEARCH CANNOT SEE IT, and without this
+   * arm the rank boost in `searchByRelevance` would be a no-op with extra CPU — it would score a
+   * row that membership had already excluded.
+   *
+   * ⚠️ THIS IS NOT HYPOTHETICAL, and the tokenizer is the reason. Checked against the live
+   * database:
+   *
+   *     to_tsvector('english','LM-358')         -> '-358':2 'lm':1
+   *     websearch_to_tsquery('english','LM358') -> 'lm358'      (numnode = 1)
+   *     ... @@ ...                              -> FALSE
+   *
+   * A stored `LM-358` produces the lexemes `lm` and `-358` and NEVER `lm358`, so a buyer typing
+   * the code without its hyphen misses the listing entirely. The `ILIKE` fallback below does not
+   * save it either: that arm fires only when the QUERY fails to parse, and `LM358` parses fine.
+   *
+   * So a buyer typing `LM358` SHOULD find `LM-358`, and this is the deliberate widening that
+   * makes it true. ⚠️ It widens membership for ALL THREE SORTS and for every facet count, which
+   * is the point rather than a side effect — A39 exists so that what matches cannot depend on how
+   * the caller asked it to be ordered. It is an indexed equality against
+   * `store_search_document_model_number_idx`, not a per-row function call.
+   */
+  const normalizedQuery = normalizeModelNumberQuery(input.trimmedQuery);
+  const partCodePredicate =
+    normalizedQuery.length === 0
+      ? null
+      : eq(storeSearchDocument.modelNumberNormalized, normalizedQuery);
+  const withPartCode = (textArm: SQL): SQL =>
+    partCodePredicate === null ? textArm : sql`(${textArm} OR ${partCodePredicate})`;
+
   if (!input.useRelevance) {
-    return sql`${storeSearchDocument.searchText} ILIKE ${likePattern}`;
+    return withPartCode(sql`${storeSearchDocument.searchText} ILIKE ${likePattern}`);
   }
 
   /**
@@ -412,10 +484,10 @@ function buildStoreSearchTextPredicate(input: {
    * punctuation, and an empty tsquery matches nothing at all.
    */
   const tsQuery = sql`websearch_to_tsquery('english', ${input.trimmedQuery})`;
-  return sql`(
+  return withPartCode(sql`(
     (numnode(${tsQuery}) > 0 AND ${storeSearchDocument.searchDocument} @@ ${tsQuery})
     OR (NOT (numnode(${tsQuery}) > 0) AND ${storeSearchDocument.searchText} ILIKE ${likePattern})
-  )`;
+  )`);
 }
 
 /**
@@ -496,6 +568,7 @@ async function searchByDiscoveryRank(context: StoreSearchPageContext): Promise<
       sellingState: storeSearchDocument.sellingState,
       providerVerificationState: storeSearchDocument.providerVerificationState,
       leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
+      modelNumber: storeSearchDocument.modelNumber,
       updatedAt: storeSearchDocument.updatedAt,
       discoveryScorePoints: storeSearchDocument.discoveryScorePoints,
     })
@@ -540,6 +613,7 @@ async function searchByDiscoveryRank(context: StoreSearchPageContext): Promise<
         sellingState: row.sellingState,
         providerVerificationState: row.providerVerificationState,
         leadTimeMaxDays: row.leadTimeMaxDays,
+        modelNumber: row.modelNumber,
         updatedAt: row.updatedAt,
         // NULL, not the discovery score. `relevanceScore` means "how well did this match
         // the words you typed", and this sort did not ask that question.
@@ -608,6 +682,7 @@ async function searchByTitle(context: StoreSearchPageContext): Promise<
       sellingState: storeSearchDocument.sellingState,
       providerVerificationState: storeSearchDocument.providerVerificationState,
       leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
+      modelNumber: storeSearchDocument.modelNumber,
       updatedAt: storeSearchDocument.updatedAt,
       id: storeSearchDocument.id,
     })
@@ -649,6 +724,7 @@ async function searchByTitle(context: StoreSearchPageContext): Promise<
         sellingState: row.sellingState,
         providerVerificationState: row.providerVerificationState,
         leadTimeMaxDays: row.leadTimeMaxDays,
+        modelNumber: row.modelNumber,
         updatedAt: row.updatedAt,
         relevanceScore: null,
       })),
@@ -679,13 +755,48 @@ async function searchByRelevance(context: StoreSearchPageContext): Promise<
    */
   const tsQuery = sql`websearch_to_tsquery('english', ${trimmedQuery})`;
   const hasUsableTsQuery = sql`numnode(${tsQuery}) > 0`;
-  const rankExpression = sql`
+  const textRankExpression = sql`
     CASE
       WHEN ${hasUsableTsQuery}
         THEN ts_rank_cd(${storeSearchDocument.searchDocument}, ${tsQuery}, 32)
       ELSE 0
     END
   `;
+
+  /**
+   * §21.1. AN EXACT PART CODE OUTRANKS A TITLE THAT MERELY MENTIONS IT.
+   *
+   * `ts_rank_cd` cannot do this on its own: `LM358` is one lexeme among many and, sitting at
+   * weight class `C` inside `search_text`, it scores below a title hit at weight `A`. So the
+   * listing that CARRIES the part code lost to the listing that happened to name it.
+   *
+   * ⚠️ ADDITIVE, NOT REPLACING. `ts_rank_cd(..., 32)` is bounded [0, 1), so the boost dominates
+   * ordering against every non-match while text relevance still orders the boosted rows AMONG
+   * THEMSELVES — a carrier whose title also matches ranks above one with an unrelated title.
+   * Replacing would throw that second signal away for nothing.
+   *
+   * ⚠️ THE BOOST SITS OUTSIDE THE `hasUsableTsQuery` BRANCH ON PURPOSE. That branch collapses the
+   * whole expression to 0 when `websearch_to_tsquery` yields no usable lexemes, and a part code
+   * typed as pure punctuation is exactly that case. Nested inside, an exact match would score
+   * zero — ranked below every ordinary hit, which is the opposite of the intent.
+   *
+   * ⚠️ AND THE CONSTANT HAS A CEILING. `encodeRelevanceSortKey` is
+   * `rank.toFixed(12).padStart(24, "0")`, and `padStart` only PADS — it never truncates. Above 11
+   * integer digits the fixed-width encoding stops sorting lexicographically and keyset pagination
+   * silently returns duplicate or missing rows. A million sits five orders of magnitude under
+   * that and six above `ts_rank_cd`'s range, which is the room this needs on both sides.
+   */
+  const normalizedQuery = normalizeModelNumberQuery(trimmedQuery);
+  const rankExpression =
+    normalizedQuery.length === 0
+      ? sql`(${textRankExpression})`
+      : sql`(
+          CASE
+            WHEN ${storeSearchDocument.modelNumberNormalized} = ${normalizedQuery}
+              THEN ${MODEL_NUMBER_EXACT_MATCH_RANK_BOOST} + (${textRankExpression})
+            ELSE (${textRankExpression})
+          END
+        )`;
 
   let cursorPredicate = undefined;
   if (decodedCursor !== null) {
@@ -720,6 +831,7 @@ async function searchByRelevance(context: StoreSearchPageContext): Promise<
       sellingState: storeSearchDocument.sellingState,
       providerVerificationState: storeSearchDocument.providerVerificationState,
       leadTimeMaxDays: storeSearchDocument.leadTimeMaxDays,
+      modelNumber: storeSearchDocument.modelNumber,
       updatedAt: storeSearchDocument.updatedAt,
       id: storeSearchDocument.id,
       relevanceScore: sql<number>`${rankExpression}`.mapWith(Number),
@@ -765,6 +877,7 @@ async function searchByRelevance(context: StoreSearchPageContext): Promise<
         sellingState: row.sellingState,
         providerVerificationState: row.providerVerificationState,
         leadTimeMaxDays: row.leadTimeMaxDays,
+        modelNumber: row.modelNumber,
         updatedAt: row.updatedAt,
         relevanceScore: row.relevanceScore,
       })),
@@ -1445,6 +1558,7 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
       sellingState: row.sellingState,
       providerVerificationState: null,
       leadTimeMaxDays: row.leadTimeMaxDays,
+      modelNumber: row.modelNumber,
       searchText,
       isEligible,
       publishedAt: row.publishedAt,
@@ -1474,6 +1588,7 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
         sellingState: row.sellingState,
         providerVerificationState: null,
         leadTimeMaxDays: row.leadTimeMaxDays,
+        modelNumber: row.modelNumber,
         searchText,
         isEligible,
         publishedAt: row.publishedAt,
@@ -1576,6 +1691,8 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
       condition: null,
       providerVerificationState: row.profileVerificationState,
       leadTimeMaxDays: row.maximumLeadTimeDays,
+      // §21.1. A service offering is not a manufactured part, so it carries no part code.
+      modelNumber: null,
       searchText,
       isEligible,
       publishedAt: null,
@@ -1598,6 +1715,7 @@ export async function refreshOfferingSearchDocument(offeringId: string): Promise
         condition: null,
         providerVerificationState: row.profileVerificationState,
         leadTimeMaxDays: row.maximumLeadTimeDays,
+        modelNumber: null,
         searchText,
         isEligible,
         updatedAt: new Date(),
@@ -1695,6 +1813,8 @@ export async function refreshOrganizationSearchDocument(organizationId: string):
     // describe it as a seller, so this stays null rather than borrowing a provider's.
     providerVerificationState: null,
     leadTimeMaxDays: null,
+    // §21.1. An organization is not a manufactured part either.
+    modelNumber: null,
     searchText,
     isEligible,
     publishedAt: row.createdAt,
