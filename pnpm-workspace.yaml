@@ -26,3 +26,35 @@ minimumReleaseAgeExclude:
   - "@typescript/typescript-win32-arm64@7.0.2"
   - "@typescript/typescript-win32-x64@7.0.2"
   - typescript@7.0.2
+
+# Security advisories in DEV-ONLY transitive dependencies. None is reachable in
+# production: `better-auth` declares `vitest` and `drizzle-kit` as OPTIONAL PEER
+# dependencies, satisfied by this repo's own devDependencies, so `pnpm audit --prod`
+# walks the peer link and reports the test runner's tree as production. It is not.
+#
+# ⚠️ AN OVERRIDE IS THE ONLY MECHANISM HERE. `pnpm update --depth Infinity` answers
+# "Already up to date" for all three: pnpm will not move a transitive dependency the
+# lockfile already resolves inside its parent's range. The frontend repo proves the
+# ranges permit these versions — it resolved nanoid 3.3.18 and postcss 8.5.26 from the
+# same vite. This repo's lockfile was simply written earlier.
+overrides:
+  # GHSA: non-secure generators loop indefinitely on a negative size (<3.3.16), and
+  # custom generators loop when size is zero (<3.3.18). Reached via vitest > vite > postcss.
+  nanoid: "^3.3.18"
+  # GHSA: path traversal through an attacker-controlled sourceMappingURL, which reads
+  # arbitrary .map files when `from` is unset (<=8.5.17, then again <=8.5.22).
+  postcss: "^8.5.26"
+  # GHSA: esbuild's DEV SERVER lets any website read responses from it (<=0.24.2).
+  # Nothing here runs `esbuild serve` — drizzle-kit uses esbuild only to bundle
+  # drizzle.config.ts — so this is the least urgent of the three.
+  #
+  # ⚠️ SCOPED, NEVER GLOBAL. Three esbuild versions are installed (0.18.20, 0.25.12,
+  # 0.28.2) and a bare `esbuild:` key would collapse all three. The old one comes from
+  # `@esbuild-kit/core-utils@3.3.2`, which declares `esbuild: "~0.18.20"` — so this
+  # forces it well outside the range it was written against, and drizzle-kit must be
+  # re-proved (`pnpm db:generate`) whenever this line changes.
+  #
+  # NOT FIXABLE BY UPGRADING: drizzle-kit@0.31.10 is the latest and still depends on
+  # @esbuild-kit/esm-loader, which is deprecated and pins core-utils. Remove this
+  # override once drizzle-kit drops that chain for tsx.
+  "@esbuild-kit/core-utils>esbuild": "^0.25.12"
