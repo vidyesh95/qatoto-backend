@@ -96,6 +96,19 @@ export interface OrderProductLineProjection {
   readonly completionId: string | null;
   readonly productId: string | null;
   readonly titleSnapshot: string;
+  /**
+   * WHICH VARIATION WAS BOUGHT — "Sea blue", frozen at order time.
+   *
+   * `null` on a listing sold without variants, which is a different fact from an unnamed one:
+   * `commerce_order_product_line_variant_ck` pairs this with `variant_id`, so both are set or
+   * neither is.
+   *
+   * ⚠️ THE SNAPSHOT, NEVER THE LIVE VARIANT NAME. Reading through `variantId` to
+   * `commerce_product_variant.name` would let a seller rename what a buyer already bought
+   * (store.ts:6372-6376). It was written since Phase 8 and projected NOWHERE until now, so an
+   * order for one variant of a multi-variant listing did not say which one.
+   */
+  readonly variantNameSnapshot: string | null;
   readonly specificationSnapshot: string;
   readonly quantityOrdered: number;
   readonly quantityReserved: number;
@@ -258,6 +271,7 @@ function projectOrderProductLine(
     completionId,
     productId: line.productId,
     titleSnapshot: line.titleSnapshot,
+    variantNameSnapshot: line.variantNameSnapshot,
     specificationSnapshot: line.specificationSnapshot,
     quantityOrdered: line.quantityOrdered,
     quantityReserved: line.quantityReserved,
