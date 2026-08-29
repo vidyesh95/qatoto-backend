@@ -117,7 +117,17 @@ export interface FreightLanePlan {
   readonly destination: { readonly countryCode: string; readonly locality: string | null };
   readonly consignment: ConsignmentMeasurement;
   readonly legs: readonly FreightLegPlan[];
+  /** END TO END: every leg covered, a real delivered total. */
   readonly journeys: readonly FreightJourneyProjection[];
+  /**
+   * PRICED AS FAR AS RATES EXIST — the covered legs only, with `unpriceableReasons` naming the leg
+   * that is missing.
+   *
+   * A SEPARATE ARRAY, NEVER MERGED INTO `journeys`, so nothing that predates it can mistake one of
+   * these for a delivered price. It is not a total and no copy may present it as one.
+   */
+  readonly partialJourneys: readonly FreightJourneyProjection[];
+  /** Why there is no END-TO-END price. Fires alongside a non-empty `partialJourneys`. */
   readonly unpriceableReasons: readonly JourneyUnpriceableReason[];
   /**
    * The RFQ affordance for the whole journey — every forwarder selling any leg of it, deduplicated.
@@ -283,39 +293,22 @@ export function planLegs(input: {
 }
 
 /**
- * PURE. Recomposes priced legs into whole journeys.
+ * PURE. One composition pass over the legs it is handed.
  *
- * ONE JOURNEY PER (currency, international mode) FOR WHICH EVERY LEG HAS AN OPTION IN THAT
+ * ONE JOURNEY PER (currency, primary mode) FOR WHICH EVERY LEG PASSED IN HAS AN OPTION IN THAT
  * CURRENCY. Within a leg the cheapest qualifying option is selected and named, so the client
  * can see which card produced each number without summing anything itself.
  *
- * AN UNCOVERED LEG MAKES THE WHOLE JOURNEY UNPRICEABLE RATHER THAN CHEAPER (§19.6). No
- * journey is emitted for ANY mode, and the offending leg is named. This is the case that
- * matters in practice: few forwarders sell a domestic card in the destination country, so the
- * inland leg is genuinely uncovered on most lanes, and it must not silently vanish into a
- * cheaper-looking total.
- *
  * NEVER CROSS-CURRENCY. Summing a USD international leg and a EUR inland leg would invent an
  * exchange rate, which is A16's and §15.4's rule.
+ *
+ * IT COMPOSES OVER WHAT IT IS GIVEN AND JUDGES NOTHING. Which legs are eligible is
+ * `composeJourneys`'s decision, and it calls this twice with two different leg sets.
  */
-export function composeJourneys(legs: readonly FreightLegPlan[]): {
+function composeOverLegs(legs: readonly FreightLegPlan[]): {
   readonly journeys: readonly FreightJourneyProjection[];
-  readonly unpriceableReasons: readonly JourneyUnpriceableReason[];
+  readonly sawCurrencySplit: boolean;
 } {
-  const uncoveredLeg = legs.find((leg) => leg.options.length === 0);
-  if (uncoveredLeg) {
-    return {
-      journeys: [],
-      unpriceableReasons: [
-        {
-          kind: "leg_uncovered",
-          legSequence: uncoveredLeg.sequence,
-          reasons: uncoveredLeg.unavailableReasons,
-        },
-      ],
-    };
-  }
-
   // The leg that carries the choice: the international one, or the single domestic one.
   // An inland leg never carries it — nobody chooses how a truck reaches the warehouse.
   const primaryLeg = legs.find((leg) => leg.kind !== "inland_destination");
@@ -399,11 +392,77 @@ export function composeJourneys(legs: readonly FreightLegPlan[]): {
       });
     }
   }
+  return { journeys, sawCurrencySplit };
+}
+
+/**
+ * PURE. Recomposes priced legs into whole journeys, and — where only a following leg is missing —
+ * into partial ones.
+ *
+ * TWO ARRAYS RATHER THAN ONE, AND THE SEPARATION IS THE ENTIRE SAFETY ARGUMENT. `journeys` keeps
+ * its original meaning exactly: every leg covered, a real delivered total. `partialJourneys` is a
+ * second array, so a reader that knows only about `journeys` — `projectFreight`, and through it
+ * the order arrival window and checkout prepare — sees today's behaviour unchanged instead of
+ * silently inheriting a price that stops short of the buyer's door.
+ *
+ * ⚠️ DO NOT FEED `partialJourneys` INTO AN ARRIVAL WINDOW. An arrival window is a time promise
+ * about delivery to the BUYER; a partial journey ends at the destination COUNTRY with a leg
+ * nobody has arranged. Its transit days are honestly shorter, and would read as a faster
+ * delivery rather than a shorter route.
+ *
+ * WHY THIS STOPPED BEING ALL-OR-NOTHING (§19.9). An uncovered leg used to empty `journeys` for
+ * every mode and every currency, and on most lanes no forwarder sells a domestic card in the
+ * destination country — so a perfectly good ocean rate went unshown, which §19.9 calls the
+ * largest practical divergence from Alibaba in the phase. §19.6 forbids an uncovered leg making
+ * a journey CHEAPER, and that guard is against a total that looks complete while missing a leg.
+ * It is not against pricing what is covered beside a NAMED absence, which is the same section's
+ * "report the components you have, name the ones you do not". The payload shape changed; the
+ * rule did not.
+ *
+ * AN UNCOVERED PRIMARY LEG STILL YIELDS NOTHING AT ALL. A journey with no international leg is
+ * not a shipment, and there is no partial worth showing when the part that crosses the border is
+ * the part with no rate. A domestic lane has one leg, which IS its primary leg, so it has no
+ * partial case by construction.
+ */
+export function composeJourneys(legs: readonly FreightLegPlan[]): {
+  readonly journeys: readonly FreightJourneyProjection[];
+  readonly partialJourneys: readonly FreightJourneyProjection[];
+  readonly unpriceableReasons: readonly JourneyUnpriceableReason[];
+} {
+  const firstUncoveredLeg = legs.find((leg) => leg.options.length === 0);
+
+  if (firstUncoveredLeg === undefined) {
+    const composed = composeOverLegs(legs);
+    return {
+      journeys: composed.journeys,
+      partialJourneys: [],
+      unpriceableReasons:
+        composed.journeys.length === 0 && composed.sawCurrencySplit
+          ? [{ kind: "no_common_currency_across_legs" }]
+          : [],
+    };
+  }
+
+  const legUncovered: JourneyUnpriceableReason = {
+    kind: "leg_uncovered",
+    legSequence: firstUncoveredLeg.sequence,
+    reasons: firstUncoveredLeg.unavailableReasons,
+  };
+
+  const primaryLeg = legs.find((leg) => leg.kind !== "inland_destination");
+  if (primaryLeg === undefined || primaryLeg.options.length === 0) {
+    return { journeys: [], partialJourneys: [], unpriceableReasons: [legUncovered] };
+  }
+
+  // Compose over the legs that priced. THE CURRENCY-SPLIT REASON IS DELIBERATELY NOT REPORTED
+  // HERE: the uncovered leg is why there is no end-to-end price, and naming a second cause would
+  // send the buyer looking for a currency problem that is not the one blocking them.
+  const partial = composeOverLegs(legs.filter((leg) => leg.options.length > 0));
 
   return {
-    journeys,
-    unpriceableReasons:
-      journeys.length === 0 && sawCurrencySplit ? [{ kind: "no_common_currency_across_legs" }] : [],
+    journeys: [],
+    partialJourneys: partial.journeys,
+    unpriceableReasons: [legUncovered],
   };
 }
 
@@ -472,6 +531,7 @@ export async function planFreightJourney(input: {
     consignment,
     legs,
     journeys: composed.journeys,
+    partialJourneys: composed.partialJourneys,
     unpriceableReasons: composed.unpriceableReasons,
     quotableProviders: [...quotableByKey.values()],
   };

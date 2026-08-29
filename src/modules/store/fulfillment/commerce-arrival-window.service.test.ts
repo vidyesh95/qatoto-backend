@@ -239,6 +239,9 @@ function lanePlan(journeys: readonly Journey[], unpriceableReasons: LanePlan["un
     },
     legs: [],
     journeys,
+    // `projectFreight` reads only `journeys`, deliberately: a partial journey ends at the
+    // destination country with a leg nobody has arranged, so it is not an arrival window.
+    partialJourneys: [],
     unpriceableReasons,
     quotableProviders: [],
   };

@@ -2615,8 +2615,14 @@ an inconsistency.
 
 - **A rate card produces a range with its provenance, never a single day.** `sourceForwarderName`
   and `validUntil` travel with every option; an expired card is not a price.
-- **An uncovered lane returns an empty `options[]`, never a zero**, and an uncovered *leg* makes
-  the whole journey unpriceable rather than cheaper. A15's and A16's rule, unchanged.
+- **An uncovered lane returns an empty `options[]`, never a zero**, and an uncovered *leg* never
+  makes a journey **cheaper**. A15's and A16's rule, unchanged — but read the next bullet with it,
+  because the *shape* that satisfies it changed in Phase 26. Until then this bullet was implemented
+  as "an uncovered leg makes the whole journey unpriceable", which was stricter than the rule it
+  came from: the guard is against a total that looks complete while a leg is missing, not against
+  pricing the legs that priced beside a **named** absence. `journeys[]` still means end to end and
+  still empties; the covered legs now compose into a separate `partialJourneys[]` that is never a
+  delivered price and never reaches an arrival window.
 - **Partial data yields a partial answer, never an extrapolated whole one.** §19.2, §19.3 and
   §19.4 are three expressions of this one rule: report the components you have, name the ones you
   do not. It is the call A16 made for money, applied to time.
@@ -2709,7 +2715,12 @@ usually the person deciding whether to change one.
   every journey under the uncovered-leg rule.
 - **Localities are labels.** They render; they never select a card.
 - **A journey is never summed across currencies**, and an uncovered leg empties `journeys[]`
-  entirely rather than pricing the international leg alone.
+  entirely rather than pricing the international leg alone. **Phase 26 added a second array rather
+  than relaxing that**: `partialJourneys[]` carries the covered legs composed on their own, so
+  `journeys[]` keeps its exact meaning and every existing reader keeps its exact behaviour. An
+  uncovered **primary** leg still yields nothing in either array — a journey with no international
+  leg is not a shipment — and a domestic lane has one leg, which is its primary one, so it has no
+  partial case by construction.
 
 #### Customs dwell
 
@@ -2779,15 +2790,30 @@ as product decisions.
 - **Currencies are never converted, so a journey whose legs quote in different currencies emits
   nothing.** Alibaba converts and shows the rate. This follows A16 and §15.4 rather than Alibaba.
   **Cost:** a USD ocean card plus a EUR inland card is unpriceable, though both are real prices.
-- **An uncovered inland leg makes the whole journey unpriceable.** Alibaba would still sell the
-  international leg **port-to-port** and let the buyer arrange the rest — because Alibaba models
-  Incoterms and this backend does not. **Cost:** on most lanes, where no forwarder sells a domestic
-  card in the destination country, a perfectly good ocean rate goes unshown. **This is the largest
-  practical divergence in the phase**, and the fix is an Incoterm concept, not a rate table.
-  **Phase 23 shipped the VOCABULARY ONLY** (`commerce_incoterm`, A40): a quote revision can now
-  only state a term the ICC publishes. Nothing branches on the value and no leg is modelled from
-  it, so this divergence stays open — a delivery term is now spelled correctly, and still means
-  nothing to the rating.
+- ~~**An uncovered inland leg makes the whole journey unpriceable.**~~ **NARROWED IN PHASE 26,
+  AND NOT CLOSED.** It used to empty `journeys[]` for every mode and every currency, so on most
+  lanes — where no forwarder sells a domestic card in the destination country — a perfectly good
+  ocean rate went unshown. That was the largest practical divergence in the phase. `composeJourneys`
+  now runs a second pass over the **covered** legs and publishes it as `partialJourneys[]`, beside
+  an `unpriceableReasons` that still names the leg with no rate.
+
+    **The separate array is the whole safety argument, and it must not be collapsed.** `journeys[]`
+    keeps its original meaning exactly — every leg covered, a real delivered total — so anything
+    reading only that field sees Phase 19's behaviour unchanged. That is not incidental:
+    `projectFreight` reads only `journeys[]`, so the order arrival window and checkout prepare keep
+    answering `unknown / leg_uncovered` **by construction**. ⚠️ **Do not feed `partialJourneys` into
+    an arrival window.** An arrival window is a time promise about delivery to the buyer; a partial
+    journey ends at the destination *country* with a leg nobody has arranged, and its honestly
+    shorter transit days would read as a faster delivery rather than a shorter route.
+
+    **What is still open is the Incoterm concept itself.** Phase 26 ships the *effect* — the buyer
+    sees the ocean rate and is told which leg it stops short of — without an incoterm input, because
+    there is none to read: `commerce_incoterm` sits on exactly two nullable columns
+    (`commerce_quote_revision.incoterm`, `commerce_order.incoterm_snapshot`), both of which exist
+    only *after* a buyer already has a priced offer. A product carries no term. **A seller-declared
+    incoterm — the value that would say which legs are the BUYER's to arrange, and would distinguish
+    an FOB listing from a DDP one — is still absent, and remains a migration.** Phase 23's vocabulary
+    (A40) is still vocabulary only: nothing branches on the value, and no leg is modelled from it.
 - **Customs dwell is exposed as its own component.** Alibaba does not surface it; it bundles
   clearance into the estimate or sells DDP. Here the backend is **more** transparent than Alibaba,
   not less, which is the intended direction.
