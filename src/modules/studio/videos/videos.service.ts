@@ -44,7 +44,6 @@ import {
   type ObjectStorageError,
 } from "#src/lib/object-storage.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
-import { mintSeriesSlug } from "#src/modules/studio/series/series.service.js";
 import {
   buildYoutubeEmbedUrl,
   extractYoutubeVideoId,
@@ -68,6 +67,7 @@ import {
   resolveDefaultCategoryId,
 } from "#src/modules/studio/content-categories.service.js";
 import { findPublicVideo } from "#src/modules/studio/public-video-gate.js";
+import { mintSeriesSlug } from "#src/modules/studio/series/series.service.js";
 import {
   MAX_VIDEO_DOCUMENTS,
   videoDocumentDownloadPath,

@@ -3401,10 +3401,30 @@ commerce_product_document
 - **PDF only, sniffed by magic bytes.** The mimetype gate in `src/middleware/upload.ts:35-45`
   says of itself that it is not the validation, and a public download path is the worst place to
   learn that lesson twice.
-- **Scanned before it is visible.** Reuse `document-scanner.adapter.ts` and
-  `sweep-pending-document-scans.ts`. The upload answers **202** with the row in `pending_scan`,
-  exactly as `POST /commerce/documents` does, and the product detail omits the document until it
-  is `available`. A 202 is not a result.
+- **⚠️ SCANNING IS AN OPEN DECISION, NOT A REUSE. THIS BULLET USED TO SAY OTHERWISE AND WAS
+  WRONG.** It read "reuse `document-scanner.adapter.ts` and `sweep-pending-document-scans.ts`",
+  and only the first half of that is possible.
+
+  `DocumentScannerAdapter` genuinely is reusable: `scanDocument` takes
+  `{ documentId, plaintextBytes, mediaType, declaredByteSize }` and returns
+  `clean | infected | unscannable`. It knows nothing about encryption or about any table.
+
+  Everything above it is welded to `commerce_encrypted_document`.
+  `scanEncryptedDocument` selects from that table, branches on ITS `state` column, and reaches the
+  bytes through `downloadPrivateCommerceDocument` + `decryptCommerceDocument` — there is no
+  already-plaintext branch. `applyScanVerdict`, `sweepPendingDocumentScans` and
+  `countPendingDocumentScans` all name the same table, and the `scan-encrypted-document` job's
+  payload is `{ documentId }` with **no field saying which table that id belongs to**.
+
+  Two facts decide this rather than a preference. **`video_document` — the precedent this table
+  copies — is not scanned at all**: `attachVideoDocument` validates the PDF bytes and stores them.
+  And the only working scanner is an EICAR-only fake; `clamav` is a configurable value with no
+  implementation, returning `SCANNER_UNAVAILABLE`.
+
+  So: either add a second scan service, job and `state` column for unencrypted documents, or ship
+  unscanned as `video_document` does — and in that case **the route answers 201, not 202**, and no
+  copy anywhere may say the file is being checked. Choose before writing the table; the `state`
+  column only exists in the first branch.
 - New `products` key prefix in `object-storage.ts:48-51` and a
   `PRODUCT_DOCUMENT_URL_TTL_SECONDS` beside the other four.
 - **⚠️ THE CASCADE CLEANS ROWS, NOT BYTES.** `deleteProduct` must delete the objects explicitly,

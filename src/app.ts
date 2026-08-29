@@ -16,6 +16,7 @@ import handlesRouter from "#src/modules/auth/handles/handles.routes.js";
 import authRouter from "#src/modules/auth/session/auth.routes.js";
 import userReportsRouter from "#src/modules/auth/users/user-reports.routes.js";
 import usersRouter from "#src/modules/auth/users/users.routes.js";
+import animeRouter from "#src/modules/home/anime/anime.routes.js";
 import channelsRouter from "#src/modules/home/channels/channels.routes.js";
 import engagementRouter, {
   commentRouter,
@@ -23,7 +24,6 @@ import engagementRouter, {
 } from "#src/modules/home/engagement/engagement.routes.js";
 import watchHistoryRouter from "#src/modules/home/engagement/watch-history.routes.js";
 import feedRouter from "#src/modules/home/feed/feed.routes.js";
-import animeRouter from "#src/modules/home/anime/anime.routes.js";
 import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
 import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";

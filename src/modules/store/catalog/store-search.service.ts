@@ -941,6 +941,16 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
       title: product.title,
       description: product.description,
       brand: product.brand,
+      /**
+       * §21.1. The manufacturer's own code, read ONLY to be indexed — it is not projected onto a
+       * search hit and there is no `model_number` column on `store_search_document`.
+       *
+       * It sat on `product` from the start, reached the buyer's product page, and was findable
+       * nowhere: a buyer who typed an exact part code got nothing back. Folding it into
+       * `searchText` below is the whole fix, and it needs no migration because `search_document`
+       * is `GENERATED ALWAYS` over `search_text`.
+       */
+      modelNumber: product.modelNumber,
       priceInCents: product.priceInCents,
       currency: product.currency,
       status: product.status,
@@ -1074,6 +1084,17 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
   const searchText = [
     row.title,
     row.brand,
+    /**
+     * §21.1. An exact part code is the one query a B2B buyer types verbatim, and it matched
+     * nothing before this line existed.
+     *
+     * ⚠️ THIS INDEXES IT; IT DOES NOT RANK IT. `search_document` weights this whole string at
+     * class `C`, so a listing whose TITLE happens to contain the query still outranks the listing
+     * that actually carries the code. Ranking an exact code first needs to compare against the
+     * value, which needs a `model_number` column on this table — a migration, and deliberately not
+     * done here. Being findable is the gap that was open; being first is a refinement.
+     */
+    row.modelNumber,
     row.description,
     row.organizationDisplayName,
     ...(categorySynonymRow?.searchSynonyms ?? []),
