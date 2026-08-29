@@ -228,7 +228,7 @@ async function writeStepOutcome(
  * support. §8 says the same thing about `workshop_file.sizeBytes` staying NULL.
  */
 function referenceSha256(provider: string, reference: string): string {
-  return createHash("sha256").update(`${provider} ${reference}`, "utf8").digest("hex");
+  return createHash("sha256").update(`${provider}\0${reference}`, "utf8").digest("hex");
 }
 
 /**
