@@ -9,6 +9,7 @@ import {
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as commerceCategoriesController from "#src/modules/store/catalog/commerce-categories.controller.js";
+import * as categoryAttributesController from "#src/modules/store/catalog/commerce-category-attributes.controller.js";
 import { uploadCommerceCategoryImage } from "#src/modules/store/catalog/upload-commerce-category-image.js";
 
 const router = express.Router();
@@ -118,6 +119,46 @@ router.post(
   requireAuth,
   commerceCategoryWriteLimiter,
   commerceCategoriesController.retireCategory,
+);
+
+/**
+ * STORE §20 — the per-category attribute vocabulary.
+ *
+ * ⚠️ ROUTE ORDER, AGAIN. `/admin/categories/:categoryId/attributes` is three segments deep and
+ * sits AFTER the two-segment `/admin/categories/:categoryId` above; Express matches on the full
+ * path, so neither shadows the other. The edit route is deliberately mounted at
+ * `/admin/category-attributes/:attributeId` rather than nested under a category — an attribute id
+ * is globally unique and nesting would invite a mismatched pair in the URL.
+ */
+router.get(
+  "/admin/categories/:categoryId/attributes",
+  requireAuth,
+  commerceCategoryWriteLimiter,
+  categoryAttributesController.listAttributesForStaff,
+);
+
+router.post(
+  "/admin/categories/:categoryId/attributes",
+  requireAuth,
+  commerceCategoryWriteLimiter,
+  compactBody,
+  categoryAttributesController.createAttribute,
+);
+
+/**
+ * PATCH /commerce/admin/category-attributes/:attributeId — label, group, unit, flags, choices.
+ *
+ * THERE IS NO DELETE, matching the categories above and for a stronger reason:
+ * `commerce_product_attribute_value.attribute_id` is ON DELETE RESTRICT, so a definition any
+ * listing has answered cannot be removed at all. `isFilterable: false` takes it out of browse
+ * and is reversible.
+ */
+router.patch(
+  "/admin/category-attributes/:attributeId",
+  requireAuth,
+  commerceCategoryWriteLimiter,
+  compactBody,
+  categoryAttributesController.updateAttribute,
 );
 
 /** GET /commerce/admin/category-requests — the moderation queue. */

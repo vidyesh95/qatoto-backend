@@ -2,6 +2,7 @@ import express from "express";
 
 import { attachOptionalUser } from "#src/middleware/attach-optional-user.js";
 import { storeFactoryReadLimiter, storeReadLimiter } from "#src/middleware/rate-limit.js";
+import * as categoryAttributesController from "#src/modules/store/catalog/commerce-category-attributes.controller.js";
 import * as communityCofounderController from "#src/modules/store/community/community-cofounder.controller.js";
 import * as communityForumController from "#src/modules/store/community/community-forum.controller.js";
 import * as storeFactoriesController from "#src/modules/store/storefront/store-factories.controller.js";
@@ -19,6 +20,18 @@ storeRouter.use(attachOptionalUser, storeReadLimiter);
 storeRouter.get("/home", storeController.getHome);
 storeRouter.get("/categories", storeController.listCategories);
 storeRouter.get("/categories/:slug", storeController.getCategory);
+/**
+ * STORE §20. The RESOLVED attribute set for a category — its own definitions plus every
+ * ancestor's. Public: the seller wizard needs it before a listing exists and the buyer's filter
+ * row needs it before anyone signs in, and a definition is not a secret — it is the question the
+ * category asks of every listing under it.
+ *
+ * Four segments, so it shadows nothing and nothing shadows it.
+ */
+storeRouter.get(
+  "/categories/:slug/attributes",
+  categoryAttributesController.getPublicCategoryAttributes,
+);
 storeRouter.get("/search", storeController.search);
 storeRouter.get("/products/:productSlug", storeController.getProduct);
 /**

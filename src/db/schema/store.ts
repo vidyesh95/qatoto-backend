@@ -7,6 +7,7 @@ import {
   timestamp,
   boolean,
   integer,
+  smallint,
   bigint,
   date,
   index,
@@ -171,6 +172,26 @@ export const commerceCategoryRequestStateEnum = pgEnum("commerce_category_reques
   "approved",
   "rejected",
 ]);
+
+/**
+ * §20.2. What KIND of answer an attribute takes, and therefore what the buyer can do with it.
+ *
+ * ⚠️ ONLY `enum` AND `number` ARE FILTERABLE, and `commerce_category_attribute_filterable_ck`
+ * enforces it. A filterable free-text attribute produces "Oak", "oak" and "Solid oak" as three
+ * separate chips over what sellers meant as one answer — worse than no filter, because it looks
+ * authoritative. This is the same split the shipped certification model makes: `standardCode` is a
+ * closed enum and filterable, `standardName` is open text and is not.
+ */
+export const commerceCategoryAttributeValueKindEnum = pgEnum(
+  "commerce_category_attribute_value_kind",
+  ["enum", "number", "text"],
+);
+
+/** A seller's proposal for an attribute their category does not define. Mirrors the category one. */
+export const commerceCategoryAttributeRequestStateEnum = pgEnum(
+  "commerce_category_attribute_request_state",
+  ["pending", "approved", "rejected"],
+);
 
 export const commerceDocumentKindEnum = pgEnum("commerce_document_kind", [
   "business_registration",
@@ -3217,6 +3238,279 @@ export const productPricingTier = pgTable(
     check(
       "product_pricing_tier_lead_time_ck",
       sql`lead_time_days IS NULL OR lead_time_days BETWEEN 0 AND 3650`,
+    ),
+  ],
+);
+
+/**
+ * §20.2. One question a category asks of every listing under it — "Voltage", "Wood type", "Size".
+ *
+ * ⚠️ INHERITED DOWN THE TREE, AND THAT IS WHAT MAKES THE FEATURE WORK. An attribute on
+ * `electronics` applies to every leaf beneath it; the resolved set for a product is the union
+ * along its category trail, nearer definitions shadowing farther ones on the same `attributeKey`.
+ * Without inheritance an admin authors "voltage" once per leaf, the copies drift, and two leaves
+ * end up with `voltage` and `voltage_volts` — the free-text problem re-created one level up, in
+ * the one place that was supposed to be canonical.
+ *
+ * ⚠️ `attributeKey` IS A WIRE IDENTITY, not a label. A stored value points at this row through
+ * `attributeId` and a buyer's saved filter link names the KEY, so it is absent from the PATCH body
+ * for the same reason `commerce_category.slug` is: an attribute that needs a different key is a
+ * new attribute.
+ *
+ * NO UNIQUE INDEX ON `(categoryId, position)`, deliberately, and it is a departure from the
+ * sibling-order rule `commerce_category` follows. That table can enforce it because its reorder
+ * route rewrites a whole sibling set in two passes; an attribute set CANNOT be rewritten that way,
+ * because `commerce_product_attribute_value.attributeId` is `ON DELETE RESTRICT` and a replace-set
+ * would fail the moment one listing used one. Position is therefore an ordering hint and ties
+ * break on `attributeKey`, which is stable — so the order is deterministic without a constraint
+ * that would block inserting at 3.
+ */
+export const commerceCategoryAttribute = pgTable(
+  "commerce_category_attribute",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /**
+     * `restrict`, matching `product.categoryId`: a category with attributes cannot be deleted out
+     * from under the values that point at them. `retire` is the taxonomy's only exit anyway.
+     */
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => commerceCategory.id, { onDelete: "restrict" }),
+    attributeKey: text("attribute_key").notNull(),
+    label: text("label").notNull(),
+    /** Becomes the tab on the buyer's spec sheet. NULL is ungrouped. */
+    groupLabel: text("group_label"),
+    valueKind: commerceCategoryAttributeValueKindEnum("value_kind").notNull(),
+    /** `number` only — "V", "mm", "kg". Rendered as a suffix, never parsed back out of a string. */
+    unitLabel: text("unit_label"),
+    /**
+     * `number` only. FIXED POINT, and the scale lives HERE rather than on the value row so two
+     * values for one attribute cannot disagree about what `4700` means. Same shape as the FX rate
+     * on a quote revision (`rateFixedPoint` / `rateScale`).
+     */
+    numericScale: smallint("numeric_scale"),
+    isFilterable: boolean("is_filterable").default(false).notNull(),
+    isRequiredForPublish: boolean("is_required_for_publish").default(false).notNull(),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_category_attribute_key_uidx").on(table.categoryId, table.attributeKey),
+    index("commerce_category_attribute_category_idx").on(
+      table.categoryId,
+      table.position,
+      table.attributeKey,
+    ),
+    /** snake_case on the wire, like every pgEnum label and every `choiceValue` below. */
+    check("commerce_category_attribute_key_ck", sql`attribute_key ~ '^[a-z0-9]+(_[a-z0-9]+)*$'`),
+    check(
+      "commerce_category_attribute_text_ck",
+      sql`char_length(attribute_key) BETWEEN 1 AND 64
+          AND char_length(label) BETWEEN 1 AND 120
+          AND (group_label IS NULL OR char_length(group_label) BETWEEN 1 AND 80)
+          AND (unit_label IS NULL OR char_length(unit_label) BETWEEN 1 AND 24)`,
+    ),
+    /**
+     * The unit and the scale belong to `number` and to nothing else, and a `number` MUST carry a
+     * scale — otherwise a stored `4700` is an integer nobody can render.
+     */
+    check(
+      "commerce_category_attribute_numeric_ck",
+      sql`(value_kind = 'number') = (numeric_scale IS NOT NULL)
+          AND (unit_label IS NULL OR value_kind = 'number')
+          AND (numeric_scale IS NULL OR numeric_scale BETWEEN 0 AND 6)`,
+    ),
+    /** See the enum: a filterable free-text attribute is worse than no filter. */
+    check(
+      "commerce_category_attribute_filterable_ck",
+      sql`NOT (is_filterable AND value_kind = 'text')`,
+    ),
+    check("commerce_category_attribute_position_ck", sql`position >= 0`),
+  ],
+);
+
+/**
+ * §20.2. One allowed answer for an `enum` attribute — "3v3", "5v", "12v".
+ *
+ * `choiceValue` is snake_case and is what a filter names in the query string; `label` is what the
+ * chip says. The two are separate for the same reason `standardCode` and `standardName` are.
+ *
+ * CASCADE from the attribute, unlike everything else here: a choice has no meaning without its
+ * question, and the RESTRICT on `commerce_product_attribute_value.choiceId` is what actually stops
+ * a choice in use from disappearing.
+ */
+export const commerceCategoryAttributeChoice = pgTable(
+  "commerce_category_attribute_choice",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    attributeId: text("attribute_id")
+      .notNull()
+      .references(() => commerceCategoryAttribute.id, { onDelete: "cascade" }),
+    choiceValue: text("choice_value").notNull(),
+    label: text("label").notNull(),
+    position: integer("position").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_category_attribute_choice_uidx").on(table.attributeId, table.choiceValue),
+    index("commerce_category_attribute_choice_attribute_idx").on(
+      table.attributeId,
+      table.position,
+      table.choiceValue,
+    ),
+    check(
+      "commerce_category_attribute_choice_value_ck",
+      sql`choice_value ~ '^[a-z0-9]+(_[a-z0-9]+)*$' AND char_length(choice_value) BETWEEN 1 AND 64`,
+    ),
+    check("commerce_category_attribute_choice_label_ck", sql`char_length(label) BETWEEN 1 AND 120`),
+    check("commerce_category_attribute_choice_position_ck", sql`position >= 0`),
+  ],
+);
+
+/**
+ * §20.2. One listing's answer to one attribute.
+ *
+ * ⚠️ EXACTLY ONE VALUE COLUMN IS POPULATED, and `..._one_value_ck` enforces it rather than leaving
+ * three nullable columns and hope. Which one is decided by the attribute's `valueKind`, which SQL
+ * cannot reach from here — the service checks that pairing, and this CHECK stops the shape that
+ * would be meaningless either way.
+ *
+ * `attributeId` is `restrict`: a definition in use cannot be deleted, which is why the admin exit
+ * is `isFilterable → false` rather than DELETE. `productId` cascades, because a value is part of
+ * the listing and means nothing without it.
+ */
+export const commerceProductAttributeValue = pgTable(
+  "commerce_product_attribute_value",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    attributeId: text("attribute_id")
+      .notNull()
+      .references(() => commerceCategoryAttribute.id, { onDelete: "restrict" }),
+    choiceId: text("choice_id").references(() => commerceCategoryAttributeChoice.id, {
+      onDelete: "restrict",
+    }),
+    /** Already multiplied by the DEFINITION's `numericScale`. No decimal crosses the wire. */
+    numericValueScaled: bigint("numeric_value_scaled", { mode: "number" }),
+    textValue: text("text_value"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_product_attribute_value_uidx").on(table.productId, table.attributeId),
+    /** The enum facet and its filter: "which products answer `5v`". */
+    index("commerce_product_attribute_value_choice_idx").on(table.attributeId, table.choiceId),
+    /** The range filter and the min/max facet. */
+    index("commerce_product_attribute_value_numeric_idx").on(
+      table.attributeId,
+      table.numericValueScaled,
+    ),
+    check(
+      "commerce_product_attribute_value_one_value_ck",
+      sql`num_nonnulls(choice_id, numeric_value_scaled, text_value) = 1`,
+    ),
+    check(
+      "commerce_product_attribute_value_text_ck",
+      sql`text_value IS NULL OR char_length(text_value) BETWEEN 1 AND 500`,
+    ),
+  ],
+);
+
+/**
+ * §20.4. A seller's proposal for an attribute their category does not define.
+ *
+ * Mirrors `commerce_category_request` column for column and for the same reasons — `set null` on
+ * both author columns so a deleted account cannot pin a decided request, a queue index in
+ * `(state, createdAt, id)`, and a review CHECK pairing the timestamp with the STATE rather than
+ * with a reviewer who may since have been deleted.
+ *
+ * ⚠️ A PENDING REQUEST NEVER BLOCKS A LISTING. The seller types their value, it lands as an
+ * ordinary free-text `commerce_product_specification` row, and the listing publishes immediately.
+ * Approval promotes the vocabulary; it does not gate the catalogue. That fallback is the whole
+ * reason this table can ship after the rest of §20 rather than with it.
+ */
+export const commerceCategoryAttributeRequest = pgTable(
+  "commerce_category_attribute_request",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    requestedByUserId: text("requested_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    requestedOrganizationId: text("requested_organization_id").references(
+      () => commerceOrganization.id,
+      { onDelete: "set null" },
+    ),
+    /** Which category the seller wants it on. Restrict: a decided request keeps its subject. */
+    categoryId: text("category_id")
+      .notNull()
+      .references(() => commerceCategory.id, { onDelete: "restrict" }),
+    /**
+     * What the seller typed. NOT an `attributeKey` — the key is derived by the moderator on
+     * approval, after any edit, so a requester cannot choose a wire identity.
+     */
+    proposedLabel: text("proposed_label").notNull(),
+    proposedValueKind: commerceCategoryAttributeValueKindEnum("proposed_value_kind").notNull(),
+    proposedUnitLabel: text("proposed_unit_label"),
+    justification: text("justification"),
+    state: commerceCategoryAttributeRequestStateEnum("state").default("pending").notNull(),
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewNote: text("review_note"),
+    /** The attribute this request became. Set on approval only. */
+    resultingAttributeId: text("resulting_attribute_id").references(
+      () => commerceCategoryAttribute.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("commerce_category_attribute_request_queue_idx").on(
+      table.state,
+      table.createdAt,
+      table.id,
+    ),
+    index("commerce_category_attribute_request_requestedByUserId_idx").on(table.requestedByUserId),
+    index("commerce_category_attribute_request_category_idx").on(table.categoryId),
+    check(
+      "commerce_category_attribute_request_review_ck",
+      sql`(reviewed_at IS NULL) = (state = 'pending')
+          AND (state = 'approved' OR resulting_attribute_id IS NULL)
+          AND (state <> 'rejected' OR review_note IS NOT NULL)`,
+    ),
+    check(
+      "commerce_category_attribute_request_text_ck",
+      sql`char_length(proposed_label) BETWEEN 1 AND 120
+          AND (proposed_unit_label IS NULL OR char_length(proposed_unit_label) BETWEEN 1 AND 24)
+          AND (justification IS NULL OR char_length(justification) BETWEEN 1 AND 2000)
+          AND (review_note IS NULL OR char_length(review_note) BETWEEN 1 AND 2000)`,
+    ),
+    /** A unit only means anything on a number, the same rule the definition table carries. */
+    check(
+      "commerce_category_attribute_request_unit_ck",
+      sql`proposed_unit_label IS NULL OR proposed_value_kind = 'number'`,
     ),
   ],
 );

@@ -169,6 +169,57 @@ export async function getCategory(req: Request, res: Response): Promise<void> {
   } satisfies ApiResponse);
 }
 
+/**
+ * §20.5. The two repeatable query keys into the maps the search service takes.
+ *
+ * ⚠️ AN ATTRIBUTE FILTER FORCES `documentKind: "product"`. Provider offerings and organizations
+ * have no category attributes, so an unscoped attribute filter would answer "the matching
+ * products, plus every offering and supplier" — which is not a filter but a broken one. Forcing
+ * the kind here is the honest reading of what the buyer asked for.
+ *
+ * The regexes in the schema have already proved the shape, so the splits below cannot produce a
+ * missing part; the guards are for the type checker rather than for untrusted input.
+ */
+function buildAttributeFilters(
+  attribute: readonly string[] | undefined,
+  attributeRange: readonly string[] | undefined,
+): {
+  readonly attributeSelections?: ReadonlyMap<string, readonly string[]>;
+  readonly attributeRanges?: ReadonlyMap<string, { minScaled: number; maxScaled: number }>;
+  readonly documentKind?: "product";
+} {
+  if (attribute === undefined && attributeRange === undefined) return {};
+
+  const selections = new Map<string, string[]>();
+  for (const entry of attribute ?? []) {
+    const [attributeKey, choiceValue] = entry.split(":");
+    if (attributeKey === undefined || choiceValue === undefined) continue;
+    const bucket = selections.get(attributeKey) ?? [];
+    bucket.push(choiceValue);
+    selections.set(attributeKey, bucket);
+  }
+
+  const ranges = new Map<string, { minScaled: number; maxScaled: number }>();
+  for (const entry of attributeRange ?? []) {
+    const [attributeKey, rawMin, rawMax] = entry.split(":");
+    if (attributeKey === undefined || rawMin === undefined || rawMax === undefined) continue;
+    const minScaled = Number.parseInt(rawMin, 10);
+    const maxScaled = Number.parseInt(rawMax, 10);
+    if (!Number.isSafeInteger(minScaled) || !Number.isSafeInteger(maxScaled)) continue;
+    // A reversed pair is the caller's slip, not a reason to answer nothing — order it and move on.
+    ranges.set(attributeKey, {
+      minScaled: Math.min(minScaled, maxScaled),
+      maxScaled: Math.max(minScaled, maxScaled),
+    });
+  }
+
+  return {
+    ...(selections.size === 0 ? {} : { attributeSelections: selections }),
+    ...(ranges.size === 0 ? {} : { attributeRanges: ranges }),
+    documentKind: "product",
+  };
+}
+
 export async function search(req: Request, res: Response): Promise<void> {
   const parsed = SearchQuerySchema.safeParse(req.query);
   if (!parsed.success) {
@@ -193,6 +244,7 @@ export async function search(req: Request, res: Response): Promise<void> {
     samplePolicy: parsed.data.samplePolicy,
     condition: parsed.data.condition,
     sellingState: parsed.data.sellingState,
+    ...buildAttributeFilters(parsed.data.attribute, parsed.data.attributeRange),
     verificationState: parsed.data.verificationState,
     leadTimeMaxDays: parsed.data.leadTimeMaxDays,
     sort: parsed.data.sort ?? "relevance",

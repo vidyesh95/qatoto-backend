@@ -25,6 +25,7 @@ import {
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-errors.js";
+import type { ProductAttributeValueView } from "#src/modules/store/catalog/commerce-category-attributes.service.js";
 import { ensureCommerceProductStatsRow } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
 import type {
   CreateProductInput,
@@ -409,6 +410,8 @@ export interface PublicProduct {
   readonly images: readonly ProductImageView[];
   readonly pricingTiers: readonly PricingTierView[];
   readonly specifications: readonly ProductSpecificationView[];
+  /** STORE §20. The structured answers, so the wizard can hydrate its typed controls. */
+  readonly attributeValues: readonly ProductAttributeValueView[];
   readonly variants: readonly ProductVariantView[];
   readonly highlights: readonly ProductHighlightView[];
   readonly customizationOptions: readonly ProductCustomizationOptionView[];
@@ -557,6 +560,7 @@ function toPublicProduct(
   images: readonly ProductImageView[],
   pricingTiers: readonly PricingTierView[],
   specifications: readonly ProductSpecificationView[],
+  attributeValues: readonly ProductAttributeValueView[] = [],
   variants: readonly ProductVariantView[] = [],
   highlights: readonly ProductHighlightView[] = [],
   customizationOptions: readonly ProductCustomizationOptionView[] = [],
@@ -611,6 +615,7 @@ function toPublicProduct(
     images,
     pricingTiers,
     specifications,
+    attributeValues,
     variants,
     highlights,
     customizationOptions,
@@ -707,12 +712,18 @@ async function loadOrganizationProduct(
     pricingTiers: pricingTiers.filter((tier) => tier.variantId === variantRow.id),
   }));
 
+  // STORE §20. The structured answers, so an edit hydrates its typed controls.
+  const { listProductAttributeValues } =
+    await import("#src/modules/store/catalog/commerce-category-attributes.service.js");
+  const attributeValues = await listProductAttributeValues(productId);
+
   return toPublicProduct(
     row,
     images,
     // The seller edits the product ladder here; variant ladders ride their variant.
     pricingTiers.filter((tier) => tier.variantId === null),
     specifications,
+    attributeValues,
     variants,
     highlights,
     customizationOptions,
@@ -1308,7 +1319,7 @@ export async function createProduct(
          */
         await ensureCommerceProductStatsRow(tx, row.id);
 
-        return { success: true, value: toPublicProduct(row, [], pricingTiers, specifications) };
+        return { success: true, value: toPublicProduct(row, [], pricingTiers, specifications, []) };
       },
       { isolationLevel: "serializable" },
     );

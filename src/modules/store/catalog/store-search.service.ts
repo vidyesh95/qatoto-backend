@@ -17,7 +17,10 @@ import type { PgColumn } from "drizzle-orm/pg-core";
 import { db } from "#src/db/index.js";
 import {
   commerceCategory,
+  commerceCategoryAttribute,
+  commerceCategoryAttributeChoice,
   commerceOrganization,
+  commerceProductAttributeValue,
   commerceProductHighlight,
   commerceProductSpecification,
   commerceProductVariant,
@@ -209,6 +212,20 @@ export interface StoreSearchFilterInput {
   readonly verificationState?: StoreSearchVerificationState | undefined;
   readonly leadTimeMaxDays?: number | undefined;
   /**
+   * §20.5. Attribute filters, as BOUNDED REPEATABLE keys rather than one query key per
+   * attribute — `SearchQuerySchema` is `.strict()`, so `?voltage=5v` would be a 422 that kills
+   * the whole read rather than an ignored parameter.
+   *
+   * `attributeSelections` is `attributeKey -> the choice values that satisfy it`: OR within one
+   * key, AND across keys. "5 V or 12 V, and SOP-8" is the only reading a buyer means.
+   * `attributeRanges` is `attributeKey -> scaled integer bounds`, already multiplied by the
+   * definition's `numericScale` — no decimal is ever parsed off a query string.
+   */
+  readonly attributeSelections?: ReadonlyMap<string, readonly string[]> | undefined;
+  readonly attributeRanges?:
+    | ReadonlyMap<string, { readonly minScaled: number; readonly maxScaled: number }>
+    | undefined;
+  /**
    * §21.2. UNLIKE EVERY OTHER FILTER HERE, THIS ONE IS APPLIED WHEN IT IS ABSENT. Omitting it
    * excludes `discontinued`; naming a value narrows to exactly that state, which is how a buyer
    * asks to see dead listings on purpose. Anything else would make the default result set
@@ -316,6 +333,47 @@ function buildStoreSearchFilters(
      * not true — so a bare inequality would silently drop every supplier and every service from
      * the default result set and from their own facet counts.
      */
+    /**
+     * §20.5. ONE `EXISTS` PER REQUESTED ATTRIBUTE, correlated on the document's `entity_id`.
+     *
+     * No denormalized column and no second refresh path: the search document already carries the
+     * product id, so the value table can be asked directly. Within one key the choice values are
+     * an `IN`, which is the OR; across keys each is its own `EXISTS`, which is the AND.
+     *
+     * ⚠️ SCOPED TO `document_kind = 'product'` BY THE CALLER. A provider offering has no category
+     * attributes, so an unscoped attribute filter would answer "the matching products, plus every
+     * offering" — which is not a filter. `store.controller.ts` forces the kind.
+     */
+    ...[...(input.attributeSelections ?? new Map<string, readonly string[]>())].map(
+      ([attributeKey, choiceValues]) =>
+        choiceValues.length === 0
+          ? undefined
+          : sql`EXISTS (
+            SELECT 1
+              FROM commerce_product_attribute_value AS pav
+              JOIN commerce_category_attribute AS ca ON ca.id = pav.attribute_id
+              JOIN commerce_category_attribute_choice AS cac ON cac.id = pav.choice_id
+             WHERE pav.product_id = ${storeSearchDocument.entityId}
+               AND ca.attribute_key = ${attributeKey}
+               AND cac.choice_value IN (${sql.join(
+                 choiceValues.map((choiceValue) => sql`${choiceValue}`),
+                 sql`, `,
+               )})
+          )`,
+    ),
+    ...[
+      ...(input.attributeRanges ??
+        new Map<string, { readonly minScaled: number; readonly maxScaled: number }>()),
+    ].map(
+      ([attributeKey, bounds]) => sql`EXISTS (
+        SELECT 1
+          FROM commerce_product_attribute_value AS pav
+          JOIN commerce_category_attribute AS ca ON ca.id = pav.attribute_id
+         WHERE pav.product_id = ${storeSearchDocument.entityId}
+           AND ca.attribute_key = ${attributeKey}
+           AND pav.numeric_value_scaled BETWEEN ${bounds.minScaled} AND ${bounds.maxScaled}
+      )`,
+    ),
     omit === "sellingState"
       ? undefined
       : input.sellingState === undefined
@@ -788,6 +846,7 @@ export interface StoreSearchFacets {
    * screen.
    */
   readonly sellingStates: readonly StoreSearchFacetBucket[];
+  readonly attributeFacets: readonly StoreSearchAttributeFacet[];
   readonly verificationStates: readonly StoreSearchFacetBucket[];
   readonly documentKinds: readonly StoreSearchFacetBucket[];
   readonly providerKinds: readonly StoreSearchFacetBucket[];
@@ -803,12 +862,44 @@ export interface StoreSearchFacets {
   };
 }
 
+/**
+ * §20.6. One attribute's facet.
+ *
+ * A DISCRIMINATED UNION on `valueKind`, never a bag of optional fields: an enum facet has buckets
+ * and no bounds, a number facet has bounds and no buckets, and a renderer should not have to
+ * guess which. `text` never appears at all — a free-text attribute is display-only.
+ */
+export type StoreSearchAttributeFacet =
+  | {
+      readonly valueKind: "enum";
+      readonly attributeKey: string;
+      readonly label: string;
+      readonly groupLabel: string | null;
+      readonly buckets: readonly {
+        readonly value: string;
+        readonly label: string;
+        readonly count: number;
+      }[];
+    }
+  | {
+      readonly valueKind: "number";
+      readonly attributeKey: string;
+      readonly label: string;
+      readonly groupLabel: string | null;
+      readonly unitLabel: string | null;
+      readonly numericScale: number;
+      readonly minScaled: number | null;
+      readonly maxScaled: number | null;
+      readonly count: number;
+    };
+
 const EMPTY_STORE_SEARCH_FACETS: StoreSearchFacets = {
   sellerCountryCodes: [],
   stockStates: [],
   samplePolicies: [],
   conditions: [],
   sellingStates: [],
+  attributeFacets: [],
   verificationStates: [],
   documentKinds: [],
   providerKinds: [],
@@ -870,6 +961,121 @@ async function countByColumn(
  * facets already had, so no wire shape changes; and neither a country code nor a price range
  * has a closed value set, so padding could never have been uniform across facets anyway.
  */
+/**
+ * §20.6. The per-attribute facets for the category in scope.
+ *
+ * Two grouped queries per FILTERABLE attribute rather than one per attribute of any kind: a
+ * `text` attribute is display-only and never becomes a chip, so it is filtered out before any
+ * SQL runs. An enum yields labelled buckets; a number yields scaled bounds and a count.
+ */
+async function computeAttributeFacets(
+  input: StoreSearchFilterInput,
+  textPredicate: SQL | undefined,
+): Promise<readonly StoreSearchAttributeFacet[]> {
+  if (input.categorySlug === undefined) return [];
+
+  const { findActiveCategoryIdBySlug, resolveCategoryAttributes } =
+    await import("#src/modules/store/catalog/commerce-category-attributes.service.js");
+  const categoryId = await findActiveCategoryIdBySlug(input.categorySlug);
+  if (categoryId === null) return [];
+
+  const filterable = (await resolveCategoryAttributes(categoryId)).filter(
+    (attribute) => attribute.isFilterable,
+  );
+  if (filterable.length === 0) return [];
+
+  // Every facet is scoped by the same document filters the results use, with the attribute
+  // predicates dropped — a facet blind to its own dimension, like `scopedFor` does for the rest.
+  const documentScope = buildStoreSearchFilters(
+    { ...input, attributeSelections: undefined, attributeRanges: undefined },
+    // The same subtree expansion the results use, so a facet on a parent category counts the
+    // leaves under it rather than only what is assigned to the parent itself.
+    await listActiveCategorySubtreeSlugs(input.categorySlug),
+  );
+  const scopeCondition = and(...documentScope, textPredicate);
+
+  const facets = await Promise.all(
+    filterable.map(async (attribute): Promise<StoreSearchAttributeFacet | null> => {
+      if (attribute.valueKind === "enum") {
+        const rows = await db
+          .select({
+            choiceValue: commerceCategoryAttributeChoice.choiceValue,
+            choiceLabel: commerceCategoryAttributeChoice.label,
+            total: sql<number>`count(*)::int`,
+          })
+          .from(commerceProductAttributeValue)
+          .innerJoin(
+            commerceCategoryAttributeChoice,
+            eq(commerceCategoryAttributeChoice.id, commerceProductAttributeValue.choiceId),
+          )
+          .innerJoin(
+            storeSearchDocument,
+            eq(storeSearchDocument.entityId, commerceProductAttributeValue.productId),
+          )
+          .where(and(eq(commerceProductAttributeValue.attributeId, attribute.id), scopeCondition))
+          .groupBy(
+            commerceCategoryAttributeChoice.choiceValue,
+            commerceCategoryAttributeChoice.label,
+          );
+        if (rows.length === 0) return null;
+        return {
+          valueKind: "enum",
+          attributeKey: attribute.attributeKey,
+          label: attribute.label,
+          groupLabel: attribute.groupLabel,
+          buckets: rows
+            .map((row) => ({ value: row.choiceValue, label: row.choiceLabel, count: row.total }))
+            .toSorted(
+              (left, right) => right.count - left.count || left.value.localeCompare(right.value),
+            ),
+        };
+      }
+
+      const [summary] = await db
+        .select({
+          /**
+           * ⚠️ `.mapWith(Number)` IS NOT DECORATION ON A BIGINT. node-postgres hands back `bigint`
+           * as a STRING to avoid silent precision loss, so `min()`/`max()` over
+           * `numeric_value_scaled` arrive as `"450"` — which the frontend's `z.number()` rejects,
+           * taking the whole search response down with it. The price facet below does the same
+           * thing for the same reason.
+           */
+          minScaled: sql<
+            number | null
+          >`min(${commerceProductAttributeValue.numericValueScaled})`.mapWith(Number),
+          maxScaled: sql<
+            number | null
+          >`max(${commerceProductAttributeValue.numericValueScaled})`.mapWith(Number),
+          total: sql<number>`count(${commerceProductAttributeValue.numericValueScaled})::int`,
+        })
+        .from(commerceProductAttributeValue)
+        .innerJoin(
+          storeSearchDocument,
+          eq(storeSearchDocument.entityId, commerceProductAttributeValue.productId),
+        )
+        .where(and(eq(commerceProductAttributeValue.attributeId, attribute.id), scopeCondition));
+      if (!summary || summary.total === 0) return null;
+      return {
+        valueKind: "number",
+        attributeKey: attribute.attributeKey,
+        label: attribute.label,
+        groupLabel: attribute.groupLabel,
+        unitLabel: attribute.unitLabel,
+        // A `number` attribute always carries a scale — the CHECK pairs them — so the fallback
+        // is unreachable rather than a default anybody relies on.
+        numericScale: attribute.numericScale ?? 0,
+        minScaled: summary.minScaled,
+        maxScaled: summary.maxScaled,
+        count: summary.total,
+      };
+    }),
+  );
+
+  // A facet nothing answers is DROPPED, not rendered at zero: a chip row of empty chips is worse
+  // than a shorter row, and `countByColumn` drops empty buckets for the same reason.
+  return facets.filter((facet): facet is StoreSearchAttributeFacet => facet !== null);
+}
+
 export async function computeStoreSearchFacets(
   input: StoreSearchFilterInput,
 ): Promise<StoreSearchFacets> {
@@ -956,7 +1162,19 @@ export async function computeStoreSearchFacets(
   const leadTimeCounts = leadTimeRows[0] ?? {};
   const priceSummary = priceRow[0];
 
+  /**
+   * §20.6. THE RULE THE WHOLE DESIGN RESTS ON: attribute facets exist ONLY when a category is in
+   * scope. Without one there is no resolved set to draw from, so the array is empty and the client
+   * renders no new control — which is why a category with no attributes costs a buyer nothing.
+   *
+   * Counted with the attribute filters OMITTED for the facet's own key, the same drill-down
+   * blind-to-self rule every facet here follows: the `5v` bucket must show what clicking it would
+   * return, not what is already on screen.
+   */
+  const attributeFacets = await computeAttributeFacets(input, textPredicate);
+
   return {
+    attributeFacets,
     sellerCountryCodes,
     stockStates,
     samplePolicies,
@@ -1068,45 +1286,66 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
     );
   const searchPriceInCents = variantPriceRow?.lowestPriceInCents ?? row.priceInCents;
 
-  const [specificationRows, variantNameRows, highlightRows, categorySynonymRow] = await Promise.all(
-    [
-      db
-        .select({
-          key: commerceProductSpecification.specificationKey,
-          value: commerceProductSpecification.specificationValue,
-          group: commerceProductSpecification.specificationGroup,
-        })
-        .from(commerceProductSpecification)
-        .where(eq(commerceProductSpecification.productId, productId))
-        .orderBy(asc(commerceProductSpecification.position)),
-      db
-        .select({
-          name: commerceProductVariant.name,
-          stockQuantity: commerceProductVariant.stockQuantity,
-        })
-        .from(commerceProductVariant)
-        .where(
-          and(
-            eq(commerceProductVariant.productId, productId),
-            eq(commerceProductVariant.state, "active"),
-          ),
-        )
-        .orderBy(asc(commerceProductVariant.position)),
-      db
-        .select({ title: commerceProductHighlight.title })
-        .from(commerceProductHighlight)
-        .where(eq(commerceProductHighlight.productId, productId))
-        .orderBy(asc(commerceProductHighlight.position)),
-      row.categoryId === null
-        ? Promise.resolve(undefined)
-        : db
-            .select({ searchSynonyms: commerceCategory.searchSynonyms })
-            .from(commerceCategory)
-            .where(eq(commerceCategory.id, row.categoryId))
-            .limit(1)
-            .then((rows) => rows[0]),
-    ],
-  );
+  const [
+    specificationRows,
+    variantNameRows,
+    highlightRows,
+    categorySynonymRow,
+    attributeValueRows,
+  ] = await Promise.all([
+    db
+      .select({
+        key: commerceProductSpecification.specificationKey,
+        value: commerceProductSpecification.specificationValue,
+        group: commerceProductSpecification.specificationGroup,
+      })
+      .from(commerceProductSpecification)
+      .where(eq(commerceProductSpecification.productId, productId))
+      .orderBy(asc(commerceProductSpecification.position)),
+    db
+      .select({
+        name: commerceProductVariant.name,
+        stockQuantity: commerceProductVariant.stockQuantity,
+      })
+      .from(commerceProductVariant)
+      .where(
+        and(
+          eq(commerceProductVariant.productId, productId),
+          eq(commerceProductVariant.state, "active"),
+        ),
+      )
+      .orderBy(asc(commerceProductVariant.position)),
+    db
+      .select({ title: commerceProductHighlight.title })
+      .from(commerceProductHighlight)
+      .where(eq(commerceProductHighlight.productId, productId))
+      .orderBy(asc(commerceProductHighlight.position)),
+    row.categoryId === null
+      ? Promise.resolve(undefined)
+      : db
+          .select({ searchSynonyms: commerceCategory.searchSynonyms })
+          .from(commerceCategory)
+          .where(eq(commerceCategory.id, row.categoryId))
+          .limit(1)
+          .then((rows) => rows[0]),
+    /** §20.5. The structured answers, joined out to their labels for the indexed text. */
+    db
+      .select({
+        label: commerceCategoryAttribute.label,
+        choiceLabel: commerceCategoryAttributeChoice.label,
+        textValue: commerceProductAttributeValue.textValue,
+      })
+      .from(commerceProductAttributeValue)
+      .innerJoin(
+        commerceCategoryAttribute,
+        eq(commerceCategoryAttribute.id, commerceProductAttributeValue.attributeId),
+      )
+      .leftJoin(
+        commerceCategoryAttributeChoice,
+        eq(commerceCategoryAttributeChoice.id, commerceProductAttributeValue.choiceId),
+      )
+      .where(eq(commerceProductAttributeValue.productId, productId)),
+  ]);
 
   /**
    * ⚠️ `sellingState` IS DELIBERATELY ABSENT FROM THIS CONJUNCTION, and adding it would be a
@@ -1160,6 +1399,20 @@ export async function refreshProductSearchDocument(productId: string): Promise<v
       specification.key,
       specification.value,
       specification.group,
+    ]),
+    /**
+     * §20.5. THE STRUCTURED ANSWERS, indexed as text beside the free-text ones.
+     *
+     * ⚠️ WITHOUT THIS, STRUCTURING A FIELD WOULD MAKE IT LESS FINDABLE THAN LEAVING IT ALONE.
+     * A buyer typing "5V regulator" into the search box must match a product whose voltage is a
+     * structured value — otherwise the seller who filled in the form properly ranks below the one
+     * who typed prose, and sellers would rationally stop filling it in. The label and the choice
+     * label are both included because either is what a person types.
+     */
+    ...attributeValueRows.flatMap((attributeValue) => [
+      attributeValue.label,
+      attributeValue.choiceLabel,
+      attributeValue.textValue,
     ]),
     // "Sea blue" and a highlight title are things buyers type; both are public.
     ...variantNameRows.map((variant) => variant.name),

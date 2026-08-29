@@ -100,6 +100,30 @@ export const SearchQuerySchema = z
      * be bought.
      */
     sellingState: z.enum(["selling", "paused", "discontinued"]).optional(),
+    /**
+     * §20.5. ATTRIBUTE FILTERS, as two bounded repeatable keys rather than one key per attribute.
+     *
+     * ⚠️ THIS SCHEMA IS `.strict()`, so `?voltage=5v` is a 422 that kills the WHOLE read — not an
+     * ignored parameter. That is the trap A25 recorded for the seven undeclared facet filters,
+     * and it is why an open-ended attribute vocabulary cannot travel as its own query keys.
+     *
+     * `attribute=<key>:<choice>` — repeatable. OR within one key, AND across keys.
+     * `attributeRange=<key>:<minScaled>:<maxScaled>` — repeatable, integers already multiplied by
+     * the definition's `numericScale`, so no decimal is ever parsed off a query string.
+     *
+     * The caps are the point rather than decoration: an unbounded array of `EXISTS` subqueries is
+     * a query-cost hole a crawler finds on its first pass.
+     */
+    attribute: z
+      .union([z.string(), z.array(z.string())])
+      .transform((raw) => (Array.isArray(raw) ? raw : [raw]))
+      .pipe(z.array(z.string().regex(/^[a-z0-9_]{1,64}:[a-z0-9_]{1,64}$/)).max(6))
+      .optional(),
+    attributeRange: z
+      .union([z.string(), z.array(z.string())])
+      .transform((raw) => (Array.isArray(raw) ? raw : [raw]))
+      .pipe(z.array(z.string().regex(/^[a-z0-9_]{1,64}:-?\d{1,15}:-?\d{1,15}$/)).max(4))
+      .optional(),
     verificationState: z
       .enum(["unverified", "documents_pending", "verified", "rejected", "suspended"])
       .optional(),

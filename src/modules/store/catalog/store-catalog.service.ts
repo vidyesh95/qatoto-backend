@@ -192,6 +192,21 @@ export interface StoreProductCustomizationOptionProjection {
   readonly position: number;
 }
 
+/** STORE §20. One structured answer, joined out to the labels a buyer reads. */
+export interface ProductAttributeValueProjection {
+  readonly attributeKey: string;
+  readonly label: string;
+  readonly groupLabel: string | null;
+  readonly valueKind: "enum" | "number" | "text";
+  readonly unitLabel: string | null;
+  readonly numericScale: number | null;
+  readonly position: number;
+  readonly choiceValue: string | null;
+  readonly choiceLabel: string | null;
+  readonly numericValueScaled: number | null;
+  readonly textValue: string | null;
+}
+
 export interface StoreProductDetailProjection extends StoreProductCardProjection {
   readonly description: string | null;
   readonly keyFeatures: readonly string[];
@@ -218,6 +233,13 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
     readonly group: string | null;
     readonly position: number;
   }[];
+  /**
+   * STORE §20. The STRUCTURED answers, beside the free-text `specifications` above.
+   *
+   * The product page merges the two into ONE spec sheet — structured first inside each group,
+   * free text after. A buyer does not care which table a fact came from.
+   */
+  readonly attributeValues: readonly ProductAttributeValueProjection[];
   readonly categoryTrail: readonly StoreCategoryProjection[];
   /**
    * A11. Integer counts plus per-viewer state.
@@ -1308,6 +1330,12 @@ export async function getPublicProductBySlug(
     };
   });
 
+  // STORE §20. Loaded through the attribute service so the join and its ordering live in one
+  // place; a second copy here would be a second thing to keep in step with the definitions.
+  const { listProductAttributeValues } =
+    await import("#src/modules/store/catalog/commerce-category-attributes.service.js");
+  const attributeValues = await listProductAttributeValues(row.id);
+
   const card = mapProductCard(
     {
       ...row,
@@ -1329,6 +1357,7 @@ export async function getPublicProductBySlug(
     success: true,
     value: {
       ...card,
+      attributeValues,
       description: row.description,
       keyFeatures: row.keyFeatures,
       modelNumber: row.modelNumber,

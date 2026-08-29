@@ -8,6 +8,7 @@ import {
   productImageUploadLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import * as categoryAttributesController from "#src/modules/store/catalog/commerce-category-attributes.controller.js";
 import * as productsController from "#src/modules/store/catalog/products.controller.js";
 import { uploadProductHighlightImageFile } from "#src/modules/store/catalog/upload-product-highlight-image.js";
 import { uploadProductImage } from "#src/modules/store/catalog/upload-product-image.js";
@@ -99,6 +100,22 @@ router.put(
   longFormBody,
   idempotency({ scope: "active_organization" }),
   productsController.replaceCustomizationOptions,
+);
+
+/**
+ * PUT /products/:id/attributes — STORE §20. The listing's STRUCTURED answers, as a replace-set,
+ * matching the variants / highlights / customization-options writes beside it.
+ *
+ * The free-text `specifications` on the create/patch body stay: they are the fallback for
+ * anything the category does not define, and a seller is not blocked while a definition is being
+ * requested.
+ */
+router.put(
+  "/:id/attributes",
+  productCatalogDepthWriteLimiter,
+  longFormBody,
+  idempotency({ scope: "active_organization" }),
+  categoryAttributesController.replaceProductAttributes,
 );
 
 router.put(

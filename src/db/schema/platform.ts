@@ -193,6 +193,19 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // those would drown the entries that name an accountable human.
   "commerce_category_request_approved",
   "commerce_category_request_rejected",
+  // STORE §20 / Phase 24 — the per-category attribute vocabulary. Named for the same reason
+  // the taxonomy above is: an attribute decides what every listing in a category must state
+  // and what a buyer can filter on, so changing one changes the storefront for everybody.
+  //
+  // There is no `_deleted` member because there is no delete: `commerce_product_attribute_value`
+  // holds `attribute_id` at RESTRICT, so a definition in use cannot go, and the reversible exit
+  // is `is_filterable = false` — an ordinary update.
+  "commerce_category_attribute_created",
+  "commerce_category_attribute_updated",
+  // The seller-request verdicts, matching the category pair above. Submitting one records
+  // nothing: there is no staff actor behind it.
+  "commerce_category_attribute_request_approved",
+  "commerce_category_attribute_request_rejected",
   // Site audits — `commerce-seller-profile` (Phase 17, §16.2). Both verdicts are here
   // because `site_audited` is the strongest claim this platform makes about a factory,
   // and a claim of that weight must name the human who made it and the human who
