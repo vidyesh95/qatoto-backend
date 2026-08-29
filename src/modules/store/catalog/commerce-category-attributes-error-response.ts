@@ -72,12 +72,15 @@ export function mapCategoryAttributeErrorToResponse(error: CommerceCategoryAttri
           ],
         },
       };
-    case "ATTRIBUTE_VALUE_KIND_MISMATCH":
+    case "ATTRIBUTE_VALUE_KIND_MISMATCH": {
+      // "a enum" reads as a typo in a message a seller sees on a refused save.
+      const articleForKind = error.expected === "enum" ? "an" : "a";
       return {
         statusCode: 422,
-        message: `"${error.attributeKey}" expects a ${error.expected} answer.`,
-        errors: { values: [`Send a ${error.expected} value for this attribute.`] },
+        message: `"${error.attributeKey}" expects ${articleForKind} ${error.expected} answer.`,
+        errors: { values: [`Send ${articleForKind} ${error.expected} value for this attribute.`] },
       };
+    }
 
     // --- 409: true now, not necessarily later.
     case "ATTRIBUTE_KEY_TAKEN":

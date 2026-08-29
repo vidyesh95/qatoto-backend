@@ -130,12 +130,27 @@ export type NormalizedAvatar = NormalizedImage;
 /** Output codec for the re-encoded buffer. */
 export type ImageOutputFormat = "webp" | "avif";
 
+/** The defaults every caller got before `outputQuality` existed. Photographic tuning. */
+const DEFAULT_AVIF_QUALITY = 55;
+const DEFAULT_WEBP_QUALITY = 85;
+
 /** Tunables for the re-encode step; validation bounds are fixed. */
 export interface NormalizeImageOptions {
   /** Downscale to fit this box (px), never enlarged. */
   readonly outputMaxDimensionPx: number;
   /** Codec of the emitted buffer. avif is smaller-per-byte but slower to encode. */
   readonly outputFormat: ImageOutputFormat;
+  /**
+   * Encoder quality. OPTIONAL, and omitting it keeps the photographic defaults every existing
+   * caller was built against — 55 for avif, 85 for webp.
+   *
+   * ⚠️ RAISE IT FOR ANYTHING THAT IS READ RATHER THAN LOOKED AT. The defaults are tuned so a
+   * product photo or an avatar looks right at a glance; they are the wrong setting for a scanned
+   * DOCUMENT, where the whole value of the file is a registration number, an issuer and a
+   * signature that a human has to make out. Lossy artefacts land hardest on small high-contrast
+   * text, which is exactly what a certificate is.
+   */
+  readonly outputQuality?: number;
 }
 
 /**
@@ -218,9 +233,12 @@ export async function validateAndNormalizeImage(
     withoutEnlargement: true,
   });
 
-  // AVIF quality 55 ≈ WebP quality 85 visually, at a smaller byte size.
+  // AVIF quality 55 ≈ WebP quality 85 visually, at a smaller byte size. Both are overridable
+  // per call — see `outputQuality`, and the reason a document needs a higher one.
   const encoded =
-    options.outputFormat === "avif" ? resized.avif({ quality: 55 }) : resized.webp({ quality: 85 });
+    options.outputFormat === "avif"
+      ? resized.avif({ quality: options.outputQuality ?? DEFAULT_AVIF_QUALITY })
+      : resized.webp({ quality: options.outputQuality ?? DEFAULT_WEBP_QUALITY });
 
   /**
    * GUARDED, and this is the half that keeps a 422 from becoming a 500.

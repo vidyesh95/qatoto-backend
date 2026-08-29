@@ -1072,6 +1072,13 @@
       "when": 1787999196273,
       "tag": "0152_category_attribute_audit_kinds",
       "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1788002007424,
+      "tag": "0153_drop_attribute_request",
+      "breakpoints": true
     }
   ]
 }

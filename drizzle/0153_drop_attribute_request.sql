@@ -1,0 +1,22 @@
+-- STORE §20 — remove the attribute-request queue that was never built.
+--
+-- WHY IT GOES RATHER THAN GETS FINISHED. `0151` shipped this table with its queue index and its
+-- review CHECK as the staged last step of Phase 24, and nothing was ever written against it: no
+-- service, no route, no UI. An unused table is unverified schema — it looks like a feature to the
+-- next reader and answers no query — and the fallback it was meant to soften already works, because
+-- a seller whose field has no definition types it into the free-text specification sheet.
+--
+-- It is also not the model being copied. On Alibaba, per-category attributes are PLATFORM-defined:
+-- sellers fill them in and never propose new ones, so there is no seller-proposal flow to mirror.
+--
+-- SAFE TO DROP: verified 0 rows before writing this. `CASCADE` removes only the three indexes and
+-- the four foreign keys that belong to this table; nothing references it in the other direction.
+--
+-- ⚠️ TWO AUDIT ENUM LABELS SURVIVE THIS, AND CANNOT BE REMOVED.
+-- `commerce_category_attribute_request_approved` and `..._rejected` were added to
+-- `platform_audit_event_kind` by `0152`. Postgres has no `ALTER TYPE ... DROP VALUE`, and that type
+-- is referenced by every audit row ever written, so the labels stay as dead vocabulary. Nobody ever
+-- emitted one. This is the cost of having added them before the feature they named, and it is
+-- recorded here so a later reader does not mistake them for a capability that went missing.
+DROP TABLE "commerce_category_attribute_request" CASCADE;--> statement-breakpoint
+DROP TYPE "public"."commerce_category_attribute_request_state";

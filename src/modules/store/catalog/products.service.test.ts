@@ -97,6 +97,16 @@ vi.mock("#src/modules/store/catalog/store-search.service.js", () => ({
     async () => undefined,
   ),
 }));
+vi.mock("#src/modules/store/catalog/commerce-category-attributes.service.js", () => ({
+  /**
+   * STORE §20. Stubbed because this file is about a DIFFERENT gate. The publish path now also asks
+   * which required category attributes are unanswered, and that read joins three tables the
+   * harness's `db` stub does not model. Answering "none outstanding" keeps these cases testing the
+   * thing they were written for; the attribute gate has its own coverage.
+   */
+  listProductAttributeValues: vi.fn<() => Promise<readonly unknown[]>>(async () => []),
+  listMissingRequiredAttributeKeys: vi.fn<() => Promise<readonly string[]>>(async () => []),
+}));
 
 const { createProduct } = await import("#src/modules/store/catalog/products.service.js");
 

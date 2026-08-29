@@ -174,7 +174,20 @@ export interface ProductCustomizationOptionView {
  * THE PUBLISH GATE AND THE SELLER'S READ CALL THIS ONE FUNCTION, which is the point: a checklist
  * that disagreed with the 422 behind it would be worse than no checklist.
  */
-export type ListingRequirementKey = "title" | "price" | "images" | "samplePrice" | "shippingFacts";
+export type ListingRequirementKey =
+  | "title"
+  | "price"
+  | "images"
+  | "samplePrice"
+  | "shippingFacts"
+  /**
+   * STORE §20. The category's own required attributes.
+   *
+   * Adding this member is a deliberate compile-time trip-wire: every exhaustive map over the key
+   * — including `LISTING_REQUIREMENT_LABELS` on the frontend — fails to build until it grows an
+   * entry, which is how the seller-facing copy stays in step with the gate that refuses them.
+   */
+  | "categoryAttributes";
 
 export type ListingRequirementState = "satisfied" | "missing" | "not_applicable";
 
@@ -210,6 +223,17 @@ export interface ListingCompletenessFacts {
   readonly packageHeightMm: number | null;
   readonly packageGrossWeightGrams: number | null;
   readonly unitsPerPackage: number | null;
+  /**
+   * STORE §20. Required attribute keys this listing has not answered.
+   *
+   * ⚠️ COMPUTED BY THE CALLER, NOT READ HERE, AND THAT IS DELIBERATE. This projection is pure and
+   * synchronous — its own test mocks `db` as `{}` — while resolving a category's required
+   * attributes needs two queries. Making the projection async would cascade into
+   * `toPublicProduct`, which returns an object literal, and from there into `createProduct`'s
+   * serializable transaction. Passing the answer in keeps the gate and the seller's checklist
+   * computed by ONE function without dragging a DB read into it.
+   */
+  readonly missingRequiredAttributeKeys: readonly string[];
 }
 
 /**
@@ -290,6 +314,19 @@ export function projectListingCompleteness(
         }
       : { key: "samplePrice", state: "not_applicable", missingFields: [] },
     projectShippingFactsRequirement(facts),
+    /**
+     * STORE §20. `not_applicable` when the category requires nothing — which is most categories
+     * today — so it never shows as an unmet box a seller cannot act on. `not_applicable` is NOT a
+     * synonym for satisfied and stays out of the denominator, the rule `samplePrice` already
+     * follows.
+     */
+    facts.missingRequiredAttributeKeys.length === 0
+      ? { key: "categoryAttributes", state: "not_applicable", missingFields: [] }
+      : {
+          key: "categoryAttributes",
+          state: "missing",
+          missingFields: facts.missingRequiredAttributeKeys,
+        },
   ];
 
   const applicable = requirements.filter((requirement) => requirement.state !== "not_applicable");
@@ -561,6 +598,11 @@ function toPublicProduct(
   pricingTiers: readonly PricingTierView[],
   specifications: readonly ProductSpecificationView[],
   attributeValues: readonly ProductAttributeValueView[] = [],
+  /**
+   * STORE §20. Passed in rather than read here, so this function stays synchronous — see the
+   * note on `ListingCompletenessFacts.missingRequiredAttributeKeys`.
+   */
+  missingRequiredAttributeKeys: readonly string[] = [],
   variants: readonly ProductVariantView[] = [],
   highlights: readonly ProductHighlightView[] = [],
   customizationOptions: readonly ProductCustomizationOptionView[] = [],
@@ -611,6 +653,7 @@ function toPublicProduct(
       packageHeightMm: row.packageHeightMm,
       packageGrossWeightGrams: row.packageGrossWeightGrams,
       unitsPerPackage: row.unitsPerPackage,
+      missingRequiredAttributeKeys,
     }),
     images,
     pricingTiers,
@@ -716,6 +759,16 @@ async function loadOrganizationProduct(
   const { listProductAttributeValues } =
     await import("#src/modules/store/catalog/commerce-category-attributes.service.js");
   const attributeValues = await listProductAttributeValues(productId);
+  /**
+   * STORE §20. The seller's checklist and the publish refusal are computed from ONE projection, so
+   * this has to be resolved here too — otherwise the form would tick a box the button then refuses.
+   */
+  const { listMissingRequiredAttributeKeys } =
+    await import("#src/modules/store/catalog/commerce-category-attributes.service.js");
+  const missingRequiredAttributeKeys = await listMissingRequiredAttributeKeys(
+    row.categoryId,
+    attributeValues.map((attributeValue) => attributeValue.attributeKey),
+  );
 
   return toPublicProduct(
     row,
@@ -724,6 +777,7 @@ async function loadOrganizationProduct(
     pricingTiers.filter((tier) => tier.variantId === null),
     specifications,
     attributeValues,
+    missingRequiredAttributeKeys,
     variants,
     highlights,
     customizationOptions,
@@ -1319,7 +1373,31 @@ export async function createProduct(
          */
         await ensureCommerceProductStatsRow(tx, row.id);
 
-        return { success: true, value: toPublicProduct(row, [], pricingTiers, specifications, []) };
+        /**
+         * STORE §20. A brand-new draft has answered nothing, so every required attribute on its
+         * category is outstanding. Read here rather than left empty: the create response carries a
+         * completeness checklist the wizard renders immediately, and an empty list would tick a box
+         * the first publish then refuses.
+         */
+        const { listMissingRequiredAttributeKeys } =
+          await import("#src/modules/store/catalog/commerce-category-attributes.service.js");
+        const missingRequiredAttributeKeys = await listMissingRequiredAttributeKeys(
+          categoryResult.value.categoryId,
+          [],
+        );
+
+        return {
+          success: true,
+          // A new draft has answered no attributes; the read below reports what it still owes.
+          value: toPublicProduct(
+            row,
+            [],
+            pricingTiers,
+            specifications,
+            [],
+            missingRequiredAttributeKeys,
+          ),
+        };
       },
       { isolationLevel: "serializable" },
     );
@@ -2075,6 +2153,22 @@ export async function publishProduct(
        * The row is `SELECT ... FOR UPDATE` inside a serializable transaction, so a concurrent
        * PATCH clearing the geometry cannot slip between this check and the write below.
        */
+      /**
+       * STORE §20. THE GATE. `row.categoryId` is already in the `FOR UPDATE` select above, so this
+       * needs no schema change — only the answers, which are a plain read of the value table.
+       *
+       * Read through the module-level `db` rather than `transaction`: the attribute DEFINITIONS
+       * are a category's, not this listing's, and nothing in this transaction touches them. The
+       * ANSWERS are this product's and are locked by the row above.
+       */
+      const { listMissingRequiredAttributeKeys, listProductAttributeValues: readAnswers } =
+        await import("#src/modules/store/catalog/commerce-category-attributes.service.js");
+      const answered = await readAnswers(productId);
+      const missingRequiredAttributeKeys = await listMissingRequiredAttributeKeys(
+        row.categoryId,
+        answered.map((attributeValue) => attributeValue.attributeKey),
+      );
+
       const completeness = projectListingCompleteness({
         title: row.title,
         priceInCents: row.priceInCents,
@@ -2086,6 +2180,7 @@ export async function publishProduct(
         packageHeightMm: row.packageHeightMm,
         packageGrossWeightGrams: row.packageGrossWeightGrams,
         unitsPerPackage: row.unitsPerPackage,
+        missingRequiredAttributeKeys,
       });
       if (!completeness.isComplete) {
         return { status: "incomplete", missing: collectMissingListingFields(completeness) };

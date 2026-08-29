@@ -28,6 +28,9 @@ function facts(overrides: Partial<Facts> = {}): Facts {
     imageCount: 3,
     samplePolicy: "unavailable",
     samplePriceInCents: null,
+    // STORE §20. Empty by default: most categories require no attributes, and the
+    // requirement projects as `not_applicable` in that case rather than as an unmet box.
+    missingRequiredAttributeKeys: [],
     packageLengthMm: 400,
     packageWidthMm: 300,
     packageHeightMm: 200,
@@ -96,7 +99,10 @@ describe("projectListingCompleteness", () => {
       state: "not_applicable",
       missingFields: [],
     });
-    expect(completeness.requirementCount).toBe(5);
+    // STORE §20 added a sixth requirement. It is `not_applicable` here — this fixture's
+    // category requires no attributes — so the APPLICABLE count is unchanged, which is the
+    // property this case is actually asserting.
+    expect(completeness.requirementCount).toBe(6);
     expect(completeness.applicableRequirementCount).toBe(4);
     expect(completeness.isComplete).toBe(true);
   });

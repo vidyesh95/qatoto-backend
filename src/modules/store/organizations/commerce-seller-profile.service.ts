@@ -73,6 +73,18 @@ export type CommerceSellerProfileError =
  * narrowest set that can do the job is the right one.
  */
 const PROFILE_MANAGERS: readonly MemberRole[] = ["owner", "administrator"];
+/**
+ * A certificate is READ, NOT LOOKED AT, and these two numbers exist because of that.
+ *
+ * `validateAndNormalizeImage`'s defaults (AVIF q55, "≈ WebP 85 visually") are tuned for
+ * photographs, where a smeared pixel costs nothing. Here the value of the file IS the small
+ * high-contrast text — a registration number, an issuer, a signature — which is precisely what
+ * lossy artefacts destroy first. So: a high quality, and a box big enough that a scanned A4 page
+ * is still legible at full size.
+ */
+const CERTIFICATE_OUTPUT_MAX_DIMENSION_PX = 2400;
+const CERTIFICATE_OUTPUT_QUALITY = 88;
+
 /** Certification evidence is compliance paperwork, so it matches VERIFICATION_MANAGERS. */
 const CERTIFICATION_MANAGERS: readonly MemberRole[] = ["owner", "administrator"];
 const CERTIFICATION_READERS: readonly MemberRole[] = [
@@ -1628,7 +1640,39 @@ export async function submitCertification(input: {
   );
   if (!access.success) return access;
 
-  const encryptedDocument = encryptCommerceDocument(input.evidenceBytes);
+  /**
+   * ⚠️ AN IMAGE IS REBUILT; A PDF IS NOT TOUCHED. This is the one place the two diverge, and the
+   * asymmetry is the whole point.
+   *
+   * A JPEG or PNG goes through sharp, which decodes it and re-encodes it — stripping EXIF and any
+   * non-image payload smuggled into the container — so what reaches storage is sharp's output
+   * rather than the uploader's bytes. It also lands smaller.
+   *
+   * A PDF is stored BYTE FOR BYTE. It is what SGS, TÜV and Bureau Veritas actually issue, it can
+   * carry a multi-page scope annexe no raster can represent, and it is the artefact a moderator
+   * reads to decide whether a compliance claim is true. There is no lossy transform that could be
+   * applied to it without degrading the evidence, so none is.
+   *
+   * NOTE WHAT THIS IS NOT: it is not the malware control. The document is enqueued for scanning
+   * further down, and it is encrypted at rest and never served to a buyer. Re-encoding is a
+   * belt-and-braces on the half where it happens to be free.
+   */
+  let evidenceBytes = input.evidenceBytes;
+  let evidenceMediaType = input.mediaType;
+  if (evidenceMediaType.startsWith("image/")) {
+    const normalized = await validateAndNormalizeImage(evidenceBytes, {
+      outputMaxDimensionPx: CERTIFICATE_OUTPUT_MAX_DIMENSION_PX,
+      outputFormat: "avif",
+      outputQuality: CERTIFICATE_OUTPUT_QUALITY,
+    });
+    if (!normalized.success) {
+      return { success: false, error: { type: "IMAGE_REJECTED", imageError: normalized.error } };
+    }
+    evidenceBytes = normalized.value.buffer;
+    evidenceMediaType = "image/avif";
+  }
+
+  const encryptedDocument = encryptCommerceDocument(evidenceBytes);
   if (!encryptedDocument.success) {
     return {
       success: false,
@@ -1678,8 +1722,8 @@ export async function submitCertification(input: {
           state: "pending_scan",
           storageProvider: "backblaze_b2",
           objectStorageKey: uploaded.value.objectKey,
-          mediaType: input.mediaType,
-          fileByteSize: input.evidenceBytes.length,
+          mediaType: evidenceMediaType,
+          fileByteSize: evidenceBytes.length,
           contentSha256: encryptedDocument.value.contentSha256,
           encryptionAlgorithm: encryptedDocument.value.encryptionAlgorithm,
           encryptionKeyVersion: encryptedDocument.value.encryptionKeyVersion,

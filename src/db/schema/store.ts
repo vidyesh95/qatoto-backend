@@ -187,12 +187,6 @@ export const commerceCategoryAttributeValueKindEnum = pgEnum(
   ["enum", "number", "text"],
 );
 
-/** A seller's proposal for an attribute their category does not define. Mirrors the category one. */
-export const commerceCategoryAttributeRequestStateEnum = pgEnum(
-  "commerce_category_attribute_request_state",
-  ["pending", "approved", "rejected"],
-);
-
 export const commerceDocumentKindEnum = pgEnum("commerce_document_kind", [
   "business_registration",
   "tax_registration",
@@ -3427,90 +3421,6 @@ export const commerceProductAttributeValue = pgTable(
     check(
       "commerce_product_attribute_value_text_ck",
       sql`text_value IS NULL OR char_length(text_value) BETWEEN 1 AND 500`,
-    ),
-  ],
-);
-
-/**
- * §20.4. A seller's proposal for an attribute their category does not define.
- *
- * Mirrors `commerce_category_request` column for column and for the same reasons — `set null` on
- * both author columns so a deleted account cannot pin a decided request, a queue index in
- * `(state, createdAt, id)`, and a review CHECK pairing the timestamp with the STATE rather than
- * with a reviewer who may since have been deleted.
- *
- * ⚠️ A PENDING REQUEST NEVER BLOCKS A LISTING. The seller types their value, it lands as an
- * ordinary free-text `commerce_product_specification` row, and the listing publishes immediately.
- * Approval promotes the vocabulary; it does not gate the catalogue. That fallback is the whole
- * reason this table can ship after the rest of §20 rather than with it.
- */
-export const commerceCategoryAttributeRequest = pgTable(
-  "commerce_category_attribute_request",
-  {
-    id: text("id")
-      .primaryKey()
-      .$defaultFn(() => randomUUID()),
-    requestedByUserId: text("requested_by_user_id").references(() => user.id, {
-      onDelete: "set null",
-    }),
-    requestedOrganizationId: text("requested_organization_id").references(
-      () => commerceOrganization.id,
-      { onDelete: "set null" },
-    ),
-    /** Which category the seller wants it on. Restrict: a decided request keeps its subject. */
-    categoryId: text("category_id")
-      .notNull()
-      .references(() => commerceCategory.id, { onDelete: "restrict" }),
-    /**
-     * What the seller typed. NOT an `attributeKey` — the key is derived by the moderator on
-     * approval, after any edit, so a requester cannot choose a wire identity.
-     */
-    proposedLabel: text("proposed_label").notNull(),
-    proposedValueKind: commerceCategoryAttributeValueKindEnum("proposed_value_kind").notNull(),
-    proposedUnitLabel: text("proposed_unit_label"),
-    justification: text("justification"),
-    state: commerceCategoryAttributeRequestStateEnum("state").default("pending").notNull(),
-    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
-      onDelete: "set null",
-    }),
-    reviewedAt: timestamp("reviewed_at"),
-    reviewNote: text("review_note"),
-    /** The attribute this request became. Set on approval only. */
-    resultingAttributeId: text("resulting_attribute_id").references(
-      () => commerceCategoryAttribute.id,
-      { onDelete: "set null" },
-    ),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at")
-      .defaultNow()
-      .$onUpdate(() => /* @__PURE__ */ new Date())
-      .notNull(),
-  },
-  (table) => [
-    index("commerce_category_attribute_request_queue_idx").on(
-      table.state,
-      table.createdAt,
-      table.id,
-    ),
-    index("commerce_category_attribute_request_requestedByUserId_idx").on(table.requestedByUserId),
-    index("commerce_category_attribute_request_category_idx").on(table.categoryId),
-    check(
-      "commerce_category_attribute_request_review_ck",
-      sql`(reviewed_at IS NULL) = (state = 'pending')
-          AND (state = 'approved' OR resulting_attribute_id IS NULL)
-          AND (state <> 'rejected' OR review_note IS NOT NULL)`,
-    ),
-    check(
-      "commerce_category_attribute_request_text_ck",
-      sql`char_length(proposed_label) BETWEEN 1 AND 120
-          AND (proposed_unit_label IS NULL OR char_length(proposed_unit_label) BETWEEN 1 AND 24)
-          AND (justification IS NULL OR char_length(justification) BETWEEN 1 AND 2000)
-          AND (review_note IS NULL OR char_length(review_note) BETWEEN 1 AND 2000)`,
-    ),
-    /** A unit only means anything on a number, the same rule the definition table carries. */
-    check(
-      "commerce_category_attribute_request_unit_ck",
-      sql`proposed_unit_label IS NULL OR proposed_value_kind = 'number'`,
     ),
   ],
 );

@@ -750,3 +750,29 @@ export async function findActiveCategoryIdBySlug(slug: string): Promise<string |
     .limit(1);
   return row?.id ?? null;
 }
+
+/**
+ * Which of a category's REQUIRED attributes a listing has not answered.
+ *
+ * Returns `attributeKey`s, because that is the vocabulary `INCOMPLETE_FOR_PUBLISH.missing` already
+ * speaks and what the seller's form labels its controls by.
+ *
+ * ⚠️ RESOLVED, so an attribute a PARENT category marks required blocks publishing on every leaf
+ * beneath it — the same inheritance the wizard renders. A leaf that should not carry the parent's
+ * requirement says so by defining the key itself, which shadows it.
+ *
+ * ⚠️ A REQUIREMENT IS A PROPERTY OF THE CATEGORY, NOT OF THE LISTING'S AGE. An existing listing
+ * whose category later gains a required attribute becomes incomplete, and its next publish is
+ * refused until it is answered. That is intended: the alternative is a catalogue where the same
+ * category means different things depending on when the seller happened to list.
+ */
+export async function listMissingRequiredAttributeKeys(
+  categoryId: string,
+  answeredAttributeKeys: readonly string[],
+): Promise<readonly string[]> {
+  const resolved = await resolveCategoryAttributes(categoryId);
+  const answered = new Set(answeredAttributeKeys);
+  return resolved
+    .filter((attribute) => attribute.isRequiredForPublish && !answered.has(attribute.attributeKey))
+    .map((attribute) => attribute.attributeKey);
+}
