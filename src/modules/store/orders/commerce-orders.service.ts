@@ -12,6 +12,7 @@ import {
 import { loadOrderCompletionIndex } from "#src/modules/store/orders/commerce-completion.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import type { CommerceIncoterm } from "#src/modules/store/procurement/commerce-quotes.service.js";
 import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
@@ -145,7 +146,13 @@ export interface OrderDetailProjection {
   readonly discountInCents: number;
   readonly totalInCents: number;
   readonly paymentTermsSnapshot: string | null;
-  readonly incotermSnapshot: string | null;
+  /**
+   * A40. The `commerce_incoterm` enum, NOT a free string — typed from the column the way
+   * `commerce-quotes.service.ts` does, rather than restating it loosely. It was `string | null`
+   * here while the quotes module used `CommerceIncoterm`, so the same value had two types
+   * depending on which read you came through.
+   */
+  readonly incotermSnapshot: CommerceIncoterm | null;
   readonly buyerLegalNameSnapshot: string;
   readonly counterpartyLegalNameSnapshot: string;
   readonly createdAt: Date;

@@ -58,6 +58,7 @@ import {
   resolveSettlementRail,
 } from "#src/modules/store/orders/commerce-settlement.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import type { CommerceIncoterm } from "#src/modules/store/procurement/commerce-quotes.service.js";
 import {
   resolveCustomizationSelections,
   type CommerceCustomizationError,
@@ -162,6 +163,17 @@ export interface CheckoutPrepareLineProjection {
   readonly productId: string;
   readonly sellerOrganizationId: string;
   readonly title: string;
+  /**
+   * A1. WHICH VARIATION IS ABOUT TO BE BOUGHT, from the prepare row's own snapshot.
+   *
+   * ⚠️ THE COLUMN WAS WRITTEN AND PROJECTED NOWHERE. The cart names the variant and the order names
+   * it; the last screen before payment did not — so a buyer confirming two visually identical lines
+   * could not tell them apart at the one moment it mattered. `null` on a listing sold as one thing.
+   *
+   * The SNAPSHOT, never a re-read: this row is what confirm builds the order from, and §0 forbids
+   * recomputing a commercial fact from mutable data.
+   */
+  readonly variantNameSnapshot: string | null;
   readonly quantity: number;
   readonly unitPriceInCents: number;
   readonly lineTotalInCents: number;
@@ -236,7 +248,13 @@ export interface OrderProjection {
   readonly discountInCents: number;
   readonly totalInCents: number;
   readonly paymentTermsSnapshot: string | null;
-  readonly incotermSnapshot: string | null;
+  /**
+   * A40. The `commerce_incoterm` enum, NOT a free string — typed from the column the way
+   * `commerce-quotes.service.ts` does, rather than restating it loosely. It was `string | null`
+   * here while the quotes module used `CommerceIncoterm`, so the same value had two types
+   * depending on which read you came through.
+   */
+  readonly incotermSnapshot: CommerceIncoterm | null;
   readonly buyerLegalNameSnapshot: string;
   readonly counterpartyLegalNameSnapshot: string;
   /**
@@ -527,6 +545,7 @@ function projectPrepare(
         productId: line.productId,
         sellerOrganizationId: line.sellerOrganizationId,
         title: line.titleSnapshot,
+        variantNameSnapshot: line.variantNameSnapshot,
         quantity: line.quantity,
         unitPriceInCents: line.unitPriceInCents,
         lineTotalInCents: line.lineTotalInCents,

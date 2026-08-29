@@ -486,6 +486,10 @@ export interface ProductListRow {
   readonly priceInCents: number;
   readonly stockQuantity: number;
   readonly status: "draft" | "active";
+  /** §20. A moderator's decision, which `status` does not carry. */
+  readonly moderationState: "pending" | "approved" | "rejected" | "suspended";
+  /** NULL until the listing has been published — a draft has no buyer page to link to. */
+  readonly publicSlug: string | null;
 }
 
 /** A page of the caller's listings plus the total for pagination metadata. */
@@ -1460,6 +1464,14 @@ export async function listMyProducts(
       priceInCents: product.priceInCents,
       stockQuantity: product.stockQuantity,
       status: product.status,
+      /**
+       * §20. What a MODERATOR decided, which `status` does not say. Without it the seller's own
+       * list shows "Draft" or "Active" for a listing that was rejected or suspended — a wrong
+       * answer on the screen the person who could appeal is looking at.
+       */
+      moderationState: product.moderationState,
+      /** So the list can link to the live buyer page rather than only to its own editor. */
+      publicSlug: product.publicSlug,
     })
     .from(product)
     .where(eq(product.sellerOrganizationId, sellerOrganizationId))
