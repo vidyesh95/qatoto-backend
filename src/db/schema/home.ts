@@ -1052,6 +1052,16 @@ export const animeSeries = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
+    /**
+     * The public URL identity — `/anime/series/<slug>`.
+     *
+     * SERVER-MINTED FROM THE TITLE ON CREATE, AND NEVER REWRITTEN. A slug is linked
+     * the moment it exists, so letting an edit change it silently breaks every link
+     * anyone has already shared. The title is free to change; this is not.
+     *
+     * kebab-case, per the wire-casing rule for URL identities.
+     */
+    slug: text("slug").notNull(),
     description: text("description"),
     posterUrl: text("poster_url"),
     genreTags: text("genre_tags").array().notNull().default([]),
@@ -1064,7 +1074,14 @@ export const animeSeries = pgTable(
   },
   (table) => [
     index("anime_series_ownerId_idx").on(table.ownerId),
+    // The public detail read is keyed by slug, and uniqueness is what makes the slug
+    // an identity rather than a label.
+    uniqueIndex("anime_series_slug_uidx").on(table.slug),
     check("anime_series_genre_tags_ck", sql`cardinality(genre_tags) <= 20`),
+    check(
+      "anime_series_slug_ck",
+      sql`char_length(slug) BETWEEN 1 AND 120 AND slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
+    ),
   ],
 );
 
@@ -1791,6 +1808,147 @@ export const feedSpotlightSlotRelations = relations(feedSpotlightSlot, ({ one })
     fields: [feedSpotlightSlot.updatedByUserId],
     references: [user.id],
   }),
+}));
+
+// ---------------------------------------------------------------------------
+// The /anime hero carousel — `anime_hero_slide`.
+//
+// PLATFORM-AUTHORED, like `promotional_slide` and `feed_spotlight_slot`. No member
+// owner; the gate is `manage_promotions`, the same grant the other two front-page
+// placements use. Reusing it is deliberate: this is the same staff act with the same
+// blast radius, and a fourth admin-only capability for it would be role ceremony.
+//
+// WHY ITS OWN TABLE AND NOT A `placement` COLUMN ON `promotional_slide`. Two
+// differences, and both are structural rather than cosmetic:
+//
+//   1. THIS SURFACE IS INTERNAL-ONLY. A promotional slide carries
+//      `destination_kind ∈ {internal_path, external_url}` because an advertiser link
+//      is supposed to leave the site. An anime hero slide points at a page in this
+//      app or at nothing at all. Folding the two together would put an
+//      external-URL arm one boolean away from a content surface.
+//   2. NO INTRINSIC DIMENSIONS. The promo carousel is `object-contain` inside a
+//      fixed-height band, so it needs the asset's width and height to avoid a layout
+//      shift. This one renders `fill`/`object-cover` inside a fixed `aspect-video`
+//      box, so the aspect ratio is the container's and the columns would be dead
+//      weight that every write has to populate.
+//
+// One shared table would therefore mean two validation regimes, two renderers and
+// two meanings for the same columns behind a single discriminator.
+// ---------------------------------------------------------------------------
+
+export const animeHeroSlide = pgTable(
+  "anime_hero_slide",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /**
+     * Either a Cloudinary `secure_url` from an admin upload, or a SITE-RELATIVE path
+     * for the rows seeded with this table.
+     *
+     * THE RELATIVE ARM IS NOT A LOOPHOLE, it is the only honest way to seed. A
+     * migration cannot upload to Cloudinary, and the alternative — a hardcoded
+     * fallback slide inside the component when the list comes back empty — is a mock
+     * fallback on a wired surface, which this repo forbids. Seeded rows are real rows
+     * an admin can edit, reorder or delete like any other.
+     *
+     * Store what Cloudinary returned; never reconstruct it from the public id. The
+     * `/v<timestamp>/` segment changes on every overwrite, and that segment is exactly
+     * what busts the browser cache when an image is replaced in place.
+     */
+    imageUrl: text("image_url").notNull(),
+    /**
+     * The overlay caption, AND the image's alt text — one field, two uses.
+     *
+     * The mock this replaces already did exactly that (`alt={hero.title}`), and the
+     * title names the show, which is what a screen reader needs from a link whose only
+     * content is an image. A separate `alt_text` column would be a second thing to
+     * fill in on every slide for a distinction nobody making these slides would draw.
+     */
+    title: text("title").notNull(),
+    /**
+     * Where the slide sends the visitor, or NULL for a decorative slide.
+     *
+     * NULLABLE ON PURPOSE. `store_hero_slide` already models a slide with no link, and
+     * `HeroCarousel.slideHref()` already returns null for one. It is also what lets the
+     * seeded rows exist before any anime series does — the alternative would be seeding
+     * them with a link to a page that 404s.
+     */
+    destinationPath: text("destination_path"),
+    /**
+     * 0-based display order; slide 0 shows first. Contiguous, re-packed on delete —
+     * the same contract as `promotional_slide.position`. NO UNIQUE INDEX, for the same
+     * reason: a reorder rewrites every row inside one transaction and a
+     * non-deferrable UNIQUE would fire mid-loop.
+     */
+    position: integer("position").notNull(),
+    /** The retirement switch. The row survives; the public read stops offering it. */
+    isActive: boolean("is_active").default(true).notNull(),
+    /** NULL on either side = unbounded in that direction. Absolute instants, UTC. */
+    startsAt: timestamp("starts_at"),
+    endsAt: timestamp("ends_at"),
+    /**
+     * `set null`, not `restrict`: the authoritative accountability record is the
+     * platform audit chain, and `restrict` would let one hero slide block a staff
+     * account deletion forever.
+     */
+    createdByUserId: text("created_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    updatedByUserId: text("updated_by_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // The public read — live slides in order. Partial, because that is what almost
+    // every read wants.
+    index("anime_hero_slide_live_idx")
+      .on(table.position, table.id)
+      .where(sql`is_active`),
+    // The admin read, which includes retired and out-of-window rows.
+    index("anime_hero_slide_position_idx").on(table.position, table.id),
+
+    check("anime_hero_slide_position_ck", sql`position >= 0`),
+    check("anime_hero_slide_title_ck", sql`char_length(title) BETWEEN 1 AND 160`),
+    /**
+     * `https://` for an uploaded asset, or a site-relative path for a seeded one.
+     *
+     * The doubled-slash refusal is the same open-redirect backstop
+     * `promotional_slide_destination_ck` applies to its internal arm: `//evil.tld/x`
+     * starts with "/" and is a protocol-relative URL that leaves the site. It matters
+     * here too, because this value becomes a `next/image` src on a public page.
+     */
+    check(
+      "anime_hero_slide_image_url_ck",
+      sql`char_length(image_url) BETWEEN 1 AND 2048
+          AND image_url !~ '[[:space:][:cntrl:]]'
+          AND (image_url LIKE 'https://%'
+               OR (image_url LIKE '/%' AND image_url NOT LIKE '//%'))`,
+    ),
+    /** Same rule, minus the https arm — this surface never links off-site. */
+    check(
+      "anime_hero_slide_destination_ck",
+      sql`destination_path IS NULL
+          OR (char_length(destination_path) BETWEEN 1 AND 512
+              AND destination_path LIKE '/%'
+              AND destination_path NOT LIKE '//%'
+              AND destination_path !~ '[[:space:][:cntrl:]]')`,
+    ),
+    check(
+      "anime_hero_slide_window_ck",
+      sql`starts_at IS NULL OR ends_at IS NULL OR ends_at > starts_at`,
+    ),
+  ],
+);
+
+export const animeHeroSlideRelations = relations(animeHeroSlide, ({ one }) => ({
+  createdBy: one(user, { fields: [animeHeroSlide.createdByUserId], references: [user.id] }),
+  updatedBy: one(user, { fields: [animeHeroSlide.updatedByUserId], references: [user.id] }),
 }));
 
 // ---------------------------------------------------------------------------

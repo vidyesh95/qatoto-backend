@@ -1008,6 +1008,103 @@ export async function deletePromotionalSlideImage(
 
 /**
  * ---------------------------------------------------------------------------------------
+ * The /anime hero carousel.
+ *
+ * Byte-for-byte the promotional-slide arrangement above, with a different folder. Same
+ * deterministic public id derived from the row id, so replacing a slide's art overwrites in
+ * place and cannot orphan the previous asset, and the same requirement on callers: write the
+ * RETURNED secure_url back to `image_url`, because its fresh `/v<timestamp>/` segment is
+ * what busts the browser cache.
+ * ---------------------------------------------------------------------------------------
+ */
+const ANIME_HERO_SLIDE_FOLDER = "qatoto/anime-hero-slides";
+
+/** The stable, deterministic public id an anime hero slide's image always lives at. */
+export function animeHeroSlideImagePublicId(slideId: string): string {
+  return `${ANIME_HERO_SLIDE_FOLDER}/${slideId}`;
+}
+
+/**
+ * Upload (or overwrite) a hero slide's image from an already-validated/re-encoded buffer.
+ * The buffer MUST be checked and normalized by the caller first (CLAUDE.md §1.1).
+ */
+export async function uploadAnimeHeroSlideImage(
+  slideId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: animeHeroSlideImagePublicId(slideId),
+          resource_type: "image",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Delete a hero slide's image asset.
+ *
+ * Treated as success when the asset is already gone — the desired end state is reached
+ * either way. A SEEDED slide has no Cloudinary asset at all (its `image_url` is a
+ * site-relative path), so deleting one takes this branch every time and must not fail.
+ */
+export async function deleteAnimeHeroSlideImage(
+  slideId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
+      animeHeroSlideImagePublicId(slideId),
+      { invalidate: true },
+    );
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
+
+/**
+ * ---------------------------------------------------------------------------------------
  * Content category tiles (HOME_BACKEND_STRUCTURE.md §2).
  *
  * Same deterministic-public-id shape as promotional slides, and for the same reason: the id

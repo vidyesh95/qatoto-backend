@@ -159,6 +159,15 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // The home-page Spotlight rail — up to three admin-picked catalogue videos. One event
   // because the only write is a whole-set replace (never a per-slot create/update).
   "spotlight_slots_replaced",
+  // The /anime hero carousel — `anime-hero-slides`. Same shape and same reasoning as the
+  // promotional carousel above: every one of these five puts an image in front of every
+  // visitor to /anime, or takes one away, so all five are named rather than only the
+  // destructive ones.
+  "anime_hero_slide_created",
+  "anime_hero_slide_updated",
+  "anime_hero_slide_reordered",
+  "anime_hero_slide_image_replaced",
+  "anime_hero_slide_deleted",
   // Commerce content moderation — `commerce-content-reports` (Appendix A12). Staff
   // decisions only. An AUTOMATIC threshold hide never reaches this chain: this table's
   // `actorUserId` is NOT NULL because every entry must name an accountable human, and

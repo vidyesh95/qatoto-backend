@@ -52,6 +52,7 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/products", specifier: "#src/modules/store/catalog/products.routes.js", exportName: "default" },
   { mountPath: "/promotions", specifier: "#src/modules/home/promotions/promotions.routes.js", exportName: "default" },
   { mountPath: "/spotlight", specifier: "#src/modules/home/spotlight/spotlight.routes.js", exportName: "default" },
+  { mountPath: "/anime", specifier: "#src/modules/home/anime/anime.routes.js", exportName: "default" },
   { mountPath: "/feed", specifier: "#src/modules/home/feed/feed.routes.js", exportName: "default" },
   { mountPath: "/videos", specifier: "#src/modules/studio/videos/videos.routes.js", exportName: "default" },
   { mountPath: "/videos", specifier: "#src/modules/home/engagement/engagement.routes.js", exportName: "default" },

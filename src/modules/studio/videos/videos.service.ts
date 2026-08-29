@@ -44,6 +44,7 @@ import {
   type ObjectStorageError,
 } from "#src/lib/object-storage.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { mintSeriesSlug } from "#src/modules/studio/series/series.service.js";
 import {
   buildYoutubeEmbedUrl,
   extractYoutubeVideoId,
@@ -1482,14 +1483,27 @@ export async function createVideo(
         // already proven exactly one of seriesId / newSeriesTitle is present.
         let seriesId = resolvedSeriesId;
         if (!seriesId) {
-          const [createdSeries] = await tx
-            .insert(animeSeries)
-            .values({
-              ownerId: creatorId,
-              title: input.anime.newSeriesTitle ?? input.title,
-              genreTags: [...input.anime.genreTags],
-            })
-            .returning({ id: animeSeries.id });
+          // The slug is the public URL identity at /anime/series/<slug> and is minted from
+          // the title, never supplied. Minting reads before it writes, so a concurrent
+          // upload of a same-titled series can lose the race on `anime_series_slug_uidx`;
+          // the retry re-mints, which is now guaranteed to see the winner's row.
+          const seriesTitle = input.anime.newSeriesTitle ?? input.title;
+          let createdSeries: { id: string } | undefined;
+          for (let attempt = 0; attempt < 3 && createdSeries === undefined; attempt += 1) {
+            try {
+              [createdSeries] = await tx
+                .insert(animeSeries)
+                .values({
+                  ownerId: creatorId,
+                  title: seriesTitle,
+                  slug: await mintSeriesSlug(tx, seriesTitle),
+                  genreTags: [...input.anime.genreTags],
+                })
+                .returning({ id: animeSeries.id });
+            } catch (insertError) {
+              if (!isUniqueViolation(insertError) || attempt === 2) throw insertError;
+            }
+          }
           if (!createdSeries) throw new Error("Insert returned no anime series row");
           seriesId = createdSeries.id;
         }

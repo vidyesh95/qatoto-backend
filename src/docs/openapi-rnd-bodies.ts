@@ -110,6 +110,11 @@ import {
   UpdateProjectSchema,
   UpdateProjectStageSchema,
 } from "#src/modules/rnd/projects/research-projects.schemas.js";
+import {
+  CreateAnimeHeroSlideSchema,
+  ReorderAnimeHeroSlidesSchema,
+  UpdateAnimeHeroSlideSchema,
+} from "#src/modules/home/anime/anime.schemas.js";
 import { ReplaceSpotlightSlotsSchema } from "#src/modules/home/spotlight/spotlight.schemas.js";
 import {
   CreateSupplierEngagementSchema,
@@ -449,6 +454,23 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
     schema: ReplaceSpotlightSlotsSchema,
     required: true,
   },
+  "post /anime/admin/hero-slides": {
+    schema: CreateAnimeHeroSlideSchema,
+    required: true,
+    contentType: "multipart/form-data",
+    binaryField: "image",
+  },
+  "patch /anime/admin/hero-slides/reorder": {
+    schema: ReorderAnimeHeroSlidesSchema,
+    required: true,
+  },
+  "patch /anime/admin/hero-slides/{slideId}": {
+    schema: UpdateAnimeHeroSlideSchema,
+    required: true,
+  },
+  // PATCH /anime/admin/hero-slides/{slideId}/image is deliberately ABSENT, for the same
+  // reason its promotional twin is: it carries only the file and its controller never
+  // touches `req.body`, so an entry here would be an orphan the sweep reports.
   "post /research-programs/{programSlug}/papers/{paperId}/file": {
     schema: AttachPaperFileSchema,
     required: true,

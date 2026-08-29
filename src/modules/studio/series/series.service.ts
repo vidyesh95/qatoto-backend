@@ -1,4 +1,4 @@
-import { and, asc, count, countDistinct, desc, eq } from "drizzle-orm";
+import { and, asc, count, countDistinct, desc, eq, like } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { animeEpisode, animeSeason, animeSeries } from "#src/db/schema.js";
@@ -18,6 +18,62 @@ import type {
   UpdateSeriesInput,
 } from "#src/modules/studio/series/series.schemas.js";
 import type { Result } from "#src/types/index.js";
+
+/**
+ * Turns a title into the kebab-case slug that becomes `/anime/series/<slug>`.
+ *
+ * MINTED ONCE, ON CREATE, AND NEVER REWRITTEN — see the column's comment. A retitle
+ * leaves the slug alone on purpose: the slug is linked the moment it exists, and silently
+ * changing it breaks every URL anyone has already shared.
+ *
+ * Diacritics are decomposed and stripped rather than transliterated, so "Kimetsu no Yaiba"
+ * and "Kimetsu nö Yaiba" produce the same slug and the collision loop below separates them.
+ * A title with no ASCII-able characters at all — a fully CJK one, which this catalogue will
+ * see — reduces to the empty string, and `"series"` is the fallback that keeps the column's
+ * CHECK satisfiable rather than failing the insert on a legitimate name.
+ */
+function toSlugCandidate(title: string): string {
+  const asciiFolded = title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return asciiFolded.length === 0 ? "series" : asciiFolded.slice(0, 100);
+}
+
+/**
+ * The first free slug for this title.
+ *
+ * READ-THEN-INSERT, deliberately not a loop around a unique violation. Two series created
+ * with the same title in the same millisecond would race, and the loser retries — which is
+ * why EVERY caller inserts inside a retry on `isUniqueViolation` rather than trusting this
+ * to be atomic. The suffix is a counter rather than a random tail so the common case reads
+ * as "one-piece", "one-piece-2".
+ *
+ * Takes the executor so the upload flow can mint inside its own transaction: reading
+ * through `db` from inside a `tx` would miss rows that transaction has already inserted.
+ */
+export async function mintSeriesSlug(
+  executor: Pick<typeof db, "select">,
+  title: string,
+): Promise<string> {
+  const candidate = toSlugCandidate(title);
+
+  const taken = await executor
+    .select({ slug: animeSeries.slug })
+    .from(animeSeries)
+    .where(like(animeSeries.slug, `${candidate}%`));
+
+  const takenSlugs = new Set(taken.map((row) => row.slug));
+  if (!takenSlugs.has(candidate)) return candidate;
+
+  for (let suffix = 2; ; suffix += 1) {
+    const suffixed = `${candidate}-${String(suffix)}`;
+    if (!takenSlugs.has(suffixed)) return suffixed;
+  }
+}
 
 /**
  * The anime catalog: series → season → episode (docs/STUDIO_BACKEND_STRUCTURE.md §4, §6).
@@ -80,6 +136,8 @@ export interface AnimeSeasonSummary {
 export interface PublicSeries {
   readonly id: string;
   readonly title: string;
+  /** The public URL identity — `/anime/series/<slug>`. Read-only; see `mintSeriesSlug`. */
+  readonly slug: string;
   readonly description: string | null;
   readonly posterUrl: string | null;
   readonly genreTags: readonly string[];
@@ -177,6 +235,7 @@ async function loadOwnedSeries(ownerId: string, seriesId: string): Promise<Publi
   return {
     id: row.id,
     title: row.title,
+    slug: row.slug,
     description: row.description,
     posterUrl: row.posterUrl,
     genreTags: row.genreTags,
@@ -198,17 +257,29 @@ export async function createSeries(
   ownerId: string,
   input: CreateSeriesInput,
 ): Promise<Result<PublicSeries, AnimeSeriesError>> {
-  const [created] = await db
-    .insert(animeSeries)
-    .values({
-      ownerId,
-      title: input.title,
-      description: input.description,
-      posterUrl: input.posterUrl,
-      genreTags: [...input.genreTags],
-      status: input.status,
-    })
-    .returning({ id: animeSeries.id });
+  // The slug is the public URL identity and cannot be supplied by the caller — see
+  // `mintSeriesSlug`. The retry exists because minting reads before it writes: two series
+  // created with the same title concurrently both see the slug free, and the loser gets a
+  // unique violation on `anime_series_slug_uidx` rather than a silent overwrite.
+  let created: { id: string } | undefined;
+  for (let attempt = 0; attempt < 3 && created === undefined; attempt += 1) {
+    try {
+      [created] = await db
+        .insert(animeSeries)
+        .values({
+          ownerId,
+          title: input.title,
+          slug: await mintSeriesSlug(db, input.title),
+          description: input.description,
+          posterUrl: input.posterUrl,
+          genreTags: [...input.genreTags],
+          status: input.status,
+        })
+        .returning({ id: animeSeries.id });
+    } catch (insertError) {
+      if (!isUniqueViolation(insertError) || attempt === 2) throw insertError;
+    }
+  }
 
   if (!created) throw new Error("Insert returned no anime series row");
 

@@ -1044,6 +1044,13 @@
       "when": 1787843977356,
       "tag": "0148_tough_spencer_smythe",
       "breakpoints": true
+    },
+    {
+      "idx": 149,
+      "version": "7",
+      "when": 1787982075864,
+      "tag": "0149_anime_hero_and_series_slug",
+      "breakpoints": true
     }
   ]
 }

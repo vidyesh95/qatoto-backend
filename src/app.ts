@@ -23,6 +23,7 @@ import engagementRouter, {
 } from "#src/modules/home/engagement/engagement.routes.js";
 import watchHistoryRouter from "#src/modules/home/engagement/watch-history.routes.js";
 import feedRouter from "#src/modules/home/feed/feed.routes.js";
+import animeRouter from "#src/modules/home/anime/anime.routes.js";
 import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
 import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";
@@ -296,6 +297,10 @@ app.use("/promotions", promotionsRouter);
 // The home-page Spotlight rail. GET /spotlight/videos is public; admin routes are gated
 // by `manage_promotions` inside the service (same blast radius as the carousel).
 app.use("/spotlight", spotlightRouter);
+// The /anime surface — the hero carousel and the public anime catalogue. Three bare public
+// GETs; every /anime/admin/* route is gated by `manage_promotions` inside the service, the
+// same grant the two front-page placements above use.
+app.use("/anime", animeRouter);
 // The home feed's public read surface (HOME_BACKEND_STRUCTURE.md §5.1). Grouped with the
 // carousel above because both are front-page data sources, but UNLIKE the /research-projects
 // stack below, ordering here is NOT load-bearing: /feed is a single-segment prefix that no

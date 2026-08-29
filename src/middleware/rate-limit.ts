@@ -1026,6 +1026,35 @@ export const spotlightWriteLimiter = createLimiter({
   limit: 30,
 });
 
+/**
+ * The anime hero carousel's admin writes — list, create, update, reorder, delete.
+ *
+ * ONE BUCKET for all of them, and the same numbers as the promotional carousel: these are
+ * low-frequency staff actions against a table that holds at most a dozen rows. Splitting
+ * them would document a distinction that does not exist.
+ */
+export const animeHeroWriteLimiter = createLimiter({
+  namespace: "animeHeroWrite",
+  windowMs: ONE_MINUTE_MS,
+  limit: 30,
+});
+
+/**
+ * The two multipart routes — create and image replace.
+ *
+ * The expensive path: a 5 MB buffer, a sharp decode and AVIF re-encode, and a Cloudinary
+ * round trip, per request. Tighter than the write bucket because the cost is CPU and egress
+ * rather than a row.
+ *
+ * NOTE that POST /anime/admin/hero-slides carries ONLY this limiter, not both — stacking
+ * two limiters on one route double-counts every request against the stricter of them.
+ */
+export const animeHeroImageUploadLimiter = createLimiter({
+  namespace: "animeHeroImageUpload",
+  windowMs: ONE_MINUTE_MS,
+  limit: 20,
+});
+
 // ---------------------------------------------------------------------------
 // HOME FEED ENGAGEMENT (HOME_BACKEND_STRUCTURE.md §7)
 //
