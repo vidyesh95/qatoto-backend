@@ -1059,13 +1059,37 @@ async function replaceProductCustomizationOptions(
       .where(eq(commerceProductCustomizationOption.productId, productId));
   }
 
+  /**
+   * ⚠️ A RETIRED ROW MUST BE GIVEN A FINAL POSITION, NOT LEFT PARKED — and leaving it parked was a
+   * DETERMINISTIC 500 that survived every subsequent save.
+   *
+   * The parking offset above is `existing.length + options.length + 1000`. A retired row that keeps
+   * its parked value carries that number forever, because nothing below re-positions it. The next
+   * replace whose offset happens to equal it then parks an ACTIVE row onto the same number and
+   * `commerce_product_customization_option_position_uidx` raises `23505` — which `ProductError` has
+   * no member for, so it escaped as an unmapped 500 rather than a refusal.
+   *
+   * Reproduced on a live listing before this fix, and the arithmetic is the whole story:
+   *
+   *   after retiring 1 of 2 slots:  active pos=0 · retired pos=1004 (parked, never reset)
+   *   next save, 2 options: offset = 2+2+1000 = 1004 → active 0→1004 COLLIDES → 500
+   *   next save, 3 options: offset = 2+3+1000 = 1005 → no collision            → 200
+   *
+   * So the bug fired only when the counts lined up, which is why it looked intermittent. It is not:
+   * it is exact, and "remove a slot, save, edit something else, save" hits it.
+   *
+   * `replaceProductVariants` above never had this — it already sets `position: variants.length + index`
+   * when it retires. This is that line, and the two functions now agree.
+   */
   const incomingSlotKeys = new Set(options.map((option) => option.slotKey));
+  let retiredIndex = 0;
   for (const [slotKey, optionId] of existingBySlotKey) {
     if (incomingSlotKeys.has(slotKey)) continue;
     await transaction
       .update(commerceProductCustomizationOption)
-      .set({ state: "retired" })
+      .set({ state: "retired", position: options.length + retiredIndex })
       .where(eq(commerceProductCustomizationOption.id, optionId));
+    retiredIndex += 1;
   }
 
   for (const [index, option] of options.entries()) {
