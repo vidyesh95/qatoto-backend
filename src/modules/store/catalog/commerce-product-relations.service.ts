@@ -10,6 +10,7 @@ import {
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import type { Result } from "#src/types/index.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -24,6 +25,19 @@ export type CommerceProductRelationError =
   /** One or more `toProductId` values are not products a buyer could ever see. */
   | { type: "INVALID_TARGET"; productIds: readonly string[] }
   | { type: "SELF_RELATION" }
+  /**
+   * ⚠️ **A SELLER RE-SENT AN EDGE A MODERATOR HAS ALREADY CURATED.**
+   *
+   * `commerce_product_relation_edge_uidx` is `(fromProductId, toProductId, relationKind)` and does
+   * NOT include `sourceKind`, while the delete above is scoped to `seller_declared` — so a curated
+   * row survives the wipe and then collides with the seller's re-insert. Until this member existed
+   * the `23505` escaped as an unmapped **500** on an entirely foreseeable action: read your own
+   * relations, send them back unchanged.
+   *
+   * It is a finding rather than a retry — the edge already exists, with more authority than the
+   * seller was claiming for it.
+   */
+  | { type: "RELATION_ALREADY_CURATED" }
   | { type: "ALREADY_VERIFIED" }
   | { type: "PLATFORM_CAPABILITY_REQUIRED"; capability: "moderate_commerce" };
 
@@ -193,6 +207,10 @@ export async function replaceSellerDeclaredRelations(
       );
 
     return { status: "replaced" as const, rows };
+  }).catch((error: unknown) => {
+    // The only unique index reachable from here is the edge one — see RELATION_ALREADY_CURATED.
+    if (isUniqueViolation(error)) return { status: "already_curated" as const };
+    throw error;
   });
 
   switch (outcome.status) {
@@ -203,6 +221,8 @@ export async function replaceSellerDeclaredRelations(
         success: false,
         error: { type: "INVALID_TARGET", productIds: outcome.productIds },
       };
+    case "already_curated":
+      return { success: false, error: { type: "RELATION_ALREADY_CURATED" } };
     case "replaced":
       return { success: true, value: outcome.rows.map(projectRelation) };
     default: {

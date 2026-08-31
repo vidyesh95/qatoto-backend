@@ -94,6 +94,17 @@ function mapRelationError(res: Response, error: CommerceProductRelationError): v
         message: "A product cannot relate to itself.",
       } satisfies ApiResponse);
       return;
+    case "RELATION_ALREADY_CURATED":
+      // 409: the edge exists with MORE authority than the seller was claiming. Not a retry, and
+      // not a validation failure — the seller's list is fine, it just names something a moderator
+      // already confirmed.
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message:
+          "A moderator has already confirmed one of these related products. Remove it from your list — their version stays.",
+      } satisfies ApiResponse);
+      return;
     case "ALREADY_VERIFIED":
       res.status(409).json({
         status: "error",

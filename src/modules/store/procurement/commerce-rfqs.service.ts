@@ -208,6 +208,10 @@ export interface RfqDocumentProjection {
 export interface RfqInvitationProjection {
   readonly id: string;
   readonly providerOrganizationId: string;
+  /** The provider's name, so a buyer's list is readable rather than a column of uuids. */
+  readonly providerDisplayName: string;
+  /** Lets the list link to `/store/providers/:slug`. */
+  readonly providerSlug: string;
   readonly state: InvitationRow["state"];
   readonly sentAt: string | null;
   readonly createdAt: string;
@@ -879,15 +883,31 @@ async function projectRfqDetail(
       })
       .from(commerceRfqDocument)
       .where(eq(commerceRfqDocument.rfqId, rfq.id)),
+    /**
+     * ⚠️ **JOINED FOR THE NAME, BECAUSE A UUID IS NOT A PROVIDER.** This was a bare single-table
+     * select, so the buyer's invitation list could only render `providerOrganizationId` — and
+     * `rfq-detail.tsx` did exactly that, a monospace uuid per row, with a comment calling a display
+     * name "a one-field backend ask". It is: the column is already an FK to `commerce_organization`,
+     * so this costs one join and no extra query.
+     *
+     * `innerJoin` rather than left: the FK guarantees the organization exists, and a row that
+     * somehow lost it is not an invitation anyone can act on.
+     */
     db
       .select({
         id: commerceRfqInvitation.id,
         providerOrganizationId: commerceRfqInvitation.providerOrganizationId,
+        providerDisplayName: commerceOrganization.displayName,
+        providerSlug: commerceOrganization.slug,
         state: commerceRfqInvitation.state,
         sentAt: commerceRfqInvitation.sentAt,
         createdAt: commerceRfqInvitation.createdAt,
       })
       .from(commerceRfqInvitation)
+      .innerJoin(
+        commerceOrganization,
+        eq(commerceOrganization.id, commerceRfqInvitation.providerOrganizationId),
+      )
       .where(eq(commerceRfqInvitation.rfqId, rfq.id)),
   ]);
 
@@ -937,6 +957,8 @@ async function projectRfqDetail(
     invitations: invitations.map((invitation) => ({
       id: invitation.id,
       providerOrganizationId: invitation.providerOrganizationId,
+      providerDisplayName: invitation.providerDisplayName,
+      providerSlug: invitation.providerSlug,
       state: invitation.state,
       sentAt: toIsoOrNull(invitation.sentAt),
       createdAt: invitation.createdAt.toISOString(),
@@ -1596,16 +1618,50 @@ export async function inviteProviders(input: {
       return invitations;
     });
 
+    /**
+     * The names for the rows just written. A separate lookup rather than a join, because these
+     * came back from an INSERT ... RETURNING inside the transaction and carry only their own
+     * columns — and the projection now promises a name on every invitation, so this response has
+     * to keep that promise as much as the detail read does.
+     */
+    const invitedOrganizationRows =
+      createdInvitations.length === 0
+        ? []
+        : await db
+            .select({
+              id: commerceOrganization.id,
+              displayName: commerceOrganization.displayName,
+              slug: commerceOrganization.slug,
+            })
+            .from(commerceOrganization)
+            .where(
+              inArray(
+                commerceOrganization.id,
+                createdInvitations.map((invitation) => invitation.providerOrganizationId),
+              ),
+            );
+    const invitedOrganizationById = new Map(
+      invitedOrganizationRows.map((row) => [row.id, row]),
+    );
+
     return {
       success: true,
       value: {
-        invitations: createdInvitations.map((invitation) => ({
-          id: invitation.id,
-          providerOrganizationId: invitation.providerOrganizationId,
-          state: invitation.state,
-          sentAt: toIsoOrNull(invitation.sentAt),
-          createdAt: invitation.createdAt.toISOString(),
-        })),
+        invitations: createdInvitations.map((invitation) => {
+          const organization = invitedOrganizationById.get(invitation.providerOrganizationId);
+          return {
+            id: invitation.id,
+            providerOrganizationId: invitation.providerOrganizationId,
+            // The eligibility gate already proved the organization exists and is public, so a
+            // miss here is impossible rather than merely unlikely — but an empty string would be
+            // a lie, so it falls back to the id the caller already sent.
+            providerDisplayName: organization?.displayName ?? invitation.providerOrganizationId,
+            providerSlug: organization?.slug ?? "",
+            state: invitation.state,
+            sentAt: toIsoOrNull(invitation.sentAt),
+            createdAt: invitation.createdAt.toISOString(),
+          };
+        }),
       },
     };
   } catch (error: unknown) {

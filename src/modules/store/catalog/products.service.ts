@@ -9,6 +9,7 @@ import {
   commerceProductCustomizationOption,
   commerceProductDocument,
   commerceProductHighlight,
+  commerceProductRelation,
   commerceProductSpecification,
   commerceProductVariant,
   product,
@@ -158,6 +159,16 @@ export interface ProductVariantView {
 }
 
 /** A6. One marketing highlight card. */
+export interface ProductRelationView {
+  readonly id: string;
+  readonly toProductId: string;
+  readonly relationKind: (typeof commerceProductRelation.$inferSelect)["relationKind"];
+  readonly sourceKind: (typeof commerceProductRelation.$inferSelect)["sourceKind"];
+  readonly rank: number;
+  readonly toProductTitle: string;
+  readonly toProductPublicSlug: string | null;
+}
+
 export interface ProductHighlightView {
   readonly id: string;
   readonly title: string;
@@ -473,6 +484,7 @@ export interface PublicProduct {
   readonly attributeValues: readonly ProductAttributeValueView[];
   readonly variants: readonly ProductVariantView[];
   readonly highlights: readonly ProductHighlightView[];
+  readonly relations: readonly ProductRelationView[];
   /** §21.3. The public PDFs on this listing, so the wizard can list and remove them. */
   readonly documents: readonly ProductDocumentView[];
   readonly customizationOptions: readonly ProductCustomizationOptionView[];
@@ -577,6 +589,29 @@ const PRODUCT_VARIANT_VIEW_COLUMNS = {
   state: commerceProductVariant.state,
 } as const;
 
+/**
+ * One relation this listing declares, as its OWNER sees it.
+ *
+ * ⚠️ **`sourceKind` IS ON HERE AND IT IS LOAD-BEARING.** The write replaces only the
+ * `seller_declared` rows — a moderator's curated edge and the derived co-occurrence graph are
+ * deliberately left alone — so an editor rebuilding the payload MUST filter to `seller_declared`.
+ * Resending a curated edge also collides on `commerce_product_relation_edge_uidx`, which does not
+ * include `sourceKind`, and the service does not catch the `23505`.
+ *
+ * The target's title and slug ride along because the row stores only ids, and there is no read
+ * that turns a product id into a name for an arbitrary caller — the public read is slug-keyed and
+ * `GET /products/:id` refuses another seller's listing, which is exactly what a relation points at.
+ */
+const PRODUCT_RELATION_VIEW_COLUMNS = {
+  id: commerceProductRelation.id,
+  toProductId: commerceProductRelation.toProductId,
+  relationKind: commerceProductRelation.relationKind,
+  sourceKind: commerceProductRelation.sourceKind,
+  rank: commerceProductRelation.rank,
+  toProductTitle: product.title,
+  toProductPublicSlug: product.publicSlug,
+} as const;
+
 const PRODUCT_HIGHLIGHT_VIEW_COLUMNS = {
   id: commerceProductHighlight.id,
   title: commerceProductHighlight.title,
@@ -636,6 +671,8 @@ function toPublicProduct(
   customizationOptions: readonly ProductCustomizationOptionView[] = [],
   /** §21.3. Defaulted like the collections above so the three call sites opt in one at a time. */
   documents: readonly ProductDocumentView[] = [],
+  /** Defaulted for the same reason — the owner-side relations read. */
+  relations: readonly ProductRelationView[] = [],
 ): PublicProduct {
   // The defensive `categoryId === null` throw that stood here is gone: migration 0063
   // made the column NOT NULL, so the case it guarded can no longer be represented.
@@ -693,6 +730,7 @@ function toPublicProduct(
     highlights,
     documents,
     customizationOptions,
+    relations,
   };
 }
 
@@ -773,6 +811,23 @@ async function loadOrganizationProduct(
     .where(eq(commerceProductHighlight.productId, productId))
     .orderBy(asc(commerceProductHighlight.position));
 
+  /**
+   * Every relation on this listing, curated and derived ones included.
+   *
+   * The editor filters to `seller_declared` before rebuilding its payload; showing the others
+   * read-only is what stops a seller wondering where a moderator's edge went.
+   */
+  const relations = await db
+    .select(PRODUCT_RELATION_VIEW_COLUMNS)
+    .from(commerceProductRelation)
+    .innerJoin(product, eq(product.id, commerceProductRelation.toProductId))
+    .where(eq(commerceProductRelation.fromProductId, productId))
+    .orderBy(
+      asc(commerceProductRelation.relationKind),
+      asc(commerceProductRelation.rank),
+      asc(commerceProductRelation.id),
+    );
+
   // Retired slots are included: the seller wrote them, and the order lines bought under
   // them still name them. The buyer's projection filters to active.
   const customizationOptions = await db
@@ -817,6 +872,7 @@ async function loadOrganizationProduct(
     highlights,
     customizationOptions,
     documents,
+    relations,
   );
 }
 
