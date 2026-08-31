@@ -121,6 +121,16 @@ function mapRelationError(res: Response, error: CommerceProductRelationError): v
         message: "This relation is already verified.",
       } satisfies ApiResponse);
       return;
+    case "SELF_MODERATION_FORBIDDEN":
+      // 403: they hold `moderate_commerce` but belong to the selling organization, so they are a
+      // party to the claim. The client cannot know a moderator's memberships, so this is surfaced
+      // on the row that produced it rather than by hiding the control.
+      res.status(403).json({
+        status: "error",
+        statusCode: 403,
+        message: "A member of the selling organization cannot confirm its own claim.",
+      } satisfies ApiResponse);
+      return;
     case "PLATFORM_CAPABILITY_REQUIRED":
       // 403 for a non-probeable staff capability, per §7's HTTP mapping.
       res.status(403).json({

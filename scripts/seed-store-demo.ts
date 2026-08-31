@@ -33,6 +33,7 @@ import {
   commerceServiceOffering,
   freightOfferingDetail,
   product,
+  productImage,
   productPricingTier,
   storeHeroSlide,
   storePathway,
@@ -276,6 +277,7 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
       id: CHAIR_PRODUCT_ID,
       title: "Banquet chair, stackable",
       publicSlug: "banquet-chair-stackable",
+      imageFileName: "stacking_chair.avif",
       priceInCents: 480_000,
       // A17: orderable and refundable, so a completed sample mints a credit.
       samplePolicy: "refundable" as const,
@@ -285,6 +287,7 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
       id: LAMP_PRODUCT_ID,
       title: "Bedside reading lamp",
       publicSlug: "bedside-reading-lamp",
+      imageFileName: "vanity.avif",
       priceInCents: 120_000,
       samplePolicy: "paid" as const,
       samplePriceInCents: 18_000,
@@ -293,6 +296,7 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
       id: RUG_PRODUCT_ID,
       title: "Guest room rug",
       publicSlug: "guest-room-rug",
+      imageFileName: "home_furniture.avif",
       priceInCents: 260_000,
       samplePolicy: "unavailable" as const,
       samplePriceInCents: null,
@@ -373,6 +377,31 @@ async function ensureProducts(sellerUserId: string): Promise<void> {
           position: 1,
         },
       ])
+      .onConflictDoNothing();
+
+    /**
+     * ⚠️ **WITHOUT AN IMAGE THIS LISTING IS STRANDED.** The product above is written
+     * straight to `status: "active"`, bypassing the publish path — but the publish RULE requires
+     * at least one image. An active product with no `product_image` row can be unpublished and
+     * then never republished: the seller is told "missing images" about a listing this script
+     * created without any. That is exactly how the demo lamp got stuck.
+     *
+     * Bare `.onConflictDoNothing()` — there are TWO unique keys, the primary key and
+     * `product_image_position_uidx (product_id, coalesce(variant_id,''), position)`. Naming only
+     * the PK would still raise on the second one, and this script is re-runnable with no reset.
+     *
+     * `variantId` stays NULL so the asset is shared by every variant, which is what the lamp's two
+     * variants should show until someone uploads per-variant photography.
+     */
+    await db
+      .insert(productImage)
+      .values({
+        id: `store_demo_image_${demoProduct.id}`,
+        productId: demoProduct.id,
+        url: `/dummy/${demoProduct.imageFileName}`,
+        altText: demoProduct.title,
+        position: 0,
+      })
       .onConflictDoNothing();
   }
 

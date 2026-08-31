@@ -1078,11 +1078,21 @@ export async function listRankedProductIds(input: {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
 
+  /**
+   * The sort key is a score in points, so a well-formed cursor carrying something that is not an
+   * integer is still a bad cursor. Without this, `Number("nonsense")` becomes `NaN`, goes into the
+   * comparison, and the route answers a 500 instead of naming the caller's mistake.
+   */
+  const cursorFinalScorePoints = decodedCursor === null ? null : Number(decodedCursor.sortKey);
+  if (cursorFinalScorePoints !== null && !Number.isInteger(cursorFinalScorePoints)) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
   const cursorPredicate =
     decodedCursor === null
       ? sql`TRUE`
       : sql`(${commerceProductRankingState.finalScorePoints}, ${commerceProductRankingState.productId})
-            < (${Number(decodedCursor.sortKey)}, ${decodedCursor.id})`;
+            < (${cursorFinalScorePoints}, ${decodedCursor.id})`;
 
   const rows = await db
     .select({

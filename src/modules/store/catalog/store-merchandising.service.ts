@@ -272,15 +272,30 @@ async function resolveRailItemsPage(input: {
         };
       }
 
+      /**
+       * The sort key is a placement position, so a well-formed cursor carrying something that is
+       * not an integer is still a bad cursor. Without this, `Number("nonsense")` becomes `NaN`,
+       * reaches the driver inside the comparison, and the route answers a 500 rather than naming
+       * the caller's mistake.
+       */
+      const cursorPosition = decodedCursor === null ? null : Number(decodedCursor.sortKey);
+      if (cursorPosition !== null && !Number.isInteger(cursorPosition)) {
+        return {
+          items: [],
+          page: { nextCursor: null, hasMore: false },
+          error: { type: "INVALID_CURSOR" },
+        };
+      }
+
       // Over-fetch then filter ineligible placements so the page stays dense.
       const fetchLimit = Math.min(input.limit * 4, 96);
       const cursorPredicate =
-        decodedCursor === null
+        decodedCursor === null || cursorPosition === null
           ? undefined
           : or(
-              sql`${storeRailPlacement.position} > ${Number(decodedCursor.sortKey)}`,
+              sql`${storeRailPlacement.position} > ${cursorPosition}`,
               and(
-                eq(storeRailPlacement.position, Number(decodedCursor.sortKey)),
+                eq(storeRailPlacement.position, cursorPosition),
                 sql`${storeRailPlacement.id} > ${decodedCursor.id}`,
               ),
             );

@@ -2,6 +2,20 @@
  * Opaque cursor helpers for store list endpoints.
  * Format: `<sortKey>_<id>` where sortKey is URL-safe text (often an ISO timestamp
  * or padded integer). Always ends with a unique id so equal sort keys cannot skip rows.
+ *
+ * ⚠️ **BOTH HALVES ESCAPE `_`, AND THAT IS WHAT MAKES THE SPLIT UNAMBIGUOUS.**
+ * `encodeURIComponent` does NOT escape `_` — it is an RFC 3986 unreserved character. Without the
+ * extra escaping below, an id containing an underscore (`store_demo_rail_placement_x`) puts extra
+ * separators into the string and `lastIndexOf` then splits INSIDE the id, yielding a corrupt sort
+ * key and a truncated id. Escaping to `%5F` here leaves exactly ONE literal `_` in any cursor this
+ * module mints, so the split cannot land anywhere else. `decodeURIComponent` turns `%5F` back into
+ * `_`, so the round trip is exact.
+ *
+ * The split stays `lastIndexOf` rather than `indexOf` deliberately. The sibling codecs
+ * (`src/lib/instant-cursor.ts`, `src/modules/rnd/date-cursor.ts`) split on the FIRST separator, but
+ * their sort keys are regex-pinned digits or dates. This module's sort keys include free text —
+ * product and pathway titles — so `lastIndexOf` is what keeps a pre-escaping cursor with an
+ * underscored TITLE decoding correctly across a deploy.
  */
 
 export interface StoreCursorParts {
@@ -14,8 +28,13 @@ export interface StoreTimestampCursorParts {
   readonly id: string;
 }
 
+/** Percent-encode a cursor half, including the `_` separator that `encodeURIComponent` leaves bare. */
+function encodeCursorPart(part: string): string {
+  return encodeURIComponent(part).replace(/_/g, "%5F");
+}
+
 export function encodeStoreCursor(parts: StoreCursorParts): string {
-  return `${encodeURIComponent(parts.sortKey)}_${encodeURIComponent(parts.id)}`;
+  return `${encodeCursorPart(parts.sortKey)}_${encodeCursorPart(parts.id)}`;
 }
 
 export function decodeStoreCursor(cursor: string): StoreCursorParts | null {

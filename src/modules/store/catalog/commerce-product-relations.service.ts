@@ -2,7 +2,12 @@ import { and, asc, eq, gt, gte, inArray, lt, or, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "#src/db/index.js";
-import { commerceOrganization, commerceProductRelation, product } from "#src/db/schema.js";
+import {
+  commerceOrganization,
+  commerceOrganizationMember,
+  commerceProductRelation,
+  product,
+} from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import {
@@ -43,6 +48,11 @@ export type CommerceProductRelationError =
   | { type: "ALREADY_VERIFIED" }
   /** A cursor this service did not mint. Never a 500 — a bad page token is a caller error. */
   | { type: "INVALID_CURSOR" }
+  /**
+   * §4.11: the moderator belongs to the organization that sells the FROM product, so they are a
+   * party to the claim they are trying to confirm. Holding `moderate_commerce` is not enough.
+   */
+  | { type: "SELF_MODERATION_FORBIDDEN" }
   | { type: "PLATFORM_CAPABILITY_REQUIRED"; capability: "moderate_commerce" };
 
 /**
@@ -263,6 +273,34 @@ export interface ProductCompanionGroupProjection {
 /** Bounded so a PDP read cannot be turned into a catalog dump. */
 const MAXIMUM_COMPANIONS_PER_KIND = 12;
 
+/**
+ * Is this moderator a member of the organization that owns the claim?
+ *
+ * Same shape as the content-report queue's guard (`commerce-content-reports.service.ts`) and the
+ * pathway one, deliberately: `state: "active"` means a suspended or departed member is NOT a party,
+ * and taking the executor as a parameter is what lets this run INSIDE the caller's transaction,
+ * after the row lock.
+ */
+async function isModeratorPartyToTarget(
+  executor: DatabaseTransaction | typeof db,
+  moderatorUserId: string,
+  ownerOrganizationId: string | null,
+): Promise<boolean> {
+  if (ownerOrganizationId === null) return false;
+  const [membership] = await executor
+    .select({ id: commerceOrganizationMember.id })
+    .from(commerceOrganizationMember)
+    .where(
+      and(
+        eq(commerceOrganizationMember.userId, moderatorUserId),
+        eq(commerceOrganizationMember.organizationId, ownerOrganizationId),
+        eq(commerceOrganizationMember.state, "active"),
+      ),
+    )
+    .limit(1);
+  return membership !== undefined;
+}
+
 async function appendAuditOrThrow(
   transaction: DatabaseTransaction,
   input: Parameters<typeof appendCommerceOrganizationAuditEntry>[1],
@@ -440,6 +478,39 @@ export async function verifyRelation(
       .where(eq(commerceProductRelation.id, relationId))
       .for("update");
     if (!relation) return { status: "not_found" as const };
+
+    /**
+     * ⚠️ **HOISTED ABOVE THE REPLAY RETURN ON PURPOSE.** This select used to sit after the UPDATE,
+     * where it only fed the audit append. The self-moderation guard below needs the owning
+     * organization, and it has to refuse a party moderator on a REPLAY too — otherwise "verify it
+     * twice" would be a way around the check.
+     */
+    const [fromProduct] = await transaction
+      .select({ sellerOrganizationId: product.sellerOrganizationId })
+      .from(product)
+      .where(eq(product.id, relation.fromProductId))
+      .limit(1);
+
+    /**
+     * §4.11: a party to the claim cannot be the one who confirms it. A moderator with
+     * `moderate_commerce` who also belongs to the selling organization would otherwise be able to
+     * promote their own company's compatibility claim to "we checked".
+     *
+     * ⚠️ This runs AFTER the capability check, which is deliberate — the capability check happens
+     * before any row is read, so a caller without `moderate_commerce` still learns nothing about
+     * whether `relationId` exists. Moving this earlier would turn the route into an existence
+     * oracle.
+     */
+    if (
+      await isModeratorPartyToTarget(
+        transaction,
+        actorUserId,
+        fromProduct?.sellerOrganizationId ?? null,
+      )
+    ) {
+      return { status: "self_moderation" as const };
+    }
+
     if (relation.sourceKind === "moderator_curated") {
       // Idempotent replays return the existing row; a genuine re-verification of an
       // already-curated edge has nothing left to change.
@@ -453,12 +524,6 @@ export async function verifyRelation(
       .where(eq(commerceProductRelation.id, relationId))
       .returning();
     if (!updated) throw new Error("Product relation verify returned no row.");
-
-    const [fromProduct] = await transaction
-      .select({ sellerOrganizationId: product.sellerOrganizationId })
-      .from(product)
-      .where(eq(product.id, relation.fromProductId))
-      .limit(1);
 
     if (fromProduct?.sellerOrganizationId) {
       await appendAuditOrThrow(transaction, {
@@ -484,6 +549,8 @@ export async function verifyRelation(
   switch (outcome.status) {
     case "not_found":
       return { success: false, error: { type: "NOT_FOUND" } };
+    case "self_moderation":
+      return { success: false, error: { type: "SELF_MODERATION_FORBIDDEN" } };
     case "already_verified":
     case "verified":
       return { success: true, value: projectRelation(outcome.relation) };

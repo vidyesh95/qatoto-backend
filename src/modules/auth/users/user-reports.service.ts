@@ -151,9 +151,19 @@ export async function listUserReports(
 
   let cursorCondition = sql`true`;
   if (input.cursor !== undefined) {
-    const [rawInstant, rawId] = input.cursor.split("_");
-    const cursorInstant = rawInstant === undefined ? Number.NaN : Number(rawInstant);
-    if (!Number.isFinite(cursorInstant) || rawId === undefined || rawId === "") {
+    /**
+     * ⚠️ **SPLIT ON THE FIRST SEPARATOR, WITH THE ID AS THE UNBOUNDED TAIL.**
+     * This used to be `const [rawInstant, rawId] = input.cursor.split("_")`, which takes element
+     * `[1]` and DISCARDS the rest — so an id containing an underscore paged from a truncated id
+     * and returned the WRONG ROWS rather than refusing. A silent wrong answer, not an error.
+     * The epoch prefix is digits only and can never contain `_`, so the first separator is always
+     * the real one. Same shape as `src/lib/instant-cursor.ts`.
+     */
+    const separatorIndex = input.cursor.indexOf("_");
+    const rawInstant = separatorIndex === -1 ? "" : input.cursor.slice(0, separatorIndex);
+    const rawId = separatorIndex === -1 ? "" : input.cursor.slice(separatorIndex + 1);
+    const cursorInstant = rawInstant === "" ? Number.NaN : Number(rawInstant);
+    if (!Number.isInteger(cursorInstant) || cursorInstant < 0 || rawId === "") {
       return { success: false, error: { type: "INVALID_CURSOR" } };
     }
     const cursorDate = new Date(cursorInstant);

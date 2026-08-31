@@ -67,6 +67,7 @@ import {
   commerceProductViewSession,
   commerceRefund,
   product,
+  productImage,
   productPricingTier,
   user,
 } from "#src/db/schema.js";
@@ -489,6 +490,9 @@ async function resetSeed(): Promise<void> {
     .delete(commerceProductStats)
     .where(like(commerceProductStats.productId, `${ID_PREFIX}%`));
   await db.delete(productPricingTier).where(like(productPricingTier.productId, `${ID_PREFIX}%`));
+  // `product_image.product_id` is ON DELETE cascade, so the product delete below would take
+  // these anyway. Explicit for symmetry with every other child table in this block.
+  await db.delete(productImage).where(like(productImage.productId, `${ID_PREFIX}%`));
   await db.delete(product).where(like(product.id, `${ID_PREFIX}%`));
   await db
     .delete(commerceOrganizationVerification)
@@ -768,6 +772,34 @@ async function seedProducts(
         unitPriceInCents: seedProduct.priceInCents,
       })
       .onConflictDoNothing({ target: productPricingTier.id });
+
+    /**
+     * ⚠️ **WITHOUT AN IMAGE THESE LISTINGS ARE STRANDED.** `status: "active"` is set directly
+     * above, bypassing the publish path — but the publish RULE requires at least one image
+     * (`projectListingCompleteness`, products.service.ts). So an `active` product with no
+     * `product_image` row can be unpublished and then never republished: the seller is told
+     * "missing images" about a listing the seed created without any.
+     *
+     * ⚠️ **THE ASSET IS DELIBERATELY GENERIC AND DELIBERATELY WRONG-ISH.** `public/dummy/` in the
+     * frontend is a furniture and lifestyle library; it holds no freezer, compressor, carton or
+     * probe. `machinery.avif` is the only industrial frame in it, so every seeded industrial
+     * listing shares it. The `altText` carries the real product title, so the accessible name
+     * stays truthful even though the picture is filler.
+     *
+     * Bare `.onConflictDoNothing()` — there are TWO unique keys here, the primary key and
+     * `product_image_position_uidx (product_id, coalesce(variant_id,''), position)`. Naming only
+     * the PK would still raise on the second one.
+     */
+    await db
+      .insert(productImage)
+      .values({
+        id: `${ID_PREFIX}img_${seedProduct.key}`,
+        productId,
+        url: "/dummy/machinery.avif",
+        altText: seedProduct.title,
+        position: 0,
+      })
+      .onConflictDoNothing();
 
     await refreshProductSearchDocument(productId);
   }
