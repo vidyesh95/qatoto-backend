@@ -187,7 +187,7 @@ const connectionString = ssl
 export const pool = new Pool({
     connectionString,
     ssl,
-    max: 20,
+    max: config.DATABASE_POOL_MAX, // env-driven; default 8, NOT the server's max_connections
     idleTimeoutMillis: 10000,
     connectionTimeoutMillis: 10000,
     keepAlive: true,

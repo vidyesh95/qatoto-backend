@@ -5,7 +5,7 @@ import debugLib from "debug";
 
 import app from "#src/app.js";
 import { config } from "#src/config/index.js";
-import { pool } from "#src/db/index.js";
+import { logConnectionBudget, pool } from "#src/db/index.js";
 
 const debug = debugLib("qatoto-backend:server");
 
@@ -65,6 +65,11 @@ function onListening() {
   const bind = typeof addr === "string" ? "pipe " + addr : "port " + addr.port;
   debug("Listening on " + bind);
   console.log(`Server running on ${bind} [${config.NODE_ENV}]`);
+
+  // AFTER listen, not before: the budget is diagnostic, and making the port wait on a
+  // database round trip would let a slow database delay serving traffic. `void` is safe
+  // because logConnectionBudget catches everything and resolves either way.
+  void logConnectionBudget("the API", config.DATABASE_POOL_MAX);
 }
 
 /**

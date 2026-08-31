@@ -532,7 +532,7 @@ const connectionString = ssl
 export const pool = new Pool({
     connectionString,
     ssl,
-    max: 20,
+    max: config.DATABASE_POOL_MAX, // env-driven; default 8, NOT the server's max_connections
     idleTimeoutMillis: 10000, // recycle before Aiven reaps idle sockets
     connectionTimeoutMillis: 10000,
     keepAlive: true,
@@ -541,6 +541,37 @@ export const db = drizzle(pool, { schema });
 
 // Idle clients dropped by the remote server emit 'error' here — log, never exit.
 pool.on("error", (err) => console.error("Unexpected error on idle database client", err));
+
+
+#### The connection budget — `DATABASE_POOL_MAX` / `WORKER_DATABASE_POOL_MAX`
+
+`max_connections` is a **server-wide** limit, not a per-client one. Every process pointed at
+the database draws from the same number: the API, the worker, every `pnpm db:*` script, and
+any open psql. The Aiven free plan reports **20**.
+
+| Process | Pools it holds | Ceiling |
+| --- | --- | --- |
+| API (`src/index.ts`) | shared `pool` | `DATABASE_POOL_MAX` (default 8) |
+| Worker (`src/worker.ts`) | shared `pool` **and** `workerPool` | `DATABASE_POOL_MAX + WORKER_DATABASE_POOL_MAX` (default 12) |
+| `pnpm db:*` script | shared `pool` | `DATABASE_POOL_MAX` (default 8) |
+
+⚠️ **The worker holds BOTH pools.** Its dedicated pool serves pg-boss's pollers; its job
+handlers reach the shared pool through `db`. Budgeting with `WORKER_DATABASE_POOL_MAX` alone
+understates the worker by two thirds. `src/worker.ts` ends both at shutdown for this reason.
+
+⚠️ **The defaults SUM ABOVE 20** once all three run at once (8 + 12 + 8 = 28). They are
+ceilings rather than reservations — `pg.Pool` connects on demand, so a sequential script holds
+one — but a concurrency spike is exactly what exhausts them. This has fired before: an earlier
+worker subscribed one poller per dead-letter queue and hit `FATAL: sorry, too many clients
+already` (SQLSTATE 53300). Set both per service; `.env.example` carries a worked budget.
+
+⚠️ **NOTHING AUTO-SCALES ON MIGRATION.** No code reads the server's `max_connections` to size
+a pool. Moving to a larger database keeps the low defaults and silently under-uses it — a
+failure with no error attached. `logConnectionBudget()` (`src/db/index.ts`) runs one
+`SHOW max_connections` at boot in both runtime processes and logs this process's ceiling
+against the server's total, so the gap is visible on the first deploy rather than never. Note
+also that both vars are Zod-capped at `.max(100)`: a larger value is a startup failure, not a
+larger pool.
 
 // Thin raw-SQL helper (used by a couple of legacy read paths in users.service).
 export async function query(text: string, params?: unknown[]) {

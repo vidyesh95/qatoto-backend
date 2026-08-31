@@ -130,9 +130,22 @@ const envSchema = z.object({
   // WHOLE SERVER, shared across the API, every worker, and every db:* script — so this
   // defaults well below that. Raising it does not buy throughput; it converts an
   // invisible in-pool wait into `FATAL: too many clients` in whichever process asks last.
+  //
+  // ⚠️ NOTHING AUTO-SCALES THIS. No code anywhere reads the server's max_connections to
+  // size a pool — `logConnectionBudget` in src/db/index.ts only REPORTS the gap at boot.
+  // Moving to a larger database therefore keeps these defaults and silently under-uses it,
+  // which is a failure with no error attached. Raise them by hand on migration day.
+  //
+  // ⚠️ AND NOTE THE `.max(100)`: it is a validation ceiling, not advice. A value above it
+  // is a startup failure rather than a large pool, so a genuinely large instance needs this
+  // line edited too — do not spend a deploy discovering that from a crash.
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(8),
   // The worker's own, separate pool. pg-boss polls every queue on an interval, so its
   // demand is steady and concurrent rather than request-shaped.
+  //
+  // ⚠️ THE WORKER'S TOTAL SHARE IS THIS PLUS DATABASE_POOL_MAX, because its handlers reach
+  // the shared pool through `db`. Budgeting with this number alone understates the worker
+  // by two thirds; src/worker.ts ends both pools at shutdown for the same reason.
   WORKER_DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(4),
   JOBS_SCHEMA: z.string().min(1).default("pgboss"),
   /**

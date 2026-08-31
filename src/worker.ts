@@ -3,7 +3,7 @@ import { PgBoss } from "pg-boss";
 import type { Job } from "pg-boss";
 
 import { config } from "#src/config/index.js";
-import { createDedicatedPool, db, pool } from "#src/db/index.js";
+import { createDedicatedPool, db, logConnectionBudget, pool } from "#src/db/index.js";
 import { jobFailure } from "#src/db/schema.js";
 import {
   handleAnonymizeDueAccountsTick,
@@ -742,6 +742,16 @@ async function startWorker(): Promise<void> {
   console.log(
     `Worker running [${config.NODE_ENV}] — ${Object.keys(JOB_NAMES).length} queues, ` +
       `concurrency ${config.WORKER_CONCURRENCY}, pool ${config.WORKER_DATABASE_POOL_MAX}`,
+  );
+
+  // ⚠️ THE SUM, NOT `WORKER_DATABASE_POOL_MAX` ALONE. The line above reports the dedicated
+  // pg-boss pool, which is what an operator tuning polling wants to see. The BUDGET is the
+  // dedicated pool plus the shared one the handlers reach through `db` — the same two pools
+  // shutdown ends below. Reporting only the dedicated one here would understate this
+  // process's claim on the server by two thirds.
+  await logConnectionBudget(
+    "the worker",
+    config.DATABASE_POOL_MAX + config.WORKER_DATABASE_POOL_MAX,
   );
 }
 
