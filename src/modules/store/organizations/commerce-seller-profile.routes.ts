@@ -3,6 +3,7 @@ import express from "express";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
+  commerceDocumentDownloadLimiter,
   commerceOrganizationEvidenceLimiter,
   commerceOrganizationWriteLimiter,
   productCatalogDepthWriteLimiter,
@@ -149,6 +150,21 @@ router.post(
   uploadCommerceCertificate,
   idempotency({ required: true }),
   commerceSellerProfileController.submitCertification,
+);
+
+/**
+ * THE CERTIFICATE ITSELF — the read that makes the moderation console honest.
+ *
+ * `commerceDocumentDownloadLimiter`, not the write limiter: decrypting and streaming a file is
+ * the expensive read that limiter exists to bound. No body middleware and no idempotency — this
+ * is a GET. Members of the owning organization and `moderate_commerce` holders both reach it,
+ * decided in-service, and a staff read lands on the seller's audit chain.
+ */
+router.get(
+  "/organizations/:organizationId/certifications/:certificationId/evidence",
+  requireAuth,
+  commerceDocumentDownloadLimiter,
+  commerceSellerProfileController.downloadCertificationEvidence,
 );
 
 /**

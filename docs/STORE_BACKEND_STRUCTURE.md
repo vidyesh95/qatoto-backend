@@ -1014,6 +1014,7 @@ newer than Phase 17:
 | GET    | `/commerce/organizations/:organizationId/seller-profile`                       | The owner's own read; visibility is not consulted          |
 | GET    | `/commerce/organizations/:organizationId/certifications`                       | The seller's list, every state                             |
 | POST   | `/commerce/organizations/:organizationId/certifications`                       | Claim + evidence, one multipart. **Idempotency-Key**, 201  |
+| GET    | `/commerce/organizations/:organizationId/certifications/:id/evidence`          | The certificate itself, decrypted and streamed             |
 | POST   | `/commerce/organizations/:organizationId/certifications/:id/withdraw`          | The seller retracts its own. **Idempotency-Key**           |
 | GET    | `/commerce/admin/certifications`                                               | The moderation queue, oldest first, `?state=` and a cursor |
 | POST   | `/commerce/admin/certifications/:certificationId/decision`                     | `approve` / `reject` with a reason. **Idempotency-Key**    |
@@ -3892,6 +3893,26 @@ from either side alone:
 | **`standardCode` was unreachable.** `submitCertification` took it and wrote it, but `SubmitCertificationSchema` had no such key and is `.strict()`, so every row ever created carried `null` — and §16.2's filter matches only rows with a code | The key exists on the body, optional, mirrored from `commerceCertificationStandardCodeEnum`. **Nothing infers it from `standardName`**: a fuzzy match would put a factory into a compliance filter it never claimed |
 | **No seller-side profile read.** Both public projections are gated on `tradeState = 'active' AND visibility = 'public'`, so a private or not-yet-active organization could write every field on this surface and never read one back | `GET /commerce/organizations/:organizationId/seller-profile`, `PROFILE_MANAGERS` only, reusing `loadSellerDeclaredProfiles` rather than a parallel projection. A missing row answers `{ declaredProfile: null }` with a **200** |
 | **The decision route had no queue and `withdrawn` had no writer.** No route listed a pending certification, so no id could be learned and nothing was ever approved — which is the second reason the directory facet matched nothing | `GET /commerce/admin/certifications` (oldest first, keyset, `moderate_commerce` checked before any id is read) and `POST /commerce/organizations/:organizationId/certifications/:certificationId/withdraw`, `certification_withdrawn` on the org chain (`0156`) |
+
+**The evidence read is what makes the decision honest, and it audits itself.** `decideCertification`
+asks a moderator to publish a compliance claim to every buyer browsing the directory, and until this
+route there was nothing anywhere that let them read the paper behind it — no projection on this
+surface carries an evidence id, URL or token, deliberately, so the verdict was being formed from a
+typed-in standard name. The gate is `canReadVerification`'s: a `CERTIFICATION_READERS` member, or a
+`moderate_commerce` holder, refused as `NOT_FOUND` either way. Three details are its own rather than
+`downloadVerificationEvidence`'s:
+
+- **A staff read is written to the seller's chain** as `document_downloaded`, inside a transaction,
+  throwing on a failed append — a read that could not be logged does not happen. An organization
+  opening its own file is not audited, which is the line `downloadTradeDocument` draws.
+  `downloadVerificationEvidence` audits nothing at all; that is a gap on that route, not a
+  precedent.
+- **`pending_scan` and `quarantined` are 409s, not 404s.** Each is something a moderator acts on —
+  wait for the scanner, or refuse the claim without ever opening the file — and collapsing them
+  into "not found" says the seller uploaded nothing.
+- **`Content-Disposition: inline`, with `nosniff`.** The console renders the certificate beside the
+  approve and refuse controls; the point is to stop compliance paperwork being saved to a
+  moderator's disk in order to be read.
 
 **A withdrawal is not a decision and not a delete.** `certification_withdrawn` is its own audit kind
 because a seller retracting its own claim and a moderator ruling on it are different acts. `pending`

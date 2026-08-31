@@ -25,16 +25,20 @@ import {
   uploadOrganizationStakeholderPhoto,
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
-import { encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
+import { decryptCommercePii, encryptCommercePii } from "#src/lib/commerce-pii-encryption.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
 import {
   deletePrivateCommerceDocument,
+  downloadPrivateCommerceDocument,
   uploadPrivateCommerceDocument,
 } from "#src/lib/object-storage.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
-import { encryptCommerceDocument } from "#src/modules/store/commerce-document-encryption.js";
+import {
+  decryptCommerceDocument,
+  encryptCommerceDocument,
+} from "#src/modules/store/commerce-document-encryption.js";
 import { scheduleDocumentScan } from "#src/modules/store/organizations/commerce-document-scan.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
@@ -68,7 +72,15 @@ export type CommerceSellerProfileError =
   /** A moderator cannot decide a certification they submitted themselves (§11). */
   | { type: "SELF_REVIEW_FORBIDDEN" }
   /** A tampered or truncated keyset cursor on the moderation queue. */
-  | { type: "INVALID_CURSOR" };
+  | { type: "INVALID_CURSOR" }
+  /**
+   * The evidence exists and the scanner has not finished with it. NOT a 404: telling a
+   * moderator the seller uploaded nothing, when what happened is that a scan is running, is
+   * the difference between waiting and wrongly refusing a claim.
+   */
+  | { type: "EVIDENCE_NOT_READY" }
+  /** The scanner quarantined it. A finding about the claim, not a transport failure. */
+  | { type: "EVIDENCE_QUARANTINED" };
 
 /**
  * Who may edit the company's public face. `finance` and `support` are deliberately absent:
@@ -1953,6 +1965,155 @@ export async function withdrawCertification(input: {
     };
   }
   return { success: true, value: projectOwnedCertification(outcome.row) };
+}
+
+/**
+ * THE CERTIFICATE ITSELF, DECRYPTED AND STREAMED.
+ *
+ * WHY IT HAS TO EXIST. `decideCertification` asks a moderator to publish a compliance claim to
+ * every buyer browsing the directory, and until this route there was nothing anywhere that let
+ * them read the paper behind it: no projection on this surface — public, seller or moderator —
+ * carries an evidence id, URL or token, deliberately. The decision was being made on a typed-in
+ * standard name.
+ *
+ * THE GATE IS `canReadVerification`'S, and for the same reason: an organization reading its own
+ * paperwork, or a `moderate_commerce` holder reading it to decide on it. A refusal is
+ * `NOT_FOUND` either way, so the route is not an existence oracle for anyone else.
+ *
+ * THE JOIN MATCHES ON BOTH COLUMNS — the document's id AND its owning organization — so a
+ * document id cannot be borrowed across organizations by pairing it with somebody else's
+ * certification.
+ *
+ * A STAFF READ IS AUDITED; AN OWNER READING ITS OWN FILE IS NOT. That is A15's line, applied to
+ * bytes: the append runs inside a transaction and a failed append THROWS, so a read that could
+ * not be logged does not happen. `downloadVerificationEvidence` audits nothing, which is a gap
+ * on that route rather than a precedent to copy.
+ */
+export async function downloadCertificationEvidence(input: {
+  readonly userId: string;
+  readonly organizationId: string;
+  readonly certificationId: string;
+}): Promise<
+  Result<
+    { readonly bytes: Buffer; readonly mediaType: string; readonly fileName: string },
+    CommerceSellerProfileError
+  >
+> {
+  const membership = await activeMembership(input.userId, input.organizationId);
+  const isMemberReader = membership !== null && CERTIFICATION_READERS.includes(membership.role);
+  const staff = isMemberReader
+    ? null
+    : await requirePlatformCapability(input.userId, "moderate_commerce");
+  if (!isMemberReader && (staff === null || !staff.success)) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  const [document] = await db
+    .select({
+      documentId: commerceEncryptedDocument.id,
+      state: commerceEncryptedDocument.state,
+      documentKind: commerceEncryptedDocument.documentKind,
+      objectStorageKey: commerceEncryptedDocument.objectStorageKey,
+      mediaType: commerceEncryptedDocument.mediaType,
+      encryptedDataKey: commerceEncryptedDocument.encryptedDataKey,
+      initializationVector: commerceEncryptedDocument.initializationVector,
+      originalFileNameEncrypted: commerceEncryptedDocument.originalFileNameEncrypted,
+    })
+    .from(commerceOrganizationCertification)
+    .innerJoin(
+      commerceEncryptedDocument,
+      and(
+        eq(commerceEncryptedDocument.id, commerceOrganizationCertification.evidenceDocumentId),
+        eq(
+          commerceEncryptedDocument.organizationId,
+          commerceOrganizationCertification.organizationId,
+        ),
+      ),
+    )
+    .where(
+      and(
+        eq(commerceOrganizationCertification.id, input.certificationId),
+        eq(commerceOrganizationCertification.organizationId, input.organizationId),
+      ),
+    )
+    .limit(1);
+  if (!document) return { success: false, error: { type: "NOT_FOUND" } };
+
+  /**
+   * THREE DOCUMENT STATES, THREE DIFFERENT ANSWERS. `deleted` is genuinely gone and reads as a
+   * 404; the other two are things a moderator acts on — wait for the scanner, or refuse the
+   * claim without ever opening the file — and collapsing them into "not found" would say the
+   * seller uploaded nothing.
+   */
+  if (document.state === "pending_scan") {
+    return { success: false, error: { type: "EVIDENCE_NOT_READY" } };
+  }
+  if (document.state === "quarantined") {
+    return { success: false, error: { type: "EVIDENCE_QUARANTINED" } };
+  }
+  if (document.state !== "available") return { success: false, error: { type: "NOT_FOUND" } };
+
+  const ciphertext = await downloadPrivateCommerceDocument(document.objectStorageKey);
+  if (!ciphertext.success) {
+    return {
+      success: false,
+      error: {
+        type:
+          ciphertext.error.type === "NOT_CONFIGURED"
+            ? "EVIDENCE_STORAGE_NOT_CONFIGURED"
+            : "EVIDENCE_STORAGE_FAILED",
+      },
+    };
+  }
+
+  const plaintext = decryptCommerceDocument({
+    ciphertext: ciphertext.value.ciphertext,
+    encryptedDataKey: document.encryptedDataKey,
+    initializationVector: document.initializationVector,
+  });
+  if (!plaintext.success) {
+    return { success: false, error: { type: "EVIDENCE_ENCRYPTION_UNAVAILABLE" } };
+  }
+
+  if (membership === null) {
+    await db.transaction(async (transaction) => {
+      await appendAuditOrThrow(transaction, {
+        organizationId: input.organizationId,
+        eventKind: "document_downloaded",
+        actorUserId: input.userId,
+        // A moderator holds no role in the organization whose file they are reading.
+        actorMemberRoleSnapshot: null,
+        targetEntityType: "commerce_encrypted_document",
+        targetEntityId: document.documentId,
+        // Ids ride `targetEntityId`; this payload is PII-name checked and carries neither the
+        // file name nor the object key.
+        payload: {
+          certificationId: input.certificationId,
+          documentKind: document.documentKind,
+        },
+        occurredAt: new Date(),
+      });
+    });
+  }
+
+  const decryptedFileName =
+    document.originalFileNameEncrypted === null
+      ? null
+      : decryptCommercePii(document.originalFileNameEncrypted);
+
+  return {
+    success: true,
+    value: {
+      bytes: plaintext.value,
+      mediaType: document.mediaType,
+      // The name is the uploader's, so an undecryptable one falls back rather than failing a
+      // read the moderator needs.
+      fileName:
+        decryptedFileName !== null && decryptedFileName.success
+          ? decryptedFileName.value
+          : "evidence",
+    },
+  };
 }
 
 /**

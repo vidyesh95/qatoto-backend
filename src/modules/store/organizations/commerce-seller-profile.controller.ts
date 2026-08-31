@@ -89,6 +89,21 @@ function respondSellerProfileError(res: Response, error: CommerceSellerProfileEr
         message: "That page cursor is not readable. Start from the first page.",
       } satisfies ApiResponse);
       return;
+    case "EVIDENCE_NOT_READY":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message:
+          "That certificate is still being checked for malware. It can be opened once the scan finishes.",
+      } satisfies ApiResponse);
+      return;
+    case "EVIDENCE_QUARANTINED":
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message: "That certificate was quarantined by the scanner and cannot be opened.",
+      } satisfies ApiResponse);
+      return;
     case "CONFLICT":
       res.status(409).json({
         status: "error",
@@ -477,6 +492,42 @@ export async function withdrawCertification(req: Request, res: Response): Promis
     message: "Certification withdrawn.",
     data: withdrawn.value,
   } satisfies ApiResponse);
+}
+
+/**
+ * `GET …/certifications/:certificationId/evidence` — the certificate itself.
+ *
+ * STREAMS BYTES, NOT AN ENVELOPE, so this is one of the few handlers here that does not answer
+ * JSON on success. It still answers JSON on every refusal, which is what lets a client render
+ * the two scan-state 409s as the different things they are.
+ *
+ * `inline`, NOT `attachment`, unlike `downloadVerificationEvidence`: the moderation console
+ * renders the file beside the approve and refuse controls, and the point of the route is to stop
+ * a seller's compliance paperwork being saved into somebody's Downloads folder to be read.
+ * `nosniff` rides with it so an inline response is read as the allowlisted media type — PDF,
+ * JPEG or PNG — and never as something a browser decided it looked like.
+ */
+export async function downloadCertificationEvidence(req: Request, res: Response): Promise<void> {
+  const authContext = authenticatedRequest(req, res);
+  if (!authContext) return;
+  if (!parseNoQuery(req, res)) return;
+  const params = OrganizationCertificationParamsSchema.safeParse(req.params);
+  if (!params.success) return validationError(res, params.error);
+
+  const downloaded = await commerceSellerProfileService.downloadCertificationEvidence({
+    userId: authContext.userId,
+    organizationId: params.data.organizationId,
+    certificationId: params.data.certificationId,
+  });
+  if (!downloaded.success) return respondSellerProfileError(res, downloaded.error);
+
+  // The file name is uploader-supplied text going into a response header.
+  const safeFileName = downloaded.value.fileName.replaceAll(/[^A-Za-z0-9 ._-]/g, "_").slice(0, 120);
+  res.setHeader("Content-Type", downloaded.value.mediaType);
+  res.setHeader("Content-Disposition", `inline; filename="${safeFileName || "evidence"}"`);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.status(200).send(downloaded.value.bytes);
 }
 
 /**
