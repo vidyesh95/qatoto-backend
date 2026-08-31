@@ -520,6 +520,13 @@ async function loadCommodityCategoryIds(productIds: readonly string[]): Promise<
 export async function projectPrepareArrivalWindow(input: {
   readonly sellerOrganizationId: string;
   readonly destinationCountryCode: string | null;
+  /**
+   * THE FIELD THAT DID NOT EXIST, AND ITS ABSENCE WAS THE WHOLE DEFECT. `projectFreight` below was
+   * called with a hard-coded `requestedMode: undefined` — not a parameter, a literal — so every
+   * prepare this platform has ever produced answered `mode_not_selected` regardless of what the
+   * buyer had chosen. `null` still means unchosen, and is still never guessed at.
+   */
+  readonly requestedFreightMode: FreightMode | null;
   readonly lines: readonly {
     readonly productId: string;
     readonly quantity: number;
@@ -571,7 +578,11 @@ export async function projectPrepareArrivalWindow(input: {
   const freight: FreightComponentProjection =
     hasPhysicalGoods && input.destinationCountryCode === null
       ? { status: "unknown", reason: "destination_unresolved", availableModes: [] }
-      : projectFreight({ hasPhysicalGoods, lanePlan, requestedMode: undefined });
+      : projectFreight({
+          hasPhysicalGoods,
+          lanePlan,
+          requestedMode: input.requestedFreightMode ?? undefined,
+        });
 
   const customs: CustomsComponentProjection = !hasPhysicalGoods
     ? { status: "not_applicable", reason: "no_physical_goods_on_order" }

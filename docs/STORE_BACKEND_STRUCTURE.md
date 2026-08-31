@@ -946,6 +946,8 @@ started, not that payment, booking, testing, or settlement succeeded.
 | GET    | `/commerce/shipment-legs/:legId/events`                   | One leg's history; finer-grained than its shipment's      |
 | POST   | `/commerce/service-engagements/:engagementId/commands`    | Phase 6 engagement command rail                           |
 | POST   | `/commerce/shipments/:shipmentId/legs`                    | Add legs to an existing shipment; counterparty only — A43 |
+| —      | `product.sourcing_quote_product_line_id`                  | The seller's cost basis; no new route — A44                |
+| —      | `commerce_checkout_prepare.requested_freight_mode`        | The buyer's requested mode; rides `checkout/prepare` — A45 |
 | POST   | `/commerce/shipment-legs/:legId/assignment`               | Attach or detach the logistics engagement; `null` detaches — A43 |
 
 ⚠️ **THE FIRST FOUR ROWS ABOVE ARE NOT NEW.** They shipped with Phase 6 and this table never listed
@@ -5351,7 +5353,7 @@ existed: `launch-readiness.service.ts`, an R&D module, reads the `product` table
 
 ---
 
-### A43. The shipment-leg lifecycle was open at both ends — **SHIPPED (Phase 26, no migration)**
+### A43. The shipment-leg lifecycle was open at both ends — **SHIPPED (Phase 27, no migration)**
 
 **Needed by:** `components/studio/commerce/logistics/shipment-leg-panel.tsx`, which shipped saying
 "legs can only be added when a shipment is created" because that was the truth (frontend `todo.md`
@@ -5407,3 +5409,107 @@ the sequence-collision `CONFLICT` and the `VERSION_CONFLICT` path are reasoned f
 `executeShipmentLegCommand` and `createShipment`, which they mirror, not observed. Typecheck, lint
 and the 184 tests in `src/modules/store/fulfillment/` plus the limiter, body-budget and route-order
 sweeps all pass.
+
+---
+
+### A44. Nothing recorded what a seller PAID — **SHIPPED (Phase 27, `0159`)**
+
+**Needed by:** `/studio/earn`, which renders a card reading "Profit and margin are not shown"
+(frontend `todo.md` §A).
+
+**The defect, and why the obvious fix did not work.** `commerce-earnings.service.ts` ended with a
+section headed "No profit": *"Nothing in this backend records what a seller PAID for anything — no
+cost of goods, no expense, no purchase record."* True. The tempting repair — derive it from quotes
+the seller accepted — **does not work**, because `commerce_quote_product_line` references
+`commerce_rfq_product_line`, whose `product_id` is **nullable**: an RFQ line is usually free text
+describing a thing that does not exist yet. There is no FK path from a listing to the quote that
+sourced it, so the link has to be explicit.
+
+**What shipped:** `product.sourcing_quote_product_line_id`, nullable, `ON DELETE restrict`, plus a
+partial index. Settable through the existing create and update routes; **no new endpoint.**
+
+**The good news underneath it.** `commerce_quote_product_line.unit_price_in_cents` is **already per
+unit**, so the batch-to-order-line apportionment the frontend `todo.md` said to settle *before*
+building anything **is not needed and none is invented**. That was the blocker, and reading the
+column dissolved it.
+
+**Authorization is a four-table join and lives in the service** (`assertSourcingQuoteLineUsable`),
+never in a CHECK or a Zod refinement — the id arrives from a hostile client and a quote line is
+another organization's commercial data. Two facts must hold: the seller was the **buyer** of that
+quote (`line → revision → quote → rfq.buyerOrganizationId`, because a quote records its provider
+directly but its buyer only through the RFQ), and the quote was **accepted at that revision**. One
+refusal covers "no such line", "not yours" and "never accepted" — splitting them would turn the
+field into an oracle for probing other organizations' quote-line ids.
+
+**The read: `sourcingCost`, in its own member, never subtracted.** Exactly `commissionOwed`'s
+treatment for exactly its reason — *"A client is free to render them together. It is not free to add
+them."* Three separate reasons it is not a margin:
+
+1. **Coverage.** Almost no listing is sourced through a Qatoto quote. So
+   `uncounted.orderLinesWithNoSourcingRecord` ships beside it — the denominator, reported rather
+   than hidden. The frontend `todo.md` warned a cost over 12 of 47 orders is worse than none; that
+   is true of a cost presented *alone*, and stops being true when the uncovered count travels with
+   it. **Nothing may render `sourcingCost` without it.**
+2. **Completeness.** Storage, freight, duties and labour are still unrecorded. Warehouse fees are a
+   flat per-engagement `fee_in_cents` on `commerce_quote_service_line` with no quantity and no
+   product link, so there is no per-unit storage cost to have. Subtracting a partial cost from a
+   complete revenue does not yield a smaller profit — it yields a **wrong** one that flatters the
+   seller by exactly the costs nobody recorded.
+3. **Window basis.** `sourcingCost` is measured over `order.confirmedAt`; `processorSettled` over
+   `paymentIntent.settledAt`. An order confirmed in March and settled in April sits in different
+   windows on the two clocks. Cancelled orders are excluded; **refunded ones are not** — the seller
+   still bought the goods, and netting would make a fully refunded order indistinguishable from one
+   that never happened, the mistake `SETTLED_PAYMENT_INTENT_STATES` already refuses.
+
+The currency is the **quote revision's**, not the order's. A seller may buy in CNY and sell in USD;
+converting would be Qatoto inventing an FX rate for a figure it then owns.
+
+⚠️ **The service's "No profit" header section was REWRITTEN, not left.** It asserted something this
+migration made false, and a header contradicting the code beneath it is worse than none.
+
+### A45. The buyer's transport choice reached nobody — **SHIPPED (Phase 27, `0159`)**
+
+**Needed by:** `components/home/store/sheets/delivery-sheet.tsx`, which let a buyer pick a mode per
+leg and held it in local component state that died when the sheet closed (frontend `todo.md` §B).
+
+**The defect was one hard-coded literal.** `projectPrepareArrivalWindow` called
+`projectFreight({ …, requestedMode: undefined })` — not a parameter, a literal — because its input
+object had **no mode field for a caller to fill**. So every checkout prepare this platform has ever
+produced answered `freight: { status: "unknown", reason: "mode_not_selected" }` by construction,
+whatever the buyer had chosen.
+
+**What shipped:** `commerce_checkout_prepare.requested_freight_mode` and
+`commerce_order.requested_freight_mode_snapshot`, both nullable, both `commerce_shipment_leg_mode`
+— **no new enum**, per §19.2's rule against minting a second one. Four members, no `multimodal`: a
+buyer picks a way of travelling, and multimodal is what a *sequence of legs* is.
+
+`PrepareCheckoutSchema` gains `requestedFreightMode`. **`ConfirmCheckoutSchema` deliberately does
+not** — the buyer chose at prepare, when they could see the lane, and letting confirm override it
+would put one decision in two places and make the arrival window they were shown a different
+question from the one recorded. Confirm copies the prepare's value onto the order.
+
+**Why it lives on the prepare and not the cart.** A cart is a list of desired quantities with no
+destination, and a mode without a lane is not a choice. The prepare is the first row that knows
+`delivery_address_id`, and it is where the arrival window is projected.
+
+⚠️ **`requested_`, AND THE PREFIX IS LOAD-BEARING.** This is what the buyer ASKED FOR. It prices
+nothing (`shipping_in_cents` stays 0), books nothing, reserves nothing, and **no shipment leg may be
+auto-filled from it** — the mode goods actually move by is `commerce_shipment_leg.mode`, written by
+the seller when they plan the route. `null` means "not asked or not chosen", never "no preference".
+
+⚠️ **HOW LITTLE THIS CHANGES TODAY, said plainly.** The prepare's `arrivalWindow` stays `null`
+regardless, because there is no `confirmedAt` to start the clock — that function's own header says
+so. What improves is the freight *component*: `mode_not_selected` becomes a real day range, or
+`mode_not_covered`, or `no_active_rate_card`. Every lane answers the last of those today, because
+rate cards ship empty by design (§18 is a purchase, not code). The value is that the buyer's request
+stops being discarded, and that the **seller can now read it** — added to both order projections,
+because a column nobody reads is a write-only feature.
+
+**Nothing is auto-selected, anywhere.** `commerce-arrival-window.service.ts` states why at length:
+sea is nearly always cheapest and roughly four times slower, so guessing publishes the slowest
+window as though the buyer had chosen it.
+
+⚠️ **NEITHER A44 NOR A45 HAS BEEN RUN AGAINST A DATABASE.** `0159` is generated and reviewed, not
+applied; there is no local instance and the shared one was deliberately left alone. The ownership
+join, the cost aggregation and the mode round-trip are reasoned from the code they mirror, not
+observed. Typecheck, lint and **2044 tests across 126 files** pass.

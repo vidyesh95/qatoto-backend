@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
+import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 import {
   commerceCartLineCustomization,
   commerceCartProductLine,
@@ -137,6 +138,8 @@ export type CommerceCheckoutError =
 
 export interface PrepareCheckoutInput {
   readonly deliveryAddressId?: string;
+  /** What the buyer asked for, not what was booked. See `PrepareCheckoutSchema`. */
+  readonly requestedFreightMode?: FreightMode;
 }
 
 export interface ConfirmCheckoutInput {
@@ -255,6 +258,18 @@ export interface OrderProjection {
    * depending on which read you came through.
    */
   readonly incotermSnapshot: CommerceIncoterm | null;
+  /**
+   * What the buyer ASKED FOR at checkout — never what was booked.
+   *
+   * ⚠️ **THE READER OF THIS FIELD IS THE SELLER, AND THAT IS THE ENTIRE REASON IT IS ON THE WIRE.**
+   * Before it, a buyer's mode choice reached the database and stopped there, which made the column
+   * write-only and the feature inert. `null` means the buyer was never asked or never chose — it
+   * does NOT mean "no preference", and nothing may default it.
+   *
+   * It prices nothing (`shippingInCents` is 0) and books nothing. The mode the goods actually move
+   * by is on `commerce_shipment_leg`.
+   */
+  readonly requestedFreightModeSnapshot: FreightMode | null;
   readonly buyerLegalNameSnapshot: string;
   readonly counterpartyLegalNameSnapshot: string;
   /**
@@ -497,6 +512,7 @@ async function estimatePrepareDelivery(
 async function projectPrepareArrivalWindows(
   items: readonly PrepareProductLineRow[],
   deliveryCountryCode: string | null,
+  requestedFreightMode: FreightMode | null,
 ): Promise<readonly SellerArrivalWindowProjection[]> {
   if (deliveryCountryCode === null || items.length === 0) return [];
 
@@ -519,6 +535,7 @@ async function projectPrepareArrivalWindows(
           leadTimeMinDaysSnapshot: line.leadTimeMinDaysSnapshot,
           leadTimeMaxDaysSnapshot: line.leadTimeMaxDaysSnapshot,
         })),
+        requestedFreightMode,
         asOf: new Date(),
       }),
     })),
@@ -622,6 +639,7 @@ function projectOrder(order: OrderRow): OrderProjection {
     totalInCents: order.totalInCents,
     paymentTermsSnapshot: order.paymentTermsSnapshot,
     incotermSnapshot: order.incotermSnapshot,
+    requestedFreightModeSnapshot: order.requestedFreightModeSnapshot,
     buyerLegalNameSnapshot: order.buyerLegalNameSnapshot,
     counterpartyLegalNameSnapshot: order.counterpartyLegalNameSnapshot,
     settlementRail: order.settlementRail,
@@ -719,6 +737,7 @@ export async function prepareCheckout(
           state: "active",
           deliveryAddressId,
           deliveryAddressSnapshot,
+          requestedFreightMode: input.requestedFreightMode ?? null,
           expiresAt,
           prepareIdempotencyKey: prepareIdempotencyKey ?? null,
           createdByMemberId: actor.memberId,
@@ -881,7 +900,11 @@ export async function prepareCheckout(
          */
         const [deliveryEstimates, arrivalWindows] = await Promise.all([
           estimatePrepareDelivery(outcome.items, outcome.deliveryCountryCode),
-          projectPrepareArrivalWindows(outcome.items, outcome.deliveryCountryCode),
+          projectPrepareArrivalWindows(
+            outcome.items,
+            outcome.deliveryCountryCode,
+            input.requestedFreightMode ?? null,
+          ),
         ]);
         return {
           success: true,
@@ -1522,6 +1545,17 @@ async function createOrderForSellerGroup(
       totalInCents: subtotalInCents - discountInCents,
       paymentTermsSnapshot: null,
       incotermSnapshot: null,
+      /**
+       * FROM THE PREPARE ROW, NOT FROM THE CONFIRM BODY — and `ConfirmCheckoutSchema` was
+       * deliberately NOT widened to accept one. The buyer chose at prepare, when they could see the
+       * lane; letting confirm override it would put one decision in two places and make the
+       * arrival window the buyer was shown a different question from the one recorded here.
+       *
+       * Still only a request. `shippingInCents` above stays 0, nothing is booked, and no shipment
+       * leg may be filled in from this. What the goods actually move by is
+       * `commerce_shipment_leg.mode`, written by the seller when they plan the route.
+       */
+      requestedFreightModeSnapshot: prepare.requestedFreightMode,
       buyerLegalNameSnapshot: buyerOrganization.legalName,
       counterpartyLegalNameSnapshot: sellerLegalName,
       buyerAddressSnapshot: deliveryAddressSnapshot,

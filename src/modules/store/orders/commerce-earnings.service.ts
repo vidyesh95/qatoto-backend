@@ -1,13 +1,17 @@
-import { and, count, countDistinct, eq, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
+import { and, count, countDistinct, eq, gte, inArray, isNotNull, isNull, lt, ne, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
   commerceJournalEntry,
   commerceJournalLine,
   commerceOrder,
+  commerceOrderProductLine,
   commercePaymentIntent,
+  commerceQuoteProductLine,
+  commerceQuoteRevision,
   commerceRefund,
   commerceSettlementAttestation,
+  product,
 } from "#src/db/schema.js";
 import { countOfflineOrdersWithoutSellerAttestation } from "#src/modules/store/orders/commerce-settlement-attestation.service.js";
 import type { Result } from "#src/types/index.js";
@@ -63,10 +67,29 @@ import type { Result } from "#src/types/index.js";
  * orders nobody has attested may well have been paid, and reporting them as zero revenue would
  * be a claim this platform has no basis for.
  *
- * ## No profit
+ * ## Cost is recorded now. Profit still is not, and the difference is the point.
  *
- * Nothing in this backend records what a seller PAID for anything — no cost of goods, no
- * expense, no purchase record. Margin is therefore not derivable and is not estimated here.
+ * ⚠️ **THIS SECTION USED TO SAY "Nothing in this backend records what a seller PAID for
+ * anything — no cost of goods, no expense, no purchase record."** That stopped being true when
+ * `product.sourcingQuoteProductLineId` shipped, and a header that contradicts the code beneath it
+ * is worse than no header. What changed and what did not:
+ *
+ * **Recorded:** the accepted quote line a listing's goods were sourced from. Not a seller-typed
+ * number — a row this platform hosted, that a provider submitted and this organization accepted,
+ * whose `unit_price_in_cents` is already per unit. `sourcingCost` sums it over sold lines.
+ *
+ * **Still not recorded, and no figure here implies otherwise:** storage (warehouse fees are a flat
+ * per-engagement `fee_in_cents` with no quantity and no product link), freight, duties, labour,
+ * and every listing a seller sourced anywhere other than through a Qatoto quote — which today is
+ * very nearly all of them. `uncounted.orderLinesWithNoSourcingRecord` reports that last one as a
+ * number rather than leaving the reader to assume full coverage.
+ *
+ * **So margin is still not derivable, and is still not estimated.** Subtracting a partial cost
+ * from a complete revenue does not yield a smaller profit; it yields a WRONG one, and one that
+ * flatters the seller by exactly the costs nobody recorded. `sourcingCost` therefore sits in its
+ * own member and is never netted off — the same treatment, for the same reason, that
+ * `commissionOwed` gets one paragraph up. A client is free to render them together. It is still
+ * not free to add them.
  */
 
 type PaymentIntentState = (typeof commercePaymentIntent.$inferSelect)["state"];
@@ -116,9 +139,32 @@ export interface CommerceEarningsProjection {
   };
   /** What this seller owes Qatoto in commission. Real money, and it runs the other way. */
   readonly commissionOwed: readonly CurrencyAmount[];
+  /**
+   * What the goods cost this seller — the accepted quote lines their listings were sourced from.
+   *
+   * ⚠️ **ITS OWN MEMBER, AND NEVER SUBTRACTED FROM ANYTHING ABOVE.** Exactly `commissionOwed`'s
+   * treatment, for exactly its reason: a client is free to render them together and is not free to
+   * add them. See the header — margin would combine a figure this platform WITNESSED (a quote it
+   * hosted) with figures a processor or the seller reported, across the boundary
+   * `commerce_journal_account_memorandum_ck` exists to hold.
+   *
+   * ⚠️ **THE CURRENCY IS THE QUOTE'S, NOT THE ORDER'S.** A seller may buy in CNY and sell in USD;
+   * converting would be Qatoto inventing an FX rate for a figure it then owns. Two currencies in
+   * two arrays is the honest answer, and `CurrencyAmount`'s own comment already forbids merging.
+   */
+  readonly sourcingCost: readonly CurrencyAmount[];
   readonly uncounted: {
     readonly offlineOrdersWithNoAttestation: number;
     readonly ordersAwaitingPayment: number;
+    /**
+     * How many sold order lines had NO sourcing link — the denominator behind `sourcingCost`.
+     *
+     * ⚠️ **THIS IS THE FIGURE THAT KEEPS THE ONE ABOVE HONEST.** `todo.md`'s refusal of a margin
+     * feature said a cost over 12 of 47 orders is worse than no cost at all. That is true of a cost
+     * presented ALONE; it stops being true when the uncovered count travels beside it. Nothing may
+     * render `sourcingCost` without it.
+     */
+    readonly orderLinesWithNoSourcingRecord: number;
   };
 }
 
@@ -405,10 +451,103 @@ async function countOrdersAwaitingPayment(
 }
 
 /**
+ * What the goods this seller sold cost them.
+ *
+ * ⚠️ **THE WINDOW BASIS IS `order.confirmedAt`, NOT `paymentIntent.settledAt`.** So this figure and
+ * `processorSettled` above are measured over DIFFERENT sets of orders, and that is deliberate
+ * rather than an oversight: cost is incurred when goods are sold, settlement happens whenever the
+ * money moves, and an order confirmed in March that settled in April belongs to different windows
+ * on the two clocks. It is also a third reason the two must never be subtracted — the first two
+ * being the header's rule about combining kinds of fact, and the currency mismatch below.
+ *
+ * ⚠️ **CANCELLED ORDERS ARE EXCLUDED, REFUNDED ONES ARE NOT.** A cancelled order sold nothing. A
+ * refunded one did sell, and the seller still paid for the goods — netting it away would make a
+ * fully refunded order indistinguishable from one that never happened, which is the exact mistake
+ * `SETTLED_PAYMENT_INTENT_STATES` refuses to make one loader up.
+ *
+ * `quantityOrdered`, not `quantityFulfilled`: the cost is what the seller bought to satisfy the
+ * order, and a line that shipped in parts cost the same as one that shipped at once.
+ */
+async function loadSourcingCost(
+  sellerOrganizationId: string,
+  window: EarningsWindowInput,
+): Promise<readonly CurrencyAmount[]> {
+  const rows = await db
+    .select({
+      currency: commerceQuoteRevision.currency,
+      total: sql<string>`coalesce(sum(${commerceQuoteProductLine.unitPriceInCents} * ${commerceOrderProductLine.quantityOrdered}), 0)`,
+      orderCount: countDistinct(commerceOrderProductLine.orderId),
+    })
+    .from(commerceOrderProductLine)
+    .innerJoin(commerceOrder, eq(commerceOrder.id, commerceOrderProductLine.orderId))
+    .innerJoin(product, eq(product.id, commerceOrderProductLine.productId))
+    .innerJoin(
+      commerceQuoteProductLine,
+      eq(commerceQuoteProductLine.id, product.sourcingQuoteProductLineId),
+    )
+    .innerJoin(
+      commerceQuoteRevision,
+      eq(commerceQuoteRevision.id, commerceQuoteProductLine.revisionId),
+    )
+    .where(
+      and(
+        eq(commerceOrder.counterpartyOrganizationId, sellerOrganizationId),
+        ne(commerceOrder.state, "cancelled"),
+        isNotNull(commerceOrder.confirmedAt),
+        window.from === undefined ? undefined : gte(commerceOrder.confirmedAt, window.from),
+        window.to === undefined ? undefined : lt(commerceOrder.confirmedAt, window.to),
+      ),
+    )
+    .groupBy(commerceQuoteRevision.currency);
+
+  return sortByCurrency(
+    withoutEmptyTotals(
+      rows.map((row) => ({
+        currency: row.currency,
+        amountInCents: toSafeCents(row.total, "sourcingCost"),
+        orderCount: row.orderCount,
+      })),
+    ),
+  );
+}
+
+/**
+ * The denominator: sold lines this seller has no cost basis for.
+ *
+ * SAME WINDOW AND SAME PREDICATE as `loadSourcingCost`, minus the sourcing join — so the two
+ * numbers describe one population and a reader can see what fraction is covered. A line whose
+ * `productId` is null counts here too: a listing that was deleted leaves an order line behind, and
+ * it is as uncovered as one that was never linked.
+ */
+async function countOrderLinesWithNoSourcingRecord(
+  sellerOrganizationId: string,
+  window: EarningsWindowInput,
+): Promise<number> {
+  const [row] = await db
+    .select({ lineCount: count() })
+    .from(commerceOrderProductLine)
+    .innerJoin(commerceOrder, eq(commerceOrder.id, commerceOrderProductLine.orderId))
+    .leftJoin(product, eq(product.id, commerceOrderProductLine.productId))
+    .where(
+      and(
+        eq(commerceOrder.counterpartyOrganizationId, sellerOrganizationId),
+        ne(commerceOrder.state, "cancelled"),
+        isNotNull(commerceOrder.confirmedAt),
+        isNull(product.sourcingQuoteProductLineId),
+        window.from === undefined ? undefined : gte(commerceOrder.confirmedAt, window.from),
+        window.to === undefined ? undefined : lt(commerceOrder.confirmedAt, window.to),
+      ),
+    );
+  return row?.lineCount ?? 0;
+}
+
+/**
  * Every figure for one seller over one window.
  *
- * The six reads are independent and run concurrently, following the batching shape
- * `commerce-trust-metrics.service.ts` established for per-organization aggregates.
+ * The reads are independent and run concurrently, following the batching shape
+ * `commerce-trust-metrics.service.ts` established for per-organization aggregates. (This said
+ * "six" while there were six; it is eight now, and a comment that counts is a comment that rots —
+ * so it no longer counts.)
  */
 export async function getSellerEarnings(
   actor: CommerceEarningsActorContext,
@@ -429,19 +568,23 @@ export async function getSellerEarnings(
     escrowMovements,
     attestedReceived,
     commissionOwed,
+    sourcingCost,
     offlineOrdersWithNoAttestation,
     ordersAwaitingPayment,
+    orderLinesWithNoSourcingRecord,
   ] = await Promise.all([
     loadProcessorSettled(sellerOrganizationId, window),
     loadProcessorRefunded(sellerOrganizationId, window),
     loadEscrowMovements(sellerOrganizationId, window),
     loadAttestedReceived(sellerOrganizationId, window),
     loadCommissionOwed(sellerOrganizationId, window),
+    loadSourcingCost(sellerOrganizationId, window),
     countOfflineOrdersWithoutSellerAttestation(sellerOrganizationId, {
       from: window.from ?? null,
       to: window.to ?? null,
     }),
     countOrdersAwaitingPayment(sellerOrganizationId, window),
+    countOrderLinesWithNoSourcingRecord(sellerOrganizationId, window),
   ]);
 
   return {
@@ -456,7 +599,12 @@ export async function getSellerEarnings(
       },
       selfReported: { attestedReceived },
       commissionOwed,
-      uncounted: { offlineOrdersWithNoAttestation, ordersAwaitingPayment },
+      sourcingCost,
+      uncounted: {
+        offlineOrdersWithNoAttestation,
+        ordersAwaitingPayment,
+        orderLinesWithNoSourcingRecord,
+      },
     },
   };
 }

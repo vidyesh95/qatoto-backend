@@ -135,6 +135,18 @@ function mapProductErrorToResponse(error: productsService.ProductError): {
         statusCode: 422,
         message: "Image order must be an exact permutation of the listing's images.",
       };
+    case "SOURCING_QUOTE_LINE_NOT_USABLE":
+      /**
+       * ONE SENTENCE FOR THREE CAUSES, matching the single error variant. It does not say which of
+       * "no such line", "not your quote" and "never accepted" applied, because distinguishing them
+       * would let a seller probe for quote-line ids belonging to other organizations. The sentence
+       * still tells an honest seller what to check.
+       */
+      return {
+        statusCode: 422,
+        message:
+          "That sourcing quote line is not one you can link. It must be a line from a quote your organization requested and accepted.",
+      };
     case "NOT_AN_IMAGE":
       return { statusCode: 422, message: "The uploaded file is not a valid image." };
     case "UNSUPPORTED_FORMAT":

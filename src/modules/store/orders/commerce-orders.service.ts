@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
+import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 import {
   commerceOrder,
   commerceOrderProductLine,
@@ -153,6 +154,18 @@ export interface OrderDetailProjection {
    * depending on which read you came through.
    */
   readonly incotermSnapshot: CommerceIncoterm | null;
+  /**
+   * What the buyer ASKED FOR at checkout — never what was booked.
+   *
+   * ⚠️ **THE READER OF THIS FIELD IS THE SELLER, AND THAT IS THE ENTIRE REASON IT IS ON THE WIRE.**
+   * Before it, a buyer's mode choice reached the database and stopped there, which made the column
+   * write-only and the feature inert. `null` means the buyer was never asked or never chose — it
+   * does NOT mean "no preference", and nothing may default it.
+   *
+   * It prices nothing (`shippingInCents` is 0) and books nothing. The mode the goods actually move
+   * by is on `commerce_shipment_leg`.
+   */
+  readonly requestedFreightModeSnapshot: FreightMode | null;
   readonly buyerLegalNameSnapshot: string;
   readonly counterpartyLegalNameSnapshot: string;
   readonly createdAt: Date;
@@ -336,6 +349,7 @@ async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjectio
     totalInCents: order.totalInCents,
     paymentTermsSnapshot: order.paymentTermsSnapshot,
     incotermSnapshot: order.incotermSnapshot,
+    requestedFreightModeSnapshot: order.requestedFreightModeSnapshot,
     buyerLegalNameSnapshot: order.buyerLegalNameSnapshot,
     counterpartyLegalNameSnapshot: order.counterpartyLegalNameSnapshot,
     settlementRail: order.settlementRail,

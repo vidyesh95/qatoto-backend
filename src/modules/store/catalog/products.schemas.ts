@@ -124,6 +124,26 @@ export const productFieldShapes = {
         entries.length,
       "Specification keys must be unique within a listing.",
     ),
+  /**
+   * The accepted quote line this listing's goods were sourced from — the seller's cost basis.
+   *
+   * ⚠️ **`.nullable()` AS WELL AS OPTIONAL, AND THE DIFFERENCE IS THE FEATURE.** Omitting the key
+   * on a PATCH leaves the existing link alone; sending `null` CLEARS it. Without the null a seller
+   * who linked the wrong quote could never unlink it, only overwrite it with another.
+   *
+   * ⚠️ **THIS SCHEMA CHECKS THE SHAPE AND NOTHING ELSE.** Whether the caller may point at this
+   * particular quote line is a four-table join — the quote's RFQ buyer organization must be this
+   * listing's seller organization, and the quote must be accepted — and it lives in
+   * `products.service.ts`. A Zod refinement cannot reach the database, and the id arrives from a
+   * client this codebase treats as hostile.
+   */
+  /**
+   * `.nullable().optional()` AND BOTH HALVES EARN THEIR PLACE. `UpdateProductSchema` calls
+   * `.partial()`, so optionality there is free — but `CreateProductSchema` does not, and without
+   * `.optional()` every listing create in the system would have been required to name a sourcing
+   * quote. That is how this shipped for one test run; five suites caught it.
+   */
+  sourcingQuoteProductLineId: z.string().trim().min(1).max(200).nullable().optional(),
 };
 
 /** A1. One variation, with its own price, stock and optional MOQ and ladder. */

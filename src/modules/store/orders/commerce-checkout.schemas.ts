@@ -14,11 +14,31 @@
  */
 import { z } from "zod";
 
+import { FreightModeSchema } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
+
 export const EmptyObjectSchema = z.object({}).strict();
 
 export const PrepareCheckoutSchema = z
   .object({
     deliveryAddressId: z.string().trim().min(1).max(200).optional(),
+    /**
+     * How the buyer is asking for the goods to travel.
+     *
+     * ⚠️ **A REQUEST, NOT A BOOKING.** Nothing prices it, nothing reserves capacity, and no
+     * shipment leg is filled in from it. It reaches the arrival-window projection, which until now
+     * answered `mode_not_selected` for every prepare ever made because there was no field to put a
+     * mode in, and it reaches the seller on the order so somebody can act on it.
+     *
+     * `FreightModeSchema` — the four-member tuple mirroring `commerce_shipment_leg_mode`, NOT
+     * `freight_transport_mode`'s five. A buyer picks a way of travelling; `multimodal` is what a
+     * sequence of legs IS, not something to ask for.
+     *
+     * OPTIONAL, AND NOTHING IS AUTO-SELECTED WHEN IT IS ABSENT — the rule
+     * `commerce-arrival-window.service.ts` states at length: sea is nearly always cheapest and
+     * roughly four times slower, so guessing publishes the slowest window as though the buyer had
+     * chosen it.
+     */
+    requestedFreightMode: FreightModeSchema.optional(),
   })
   .strict();
 

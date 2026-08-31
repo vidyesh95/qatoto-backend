@@ -7,6 +7,10 @@ import {
   commerceCategory,
   commerceCategoryRequest,
   commerceProductCustomizationOption,
+  commerceQuote,
+  commerceQuoteProductLine,
+  commerceQuoteRevision,
+  commerceRfq,
   commerceProductDocument,
   commerceProductHighlight,
   commerceProductRelation,
@@ -84,6 +88,16 @@ export type ProductError =
   | { type: "ACTIVE_LISTING_MISSING_PACKAGE_DIMENSIONS"; missing: readonly string[] }
   | { type: "IMAGE_ORDER_MISMATCH" }
   /**
+   * ⚠️ **ONE VARIANT FOR "NO SUCH QUOTE LINE" AND "NOT YOURS", DELIBERATELY.** Splitting them would
+   * turn this field into an oracle: a seller could paste candidate ids and learn which ones exist,
+   * which is a read of other organizations' quote lines by another name. §0's rule — an
+   * inaccessible id is indistinguishable from a missing one.
+   *
+   * It also covers "the quote was never accepted", because an unaccepted bid is a price nobody
+   * agreed to and is not a cost basis.
+   */
+  | { type: "SOURCING_QUOTE_LINE_NOT_USABLE" }
+  /**
    * ⚠️ **THE LISTING IS REFERENCED BY SOMETHING THAT MAY NOT LOSE IT.** Twelve foreign keys point at
    * `product` with `ON DELETE restrict` — orders, completions, reservations, reviews, questions,
    * inquiries, RFQ lines, sample credits, relations (both ends) and pathway anchors/candidates.
@@ -110,6 +124,13 @@ type ProductUpdateOutcome =
   | { readonly status: "updated" }
   | { readonly status: "not_found" }
   | { readonly status: "category_error"; readonly error: ProductError }
+  /**
+   * Its own variant rather than reusing `category_error`, which carries the same payload type: the
+   * two refusals come from different resolvers and a reader tracing "category_error" back to a
+   * sourcing check would be reading a lie. The extra member costs one `case`; the `never` default
+   * below makes forgetting it a compile error.
+   */
+  | { readonly status: "sourcing_error"; readonly error: ProductError }
   | {
       readonly status: "active_listing_unmeasured";
       readonly missing: readonly string[];
@@ -1290,6 +1311,56 @@ interface ResolvedProductCategory {
  *   honest reply: the category really is gone. Silently filing such a listing under
  *   `misc` would tell the client it succeeded at something it did not.
  */
+/**
+ * May this seller point their listing at this quote line as its cost basis?
+ *
+ * ⚠️ **THIS IS THE WHOLE AUTHORIZATION FOR `sourcingQuoteProductLineId`, AND IT IS A FOUR-TABLE
+ * JOIN.** The id arrives from a hostile client, and a quote line is another organization's
+ * commercial data — the price a provider bid. Two facts have to hold, and neither is expressible
+ * as a CHECK or a Zod refinement:
+ *
+ *  1. **The seller was the BUYER of this quote.** A quote records its provider directly
+ *     (`commerce_quote.providerOrganizationId`) but its buyer only through the RFQ
+ *     (`commerce_rfq.buyerOrganizationId`), so the walk is
+ *     `line → revision → quote → rfq`. Without this check a seller could read any quote line in
+ *     the system by linking it and then reading their own earnings.
+ *  2. **The quote was accepted, at THIS revision.** `acceptedRevisionNumber` must match the
+ *     revision the line belongs to. A submitted-but-unaccepted bid is a price nobody agreed to,
+ *     and a superseded revision is a price that was replaced.
+ *
+ * One refusal for every failure, on purpose — see `SOURCING_QUOTE_LINE_NOT_USABLE`.
+ */
+async function assertSourcingQuoteLineUsable(
+  transaction: DatabaseTransaction,
+  sellerOrganizationId: string,
+  sourcingQuoteProductLineId: string,
+): Promise<Result<true, ProductError>> {
+  const [row] = await transaction
+    .select({
+      buyerOrganizationId: commerceRfq.buyerOrganizationId,
+      revisionNumber: commerceQuoteRevision.revisionNumber,
+      acceptedRevisionNumber: commerceQuote.acceptedRevisionNumber,
+    })
+    .from(commerceQuoteProductLine)
+    .innerJoin(
+      commerceQuoteRevision,
+      eq(commerceQuoteRevision.id, commerceQuoteProductLine.revisionId),
+    )
+    .innerJoin(commerceQuote, eq(commerceQuote.id, commerceQuoteRevision.quoteId))
+    .innerJoin(commerceRfq, eq(commerceRfq.id, commerceQuote.rfqId))
+    .where(eq(commerceQuoteProductLine.id, sourcingQuoteProductLineId))
+    .limit(1);
+
+  if (!row) return { success: false, error: { type: "SOURCING_QUOTE_LINE_NOT_USABLE" } };
+  if (row.buyerOrganizationId !== sellerOrganizationId) {
+    return { success: false, error: { type: "SOURCING_QUOTE_LINE_NOT_USABLE" } };
+  }
+  if (row.acceptedRevisionNumber === null || row.acceptedRevisionNumber !== row.revisionNumber) {
+    return { success: false, error: { type: "SOURCING_QUOTE_LINE_NOT_USABLE" } };
+  }
+  return { success: true, value: true };
+}
+
 async function resolveProductCategory(
   transaction: DatabaseTransaction,
   // `userId` is optional because the update and publish paths only ever resolve a
@@ -1445,10 +1516,21 @@ export async function createProduct(
       async (tx) => {
         const categoryResult = await resolveProductCategory(tx, commerceContext, input);
         if (!categoryResult.success) return categoryResult;
+        // Inside the transaction, so the quote line cannot be accepted-then-withdrawn between the
+        // check and the insert. The FK is `restrict`, so it can never be deleted underneath either.
+        if (input.sourcingQuoteProductLineId != null) {
+          const sourcingResult = await assertSourcingQuoteLineUsable(
+            tx,
+            commerceContext.organizationId,
+            input.sourcingQuoteProductLineId,
+          );
+          if (!sourcingResult.success) return sourcingResult;
+        }
         const [row] = await tx
           .insert(product)
           .values({
             sellerOrganizationId: commerceContext.organizationId,
+            sourcingQuoteProductLineId: input.sourcingQuoteProductLineId ?? null,
             createdByUserId: commerceContext.userId,
             title: input.title,
             brand: input.brand ?? null,
@@ -1634,6 +1716,11 @@ export async function updateProduct(
   if (patch.packageLengthMm !== undefined) scalarUpdates.packageLengthMm = patch.packageLengthMm;
   if (patch.packageWidthMm !== undefined) scalarUpdates.packageWidthMm = patch.packageWidthMm;
   if (patch.packageHeightMm !== undefined) scalarUpdates.packageHeightMm = patch.packageHeightMm;
+  // `undefined` LEAVES THE LINK ALONE, `null` CLEARS IT. That is the only reason the schema field
+  // is `.nullable()` as well as optional — without it a seller who linked the wrong quote could
+  // overwrite it but never remove it.
+  if (patch.sourcingQuoteProductLineId !== undefined)
+    scalarUpdates.sourcingQuoteProductLineId = patch.sourcingQuoteProductLineId;
   if (patch.packageGrossWeightGrams !== undefined)
     scalarUpdates.packageGrossWeightGrams = patch.packageGrossWeightGrams;
   if (patch.unitsPerPackage !== undefined) scalarUpdates.unitsPerPackage = patch.unitsPerPackage;
@@ -1659,6 +1746,19 @@ export async function updateProduct(
 
         if (!owned) {
           return { status: "not_found" };
+        }
+
+        // Ownership of the LISTING is proven above; this proves ownership of the QUOTE, which is a
+        // different organization relationship — the seller here was the BUYER there.
+        if (patch.sourcingQuoteProductLineId != null) {
+          const sourcingResult = await assertSourcingQuoteLineUsable(
+            tx,
+            sellerOrganizationId,
+            patch.sourcingQuoteProductLineId,
+          );
+          if (!sourcingResult.success) {
+            return { status: "sourcing_error", error: sourcingResult.error };
+          }
         }
 
         /**
@@ -1757,6 +1857,7 @@ export async function updateProduct(
       case "not_found":
         return { success: false, error: { type: "NOT_FOUND", productId } };
       case "category_error":
+      case "sourcing_error":
         return { success: false, error: outcome.error };
       case "active_listing_unmeasured":
         return {

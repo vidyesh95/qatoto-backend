@@ -2846,6 +2846,36 @@ export const product = pgTable(
       (): AnyPgColumn => researchProject.id,
       { onDelete: "restrict" },
     ),
+    /**
+     * WHAT THESE GOODS COST THE SELLER — the accepted quote line they sourced this listing from.
+     *
+     * ⚠️ **THE ONLY COST-OF-GOODS RECORD IN THIS BACKEND, AND IT IS DELIBERATELY A LINK RATHER
+     * THAN A NUMBER.** A `costInCents` column here would be a seller-typed figure that nothing
+     * corroborates, which `todo.md`'s "Seller cost-of-goods and margin" entry refused on three
+     * grounds. This points at a row the platform already witnessed: a quote a provider submitted,
+     * that this organization accepted, whose `unit_price_in_cents` is already PER UNIT — so no
+     * batch-to-order-line apportionment is needed and none is invented.
+     *
+     * ⚠️ **IT IS NOT DERIVABLE, WHICH IS WHY THE COLUMN EXISTS.** `commerce_quote_product_line`
+     * references `commerce_rfq_product_line`, whose `product_id` is NULLABLE — an RFQ line is
+     * usually free text describing a thing that does not exist yet. So there is no FK path from a
+     * listing to the quote that sourced it, and walking the existing ones would silently miss most
+     * of them.
+     *
+     * WHO MAY SET IT is a four-table join and lives in `products.service.ts`, never here: the
+     * quote's RFQ buyer organization must be this listing's seller organization, and the quote must
+     * be accepted. A CHECK cannot express that, and the id arrives from a hostile client.
+     *
+     * `restrict`, on `researchProjectId`'s reasoning directly above: a quote line that priced a
+     * listing's goods is not deletable out from under it.
+     *
+     * Declared before `commerceQuoteProductLine` appears below; the callback resolves lazily, the
+     * same mechanism the R&D link uses.
+     */
+    sourcingQuoteProductLineId: text("sourcing_quote_product_line_id").references(
+      (): AnyPgColumn => commerceQuoteProductLine.id,
+      { onDelete: "restrict" },
+    ),
     title: text("title").notNull(),
     brand: text("brand"),
     /**
@@ -2958,6 +2988,12 @@ export const product = pgTable(
     index("product_researchProjectId_idx")
       .on(table.researchProjectId)
       .where(sql`research_project_id IS NOT NULL`),
+    // "What did this listing cost me?" — the earnings read's join. Partial for the same reason as
+    // the research link above: almost no listing is sourced through a Qatoto quote today, and the
+    // index should not carry a row per listing that is not.
+    index("product_sourcing_quote_line_idx")
+      .on(table.sourcingQuoteProductLineId)
+      .where(sql`sourcing_quote_product_line_id IS NOT NULL`),
     // An organization can't reuse one SKU across its listings. Postgres UNIQUE
     // permits many NULLs, so SKU stays optional.
     //
@@ -6213,6 +6249,20 @@ export const commerceOrder = pgTable(
      * — less constrained than its own source — until Phase 23.
      */
     incotermSnapshot: commerceIncotermEnum("incoterm_snapshot"),
+    /**
+     * The mode the buyer asked for at checkout, carried onto the order so the SELLER can see it.
+     *
+     * ⚠️ **SNAPSHOT, AND STILL ONLY A REQUEST.** It is copied from
+     * `commerce_checkout_prepare.requested_freight_mode` at confirm and never changes afterwards —
+     * §2.2's rule, the same one `incoterm_snapshot` directly above follows. It does not price the
+     * order (`shipping_in_cents` stays 0), it books nothing, and no shipment leg may be filled in
+     * from it. A seller reading it learns what the buyer wanted, which is the entire point: before
+     * this column that preference reached nobody.
+     *
+     * NULL ON EVERY QUOTE-ORIGINATED ORDER, because those have no prepare — the same reason
+     * `delivery_address_id` is nullable. Never read NULL as "no preference"; read it as "not asked".
+     */
+    requestedFreightModeSnapshot: commerceShipmentLegModeEnum("requested_freight_mode_snapshot"),
     buyerLegalNameSnapshot: text("buyer_legal_name_snapshot").notNull(),
     counterpartyLegalNameSnapshot: text("counterparty_legal_name_snapshot").notNull(),
     /**
@@ -6727,6 +6777,25 @@ export const commerceCheckoutPrepare = pgTable(
       },
     ),
     deliveryAddressSnapshot: text("delivery_address_snapshot"),
+    /**
+     * HOW THE BUYER ASKED FOR THE GOODS TO TRAVEL. The first place that choice is durable.
+     *
+     * ⚠️ **A REQUEST, NOT A BOOKING, AND THE NAME CARRIES THAT.** Nothing prices it, nothing
+     * reserves capacity against it, and no shipment leg may be auto-filled from it. The mode goods
+     * ACTUALLY move by is `commerce_shipment_leg.mode`, written by the seller when they plan the
+     * route.
+     *
+     * WHY IT LIVES HERE AND NOT ON THE CART. The cart is a list of desired quantities with no
+     * destination; a mode without a lane is not a choice. The prepare is the first row that knows
+     * `delivery_address_id`, and it is where the arrival window is projected — which is exactly the
+     * projection that answered `mode_not_selected` for every prepare ever made, because
+     * `projectPrepareArrivalWindow` had no field for a caller to put one in.
+     *
+     * `commerce_shipment_leg_mode`, NOT `freight_transport_mode`: four members, no `multimodal`.
+     * A buyer picks a way of travelling; "multimodal" is what a SEQUENCE of legs is, not an option.
+     * `commerce_freight_rate_card.mode` already reuses this enum for the same reason.
+     */
+    requestedFreightMode: commerceShipmentLegModeEnum("requested_freight_mode"),
     expiresAt: timestamp("expires_at").notNull(),
     prepareIdempotencyKey: text("prepare_idempotency_key"),
     createdByMemberId: text("created_by_member_id")
