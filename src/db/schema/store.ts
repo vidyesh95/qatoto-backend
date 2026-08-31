@@ -361,6 +361,13 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
     "certification_submitted",
     "certification_decided",
     /**
+     * A seller retracting its OWN claim, which is a different act from a moderator's
+     * verdict and therefore not `certification_decided`. It is the only route that reaches
+     * `commerce_certification_state.withdrawn`, which sat in the enum unreachable until it
+     * shipped.
+     */
+    "certification_withdrawn",
+    /**
      * Phase 13, added to the TYPE by `0073_store_phase_13_enums.sql` and missing from this
      * list until the 0146 snapshot re-baseline compared the enum against the live database.
      * A moderator resolving a ranking appeal or overriding an automatic enforcement lands on

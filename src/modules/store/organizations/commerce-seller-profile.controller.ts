@@ -7,7 +7,9 @@ import {
   AddOrganizationMediaSchema,
   CertificationParamsSchema,
   DecideCertificationSchema,
+  ListCertificationsForModerationQuerySchema,
   MediaParamsSchema,
+  OrganizationCertificationParamsSchema,
   OrganizationIdSchema,
   ReorderOrganizationMediaSchema,
   ReplaceCapabilitiesSchema,
@@ -78,6 +80,13 @@ function respondSellerProfileError(res: Response, error: CommerceSellerProfileEr
         status: "error",
         statusCode: 403,
         message: "This action requires a platform staff role.",
+      } satisfies ApiResponse);
+      return;
+    case "INVALID_CURSOR":
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "That page cursor is not readable. Start from the first page.",
       } satisfies ApiResponse);
       return;
     case "CONFLICT":
@@ -374,6 +383,9 @@ export async function submitCertification(req: Request, res: Response): Promise<
     userId: authContext.userId,
     organizationId: params.data.organizationId,
     standardName: body.data.standardName,
+    // Absent stays absent — the service writes `null`, and nothing here guesses a code
+    // from the free-text name.
+    standardCode: body.data.standardCode,
     issuerName: body.data.issuerName,
     certificateNumber: body.data.certificateNumber,
     scopeSummary: body.data.scopeSummary ?? null,
@@ -389,6 +401,33 @@ export async function submitCertification(req: Request, res: Response): Promise<
     statusCode: 201,
     message: "Certification submitted for review.",
     data: submitted.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * `GET /organizations/:organizationId/seller-profile` — the owner's read of its own face.
+ *
+ * A `null` profile is a 200, never a 404: the organization exists and the caller may edit
+ * it, it has simply never saved a profile row. A 404 here would send the editor to an error
+ * panel on the one path where it should render empty forms.
+ */
+export async function getOwnSellerProfile(req: Request, res: Response): Promise<void> {
+  const authContext = authenticatedRequest(req, res);
+  if (!authContext) return;
+  if (!parseNoQuery(req, res)) return;
+  const params = OrganizationIdSchema.safeParse(req.params);
+  if (!params.success) return validationError(res, params.error);
+
+  const loaded = await commerceSellerProfileService.getOwnSellerProfile({
+    userId: authContext.userId,
+    organizationId: params.data.organizationId,
+  });
+  if (!loaded.success) return respondSellerProfileError(res, loaded.error);
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Seller profile loaded.",
+    data: { declaredProfile: loaded.value },
   } satisfies ApiResponse);
 }
 
@@ -409,6 +448,63 @@ export async function listCertifications(req: Request, res: Response): Promise<v
     statusCode: 200,
     message: "Certifications loaded.",
     data: { items: listed.value },
+  } satisfies ApiResponse);
+}
+
+/**
+ * `POST …/certifications/:certificationId/withdraw` — the seller retracts its own claim.
+ *
+ * A 409 carries the backend's own message naming the state it is in, because "already
+ * withdrawn" and "rejected, so there is nothing to withdraw" are different answers and the
+ * seller can act on neither if both read as a generic conflict.
+ */
+export async function withdrawCertification(req: Request, res: Response): Promise<void> {
+  const authContext = authenticatedRequest(req, res);
+  if (!authContext) return;
+  if (!parseNoQuery(req, res)) return;
+  const params = OrganizationCertificationParamsSchema.safeParse(req.params);
+  if (!params.success) return validationError(res, params.error);
+
+  const withdrawn = await commerceSellerProfileService.withdrawCertification({
+    userId: authContext.userId,
+    organizationId: params.data.organizationId,
+    certificationId: params.data.certificationId,
+  });
+  if (!withdrawn.success) return respondSellerProfileError(res, withdrawn.error);
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Certification withdrawn.",
+    data: withdrawn.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * `GET /admin/certifications` — the queue the decision route never had.
+ *
+ * `state` defaults to `pending` HERE rather than in the schema, so a moderator can still
+ * ask for another state explicitly and the default stays visible to a reader of this file.
+ */
+export async function listCertificationsForModeration(req: Request, res: Response): Promise<void> {
+  const authContext = authenticatedRequest(req, res);
+  if (!authContext) return;
+  const query = ListCertificationsForModerationQuerySchema.safeParse(req.query);
+  if (!query.success) return validationError(res, query.error);
+
+  const listed = await commerceSellerProfileService.listCertificationsForModeration(
+    authContext.userId,
+    {
+      state: query.data.state ?? "pending",
+      cursor: query.data.cursor,
+      limit: query.data.limit,
+    },
+  );
+  if (!listed.success) return respondSellerProfileError(res, listed.error);
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Certifications awaiting a decision.",
+    data: listed.value,
   } satisfies ApiResponse);
 }
 

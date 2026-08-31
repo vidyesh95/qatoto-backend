@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -37,6 +37,7 @@ import { requirePlatformCapability } from "#src/modules/platform/roles/platform-
 import { encryptCommerceDocument } from "#src/modules/store/commerce-document-encryption.js";
 import { scheduleDocumentScan } from "#src/modules/store/organizations/commerce-document-scan.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 type MemberRole = (typeof commerceOrganizationMember.$inferSelect)["role"];
@@ -65,7 +66,9 @@ export type CommerceSellerProfileError =
   | { type: "EVIDENCE_STORAGE_NOT_CONFIGURED" }
   | { type: "EVIDENCE_STORAGE_FAILED" }
   /** A moderator cannot decide a certification they submitted themselves (§11). */
-  | { type: "SELF_REVIEW_FORBIDDEN" };
+  | { type: "SELF_REVIEW_FORBIDDEN" }
+  /** A tampered or truncated keyset cursor on the moderation queue. */
+  | { type: "INVALID_CURSOR" };
 
 /**
  * Who may edit the company's public face. `finance` and `support` are deliberately absent:
@@ -717,6 +720,40 @@ export interface ReplaceFactoryTermsInput {
   readonly minimumLeadTimeDays: number | null;
   readonly maximumLeadTimeDays: number | null;
   readonly acceptingInquiries: boolean;
+}
+
+/**
+ * THE SELLER'S OWN PROFILE, READ WITH NO REGARD FOR VISIBILITY.
+ *
+ * WHY THIS EXISTS, when the same rows are already projected by
+ * `GET /store/factories/:slug` and `GET /store/organizations/:slug`: both of those sit
+ * behind `directoryPredicate()` — `tradeState = 'active' AND visibility = 'public'` — so a
+ * private, unlisted or not-yet-active organization could not read the profile its own
+ * editor prefills from. It could WRITE every field on this surface and never see one. This
+ * route is the read half of the writes below, gated by the same `PROFILE_MANAGERS` set, so
+ * whoever may save may also load.
+ *
+ * NO SECOND PROJECTION. It calls `loadSellerDeclaredProfiles` — the same six queries the
+ * storefront uses — because a parallel owner-side projection is a second place for these
+ * rows to disagree (§16.1).
+ *
+ * A MISSING ROW IS `null`, NOT AN EMPTY PROJECTION. "This seller has not described itself"
+ * and "this seller described itself and said nothing" are different facts, and the editor
+ * renders them differently.
+ *
+ * The certifications inside the projection stay the PUBLIC set — approved and unexpired.
+ * The seller's own full list, with `state`, `decisionReason` and the review timestamps,
+ * comes from `listCertifications`; these two reads are disjoint on purpose.
+ */
+export async function getOwnSellerProfile(input: {
+  readonly userId: string;
+  readonly organizationId: string;
+}): Promise<Result<SellerDeclaredProfileProjection | null, CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(input.userId, input.organizationId, PROFILE_MANAGERS);
+  if (!access.success) return access;
+
+  const profiles = await loadSellerDeclaredProfiles([input.organizationId]);
+  return { success: true, value: profiles.get(input.organizationId) ?? null };
 }
 
 /**
@@ -1823,6 +1860,222 @@ export async function listCertifications(input: {
       asc(commerceOrganizationCertification.id),
     );
   return { success: true, value: rows.map(projectOwnedCertification) };
+}
+
+/**
+ * A seller RETRACTS ITS OWN CLAIM.
+ *
+ * The only route that reaches `commerce_certification_state.withdrawn`, which sat in the
+ * enum with nothing able to write it. It is NOT an undo and NOT a delete: the row survives
+ * with its evidence and its history, it stops being published, and the organization's chain
+ * carries the retraction beside the original submission.
+ *
+ * WHY BOTH `pending` AND `approved` MAY BE WITHDRAWN. A pending claim is one the seller
+ * changed its mind about before anyone looked; an approved one is a certificate that lapsed,
+ * was revoked by its issuer, or was uploaded in error — and a seller unable to retract that
+ * is a seller forced to keep publishing a claim it knows to be false. `rejected` and
+ * `withdrawn` are terminal, and asking again is a 409 rather than a silent success.
+ *
+ * NO `withdrawnAt` COLUMN, deliberately: the timestamp and the actor live in the audit
+ * entry, which is immutable, rather than in two places that can disagree.
+ */
+export async function withdrawCertification(input: {
+  readonly userId: string;
+  readonly organizationId: string;
+  readonly certificationId: string;
+}): Promise<Result<OwnedCertificationProjection, CommerceSellerProfileError>> {
+  const access = await requireMembershipRole(
+    input.userId,
+    input.organizationId,
+    CERTIFICATION_MANAGERS,
+  );
+  if (!access.success) return access;
+
+  const outcome = await db.transaction(async (transaction) => {
+    const occurredAt = new Date();
+    const [existing] = await transaction
+      .select()
+      .from(commerceOrganizationCertification)
+      .where(eq(commerceOrganizationCertification.id, input.certificationId))
+      .for("update");
+    /**
+     * A certification belonging to ANOTHER organization is a 404, never a 403. A 403 here
+     * would confirm the id exists to a caller who may not know that.
+     */
+    if (!existing || existing.organizationId !== input.organizationId) {
+      return { status: "not_found" as const };
+    }
+    if (existing.state !== "pending" && existing.state !== "approved") {
+      return { status: "not_withdrawable" as const, state: existing.state };
+    }
+
+    const [row] = await transaction
+      .update(commerceOrganizationCertification)
+      .set({ state: "withdrawn", updatedAt: occurredAt })
+      .where(
+        and(
+          eq(commerceOrganizationCertification.id, input.certificationId),
+          inArray(commerceOrganizationCertification.state, ["pending", "approved"]),
+        ),
+      )
+      .returning();
+    if (!row) return { status: "race_conflict" as const };
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: row.organizationId,
+      eventKind: "certification_withdrawn",
+      actorUserId: input.userId,
+      actorMemberRoleSnapshot: access.value.role,
+      targetEntityType: "commerce_organization_certification",
+      targetEntityId: row.id,
+      // Never the evidence object key — the same rule `certification_submitted` follows.
+      payload: { standardName: row.standardName, previousState: existing.state },
+      occurredAt,
+    });
+
+    return { status: "withdrawn" as const, row };
+  });
+
+  if (outcome.status === "not_found") return { success: false, error: { type: "NOT_FOUND" } };
+  if (outcome.status === "not_withdrawable") {
+    return {
+      success: false,
+      error: {
+        type: "CONFLICT",
+        message: `A ${outcome.state} certification cannot be withdrawn.`,
+      },
+    };
+  }
+  if (outcome.status === "race_conflict") {
+    return {
+      success: false,
+      error: { type: "CONFLICT", message: "This certification changed state concurrently." },
+    };
+  }
+  return { success: true, value: projectOwnedCertification(outcome.row) };
+}
+
+/**
+ * A pending certification AS A MODERATOR SEES IT: the seller's own view plus whose claim it
+ * is, because a queue of standard names with no companies attached is undecidable.
+ */
+export interface ModerationCertificationProjection extends OwnedCertificationProjection {
+  readonly organization: {
+    readonly id: string;
+    /**
+     * BOTH NAMES, because they answer different halves of the question. The certificate
+     * names the LEGAL entity, which is what a moderator compares the PDF against; the
+     * `displayName` is who a buyer thinks they are dealing with, and a mismatch between
+     * the two is itself a finding.
+     */
+    readonly legalName: string;
+    readonly displayName: string;
+    readonly slug: string;
+  };
+}
+
+export interface ListCertificationsForModerationQuery {
+  readonly state?: CertificationRow["state"];
+  readonly cursor?: string;
+  readonly limit: number;
+}
+
+/**
+ * THE QUEUE BEHIND `POST /admin/certifications/:certificationId/decision`.
+ *
+ * That route shipped without one, so there was no way to learn a pending id and nothing was
+ * ever approved — which is also why the manufacturer directory's certification filter, which
+ * matches only `approved` rows, had nothing to match.
+ *
+ * OLDEST FIRST. This is a queue, not a feed: a claim that has waited longest is the one a
+ * moderator should see, and `submittedAt ASC, id ASC` is a stable keyset over it.
+ *
+ * NO EVIDENCE ID, URL OR TOKEN ON THIS PROJECTION, exactly as on the seller's and the
+ * public's. A moderator reads the certificate through the document surface that already
+ * audits the read; this queue must not become a second, unaudited way to reach it.
+ */
+export async function listCertificationsForModeration(
+  moderatorUserId: string,
+  query: ListCertificationsForModerationQuery,
+): Promise<
+  Result<
+    {
+      readonly items: readonly ModerationCertificationProjection[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    CommerceSellerProfileError
+  >
+> {
+  // Capability BEFORE any id is read, so the route is not an existence oracle for non-staff.
+  const capability = await requirePlatformCapability(moderatorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return { success: false, error: { type: "PLATFORM_CAPABILITY_REQUIRED" } };
+  }
+
+  const filters: SQL[] = [];
+  if (query.state !== undefined) {
+    filters.push(eq(commerceOrganizationCertification.state, query.state));
+  }
+  if (query.cursor !== undefined) {
+    const cursor = decodeTimestampStoreCursor(query.cursor);
+    if (!cursor) return { success: false, error: { type: "INVALID_CURSOR" } };
+    const keyset = or(
+      gt(commerceOrganizationCertification.submittedAt, cursor.sortKey),
+      and(
+        eq(commerceOrganizationCertification.submittedAt, cursor.sortKey),
+        gt(commerceOrganizationCertification.id, cursor.id),
+      ),
+    );
+    if (keyset) filters.push(keyset);
+  }
+
+  const rows = await db
+    .select({
+      certification: commerceOrganizationCertification,
+      organizationLegalName: commerceOrganization.legalName,
+      organizationDisplayName: commerceOrganization.displayName,
+      organizationSlug: commerceOrganization.slug,
+    })
+    .from(commerceOrganizationCertification)
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, commerceOrganizationCertification.organizationId),
+    )
+    .where(filters.length > 0 ? and(...filters) : undefined)
+    .orderBy(
+      asc(commerceOrganizationCertification.submittedAt),
+      asc(commerceOrganizationCertification.id),
+    )
+    .limit(query.limit + 1);
+
+  const hasMore = rows.length > query.limit;
+  const pageRows = hasMore ? rows.slice(0, query.limit) : rows;
+  const lastRow = pageRows.at(-1);
+
+  return {
+    success: true,
+    value: {
+      items: pageRows.map((row) => ({
+        ...projectOwnedCertification(row.certification),
+        organization: {
+          id: row.certification.organizationId,
+          legalName: row.organizationLegalName,
+          displayName: row.organizationDisplayName,
+          slug: row.organizationSlug,
+        },
+      })),
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({
+                sortKey: lastRow.certification.submittedAt.toISOString(),
+                id: lastRow.certification.id,
+              })
+            : null,
+        hasMore: hasMore && lastRow !== undefined,
+      },
+    },
+  };
 }
 
 export type CertificationDecision =

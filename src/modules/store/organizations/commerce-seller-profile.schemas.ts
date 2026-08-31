@@ -63,6 +63,26 @@ export const CapabilityKindSchema = z.enum([
 ]);
 
 /**
+ * The eight standards a buyer can FILTER on, mirroring
+ * `commerceCertificationStandardCodeEnum`. Widen it WITH the enum: a code added to the
+ * database and forgotten here is rejected at this boundary and no seller can ever claim it.
+ *
+ * OPTIONAL ON THE SUBMIT BODY, and NOTHING INFERS IT from the free-text `standardName` —
+ * a fuzzy match would put a factory into a compliance filter it never claimed. Omitting it
+ * costs the seller only filterability; the certificate still renders on the detail page.
+ */
+export const CertificationStandardCodeSchema = z.enum([
+  "iso_9001",
+  "iso_14001",
+  "bsci",
+  "sedex_smeta",
+  "gots",
+  "fsc",
+  "ce_marking",
+  "fda_registered",
+]);
+
+/**
  * `year_founded BETWEEN 1800 AND 2100` in the database stops a typo; THIS stops a claim
  * about the future. The CHECK cannot express it, because `now()` is not IMMUTABLE and
  * Postgres refuses it in a constraint — so the real rule lives here, where a clock is
@@ -173,6 +193,8 @@ export const IsoDateSchema = z
 export const SubmitCertificationSchema = z
   .object({
     standardName: z.string().trim().min(1).max(200),
+    /** A multipart text field arrives as a string, which `z.enum` parses without coercion. */
+    standardCode: CertificationStandardCodeSchema.optional(),
     issuerName: z.string().trim().min(1).max(200),
     certificateNumber: z.string().trim().min(1).max(120),
     scopeSummary: z.string().trim().min(1).max(2000).optional(),
@@ -184,6 +206,28 @@ export const SubmitCertificationSchema = z
     (certification) => certification.validUntil > certification.validFrom,
     "validUntil must be after validFrom.",
   );
+
+/**
+ * The certification a seller is retracting, and the organization it belongs to. Both ids
+ * are in the path: the service refuses a certification that belongs to a different
+ * organization with a 404 rather than a 403, so the pair is checked, never trusted.
+ */
+export const OrganizationCertificationParamsSchema = OrganizationIdSchema.extend({
+  certificationId: z.string().uuid(),
+}).strict();
+
+/**
+ * The moderation queue's query. `state` defaults to `pending` IN THE CONTROLLER rather than
+ * here, so an explicit `?state=approved` is still expressible — a default baked into the
+ * schema would be indistinguishable from the caller asking for it.
+ */
+export const ListCertificationsForModerationQuerySchema = z
+  .object({
+    state: z.enum(["pending", "approved", "rejected", "withdrawn"]).optional(),
+    cursor: z.string().trim().min(1).max(500).optional(),
+    limit: z.coerce.number().int().min(1).max(50).default(25),
+  })
+  .strict();
 
 export const DecideCertificationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("approve") }).strict(),

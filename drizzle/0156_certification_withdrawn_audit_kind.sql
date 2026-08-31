@@ -1,0 +1,1 @@
+ALTER TYPE "public"."commerce_organization_audit_event_kind" ADD VALUE 'certification_withdrawn' BEFORE 'ranking_enforcement_decided';

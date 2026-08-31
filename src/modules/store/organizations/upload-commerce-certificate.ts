@@ -9,9 +9,11 @@ import {
  *
  * WHY THIS IS NOT `uploadCommerceVerificationEvidence`, which it otherwise duplicates:
  * that middleware sets `fields: 2`, because a verification submit sends exactly
- * `verificationKind` and `documentKind`. A certification sends SIX text parts — standard
- * name, issuer, certificate number, both validity dates and an optional scope summary — so
- * reusing it produced a `LIMIT_FIELD_COUNT` rejection and a flat 422 on every submission.
+ * `verificationKind` and `documentKind`. A certification sends SEVEN text parts — standard
+ * name, the optional filterable `standardCode`, issuer, certificate number, both validity
+ * dates and an optional scope summary — so reusing it produced a `LIMIT_FIELD_COUNT`
+ * rejection and a flat 422 on every submission. The cap below is eight and stays eight: it
+ * already had the headroom this field needed.
  *
  * Raising the shared cap to eight was the other option and is worse: the verification route's
  * cap is part of its contract, and widening it to suit a different route is how a limit stops

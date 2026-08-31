@@ -1006,6 +1006,18 @@ unnecessary.
 | POST   | `/commerce/admin/organizations/:organizationId/site-audits` | Record one. **Idempotency-Key**               |
 | POST   | `/commerce/admin/site-audits/:auditId/withdraw`             | Retract it, with a required reason            |
 
+Certifications sit on `commerce-seller-profile.routes.ts` rather than here, and three of them are
+newer than Phase 17:
+
+| Method | Route                                                                          | Result                                                    |
+| ------ | ------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| GET    | `/commerce/organizations/:organizationId/seller-profile`                       | The owner's own read; visibility is not consulted          |
+| GET    | `/commerce/organizations/:organizationId/certifications`                       | The seller's list, every state                             |
+| POST   | `/commerce/organizations/:organizationId/certifications`                       | Claim + evidence, one multipart. **Idempotency-Key**, 201  |
+| POST   | `/commerce/organizations/:organizationId/certifications/:id/withdraw`          | The seller retracts its own. **Idempotency-Key**           |
+| GET    | `/commerce/admin/certifications`                                               | The moderation queue, oldest first, `?state=` and a cursor |
+| POST   | `/commerce/admin/certifications/:certificationId/decision`                     | `approve` / `reject` with a reason. **Idempotency-Key**    |
+
 Literal `/factories/inquiries/*` paths are declared **before** `/factories/:factorySlug/inquiries`,
 which is the same depth; `commerce-factories.routes.order.test.ts` asserts it.
 
@@ -3851,7 +3863,7 @@ products had no profile row at all. Of the six mock stats:
 **What exists now:** all of it except online revenue, which stays §14's decision.
 `commerce_seller_profile`, `commerce_organization_media`, `commerce_organization_site_access`,
 `commerce_organization_stakeholder`, `commerce_organization_capability` and
-`commerce_organization_certification`, authored through ten routes on
+`commerce_organization_certification`, authored through thirteen routes on
 `commerce-seller-profile.routes.ts`; plus `promised_delivery_at` on the order and its product lines,
 `lead_time_max_days_snapshot` on the prepare line, and `reorderRate` /
 `measuredResponseTimeHours` derived in `commerce-trust-metrics.service.ts`.
@@ -3870,6 +3882,23 @@ constraint A18 had to route around. The seller's advertised lead time is snapsho
 and the promise derived at confirm, because a seller typing a date at ship time would set the bar
 after knowing the outcome, and re-reading the product at confirm would hold it to a lead time the
 buyer never saw.
+
+**Three gaps closed after the fact, all of them at the boundary rather than in the service.** The
+service layer had been right the whole time; the routes above it had not, and each gap was invisible
+from either side alone:
+
+| Gap                                                                                                                                                                                                                          | What shipped                                                                                                                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`standardCode` was unreachable.** `submitCertification` took it and wrote it, but `SubmitCertificationSchema` had no such key and is `.strict()`, so every row ever created carried `null` — and §16.2's filter matches only rows with a code | The key exists on the body, optional, mirrored from `commerceCertificationStandardCodeEnum`. **Nothing infers it from `standardName`**: a fuzzy match would put a factory into a compliance filter it never claimed |
+| **No seller-side profile read.** Both public projections are gated on `tradeState = 'active' AND visibility = 'public'`, so a private or not-yet-active organization could write every field on this surface and never read one back | `GET /commerce/organizations/:organizationId/seller-profile`, `PROFILE_MANAGERS` only, reusing `loadSellerDeclaredProfiles` rather than a parallel projection. A missing row answers `{ declaredProfile: null }` with a **200** |
+| **The decision route had no queue and `withdrawn` had no writer.** No route listed a pending certification, so no id could be learned and nothing was ever approved — which is the second reason the directory facet matched nothing | `GET /commerce/admin/certifications` (oldest first, keyset, `moderate_commerce` checked before any id is read) and `POST /commerce/organizations/:organizationId/certifications/:certificationId/withdraw`, `certification_withdrawn` on the org chain (`0156`) |
+
+**A withdrawal is not a decision and not a delete.** `certification_withdrawn` is its own audit kind
+because a seller retracting its own claim and a moderator ruling on it are different acts. `pending`
+and `approved` may be withdrawn — an approved certificate can lapse, be revoked by its issuer, or
+have been uploaded in error, and a seller unable to retract that is one forced to keep publishing a
+claim they know to be false. There is no `withdrawn_at` column: the actor and the timestamp live in
+the audit entry, which is immutable, rather than in two places that can disagree.
 
 **Expiry is deliberately not a certification state.** Lapsing is `validUntil < current_date` at read
 time; a stored `expired` value would need a nightly job and would be wrong between ticks, which is

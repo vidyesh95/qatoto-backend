@@ -30,6 +30,20 @@ import { uploadStakeholderPhotoFile } from "#src/modules/store/organizations/upl
  */
 const router = express.Router();
 
+/**
+ * The READ half of this router, and the only route here that is not a write.
+ *
+ * No body middleware and no idempotency: the controller reads params only, and
+ * `json-body-budget.test.ts` treats a declared cap on a bodyless route as a documented lie.
+ * It exists because the public projections are gated on `visibility = 'public'`, so without
+ * it a private organization can write every field on this surface and never read one back.
+ */
+router.get(
+  "/organizations/:organizationId/seller-profile",
+  requireAuth,
+  commerceSellerProfileController.getOwnSellerProfile,
+);
+
 router.patch(
   "/organizations/:organizationId/seller-profile",
   requireAuth,
@@ -116,7 +130,7 @@ router.delete(
  * Certification evidence has its OWN multipart middleware, not the verification one.
  *
  * That was the plan, and the plan was wrong: `uploadCommerceVerificationEvidence` sets
- * `fields: 2` for its own two text parts, and a certification sends six — so every
+ * `fields: 2` for its own two text parts, and a certification sends seven — so every
  * submission came back a flat 422 from multer's `LIMIT_FIELD_COUNT`. The HTTP smoke caught
  * it; nothing else could have, because the field cap lives in middleware no unit test loads.
  * The size cap and media-type allowlist are still shared.
@@ -135,6 +149,35 @@ router.post(
   uploadCommerceCertificate,
   idempotency({ required: true }),
   commerceSellerProfileController.submitCertification,
+);
+
+/**
+ * The seller's retraction. No body middleware — this route takes no body at all, and a
+ * declared cap on a bodyless route is the documented lie `json-body-budget.test.ts` fails
+ * on, same as the media DELETE above. Idempotency is still required: a retried retraction
+ * must not append a second audit entry.
+ */
+router.post(
+  "/organizations/:organizationId/certifications/:certificationId/withdraw",
+  requireAuth,
+  commerceOrganizationWriteLimiter,
+  idempotency({ required: true }),
+  commerceSellerProfileController.withdrawCertification,
+);
+
+/**
+ * THE QUEUE THE DECISION ROUTE BELOW NEVER HAD. Without it there was no way to learn a
+ * pending certification id, so nothing was ever approved and the manufacturer directory's
+ * certification filter — which matches only approved rows — had nothing to match.
+ *
+ * No capability middleware, same as the decision route: `moderate_commerce` is demanded by
+ * the service before any id is read, so this is not an existence oracle for non-staff.
+ */
+router.get(
+  "/admin/certifications",
+  requireAuth,
+  commerceOrganizationWriteLimiter,
+  commerceSellerProfileController.listCertificationsForModeration,
 );
 
 router.post(
