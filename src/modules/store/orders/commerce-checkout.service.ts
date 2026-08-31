@@ -2,7 +2,6 @@ import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 
 import { config } from "#src/config/index.js";
 import { db } from "#src/db/index.js";
-import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 import {
   commerceCartLineCustomization,
   commerceCartProductLine,
@@ -39,6 +38,7 @@ import {
   estimateDeliveryForLines,
   type DeliveryEstimateProjection,
 } from "#src/modules/store/fulfillment/commerce-delivery-estimate.service.js";
+import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 import {
   getOrCreateCartForUpdate,
   supersedeActiveCheckoutPrepares,

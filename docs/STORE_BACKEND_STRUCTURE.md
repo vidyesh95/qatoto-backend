@@ -5405,11 +5405,13 @@ before the order/buyer-scope test, so a wrong-kind engagement on another order l
 `PROVIDER_KIND_MISMATCH` rather than `NOT_FOUND`. Kept because changing it changes a status code
 `POST /orders/:orderId/shipments` already returns.
 
-⚠️ **NOT EXERCISED AGAINST A REAL ORDER.** There is no local database; the authorization branches,
-the sequence-collision `CONFLICT` and the `VERSION_CONFLICT` path are reasoned from
-`executeShipmentLegCommand` and `createShipment`, which they mirror, not observed. Typecheck, lint
-and the 184 tests in `src/modules/store/fulfillment/` plus the limiter, body-budget and route-order
-sweeps all pass.
+⚠️ **STILL NOT EXERCISED AGAINST A REAL SHIPMENT, and this is the one gap Phase 27 did not close.**
+The database holds exactly ONE `commerce_shipment` row, and adding a leg to it or re-pointing its
+engagement would write commerce data plus append-only audit entries that cannot honestly be deleted
+afterwards — so the authorization branches, the sequence-collision `CONFLICT` and the
+`VERSION_CONFLICT` path remain reasoned from `executeShipmentLegCommand` and `createShipment`, which
+they mirror, rather than observed. Typecheck, lint and the 184 tests in
+`src/modules/store/fulfillment/` plus the limiter, body-budget and route-order sweeps all pass.
 
 ---
 
@@ -5510,10 +5512,30 @@ because a column nobody reads is a write-only feature.
 sea is nearly always cheapest and roughly four times slower, so guessing publishes the slowest
 window as though the buyer had chosen it.
 
-⚠️ **NEITHER A44 NOR A45 HAS BEEN RUN AGAINST A DATABASE.** `0159` is generated and reviewed, not
-applied; there is no local instance and the shared one was deliberately left alone. The ownership
-join, the cost aggregation and the mode round-trip are reasoned from the code they mirror, not
-observed. Typecheck, lint and **2044 tests across 126 files** pass.
+✅ **VERIFIED AGAINST THE LIVE DATABASE (Phase 27).** `0159` is applied. Structure is asserted by
+`pnpm db:verify-store-phase-27-constraints` — 8/8, including the two checks nothing functional could
+have caught: that both mode columns are `commerce_shipment_leg_mode` rather than
+`freight_transport_mode` (which would accept every value written today and silently admit
+`multimodal`), and that `product_sourcing_quote_line_idx` is PARTIAL rather than full (a full index
+answers every query correctly and merely wastes a row per listing).
+
+Read paths were exercised over HTTP as the seeded demo seller:
+
+| Read | Result |
+| ---- | ------ |
+| `GET /products/:id` | `sourcingQuoteProductLineId: null` present — the read that stops the editor wiping a link |
+| `GET /commerce/sourcing/quote-lines` | 200, `{ items: [], page: { nextCursor: null, hasMore: false } }` |
+| `GET /commerce/provider/earnings` | `sourcingCost: []` (absent, not zero) and **`uncounted.orderLinesWithNoSourcingRecord: 18`** |
+| `GET /commerce/orders/:orderId` | `requestedFreightModeSnapshot: null` — "not asked", which is correct |
+
+The `18` is worth noting: it is real data, over eighteen genuinely sold order lines, and it is the
+coverage denominator doing its job — every one of them has no cost basis, which is exactly why
+`sourcingCost` may never be rendered without it.
+
+⚠️ **WHAT IS STILL UNPROVEN.** No listing has been linked to a quote and no order has carried a
+requested mode, because both need writes. So `loadSourcingCost`'s aggregation and the mode
+round-trip have been proven to RUN and to return their empty/absent forms correctly; they have not
+been proven to produce a correct non-empty number.
 
 ---
 
@@ -5553,5 +5575,7 @@ cleared. `PublicProduct` did not project the column, so the form would have pref
 same failure shape as a replace-set endpoint shipped without an owner-side read: a write with no
 matching read destroys data, and the absence of the read is the bug.
 
-⚠️ **NOT EXERCISED AGAINST A DATABASE.** `0159` is still unapplied, so no row has round-tripped.
-Typecheck, lint and 2044 tests across 126 files pass.
+✅ **EXERCISED.** `GET /commerce/sourcing/quote-lines` answers 200 with the exact cursor envelope and
+an empty `items` for a seller with no accepted quotes — which is the correct answer for every seller
+today, since the database holds two `commerce_quote_product_line` rows and neither belongs to an
+accepted revision. The join has not been proven to return a non-empty page.

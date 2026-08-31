@@ -1,7 +1,6 @@
 import { and, asc, desc, eq, gt, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 import {
   commerceOrder,
   commerceOrderProductLine,
@@ -10,6 +9,7 @@ import {
   commerceServiceEngagement,
   product,
 } from "#src/db/schema.js";
+import type { FreightMode } from "#src/modules/store/fulfillment/commerce-freight-rates.schemas.js";
 import { loadOrderCompletionIndex } from "#src/modules/store/orders/commerce-completion.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";

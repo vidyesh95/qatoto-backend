@@ -418,6 +418,55 @@ Tables (auth-owned + the identity columns/table we own):
 > In `drizzle.config.ts`, use **discrete** credentials (`host`/`port`/`user`/`password`/
 > `database` + `ssl`), not the `url`. Re-run the workflow above after any schema change.
 
+> ⚠️ **THE LEDGER AND THE JOURNAL DISAGREE TODAY. DO NOT RUN `pnpm db:migrate` UNTIL THIS IS
+> SETTLED.** Measured against the live database on 2026-08-31, after `0159` was applied:
+>
+> | | |
+> | --- | --- |
+> | `drizzle/meta/_journal.json` entries | 160 (`0000`–`0159`) |
+> | rows in `drizzle.__drizzle_migrations` | 159 |
+> | journal entries with **no** ledger row | **2** — `0147_video_moderation_notification_enums`, `0149_anime_hero_and_series_slug` |
+> | ledger rows matching **no** journal entry | **1** — `created_at = 2026-08-29T05:50:36.499Z` |
+>
+> **The SCHEMA is correct; only the bookkeeping is wrong.** Every object those two migrations
+> create was confirmed present: the `redirected_to_source` label on
+> `video_moderation_action_kind`, both `notification_kind` labels, the `anime_hero_slide` table and
+> `anime_series.slug`. They were applied — their ledger rows are simply missing.
+>
+> **Why that matters more than it sounds.** `drizzle-kit migrate` decides what to run by diffing
+> the journal against the ledger, so the next invocation will try to **re-apply `0147` and `0149`**.
+> `0147` is three `ALTER TYPE … ADD VALUE` statements and `0149` creates a table that exists, so it
+> will fail — loudly, and inside one transaction, so nothing should be damaged. But it will look
+> like a broken migration when it is actually a bookkeeping artefact, and the temptation at that
+> moment is to "fix" it by editing SQL that is already applied.
+>
+> **This drift predates the entries it affects being noticed** — the timestamps are 27–29 August,
+> before Phase 27. Settling it means reconciling `drizzle.__drizzle_migrations` by hand against the
+> journal, which is a decision for whoever owns the database, not something a migration can repair.
+>
+> **WHERE THIS DRIFT ALMOST CERTAINLY CAME FROM, because it is not a mystery.** On 2026-08-27,
+> applying `0148`, `pnpm db:migrate` **failed silently** — it printed `applying migrations...` and
+> exited 1 with nothing on stdout or stderr. The cause was content-hash drift: five files (`0042`,
+> `0047`, `0049`, `0052`, **`0147`**) no longer hashed to their ledger rows, drizzle-kit read them
+> as pending, and it died re-running `0042` against tables that already existed. `0148` was then
+> applied by hand — statements dry-run in a rolled-back transaction, re-run and committed, and the
+> ledger row **inserted manually**. Note `0147` appears in both that list and the two-missing-rows
+> table above, and the one orphan ledger row is dated 2026-08-29, in the same window.
+>
+> **The mechanism recurs because the documented workflow causes it.** §6 asks for a hand-written
+> header on the generated `.sql` explaining WHY — and if that edit lands *after* the migration was
+> applied, the file's hash moves and its ledger row stops matching. Writing the header BEFORE
+> applying is what stops it.
+>
+> **Never conclude "the migration failed" from `db:migrate`'s exit code alone.** Query
+> `information_schema.columns` and `drizzle.__drizzle_migrations` and see what is actually there.
+> The failure looks like a broken database or bad SQL and is neither, so the first instinct —
+> rewriting the migration — wastes the session. `0159` was verified applied exactly this way.
+>
+> Note what this is **not**: §6's story above is about `db:generate` diffing from a stale snapshot
+> baseline, which `0146_snapshot.json` repaired. That is a **different** failure from the hash drift
+> described here, and `db:generate` is working — `0159` was generated with it.
+
 ---
 
 ## 7. The endpoints
