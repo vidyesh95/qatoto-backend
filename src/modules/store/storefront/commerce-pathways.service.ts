@@ -80,6 +80,30 @@ export interface PathwayCandidateAuthoringProjection {
   readonly productId: string;
   readonly variantId: string | null;
   readonly rank: number;
+  /**
+   * ⚠️ **THE AUTHOR-FACING NAME, AND WITHOUT IT AN EDITOR CAN ONLY SHOW A UUID.**
+   *
+   * A candidate is a `productId` and nothing else on the row, and there is no read anywhere that
+   * turns a product id into a name for an arbitrary caller: the public product read is keyed on
+   * `publicSlug`, `GET /products/:id` is owner-scoped and 404s on somebody else's listing — which
+   * is exactly the case that matters here, since `ownCandidateShare` exists BECAUSE a set mixes
+   * other people's SKUs with your own — and the public pathway read only serves `active` sets, so
+   * it cannot help a draft.
+   *
+   * So the join happens here, where the rows already are. `null` only if the product row has gone,
+   * which its `restrict` FK is supposed to prevent.
+   */
+  readonly productTitle: string | null;
+  /** Lets an editor link to the live listing. Null while the product is unpublished. */
+  readonly productPublicSlug: string | null;
+  /** Null when the candidate names no variant, which is the common case. */
+  readonly variantName: string | null;
+  /**
+   * ⚠️ **A SLOT CANNOT ASK FOR FEWER UNITS THAN THIS**, and the editor needs it to say so before a
+   * save rather than after one. The variant's own minimum wins when the candidate names a variant,
+   * because that is the row actually being bought. `null` means unstated, which imposes no floor.
+   */
+  readonly minimumOrderQuantity: number | null;
 }
 
 export interface PathwaySlotAuthoringProjection {
@@ -102,6 +126,8 @@ export interface PathwayAuthoringProjection {
   readonly accent: (typeof storePathway.$inferSelect)["accent"];
   readonly state: (typeof storePathway.$inferSelect)["state"];
   readonly anchorProductId: string | null;
+  /** The anchor's name, for the same reason a candidate carries one. Null when unanchored. */
+  readonly anchorProductTitle: string | null;
   readonly heroImageUrl: string | null;
   readonly cardImageUrl: string | null;
   readonly ownerOrganizationId: string | null;
@@ -255,12 +281,33 @@ async function projectPathway(
     .where(eq(storePathwaySlot.pathwayId, row.id))
     .orderBy(asc(storePathwaySlot.siblingOrder), asc(storePathwaySlot.id));
 
+  /**
+   * ⚠️ **JOINED, NOT A BARE SELECT, AND THE JOIN IS THE POINT.** The row carries only ids, and an
+   * author editing a draft has no other way to learn what `9d55…` is — see the docblock on
+   * `PathwayCandidateAuthoringProjection`. Both joins are LEFT so a missing product degrades to a
+   * nameless row rather than dropping a candidate the set still contains.
+   */
   const candidateRows =
     slotRows.length === 0
       ? []
       : await databaseExecutor
-          .select()
+          .select({
+            id: storePathwaySlotCandidate.id,
+            slotId: storePathwaySlotCandidate.slotId,
+            productId: storePathwaySlotCandidate.productId,
+            variantId: storePathwaySlotCandidate.variantId,
+            rank: storePathwaySlotCandidate.rank,
+            productTitle: product.title,
+            productPublicSlug: product.publicSlug,
+            variantName: commerceProductVariant.name,
+            variantMinimumOrderQuantity: commerceProductVariant.minimumOrderQuantity,
+          })
           .from(storePathwaySlotCandidate)
+          .leftJoin(product, eq(product.id, storePathwaySlotCandidate.productId))
+          .leftJoin(
+            commerceProductVariant,
+            eq(commerceProductVariant.id, storePathwaySlotCandidate.variantId),
+          )
           .where(
             inArray(
               storePathwaySlotCandidate.slotId,
@@ -268,6 +315,22 @@ async function projectPathway(
             ),
           )
           .orderBy(asc(storePathwaySlotCandidate.rank), asc(storePathwaySlotCandidate.id));
+
+  /**
+   * A product's minimum order quantity is NOT a column on `product` — it is resolved through
+   * `resolveEligibleProductCardsByIds`, the same function `validateCandidates` uses to refuse a
+   * slot that asks for fewer units than its candidate needs. Reusing it here means the editor
+   * reads the exact number the validator will judge it by, rather than a second opinion that
+   * could drift.
+   */
+  const candidateProductIds = [...new Set(candidateRows.map((candidateRow) => candidateRow.productId))];
+  const candidateProductCards =
+    candidateProductIds.length === 0
+      ? []
+      : await resolveEligibleProductCardsByIds(candidateProductIds);
+  const productMinimumById = new Map(
+    candidateProductCards.map((card) => [card.id, card.minimumOrderQuantity]),
+  );
 
   const candidatesBySlotId = new Map<string, PathwayCandidateAuthoringProjection[]>();
   for (const candidateRow of candidateRows) {
@@ -277,9 +340,29 @@ async function projectPathway(
       productId: candidateRow.productId,
       variantId: candidateRow.variantId,
       rank: candidateRow.rank,
+      productTitle: candidateRow.productTitle,
+      productPublicSlug: candidateRow.productPublicSlug,
+      variantName: candidateRow.variantName,
+      minimumOrderQuantity:
+        candidateRow.variantMinimumOrderQuantity ??
+        productMinimumById.get(candidateRow.productId) ??
+        null,
     });
     candidatesBySlotId.set(candidateRow.slotId, candidates);
   }
+
+  // The anchor gets the same treatment, and for the same reason: an unresolved anchor renders as
+  // a uuid in the one place the author is choosing it.
+  const anchorProductRow =
+    row.anchorProductId === null
+      ? null
+      : ((
+          await databaseExecutor
+            .select({ title: product.title })
+            .from(product)
+            .where(eq(product.id, row.anchorProductId))
+            .limit(1)
+        )[0] ?? null);
 
   return {
     id: row.id,
@@ -289,6 +372,7 @@ async function projectPathway(
     accent: row.accent,
     state: row.state,
     anchorProductId: row.anchorProductId,
+    anchorProductTitle: anchorProductRow?.title ?? null,
     heroImageUrl: row.heroImageUrl,
     cardImageUrl: row.cardImageUrl,
     ownerOrganizationId: row.ownerOrganizationId,
@@ -1056,7 +1140,26 @@ export async function submitPathway(
 
     const [updated] = await transaction
       .update(storePathway)
-      .set({ state: "pending_review", submittedAt: occurredAt })
+      .set({
+        state: "pending_review",
+        submittedAt: occurredAt,
+        /**
+         * ⚠️ **THE PREVIOUS VERDICT IS CLEARED, AND WITHOUT THIS A REJECTED SET COULD NEVER BE
+         * RESUBMITTED.** `store_pathway_review_ck` asserts
+         * `reviewed_at IS NULL OR state IN ('active','rejected')`. A rejection stamps
+         * `reviewedAt`/`reviewedByUserId`, so moving the row back to `pending_review` while they
+         * were still set violated the constraint and the resubmission died as an unmapped 500 —
+         * meaning the entire fix-and-resubmit loop was dead, which is the one recoverable path
+         * moderation has. Found by resubmitting a rejected set against the live database.
+         *
+         * The note goes with them: it is last round's verdict, and leaving it on a set now
+         * awaiting a NEW review would show the author a rejection for a decision nobody has made
+         * yet.
+         */
+        reviewedByUserId: null,
+        reviewedAt: null,
+        reviewNote: null,
+      })
       .where(eq(storePathway.id, pathwayId))
       .returning();
     if (!updated) throw new Error("Pathway submit returned no row.");
