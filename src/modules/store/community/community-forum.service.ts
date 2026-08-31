@@ -17,11 +17,7 @@ import {
   requirePlatformCapability,
   type PlatformStaffContext,
 } from "#src/modules/platform/roles/platform-role.service.js";
-import {
-  decodeStoreCursor,
-  decodeTimestampStoreCursor,
-  encodeStoreCursor,
-} from "#src/modules/store/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -404,7 +400,7 @@ export async function getForumThreadBySlug(input: {
   readonly replyCursor?: string;
 }): Promise<Result<ForumThreadDetailProjection, CommunityForumError>> {
   const decodedCursor =
-    input.replyCursor === undefined ? null : decodeStoreCursor(input.replyCursor);
+    input.replyCursor === undefined ? null : decodeTimestampStoreCursor(input.replyCursor);
   if (input.replyCursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -427,7 +423,7 @@ export async function getForumThreadBySlug(input: {
     eq(communityForumReply.state, "visible"),
   ];
   if (decodedCursor !== null) {
-    const cursorInstant = new Date(decodedCursor.sortKey);
+    const cursorInstant = decodedCursor.sortKey;
     if (Number.isNaN(cursorInstant.getTime())) {
       return { success: false, error: { type: "INVALID_CURSOR" } };
     }

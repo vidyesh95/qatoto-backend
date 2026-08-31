@@ -1850,7 +1850,9 @@ export const commerceEncryptedDocument = pgTable(
     uploadedByUserId: text("uploaded_by_user_id")
       .notNull()
       .references(() => user.id, { onDelete: "restrict" }),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
@@ -5509,7 +5511,9 @@ export const commerceRfq = pgTable(
     awardedAt: timestamp("awarded_at"),
     expiredAt: timestamp("expired_at"),
     cancelledAt: timestamp("cancelled_at"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
@@ -5838,7 +5842,9 @@ export const commerceQuote = pgTable(
     withdrawnAt: timestamp("withdrawn_at"),
     expiredAt: timestamp("expired_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at")
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    updatedAt: timestamp("updated_at", { precision: 3 })
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
       .notNull(),
@@ -6275,7 +6281,9 @@ export const commerceOrder = pgTable(
     createdByMemberId: text("created_by_member_id")
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
@@ -6497,7 +6505,9 @@ export const commerceThread = pgTable(
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
-    updatedAt: timestamp("updated_at")
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    updatedAt: timestamp("updated_at", { precision: 3 })
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
       .notNull(),
@@ -6559,7 +6569,9 @@ export const commerceMessage = pgTable(
       (): AnyPgColumn => commerceSettlementAgreement.id,
       { onDelete: "cascade" },
     ),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
   },
   (table) => [
     index("commerce_message_thread_idx").on(table.threadId, table.createdAt, table.id),
@@ -7018,7 +7030,9 @@ export const commerceServiceEngagement = pgTable(
     startedAt: timestamp("started_at"),
     completedAt: timestamp("completed_at"),
     cancelledAt: timestamp("cancelled_at"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
@@ -7065,7 +7079,9 @@ export const commerceShipment = pgTable(
     createdByMemberId: text("created_by_member_id")
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
@@ -8040,7 +8056,9 @@ export const commerceRefund = pgTable(
     createdByMemberId: text("created_by_member_id")
       .notNull()
       .references(() => commerceOrganizationMember.id, { onDelete: "restrict" }),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
@@ -8677,7 +8695,9 @@ export const commerceReview = pgTable(
      * B2B orders an unbounded delete is an extortion lever, so the bound lives here.
      */
     editedAt: timestamp("edited_at", { precision: 3 }),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
@@ -9429,7 +9449,9 @@ export const commerceDispute = pgTable(
       onDelete: "restrict",
     }),
     decisionNote: text("decision_note"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())

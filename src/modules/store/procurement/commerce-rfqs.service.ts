@@ -26,7 +26,7 @@ import {
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import { linkInquiryToRfq } from "#src/modules/store/trust/commerce-product-inquiry.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -1167,7 +1167,8 @@ export async function listMyRfqs(input: {
   readonly cursor?: string;
 }): Promise<Result<RfqListPage, CommerceRfqsError>> {
   const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -1176,9 +1177,9 @@ export async function listMyRfqs(input: {
     decodedCursor === null
       ? undefined
       : or(
-          lt(commerceRfq.createdAt, new Date(decodedCursor.sortKey)),
+          lt(commerceRfq.createdAt, decodedCursor.sortKey),
           and(
-            eq(commerceRfq.createdAt, new Date(decodedCursor.sortKey)),
+            eq(commerceRfq.createdAt, decodedCursor.sortKey),
             gt(commerceRfq.id, decodedCursor.id),
           ),
         );
@@ -1640,9 +1641,7 @@ export async function inviteProviders(input: {
                 createdInvitations.map((invitation) => invitation.providerOrganizationId),
               ),
             );
-    const invitedOrganizationById = new Map(
-      invitedOrganizationRows.map((row) => [row.id, row]),
-    );
+    const invitedOrganizationById = new Map(invitedOrganizationRows.map((row) => [row.id, row]));
 
     return {
       success: true,
@@ -1746,7 +1745,8 @@ export async function listProviderRfqs(input: {
   readonly cursor?: string;
 }): Promise<Result<RfqListPage, CommerceRfqsError>> {
   const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -1755,9 +1755,9 @@ export async function listProviderRfqs(input: {
     decodedCursor === null
       ? undefined
       : or(
-          lt(commerceRfq.createdAt, new Date(decodedCursor.sortKey)),
+          lt(commerceRfq.createdAt, decodedCursor.sortKey),
           and(
-            eq(commerceRfq.createdAt, new Date(decodedCursor.sortKey)),
+            eq(commerceRfq.createdAt, decodedCursor.sortKey),
             gt(commerceRfq.id, decodedCursor.id),
           ),
         );

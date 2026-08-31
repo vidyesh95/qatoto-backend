@@ -26,7 +26,7 @@ import {
   evaluateBuyerQualification,
   type BuyerQualificationVerdict,
 } from "#src/modules/store/procurement/commerce-buyer-qualification.service.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import {
   resolveCommercePaymentProvider,
   type CommercePaymentProviderError,
@@ -520,7 +520,8 @@ export async function listRefunds(
   >
 > {
   const limit = input.limit ?? 20;
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -529,9 +530,9 @@ export async function listRefunds(
     decodedCursor === null
       ? undefined
       : or(
-          lt(commerceRefund.createdAt, new Date(decodedCursor.sortKey)),
+          lt(commerceRefund.createdAt, decodedCursor.sortKey),
           and(
-            eq(commerceRefund.createdAt, new Date(decodedCursor.sortKey)),
+            eq(commerceRefund.createdAt, decodedCursor.sortKey),
             gt(commerceRefund.id, decodedCursor.id),
           ),
         );

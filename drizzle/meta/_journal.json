@@ -1100,6 +1100,13 @@
       "when": 1788153353788,
       "tag": "0156_certification_withdrawn_audit_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1788177419352,
+      "tag": "0157_shiny_maginty",
+      "breakpoints": true
     }
   ]
 }

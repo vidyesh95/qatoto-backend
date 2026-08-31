@@ -13,7 +13,7 @@ import { loadOrderCompletionIndex } from "#src/modules/store/orders/commerce-com
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import type { CommerceIncoterm } from "#src/modules/store/procurement/commerce-quotes.service.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -359,7 +359,8 @@ async function listOrdersBy(
   input: ListOrdersInput,
 ): Promise<Result<OrderListPage, CommerceOrdersError>> {
   const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -368,9 +369,9 @@ async function listOrdersBy(
     decodedCursor === null
       ? undefined
       : or(
-          lt(commerceOrder.createdAt, new Date(decodedCursor.sortKey)),
+          lt(commerceOrder.createdAt, decodedCursor.sortKey),
           and(
-            eq(commerceOrder.createdAt, new Date(decodedCursor.sortKey)),
+            eq(commerceOrder.createdAt, decodedCursor.sortKey),
             gt(commerceOrder.id, decodedCursor.id),
           ),
         );

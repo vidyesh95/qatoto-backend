@@ -3,6 +3,7 @@ import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "#src/db/index.js";
 import { commerceOrganization, commerceProductRelation, product } from "#src/db/schema.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import {
   resolveEligibleProductCardsByIds,
@@ -10,12 +11,8 @@ import {
 } from "#src/modules/store/catalog/store-catalog.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import {
-  decodeTimestampStoreCursor,
-  encodeStoreCursor,
-} from "#src/modules/store/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
-import { isUniqueViolation } from "#src/lib/pg-errors.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -310,87 +307,92 @@ export async function replaceSellerDeclaredRelations(
     return { success: false, error: { type: "SELF_RELATION" } };
   }
 
-  const outcome = await db.transaction(async (transaction) => {
-    const [ownedProduct] = await transaction
-      .select({ id: product.id })
-      .from(product)
-      .where(
-        and(eq(product.id, fromProductId), eq(product.sellerOrganizationId, actor.organizationId)),
-      )
-      .limit(1);
-    // NOT_FOUND rather than FORBIDDEN: a caller must not learn that a listing they
-    // do not own exists.
-    if (!ownedProduct) return { status: "not_found" as const };
+  const outcome = await db
+    .transaction(async (transaction) => {
+      const [ownedProduct] = await transaction
+        .select({ id: product.id })
+        .from(product)
+        .where(
+          and(
+            eq(product.id, fromProductId),
+            eq(product.sellerOrganizationId, actor.organizationId),
+          ),
+        )
+        .limit(1);
+      // NOT_FOUND rather than FORBIDDEN: a caller must not learn that a listing they
+      // do not own exists.
+      if (!ownedProduct) return { status: "not_found" as const };
 
-    const targetProductIds = [...new Set(relations.map((relation) => relation.toProductId))];
-    if (targetProductIds.length > 0) {
-      /**
-       * A relation may only point at something a buyer could reach. Checking mere
-       * existence would let a seller mine draft or suspended listings by watching
-       * which ids are accepted.
-       */
-      const eligibleTargets = await resolveEligibleProductCardsByIds(targetProductIds);
-      const eligibleIds = new Set(eligibleTargets.map((card) => card.id));
-      const invalidIds = targetProductIds.filter((productId) => !eligibleIds.has(productId));
-      if (invalidIds.length > 0) {
-        return { status: "invalid_target" as const, productIds: invalidIds };
+      const targetProductIds = [...new Set(relations.map((relation) => relation.toProductId))];
+      if (targetProductIds.length > 0) {
+        /**
+         * A relation may only point at something a buyer could reach. Checking mere
+         * existence would let a seller mine draft or suspended listings by watching
+         * which ids are accepted.
+         */
+        const eligibleTargets = await resolveEligibleProductCardsByIds(targetProductIds);
+        const eligibleIds = new Set(eligibleTargets.map((card) => card.id));
+        const invalidIds = targetProductIds.filter((productId) => !eligibleIds.has(productId));
+        if (invalidIds.length > 0) {
+          return { status: "invalid_target" as const, productIds: invalidIds };
+        }
       }
-    }
 
-    await transaction
-      .delete(commerceProductRelation)
-      .where(
-        and(
-          eq(commerceProductRelation.fromProductId, fromProductId),
-          eq(commerceProductRelation.sourceKind, "seller_declared"),
-        ),
-      );
+      await transaction
+        .delete(commerceProductRelation)
+        .where(
+          and(
+            eq(commerceProductRelation.fromProductId, fromProductId),
+            eq(commerceProductRelation.sourceKind, "seller_declared"),
+          ),
+        );
 
-    if (relations.length > 0) {
-      await transaction.insert(commerceProductRelation).values(
-        relations.map((relation, index) => ({
+      if (relations.length > 0) {
+        await transaction.insert(commerceProductRelation).values(
+          relations.map((relation, index) => ({
+            fromProductId,
+            toProductId: relation.toProductId,
+            relationKind: relation.relationKind,
+            sourceKind: "seller_declared" as const,
+            rank: relation.rank ?? index,
+            createdByUserId: actor.actorUserId,
+            createdByOrganizationId: actor.organizationId,
+          })),
+        );
+      }
+
+      await appendAuditOrThrow(transaction, {
+        organizationId: actor.organizationId,
+        eventKind: "product_relations_declared",
+        actorUserId: actor.actorUserId,
+        actorMemberRoleSnapshot: actor.memberRole,
+        targetEntityType: "product",
+        targetEntityId: fromProductId,
+        payload: {
           fromProductId,
-          toProductId: relation.toProductId,
-          relationKind: relation.relationKind,
-          sourceKind: "seller_declared" as const,
-          rank: relation.rank ?? index,
-          createdByUserId: actor.actorUserId,
-          createdByOrganizationId: actor.organizationId,
-        })),
-      );
-    }
+          relationCount: String(relations.length),
+          relationKinds: [...new Set(relations.map((relation) => relation.relationKind))],
+        },
+        occurredAt: new Date(),
+      });
 
-    await appendAuditOrThrow(transaction, {
-      organizationId: actor.organizationId,
-      eventKind: "product_relations_declared",
-      actorUserId: actor.actorUserId,
-      actorMemberRoleSnapshot: actor.memberRole,
-      targetEntityType: "product",
-      targetEntityId: fromProductId,
-      payload: {
-        fromProductId,
-        relationCount: String(relations.length),
-        relationKinds: [...new Set(relations.map((relation) => relation.relationKind))],
-      },
-      occurredAt: new Date(),
+      const rows = await transaction
+        .select()
+        .from(commerceProductRelation)
+        .where(eq(commerceProductRelation.fromProductId, fromProductId))
+        .orderBy(
+          asc(commerceProductRelation.relationKind),
+          asc(commerceProductRelation.rank),
+          asc(commerceProductRelation.id),
+        );
+
+      return { status: "replaced" as const, rows };
+    })
+    .catch((error: unknown) => {
+      // The only unique index reachable from here is the edge one — see RELATION_ALREADY_CURATED.
+      if (isUniqueViolation(error)) return { status: "already_curated" as const };
+      throw error;
     });
-
-    const rows = await transaction
-      .select()
-      .from(commerceProductRelation)
-      .where(eq(commerceProductRelation.fromProductId, fromProductId))
-      .orderBy(
-        asc(commerceProductRelation.relationKind),
-        asc(commerceProductRelation.rank),
-        asc(commerceProductRelation.id),
-      );
-
-    return { status: "replaced" as const, rows };
-  }).catch((error: unknown) => {
-    // The only unique index reachable from here is the edge one — see RELATION_ALREADY_CURATED.
-    if (isUniqueViolation(error)) return { status: "already_curated" as const };
-    throw error;
-  });
 
   switch (outcome.status) {
     case "not_found":

@@ -568,7 +568,9 @@ export const notification = pgTable(
     readAt: timestamp("read_at"),
     emailStatus: notificationEmailStatusEnum("email_status").default("queued").notNull(),
     emailSentAt: timestamp("email_sent_at"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
   },
   (table) => [
     // The keyset index: (recipient, createdAt, id) matches the feed's ORDER BY

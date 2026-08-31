@@ -11,7 +11,7 @@ import {
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
 import { createOrGetThread } from "#src/modules/store/procurement/commerce-messages.service.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import { resolveFactoryForInquiry } from "#src/modules/store/storefront/store-factories.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -630,7 +630,8 @@ async function listInquiries(input: {
   readonly limit: number;
   readonly cursor?: string;
 }): Promise<Result<ManufacturingInquiryPage, CommerceManufacturingInquiryError>> {
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -648,7 +649,7 @@ async function listInquiries(input: {
     filters.push(eq(commerceManufacturingInquiry.state, input.state));
   }
   if (decodedCursor !== null) {
-    const cursorInstant = new Date(decodedCursor.sortKey);
+    const cursorInstant = decodedCursor.sortKey;
     if (Number.isNaN(cursorInstant.getTime())) {
       return { success: false, error: { type: "INVALID_CURSOR" } };
     }

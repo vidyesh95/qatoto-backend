@@ -145,7 +145,9 @@ export const user = pgTable(
      * account must leave the directory rather than keep being advertised.
      */
     isChannelListed: boolean("is_channel_listed").default(true).notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
       .$onUpdate(() => /* @__PURE__ */ new Date())
@@ -301,7 +303,9 @@ export const userReport = pgTable(
     }),
     resolvedAt: timestamp("resolved_at"),
     resolutionNote: text("resolution_note"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
+    // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
+    // microsecond column makes rows unreachable at every page boundary (store-cursor.ts).
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
   },
   (table) => [
     // Partial for the reason `video_content_report_reporter_uidx` states: `reporter_user_id` is

@@ -28,7 +28,11 @@ import {
 } from "#src/modules/store/orders/commerce-cart.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import {
+  decodeStoreCursor,
+  decodeTimestampStoreCursor,
+  encodeStoreCursor,
+} from "#src/modules/store/store-cursor.js";
 import { getPathwaySetBySlug } from "#src/modules/store/storefront/store-pathways.service.js";
 import type { Result } from "#src/types/index.js";
 
@@ -323,7 +327,9 @@ async function projectPathway(
    * reads the exact number the validator will judge it by, rather than a second opinion that
    * could drift.
    */
-  const candidateProductIds = [...new Set(candidateRows.map((candidateRow) => candidateRow.productId))];
+  const candidateProductIds = [
+    ...new Set(candidateRows.map((candidateRow) => candidateRow.productId)),
+  ];
   const candidateProductCards =
     candidateProductIds.length === 0
       ? []
@@ -1386,14 +1392,13 @@ export async function listPathwayModerationQueue(
   }
 
   const limit = page.limit ?? DEFAULT_PAGE_LIMIT;
-  const decodedCursor = page.cursor === undefined ? null : decodeStoreCursor(page.cursor);
+  const decodedCursor = page.cursor === undefined ? null : decodeTimestampStoreCursor(page.cursor);
   if (page.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
-  const cursorSubmittedAt = decodedCursor === null ? null : new Date(decodedCursor.sortKey);
-  if (cursorSubmittedAt !== null && Number.isNaN(cursorSubmittedAt.getTime())) {
-    return { success: false, error: { type: "INVALID_CURSOR" } };
-  }
+  // decodeTimestampStoreCursor already rejects anything that is not an exact ISO
+  // millisecond string, so the old Number.isNaN(getTime()) guard here was unreachable.
+  const cursorSubmittedAt = decodedCursor === null ? null : decodedCursor.sortKey;
 
   const rows = await db
     .select()

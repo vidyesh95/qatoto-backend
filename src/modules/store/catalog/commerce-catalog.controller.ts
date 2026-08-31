@@ -146,7 +146,10 @@ function mapRelationError(res: Response, error: CommerceProductRelationError): v
  * `seller_declared`; it must never be expressed as `verifiedAt IS NULL`, which would also match
  * every row the nightly co-occurrence job writes.
  */
-export async function listProductRelationsForModeration(req: Request, res: Response): Promise<void> {
+export async function listProductRelationsForModeration(
+  req: Request,
+  res: Response,
+): Promise<void> {
   const userId = req.user?.id;
   if (!userId) {
     res.status(401).json({

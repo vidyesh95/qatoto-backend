@@ -13,7 +13,7 @@ import {
   commerceThread,
   commerceThreadParticipant,
 } from "#src/db/schema.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -523,7 +523,8 @@ export async function listThreadsForOrganization(input: {
     };
   }
 
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "VALIDATION_FAILED", message: "Invalid cursor." } };
   }
@@ -532,9 +533,9 @@ export async function listThreadsForOrganization(input: {
     decodedCursor === null
       ? undefined
       : or(
-          lt(commerceThread.updatedAt, new Date(decodedCursor.sortKey)),
+          lt(commerceThread.updatedAt, decodedCursor.sortKey),
           and(
-            eq(commerceThread.updatedAt, new Date(decodedCursor.sortKey)),
+            eq(commerceThread.updatedAt, decodedCursor.sortKey),
             gt(commerceThread.id, decodedCursor.id),
           ),
         );
@@ -702,7 +703,8 @@ export async function listMessages(input: {
     };
   }
 
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return {
       success: false,
@@ -714,9 +716,9 @@ export async function listMessages(input: {
     decodedCursor === null
       ? undefined
       : or(
-          lt(commerceMessage.createdAt, new Date(decodedCursor.sortKey)),
+          lt(commerceMessage.createdAt, decodedCursor.sortKey),
           and(
-            eq(commerceMessage.createdAt, new Date(decodedCursor.sortKey)),
+            eq(commerceMessage.createdAt, decodedCursor.sortKey),
             gt(commerceMessage.id, decodedCursor.id),
           ),
         );

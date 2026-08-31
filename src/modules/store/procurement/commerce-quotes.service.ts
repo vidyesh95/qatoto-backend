@@ -57,7 +57,7 @@ import {
 } from "#src/modules/store/orders/commerce-settlement.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
-import { decodeStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
+import { decodeTimestampStoreCursor, encodeStoreCursor } from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -1446,7 +1446,8 @@ export async function listProviderQuotes(
   >
 > {
   const limit = input.limit ?? 20;
-  const decodedCursor = input.cursor === undefined ? null : decodeStoreCursor(input.cursor);
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
   if (input.cursor !== undefined && decodedCursor === null) {
     return { success: false, error: { type: "INVALID_CURSOR" } };
   }
@@ -1455,9 +1456,9 @@ export async function listProviderQuotes(
     decodedCursor === null
       ? undefined
       : or(
-          lt(commerceQuote.updatedAt, new Date(decodedCursor.sortKey)),
+          lt(commerceQuote.updatedAt, decodedCursor.sortKey),
           and(
-            eq(commerceQuote.updatedAt, new Date(decodedCursor.sortKey)),
+            eq(commerceQuote.updatedAt, decodedCursor.sortKey),
             gt(commerceQuote.id, decodedCursor.id),
           ),
         );
