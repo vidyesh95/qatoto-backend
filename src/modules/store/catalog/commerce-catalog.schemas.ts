@@ -5,6 +5,16 @@ import { z } from "zod";
  * bicycle" does not invert. Symmetric meanings (`complements`, `compatible_with`)
  * are stored as two rows so one query direction serves every read.
  */
+/**
+ * Who asserted a relation. Read-only on the seller's write — a client cannot set it — but a
+ * moderator's LIST may filter by it, which is the only reason it is expressible at all.
+ */
+export const ProductRelationSourceKindSchema = z.enum([
+  "seller_declared",
+  "moderator_curated",
+  "derived_cooccurrence",
+]);
+
 export const ProductRelationKindSchema = z.enum([
   "accessory_of",
   "spare_part_of",
@@ -59,3 +69,20 @@ export type ReplaceProductRelationsInput = z.infer<typeof ReplaceProductRelation
 export const EmptyObjectSchema = z.object({}).strict();
 
 export const EmptyRequestBodySchema = z.union([z.undefined(), EmptyObjectSchema]);
+
+/**
+ * `GET /commerce/admin/product-relations`.
+ *
+ * ⚠️ **`sourceKind` HAS NO DEFAULT HERE, ON PURPOSE.** The controller applies
+ * `seller_declared`, which keeps an explicit `?sourceKind=derived_cooccurrence` expressible for a
+ * moderator who wants to audit the machine's own edges. Putting the default in the schema would
+ * make the common case convenient and the deliberate one impossible — the same split
+ * `ListCertificationsForModerationQuerySchema` uses for its state filter.
+ */
+export const ListProductRelationsForModerationQuerySchema = z
+  .object({
+    sourceKind: ProductRelationSourceKindSchema.optional(),
+    cursor: z.string().trim().min(1).max(500).optional(),
+    limit: z.coerce.number().int().min(1).max(50).default(25),
+  })
+  .strict();

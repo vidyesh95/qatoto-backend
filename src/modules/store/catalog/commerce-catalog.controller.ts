@@ -5,6 +5,7 @@ import { respondValidationFailed } from "#src/modules/rnd/projects/project-error
 import {
   ProductIdParamsSchema,
   RelationIdParamsSchema,
+  ListProductRelationsForModerationQuerySchema,
   ReplaceProductRelationsSchema,
 } from "#src/modules/store/catalog/commerce-catalog.schemas.js";
 import {
@@ -105,6 +106,14 @@ function mapRelationError(res: Response, error: CommerceProductRelationError): v
           "A moderator has already confirmed one of these related products. Remove it from your list — their version stays.",
       } satisfies ApiResponse);
       return;
+    case "INVALID_CURSOR":
+      // A page token this service did not mint. A caller error, never a 500.
+      res.status(422).json({
+        status: "error",
+        statusCode: 422,
+        message: "Invalid cursor.",
+      } satisfies ApiResponse);
+      return;
     case "ALREADY_VERIFIED":
       res.status(409).json({
         status: "error",
@@ -125,6 +134,51 @@ function mapRelationError(res: Response, error: CommerceProductRelationError): v
       throw new Error(`Unhandled product relation error: ${JSON.stringify(exhaustiveError)}`);
     }
   }
+}
+
+/**
+ * GET /commerce/admin/product-relations
+ *
+ * The claims a moderator may promote. ⚠️ **`moderate_commerce` is checked inside the SERVICE**, not
+ * in the route chain, so a caller without it learns nothing about whether rows exist.
+ *
+ * ⚠️ **THE DEFAULT IS APPLIED HERE RATHER THAN IN THE SCHEMA** — see its docblock. Unreviewed means
+ * `seller_declared`; it must never be expressed as `verifiedAt IS NULL`, which would also match
+ * every row the nightly co-occurrence job writes.
+ */
+export async function listProductRelationsForModeration(req: Request, res: Response): Promise<void> {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const query = ListProductRelationsForModerationQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const listed = await commerceProductRelationsService.listRelationsForModeration(userId, {
+    sourceKind: query.data.sourceKind ?? "seller_declared",
+    limit: query.data.limit,
+    ...(query.data.cursor === undefined ? {} : { cursor: query.data.cursor }),
+  });
+  if (!listed.success) {
+    mapRelationError(res, listed.error);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Product relations awaiting review.",
+    data: listed.value,
+  } satisfies ApiResponse);
 }
 
 /**

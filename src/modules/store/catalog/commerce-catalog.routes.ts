@@ -26,6 +26,23 @@ router.put(
   commerceCatalogController.replaceProductRelations,
 );
 
+/**
+ * The list the verify route below never had.
+ *
+ * ⚠️ Without this, `verify` is reachable only by a caller who already holds a `relationId` — which
+ * nothing hands out — so the whole moderator half of §15.3 was unreachable. Third instance of that
+ * pattern in this module, and the doc says so.
+ *
+ * `requireAuth` only: the capability is enforced in the service so it is not probeable from the
+ * route table. The write limiter is reused for the read, as the sibling admin queues do.
+ */
+router.get(
+  "/admin/product-relations",
+  requireAuth,
+  commerceProductRelationWriteLimiter,
+  commerceCatalogController.listProductRelationsForModeration,
+);
+
 router.post(
   "/admin/product-relations/:relationId/verify",
   requireAuth,

@@ -1,7 +1,8 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, lt, or, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "#src/db/index.js";
-import { commerceProductRelation, product } from "#src/db/schema.js";
+import { commerceOrganization, commerceProductRelation, product } from "#src/db/schema.js";
 import { requirePlatformCapability } from "#src/modules/platform/roles/platform-role.service.js";
 import {
   resolveEligibleProductCardsByIds,
@@ -9,6 +10,10 @@ import {
 } from "#src/modules/store/catalog/store-catalog.service.js";
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { appendCommerceOrganizationAuditEntry } from "#src/modules/store/organizations/commerce-organization-audit.service.js";
+import {
+  decodeTimestampStoreCursor,
+  encodeStoreCursor,
+} from "#src/modules/store/store-cursor.js";
 import type { Result } from "#src/types/index.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 
@@ -39,7 +44,181 @@ export type CommerceProductRelationError =
    */
   | { type: "RELATION_ALREADY_CURATED" }
   | { type: "ALREADY_VERIFIED" }
+  /** A cursor this service did not mint. Never a 500 — a bad page token is a caller error. */
+  | { type: "INVALID_CURSOR" }
   | { type: "PLATFORM_CAPABILITY_REQUIRED"; capability: "moderate_commerce" };
+
+/**
+ * One relation as a MODERATOR sees it.
+ *
+ * ⚠️ **BOTH ENDS ARE NAMED, AND THE TARGET'S STATE RIDES ALONG.** The row stores only ids, and a
+ * reviewer cannot judge "does this bolt really fit that bicycle" from two uuids. The target's
+ * `status` and `moderationState` are here deliberately: they are how a reviewer sees that the
+ * seller has since unpublished what they were claiming a fit against.
+ */
+export interface ProductRelationModerationProjection {
+  readonly id: string;
+  readonly relationKind: CommerceProductRelationKind;
+  readonly sourceKind: CommerceProductRelationSourceKind;
+  readonly createdAt: string;
+  readonly fromProductId: string;
+  readonly fromProductTitle: string;
+  readonly fromProductPublicSlug: string | null;
+  readonly toProductId: string;
+  readonly toProductTitle: string;
+  readonly toProductPublicSlug: string | null;
+  readonly toProductStatus: string;
+  readonly toProductModerationState: string;
+  /** Who made the claim. A claim with no claimant behind it cannot be judged. */
+  readonly sellerOrganizationId: string;
+  readonly sellerOrganizationDisplayName: string;
+}
+
+export interface ListRelationsForModerationQuery {
+  readonly sourceKind: CommerceProductRelationSourceKind;
+  readonly limit: number;
+  readonly cursor?: string;
+}
+
+/**
+ * The claims a moderator can promote.
+ *
+ * ⚠️ **THIS LIST CANNOT BE DISMISSED FROM, AND THAT IS A PROPERTY OF THE SCHEMA RATHER THAN AN
+ * OVERSIGHT HERE.** There is no review state beside `sourceKind`, and
+ * `commerce_product_relation_verified_ck` enforces that attribution exists IFF `moderator_curated`,
+ * so nothing can record "a moderator looked at this and left it". `updatedAt` cannot stand in
+ * either — verification is the only UPDATE in the codebase, so it equals `createdAt` on every
+ * unverified row. The list therefore shrinks only when a claim is CONFIRMED or the seller retracts
+ * it. Adding real dismissal is a migration; until then the console says so rather than implying a
+ * queue that drains.
+ *
+ * ⚠️ **FILTERED ON `sourceKind`, NEVER ON `verifiedAt IS NULL`.** Those look equivalent and are
+ * not: `derived_cooccurrence` rows are null-attributed too, so the timestamp predicate would pour
+ * the nightly co-occurrence graph into a human review list.
+ *
+ * ⚠️ **INNER JOINS, NOT `resolveEligibleProductCardsByIds`.** That helper applies
+ * `publicProductEligibility` and silently DROPS a target that is not publicly visible — which would
+ * let a seller hide a claim from review by unpublishing the thing they claimed a fit against, and
+ * would under-fill the page and corrupt `hasMore` on the way. Both FKs are `NOT NULL` with
+ * `ON DELETE restrict`, so the joined rows always exist.
+ *
+ * ASC, because this is a queue and not a feed: newest-first is how the oldest claim never gets read.
+ */
+export async function listRelationsForModeration(
+  actorUserId: string,
+  query: ListRelationsForModerationQuery,
+): Promise<
+  Result<
+    {
+      items: readonly ProductRelationModerationProjection[];
+      page: { nextCursor: string | null; hasMore: boolean };
+    },
+    CommerceProductRelationError
+  >
+> {
+  // Before any row is read, so the route is not an existence oracle for a caller without it.
+  const capability = await requirePlatformCapability(actorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return {
+      success: false,
+      error: { type: "PLATFORM_CAPABILITY_REQUIRED", capability: "moderate_commerce" },
+    };
+  }
+
+  const fromProduct = alias(product, "from_product");
+  const toProduct = alias(product, "to_product");
+
+  const filters: SQL[] = [eq(commerceProductRelation.sourceKind, query.sourceKind)];
+
+  if (query.cursor !== undefined) {
+    const cursor = decodeTimestampStoreCursor(query.cursor);
+    if (!cursor) return { success: false, error: { type: "INVALID_CURSOR" } };
+    /**
+     * ⚠️ **A MILLISECOND WINDOW, NOT AN EQUALITY, AND THE OBVIOUS VERSION IS BROKEN HERE.**
+     *
+     * The sibling queues write `gt(sortColumn, cursor) OR (eq(sortColumn, cursor) AND gt(id, …))`,
+     * and that is correct FOR THEM because their sort columns are written from JavaScript, so the
+     * stored value is millisecond-precise and `toISOString()` round-trips it exactly.
+     *
+     * `created_at` here defaults to Postgres `now()`, which is **microsecond**-precise —
+     * `11:15:24.538694`. The cursor can only carry `…538Z`, so `eq` never matches and `gt` matches
+     * the row the cursor points AT. **Measured, not reasoned about**: page 2 returned page 1's row.
+     *
+     * So the comparison is done against the millisecond the cursor names: everything after that
+     * millisecond, plus anything inside it with a larger id. Correct at any stored precision, and
+     * still a range scan.
+     */
+    const cursorMillisecond = cursor.sortKey;
+    const nextMillisecond = new Date(cursorMillisecond.getTime() + 1);
+    const keyset = or(
+      gte(commerceProductRelation.createdAt, nextMillisecond),
+      and(
+        gte(commerceProductRelation.createdAt, cursorMillisecond),
+        lt(commerceProductRelation.createdAt, nextMillisecond),
+        gt(commerceProductRelation.id, cursor.id),
+      ),
+    );
+    if (keyset) filters.push(keyset);
+  }
+
+  const rows = await db
+    .select({
+      id: commerceProductRelation.id,
+      relationKind: commerceProductRelation.relationKind,
+      sourceKind: commerceProductRelation.sourceKind,
+      createdAt: commerceProductRelation.createdAt,
+      fromProductId: commerceProductRelation.fromProductId,
+      fromProductTitle: fromProduct.title,
+      fromProductPublicSlug: fromProduct.publicSlug,
+      toProductId: commerceProductRelation.toProductId,
+      toProductTitle: toProduct.title,
+      toProductPublicSlug: toProduct.publicSlug,
+      toProductStatus: toProduct.status,
+      toProductModerationState: toProduct.moderationState,
+      sellerOrganizationId: fromProduct.sellerOrganizationId,
+      sellerOrganizationDisplayName: commerceOrganization.displayName,
+    })
+    .from(commerceProductRelation)
+    .innerJoin(fromProduct, eq(fromProduct.id, commerceProductRelation.fromProductId))
+    .innerJoin(toProduct, eq(toProduct.id, commerceProductRelation.toProductId))
+    .innerJoin(commerceOrganization, eq(commerceOrganization.id, fromProduct.sellerOrganizationId))
+    .where(and(...filters))
+    .orderBy(asc(commerceProductRelation.createdAt), asc(commerceProductRelation.id))
+    .limit(query.limit + 1);
+
+  const hasMore = rows.length > query.limit;
+  const pageRows = hasMore ? rows.slice(0, query.limit) : rows;
+  const lastRow = pageRows.at(-1);
+
+  return {
+    success: true,
+    value: {
+      items: pageRows.map((row) => ({
+        id: row.id,
+        relationKind: row.relationKind,
+        sourceKind: row.sourceKind,
+        createdAt: row.createdAt.toISOString(),
+        fromProductId: row.fromProductId,
+        fromProductTitle: row.fromProductTitle,
+        fromProductPublicSlug: row.fromProductPublicSlug,
+        toProductId: row.toProductId,
+        toProductTitle: row.toProductTitle,
+        toProductPublicSlug: row.toProductPublicSlug,
+        toProductStatus: row.toProductStatus,
+        toProductModerationState: row.toProductModerationState,
+        sellerOrganizationId: row.sellerOrganizationId,
+        sellerOrganizationDisplayName: row.sellerOrganizationDisplayName,
+      })),
+      page: {
+        nextCursor:
+          hasMore && lastRow
+            ? encodeStoreCursor({ sortKey: lastRow.createdAt.toISOString(), id: lastRow.id })
+            : null,
+        hasMore: hasMore && lastRow !== undefined,
+      },
+    },
+  };
+}
 
 export interface CommerceProductRelationActorContext {
   readonly organizationId: string;
