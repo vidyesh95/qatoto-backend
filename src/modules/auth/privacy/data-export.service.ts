@@ -561,6 +561,33 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     ),
   };
 
+  /**
+   * PRODUCT PAGES THE SUBJECT OPENED WHILE SIGNED IN.
+   *
+   * ⚠️ **ADDED WITH THE PRODUCT VIEW BEACON, AND IT HAD TO BE.** Until the beacon shipped nothing
+   * called the route, so the table held no production rows and its absence here cost nothing. The
+   * moment a signed-in reader opens a listing, `commerce_product_view_session.viewer_id` carries
+   * their account id and Art. 15 asks for the row — an export missing it is silently incomplete,
+   * which is worse than one that never had it.
+   *
+   * ⚠️ **`viewer_fingerprint` AND `subnet_hash` ARE DELIBERATELY NOT SELECTED**, on the same
+   * reasoning the watch fingerprint is excluded below: they are salted hashes that exist to stop
+   * one person counting as many, they are not identifiers anyone here can read back, and printing
+   * them would tell the subject nothing about themselves while handing out the shape of an
+   * anti-fraud control. `notIncluded` says so in the document.
+   *
+   * Anonymisation is already handled elsewhere — `anonymization-manifest.ts` nulls `viewer_id`,
+   * which leaves the row as anonymous traffic rather than deleting a seller's view count.
+   */
+  const productPagesYouLookedAt = await collect(
+    "productPagesYouLookedAt",
+    sql`SELECT product_id, view_day_bucket, view_source, dwell_seconds, is_counted_view,
+               first_beacon_at, last_beacon_at
+        FROM commerce_product_view_session
+        WHERE viewer_id = ${userId}
+        ORDER BY view_day_bucket DESC`,
+  );
+
   const workYouHaveDone = {
     projectsFounded: await collect(
       "projectsFounded",
@@ -607,6 +634,14 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
           what: "The platform-wide hour-by-hour activity total",
           why: "It carries no account id at all, so there is no way to say which part of it is yours.",
         },
+        {
+          what: "The per-day code and blunted network address stored beside each product-page view",
+          why: "Salted hashes that stop one person's reloads counting as many shoppers. They are not identifiers we can read back, so printing them would tell you nothing about yourself.",
+        },
+        {
+          what: "Product pages you opened while signed out",
+          why: "They carry no account id, so there is no way to say which of them were yours.",
+        },
       ],
     },
     whoYouAre,
@@ -615,6 +650,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     howYouSignIn,
     whatYouDoHere,
     howMuchYouWatch,
+    productPagesYouLookedAt,
     workYouHaveDone,
     /**
      * PRESENT AND EMPTY, ON PURPOSE. The panel lists "Settings on this device" as one of
