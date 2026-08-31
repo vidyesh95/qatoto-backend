@@ -203,8 +203,37 @@ export async function logConnectionBudget(
   processConnectionCeiling: number,
 ): Promise<void> {
   try {
-    const result = await pool.query<{ max_connections: string }>("SHOW max_connections");
+    // ⚠️ THREE NUMBERS, NOT ONE, AND THE DIFFERENCE BETWEEN THEM IS THE WHOLE POINT.
+    //
+    // `max_connections` alone OVERSTATES what this application may use, and reasoning from it is
+    // how a budget ends up wrong in the optimistic direction. Two subtractions matter:
+    //
+    //   1. `superuser_reserved_connections` is unavailable to an ordinary role. On Aiven the
+    //      application connects as `avnadmin`, which has `rolsuper = false`, so those slots are
+    //      not ours — measured, not assumed.
+    //   2. The managed provider keeps its own CLIENT connections (Aiven's management-agent, and
+    //      on RDS the equivalent), which occupy real slots.
+    //
+    // ⚠️ AND THE COUNT MUST FILTER ON `backend_type = 'client backend'`. `pg_stat_activity` also
+    // lists background workers — `pg_cron launcher`, `TimescaleDB Background Worker Launcher`,
+    // `pg_failover_slots worker`, `checkpointer`, `walwriter` — which draw on
+    // `max_worker_processes`, NOT on `max_connections`. Counting them makes the server look ~10
+    // connections busier than it is and produces a budget that is wrong in the pessimistic
+    // direction. Both mistakes have been made against this database; the filter is the fix.
+    const result = await pool.query<{
+      max_connections: string;
+      superuser_reserved: string;
+      client_backends: string;
+    }>(
+      `SELECT current_setting('max_connections')            AS max_connections,
+              current_setting('superuser_reserved_connections') AS superuser_reserved,
+              (SELECT count(*) FROM pg_stat_activity
+                WHERE backend_type = 'client backend')      AS client_backends`,
+    );
+
     const serverMaxConnections = Number(result.rows[0]?.max_connections);
+    const superuserReserved = Number(result.rows[0]?.superuser_reserved);
+    const clientBackendsInUse = Number(result.rows[0]?.client_backends);
 
     if (!Number.isFinite(serverMaxConnections) || serverMaxConnections <= 0) {
       console.warn(
@@ -214,10 +243,22 @@ export async function logConnectionBudget(
       return;
     }
 
-    const sharePercent = Math.round((processConnectionCeiling / serverMaxConnections) * 100);
+    // Reserved slots are not ours to spend. A server that fails to report them is treated as
+    // reserving none, which is the conservative direction for a LOG (it under-claims headroom
+    // rather than inventing it).
+    const availableToApplication =
+      serverMaxConnections - (Number.isFinite(superuserReserved) ? superuserReserved : 0);
+
+    const sharePercent = Math.round((processConnectionCeiling / availableToApplication) * 100);
+    const inUseNote = Number.isFinite(clientBackendsInUse)
+      ? ` ${clientBackendsInUse} client backend(s) connected right now.`
+      : "";
     const summary =
       `Connection budget: ${processLabel} may hold up to ${processConnectionCeiling} of the ` +
-      `server's ${serverMaxConnections} connections (${sharePercent}%).`;
+      `${availableToApplication} connections available to this role ` +
+      `(${sharePercent}%; server max_connections ${serverMaxConnections}, ` +
+      `${Number.isFinite(superuserReserved) ? superuserReserved : 0} reserved for superusers).` +
+      inUseNote;
 
     if (sharePercent > SAFE_PROCESS_SHARE_PERCENT) {
       console.warn(
@@ -230,6 +271,6 @@ export async function logConnectionBudget(
     console.log(summary);
   } catch (error: unknown) {
     // A failure here says nothing about whether the service can serve traffic.
-    console.warn("Connection budget: could not read max_connections from the server.", error);
+    console.warn("Connection budget: could not read the connection limits from the server.", error);
   }
 }

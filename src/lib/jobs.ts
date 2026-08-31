@@ -1637,7 +1637,52 @@ export function createPgBossDbAdapter(targetPool: Pool = pool): PgBossDb {
   };
 }
 
+/**
+ * How often the send-only instance refreshes its queue-name cache.
+ *
+ * ⚠️ **THIS IS A RECOVERY WINDOW, NOT A FRESHNESS KNOB. DO NOT RAISE IT TO THE 24-HOUR MAXIMUM.**
+ *
+ * pg-boss installs this poller in `Manager.start()` UNCONDITIONALLY — `supervise: false` and
+ * `schedule: false` gate the maintenance, navigator and timekeeper subsystems and nothing else
+ * (`pg-boss/dist/index.js`). So a "send-only" instance still queries `getQueues()` on a timer, and
+ * at the 60-second default that poll was competing with HTTP handlers for the shared pool and
+ * losing: `Connection terminated due to connection timeout`, logged once a minute forever.
+ *
+ * Sending does not need the refresh. `Manager.getQueueCache` self-heals on a miss — an unknown
+ * queue name is fetched individually and cached — and queue metadata is written by
+ * `pnpm jobs:install` at deploy time, not at runtime. So the only thing the interval still buys is
+ * RECOVERY: if the FIRST cache load fails, `manager.queues` stays undefined and every enqueue
+ * asserts "Queue cache is not initialized" until the next tick. That is why this is fifteen
+ * minutes and not twenty-four hours — the maximum would turn a transient startup failure into a
+ * day-long outage of every background job on the platform.
+ */
+const SEND_ONLY_QUEUE_CACHE_INTERVAL_SECONDS = 900;
+
 let sendOnlyBossPromise: Promise<PgBoss> | null = null;
+
+/**
+ * A pg-boss instance this process ALREADY owns, if it has one.
+ *
+ * ⚠️ **THE WORKER USED TO RUN TWO INSTANCES AND ONLY ONE OF THEM WAS ON PURPOSE.** `sendJob` is
+ * called from worker handlers as well as from HTTP handlers (`src/jobs/scheduled-ticks.ts` re-
+ * enqueues on every tick), and it used to reach for the lazily-built send-only instance
+ * unconditionally. So the worker held its own boss on `workerPool` PLUS a second one on the shared
+ * pool — two connections' worth of pollers, both querying the same tables, in a process that was
+ * already the tightest consumer of a 16-connection budget.
+ *
+ * The worker registers its own instance at startup and sends through that instead.
+ */
+let registeredSendingBoss: PgBoss | null = null;
+
+/**
+ * Lets a process that already owns a pg-boss instance send through it rather than building a
+ * second one. Called by `src/worker.ts` immediately after it constructs its boss.
+ *
+ * The API never calls this: it owns no boss, so it gets the lazy send-only instance below.
+ */
+export function registerSendingBoss(boss: PgBoss): void {
+  registeredSendingBoss = boss;
+}
 
 /**
  * The API process's send-only pg-boss instance, started lazily on first enqueue.
@@ -1656,6 +1701,9 @@ async function getSendOnlyBoss(): Promise<PgBoss> {
       migrate: false,
       supervise: false,
       schedule: false,
+      // See the constant. `supervise`/`schedule` do NOT stop the queue-cache poller, so this is
+      // what actually keeps a send-only instance from polling every minute.
+      queueCacheIntervalSeconds: SEND_ONLY_QUEUE_CACHE_INTERVAL_SECONDS,
     });
 
     boss.on("error", (error: unknown) => {
@@ -1765,7 +1813,8 @@ export async function sendJob<TName extends JobName>(
     sendOptions.db = options.db;
   }
 
-  const boss = await getSendOnlyBoss();
+  // The worker's own instance when there is one, the lazy send-only instance otherwise.
+  const boss = registeredSendingBoss ?? (await getSendOnlyBoss());
 
   // pg-boss signals a DEDUPLICATED send by resolving null rather than throwing, so a
   // null jobId is a success — the work is already queued — and callers must not treat it

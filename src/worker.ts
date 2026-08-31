@@ -43,6 +43,7 @@ import {
   createPgBossDbAdapter,
   JOB_NAMES,
   PermanentJobError,
+  registerSendingBoss,
   stopSendOnlyBoss,
   type JobName,
 } from "#src/lib/jobs.js";
@@ -160,6 +161,15 @@ const boss = new PgBoss({
 boss.on("error", (error: unknown) => {
   console.error("pg-boss worker error:", error);
 });
+
+// SEND THROUGH THE INSTANCE THIS PROCESS ALREADY OWNS.
+//
+// ⚠️ Without this the worker runs TWO pg-boss instances. `sendJob` is called from handlers here —
+// `scheduled-ticks.ts` re-enqueues on every tick — and it otherwise builds the lazy send-only
+// instance on the SHARED pool, on top of this one on `workerPool`. Two instances means two
+// queue-cache pollers hitting the same tables from one process, against a connection budget where
+// the worker is already the largest consumer (it holds both pools).
+registerSendingBoss(boss);
 
 /**
  * Wraps a handler so every failure is classified and recorded.
