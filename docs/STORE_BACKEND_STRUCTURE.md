@@ -5405,13 +5405,32 @@ before the order/buyer-scope test, so a wrong-kind engagement on another order l
 `PROVIDER_KIND_MISMATCH` rather than `NOT_FOUND`. Kept because changing it changes a status code
 `POST /orders/:orderId/shipments` already returns.
 
-⚠️ **STILL NOT EXERCISED AGAINST A REAL SHIPMENT, and this is the one gap Phase 27 did not close.**
-The database holds exactly ONE `commerce_shipment` row, and adding a leg to it or re-pointing its
-engagement would write commerce data plus append-only audit entries that cannot honestly be deleted
-afterwards — so the authorization branches, the sequence-collision `CONFLICT` and the
-`VERSION_CONFLICT` path remain reasoned from `executeShipmentLegCommand` and `createShipment`, which
-they mirror, rather than observed. Typecheck, lint and the 184 tests in
-`src/modules/store/fulfillment/` plus the limiter, body-budget and route-order sweeps all pass.
+✅ **EXERCISED against the live database by `pnpm db:smoke-store-phase-27`:** a shipment created
+with `legs[]` (the input that was refused until this phase), a leg added to an existing shipment
+(201, correct `sequence` and `mode`), and a taken sequence refused with **409** whose message names
+the number.
+
+⚠️ **THE ASSIGNMENT RAIL IS STRUCTURALLY UNREACHABLE, AND THAT IS THE MOST USEFUL THING PHASE 27
+FOUND.** `logistics_engagement_id` cannot be exercised end to end by anyone today — not for want of
+a test, but because of a chain upstream of this route:
+
+1. `insert(commerceServiceEngagement)` appears in exactly ONE place in `src/` —
+   `commerce-quotes.service.ts`, the quote-accept path. Nothing else ever creates one.
+2. Accepting a quote produces an order on the **`direct_offline`** rail.
+3. `direct_offline` is refused a payment intent by name (`PAYMENT_INTENT_RAIL_REFUSALS`): "Record
+   the transfer as a settlement attestation rather than paying it here."
+4. A settlement attestation records that money moved and **never touches `commerce_order.state`**.
+   Only `applyPaymentSettlement` and the escrow service set `confirmed`; neither runs on this rail.
+5. `createShipment` requires `confirmed | in_fulfillment | partially_completed`.
+
+**So the only orders that carry a freight engagement are the only orders that can never be
+shipped.** The route and its authorization are correct; what is missing is a confirmation path for
+an offline order, which is a product decision and affects anything else wanting to fulfil a
+quote-originated order. The smoke's three assignment checks — attach, stale `VERSION_CONFLICT`,
+detach — therefore SKIP with the reason printed rather than being deleted or quietly passing.
+
+Typecheck, lint and the 184 tests in `src/modules/store/fulfillment/` plus the limiter, body-budget
+and route-order sweeps all pass.
 
 ---
 
@@ -5532,10 +5551,17 @@ The `18` is worth noting: it is real data, over eighteen genuinely sold order li
 coverage denominator doing its job — every one of them has no cost basis, which is exactly why
 `sourcingCost` may never be rendered without it.
 
-⚠️ **WHAT IS STILL UNPROVEN.** No listing has been linked to a quote and no order has carried a
-requested mode, because both need writes. So `loadSourcingCost`'s aggregation and the mode
-round-trip have been proven to RUN and to return their empty/absent forms correctly; they have not
-been proven to produce a correct non-empty number.
+✅ **NOW PROVEN NON-EMPTY, by `pnpm db:smoke-store-phase-27`.** A listing was linked to a quote the
+seller accepted, and `sourcingCost` came back **`USD 384000`** with
+`orderLinesWithNoSourcingRecord` falling to `0` — the aggregation, its join and its window all
+running over real rows rather than returning an honest empty. The four-table refusal was exercised
+too: linking a quote line belonging to another organization answers **422**. And a checkout carrying
+`requestedFreightMode: "sea"` moved the freight component off `mode_not_selected`, snapshotted
+`"sea"` onto the order, and the seller read it back.
+
+⚠️ **WHAT THE PRICED PATH STILL CANNOT SHOW.** The freight component moved to `leg_uncovered`, not
+to a day range — no rate card covers any lane, by design (§18 is a purchase). A priced arrival
+window remains unobservable until a forwarder lane list is bought.
 
 ---
 
@@ -5575,7 +5601,8 @@ cleared. `PublicProduct` did not project the column, so the form would have pref
 same failure shape as a replace-set endpoint shipped without an owner-side read: a write with no
 matching read destroys data, and the absence of the read is the bug.
 
-✅ **EXERCISED.** `GET /commerce/sourcing/quote-lines` answers 200 with the exact cursor envelope and
-an empty `items` for a seller with no accepted quotes — which is the correct answer for every seller
-today, since the database holds two `commerce_quote_product_line` rows and neither belongs to an
-accepted revision. The join has not been proven to return a non-empty page.
+✅ **EXERCISED, EMPTY AND NON-EMPTY.** `GET /commerce/sourcing/quote-lines` answered 200 with the
+exact cursor envelope and an empty `items` for a seller with no accepted quotes, and — after
+`smoke-store-phase-27` drove a seller-as-buyer RFQ through invite, quote, submit and accept —
+returned the accepted line itself. The join, the `acceptedRevisionNumber` pin and the buyer-org
+scope are all observed rather than reasoned.

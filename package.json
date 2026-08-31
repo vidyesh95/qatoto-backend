@@ -56,6 +56,7 @@
     "db:smoke-store-phase-22": "tsx --conditions=development scripts/smoke-store-phase-22.ts",
     "db:smoke-store-phase-23": "tsx --conditions=development scripts/smoke-store-phase-23.ts",
     "db:smoke-store-phase-25": "tsx --conditions=development scripts/smoke-store-phase-25.ts",
+    "db:smoke-store-phase-27": "tsx --conditions=development scripts/smoke-store-phase-27.ts",
     "db:smoke-store-phases-9-11": "tsx --conditions=development scripts/smoke-store-phases-9-11.ts",
     "db:smoke-research-programs": "tsx --conditions=development scripts/smoke-research-programs.ts",
     "db:verify-discovery-constraints": "tsx --conditions=development scripts/verify-discovery-constraints.ts",
