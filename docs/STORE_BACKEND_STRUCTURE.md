@@ -941,6 +941,38 @@ started, not that payment, booking, testing, or settlement succeeded.
 | GET    | `/commerce/seller/reviews`                                | The seller's review inbox; `?unreplied=` — A38           |
 | PATCH  | `/commerce/reviews/:reviewId`                             | The author's ONE edit, within 30 days. No DELETE — A38   |
 | POST   | `/commerce/disputes/:disputeId/notes`                     | Either party speaks, while open; 404 to a non-party — A40 |
+| GET    | `/commerce/shipments/:shipmentId`                         | One shipment WITH ITS LEGS — the only read that returns them |
+| POST   | `/commerce/shipment-legs/:legId/commands`                 | `book`/`depart`/`arrive`/`complete`/`report_exception`/`cancel` |
+| GET    | `/commerce/shipment-legs/:legId/events`                   | One leg's history; finer-grained than its shipment's      |
+| POST   | `/commerce/service-engagements/:engagementId/commands`    | Phase 6 engagement command rail                           |
+| POST   | `/commerce/shipments/:shipmentId/legs`                    | Add legs to an existing shipment; counterparty only — A43 |
+| POST   | `/commerce/shipment-legs/:legId/assignment`               | Attach or detach the logistics engagement; `null` detaches — A43 |
+
+⚠️ **THE FIRST FOUR ROWS ABOVE ARE NOT NEW.** They shipped with Phase 6 and this table never listed
+them, which is why the frontend went a long time with no caller for any of them — a route absent
+from the contract is a route nobody knows to wire. They are added here as a correction, not as
+work. **A43** is the genuinely new pair.
+
+**A43 — the leg lifecycle was open at both ends.** `commerce_shipment_leg` rows could be created
+ONLY through `legs[]` on `POST /commerce/orders/:orderId/shipments`, and `logistics_engagement_id`
+was settable only there, so a shipment created before its route was known could never acquire one
+and a forwarder booked afterwards had nowhere to be recorded. Both new routes are **counterparty
+only** — deliberately NOT the two-branch rule `executeShipmentLegCommand` uses, under which command
+authority passes to the assigned provider. Assignment in particular could not be a sixth command
+arm for exactly that reason: routing it through the command rail would make attaching an engagement
+a one-way door, since the seller would have handed away the only key that could undo it. Assignment
+is refused once a leg is past `booked`, which would strand the provider carrying it mid-journey.
+Neither route needed a migration: `command_kind` is `text`, `commerce_fulfillment_command_target_kind`
+already had `shipment` and `shipment_leg`, and the audit enum already carried `shipment_leg_created`
+— a member that had sat with **zero emitters** since Phase 6 and now has one.
+
+⚠️ **One known wart, preserved rather than fixed.** In the shared engagement check
+(`linkLogisticsEngagementToShipment`), the provider-kind test fires BEFORE the order/buyer-scope
+test, so a wrong-kind engagement belonging to another order answers `PROVIDER_KIND_MISMATCH` rather
+than `NOT_FOUND` — a small existence leak. It is kept because reordering it would change the status
+code `POST /orders/:orderId/shipments` already returns, which is a contract change and not a
+refactor.
+
 
 **`paymentIntentId` joined both order projections** rather than becoming a list route. An order
 carries at most one live intent — `commerce_payment_intent_active_order_uidx` is what makes that
@@ -5316,3 +5348,62 @@ and never implies a live number.
 **A READ crossing only.** The boundary comment on the column forbids a WRITE crossing — "a research
 route that proxied a product create" — and says nothing against reads. The reverse direction already
 existed: `launch-readiness.service.ts`, an R&D module, reads the `product` table.
+
+---
+
+### A43. The shipment-leg lifecycle was open at both ends — **SHIPPED (Phase 26, no migration)**
+
+**Needed by:** `components/studio/commerce/logistics/shipment-leg-panel.tsx`, which shipped saying
+"legs can only be added when a shipment is created" because that was the truth (frontend `todo.md`
+§C).
+
+**The defect.** `commerce_shipment_leg` rows could be written ONLY through `legs[]` on
+`POST /commerce/orders/:orderId/shipments`, and `logistics_engagement_id` — the column recording
+which forwarder carries a leg — was settable only there. So a shipment created before its route was
+known could never acquire one, and a seller who booked a forwarder afterwards had nowhere to put it.
+The command rail (`POST /shipment-legs/:legId/commands`) could move legs it had no way to create.
+
+**Two routes, both counterparty-only:**
+
+| Method | Route | Result |
+| ------ | ----- | ------ |
+| POST | `/commerce/shipments/:shipmentId/legs` | 201 `{ shipmentId, legs[] }` |
+| POST | `/commerce/shipment-legs/:legId/assignment` | 200, the updated leg |
+
+**Why assignment is not a sixth command arm**, which is the tempting shape given `report_exception`
+is already a command that changes no state. `executeShipmentLegCommand` authorizes in two branches:
+the moment a leg carries a `logisticsEngagementId`, command authority passes to the **provider**
+organization. Routing assignment through that rail would make attaching an engagement a one-way
+door — the seller would have handed away the only key that could take it back. Hence a separate
+route, counterparty-only, where an explicit `null` detaches. `.nullable()` and not `.optional()`:
+the schema is `.strict()` and the caller must SAY which of attach or detach they mean.
+
+**Assignment stops after `booked`.** Re-pointing a leg already `in_transit` would strand the
+provider commanding it, mid-journey, holding goods with no way to report on them.
+
+**No migration, and that was checked rather than hoped.** `commerce_fulfillment_command.command_kind`
+is `text` under `char_length BETWEEN 1 AND 80`, not an enum, so `add_legs` and `assign` needed no
+DDL; `commerce_fulfillment_command_target_kind` already had `shipment` and `shipment_leg`; and the
+audit enum already carried **`shipment_leg_created`**, a member that had sat with **zero emitters**
+since Phase 6 — minted for this route and never used until now.
+
+**Two deliberate non-actions on assignment.** No leg event row, because
+`commerce_shipment_leg_event_kind` has no `assigned` member and minting one is a migration this did
+not need — the audit entry is the record, and a leg's history stays a record of physical movement.
+And no `commerce_order_service_link` delete on detach: that row records the engagement WAS linked to
+this shipment, which stays true, and other paths write the same table. The leg's own
+`logisticsEngagementId` is the live fact.
+
+**The engagement check is now shared.** `linkLogisticsEngagementToShipment` was extracted from
+inside `insertShipmentLegs` so both entry points apply one rule about who may carry freight; two
+copies would drift on the first added provider kind, and the callers would then disagree about who
+may move somebody's goods. Its error ORDERING is preserved verbatim — the provider-kind test fires
+before the order/buyer-scope test, so a wrong-kind engagement on another order leaks
+`PROVIDER_KIND_MISMATCH` rather than `NOT_FOUND`. Kept because changing it changes a status code
+`POST /orders/:orderId/shipments` already returns.
+
+⚠️ **NOT EXERCISED AGAINST A REAL ORDER.** There is no local database; the authorization branches,
+the sequence-collision `CONFLICT` and the `VERSION_CONFLICT` path are reasoned from
+`executeShipmentLegCommand` and `createShipment`, which they mirror, not observed. Typecheck, lint
+and the 184 tests in `src/modules/store/fulfillment/` plus the limiter, body-budget and route-order
+sweeps all pass.

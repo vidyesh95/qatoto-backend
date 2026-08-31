@@ -43,7 +43,9 @@ import {
   reconcileShipmentStateFromLegs,
 } from "#src/modules/store/fulfillment/commerce-fulfillment-reconciliation.service.js";
 import type {
+  AddShipmentLegsInput,
   ServiceEngagementCommand,
+  ShipmentLegAssignmentInput,
   ShipmentLegCommand,
   ShipmentLegInput,
   TypedDeliverableResultSchema,
@@ -386,6 +388,77 @@ async function assertAvailableDocument(
   return { success: true, value: true };
 }
 
+/**
+ * Validates that one service engagement may carry a leg of this shipment, and records the link.
+ *
+ * EXTRACTED FROM `insertShipmentLegs`, WHERE IT WAS INLINE, because `assignShipmentLeg` has to
+ * apply exactly the same rule to an EXISTING leg. Two copies of "which engagement may carry
+ * freight" is the class of duplication that drifts on the first added provider kind, and the two
+ * callers would then disagree about who is allowed to move somebody's goods.
+ *
+ * ⚠️ **THE ERROR ORDERING IS DELIBERATE AND IS PRESERVED FROM THE ORIGINAL.** The provider-kind
+ * check fires BEFORE the order/buyer-scope check, so a wrong-kind engagement belonging to another
+ * order answers `PROVIDER_KIND_MISMATCH` rather than `NOT_FOUND`. That leaks the existence of an
+ * engagement id the caller may not own. It is kept because changing it would change the status
+ * code an existing route returns, which is a contract change and not a refactor; see the note in
+ * `docs/STORE_BACKEND_STRUCTURE.md` §6.4.
+ *
+ * The `commerce_order_service_link` write is FIND-OR-CREATE. Two legs of one shipment carried by
+ * the same forwarder produce one link row, and re-attaching an engagement that was previously
+ * detached reuses the row rather than duplicating it.
+ */
+async function linkLogisticsEngagementToShipment(
+  transaction: DatabaseTransaction,
+  logisticsEngagementId: string,
+  shipmentId: string,
+  orderId: string,
+  buyerOrganizationId: string,
+): Promise<Result<true, CommercePhase6Error>> {
+  const [engagement] = await transaction
+    .select()
+    .from(commerceServiceEngagement)
+    .where(eq(commerceServiceEngagement.id, logisticsEngagementId))
+    .limit(1);
+  if (!engagement) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+  if (
+    engagement.providerKind !== "freight_forwarder" &&
+    engagement.providerKind !== "logistics_operator"
+  ) {
+    return { success: false, error: { type: "PROVIDER_KIND_MISMATCH" } };
+  }
+  if (
+    engagement.orderId !== orderId ||
+    engagement.buyerOrganizationId !== buyerOrganizationId ||
+    engagement.state === "cancelled" ||
+    engagement.state === "disputed"
+  ) {
+    return { success: false, error: { type: "NOT_FOUND" } };
+  }
+
+  const [existingShipmentLink] = await transaction
+    .select({ id: commerceOrderServiceLink.id })
+    .from(commerceOrderServiceLink)
+    .where(
+      and(
+        eq(commerceOrderServiceLink.engagementId, engagement.id),
+        eq(commerceOrderServiceLink.orderId, orderId),
+        eq(commerceOrderServiceLink.shipmentId, shipmentId),
+      ),
+    )
+    .limit(1);
+  if (!existingShipmentLink) {
+    await transaction.insert(commerceOrderServiceLink).values({
+      engagementId: engagement.id,
+      orderId,
+      shipmentId,
+    });
+  }
+
+  return { success: true, value: true };
+}
+
 export async function insertShipmentLegs(
   transaction: DatabaseTransaction,
   shipmentId: string,
@@ -421,46 +494,14 @@ export async function insertShipmentLegs(
 
   for (const leg of legs) {
     if (leg.logisticsEngagementId) {
-      const [engagement] = await transaction
-        .select()
-        .from(commerceServiceEngagement)
-        .where(eq(commerceServiceEngagement.id, leg.logisticsEngagementId))
-        .limit(1);
-      if (!engagement) {
-        return { success: false, error: { type: "NOT_FOUND" } };
-      }
-      if (
-        engagement.providerKind !== "freight_forwarder" &&
-        engagement.providerKind !== "logistics_operator"
-      ) {
-        return { success: false, error: { type: "PROVIDER_KIND_MISMATCH" } };
-      }
-      if (
-        engagement.orderId !== shipment.orderId ||
-        engagement.buyerOrganizationId !== order.buyerOrganizationId ||
-        engagement.state === "cancelled" ||
-        engagement.state === "disputed"
-      ) {
-        return { success: false, error: { type: "NOT_FOUND" } };
-      }
-      const [existingShipmentLink] = await transaction
-        .select({ id: commerceOrderServiceLink.id })
-        .from(commerceOrderServiceLink)
-        .where(
-          and(
-            eq(commerceOrderServiceLink.engagementId, engagement.id),
-            eq(commerceOrderServiceLink.orderId, shipment.orderId),
-            eq(commerceOrderServiceLink.shipmentId, shipment.id),
-          ),
-        )
-        .limit(1);
-      if (!existingShipmentLink) {
-        await transaction.insert(commerceOrderServiceLink).values({
-          engagementId: engagement.id,
-          orderId: shipment.orderId,
-          shipmentId: shipment.id,
-        });
-      }
+      const linkResult = await linkLogisticsEngagementToShipment(
+        transaction,
+        leg.logisticsEngagementId,
+        shipment.id,
+        shipment.orderId,
+        order.buyerOrganizationId,
+      );
+      if (!linkResult.success) return linkResult;
     }
   }
 
@@ -822,6 +863,345 @@ export async function executeShipmentLegCommand(
     default: {
       const exhaustiveCheck: never = outcome;
       throw new Error(`Unhandled leg command outcome: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
+ * `POST /commerce/shipments/:shipmentId/legs` — add legs to a shipment that already exists.
+ *
+ * THE HOLE THIS CLOSES. Legs could be declared only in `legs[]` on
+ * `POST /commerce/orders/:orderId/shipments`, so a shipment created before its route was known
+ * could never acquire one. The frontend said so out loud on `/studio/logistics` because there was
+ * nothing else honest to say.
+ *
+ * ⚠️ **COUNTERPARTY ONLY, AND NOT THE TWO-BRANCH RULE `executeShipmentLegCommand` USES.** Adding a
+ * leg is the SELLER planning their own route; commanding one is whoever is carrying it. A
+ * forwarder assigned to leg 1 must not be able to append leg 2 to somebody else's shipment.
+ * Wrong role is `FORBIDDEN`; wrong organization is `NOT_FOUND`, never 403 — §0's rule against
+ * letting a caller probe for ids they cannot see.
+ *
+ * ⚠️ **THE SEQUENCE PRE-READ IS NOT BELT-AND-BRACES.** `insertShipmentLegs` checks uniqueness only
+ * WITHIN the request; a clash with a stored leg would otherwise surface as a raw
+ * `commerce_shipment_leg_sequence_uidx` violation — a 500 for what is a caller error. Both rows are
+ * read under the shipment's `FOR UPDATE` lock, which is what makes the check hold to the insert.
+ *
+ * The response body is an OBJECT, not the bare array of legs: `parseCommandReplayBody` throws on a
+ * non-object receipt, so an array here would make the write unreplayable — the one thing an
+ * idempotency key exists to guarantee.
+ */
+export async function addShipmentLegs(
+  actor: CommerceFulfillmentActorContext,
+  shipmentId: string,
+  idempotency: FulfillmentIdempotencyContext,
+  input: AddShipmentLegsInput,
+): Promise<Result<unknown, CommercePhase6Error>> {
+  const outcome = await db.transaction(async (transaction) => {
+    const claim = await claimCommandReceipt(transaction, actor, idempotency);
+    if (!claim.success) return { status: "error" as const, error: claim.error };
+
+    const [shipment] = await transaction
+      .select()
+      .from(commerceShipment)
+      .where(eq(commerceShipment.id, shipmentId))
+      .for("update");
+    if (!shipment) return { status: "not_found" as const };
+
+    const [order] = await transaction
+      .select()
+      .from(commerceOrder)
+      .where(eq(commerceOrder.id, shipment.orderId))
+      .for("update")
+      .limit(1);
+    if (!order) return { status: "not_found" as const };
+
+    if (!memberCanOperateCounterparty(actor.memberRole)) {
+      return { status: "forbidden" as const };
+    }
+    if (order.counterpartyOrganizationId !== actor.organizationId) {
+      return { status: "not_found" as const };
+    }
+
+    // AFTER AUTHORIZATION, mirroring `executeShipmentLegCommand`: a replay must not serve a cached
+    // body to an actor who would otherwise get a 404.
+    if (claim.value.status === "replay") {
+      return {
+        status: "replay" as const,
+        body: parseCommandReplayBody(claim.value.responseBody),
+      };
+    }
+
+    if (!canExecutePaidFulfillmentForOrderState(order.state)) {
+      return { status: "invalid_order_state" as const, currentState: order.state };
+    }
+    // A leg added to a delivered or cancelled shipment is a route nobody travelled.
+    if (shipment.state === "delivered" || shipment.state === "cancelled") {
+      return { status: "invalid_shipment_state" as const, currentState: shipment.state };
+    }
+
+    const existingLegs = await transaction
+      .select({ sequence: commerceShipmentLeg.sequence })
+      .from(commerceShipmentLeg)
+      .where(eq(commerceShipmentLeg.shipmentId, shipment.id));
+    const takenSequences = new Set(existingLegs.map((leg) => leg.sequence));
+    const clashingSequence = input.legs.find((leg) => takenSequences.has(leg.sequence));
+    if (clashingSequence !== undefined) {
+      return { status: "sequence_taken" as const, sequence: clashingSequence.sequence };
+    }
+
+    const insertResult = await insertShipmentLegs(
+      transaction,
+      shipment.id,
+      actor.memberId,
+      input.legs,
+    );
+    if (!insertResult.success) {
+      return { status: "error" as const, error: insertResult.error };
+    }
+
+    const projection = {
+      shipmentId: shipment.id,
+      legs: insertResult.value.map(projectShipmentLeg),
+    };
+
+    await finalizeCommandReceipt(
+      transaction,
+      actor,
+      idempotency,
+      "shipment",
+      shipment.id,
+      "add_legs",
+      201,
+      projection,
+      // NULL, NOT A VERSION. This creates rows; it does not advance the shipment's own version, and
+      // reporting one the caller could echo back would be a number that means nothing.
+      null,
+    );
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: actor.organizationId,
+      // THE ENUM MEMBER THAT HAD NO EMITTER. `shipment_leg_created` has existed since Phase 6 and
+      // nothing in `src` wrote it, because the only path that made legs was `createShipment`, whose
+      // audit entry is `shipment_created`.
+      eventKind: "shipment_leg_created",
+      actorUserId: actor.actorUserId,
+      actorMemberRoleSnapshot: actor.memberRole,
+      targetEntityType: "commerce_shipment_leg",
+      targetEntityId: shipment.id,
+      payload: {
+        shipmentId: shipment.id,
+        shipmentLegIds: insertResult.value.map((leg) => leg.id),
+        // STRINGIFIED BECAUSE `CommerceAuditSafeValue` ADMITS NO `number`, deliberately — an audit
+        // row stores what was said, and a JSON number is a lossy way to say it. `String()` here is
+        // not a workaround for a missing type; it is the payload contract.
+        sequences: input.legs.map((leg) => String(leg.sequence)),
+      },
+      occurredAt: new Date(),
+    });
+
+    return { status: "created" as const, projection };
+  });
+
+  switch (outcome.status) {
+    case "error":
+      return { success: false, error: outcome.error };
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "forbidden":
+      return { success: false, error: { type: "FORBIDDEN" } };
+    case "invalid_order_state":
+      return {
+        success: false,
+        error: { type: "INVALID_STATE", currentState: outcome.currentState, command: "add_legs" },
+      };
+    case "invalid_shipment_state":
+      return {
+        success: false,
+        error: { type: "INVALID_STATE", currentState: outcome.currentState, command: "add_legs" },
+      };
+    case "sequence_taken":
+      return {
+        success: false,
+        error: {
+          type: "CONFLICT",
+          message: `This shipment already has a leg at sequence ${outcome.sequence}.`,
+        },
+      };
+    case "replay":
+      return { success: true, value: outcome.body };
+    case "created":
+      return { success: true, value: outcome.projection };
+    default: {
+      const exhaustiveCheck: never = outcome;
+      throw new Error(`Unhandled add-legs outcome: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
+ * `POST /commerce/shipment-legs/:legId/assignment` — who is carrying this leg.
+ *
+ * ⚠️ **WHY THIS IS NOT A SIXTH `ShipmentLegCommandSchema` ARM**, which is the tempting shape given
+ * `report_exception` is already a command that changes no state. `executeShipmentLegCommand`'s
+ * authorization is two-branch: the moment a leg carries a `logisticsEngagementId`, command
+ * authority passes to the PROVIDER organization. Routing assignment through that path would make
+ * attaching an engagement a one-way door — the seller would have handed away the only key that
+ * could take it back. So assignment is counterparty-only, on its own route, and `null` detaches.
+ *
+ * ⚠️ **`planned` AND `booked` ONLY.** Re-pointing a leg that is already `in_transit` would strand
+ * the provider currently commanding it, mid-journey, with goods in their possession and no way to
+ * report on them.
+ *
+ * TWO THINGS IT DELIBERATELY DOES NOT DO:
+ *
+ *  - **No leg event row.** `commerce_shipment_leg_event_kind` has no `assigned` member, and minting
+ *    one is a migration this does not need. The audit entry is the record; a leg's own history
+ *    stays a record of physical movement rather than of paperwork.
+ *  - **No `commerce_order_service_link` delete on detach.** That row records that an engagement WAS
+ *    linked to this shipment, which stays true afterwards, and other paths write the same table.
+ *    The leg's own `logisticsEngagementId` is the live fact.
+ */
+export async function assignShipmentLeg(
+  actor: CommerceFulfillmentActorContext,
+  legId: string,
+  idempotency: FulfillmentIdempotencyContext,
+  input: ShipmentLegAssignmentInput,
+): Promise<Result<unknown, CommercePhase6Error>> {
+  const outcome = await db.transaction(async (transaction) => {
+    const claim = await claimCommandReceipt(transaction, actor, idempotency);
+    if (!claim.success) return { status: "error" as const, error: claim.error };
+
+    const [leg] = await transaction
+      .select()
+      .from(commerceShipmentLeg)
+      .where(eq(commerceShipmentLeg.id, legId))
+      .for("update");
+    if (!leg) return { status: "not_found" as const };
+
+    const [shipment] = await transaction
+      .select()
+      .from(commerceShipment)
+      .where(eq(commerceShipment.id, leg.shipmentId))
+      .for("update");
+    if (!shipment) return { status: "not_found" as const };
+
+    const [order] = await transaction
+      .select()
+      .from(commerceOrder)
+      .where(eq(commerceOrder.id, shipment.orderId))
+      .for("update")
+      .limit(1);
+    if (!order) return { status: "not_found" as const };
+
+    if (!memberCanOperateCounterparty(actor.memberRole)) {
+      return { status: "forbidden" as const };
+    }
+    if (order.counterpartyOrganizationId !== actor.organizationId) {
+      return { status: "not_found" as const };
+    }
+
+    if (claim.value.status === "replay") {
+      return {
+        status: "replay" as const,
+        body: parseCommandReplayBody(claim.value.responseBody),
+      };
+    }
+
+    if (!canExecutePaidFulfillmentForOrderState(order.state)) {
+      return { status: "invalid_order_state" as const, currentState: order.state };
+    }
+    if (leg.state !== "planned" && leg.state !== "booked") {
+      return { status: "invalid_leg_state" as const, currentState: leg.state };
+    }
+    if (leg.version !== input.expectedVersion) {
+      return { status: "version_conflict" as const, currentVersion: leg.version };
+    }
+
+    if (input.logisticsEngagementId !== null) {
+      const linkResult = await linkLogisticsEngagementToShipment(
+        transaction,
+        input.logisticsEngagementId,
+        shipment.id,
+        shipment.orderId,
+        order.buyerOrganizationId,
+      );
+      if (!linkResult.success) {
+        return { status: "error" as const, error: linkResult.error };
+      }
+    }
+
+    const nextVersion = leg.version + 1;
+    const [updated] = await transaction
+      .update(commerceShipmentLeg)
+      .set({ logisticsEngagementId: input.logisticsEngagementId, version: nextVersion })
+      .where(and(eq(commerceShipmentLeg.id, leg.id), eq(commerceShipmentLeg.version, leg.version)))
+      .returning();
+    // The predicate carries the version, so an empty return means somebody else moved this leg
+    // between the lock and the write.
+    if (!updated) return { status: "version_conflict" as const, currentVersion: leg.version };
+
+    const projection = projectShipmentLeg(updated);
+
+    await finalizeCommandReceipt(
+      transaction,
+      actor,
+      idempotency,
+      "shipment_leg",
+      leg.id,
+      "assign",
+      200,
+      projection,
+      nextVersion,
+    );
+
+    await appendAuditOrThrow(transaction, {
+      organizationId: actor.organizationId,
+      eventKind: "shipment_leg_command_executed",
+      actorUserId: actor.actorUserId,
+      actorMemberRoleSnapshot: actor.memberRole,
+      targetEntityType: "commerce_shipment_leg",
+      targetEntityId: leg.id,
+      payload: {
+        shipmentLegId: leg.id,
+        command: "assign",
+        previousEngagementId: leg.logisticsEngagementId,
+        nextEngagementId: input.logisticsEngagementId,
+      },
+      occurredAt: new Date(),
+    });
+
+    return { status: "assigned" as const, projection };
+  });
+
+  switch (outcome.status) {
+    case "error":
+      return { success: false, error: outcome.error };
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "forbidden":
+      return { success: false, error: { type: "FORBIDDEN" } };
+    case "invalid_order_state":
+      return {
+        success: false,
+        error: { type: "INVALID_STATE", currentState: outcome.currentState, command: "assign" },
+      };
+    case "invalid_leg_state":
+      return {
+        success: false,
+        error: { type: "INVALID_STATE", currentState: outcome.currentState, command: "assign" },
+      };
+    case "version_conflict":
+      return {
+        success: false,
+        error: { type: "VERSION_CONFLICT", currentVersion: outcome.currentVersion },
+      };
+    case "replay":
+      return { success: true, value: outcome.body };
+    case "assigned":
+      return { success: true, value: outcome.projection };
+    default: {
+      const exhaustiveCheck: never = outcome;
+      throw new Error(`Unhandled leg assignment outcome: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }

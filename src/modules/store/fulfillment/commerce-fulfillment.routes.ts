@@ -77,6 +77,21 @@ router.post(
   commerceFulfillmentController.appendShipmentEvent,
 );
 
+// LEGS ON AN EXISTING SHIPMENT. Until this route, `commerce_shipment_leg` rows could be written
+// ONLY through `legs[]` on `POST /orders/:orderId/shipments`, so a shipment created before its
+// route was known could never acquire one and a forwarder booked afterwards had nowhere to be
+// recorded. Counterparty-only: adding a leg is the seller planning their route, not a carrier
+// reporting on one.
+router.post(
+  "/shipments/:shipmentId/legs",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentWriteLimiter,
+  compactBody,
+  idempotency({ required: true, scope: "active_organization" }),
+  commerceFulfillmentController.addShipmentLegs,
+);
+
 router.post(
   "/shipment-legs/:legId/commands",
   requireAuth,
@@ -85,6 +100,21 @@ router.post(
   compactBody,
   idempotency({ required: true, scope: "active_organization" }),
   commerceFulfillmentController.executeShipmentLegCommand,
+);
+
+// ⚠️ SEPARATE FROM `/commands` ABOVE, AND THAT IS THE WHOLE DESIGN. `executeShipmentLegCommand`
+// authorizes in two branches: once a leg carries a `logisticsEngagementId`, command authority
+// belongs to the PROVIDER. Assignment therefore cannot live there — attaching an engagement would
+// be a one-way door, because the seller would have handed away the only key that could undo it.
+// This route is counterparty-only and accepts an explicit `null` to detach.
+router.post(
+  "/shipment-legs/:legId/assignment",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceFulfillmentWriteLimiter,
+  compactBody,
+  idempotency({ required: true, scope: "active_organization" }),
+  commerceFulfillmentController.assignShipmentLeg,
 );
 
 router.get(

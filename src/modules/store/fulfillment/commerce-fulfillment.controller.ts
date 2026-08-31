@@ -5,8 +5,10 @@ import { respondValidationFailed } from "#src/modules/rnd/projects/project-error
 import * as commerceFulfillmentPhase6Service from "#src/modules/store/fulfillment/commerce-fulfillment-phase6.service.js";
 import type { CommercePhase6Error } from "#src/modules/store/fulfillment/commerce-fulfillment-phase6.service.js";
 import {
+  AddShipmentLegsSchema,
   CreateShipmentWithLegsSchema,
   ServiceEngagementCommandSchema,
+  ShipmentLegAssignmentSchema,
   ShipmentLegCommandSchema,
 } from "#src/modules/store/fulfillment/commerce-fulfillment.schemas.js";
 import {
@@ -584,6 +586,104 @@ export async function executeServiceEngagementCommand(req: Request, res: Respons
     status: "success",
     statusCode: 200,
     message: "Service engagement command executed.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * `POST /commerce/shipments/:shipmentId/legs` — add legs to an existing shipment.
+ *
+ * **201**, not 200: rows are created. The service already refuses an empty `legs` array at the
+ * schema, so a 201 here always means at least one leg exists that did not before.
+ */
+export async function addShipmentLegs(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+  const idempotencyKey = requireIdempotencyKey(req, res);
+  if (!idempotencyKey) return;
+
+  const params = ShipmentIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = AddShipmentLegsSchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.addShipmentLegs(
+    actor,
+    params.data.shipmentId,
+    {
+      idempotencyKey,
+      requestFingerprint: commerceFulfillmentPhase6Service.buildFulfillmentRequestFingerprint({
+        path: req.originalUrl,
+        body: body.data,
+      }),
+    },
+    body.data,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(201).json({
+    status: "success",
+    statusCode: 201,
+    message: "Shipment legs added.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * `POST /commerce/shipment-legs/:legId/assignment` — attach or detach the logistics engagement
+ * carrying this leg.
+ *
+ * **200**, not 201: one existing row changes. A `logisticsEngagementId` of `null` in the body is a
+ * detach and is as valid a request as an attach — see the schema for why it must be said rather
+ * than omitted.
+ */
+export async function assignShipmentLeg(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+  if (!parseNoQuery(req, res)) return;
+  const idempotencyKey = requireIdempotencyKey(req, res);
+  if (!idempotencyKey) return;
+
+  const params = LegIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = ShipmentLegAssignmentSchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commerceFulfillmentPhase6Service.assignShipmentLeg(
+    actor,
+    params.data.legId,
+    {
+      idempotencyKey,
+      requestFingerprint: commerceFulfillmentPhase6Service.buildFulfillmentRequestFingerprint({
+        path: req.originalUrl,
+        body: body.data,
+      }),
+    },
+    body.data,
+  );
+  if (!result.success) {
+    mapPhase6Error(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Shipment leg assignment updated.",
     data: result.value,
   } satisfies ApiResponse);
 }

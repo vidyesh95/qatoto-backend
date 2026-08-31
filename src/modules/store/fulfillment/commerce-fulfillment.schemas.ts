@@ -68,6 +68,53 @@ export const CreateShipmentWithLegsSchema = z
 
 export type CreateShipmentWithLegsInput = z.infer<typeof CreateShipmentWithLegsSchema>;
 
+/**
+ * `POST /commerce/shipments/:shipmentId/legs` — add legs to a shipment that already exists.
+ *
+ * WHY THIS ROUTE EXISTS AT ALL. Until now `legs` could be declared ONLY on
+ * `CreateShipmentWithLegsSchema` above, so a shipment created before its route was known could
+ * never grow one, and a seller who booked a forwarder afterwards had nowhere to record it.
+ *
+ * SAME `ShipmentLegInputSchema`, SAME CEILING. Reusing the leg schema is what keeps one leg shape
+ * across both entry points; a second one would drift on the first field either side added. The
+ * `.max(50)` matches the create route rather than being a fresh opinion about how many legs a
+ * journey may have.
+ *
+ * `.min(1)` because an empty array is not a request — `insertShipmentLegs` short-circuits on it and
+ * would answer 201 having done nothing, which reads as success to a client that sent a broken body.
+ */
+export const AddShipmentLegsSchema = z
+  .object({
+    legs: z.array(ShipmentLegInputSchema).min(1).max(50),
+  })
+  .strict();
+
+export type AddShipmentLegsInput = z.infer<typeof AddShipmentLegsSchema>;
+
+/**
+ * `POST /commerce/shipment-legs/:legId/assignment` — who is carrying this leg.
+ *
+ * ⚠️ **`null` IS AN EXPLICIT DETACH AND IS THE REASON THIS IS A ROUTE.** `logisticsEngagementId`
+ * decides which organization may command the leg: `executeShipmentLegCommand` hands authority to
+ * the assigned provider and keeps it with the counterparty otherwise. Without a way to send `null`,
+ * attaching an engagement would be a one-way door the seller could not undo.
+ *
+ * `.nullable()` NOT `.optional()`. An absent key and an explicit `null` would mean the same thing
+ * to `.strip()`, but this schema is `.strict()` and the difference is the whole point: the caller
+ * must SAY which of attach or detach they mean, because there is no third option and no default.
+ *
+ * `expectedVersion` for the same reason every leg command carries one — assignment mutates the row
+ * and bumps its version, so a concurrent `book` must lose rather than silently interleave.
+ */
+export const ShipmentLegAssignmentSchema = z
+  .object({
+    expectedVersion: z.number().int().min(0),
+    logisticsEngagementId: z.string().trim().min(1).max(200).nullable(),
+  })
+  .strict();
+
+export type ShipmentLegAssignmentInput = z.infer<typeof ShipmentLegAssignmentSchema>;
+
 export const ShipmentLegCommandSchema = z.discriminatedUnion("command", [
   z
     .object({
