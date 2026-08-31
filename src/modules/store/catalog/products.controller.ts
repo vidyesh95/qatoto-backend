@@ -152,6 +152,17 @@ function mapProductErrorToResponse(error: productsService.ProductError): {
       return { statusCode: 502, message: "Could not store the image. Please try again." };
     case "DELETE_FAILED":
       return { statusCode: 502, message: "Could not remove the image. Please try again." };
+    case "PRODUCT_IN_USE":
+      /**
+       * 409, and it NAMES what is holding the listing. "It has orders" and "it is a pathway anchor"
+       * are different problems with different remedies, so a bare "cannot delete" would send the
+       * seller looking in the wrong place. This used to be an unmapped 500 — and one that had
+       * already destroyed the listing's images before failing.
+       */
+      return {
+        statusCode: 409,
+        message: `This listing cannot be deleted while it is referenced by: ${error.references.join(", ")}. Unpublish it instead if you want it off the store.`,
+      };
     default: {
       const exhaustiveCheck: never = error;
       throw new Error(`Unhandled product error: ${JSON.stringify(exhaustiveCheck)}`);

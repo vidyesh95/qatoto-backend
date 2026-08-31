@@ -87,11 +87,13 @@ const HISTORY_DAYS = 120;
 /**
  * One placeholder tile per category, committed in the frontend at `public/dummy/`.
  *
- * ⚠️ **AVIF, NOT SVG, AND THAT IS NOT A STYLE CHOICE.** `next/image` refuses to optimize SVG
- * unless `images.dangerouslyAllowSVG` is set, answering `400 "image type is not allowed"` — so an
- * SVG tile renders as a broken image in the product card and the PDP gallery. (The same trap
- * already catches `/images/store/category-placeholder.svg`, which is fed to `next/image` by
- * `category-card.tsx` and 400s today.) The tiles are authored as SVG and rasterised with sharp.
+ * AVIF, rasterised with sharp from an SVG source. ⚠️ **A PREVIOUS VERSION OF THIS COMMENT CLAIMED
+ * SVG WOULD RENDER BROKEN. THAT WAS WRONG** — `next/image` detects a local `.svg` and serves it
+ * unoptimized instead of routing it through the optimizer, so an SVG tile renders fine. (The 400
+ * that produced the claim came from requesting `/_next/image?url=….svg` by hand, which no component
+ * does. `navbar.tsx` renders Material Symbols the same way and the served HTML carries
+ * `src="/icons/….svg"`, no `/_next/image` in sight.) AVIF is kept because it is genuinely
+ * resized per breakpoint where an SVG is passed through whole — a preference, not a correctness fix.
  *
  * Keyed by `categoryKey` rather than per product: the tile claims to represent a CATEGORY, which is
  * true, instead of claiming to be a photograph of the individual item, which would not be.

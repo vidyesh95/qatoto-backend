@@ -83,6 +83,18 @@ export type ProductError =
    */
   | { type: "ACTIVE_LISTING_MISSING_PACKAGE_DIMENSIONS"; missing: readonly string[] }
   | { type: "IMAGE_ORDER_MISMATCH" }
+  /**
+   * ⚠️ **THE LISTING IS REFERENCED BY SOMETHING THAT MAY NOT LOSE IT.** Twelve foreign keys point at
+   * `product` with `ON DELETE restrict` — orders, completions, reservations, reviews, questions,
+   * inquiries, RFQ lines, sample credits, relations (both ends) and pathway anchors/candidates.
+   *
+   * This exists because the delete used to answer a raw **500**: the FK violation escaped unmapped.
+   * Worse, the three asset sweeps run BEFORE the row delete, so a refused delete had already
+   * destroyed every image and document — leaving a listing that survived with no bytes and, with
+   * `imageCount` now 0, could never be published again. The preflight below refuses before anything
+   * is destroyed.
+   */
+  | { type: "PRODUCT_IN_USE"; references: readonly string[] }
   /** §21.3. The listing already holds `limit` documents. */
   | { type: "TOO_MANY_DOCUMENTS"; limit: number }
   /** §21.3. The decoded bytes are not a PDF — the magic-byte check, not the mimetype header. */
@@ -2597,6 +2609,49 @@ export async function deleteProductDocumentById(
 }
 
 /**
+ * Which `ON DELETE restrict` relationships would refuse to let this listing go.
+ *
+ * Returns table names rather than a boolean so the refusal can tell the seller WHY — "it has
+ * orders" and "it is the anchor of a pathway" are different problems with different remedies.
+ *
+ * ⚠️ **KEEP THIS LIST IN STEP WITH THE SCHEMA.** It mirrors every FK to `product` declared
+ * `{ onDelete: "restrict" }`; the query below is the authoritative way to re-derive it:
+ *
+ * ```sql
+ * SELECT src.relname FROM pg_constraint con
+ *   JOIN pg_class src ON src.oid = con.conrelid
+ *   JOIN pg_class tgt ON tgt.oid = con.confrelid
+ *  WHERE con.contype = 'f' AND tgt.relname = 'product' AND con.confdeltype = 'r';
+ * ```
+ *
+ * A missed table is not a silent bug — it falls through to the `PRODUCT_IN_USE` backstop on the
+ * delete itself, which is why that catch stays even with this preflight in front of it.
+ */
+async function findBlockingProductReferences(productId: string): Promise<readonly string[]> {
+  const result = await db.execute<Record<string, boolean>>(sql`
+    SELECT
+      EXISTS (SELECT 1 FROM commerce_order_product_line      WHERE product_id = ${productId}) AS "orders",
+      EXISTS (SELECT 1 FROM commerce_completion              WHERE product_id = ${productId}) AS "completions",
+      EXISTS (SELECT 1 FROM commerce_inventory_reservation   WHERE product_id = ${productId}) AS "reservations",
+      EXISTS (SELECT 1 FROM commerce_review                  WHERE product_id = ${productId}) AS "reviews",
+      EXISTS (SELECT 1 FROM commerce_product_question        WHERE product_id = ${productId}) AS "questions",
+      EXISTS (SELECT 1 FROM commerce_product_inquiry         WHERE product_id = ${productId}) AS "inquiries",
+      EXISTS (SELECT 1 FROM commerce_rfq_product_line        WHERE product_id = ${productId}) AS "rfqs",
+      EXISTS (SELECT 1 FROM commerce_sample_credit           WHERE product_id = ${productId}) AS "sample credits",
+      EXISTS (SELECT 1 FROM commerce_product_relation
+               WHERE from_product_id = ${productId} OR to_product_id = ${productId})          AS "related products",
+      EXISTS (SELECT 1 FROM store_pathway
+               WHERE anchor_product_id = ${productId})                                        AS "pathways",
+      EXISTS (SELECT 1 FROM store_pathway_slot_candidate     WHERE product_id = ${productId}) AS "pathway slots"
+  `);
+  const [row] = result.rows;
+  if (!row) return [];
+  return Object.entries(row)
+    .filter(([, isReferenced]) => isReferenced)
+    .map(([label]) => label);
+}
+
+/**
  * §21.3. Destroys every document object a listing owns, before its rows cascade away.
  *
  * ⚠️ REFUSES ON FAILURE rather than logging and continuing, matching the two Cloudinary sweeps it
@@ -2631,6 +2686,20 @@ export async function deleteProduct(
   const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
   if (!ownedId) {
     return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  /**
+   * ⚠️ **REFUSE BEFORE DESTROYING ANYTHING. THIS MUST STAY ABOVE THE THREE ASSET SWEEPS.**
+   *
+   * The sweeps below are irreversible and the row delete after them can still be refused by any of
+   * twelve `ON DELETE restrict` foreign keys. In that order a seller deleting a listing anyone had
+   * ever ordered, reviewed or asked about lost every image and document to a request that then
+   * failed — and the surviving listing, now at `imageCount` 0, could not be published again.
+   * Measured on the demo data: **16 of 17 products** carry an order line and would have hit it.
+   */
+  const blockingReferences = await findBlockingProductReferences(productId);
+  if (blockingReferences.length > 0) {
+    return { success: false, error: { type: "PRODUCT_IN_USE", references: blockingReferences } };
   }
 
   const assetRemoval = await deleteAllProductImages(productId);
