@@ -85,6 +85,40 @@ const REQUIRED_FLAG = "--i-understand-this-writes-fake-commerce-data";
 const HISTORY_DAYS = 120;
 
 /**
+ * One placeholder tile per category, committed in the frontend at `public/dummy/`.
+ *
+ * ⚠️ **AVIF, NOT SVG, AND THAT IS NOT A STYLE CHOICE.** `next/image` refuses to optimize SVG
+ * unless `images.dangerouslyAllowSVG` is set, answering `400 "image type is not allowed"` — so an
+ * SVG tile renders as a broken image in the product card and the PDP gallery. (The same trap
+ * already catches `/images/store/category-placeholder.svg`, which is fed to `next/image` by
+ * `category-card.tsx` and 400s today.) The tiles are authored as SVG and rasterised with sharp.
+ *
+ * Keyed by `categoryKey` rather than per product: the tile claims to represent a CATEGORY, which is
+ * true, instead of claiming to be a photograph of the individual item, which would not be.
+ */
+const PLACEHOLDER_IMAGE_BY_CATEGORY_KEY: Record<string, string> = {
+  freezers: "/dummy/placeholder-freezers.avif",
+  compressors: "/dummy/placeholder-compressors.avif",
+  cartons: "/dummy/placeholder-cartons.avif",
+  instruments: "/dummy/placeholder-instruments.avif",
+};
+
+/**
+ * Throws rather than returning undefined. A missing mapping would otherwise reach the insert as a
+ * NULL `url` and fail as a constraint violation halfway through seeding, naming the column instead
+ * of the actual mistake — a new category nobody drew a tile for.
+ */
+function placeholderImageForCategory(categoryKey: string): string {
+  const url = PLACEHOLDER_IMAGE_BY_CATEGORY_KEY[categoryKey];
+  if (url === undefined) {
+    throw new Error(
+      `No placeholder tile for category "${categoryKey}". Add one to public/dummy/ and map it in PLACEHOLDER_IMAGE_BY_CATEGORY_KEY.`,
+    );
+  }
+  return url;
+}
+
+/**
  * Accounts that only ever like, bookmark and share.
  *
  * Sized so the subnet fixtures can express a real ratio: a "38 of 40 bookmarks from one
@@ -780,11 +814,12 @@ async function seedProducts(
      * `product_image` row can be unpublished and then never republished: the seller is told
      * "missing images" about a listing the seed created without any.
      *
-     * ⚠️ **THE ASSET IS DELIBERATELY GENERIC AND DELIBERATELY WRONG-ISH.** `public/dummy/` in the
-     * frontend is a furniture and lifestyle library; it holds no freezer, compressor, carton or
-     * probe. `machinery.avif` is the only industrial frame in it, so every seeded industrial
-     * listing shares it. The `altText` carries the real product title, so the accessible name
-     * stays truthful even though the picture is filler.
+     * ⚠️ **THESE ARE PLACEHOLDER TILES, AND THEY SAY SO ON THEIR FACE.** There is no product
+     * photography in this repo — a sweep of all 350 files under the frontend's `public/` found
+     * exactly one industrial photograph. Dressing a chest freezer in a stock furniture picture
+     * would be a more convincing lie than an obvious grey tile, so each category gets a tile
+     * carrying its own Material Symbol and the words "placeholder image". `altText` carries the
+     * real product title, so the accessible name is exact either way.
      *
      * Bare `.onConflictDoNothing()` — there are TWO unique keys here, the primary key and
      * `product_image_position_uidx (product_id, coalesce(variant_id,''), position)`. Naming only
@@ -795,7 +830,7 @@ async function seedProducts(
       .values({
         id: `${ID_PREFIX}img_${seedProduct.key}`,
         productId,
-        url: "/dummy/machinery.avif",
+        url: placeholderImageForCategory(seedProduct.categoryKey),
         altText: seedProduct.title,
         position: 0,
       })

@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, inArray, lt, or, type SQL } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, or, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import { db } from "#src/db/index.js";
@@ -45,6 +45,14 @@ export type CommerceProductRelationError =
    * seller was claiming for it.
    */
   | { type: "RELATION_ALREADY_CURATED" }
+  /**
+   * ⚠️ **A SELLER RE-SENT AN EDGE A MODERATOR DISMISSED**, which is NOT the same finding as
+   * `RELATION_ALREADY_CURATED` even though both surface as a `23505` on the same unique index.
+   * Told the wrong one, the seller reads "a moderator confirmed this" about a claim a moderator
+   * rejected. Detected by an explicit diff, because the unique violation carries no way to tell
+   * the two apart.
+   */
+  | { type: "RELATION_DISMISSED"; productIds: readonly string[] }
   | { type: "ALREADY_VERIFIED" }
   /** A cursor this service did not mint. Never a 500 — a bad page token is a caller error. */
   | { type: "INVALID_CURSOR" }
@@ -93,11 +101,15 @@ export interface ListRelationsForModerationQuery {
  * ⚠️ **THIS LIST CANNOT BE DISMISSED FROM, AND THAT IS A PROPERTY OF THE SCHEMA RATHER THAN AN
  * OVERSIGHT HERE.** There is no review state beside `sourceKind`, and
  * `commerce_product_relation_verified_ck` enforces that attribution exists IFF `moderator_curated`,
- * so nothing can record "a moderator looked at this and left it". `updatedAt` cannot stand in
- * either — verification is the only UPDATE in the codebase, so it equals `createdAt` on every
- * unverified row. The list therefore shrinks only when a claim is CONFIRMED or the seller retracts
- * it. Adding real dismissal is a migration; until then the console says so rather than implying a
- * queue that drains.
+ * so a verdict cannot live there. `dismissed_at` + `dismissed_by_user_id` carry it instead, which
+ * is why `sourceKind` still means PROVENANCE and nothing else: a dismissed seller claim stays
+ * distinguishable from a dismissed derived edge.
+ *
+ * ⚠️ **THE QUEUE FILTERS `dismissed_at IS NULL`, AND SO DO ALL THREE BUYER-FACING READS.**
+ * Dismissal is not queue hygiene — a fitment claim is a safety claim, so refusing one has to stop
+ * it reaching buyers on the PDP companions rail, the spare-parts reverse read and the pathway
+ * candidate resolver. Filtering only here would drain the reviewer's list while leaving the claim
+ * live to everyone else.
  *
  * ⚠️ **FILTERED ON `sourceKind`, NEVER ON `verifiedAt IS NULL`.** Those look equivalent and are
  * not: `derived_cooccurrence` rows are null-attributed too, so the timestamp predicate would pour
@@ -135,7 +147,11 @@ export async function listRelationsForModeration(
   const fromProduct = alias(product, "from_product");
   const toProduct = alias(product, "to_product");
 
-  const filters: SQL[] = [eq(commerceProductRelation.sourceKind, query.sourceKind)];
+  const filters: SQL[] = [
+    eq(commerceProductRelation.sourceKind, query.sourceKind),
+    // A dismissed claim has had its decision. It leaves the queue and never comes back.
+    isNull(commerceProductRelation.dismissedAt),
+  ];
 
   if (query.cursor !== undefined) {
     const cursor = decodeTimestampStoreCursor(query.cursor);
@@ -248,6 +264,8 @@ export interface ProductRelationProjection {
   readonly sourceKind: CommerceProductRelationSourceKind;
   readonly rank: number;
   readonly verifiedAt: Date | null;
+  /** Non-null once a moderator has refused the claim. Suppressed from every buyer-facing read. */
+  readonly dismissedAt: Date | null;
 }
 
 /**
@@ -322,6 +340,7 @@ function projectRelation(
     sourceKind: row.sourceKind,
     rank: row.rank,
     verifiedAt: row.verifiedAt,
+    dismissedAt: row.dismissedAt,
   };
 }
 
@@ -376,14 +395,61 @@ export async function replaceSellerDeclaredRelations(
         }
       }
 
+      /**
+       * ⚠️ **A DISMISSED ROW SURVIVES THIS WIPE, AND THAT IS THE WHOLE POINT.**
+       *
+       * A dismissed claim is still `seller_declared`, so without `dismissed_at IS NULL` here the
+       * seller's next save would DELETE the moderator's decision and re-insert a fresh undismissed
+       * row — the claim would go live to buyers again, cleared by the very party it was aimed at.
+       * Dismissal has to outlive the seller's own edit or it is advice, not a decision.
+       */
       await transaction
         .delete(commerceProductRelation)
         .where(
           and(
             eq(commerceProductRelation.fromProductId, fromProductId),
             eq(commerceProductRelation.sourceKind, "seller_declared"),
+            isNull(commerceProductRelation.dismissedAt),
           ),
         );
+
+      /**
+       * ⚠️ **THIS DIFF EXISTS BECAUSE THE `23505` CANNOT TELL YOU WHY IT FIRED.**
+       *
+       * A surviving dismissed row still occupies its `(from, to, relationKind)` slot in
+       * `commerce_product_relation_edge_uidx`, so re-sending that edge raises a unique violation —
+       * the SAME violation a moderator-curated edge raises. `isUniqueViolation` cannot tell them
+       * apart, so falling through to the catch below would answer "a moderator has already
+       * CONFIRMED this", the opposite of what happened. Name the real reason instead.
+       */
+      const dismissedEdges = await transaction
+        .select({
+          toProductId: commerceProductRelation.toProductId,
+          relationKind: commerceProductRelation.relationKind,
+        })
+        .from(commerceProductRelation)
+        .where(
+          and(
+            eq(commerceProductRelation.fromProductId, fromProductId),
+            isNotNull(commerceProductRelation.dismissedAt),
+          ),
+        );
+      if (dismissedEdges.length > 0) {
+        const dismissedEdgeKeys = new Set(
+          dismissedEdges.map((edge) => `${edge.toProductId}\u0000${edge.relationKind}`),
+        );
+        const resentDismissedProductIds = relations
+          .filter((relation) =>
+            dismissedEdgeKeys.has(`${relation.toProductId}\u0000${relation.relationKind}`),
+          )
+          .map((relation) => relation.toProductId);
+        if (resentDismissedProductIds.length > 0) {
+          return {
+            status: "already_dismissed" as const,
+            productIds: [...new Set(resentDismissedProductIds)],
+          };
+        }
+      }
 
       if (relations.length > 0) {
         await transaction.insert(commerceProductRelation).values(
@@ -442,6 +508,11 @@ export async function replaceSellerDeclaredRelations(
       };
     case "already_curated":
       return { success: false, error: { type: "RELATION_ALREADY_CURATED" } };
+    case "already_dismissed":
+      return {
+        success: false,
+        error: { type: "RELATION_DISMISSED", productIds: outcome.productIds },
+      };
     case "replaced":
       return { success: true, value: outcome.rows.map(projectRelation) };
     default: {
@@ -562,6 +633,108 @@ export async function verifyRelation(
 }
 
 /**
+ * Refuse one relation (§15.8). The other half of `verifyRelation`.
+ *
+ * ⚠️ **DISMISSAL SUPPRESSES THE CLAIM FROM BUYERS, IT DOES NOT MERELY TIDY THE QUEUE.** A
+ * compatibility claim is a safety claim in the categories where it matters, so a moderator judging
+ * one false has to stop it reaching the PDP companions rail, the spare-parts reverse read and the
+ * pathway candidate resolver — all three filter `dismissed_at IS NULL`.
+ *
+ * ⚠️ **AND IT OUTLIVES THE SELLER'S NEXT SAVE.** `replaceSellerDeclaredRelations` excludes
+ * dismissed rows from its delete, so the seller cannot clear this decision by re-saving their
+ * list. That is deliberate: they are the party it was made against.
+ *
+ * A repeat dismissal is an idempotent 200 with the existing row, matching `verifyRelation` rather
+ * than the content-report queue's 409 — the console paints a failed result red, and a
+ * correctly-dismissed claim is not an error.
+ */
+export async function dismissRelation(
+  actorUserId: string,
+  relationId: string,
+): Promise<Result<ProductRelationProjection, CommerceProductRelationError>> {
+  const capability = await requirePlatformCapability(actorUserId, "moderate_commerce");
+  if (!capability.success) {
+    return {
+      success: false,
+      error: { type: "PLATFORM_CAPABILITY_REQUIRED", capability: "moderate_commerce" },
+    };
+  }
+
+  const outcome = await db.transaction(async (transaction) => {
+    const [relation] = await transaction
+      .select()
+      .from(commerceProductRelation)
+      .where(eq(commerceProductRelation.id, relationId))
+      .for("update");
+    if (!relation) return { status: "not_found" as const };
+
+    // Hoisted above the replay return for the same reason as in `verifyRelation`: the party check
+    // has to refuse on a replay too, or "do it twice" walks around it.
+    const [fromProduct] = await transaction
+      .select({ sellerOrganizationId: product.sellerOrganizationId })
+      .from(product)
+      .where(eq(product.id, relation.fromProductId))
+      .limit(1);
+
+    if (
+      await isModeratorPartyToTarget(
+        transaction,
+        actorUserId,
+        fromProduct?.sellerOrganizationId ?? null,
+      )
+    ) {
+      return { status: "self_moderation" as const };
+    }
+
+    if (relation.dismissedAt !== null) {
+      return { status: "already_dismissed" as const, relation };
+    }
+
+    const dismissedAt = new Date();
+    const [updated] = await transaction
+      .update(commerceProductRelation)
+      .set({ dismissedByUserId: actorUserId, dismissedAt })
+      .where(eq(commerceProductRelation.id, relationId))
+      .returning();
+    if (!updated) throw new Error("Product relation dismiss returned no row.");
+
+    if (fromProduct?.sellerOrganizationId) {
+      await appendAuditOrThrow(transaction, {
+        organizationId: fromProduct.sellerOrganizationId,
+        eventKind: "product_relation_dismissed",
+        actorUserId,
+        actorMemberRoleSnapshot: null,
+        targetEntityType: "commerce_product_relation",
+        targetEntityId: relationId,
+        payload: {
+          relationId,
+          fromProductId: relation.fromProductId,
+          toProductId: relation.toProductId,
+          relationKind: relation.relationKind,
+        },
+        occurredAt: dismissedAt,
+      });
+    }
+
+    return { status: "dismissed" as const, relation: updated };
+  });
+
+  switch (outcome.status) {
+    case "not_found":
+      return { success: false, error: { type: "NOT_FOUND" } };
+    case "self_moderation":
+      return { success: false, error: { type: "SELF_MODERATION_FORBIDDEN" } };
+    case "already_dismissed":
+    case "dismissed":
+      return { success: true, value: projectRelation(outcome.relation) };
+    default: {
+      const exhaustiveOutcome: never = outcome;
+      throw new Error(`Unhandled relation dismiss outcome: ${JSON.stringify(exhaustiveOutcome)}`);
+    }
+  }
+}
+
+/**
  * Relation-graph companions for a public product detail page (§15.7).
  *
  * Grouped by kind, each carrying `sourceKind`. Targets that are no longer publicly
@@ -596,7 +769,13 @@ export async function listProductCompanions(
       rank: commerceProductRelation.rank,
     })
     .from(commerceProductRelation)
-    .where(eq(commerceProductRelation.fromProductId, sourceProduct.id))
+    .where(
+      and(
+        eq(commerceProductRelation.fromProductId, sourceProduct.id),
+        // A moderator refused this claim. Buyers must not see it — see the §15.8 note above.
+        isNull(commerceProductRelation.dismissedAt),
+      ),
+    )
     .orderBy(
       asc(commerceProductRelation.relationKind),
       asc(commerceProductRelation.rank),
@@ -659,6 +838,8 @@ export async function listSparePartsForProducts(
       and(
         inArray(commerceProductRelation.toProductId, [...productIds]),
         inArray(commerceProductRelation.relationKind, ["spare_part_of", "consumable_for"]),
+        // Same suppression as the companions read: a refused claim reaches no buyer surface.
+        isNull(commerceProductRelation.dismissedAt),
       ),
     )
     .orderBy(asc(commerceProductRelation.rank), asc(commerceProductRelation.id));

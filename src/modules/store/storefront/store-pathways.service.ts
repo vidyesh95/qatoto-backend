@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import {
@@ -482,6 +482,9 @@ async function resolveCandidateSeeds(
       and(
         eq(commerceProductRelation.fromProductId, anchorProductId),
         inArray(commerceProductRelation.relationKind, relationKinds),
+        // §15.8: a dismissed claim is suppressed from every buyer-facing surface, and a pathway
+        // slot is one — otherwise a refused edge keeps filling merchandising slots.
+        isNull(commerceProductRelation.dismissedAt),
       ),
     )
     .orderBy(asc(commerceProductRelation.rank), asc(commerceProductRelation.id));

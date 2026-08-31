@@ -44,6 +44,16 @@ router.get(
 );
 
 router.post(
+  "/admin/product-relations/:relationId/dismiss",
+  requireAuth,
+  commerceProductRelationWriteLimiter,
+  compactBody,
+  // Same user-scoped idempotency as verify: a moderator acts for the platform, not an organization.
+  idempotency({ required: true, scope: "user" }),
+  commerceCatalogController.dismissProductRelation,
+);
+
+router.post(
   "/admin/product-relations/:relationId/verify",
   requireAuth,
   commerceProductRelationWriteLimiter,

@@ -1107,6 +1107,13 @@
       "when": 1788177419352,
       "tag": "0157_shiny_maginty",
       "breakpoints": true
+    },
+    {
+      "idx": 158,
+      "version": "7",
+      "when": 1788180987027,
+      "tag": "0158_serious_norrin_radd",
+      "breakpoints": true
     }
   ]
 }

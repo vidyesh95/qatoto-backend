@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
 import { commerceProductRelation } from "#src/db/schema.js";
@@ -62,7 +62,18 @@ export async function handleDeriveProductRelations(rawPayload: unknown): Promise
     // Rule 2: this job owns its own rows and nothing else's.
     await transaction
       .delete(commerceProductRelation)
-      .where(eq(commerceProductRelation.sourceKind, "derived_cooccurrence"));
+      /**
+       * ⚠️ **A DISMISSED DERIVED ROW IS NOT THIS JOB'S TO RECLAIM.** Without the second predicate
+       * the nightly wipe deletes a moderator's refusal and the next pass re-derives the edge
+       * undismissed — dismissal silently undone overnight. The `humanAuthoredPairs` read below is
+       * unfiltered, so a surviving dismissed row is still seen and its pair skipped: no collision.
+       */
+      .where(
+        and(
+          eq(commerceProductRelation.sourceKind, "derived_cooccurrence"),
+          isNull(commerceProductRelation.dismissedAt),
+        ),
+      );
 
     if (rankedPairs.length === 0) return;
 

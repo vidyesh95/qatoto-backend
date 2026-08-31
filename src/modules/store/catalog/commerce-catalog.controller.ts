@@ -106,6 +106,21 @@ function mapRelationError(res: Response, error: CommerceProductRelationError): v
           "A moderator has already confirmed one of these related products. Remove it from your list — their version stays.",
       } satisfies ApiResponse);
       return;
+    case "RELATION_DISMISSED":
+      /**
+       * 409, and deliberately NOT the `RELATION_ALREADY_CURATED` message. Both arrive from the same
+       * unique index, but telling a seller "a moderator confirmed this" about a claim a moderator
+       * REFUSED is a lie in the one direction that matters. The service distinguishes them with an
+       * explicit diff rather than from the `23505`, which cannot.
+       */
+      res.status(409).json({
+        status: "error",
+        statusCode: 409,
+        message:
+          "A moderator reviewed one of these related products and did not confirm it. Remove it from your list.",
+        data: { productIds: error.productIds },
+      } satisfies ApiResponse);
+      return;
     case "INVALID_CURSOR":
       // A page token this service did not mint. A caller error, never a 500.
       res.status(422).json({
@@ -125,10 +140,12 @@ function mapRelationError(res: Response, error: CommerceProductRelationError): v
       // 403: they hold `moderate_commerce` but belong to the selling organization, so they are a
       // party to the claim. The client cannot know a moderator's memberships, so this is surfaced
       // on the row that produced it rather than by hiding the control.
+      // ⚠️ Wording is deliberately "moderate", not "confirm" — this arm serves BOTH verify and
+      // dismiss, and "cannot confirm its own claim" reads as nonsense on a dismissal.
       res.status(403).json({
         status: "error",
         statusCode: 403,
-        message: "A member of the selling organization cannot confirm its own claim.",
+        message: "A member of the selling organization cannot moderate its own claim.",
       } satisfies ApiResponse);
       return;
     case "PLATFORM_CAPABILITY_REQUIRED":
@@ -228,6 +245,50 @@ export async function replaceProductRelations(req: Request, res: Response): Prom
     statusCode: 200,
     message: "Product relations updated.",
     data: { relations: result.value },
+  } satisfies ApiResponse);
+}
+
+/**
+ * POST /commerce/admin/product-relations/:relationId/dismiss
+ *
+ * Refuse a claim. ⚠️ This SUPPRESSES it from buyers, not just from the queue, and it survives the
+ * seller's next save — see `dismissRelation`.
+ */
+export async function dismissProductRelation(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+  if (!parseNoQuery(req, res)) return;
+
+  const params = RelationIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+  const body = EmptyRequestBodySchema.safeParse(req.body);
+  if (!body.success) {
+    sendZodError(res, body.error);
+    return;
+  }
+
+  const result = await commerceProductRelationsService.dismissRelation(
+    req.user.id,
+    params.data.relationId,
+  );
+  if (!result.success) {
+    mapRelationError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Product relation dismissed.",
+    data: result.value,
   } satisfies ApiResponse);
 }
 

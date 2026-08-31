@@ -607,6 +607,13 @@ const PRODUCT_RELATION_VIEW_COLUMNS = {
   toProductId: commerceProductRelation.toProductId,
   relationKind: commerceProductRelation.relationKind,
   sourceKind: commerceProductRelation.sourceKind,
+  /**
+   * ⚠️ **PROJECTED, NEVER FILTERED ON, IN THIS READ.** Every buyer-facing read suppresses a
+   * dismissed relation; this one is the SELLER'S OWN EDITOR and must keep showing it. Hiding it
+   * would leave the seller re-declaring an edge a moderator refused, and their save would come
+   * back a 409 naming a row they can no longer see.
+   */
+  dismissedAt: commerceProductRelation.dismissedAt,
   rank: commerceProductRelation.rank,
   toProductTitle: product.title,
   toProductPublicSlug: product.publicSlug,

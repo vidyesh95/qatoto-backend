@@ -297,6 +297,8 @@ export const commerceOrganizationAuditEventKindEnum = pgEnum(
      */
     "product_relations_declared",
     "product_relation_verified",
+    /** A moderator read the claim and refused it. Suppresses it from buyers (§15.8). */
+    "product_relation_dismissed",
     /**
      * Phase 9 (§15.5, §15.8). A set is merchandising a buyer acts on, so who composed
      * it, who submitted it and who decided it are all auditable. Platform-curated sets
@@ -3623,6 +3625,19 @@ export const commerceProductRelation = pgTable(
       onDelete: "restrict",
     }),
     verifiedAt: timestamp("verified_at"),
+    /**
+     * Who refused it, and when. Mirrors the verification pair above.
+     *
+     * ⚠️ **DISMISSAL IS ORTHOGONAL TO `sourceKind`, DELIBERATELY.** `sourceKind` records
+     * PROVENANCE — who asserted the edge. Writing a verdict into it would destroy that fact, so a
+     * dismissed seller claim would become indistinguishable from a dismissed derived edge. It also
+     * could not carry attribution: `commerce_product_relation_verified_ck` below forces
+     * `verified_by_user_id IS NULL` for every kind that is not `moderator_curated`.
+     */
+    dismissedByUserId: text("dismissed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    dismissedAt: timestamp("dismissed_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -3655,6 +3670,20 @@ export const commerceProductRelation = pgTable(
           OR (source_kind <> 'moderator_curated'
              AND verified_by_user_id IS NULL AND verified_at IS NULL)`,
     ),
+    // Dismissal attribution is all-or-nothing, the same shape the verification check uses.
+    check(
+      "commerce_product_relation_dismissed_ck",
+      sql`(dismissed_at IS NULL AND dismissed_by_user_id IS NULL)
+          OR (dismissed_at IS NOT NULL AND dismissed_by_user_id IS NOT NULL)`,
+    ),
+    /**
+     * The moderation queue's ordering, and it is PARTIAL on purpose: the queue only ever reads
+     * rows still awaiting a decision, so dismissed rows do not belong in the index at all. Same
+     * idiom as `commerce_product_relation_org_idx` above.
+     */
+    index("commerce_product_relation_moderation_idx")
+      .on(table.sourceKind, table.createdAt, table.id)
+      .where(sql`dismissed_at IS NULL`),
   ],
 );
 
