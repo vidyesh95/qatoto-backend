@@ -34,6 +34,20 @@ export const ListProviderQuotesQuerySchema = z
   })
   .strict();
 
+/**
+ * `GET /commerce/sourcing/quote-lines` — A44. No filters beyond paging.
+ *
+ * NO `status` FILTER, unlike the provider queue above: this read returns ONLY lines on accepted
+ * revisions by construction, so every other status is already excluded. A filter admitting them
+ * would offer a seller a line the listing save then refuses.
+ */
+export const ListSourcingQuoteLinesQuerySchema = z
+  .object({
+    cursor: z.string().trim().min(1).max(500).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strict();
+
 export const QuoteIdParamsSchema = z
   .object({ quoteId: z.string().trim().min(1).max(200) })
   .strict();

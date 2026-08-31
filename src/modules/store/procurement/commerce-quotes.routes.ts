@@ -91,6 +91,25 @@ router.get(
   commerceQuotesController.listProviderQuotes,
 );
 
+/**
+ * A44. The caller's accepted quote product lines, so a seller can name what a listing's goods cost.
+ *
+ * NEUTRAL GUARD, like `GET /quotes/:quoteId` below rather than the buyer- or provider-specific
+ * ones. The caller is a SELLER writing a listing and was the BUYER of the quote — one organization
+ * in two roles, which §1.3 already contemplates. The service authorizes on
+ * `commerce_rfq.buyerOrganizationId`, which is the only place a quote's buyer is recorded.
+ *
+ * Declared before `/quotes/:quoteId`: no shadowing is possible (different first segment) but the
+ * route-order sweep reads this file, and keeping collection reads above parameterised ones is the
+ * convention it enforces.
+ */
+router.get(
+  "/sourcing/quote-lines",
+  requireAuth,
+  requireActiveCommerceOrganization,
+  commerceQuotesController.listSourcingQuoteLines,
+);
+
 router.get(
   "/rfqs/:rfqId/quotes",
   requireAuth,

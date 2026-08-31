@@ -498,6 +498,15 @@ export interface PublicProduct {
    */
   readonly sellingState: "selling" | "paused" | "discontinued";
   /**
+   * A44. The accepted quote line this listing's goods were sourced from, or null.
+   *
+   * ⚠️ **THIS PROJECTION IS WHAT MAKES THE WRITE SAFE, NOT A CONVENIENCE.** The listing editor
+   * sends the whole field on every save, including `null` to clear it. Without a read the form
+   * could not know an existing link was there, would prefill empty, and would WIPE it on the next
+   * unrelated edit — the same class of defect as a replace-set endpoint with no owner-side read.
+   */
+  readonly sourcingQuoteProductLineId: string | null;
+  /**
    * A5/§19.9. Why the Publish control is disabled, named field by field, so the seller learns it
    * from the form rather than from a 422 after they press the button.
    *
@@ -581,6 +590,7 @@ const PRODUCT_SCALAR_COLUMNS = {
   unitsPerPackage: product.unitsPerPackage,
   moderationState: product.moderationState,
   sellingState: product.sellingState,
+  sourcingQuoteProductLineId: product.sourcingQuoteProductLineId,
 } as const;
 
 const PRODUCT_IMAGE_VIEW_COLUMNS = {
@@ -749,6 +759,7 @@ function toPublicProduct(
     unitsPerPackage: row.unitsPerPackage,
     moderationState: row.moderationState,
     sellingState: row.sellingState,
+    sourcingQuoteProductLineId: row.sourcingQuoteProductLineId,
     listingCompleteness: projectListingCompleteness({
       title: row.title,
       priceInCents: row.priceInCents,

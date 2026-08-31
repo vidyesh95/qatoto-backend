@@ -9,6 +9,7 @@ import {
   EmptyObjectSchema,
   EmptyRequestBodySchema,
   ListProviderQuotesQuerySchema,
+  ListSourcingQuoteLinesQuerySchema,
   QuoteIdParamsSchema,
   QuoteRevisionParamsSchema,
   RfqIdParamsSchema,
@@ -344,6 +345,39 @@ export async function listProviderQuotes(req: Request, res: Response): Promise<v
     status: "success",
     statusCode: 200,
     message: "Provider quotes listed.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * `GET /commerce/sourcing/quote-lines` — the caller's accepted quote product lines.
+ *
+ * Named for what it is FOR rather than where it comes from: a seller reaches this while writing a
+ * listing, not while reading a quote. It sits on the quotes router because that is the data it
+ * reads.
+ */
+export async function listSourcingQuoteLines(req: Request, res: Response): Promise<void> {
+  const actor = requireCommerceActor(req, res);
+  if (!actor) return;
+
+  const query = ListSourcingQuoteLinesQuerySchema.safeParse(req.query);
+  if (!query.success) {
+    sendZodError(res, query.error);
+    return;
+  }
+
+  const result = await commerceQuotesService.listSourcingQuoteLines(actor, {
+    cursor: query.data.cursor,
+    limit: query.data.limit,
+  });
+  if (!result.success) {
+    mapQuotesError(res, result.error);
+    return;
+  }
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Sourcing quote lines listed.",
     data: result.value,
   } satisfies ApiResponse);
 }

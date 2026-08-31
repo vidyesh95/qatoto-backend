@@ -949,6 +949,7 @@ started, not that payment, booking, testing, or settlement succeeded.
 | —      | `product.sourcing_quote_product_line_id`                  | The seller's cost basis; no new route — A44                |
 | —      | `commerce_checkout_prepare.requested_freight_mode`        | The buyer's requested mode; rides `checkout/prepare` — A45 |
 | POST   | `/commerce/shipment-legs/:legId/assignment`               | Attach or detach the logistics engagement; `null` detaches — A43 |
+| GET    | `/commerce/sourcing/quote-lines`                          | The caller's ACCEPTED quote product lines; the cost-basis picker — A46 |
 
 ⚠️ **THE FIRST FOUR ROWS ABOVE ARE NOT NEW.** They shipped with Phase 6 and this table never listed
 them, which is why the frontend went a long time with no caller for any of them — a route absent
@@ -5513,3 +5514,44 @@ window as though the buyer had chosen it.
 applied; there is no local instance and the shared one was deliberately left alone. The ownership
 join, the cost aggregation and the mode round-trip are reasoned from the code they mirror, not
 observed. Typecheck, lint and **2044 tests across 126 files** pass.
+
+---
+
+### A46. The cost-basis picker had no read it could use — **SHIPPED (Phase 27, no migration)**
+
+**Needed by:** the listing editor's sourcing picker, which sets `product.sourcing_quote_product_line_id`
+(A44). Without it that column is unfillable and `sourcingCost` is permanently empty.
+
+**Why the obvious read does not work, and this is the whole justification.**
+`GET /commerce/quotes/:quoteId` is the only other route that emits a `commerce_quote_product_line.id`
+— but it projects the **latest** revision (falling back to the latest *submitted* one for a buyer),
+while `assertSourcingQuoteLineUsable` requires `acceptedRevisionNumber === revisionNumber`. On a
+quote that was accepted and then had a revision appended, those disagree, and the existing walk
+**cannot produce a linkable id at all**. Where it can, reaching it costs three round trips per quote
+(`/rfqs/mine` → `/rfqs/:rfqId/quotes` → `/quotes/:quoteId`) — N+1 from a browser, which is the same
+argument `GET /commerce/provider/shipments` was created to settle.
+
+`GET /commerce/sourcing/quote-lines` returns, across every RFQ, the lines this organization may
+link: line id, quote id, revision number, provider name, title snapshot, quantity, unit price, line
+total, the quote's currency, and `acceptedAt`. Keyset-paginated on `acceptedAt` then line id, the
+`store-cursor.ts` recipe `listProviderQuotes` already follows.
+
+**The WHERE clause is deliberately the same join the write validates with** — `line → revision →
+quote → rfq`, filtered on `commerce_rfq.buyerOrganizationId` and `acceptedRevisionNumber`. Any
+divergence would offer a seller a line the save then refuses, which is the worst kind of picker.
+There is no `status` filter for the same reason: only accepted-revision lines exist in this read.
+
+**Named for who is asking.** The caller is a SELLER writing a listing; the rows are quotes they
+accepted as a BUYER. One organization in two roles, which §1.3 already contemplates — hence the
+neutral `requireActiveCommerceOrganization` guard, matching `GET /quotes/:quoteId` rather than
+either side-specific one.
+
+⚠️ **A DATA-LOSS PATH WAS FOUND AND CLOSED WHILE WIRING A44.** The listing editor sends
+`sourcingQuoteProductLineId` on every save, `null` included, because `null` is how a wrong link is
+cleared. `PublicProduct` did not project the column, so the form would have prefilled empty and
+**wiped an existing link on the next unrelated edit**. The projection carries it now. This is the
+same failure shape as a replace-set endpoint shipped without an owner-side read: a write with no
+matching read destroys data, and the absence of the read is the bug.
+
+⚠️ **NOT EXERCISED AGAINST A DATABASE.** `0159` is still unapplied, so no row has round-tripped.
+Typecheck, lint and 2044 tests across 126 files pass.

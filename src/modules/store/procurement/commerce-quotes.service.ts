@@ -1522,6 +1522,137 @@ export async function listProviderQuotes(
 }
 
 /**
+ * One row of the caller's cost basis — an accepted quote product line they can link a listing to.
+ */
+export interface SourcingQuoteLineItem {
+  readonly quoteProductLineId: string;
+  readonly quoteId: string;
+  readonly rfqId: string;
+  readonly rfqTitle: string;
+  readonly revisionNumber: number;
+  readonly providerOrganizationId: string;
+  readonly providerDisplayName: string;
+  readonly titleSnapshot: string;
+  readonly quantity: number;
+  readonly unitPriceInCents: number;
+  readonly lineTotalInCents: number;
+  readonly currency: string;
+  readonly acceptedAt: Date;
+}
+
+/**
+ * Every quote product line this organization may use as a listing's cost basis — `A44`.
+ *
+ * ⚠️ **WHY THIS ROUTE HAD TO EXIST RATHER THAN REUSING `getQuote`.** `getQuote` is the only other
+ * read that emits a `commerce_quote_product_line.id`, and it projects the **latest** revision
+ * (falling back to the latest SUBMITTED one for a buyer). `assertSourcingQuoteLineUsable` on the
+ * write side requires `acceptedRevisionNumber === revisionNumber`. On a quote that was accepted and
+ * then had a revision appended, those two disagree — so the existing walk cannot produce a linkable
+ * id at all, and where it can, it takes three round trips per quote from a browser.
+ *
+ * ⚠️ **THE WHERE CLAUSE IS DELIBERATELY THE SAME JOIN THE WRITE VALIDATES WITH.** Buyer identity
+ * lives on `commerce_rfq`, not on the quote — a quote records its provider directly and its buyer
+ * only through the RFQ — and acceptance is pinned per revision. Any divergence between this read
+ * and `assertSourcingQuoteLineUsable` would offer a seller a line the save then refuses, which is
+ * the worst kind of picker.
+ *
+ * "Buyer" here means the caller BOUGHT these goods. They are a seller everywhere else in this
+ * flow; the two roles are the same organization wearing different hats, which is exactly what
+ * `commerce_provider_kind_link` and §1.3 already contemplate.
+ *
+ * Keyed on `acceptedAt` then `id`: most recently accepted first, because the line a seller wants is
+ * almost always the one they just agreed.
+ */
+export async function listSourcingQuoteLines(
+  actor: QuoteActorContext,
+  input: { readonly cursor?: string | undefined; readonly limit?: number | undefined },
+): Promise<
+  Result<
+    {
+      readonly items: readonly SourcingQuoteLineItem[];
+      readonly page: { readonly nextCursor: string | null; readonly hasMore: boolean };
+    },
+    CommerceQuotesError
+  >
+> {
+  const limit = input.limit ?? 20;
+  const decodedCursor =
+    input.cursor === undefined ? null : decodeTimestampStoreCursor(input.cursor);
+  if (input.cursor !== undefined && decodedCursor === null) {
+    return { success: false, error: { type: "INVALID_CURSOR" } };
+  }
+
+  const cursorPredicate =
+    decodedCursor === null
+      ? undefined
+      : or(
+          lt(commerceQuote.acceptedAt, decodedCursor.sortKey),
+          and(
+            eq(commerceQuote.acceptedAt, decodedCursor.sortKey),
+            gt(commerceQuoteProductLine.id, decodedCursor.id),
+          ),
+        );
+
+  const rows = await db
+    .select({
+      quoteProductLineId: commerceQuoteProductLine.id,
+      quoteId: commerceQuote.id,
+      rfqId: commerceRfq.id,
+      rfqTitle: commerceRfq.title,
+      revisionNumber: commerceQuoteRevision.revisionNumber,
+      providerOrganizationId: commerceQuote.providerOrganizationId,
+      providerDisplayName: commerceOrganization.displayName,
+      titleSnapshot: commerceQuoteProductLine.titleSnapshot,
+      quantity: commerceQuoteProductLine.quantity,
+      unitPriceInCents: commerceQuoteProductLine.unitPriceInCents,
+      lineTotalInCents: commerceQuoteProductLine.lineTotalInCents,
+      currency: commerceQuoteRevision.currency,
+      acceptedAt: commerceQuote.acceptedAt,
+    })
+    .from(commerceQuoteProductLine)
+    .innerJoin(
+      commerceQuoteRevision,
+      eq(commerceQuoteRevision.id, commerceQuoteProductLine.revisionId),
+    )
+    .innerJoin(commerceQuote, eq(commerceQuote.id, commerceQuoteRevision.quoteId))
+    .innerJoin(commerceRfq, eq(commerceRfq.id, commerceQuote.rfqId))
+    .innerJoin(
+      commerceOrganization,
+      eq(commerceOrganization.id, commerceQuote.providerOrganizationId),
+    )
+    .where(
+      and(
+        eq(commerceRfq.buyerOrganizationId, actor.organizationId),
+        eq(commerceQuote.acceptedRevisionNumber, commerceQuoteRevision.revisionNumber),
+        // Belt and braces with the predicate above — `acceptedAt` is the sort key, and a null one
+        // would make the cursor unencodable. The two are set together at acceptance.
+        isNotNull(commerceQuote.acceptedAt),
+        cursorPredicate,
+      ),
+    )
+    .orderBy(desc(commerceQuote.acceptedAt), asc(commerceQuoteProductLine.id))
+    .limit(limit + 1);
+
+  const pageRows = rows.slice(0, limit);
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor =
+    rows.length > limit && lastRow && lastRow.acceptedAt !== null
+      ? encodeStoreCursor({
+          sortKey: lastRow.acceptedAt.toISOString(),
+          id: lastRow.quoteProductLineId,
+        })
+      : null;
+
+  const items = pageRows.flatMap((row) =>
+    // `acceptedAt` is non-null by the predicate; narrowing it here rather than asserting keeps the
+    // `strictNullChecks` guarantee honest.
+    row.acceptedAt === null ? [] : [{ ...row, acceptedAt: row.acceptedAt }],
+  );
+
+  return { success: true, value: { items, page: { nextCursor, hasMore: nextCursor !== null } } };
+}
+
+/**
  * Buyer comparison list (submitted+) or provider view of own quote including drafts.
  */
 export async function listQuotesForRfq(
