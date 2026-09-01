@@ -386,6 +386,9 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 17(3)(e)",
       note: "Hash-chained. The actor label inside the chain is already pseudonymous (pseudonymousActorLabel), so scrubbing user.name removes the identity without touching a byte the hash covers.",
     },
+    // The note stays, the attribution goes. What somebody said about a broken page is still
+    // true after they leave, and it names nobody but the product.
+    "platform_feedback.user_id": { kind: "null_out" },
     "platform_role_grant_proposal.cancelled_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",

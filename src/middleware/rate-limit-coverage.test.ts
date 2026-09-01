@@ -82,6 +82,13 @@ const MOUNTED_ROUTERS: readonly {
     specifier: "#src/modules/platform/notifications/notifications.routes.js",
     exportName: "default",
   },
+  // Site feedback. This line lands in the SAME commit as the mount in app.ts — a router
+  // missing from this table is silently unchecked, which has happened before.
+  {
+    mountPath: "/",
+    specifier: "#src/modules/platform/feedback/feedback.routes.js",
+    exportName: "default",
+  },
   {
     mountPath: "/commerce",
     specifier: "#src/modules/store/organizations/commerce-organizations.routes.js",

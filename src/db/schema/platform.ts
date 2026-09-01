@@ -615,3 +615,82 @@ export const notificationRelations = relations(notification, ({ one }) => ({
     references: [researchProject.id],
   }),
 }));
+
+// ---------------------------------------------------------------------------
+// Site feedback — what somebody says about the product itself.
+//
+// IT IS NOT A REPORT, AND THAT IS WHY IT LIVES HERE. `user_report`,
+// `video_content_report` and `commerce_content_report` are each about a piece of
+// content or a person, are scoped to the surface that owns that thing, and end in a
+// moderator's verdict about it. This ends in nobody being judged. It belongs beside
+// the audit log and the role grants: platform-wide, owned by no one domain.
+//
+// `page_path` IS THE ONE PIECE OF CONTEXT WORTH STORING. A note saying "this button
+// does nothing" is unactionable without the route it was written on, and asking the
+// person to type it is asking them to do the client's job. The user agent is taken
+// from the request header for the same reason and bounded there — neither field is
+// ever read from the request body, where the client could say anything.
+// ---------------------------------------------------------------------------
+
+export const platformFeedbackCategoryEnum = pgEnum("platform_feedback_category", [
+  "bug",
+  "idea",
+  "other",
+]);
+
+/**
+ * The triage state. `new` is where every row lands; nothing in this phase moves it.
+ *
+ * Shipped with the table rather than with the triage route that will read it, because an
+ * enum column added later is a migration against a table that will by then have rows.
+ */
+export const platformFeedbackStatusEnum = pgEnum("platform_feedback_status", [
+  "new",
+  "reviewed",
+  "closed",
+]);
+
+export const platformFeedback = pgTable(
+  "platform_feedback",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // Nullable, `set null`: the anonymization manifest nulls the attribution and KEEPS the
+    // feedback. What somebody said about a broken checkout stays true after they leave.
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    category: platformFeedbackCategoryEnum("category").notNull(),
+    message: text("message").notNull(),
+    pagePath: text("page_path").notNull(),
+    // Server-captured request header, never a body field.
+    userAgent: text("user_agent"),
+    status: platformFeedbackStatusEnum("status").default("new").notNull(),
+    // `precision: 3` is LOAD-BEARING: this column is half of the keyset cursor the admin
+    // queue pages on, and a cursor minted from a millisecond it cannot store skips rows.
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    // The queue read: filter by status, page by (created_at, id).
+    index("platform_feedback_status_createdAt_idx").on(table.status, table.createdAt, table.id),
+    // The anonymization job's own lookup.
+    index("platform_feedback_userId_idx").on(table.userId),
+    // Each mirrors the Zod schema the controller parses with. The schema is the polite
+    // refusal; this is the one that cannot be bypassed.
+    check("platform_feedback_message_ck", sql`char_length(message) BETWEEN 1 AND 2000`),
+    check(
+      "platform_feedback_page_path_ck",
+      sql`char_length(page_path) BETWEEN 1 AND 300 AND left(page_path, 1) = '/'`,
+    ),
+    check(
+      "platform_feedback_user_agent_ck",
+      sql`user_agent IS NULL OR char_length(user_agent) BETWEEN 1 AND 512`,
+    ),
+  ],
+);
+
+export const platformFeedbackRelations = relations(platformFeedback, ({ one }) => ({
+  author: one(user, {
+    fields: [platformFeedback.userId],
+    references: [user.id],
+  }),
+}));

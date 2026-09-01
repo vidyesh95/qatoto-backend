@@ -327,6 +327,24 @@ export const problemReportLimiter = createLimiter({
 });
 
 /**
+ * POST /feedback — what somebody says about the product itself.
+ *
+ * PAIRED WITH `requireIdentifiedUser` the way `problemReportLimiter` above is, and for the
+ * same reason: a session is nearly free to mint, so the guard prices the identity and this
+ * bounds what one identity can do with it. Nothing counts these rows — no score, no
+ * denominator — so the risk being bounded is the staff queue filling with noise rather than
+ * a metric being poisoned.
+ *
+ * Five in fifteen minutes is generous for somebody with something to say and useless as a
+ * flood: a person reporting three separate broken pages in one sitting never notices it.
+ */
+export const platformFeedbackLimiter = createLimiter({
+  namespace: "platformFeedback",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 5,
+});
+
+/**
  * PUT/DELETE /discovery/talent/me and the publish toggle — cheap writes, but publishing
  * flips a row into a directory other people read and invite from, so an unbounded
  * publish/unpublish loop is notification amplification once §5's invite flow reads it.

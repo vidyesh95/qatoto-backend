@@ -27,6 +27,7 @@ import feedRouter from "#src/modules/home/feed/feed.routes.js";
 import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
 import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";
+import platformFeedbackRouter from "#src/modules/platform/feedback/feedback.routes.js";
 import platformMetricsRouter from "#src/modules/platform/metrics/metrics.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
@@ -434,6 +435,9 @@ app.use("/", platformAuditRouter);
 // grant is a platform-wide fact, not a fact about any one domain.
 app.use("/", platformRolesRouter);
 app.use("/", platformMetricsRouter);
+// Site feedback. Root-mounted for the same reason as the two above: what somebody says
+// about the product belongs to the platform, not to whichever surface they were looking at.
+app.use("/", platformFeedbackRouter);
 // §7's id-keyed half: /funding-rounds, /pledges, /milestones, /escrow-releases,
 // /provider-transfers and /funding/deals. Root-mounted because a backer arriving from a
 // deal-flow list holds a round id and has no reason to know which project owns it — the

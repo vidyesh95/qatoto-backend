@@ -18,6 +18,7 @@ import fundingRouter, { projectFundingRouter } from "#src/modules/rnd/funding/fu
 import pitchesRouter, { projectPitchRouter } from "#src/modules/rnd/pitches/pitches.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";
+import platformFeedbackRouter from "#src/modules/platform/feedback/feedback.routes.js";
 import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
 import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
 import proofOfEffortRouter, {
@@ -91,6 +92,7 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/", router: notificationsRouter },
   { mountPath: "/", router: platformAuditRouter },
   { mountPath: "/", router: platformRolesRouter },
+  { mountPath: "/", router: platformFeedbackRouter },
   { mountPath: "/", router: fundingRouter },
   { mountPath: "/", router: pitchesRouter },
   { mountPath: "/", router: integrationCallbackRouter },
@@ -122,6 +124,8 @@ const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = 
   { prefix: "/discovery/admin", tag: "Discovery moderation" },
   { prefix: "/discovery", tag: "Discovery" },
   { prefix: "/admin/audit-trail", tag: "Platform audit" },
+  { prefix: "/admin/feedback", tag: "Site feedback" },
+  { prefix: "/feedback", tag: "Site feedback" },
   { prefix: "/notifications", tag: "Notifications" },
   { prefix: "/governance", tag: "Governance" },
   { prefix: "/daily-logs", tag: "Daily logs" },

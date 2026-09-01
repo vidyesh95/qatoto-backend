@@ -37,6 +37,7 @@ import {
   CreateMarketInsightSchema,
   UpdateMarketInsightSchema,
 } from "#src/modules/rnd/discovery/market-insights.schemas.js";
+import { CreatePlatformFeedbackSchema } from "#src/modules/platform/feedback/feedback.schemas.js";
 import { MarkNotificationsReadSchema } from "#src/modules/platform/notifications/notifications.schemas.js";
 import {
   CountersignPlatformRoleSchema,
@@ -539,4 +540,7 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   "patch /pitches/{pitchId}": { schema: UpdatePitchSchema, required: false },
   "post /pitches/{pitchId}/moderate": { schema: ModeratePitchSchema, required: true },
   "post /pitches/{pitchId}/funding-outcomes": { schema: RecordPitchOutcomeSchema, required: true },
+  // Site feedback. `pagePath` is in the body and the user agent deliberately is not — the
+  // header is read server-side, so no client can claim one.
+  "post /feedback": { schema: CreatePlatformFeedbackSchema, required: true },
 };
