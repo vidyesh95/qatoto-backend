@@ -69,7 +69,18 @@ export type PlatformCapability =
    * than next to a review queue. A content moderator needs to judge a video, not to know when its
    * uploader stopped logging in.
    */
-  | "view_platform_metrics";
+  | "view_platform_metrics"
+  /**
+   * Read and answer support cases. `admin` ONLY, and deliberately NOT held by `moderator`.
+   *
+   * `moderate_content` is about deciding user-submitted content — approve this video, hide
+   * that post — and what a moderator reads there is the thing under complaint. A support
+   * queue is a different dossier: it is unstructured free text in which people describe
+   * payments they say they made, accounts they cannot get into, and whatever else they chose
+   * to type into a box addressed to the platform. That is a wider and more personal read than
+   * judging a post, so it sits beside role management rather than beside a review queue.
+   */
+  | "handle_support_cases";
 
 /**
  * The grant table. Explicit and total: every role lists every capability it holds, so
@@ -87,6 +98,7 @@ const PLATFORM_ROLE_GRANTS: Readonly<Record<PlatformRole, readonly PlatformCapab
     "manage_platform_roles",
     "manage_promotions",
     "view_platform_metrics",
+    "handle_support_cases",
   ],
 };
 

@@ -588,6 +588,38 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
         ORDER BY view_day_bucket DESC`,
   );
 
+  /**
+   * SUPPORT CASES THE SUBJECT OPENED, AND THE WHOLE THREAD OF EACH.
+   *
+   * ⚠️ **ADDED WITH THE TABLE, because the scrub alone would not have covered it.** The
+   * manifest deletes these rows on erasure, which is the Art. 17 half; this is the Art. 15
+   * half, and `yourChannelLinks` above records how easily one ships without the other. A case
+   * is somebody describing their own problem in their own words — squarely their personal
+   * data, and squarely portable.
+   *
+   * BOTH SIDES OF THE THREAD, and that is not a slip against the "things other people wrote
+   * about you" exclusion below. A staff reply is correspondence WITH this person, already
+   * delivered to them and readable in the app; withholding it would hand back half a
+   * conversation. `author_user_id` is deliberately NOT selected — the person learns that
+   * support answered, never which staff member did, exactly as the app shows it.
+   */
+  const supportCasesYouOpened = await collect(
+    "supportCasesYouOpened",
+    sql`SELECT id, category, state, subject, description, order_reference,
+               decision_note, created_at, decided_at
+        FROM support_case WHERE opened_by_user_id = ${userId}
+        ORDER BY created_at DESC`,
+  );
+
+  const supportCaseMessages = await collect(
+    "supportCaseMessages",
+    sql`SELECT m.case_id, m.sequence, m.author_kind, m.body, m.created_at
+        FROM support_case_message AS m
+        JOIN support_case AS c ON c.id = m.case_id
+        WHERE c.opened_by_user_id = ${userId}
+        ORDER BY m.case_id, m.sequence`,
+  );
+
   const workYouHaveDone = {
     projectsFounded: await collect(
       "projectsFounded",
@@ -651,6 +683,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     whatYouDoHere,
     howMuchYouWatch,
     productPagesYouLookedAt,
+    supportYouAskedFor: { cases: supportCasesYouOpened, messages: supportCaseMessages },
     workYouHaveDone,
     /**
      * PRESENT AND EMPTY, ON PURPOSE. The panel lists "Settings on this device" as one of

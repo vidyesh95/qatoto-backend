@@ -514,6 +514,27 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       note: "Names who owns or founded a thing other people are still working on or buying from. The row outlives the account by design (rule R1).",
     },
     "supplier.created_by_user_id": { kind: "null_out" },
+    /**
+     * ⚠️ `delete_rows`, AND IT IS THE ONLY DISPOSITION THAT WORKS HERE.
+     *
+     * A support case is FREE TEXT the person wrote about themselves — "my payment to X did
+     * not arrive", with whatever reference, address or grievance they chose to include.
+     * Nulling the foreign key would keep every one of those sentences in the table forever
+     * and merely forget who wrote them, which is not an erasure of the personal data, only of
+     * the attribution. Nothing else depends on the row: no counterparty holds the other half
+     * (staff do, and staff are us), no equity is denominated in it, and it is not an
+     * enforcement action taken about somebody else. So it goes, and the messages cascade.
+     */
+    "support_case.opened_by_user_id": { kind: "delete_rows" },
+    "support_case.decided_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
+    },
+    // The staff half of a thread. `set null` on the column and here: the message stays, and
+    // `author_kind` still records which side wrote it, so a conversation the other party can
+    // still read does not lose half its turns when a staff account is erased.
+    "support_case_message.author_user_id": { kind: "null_out" },
     "talent_profile.user_id": { kind: "delete_rows" },
     "user_activity_hour.user_id": { kind: "delete_rows" },
     "user_creator_affinity_snapshot.creator_id": { kind: "delete_rows" },

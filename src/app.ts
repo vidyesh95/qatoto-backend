@@ -31,6 +31,7 @@ import platformFeedbackRouter from "#src/modules/platform/feedback/feedback.rout
 import platformMetricsRouter from "#src/modules/platform/metrics/metrics.routes.js";
 import notificationsRouter from "#src/modules/platform/notifications/notifications.routes.js";
 import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
+import supportCasesRouter from "#src/modules/platform/support/support-cases.routes.js";
 import compensationRouter, {
   governanceRouter,
 } from "#src/modules/rnd/compensation/compensation.routes.js";
@@ -438,6 +439,12 @@ app.use("/", platformMetricsRouter);
 // Site feedback. Root-mounted for the same reason as the two above: what somebody says
 // about the product belongs to the platform, not to whichever surface they were looking at.
 app.use("/", platformFeedbackRouter);
+// Support cases. PREFIX-MOUNTED rather than root-mounted like the four platform routers
+// above, and the difference is that those own single paths (`/notifications`, `/feedback`)
+// while this owns a small tree — `/support/cases`, `/support/cases/:caseId/messages`,
+// `/support/admin/cases`. A prefix keeps that tree in one place and collides with nothing:
+// `/support` is a namespace no other router touches.
+app.use("/support", supportCasesRouter);
 // §7's id-keyed half: /funding-rounds, /pledges, /milestones, /escrow-releases,
 // /provider-transfers and /funding/deals. Root-mounted because a backer arriving from a
 // deal-flow list holds a round id and has no reason to know which project owns it — the

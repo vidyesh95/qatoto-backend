@@ -20,6 +20,7 @@ import notificationsRouter from "#src/modules/platform/notifications/notificatio
 import platformAuditRouter from "#src/modules/platform/audit/platform-audit.routes.js";
 import platformFeedbackRouter from "#src/modules/platform/feedback/feedback.routes.js";
 import platformRolesRouter from "#src/modules/platform/roles/platform-roles.routes.js";
+import supportCasesRouter from "#src/modules/platform/support/support-cases.routes.js";
 import promotionsRouter from "#src/modules/home/promotions/promotions.routes.js";
 import proofOfEffortRouter, {
   integrationCallbackRouter,
@@ -93,6 +94,10 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/", router: platformAuditRouter },
   { mountPath: "/", router: platformRolesRouter },
   { mountPath: "/", router: platformFeedbackRouter },
+  // Support cases belong here for the reason notifications and site feedback do: this table
+  // carries the PLATFORM surface, not only the R&D one. A router left out is a router the
+  // client generator concludes does not exist.
+  { mountPath: "/support", router: supportCasesRouter },
   { mountPath: "/", router: fundingRouter },
   { mountPath: "/", router: pitchesRouter },
   { mountPath: "/", router: integrationCallbackRouter },
@@ -127,6 +132,10 @@ const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = 
   { prefix: "/admin/feedback", tag: "Site feedback" },
   { prefix: "/feedback", tag: "Site feedback" },
   { prefix: "/notifications", tag: "Notifications" },
+  // Longest prefix first, so the staff queue is tagged as moderation rather than as the
+  // member-facing surface it sits inside.
+  { prefix: "/support/admin", tag: "Support moderation" },
+  { prefix: "/support", tag: "Support" },
   { prefix: "/governance", tag: "Governance" },
   { prefix: "/daily-logs", tag: "Daily logs" },
   { prefix: "/suppliers", tag: "Go-to-market" },

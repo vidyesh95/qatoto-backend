@@ -84,7 +84,74 @@ const SUBJECT_BY_KIND: Readonly<Record<(typeof notification.$inferSelect)["kind"
   video_content_actioned: "A decision was made about one of your videos",
   platform_role_change_proposed: "A staff role change is waiting for your countersignature",
   platform_role_changed: "Your staff access on Qatoto changed",
+  // Support cases. THE CASE SUBJECT NEVER APPEARS HERE, and that matters more than on the
+  // lines above: a person writes their own words into that field, so interpolating it would
+  // put user-authored text — a payment reference, a grievance, whatever they typed — into a
+  // mail server's logs and onto a lock screen. "Decided" rather than resolved-or-closed, the
+  // `video_report_decided` posture: one kind carries both verdicts, and a subject that
+  // guesses which is a subject that is sometimes wrong.
+  support_case_opened: "Someone opened a support case",
+  support_case_replied: "There is a reply on your support case",
+  support_case_decided: "Your support case was reviewed",
 };
+
+/**
+ * Which page the email points at.
+ *
+ * ⚠️ **THIS USED TO BE R&D OR NOTHING.** Every kind without a project fell back to
+ * `/research-and-development`, which was harmless while every projectless kind was an R&D
+ * one — and became a wrong door the moment a support case sent mail. The email is a doorbell
+ * and a doorbell has to be at the right house.
+ *
+ * The support link carries the case id straight from the payload. It is an id the recipient
+ * already owns, so it discloses nothing the app would not; anything richer would be putting
+ * the case itself in an email, which the subject rule above already refuses.
+ */
+function deepLinkFor(
+  frontendUrl: string,
+  kind: (typeof notification.$inferSelect)["kind"],
+  projectSlug: string | null,
+  payloadJson: string,
+): string {
+  if (
+    kind === "support_case_opened" ||
+    kind === "support_case_replied" ||
+    kind === "support_case_decided"
+  ) {
+    const supportCaseId = readStringPayloadValue(payloadJson, "supportCaseId");
+    return supportCaseId === null
+      ? `${frontendUrl}/customer-service`
+      : `${frontendUrl}/customer-service/cases/${encodeURIComponent(supportCaseId)}`;
+  }
+
+  return projectSlug === null
+    ? `${frontendUrl}/research-and-development`
+    : `${frontendUrl}/research-and-development/project/${projectSlug}`;
+}
+
+/**
+ * One string out of a stored payload, or null.
+ *
+ * A payload that will not parse is a bug in whatever wrote it and must not fail delivery —
+ * the same tolerance `parsePayload` shows the inbox read. The caller falls back to a link
+ * that is merely less specific rather than to no email at all.
+ */
+function readStringPayloadValue(payloadJson: string, key: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(payloadJson);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+
+    // Walked rather than indexed, so nothing has to be asserted back into a narrower type.
+    for (const [entryKey, entryValue] of Object.entries(parsed)) {
+      if (entryKey === key && typeof entryValue === "string" && entryValue !== "") {
+        return entryValue;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export async function handleDeliverNotification(rawPayload: unknown): Promise<void> {
   const payload = parseJobPayload(
@@ -98,6 +165,7 @@ export async function handleDeliverNotification(rawPayload: unknown): Promise<vo
       id: notification.id,
       kind: notification.kind,
       emailStatus: notification.emailStatus,
+      payloadJson: notification.payloadJson,
       recipientEmail: user.email,
       recipientName: user.name,
       projectName: researchProject.name,
@@ -136,10 +204,7 @@ export async function handleDeliverNotification(rawPayload: unknown): Promise<vo
 
   const subject = SUBJECT_BY_KIND[row.kind];
   const projectSuffix = row.projectName === null ? "" : ` — ${row.projectName}`;
-  const deepLink =
-    row.projectSlug === null
-      ? `${config.FRONTEND_URL}/research-and-development`
-      : `${config.FRONTEND_URL}/research-and-development/project/${row.projectSlug}`;
+  const deepLink = deepLinkFor(config.FRONTEND_URL, row.kind, row.projectSlug, row.payloadJson);
 
   const sent = await sendTransactionalEmail({
     toEmail: row.recipientEmail,

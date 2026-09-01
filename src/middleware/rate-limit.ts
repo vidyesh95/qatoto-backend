@@ -345,6 +345,50 @@ export const platformFeedbackLimiter = createLimiter({
 });
 
 /**
+ * `POST /support/cases` — opening a support case.
+ *
+ * THE SAME PAIRING as feedback and problem reports above: `requireIdentifiedUser` prices the
+ * identity, this bounds what one identity does with it. Looser than feedback at ten, because
+ * a person in trouble legitimately writes more than once — they open a case about a payment,
+ * realise the account question is separate, and open a second — and because the service caps
+ * CONCURRENT open cases anyway, which bounds the backlog more honestly than a window can.
+ *
+ * What is being bounded here is the queue filling with noise for a solo staff to read. There
+ * is no counter, no score and no denominator downstream, so nothing else is at stake.
+ */
+export const supportCaseOpenLimiter = createLimiter({
+  namespace: "supportCaseOpen",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+});
+
+/**
+ * `POST /support/cases/:caseId/messages` — replying on one's own case.
+ *
+ * A CONVERSATION RATE, not a submission rate, so it is per minute rather than per quarter
+ * hour and matches `commerceDisputeWriteLimiter`. Ten a minute is far more than a person
+ * types and far less than a loop; the 200-message cap per case is what bounds the total.
+ */
+export const supportCaseMessageLimiter = createLimiter({
+  namespace: "supportCaseMessage",
+  windowMs: ONE_MINUTE_MS,
+  limit: 10,
+});
+
+/**
+ * `/support/admin/*` — the staff queue, including its GETs.
+ *
+ * ON THE READS TOO, the `contentReviewLimiter` posture: staff throughput is legitimately
+ * fast, so this is generous. It exists to bound a COMPROMISED staff session reading a queue
+ * of other people's payment problems, not to pace an honest one.
+ */
+export const supportModerationLimiter = createLimiter({
+  namespace: "supportModeration",
+  windowMs: ONE_MINUTE_MS,
+  limit: 60,
+});
+
+/**
  * PUT/DELETE /discovery/talent/me and the publish toggle — cheap writes, but publishing
  * flips a row into a directory other people read and invite from, so an unbounded
  * publish/unpublish loop is notification amplification once §5's invite flow reads it.

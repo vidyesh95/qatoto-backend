@@ -38,6 +38,11 @@ import {
   UpdateMarketInsightSchema,
 } from "#src/modules/rnd/discovery/market-insights.schemas.js";
 import { CreatePlatformFeedbackSchema } from "#src/modules/platform/feedback/feedback.schemas.js";
+import {
+  AddSupportCaseMessageSchema,
+  DecideSupportCaseSchema,
+  OpenSupportCaseSchema,
+} from "#src/modules/platform/support/support-cases.schemas.js";
 import { MarkNotificationsReadSchema } from "#src/modules/platform/notifications/notifications.schemas.js";
 import {
   CountersignPlatformRoleSchema,
@@ -543,4 +548,19 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   // Site feedback. `pagePath` is in the body and the user agent deliberately is not — the
   // header is read server-side, so no client can claim one.
   "post /feedback": { schema: CreatePlatformFeedbackSchema, required: true },
+  // Support cases. Both message routes read the SAME schema — a reply is a reply whichever
+  // side writes it, and the author is proved by the session rather than declared in the body.
+  "post /support/cases": { schema: OpenSupportCaseSchema, required: true },
+  "post /support/cases/{caseId}/messages": {
+    schema: AddSupportCaseMessageSchema,
+    required: true,
+  },
+  "post /support/admin/cases/{caseId}/messages": {
+    schema: AddSupportCaseMessageSchema,
+    required: true,
+  },
+  "post /support/admin/cases/{caseId}/decisions": {
+    schema: DecideSupportCaseSchema,
+    required: true,
+  },
 };

@@ -89,6 +89,12 @@ const MOUNTED_ROUTERS: readonly {
     specifier: "#src/modules/platform/feedback/feedback.routes.js",
     exportName: "default",
   },
+  // Support cases. Same rule as the line above: this lands in the same commit as the mount.
+  {
+    mountPath: "/support",
+    specifier: "#src/modules/platform/support/support-cases.routes.js",
+    exportName: "default",
+  },
   {
     mountPath: "/commerce",
     specifier: "#src/modules/store/organizations/commerce-organizations.routes.js",

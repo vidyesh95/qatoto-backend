@@ -273,6 +273,13 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "user_profile_text_hidden",
   "user_profile_text_restored",
   "user_report_dismissed",
+  // Support cases — `support`. THE VERDICTS ONLY, matching the inclusion rule every block
+  // above follows: resolving or closing somebody's case is a staff decision taken about
+  // another person's problem, and it names an accountable human. A staff REPLY is not here.
+  // A reply is one turn of a conversation the person can read in full for themselves, and
+  // stamping the chain on every message would drown the entries that record a decision.
+  "support_case_resolved",
+  "support_case_closed",
 ]);
 
 /**
@@ -526,6 +533,19 @@ export const notificationKindEnum = pgEnum("notification_kind", [
   "video_content_actioned",
   "platform_role_change_proposed",
   "platform_role_changed",
+  /**
+   * Support cases. THREE KINDS, TWO AUDIENCES, and the first one is the reason this whole
+   * surface is not poll-only: a case sitting unread is the product failing at the one job it
+   * has, and nothing else tells staff a person is waiting.
+   *
+   * `support_case_opened` goes to every ADMIN. The other two go to the person who opened the
+   * case. `support_case_decided` carries both verdicts in one kind, the
+   * `video_report_decided` posture — a subject line that guesses which one is a subject line
+   * that is sometimes wrong on a lock screen.
+   */
+  "support_case_opened",
+  "support_case_replied",
+  "support_case_decided",
 ]);
 
 /**
