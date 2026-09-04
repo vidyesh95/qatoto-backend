@@ -37,7 +37,9 @@ import {
   handleRollupCommerceProductDailySignalTick,
   handleReconcileCommercePaymentsTick,
   handleReconcileConnectorStateTick,
+  handleRecomputeLocalizationAssessmentsTick,
   handleSweepPendingDocumentScansTick,
+  handleSyncComtradeTradeFlowsTick,
 } from "#src/jobs/scheduled-ticks.js";
 import {
   createPgBossDbAdapter,
@@ -67,6 +69,9 @@ import { handleRecomputeOpportunityScores } from "#src/modules/rnd/discovery/rec
 import { handleRefreshTalentProjections } from "#src/modules/rnd/discovery/refresh-talent-projections.js";
 import { handleRecomputeEquitySnapshot } from "#src/modules/rnd/funding/recompute-equity-snapshot.js";
 import { handleRecomputeInvestorConfidence } from "#src/modules/rnd/funding/recompute-investor-confidence.js";
+import { handleGenerateLocalizationNarrative } from "#src/modules/rnd/import-intelligence/generate-localization-narrative.js";
+import { handleRecomputeLocalizationAssessments } from "#src/modules/rnd/import-intelligence/recompute-localization-assessments.js";
+import { handleSyncComtradeTradeFlows } from "#src/modules/rnd/import-intelligence/sync-comtrade-trade-flows.js";
 import { handleRecomputeBranchSignals } from "#src/modules/rnd/programs/recompute-branch-signals.js";
 import { handleRecomputeProgramStats } from "#src/modules/rnd/programs/recompute-program-stats.js";
 import { handleSweepDisputeWindows } from "#src/modules/rnd/proof-of-effort/sweep-dispute-windows.js";
@@ -622,6 +627,37 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.sweepPendingDocumentScans,
     workOptions,
     runJob(JOB_NAMES.sweepPendingDocumentScans, handleSweepPendingDocumentScans),
+  );
+
+  // R&D §10A — import intelligence. The weekly Comtrade ingest, the nightly feasibility
+  // assessment, and the on-demand narrative the assessment enqueues for its top slice.
+  await boss.work(
+    JOB_NAMES.syncComtradeTradeFlowsTick,
+    workOptions,
+    runJob(JOB_NAMES.syncComtradeTradeFlowsTick, handleSyncComtradeTradeFlowsTick),
+  );
+  await boss.work(
+    JOB_NAMES.syncComtradeTradeFlows,
+    workOptions,
+    runJob(JOB_NAMES.syncComtradeTradeFlows, handleSyncComtradeTradeFlows),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeLocalizationAssessmentsTick,
+    workOptions,
+    runJob(
+      JOB_NAMES.recomputeLocalizationAssessmentsTick,
+      handleRecomputeLocalizationAssessmentsTick,
+    ),
+  );
+  await boss.work(
+    JOB_NAMES.recomputeLocalizationAssessments,
+    workOptions,
+    runJob(JOB_NAMES.recomputeLocalizationAssessments, handleRecomputeLocalizationAssessments),
+  );
+  await boss.work(
+    JOB_NAMES.generateLocalizationNarrative,
+    workOptions,
+    runJob(JOB_NAMES.generateLocalizationNarrative, handleGenerateLocalizationNarrative),
   );
 
   // STORE Phase 9 (§15.9) — nightly co-occurrence mining into the relation graph.

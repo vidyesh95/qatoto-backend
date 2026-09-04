@@ -866,3 +866,106 @@ export async function handlePruneExpiredDataExportsTick(
     );
   }
 }
+
+/**
+ * The §10A ingest tick — the only tick in this file that enqueues MORE THAN ONE job.
+ *
+ * It fans out over a fixed plan rather than over a database query, which is what keeps it
+ * consistent with every other tick here: no connection, no `new Date()` outside the clock
+ * reader, nothing to fail but the enqueue itself. The plan is a constant because the set
+ * of countries and years this platform ingests is a product decision, not data — widening
+ * it is a diff to the two arrays below, reviewed like any other.
+ *
+ * ONE JOB PER (country, year, direction), because that is exactly one Comtrade call. The
+ * current plan is 1 x 6 x 2 = twelve calls a week against a 500/day budget.
+ *
+ * ⚠️ AN ENQUEUE FAILURE IS COLLECTED, NOT THROWN AT THE FIRST ONE. Throwing immediately
+ * would abandon every remaining cell and retry the whole plan, re-enqueueing the cells that
+ * already succeeded — harmless only because the idempotency keys collapse them, and
+ * needlessly confusing in the job log either way.
+ */
+const COMTRADE_INGEST_COUNTRY_CODES: readonly string[] = ["IN"];
+
+/**
+ * Six years, because a trend needs at least two and a founder reading a six-year import
+ * curve can see a substitution that has already started. Comtrade revises recent years, so
+ * the most recent one is deliberately not the current year — it would be mostly empty.
+ */
+const COMTRADE_INGEST_PERIOD_YEARS: readonly number[] = [2019, 2020, 2021, 2022, 2023, 2024];
+
+const COMTRADE_INGEST_FLOW_KINDS = ["import", "export"] as const;
+
+export async function handleSyncComtradeTradeFlowsTick(_rawPayload: unknown): Promise<void> {
+  const enqueueFailures: string[] = [];
+
+  for (const reporterCountryCode of COMTRADE_INGEST_COUNTRY_CODES) {
+    for (const periodYear of COMTRADE_INGEST_PERIOD_YEARS) {
+      for (const flowKind of COMTRADE_INGEST_FLOW_KINDS) {
+        const enqueueResult = await sendJob(
+          JOB_NAMES.syncComtradeTradeFlows,
+          { reporterCountryCode, periodYear, flowKind },
+          {
+            idempotencyKey: idempotencyKeyFor.syncComtradeTradeFlows(
+              reporterCountryCode,
+              periodYear,
+              flowKind,
+            ),
+          },
+        );
+        if (!enqueueResult.success) {
+          enqueueFailures.push(
+            `${reporterCountryCode}/${periodYear}/${flowKind} (${enqueueResult.error.type})`,
+          );
+        }
+      }
+    }
+  }
+
+  if (enqueueFailures.length > 0) {
+    throw new Error(
+      `sync-comtrade-trade-flows-tick: ${enqueueFailures.length} enqueue(s) failed — ${enqueueFailures.join(", ")}`,
+    );
+  }
+}
+
+/**
+ * The §10A assessment tick.
+ *
+ * Quantized to the UTC day, like every other recompute. The window is the TWELVE MONTHS
+ * ending at `asOf`, as absolute instants (§4c rule 3) — the assessment scores an annual
+ * trade figure, so a shorter window would compare a year of imports against a month of
+ * supplier activity.
+ *
+ * `regionId: null` means every country that has trade flows; the handler fans out. Same
+ * shape as `recompute-branch-signals`, and for the same reason: the tick must not need a
+ * database to decide what to enqueue.
+ */
+const LOCALIZATION_WINDOW_DAYS = 365;
+
+export async function handleRecomputeLocalizationAssessmentsTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOf = truncateToUtcDayStart(readClock());
+  const asOfIso = asOf.toISOString();
+  const windowStartsAt = new Date(asOf.getTime() - LOCALIZATION_WINDOW_DAYS * MILLISECONDS_PER_DAY);
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.recomputeLocalizationAssessments,
+    {
+      asOf: asOfIso,
+      windowStartsAt: windowStartsAt.toISOString(),
+      windowEndsAt: asOfIso,
+      regionId: null,
+    },
+    {
+      idempotencyKey: idempotencyKeyFor.recomputeLocalizationAssessments(asOfIso, null),
+    },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `recompute-localization-assessments-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}

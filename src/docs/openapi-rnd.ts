@@ -34,6 +34,7 @@ import researchProjectsRouter, {
 } from "#src/modules/rnd/projects/research-projects.routes.js";
 import animeRouter from "#src/modules/home/anime/anime.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
+import importIntelligenceRouter from "#src/modules/rnd/import-intelligence/import-intelligence.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/modules/rnd/suppliers/suppliers.routes.js";
 import workshopRouter, { dailyLogFeedRouter } from "#src/modules/rnd/workshop/workshop.routes.js";
 
@@ -89,6 +90,7 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/", router: dailyLogFeedRouter },
   { mountPath: "/", router: governanceRouter },
   { mountPath: "/", router: supplierRouter },
+  { mountPath: "/", router: importIntelligenceRouter },
   { mountPath: "/", router: applicationInboxRouter },
   { mountPath: "/", router: notificationsRouter },
   { mountPath: "/", router: platformAuditRouter },
@@ -138,6 +140,13 @@ const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = 
   { prefix: "/support", tag: "Support" },
   { prefix: "/governance", tag: "Governance" },
   { prefix: "/daily-logs", tag: "Daily logs" },
+  // §11m. Five prefixes, one tag — they are one domain and splitting them across tags
+  // would scatter a six-route surface over a generated client.
+  { prefix: "/import-commodities", tag: "Import intelligence" },
+  { prefix: "/import-commodity-kinds", tag: "Import intelligence" },
+  { prefix: "/localization-assessments", tag: "Import intelligence" },
+  { prefix: "/localization-pathway-suggestions", tag: "Import intelligence" },
+  { prefix: "/domestic-substitutes", tag: "Import intelligence" },
   { prefix: "/suppliers", tag: "Go-to-market" },
   { prefix: "/supplier-capabilities", tag: "Go-to-market" },
   { prefix: "/launch-ready-projects", tag: "Go-to-market" },

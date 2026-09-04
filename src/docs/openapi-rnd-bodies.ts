@@ -128,6 +128,11 @@ import {
   UpdateSupplierEngagementSchema,
   UpdateSupplierSchema,
 } from "#src/modules/rnd/suppliers/suppliers.schemas.js";
+import {
+  CreateDomesticSubstituteSchema,
+  DecidePathwaySuggestionSchema,
+  UpdateDomesticSubstituteSchema,
+} from "#src/modules/rnd/import-intelligence/import-intelligence.schemas.js";
 import { TalentProfileSchema } from "#src/modules/rnd/discovery/talent-profiles.schemas.js";
 import {
   AddFileLinkSchema,
@@ -536,6 +541,18 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
     required: true,
   },
   "post /suppliers": { schema: CreateSupplierSchema, required: true },
+  // --- §11m import intelligence. All three read `req.body` unconditionally, so all three
+  // --- are `required: true`. There is deliberately no entry for a commodity or a trade
+  // --- flow: the Comtrade ingest is their only author and neither has a write route.
+  "post /domestic-substitutes": { schema: CreateDomesticSubstituteSchema, required: true },
+  "patch /domestic-substitutes/{substituteId}": {
+    schema: UpdateDomesticSubstituteSchema,
+    required: true,
+  },
+  "post /localization-pathway-suggestions/{suggestionId}/decision": {
+    schema: DecidePathwaySuggestionSchema,
+    required: true,
+  },
   "put /discovery/talent/me": { schema: TalentProfileSchema, required: true },
   "put /milestones/{milestoneId}/variance": { schema: MilestoneVarianceSchema, required: true },
   // --- §12 pitches. `required` is a property of the ROUTE, not of the schema: every one of

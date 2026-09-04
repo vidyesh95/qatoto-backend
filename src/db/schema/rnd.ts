@@ -8635,3 +8635,715 @@ export const pitchFundingOutcomeRelations = relations(pitchFundingOutcome, ({ on
     relationName: "pitchOutcomeConfirmer",
   }),
 }));
+
+// ---------------------------------------------------------------------------
+// §10A — IMPORT INTELLIGENCE & LOCALIZATION.
+//
+// The question the pipeline never asked: what does this country already buy from
+// abroad, and could it be made here instead? Three layers, and they are three tables
+// rather than one because they have three different authors — UN Comtrade writes the
+// flows, a moderator writes the substitutes, and a nightly job writes the assessment.
+//
+// FED BY A REAL FEED, NOT A FIXTURE. `commodity_trade_flow` rows come from
+// comtradeapi.un.org, one call per (reporter, year, flow), pinned to
+// `partnerCode=0&partner2Code=0&customsCode=C00&motCode=0` so the API returns exactly
+// one aggregate row per commodity. `data_origin` distinguishes that feed from a later
+// admin upload or a test fixture, so a second source lands as rows rather than as a
+// migration.
+//
+// THE UNITS RULE BITES HARDEST HERE (§4b). Comtrade sends FLOATS — `primaryValue`
+// 11862990842.188, `netWgt` 6533139.808. They are converted to integers exactly once,
+// in `comtrade.ts`, and nothing downstream ever sees a float. India's largest single
+// commodity line is $140bn, which is 14_038_629_964_550 cents: int4 caps at 2.1bn, so
+// every value column here is `bigint`.
+//
+// AND NULL IS NOT ZERO, WHICH IS LOAD-BEARING ON DAY ONE. 679 of India's 5,052 HS6
+// import lines carry no net weight at all. A weight of zero would say "this weighs
+// nothing"; NULL says "nobody recorded it", and only one of those is true.
+// ---------------------------------------------------------------------------
+
+/**
+ * What kind of thing a commodity is, derived from its HS chapter by
+ * `import-intelligence/hs-chapter-map.ts` — never free text and never client-supplied.
+ *
+ * Sixteen values because the 97 HS chapters do not collapse into fewer without lying:
+ * a pharmaceutical and an industrial chemical share a chapter range and nothing else
+ * that matters to whether a country can make one.
+ */
+export const importCommodityKindEnum = pgEnum("import_commodity_kind", [
+  "agricultural_product", // HS 01-15 — live animals, crops, fats
+  "food_product", // HS 16-24 — prepared food, beverages, tobacco
+  "mineral_ceramic", // HS 25-26, 68-70 — stone, cement, glass, ceramics
+  "energy_fuel", // HS 27 — the single largest line in most importing countries
+  "chemical", // HS 28-29, 31-38
+  "pharmaceutical", // HS 30 — split out because localizing it is a regulatory problem
+  "plastic_rubber", // HS 39-40
+  "wood_paper", // HS 44-49
+  "textile_leather", // HS 41-43, 50-67
+  "precious_material", // HS 71 — gold and diamonds, which distort any ranking they enter
+  "metal", // HS 72-83
+  "machinery", // HS 84
+  "electronic_subassembly", // HS 85
+  "transport_equipment", // HS 86-89
+  "precision_instrument", // HS 90-92
+  "other_manufactured", // HS 93-97
+]);
+
+/**
+ * The unit a traded quantity is measured in.
+ *
+ * EXACTLY THE TEN COMTRADE EMITS, verified against a full year of India's HS6 lines
+ * rather than guessed from documentation. `not_applicable` is Comtrade's own `-1`: the
+ * commodity is traded by value alone and there is no quantity to state. It is NOT a
+ * missing unit and must not render as one.
+ */
+export const importQuantityUnitEnum = pgEnum("import_quantity_unit", [
+  "not_applicable", // -1 "N/A"
+  "square_metres", // 2  "m²"
+  "thousand_kilowatt_hours", // 3  "1000 kWh"
+  "metres", // 4  "m"
+  "units", // 5  "u"
+  "pairs", // 6  "2u"
+  "litres", // 7  "l"
+  "kilograms", // 8  "kg"
+  // 9 and 10 were NOT in the first year sampled and were found by the ingest SKIPPING them
+  // and saying so — which is the whole reason an unknown unit is counted rather than guessed.
+  "thousand_units", // 9  "1000u"    — ceramic bricks and similar
+  "packs", // 10 "U (jeu/pack)" — playing cards, sets
+  "cubic_metres", // 12 "m³"
+  "carats", // 13 "carat"
+]);
+
+/**
+ * Which way the goods moved.
+ *
+ * BOTH DIRECTIONS LIVE IN ONE TABLE, and the table is named `commodity_trade_flow`
+ * rather than `import_trade_flow` for that reason. An export figure is not decoration
+ * here: it is the single hardest-to-fake evidence that a country can already make a
+ * thing, and it carries 25 of the feasibility score's 100 points.
+ */
+export const tradeFlowKindEnum = pgEnum("trade_flow_kind", ["import", "export"]);
+
+export const tradePeriodKindEnum = pgEnum("trade_period_kind", ["annual", "monthly"]);
+
+/**
+ * Where a trade row came from. Present from the first migration precisely so a second
+ * source never needs one — a purchased dataset (DGCI&S, Volza) arrives as rows with a
+ * different `data_origin`, not as an ALTER TABLE against a populated table.
+ */
+export const tradeDataOriginEnum = pgEnum("trade_data_origin", [
+  "comtrade_api",
+  "admin_upload",
+  "seeded_fixture", // smoke scripts only — never a figure shown to a founder as published
+]);
+
+/** How a domestic substitute relates to the import it would replace. */
+export const domesticSubstituteKindEnum = pgEnum("domestic_substitute_kind", [
+  "direct_material_substitute", // the same material, made domestically
+  "alternative_material", // a different material that serves the same function
+  "domestic_component", // a sub-assembly available in-country
+  "process_change", // no substitute input — a different way of making the thing
+]);
+
+/**
+ * How proven a substitute is. ORDERED, and the order is scored: `mature` pays the full
+ * component and `lab_scale` pays the least, because a substitute that exists only in a
+ * paper is evidence of possibility rather than of supply.
+ */
+export const domesticSubstituteMaturityEnum = pgEnum("domestic_substitute_maturity", [
+  "lab_scale",
+  "pilot_scale",
+  "commercial",
+  "mature",
+]);
+
+/**
+ * Whether the LLM pathway narrative was written for an assessment.
+ *
+ * `skipped_unconfigured` is a DISTINCT STATE FROM `failed`, the same line
+ * `daily_log_analysis_status` draws: "no model key in this environment" is an operator
+ * fact, not a failure a founder can act on. A local checkout with no key produces
+ * assessments with real scores and no prose, which is the correct outcome.
+ */
+export const localizationNarrativeStatusEnum = pgEnum("localization_narrative_status", [
+  "pending",
+  "generated",
+  "skipped_unconfigured",
+  "failed",
+]);
+
+export const localizationPathwayStatusEnum = pgEnum("localization_pathway_status", [
+  "open",
+  "accepted",
+  "dismissed",
+]);
+
+/** The outcome of one Comtrade fetch. `skipped_unconfigured` mirrors the narrative rule. */
+export const comtradeSyncStatusEnum = pgEnum("comtrade_sync_status", [
+  "succeeded",
+  "failed",
+  "skipped_unconfigured",
+]);
+
+/**
+ * The HS6 commodity vocabulary — DERIVED FROM THE FEED, not hand-authored.
+ *
+ * `cmdDesc` arrives with every Comtrade row when `includeDesc=true`, so the labels are
+ * the World Customs Organization's own rather than something this codebase invented and
+ * would have to maintain. There is no write endpoint: the sync job is the only author,
+ * which is what keeps the table free of a moderation status — no submission path, no
+ * spam surface, nothing to moderate. Same argument `supplier_capability` makes.
+ */
+export const importCommodity = pgTable(
+  "import_commodity",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // SIX DIGITS, AND IT IS THE URL IDENTITY. Deliberately NOT slugified: an HS code is
+    // issued by the WCO and is already a stable public identifier, so kebab-casing it
+    // would mint a second spelling of a thing that has exactly one. §11's casing rule
+    // governs identifiers this platform creates, and this is not one.
+    hsCode: text("hs_code").notNull(),
+    label: text("label").notNull(),
+    descriptionText: text("description_text"),
+    commodityKind: importCommodityKindEnum("commodity_kind").notNull(),
+    // `restrict`, and NOT NULL. An unclassified commodity sits behind no category chip
+    // and is unreachable from every surface that filters — invisible rather than
+    // neutral. The HS chapter map covers all 97 chapters so this can be total.
+    researchCategoryId: text("research_category_id")
+      .notNull()
+      .references(() => researchCategory.id, { onDelete: "restrict" }),
+    // What the feed usually reports this commodity in. The AUTHORITATIVE unit is on the
+    // flow row, not here — see the comment there.
+    defaultQuantityUnit: importQuantityUnitEnum("default_quantity_unit").notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("import_commodity_hsCode_unq").on(table.hsCode),
+    // The directory read: listed commodities, ordered by label, ending in a unique
+    // column (§4c rule 4).
+    index("import_commodity_active_label_idx")
+      .on(table.label, table.id)
+      .where(sql`is_active`),
+    index("import_commodity_kind_idx").on(table.commodityKind),
+    index("import_commodity_researchCategoryId_idx").on(table.researchCategoryId),
+    check("import_commodity_hsCode_ck", sql`hs_code ~ '^[0-9]{6}$'`),
+    check("import_commodity_label_ck", sql`char_length(label) BETWEEN 1 AND 400`),
+    check(
+      "import_commodity_description_ck",
+      sql`description_text IS NULL OR char_length(description_text) <= 4000`,
+    ),
+  ],
+);
+
+/**
+ * One country's traded value for one commodity in one period, in one direction.
+ *
+ * THE PARTNER COLUMN IS NULLABLE AND NULL MEANS "ALL PARTNERS". That is the row the
+ * ingest actually writes: Comtrade's `partnerCode=0` aggregate, which is the only figure
+ * a localization question needs — how much of this does the country buy from anywhere.
+ * Per-partner rows are representable so a later "who do we buy it from" surface needs no
+ * migration, and the two partial uniques below are what keep the aggregate unique
+ * against itself.
+ *
+ * EVERY ESTIMATION FLAG COMTRADE SENDS IS STORED. A mirrored estimate and a reported
+ * figure are both legitimate data and they are not the same claim, so the surface must be
+ * able to say which one it is showing. 2,881 of India's 5,052 import lines carry an
+ * estimated net weight; a table that dropped the flag would present all 5,052 as measured.
+ */
+export const commodityTradeFlow = pgTable(
+  "commodity_trade_flow",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    commodityId: text("commodity_id")
+      .notNull()
+      .references(() => importCommodity.id, { onDelete: "restrict" }),
+    // The REPORTING country. Must be a `kind = 'country'` region — a CHECK cannot see
+    // another table, so the service enforces it and
+    // `db:verify-import-intelligence-constraints` proves the service does.
+    reporterRegionId: text("reporter_region_id")
+      .notNull()
+      .references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    // NULL = the all-partners aggregate. See the table comment.
+    partnerRegionId: text("partner_region_id").references(() => discoveryRegion.id, {
+      onDelete: "restrict",
+    }),
+    flowKind: tradeFlowKindEnum("flow_kind").notNull(),
+    periodKind: tradePeriodKindEnum("period_kind").notNull(),
+    periodStartsDate: date("period_starts_date", { mode: "string" }).notNull(),
+    periodEndsDate: date("period_ends_date", { mode: "string" }).notNull(),
+    // §4b: an amount is never stored without its currency. Comtrade reports in USD and
+    // the column records that rather than assuming it, because a later source may not.
+    tradeValueInCents: bigint("trade_value_in_cents", { mode: "number" }).notNull(),
+    currency: text("currency").notNull(),
+    // NULLABLE, and null is not zero — 679 of India's 5,052 lines have no reported
+    // weight. Milli-kilograms because Comtrade sends three decimal places.
+    netWeightMilliKilograms: bigint("net_weight_milli_kilograms", { mode: "number" }),
+    quantityMilli: bigint("quantity_milli", { mode: "number" }),
+    // THE UNIT LIVES ON THE FLOW, NOT ON THE COMMODITY. Re-classifying a commodity is an
+    // editorial act and must not silently reinterpret every historical figure filed
+    // against it. `import_commodity.default_quantity_unit` is what the seed reaches for;
+    // this is what the number actually means.
+    quantityUnit: importQuantityUnitEnum("quantity_unit").notNull(),
+    // Comtrade's own numeric code, kept beside the enum so a future unit this codebase
+    // has not seen can be diagnosed from the row rather than from a log.
+    quantityUnitCode: integer("quantity_unit_code").notNull(),
+    // --- Estimation provenance, all four as the feed reports them.
+    isReported: boolean("is_reported").notNull(),
+    isAggregate: boolean("is_aggregate").notNull(),
+    isNetWeightEstimated: boolean("is_net_weight_estimated").notNull(),
+    isQuantityEstimated: boolean("is_quantity_estimated").notNull(),
+    legacyEstimationFlag: integer("legacy_estimation_flag"),
+    // --- Where the figure came from. Provenance rides with the number, the same rule
+    //     `commerce_freight_rate_card.source_forwarder_name` follows.
+    sourceName: text("source_name").notNull(),
+    sourceUrl: text("source_url"),
+    sourceRetrievedAt: timestamp("source_retrieved_at").notNull(),
+    dataOrigin: tradeDataOriginEnum("data_origin").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // TWO PARTIAL UNIQUES, NOT ONE. A NULL does not collide with a NULL in a Postgres
+    // unique index, so a single index over the five columns would happily admit the same
+    // all-partners aggregate twice — and the aggregate is the row the ingest writes every
+    // time it runs.
+    uniqueIndex("commodity_trade_flow_partnered_unq")
+      .on(
+        table.commodityId,
+        table.reporterRegionId,
+        table.partnerRegionId,
+        table.flowKind,
+        table.periodKind,
+        table.periodStartsDate,
+      )
+      .where(sql`partner_region_id IS NOT NULL`),
+    uniqueIndex("commodity_trade_flow_aggregate_unq")
+      .on(
+        table.commodityId,
+        table.reporterRegionId,
+        table.flowKind,
+        table.periodKind,
+        table.periodStartsDate,
+      )
+      .where(sql`partner_region_id IS NULL`),
+    // The commodity detail read: one commodity's flows, newest period first.
+    index("commodity_trade_flow_commodity_period_idx").on(
+      table.commodityId,
+      table.flowKind,
+      table.periodStartsDate,
+      table.id,
+    ),
+    // The scoring read: every flow for one country and period.
+    index("commodity_trade_flow_reporter_period_idx").on(
+      table.reporterRegionId,
+      table.periodKind,
+      table.periodStartsDate,
+      table.flowKind,
+    ),
+    check("commodity_trade_flow_currency_ck", sql`currency ~ '^[A-Z]{3}$'`),
+    check("commodity_trade_flow_period_ck", sql`period_ends_date > period_starts_date`),
+    // Non-negative, and the NULLs are explicitly permitted rather than coerced.
+    check(
+      "commodity_trade_flow_magnitudes_ck",
+      sql`trade_value_in_cents >= 0
+          AND (net_weight_milli_kilograms IS NULL OR net_weight_milli_kilograms >= 0)
+          AND (quantity_milli IS NULL OR quantity_milli >= 0)`,
+    ),
+    // An estimation flag about a value that is not there is not a claim about anything.
+    check(
+      "commodity_trade_flow_estimation_ck",
+      sql`(net_weight_milli_kilograms IS NOT NULL OR is_net_weight_estimated = false)
+          AND (quantity_milli IS NOT NULL OR is_quantity_estimated = false)`,
+    ),
+    check("commodity_trade_flow_source_ck", sql`char_length(source_name) BETWEEN 1 AND 200`),
+  ],
+);
+
+/**
+ * What could be made domestically instead of importing it — the editorial layer.
+ *
+ * `supplier_capability_id` IS THE WHOLE POINT: it is the join from "this could be made
+ * here" to "THESE suppliers can make it", over the vocabulary §11i already seeded. A NULL
+ * there is a real finding rather than a gap — no capability in the curated vocabulary
+ * covers this substitute yet — and the surface says so instead of hiding the row.
+ */
+export const domesticSubstituteMapping = pgTable(
+  "domestic_substitute_mapping",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    commodityId: text("commodity_id")
+      .notNull()
+      .references(() => importCommodity.id, { onDelete: "restrict" }),
+    // The country doing the substituting.
+    regionId: text("region_id")
+      .notNull()
+      .references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    substituteKind: domesticSubstituteKindEnum("substitute_kind").notNull(),
+    substituteLabel: text("substitute_label").notNull(),
+    substituteNotes: text("substitute_notes"),
+    // `restrict` — a curated capability must not vanish out from under a mapping that
+    // cites it, the same rule `supplier_capability_link` follows.
+    supplierCapabilityId: text("supplier_capability_id").references(() => supplierCapability.id, {
+      onDelete: "restrict",
+    }),
+    maturityLevel: domesticSubstituteMaturityEnum("maturity_level").notNull(),
+    evidenceSourceName: text("evidence_source_name"),
+    evidenceSourceUrl: text("evidence_source_url"),
+    // NULL = draft, the `market_insight` convention. Retirement is unpublishing; there is
+    // no DELETE, because a deleted mapping orphans the assessment that counted it.
+    publishedAt: timestamp("published_at"),
+    // R2: attribution that must never block an account deletion.
+    createdByUserId: text("created_by_user_id").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("domestic_substitute_mapping_cell_label_unq").on(
+      table.commodityId,
+      table.regionId,
+      table.substituteLabel,
+    ),
+    index("domestic_substitute_mapping_published_idx")
+      .on(table.commodityId, table.regionId, table.id)
+      .where(sql`published_at IS NOT NULL`),
+    index("domestic_substitute_mapping_supplierCapabilityId_idx")
+      .on(table.supplierCapabilityId)
+      .where(sql`supplier_capability_id IS NOT NULL`),
+    check(
+      "domestic_substitute_mapping_label_ck",
+      sql`char_length(substitute_label) BETWEEN 1 AND 200`,
+    ),
+    check(
+      "domestic_substitute_mapping_notes_ck",
+      sql`substitute_notes IS NULL OR char_length(substitute_notes) <= 4000`,
+    ),
+    check(
+      "domestic_substitute_mapping_evidence_ck",
+      sql`(evidence_source_name IS NULL OR char_length(evidence_source_name) BETWEEN 1 AND 200)
+          AND (evidence_source_url IS NULL OR evidence_source_name IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The nightly feasibility snapshot — one row per (commodity, country, asOf).
+ *
+ * DELIBERATELY SHAPED LIKE `demand_signal_snapshot`, down to the trend-agreement CHECK.
+ * Two derived scores over overlapping evidence that ordered it differently would let the
+ * same commodity rank one way here and another in the knowledge hub, and no local
+ * cleverness is worth that contradiction.
+ *
+ * EVERY RAW INPUT AND EVERY COMPONENT SUB-SCORE IS STORED. The sub-scores are what let
+ * the UI render "27 of 35" instead of an unfalsifiable total, and the raw inputs are what
+ * make last night's number reproducible after the ladder is retuned —
+ * `score_algorithm_version` says which ladder produced it.
+ */
+export const localizationAssessment = pgTable(
+  "localization_assessment",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    asOf: timestamp("as_of").notNull(),
+    windowStartsAt: timestamp("window_starts_at").notNull(),
+    windowEndsAt: timestamp("window_ends_at").notNull(),
+    commodityId: text("commodity_id")
+      .notNull()
+      .references(() => importCommodity.id, { onDelete: "restrict" }),
+    regionId: text("region_id")
+      .notNull()
+      .references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    feasibilityScorePoints: integer("feasibility_score_points").notNull(),
+    rank: integer("rank").notNull(),
+    trendDirection: trendDirectionEnum("trend_direction").notNull(),
+    // NULL on a cell's first-ever assessment, where there is no evidence of a direction.
+    // NOT interchangeable with 0 — see the trend-agreement CHECK below.
+    previousFeasibilityScorePoints: integer("previous_feasibility_score_points"),
+    // --- The five components, stored so the total is falsifiable.
+    importDependencyPoints: integer("import_dependency_points").notNull(),
+    exportCapabilityPoints: integer("export_capability_points").notNull(),
+    substituteAvailabilityPoints: integer("substitute_availability_points").notNull(),
+    supplierCapacityPoints: integer("supplier_capacity_points").notNull(),
+    leadTimeAdvantagePoints: integer("lead_time_advantage_points").notNull(),
+    // --- The raw inputs, same reproducibility argument as `demand_signal_snapshot`.
+    observedImportValueInCents: bigint("observed_import_value_in_cents", {
+      mode: "number",
+    }).notNull(),
+    observedExportValueInCents: bigint("observed_export_value_in_cents", {
+      mode: "number",
+    }).notNull(),
+    currency: text("currency").notNull(),
+    substituteCount: integer("substitute_count").notNull(),
+    matchedSupplierCount: integer("matched_supplier_count").notNull(),
+    verifiedSupplierCount: integer("verified_supplier_count").notNull(),
+    // NULLABLE — null is "no supplier published a lead time", never "zero days".
+    medianSupplierLeadTimeDays: integer("median_supplier_lead_time_days"),
+    narrativeStatus: localizationNarrativeStatusEnum("narrative_status")
+      .default("pending")
+      .notNull(),
+    scoreAlgorithmVersion: integer("score_algorithm_version").default(1).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("localization_assessment_asOf_cell_unq").on(
+      table.asOf,
+      table.commodityId,
+      table.regionId,
+    ),
+    uniqueIndex("localization_assessment_asOf_region_rank_unq").on(
+      table.asOf,
+      table.regionId,
+      table.rank,
+    ),
+    index("localization_assessment_cell_asOf_idx").on(
+      table.commodityId,
+      table.regionId,
+      table.asOf,
+      table.id,
+    ),
+    check("localization_assessment_rank_ck", sql`rank >= 1`),
+    check(
+      "localization_assessment_score_ck",
+      sql`feasibility_score_points BETWEEN 0 AND 100
+          AND (previous_feasibility_score_points IS NULL
+               OR previous_feasibility_score_points BETWEEN 0 AND 100)`,
+    ),
+    check(
+      "localization_assessment_window_ck",
+      sql`window_ends_at > window_starts_at AND as_of >= window_ends_at`,
+    ),
+    // THE COMPONENTS MUST SUM TO THE TOTAL. Without this the sub-scores are decoration
+    // and a UI rendering "27 of 35" could contradict the number beside it.
+    check(
+      "localization_assessment_components_ck",
+      sql`import_dependency_points BETWEEN 0 AND 35
+          AND export_capability_points BETWEEN 0 AND 25
+          AND substitute_availability_points BETWEEN 0 AND 20
+          AND supplier_capacity_points BETWEEN 0 AND 12
+          AND lead_time_advantage_points BETWEEN 0 AND 8
+          AND import_dependency_points + export_capability_points
+              + substitute_availability_points + supplier_capacity_points
+              + lead_time_advantage_points = feasibility_score_points`,
+    ),
+    check(
+      "localization_assessment_inputs_ck",
+      sql`observed_import_value_in_cents >= 0 AND observed_export_value_in_cents >= 0
+          AND substitute_count >= 0 AND matched_supplier_count >= 0
+          AND verified_supplier_count >= 0
+          AND verified_supplier_count <= matched_supplier_count
+          AND (median_supplier_lead_time_days IS NULL
+               OR median_supplier_lead_time_days BETWEEN 0 AND 3650)
+          AND currency ~ '^[A-Z]{3}$'`,
+    ),
+    // The arrow and the evidence for it cannot disagree.
+    check(
+      "localization_assessment_trend_agreement_ck",
+      sql`previous_feasibility_score_points IS NULL
+          OR (trend_direction = 'up'
+              AND feasibility_score_points > previous_feasibility_score_points)
+          OR (trend_direction = 'down'
+              AND feasibility_score_points < previous_feasibility_score_points)
+          OR (trend_direction = 'flat'
+              AND feasibility_score_points = previous_feasibility_score_points)`,
+    ),
+  ],
+);
+
+/**
+ * The LLM's localization pathway, written OVER a score it did not compute.
+ *
+ * `optimization_suggestion`'s shape exactly, for the same reason: it suggests, it never
+ * decides. Nothing here writes a score, a rank or a trade figure, and the model is handed
+ * the arithmetic in its prompt precisely so it cannot contradict it.
+ *
+ * PROVENANCE IS NOT OPTIONAL. `model_name` and `prompt_version` are NOT NULL because a
+ * machine opinion whose origin is hidden reads as a platform ruling. `confidence_bps`
+ * being NULL means NO CONFIDENCE WAS RECORDED — it is not zero confidence.
+ */
+export const localizationPathwaySuggestion = pgTable(
+  "localization_pathway_suggestion",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    // `restrict` — the assessment is the evidence this row is about, and a suggestion
+    // whose evidence vanished is an unfalsifiable claim.
+    assessmentId: text("assessment_id")
+      .notNull()
+      .references(() => localizationAssessment.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    bodyText: text("body_text").notNull(),
+    status: localizationPathwayStatusEnum("status").default("open").notNull(),
+    modelName: text("model_name").notNull(),
+    modelVersion: text("model_version"),
+    promptVersion: text("prompt_version").notNull(),
+    confidenceBps: integer("confidence_bps"),
+    asOf: timestamp("as_of").notNull(),
+    decidedByUserId: text("decided_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    decidedAt: timestamp("decided_at"),
+    decisionNote: text("decision_note"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("localization_pathway_suggestion_assessment_status_idx").on(
+      table.assessmentId,
+      table.status,
+      table.id,
+    ),
+    check(
+      "localization_pathway_suggestion_text_ck",
+      sql`char_length(title) BETWEEN 1 AND 200 AND char_length(body_text) BETWEEN 1 AND 6000`,
+    ),
+    check(
+      "localization_pathway_suggestion_confidence_ck",
+      sql`confidence_bps IS NULL OR confidence_bps BETWEEN 0 AND 10000`,
+    ),
+    check(
+      "localization_pathway_suggestion_decision_ck",
+      sql`(status = 'open') = (decided_at IS NULL)
+          AND (decided_at IS NULL) = (decided_by_user_id IS NULL)`,
+    ),
+  ],
+);
+
+/**
+ * One Comtrade fetch, recorded.
+ *
+ * A FEED WITH NO RECORD OF WHAT IT PULLED CANNOT BE DEBUGGED. This is also where "there
+ * was no API key" is written down: without it, an unconfigured environment produces an
+ * empty surface and no evidence of why, which is indistinguishable from a country that
+ * imports nothing.
+ */
+export const comtradeSyncRun = pgTable(
+  "comtrade_sync_run",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    reporterRegionId: text("reporter_region_id")
+      .notNull()
+      .references(() => discoveryRegion.id, { onDelete: "restrict" }),
+    // The calendar year requested, as a plain integer — a sync is scoped to a period, not
+    // to an instant, and `2023` is the whole of the request.
+    periodYear: integer("period_year").notNull(),
+    flowKind: tradeFlowKindEnum("flow_kind").notNull(),
+    status: comtradeSyncStatusEnum("status").notNull(),
+    requestedAt: timestamp("requested_at").notNull(),
+    completedAt: timestamp("completed_at"),
+    rowsFetched: integer("rows_fetched").default(0).notNull(),
+    rowsUpserted: integer("rows_upserted").default(0).notNull(),
+    // The provider's own message, never a paraphrase — a rewritten error is a lost error.
+    errorDetail: text("error_detail"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("comtrade_sync_run_cell_requestedAt_idx").on(
+      table.reporterRegionId,
+      table.periodYear,
+      table.flowKind,
+      table.requestedAt,
+    ),
+    check("comtrade_sync_run_period_ck", sql`period_year BETWEEN 1962 AND 2100`),
+    check("comtrade_sync_run_counts_ck", sql`rows_fetched >= 0 AND rows_upserted >= 0`),
+    check(
+      "comtrade_sync_run_completion_ck",
+      sql`(status <> 'succeeded' OR completed_at IS NOT NULL)
+          AND (error_detail IS NULL OR char_length(error_detail) BETWEEN 1 AND 2000)`,
+    ),
+  ],
+);
+
+// --- §10A relations. Child-side only, the convention every section above follows.
+
+export const importCommodityRelations = relations(importCommodity, ({ one }) => ({
+  researchCategory: one(researchCategory, {
+    fields: [importCommodity.researchCategoryId],
+    references: [researchCategory.id],
+  }),
+}));
+
+export const commodityTradeFlowRelations = relations(commodityTradeFlow, ({ one }) => ({
+  commodity: one(importCommodity, {
+    fields: [commodityTradeFlow.commodityId],
+    references: [importCommodity.id],
+  }),
+  reporterRegion: one(discoveryRegion, {
+    fields: [commodityTradeFlow.reporterRegionId],
+    references: [discoveryRegion.id],
+    relationName: "tradeFlowReporterRegion",
+  }),
+  partnerRegion: one(discoveryRegion, {
+    fields: [commodityTradeFlow.partnerRegionId],
+    references: [discoveryRegion.id],
+    relationName: "tradeFlowPartnerRegion",
+  }),
+}));
+
+export const domesticSubstituteMappingRelations = relations(
+  domesticSubstituteMapping,
+  ({ one }) => ({
+    commodity: one(importCommodity, {
+      fields: [domesticSubstituteMapping.commodityId],
+      references: [importCommodity.id],
+    }),
+    region: one(discoveryRegion, {
+      fields: [domesticSubstituteMapping.regionId],
+      references: [discoveryRegion.id],
+    }),
+    supplierCapability: one(supplierCapability, {
+      fields: [domesticSubstituteMapping.supplierCapabilityId],
+      references: [supplierCapability.id],
+    }),
+  }),
+);
+
+export const localizationAssessmentRelations = relations(localizationAssessment, ({ one }) => ({
+  commodity: one(importCommodity, {
+    fields: [localizationAssessment.commodityId],
+    references: [importCommodity.id],
+  }),
+  region: one(discoveryRegion, {
+    fields: [localizationAssessment.regionId],
+    references: [discoveryRegion.id],
+  }),
+}));
+
+export const localizationPathwaySuggestionRelations = relations(
+  localizationPathwaySuggestion,
+  ({ one }) => ({
+    assessment: one(localizationAssessment, {
+      fields: [localizationPathwaySuggestion.assessmentId],
+      references: [localizationAssessment.id],
+    }),
+    decidedBy: one(user, {
+      fields: [localizationPathwaySuggestion.decidedByUserId],
+      references: [user.id],
+    }),
+  }),
+);
+
+export const comtradeSyncRunRelations = relations(comtradeSyncRun, ({ one }) => ({
+  reporterRegion: one(discoveryRegion, {
+    fields: [comtradeSyncRun.reporterRegionId],
+    references: [discoveryRegion.id],
+  }),
+}));

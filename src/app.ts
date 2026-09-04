@@ -37,6 +37,7 @@ import compensationRouter, {
 } from "#src/modules/rnd/compensation/compensation.routes.js";
 import discoveryRouter from "#src/modules/rnd/discovery/discovery.routes.js";
 import fundingRouter, { projectFundingRouter } from "#src/modules/rnd/funding/funding.routes.js";
+import importIntelligenceRouter from "#src/modules/rnd/import-intelligence/import-intelligence.routes.js";
 import pitchesRouter, { projectPitchRouter } from "#src/modules/rnd/pitches/pitches.routes.js";
 import researchCatalogRouter from "#src/modules/rnd/programs/research-catalog.routes.js";
 import researchProgramsRouter, {
@@ -417,6 +418,12 @@ app.use("/", governanceRouter);
 // `/suppliers`, `/supplier-capabilities` and `/launch-ready-projects` (§6-family, §11i).
 // Root-mounted like researchCatalogRouter — a supplier directory belongs to no project.
 app.use("/", supplierRouter);
+// §11m import intelligence. Root-mounted like the supplier router: its five top-level
+// paths (`/import-commodities`, `/import-commodity-kinds`, `/localization-assessments`,
+// `/domestic-substitutes`, `/localization-pathway-suggestions`) collide with nothing
+// already mounted, and nesting them under a prefix would put an HS code two segments
+// deeper for no gain.
+app.use("/", importIntelligenceRouter);
 // `/applications/mine` and `/invites/mine` (§5, §11j.2). Root-mounted because neither
 // question is about one project: an applicant asks what they applied to, an invitee asks
 // who invited them, and neither holds a slug. The project-scoped lists on

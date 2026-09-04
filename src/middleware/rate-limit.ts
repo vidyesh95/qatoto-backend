@@ -735,6 +735,23 @@ export const supplierWriteLimiter = createLimiter({
   limit: 60,
 });
 
+/**
+ * §11m import-intelligence writes — substitute mappings and pathway-suggestion decisions.
+ *
+ * Same shape and budget as `supplierWriteLimiter`, and for the same reason: these are
+ * moderator-only curation routes that run a handful of times a day, and the limiter exists
+ * so a leaked staff session cannot rewrite the reference data at machine speed.
+ *
+ * Keyed on `req.user.id`, so it runs AFTER `requireAuth` and BEFORE the in-service
+ * capability check — a non-moderator spends their own budget discovering they are not
+ * staff, rather than a moderator's.
+ */
+export const importIntelligenceWriteLimiter = createLimiter({
+  namespace: "importIntelligenceWrite",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
 // ---------------------------------------------------------------------------
 // §10 research programs (R_AND_D_BACKEND_STRUCTURE.md §10, §11f).
 //

@@ -305,6 +305,31 @@ const envSchema = z.object({
   // this.
   GEMINI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(65_536).default(32_768),
 
+  // --- §10A import intelligence (docs/R_AND_D_BACKEND_STRUCTURE.md §10A). One UN Comtrade
+  //     call per (reporting country, year, direction) returns that country's whole HS6
+  //     trade picture — 5,052 commodity lines for India — so the whole ingest is 12 calls
+  //     against a 500/day free-tier budget.
+  //
+  // OPTIONAL, like Gemini: with no key the sync job records
+  // `comtrade_sync_run.status = 'skipped_unconfigured'` and writes no flows. That is an
+  // operator fact rather than a failure, and it is deliberately NOT `failed` — nor is a
+  // trade figure ever fabricated to fill the gap.
+  //
+  // ⚠️ THE VARIABLE NAMES ARE THE PROVISIONED SPELLING, not a house prefix. They are what
+  // the UN developer portal issues them as; renaming them here would mean the value in a
+  // deployment's secret store no longer matches the key that reads it.
+  COMTRADE_DEVELOPER_UN_ORG_NAME: z.string().min(1).optional(),
+  COMTRADE_DEVELOPER_UN_ORG_PRIMARY_KEY: z.string().min(1).optional(),
+  // Azure API Management issues two keys per subscription so one can be rotated while the
+  // other serves. Nothing reads this yet; it is declared so a rotation is a config change
+  // rather than a deploy.
+  COMTRADE_DEVELOPER_UN_ORG_SECONDARY_KEY: z.string().min(1).optional(),
+  // A full year of one country's HS6 lines is a ~4 MB response the API assembles on
+  // demand; observed elapsed time is 1-3 s, but a cold partition is slower. Bounded
+  // because a hung fetch holds a worker slot, and the job's `expireInSeconds` is set above
+  // this so pg-boss cannot reclaim a call that is still legitimately in flight.
+  COMTRADE_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(120_000),
+
   // --- §9 integration consent (docs/R_AND_D_BACKEND_STRUCTURE.md §9.10).
   //
   // The key that envelope-encrypts third-party access tokens at rest. OPTIONAL, and its

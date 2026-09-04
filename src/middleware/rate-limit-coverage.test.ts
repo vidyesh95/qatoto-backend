@@ -78,6 +78,11 @@ const MOUNTED_ROUTERS: readonly {
   { mountPath: "/discovery", specifier: "#src/modules/rnd/discovery/discovery.routes.js", exportName: "default" },
   { mountPath: "/suppliers", specifier: "#src/modules/rnd/suppliers/suppliers.routes.js", exportName: "default" },
   {
+    mountPath: "/",
+    specifier: "#src/modules/rnd/import-intelligence/import-intelligence.routes.js",
+    exportName: "default",
+  },
+  {
     mountPath: "/notifications",
     specifier: "#src/modules/platform/notifications/notifications.routes.js",
     exportName: "default",

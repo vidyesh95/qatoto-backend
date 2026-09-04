@@ -181,6 +181,14 @@ export const JOB_NAMES = {
   scanEncryptedDocument: "scan-encrypted-document",
   sweepPendingDocumentScansTick: "sweep-pending-document-scans-tick",
   sweepPendingDocumentScans: "sweep-pending-document-scans",
+  // R&D §10A — import intelligence. The ingest is weekly because annual trade statistics
+  // are revised a few times a year, not nightly; the assessment is daily because the
+  // supplier and substitute inputs it also reads change whenever a moderator edits one.
+  syncComtradeTradeFlowsTick: "sync-comtrade-trade-flows-tick",
+  syncComtradeTradeFlows: "sync-comtrade-trade-flows",
+  recomputeLocalizationAssessmentsTick: "recompute-localization-assessments-tick",
+  recomputeLocalizationAssessments: "recompute-localization-assessments",
+  generateLocalizationNarrative: "generate-localization-narrative",
 } as const;
 
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
@@ -243,6 +251,50 @@ const DeliverNotificationPayloadSchema = z
   .strict();
 
 const TickPayloadSchema = z.object({}).strict();
+
+/**
+ * One country-year-direction of trade data (§10A).
+ *
+ * The ISO-2 COUNTRY CODE, not a region id and not a Comtrade reporter number. The region
+ * row and the M49 code are both resolved inside the handler, which keeps the tick a pure
+ * enqueuer over a constant — every other tick in this file does no database work, and one
+ * that did would need a connection before it could decide what to schedule.
+ *
+ * A code this platform has no seeded region for, or that `comtrade-reporters.ts` does not
+ * map, fails PERMANENTLY rather than silently ingesting nothing.
+ */
+const SyncComtradeTradeFlowsPayloadSchema = z
+  .object({
+    reporterCountryCode: z.string().regex(/^[A-Z]{2}$/),
+    periodYear: z.number().int().min(1962).max(2100),
+    flowKind: z.enum(["import", "export"]),
+  })
+  .strict();
+
+/**
+ * One assessment run for one country.
+ *
+ * `asOf` makes the idempotency key per-day, and `windowStartsAt`/`windowEndsAt` are
+ * ABSOLUTE bounds rather than a day count (§4c rule 3) — a job that computed its own window
+ * from a duration would produce a different answer depending on when it was retried.
+ */
+const RecomputeLocalizationAssessmentsPayloadSchema = z
+  .object({
+    asOf: AsOfSchema,
+    windowStartsAt: AsOfSchema,
+    windowEndsAt: AsOfSchema,
+    regionId: z.string().min(1).nullable(),
+  })
+  .strict();
+
+/**
+ * One assessment's narrative. The assessment id and nothing else: the score, its
+ * components and the trade figures are all read from the row, so no payload field can
+ * change what the model is told about them.
+ */
+const GenerateLocalizationNarrativePayloadSchema = z
+  .object({ assessmentId: z.string().min(1) })
+  .strict();
 
 /**
  * Every §9 pipeline stage carries the RUN id and nothing else, for the same reason the
@@ -1414,6 +1466,71 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.recomputeCommerceProductTrending),
     },
   },
+  [JOB_NAMES.syncComtradeTradeFlowsTick]: {
+    name: JOB_NAMES.syncComtradeTradeFlowsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.syncComtradeTradeFlowsTick),
+    },
+  },
+  [JOB_NAMES.syncComtradeTradeFlows]: {
+    name: JOB_NAMES.syncComtradeTradeFlows,
+    payloadSchema: SyncComtradeTradeFlowsPayloadSchema,
+    queueOptions: {
+      // `standard`, not `singleton`: the twelve runs are disjoint (country, year,
+      // direction) cells that never touch the same flow rows, so serialising them would
+      // turn a two-minute backfill into a twenty-minute one for no safety.
+      policy: "standard",
+      ...STANDARD_RETRY,
+      // MUST exceed COMTRADE_TIMEOUT_MS (120 s) with room for the upsert of ~5,000 rows,
+      // or pg-boss reclaims a call still in flight and a second worker spends another
+      // request against a 500/day budget.
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.syncComtradeTradeFlows),
+    },
+  },
+  [JOB_NAMES.recomputeLocalizationAssessmentsTick]: {
+    name: JOB_NAMES.recomputeLocalizationAssessmentsTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeLocalizationAssessmentsTick),
+    },
+  },
+  [JOB_NAMES.recomputeLocalizationAssessments]: {
+    name: JOB_NAMES.recomputeLocalizationAssessments,
+    payloadSchema: RecomputeLocalizationAssessmentsPayloadSchema,
+    queueOptions: {
+      // `singleton`: it assigns a dense `rank` per (asOf, region), and two concurrent runs
+      // over the same cell would both compute rank 1.
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 1_800,
+      deadLetter: deadLetterNameFor(JOB_NAMES.recomputeLocalizationAssessments),
+    },
+  },
+  [JOB_NAMES.generateLocalizationNarrative]: {
+    name: JOB_NAMES.generateLocalizationNarrative,
+    payloadSchema: GenerateLocalizationNarrativePayloadSchema,
+    queueOptions: {
+      policy: "standard",
+      ...STANDARD_RETRY,
+      // Same rule as analyze-daily-log: comfortably above GEMINI_TIMEOUT_MS.
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.generateLocalizationNarrative),
+    },
+  },
   // `satisfies` rather than a plain annotation: this is what makes a job name with no
   // definition a COMPILE error, not merely a misspelled key.
 } as const satisfies Record<JobName, JobDefinition>;
@@ -1487,6 +1604,16 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // pair relies on.
   [JOB_NAMES.recomputeBranchSignalsTick]: "20 3 * * *",
   [JOB_NAMES.recomputeProgramStatsTick]: "35 3 * * *",
+  // §10A, and the ORDER here is load-bearing for the same reason §10's pair is. The
+  // assessment reads supplier rows, substitute rows and trade flows, and it must land
+  // after the other nightlies that touch the discovery tables it joins — 02:15 opportunity
+  // scores, 02:45 demand signals, 03:20 branch signals, 03:35 programme stats, then this.
+  // Ordering is expressed in cron times, not in code.
+  [JOB_NAMES.recomputeLocalizationAssessmentsTick]: "50 3 * * *",
+  // WEEKLY, on Monday. Annual trade statistics are revised a handful of times a year, so a
+  // nightly pull would spend seven times the request budget to observe the same numbers.
+  // It runs BEFORE the daily assessment that reads what it wrote.
+  [JOB_NAMES.syncComtradeTradeFlowsTick]: "20 1 * * 1",
 
   // --- Home feed ranking (HOME_BACKEND_STRUCTURE.md §6).
   //
@@ -1912,6 +2039,11 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.scanEncryptedDocument]: ScanEncryptedDocumentPayloadSchema,
   [JOB_NAMES.sweepPendingDocumentScansTick]: TickPayloadSchema,
   [JOB_NAMES.sweepPendingDocumentScans]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.syncComtradeTradeFlowsTick]: TickPayloadSchema,
+  [JOB_NAMES.syncComtradeTradeFlows]: SyncComtradeTradeFlowsPayloadSchema,
+  [JOB_NAMES.recomputeLocalizationAssessmentsTick]: TickPayloadSchema,
+  [JOB_NAMES.recomputeLocalizationAssessments]: RecomputeLocalizationAssessmentsPayloadSchema,
+  [JOB_NAMES.generateLocalizationNarrative]: GenerateLocalizationNarrativePayloadSchema,
   [JOB_NAMES.reconcileCommercePaymentsTick]: TickPayloadSchema,
   [JOB_NAMES.reconcileCommercePayments]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.deriveProductRelationsTick]: TickPayloadSchema,
@@ -2048,6 +2180,26 @@ export const idempotencyKeyFor = {
   revalidateYoutubeEmbeds: (asOfIso: string): string =>
     `${JOB_NAMES.revalidateYoutubeEmbeds}:${asOfIso}`,
   pruneEngagementData: (asOfIso: string): string => `${JOB_NAMES.pruneEngagementData}:${asOfIso}`,
+  /**
+   * Keyed on the CELL, not on a clock. A sync is idempotent by definition — it upserts the
+   * same country-year-direction — so a re-enqueue while one is queued must collapse rather
+   * than spend a second request against a 500/day budget.
+   */
+  syncComtradeTradeFlows: (
+    reporterCountryCode: string,
+    periodYear: number,
+    flowKind: string,
+  ): string =>
+    `${JOB_NAMES.syncComtradeTradeFlows}:${reporterCountryCode}:${periodYear}:${flowKind}`,
+  recomputeLocalizationAssessments: (asOfIso: string, regionId: string | null): string =>
+    `${JOB_NAMES.recomputeLocalizationAssessments}:${asOfIso}:${regionId ?? "all"}`,
+  /**
+   * Keyed on the assessment alone. Each nightly run mints new assessment rows, so the key
+   * is naturally per-run; re-enqueueing the same assessment must NOT produce a second
+   * narrative, because each one spends a metered model request.
+   */
+  generateLocalizationNarrative: (assessmentId: string): string =>
+    `${JOB_NAMES.generateLocalizationNarrative}:${assessmentId}`,
   anonymizeDueAccounts: (asOfIso: string): string => `${JOB_NAMES.anonymizeDueAccounts}:${asOfIso}`,
   /**
    * SCOPED TO THE ATTEMPT, for the reason `dispatchCommerceWebhookEvent` below spells out:

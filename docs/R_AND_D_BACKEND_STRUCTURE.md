@@ -2618,244 +2618,196 @@ buttons in `idea-item.tsx` have `aria-label`s but **no `onClick` handler at all*
 
 ## 10A. The data — import intelligence & localization
 
-**⏳ Not built.** Spec'd here, routed in [§11m](#11m-import-intelligence-10a), ordered in §16 phase 9.
+**✅ Built.** Six tables, ten enums, migration `0162`, three jobs, one router
+([§11m](#11m-import-intelligence-10a)), and 251 tests. §16 phase 9.
 
-The R&D pipeline ends at go-to-market (§11i), where a founder picks a supplier and lists a product.
-Nothing upstream of it answers the question that decides whether a venture is worth starting at all:
-**what does this country already buy from abroad, and could it be made here instead?** This section
-is that question, as data.
+The R&D pipeline ends at go-to-market (§11i), where a founder picks a supplier and lists a
+product. Nothing upstream of it answers the question that decides whether a venture is
+worth starting at all: **what does this country already buy from abroad, and could it be
+made here instead?**
 
-Three capabilities, and they are deliberately three layers rather than one table:
-
-1. **Import volumes** — country-level, per commodity, with the source of every figure on the row.
-2. **Domestic substitutes** — the material or component that could replace an import, and the
-   supplier capability that would make it.
-3. **A feasibility assessment** — a deterministic 0–100 score, and an LLM-written pathway narrative
-   over a score the model did not compute.
+Three layers, and they are three tables because they have three different authors — UN
+Comtrade writes the flows, a moderator writes the substitutes, and a nightly job writes the
+assessment.
 
 ### What already exists and is NOT rebuilt
 
-`discovery_region` (§6) already carries `kind = 'country'` and an ISO-2 `country_code` behind
-`discovery_region_country_ck`, and it is already the FK target for `supplier`, `market_insight` and
-`problem_cluster`. **There is no new country table**, and no ISO-2 string is stored on any table
-below — a country is a `discovery_region` id, exactly as it is everywhere else in §6.
+`discovery_region` (§6) already carries `kind = 'country'` and an ISO-2 `country_code`
+behind `discovery_region_country_ck`, and it is already the FK target for `supplier`,
+`market_insight` and `problem_cluster`. **There is no new country table**, and no ISO-2
+string is stored on any table below — a country is a `discovery_region` id, exactly as it is
+everywhere else in §6.
 
-The seeded country list is deliberately partial (`src/db/seed-data.ts`, 18 countries). India is in
-it, which is what makes a one-country reference set possible without a taxonomy change.
+### It is fed by a real feed, and the pinned query is the whole design
 
-### The one-country decision, and the column that survives it
+`comtradeapi.un.org`, one call per (reporting country, year, direction), authenticated with
+an Azure APIM `Ocp-Apim-Subscription-Key` header. The free tier allows 500 calls a day and
+100,000 records a call; the whole ingest plan is **twelve calls a week**.
 
-**No automated feed.** A UN Comtrade sync job means schema drift, per-reporter sanitization and
-rate-limit backoff bought before a single founder has looked at the surface. The baseline is
-therefore a **seeded reference set: ~200 HS6 manufacturing commodities for India**, filled by a
-script exactly like §11i's capability vocabulary.
+⚠️ **`partnerCode=0` ALONE DOES NOT RETURN ONE ROW PER COMMODITY.** It returns a
+`partner2Code` breakdown — one row per country of consignment — and summing those
+double-counts every dollar. All four of `partnerCode=0`, `partner2Code=0`,
+`customsCode=C00` and `motCode=0` must be pinned. Verified against the live API: India 2023
+imports returns 6,352 rows, of which 5,052 are HS6 leaves, totalling **$672,140,129,636** —
+which matches the published national figure.
 
-`import_trade_flow.data_origin` exists from the first migration so the later paths — an admin CSV
-upload of a purchased dataset (DGCI&S, Volza), or a real feed — land as rows rather than as a
-migration against a table that already has data in it.
+Two more facts that only a live call establishes, and both shaped the schema:
 
-⚠️ **A seeded figure is a published figure or it is not a row.** Every `import_trade_flow` row
-carries its own `source_name`, `source_url` and `source_published_date`. If a number cannot be
-sourced, the commodity ships with **no flow row**, and the surface says "no import data recorded".
-It does not ship a zero. §4c's rule holds here as everywhere: zero is a finding, null is the absence
-of one.
+- **`includeDesc=true` returns `cmdDesc`.** The commodity vocabulary is therefore the World
+  Customs Organization's own wording, derived from the same response that carries the
+  numbers. Nothing here is hand-authored, and there is no vocabulary to maintain.
+- **The response interleaves aggregation levels.** `aggrLevel` 2, 4 and 6 all come back in
+  one payload, so the client filters to `aggrLevel === 6 && isLeaf` before anything is
+  written. Summing across levels triples every total.
+
+`commodity_trade_flow.data_origin` distinguishes the feed from a later admin CSV upload of a
+purchased dataset (DGCI&S, Volza) or a test fixture, so a second source lands as rows rather
+than as a migration against a populated table.
+
+### Floats stop at the client
+
+Comtrade sends `primaryValue: 140386299645.03` and `netWgt: 6533139.808`. They become
+integer cents and integer milli-kilograms in `comtrade.ts` and nowhere else, so §4b's "no
+floats, ever" holds for every consumer downstream. India's largest single line is
+**14,038,629,964,550 cents** — int4 caps at 2.1bn — which is why every value column is
+`bigint` and why the wire carries a decimal string.
+
+⚠️ **NULL IS NOT ZERO, AND IT IS LOAD-BEARING ON DAY ONE.** 679 of India's 5,052 HS6 import
+lines carry no net weight at all, and 2,881 carry one flagged as estimated. A weight of zero
+would say "this weighs nothing"; NULL says "nobody recorded it". A `commodity_trade_flow`
+CHECK refuses an estimation flag on a value that is not there, because a flag about a
+missing number is not a claim about anything.
+
+⚠️ **AN UNRECOGNISED QUANTITY UNIT SKIPS THE ROW AND IS COUNTED**, never guessed. A row
+labelled with the wrong unit is a wrong number presented as a right one; a row that is
+absent and reported as absent is a gap somebody can fix by extending the map. The count
+lands on `comtrade_sync_run.error_detail` even on a successful run.
 
 ### The tables
 
-| Table                             | Notes                                                                                                    |
+| Table                             | Notes                                                                                                  |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `import_commodity`                | The HS6 vocabulary. Seeded, never user-submitted — same argument as `supplier_capability` (§11j.6)        |
-| `import_trade_flow`               | The fact table. One row per (commodity, reporter, partner, period), provenance on every row               |
-| `domestic_substitute_mapping`     | Editorial. What could replace the import, and which `supplier_capability` would make it                   |
-| `localization_assessment`         | The nightly snapshot. Shaped like `demand_signal_snapshot` (§6) down to the trend-agreement CHECK         |
-| `localization_pathway_suggestion` | The LLM's prose. Shaped like `optimization_suggestion` (§9.6) — advisory, provenance-bearing, decidable   |
+| `import_commodity`                | The HS6 vocabulary, DERIVED from the feed. No write route — the ingest is its only author                |
+| `commodity_trade_flow`            | The fact table. **Both directions**, hence the name: an export figure carries 25 of the score's 100 points |
+| `domestic_substitute_mapping`     | Editorial. What could replace the import, and which `supplier_capability` would make it                  |
+| `localization_assessment`         | The nightly snapshot. Shaped like `demand_signal_snapshot` (§6) down to the trend-agreement CHECK        |
+| `localization_pathway_suggestion` | The LLM's prose. Shaped like `optimization_suggestion` (§9.6) — advisory, provenance-bearing, decidable  |
+| `comtrade_sync_run`               | Every fetch, recorded — including the ones that did nothing                                              |
 
-#### `import_commodity`
+**Ten enums**, all snake_case: `import_commodity_kind` (16 values, one per HS section
+grouping), `import_quantity_unit` (**exactly the ten Comtrade emits**, verified against a
+full year rather than copied from documentation), `trade_flow_kind`, `trade_period_kind`,
+`trade_data_origin`, `domestic_substitute_kind`, `domestic_substitute_maturity`,
+`localization_narrative_status`, `localization_pathway_status`, `comtrade_sync_status`.
 
-| Column                | Shape                                                                                                     |
-| --------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `hs_code`             | `text`, UNIQUE, CHECK `~ '^[0-9]{6}$'`. **HS6, and it is the URL identity** — six digits, never slugified   |
-| `label`               | wire `displayLabel`, the §6 column→field convention                                                        |
-| `description_text`    | nullable                                                                                                   |
-| `commodity_kind`      | `import_commodity_kind`: `raw_material` · `electronic_subassembly` · `precision_component` · `chemical` · `machinery` · `packaging_material` |
-| `research_category_id`| → `research_category`, `restrict`, **NOT NULL**. An unclassified commodity sits behind no category chip and is unreachable |
-| `default_quantity_unit` | `import_quantity_unit`: `kilograms` · `units` · `litres` · `metres` · `square_metres`                    |
-| `is_active`           | `boolean`. Retirement is `false`, never a `DELETE` — a flow row cites it                                    |
+#### The two guarantees most likely to be silently absent
 
-An HS code is a public identifier, not a slug: it is issued by the World Customs Organization, it is
-already stable, and kebab-casing it would produce a second spelling of a thing that has one. §11's
-casing rule is about identifiers this platform mints; this is not one.
+**`commodity_trade_flow` has TWO partial unique indexes, not one**, on
+`(commodity_id, reporter_region_id, partner_region_id, flow_kind, period_kind, period_starts_date)`
+— one `WHERE partner_region_id IS NOT NULL` and one `WHERE partner_region_id IS NULL`. A
+NULL does not collide with a NULL in a Postgres unique index, so a single index would let
+the same all-partners aggregate be inserted again on every sync run. The aggregate IS the
+row the ingest writes.
 
-#### `import_trade_flow`
+⚠️ **An `ON CONFLICT` matching a partial index must RESTATE the predicate.** Without
+`targetWhere`, Postgres raises "no unique or exclusion constraint matching the ON CONFLICT
+specification" at runtime — which no type checker sees.
 
-| Column                                     | Shape                                                                                              |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `commodity_id`                             | → `import_commodity`, `restrict`                                                                    |
-| `reporter_region_id`                       | → `discovery_region`, `restrict`. The importing country                                             |
-| `partner_region_id`                        | → `discovery_region`, `restrict`, **nullable — NULL is the all-partners aggregate**                  |
-| `period_kind`                              | `import_period_kind`: `annual` · `monthly`                                                          |
-| `period_starts_date` / `period_ends_date`  | `date`, CHECK `period_ends_date > period_starts_date`                                               |
-| `import_value_in_cents` + `currency`       | `bigint` + `text` CHECK `~ '^[A-Z]{3}$'`. §4b: an amount is never stored without its currency        |
-| `quantity_milli` + `quantity_unit`         | `bigint` milli-units + the unit enum. **The unit lives on the flow, not on the commodity**          |
-| `source_name` / `source_url` / `source_published_date` | provenance, `source_url` nullable. The `commerce_freight_rate_card` precedent (§19 of the store contract) |
-| `data_origin`                              | `import_data_origin`: `seeded_reference` · `admin_upload` · `external_feed`                         |
+**`localization_assessment` CHECKs that its five components sum to its total**, and bounds
+each one by its own budget. Without it the sub-scores are decoration and a UI could render
+"27 of 35" beside a total that contradicts it.
 
-**Two partial uniques, not one**, on `(commodity_id, reporter_region_id, partner_region_id, period_kind, period_starts_date)`:
-one `WHERE partner_region_id IS NOT NULL` and one `WHERE partner_region_id IS NULL`. A nullable column
-in a unique index does not collide with itself in Postgres, so a single index would let the same
-all-partners aggregate be inserted twice.
-
-**Why the quantity unit is on the flow.** Re-classifying a commodity — an editorial act — must not
-silently reinterpret every historical figure filed against it. The unit is a property of the
-measurement, and the commodity's `default_quantity_unit` is only what the seed reaches for.
-
-⚠️ **`reporter_region_id` must be a `kind = 'country'` region, and a CHECK cannot see another
-table.** The service enforces it on write and `db:verify-import-intelligence-constraints` proves the
-service does. This is the same shape as every other cross-table invariant in this document: stated
-here, enforced in one service function, exercised by a script — never assumed.
-
-#### `domestic_substitute_mapping`
-
-| Column                                    | Shape                                                                                          |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `commodity_id` / `region_id`              | `restrict`. The commodity, and the country doing the substituting                               |
-| `substitute_kind`                         | `domestic_substitute_kind`: `direct_material_substitute` · `alternative_material` · `domestic_component` · `process_change` |
-| `substitute_label` / `substitute_notes`   | the editorial content                                                                           |
-| `supplier_capability_id`                  | → `supplier_capability`, `restrict`, **nullable**                                               |
-| `maturity_level`                          | `domestic_substitute_maturity`: `lab_scale` · `pilot_scale` · `commercial` · `mature`           |
-| `evidence_source_name` / `evidence_source_url` | nullable                                                                                    |
-| `published_at`                            | nullable — **NULL is a draft**, the `market_insight` convention                                  |
-| `created_by_user_id`                      | `set null`                                                                                      |
-
-Unique `(commodity_id, region_id, substitute_label)`.
-
-`supplier_capability_id` is the whole point of this table: it is the join from "this could be made
-here" to "**these** suppliers can make it", over the vocabulary §11i already seeded. A NULL there is
-a real finding — no capability in the vocabulary covers this substitute yet — and the surface says
-so rather than hiding the row.
-
-#### `localization_assessment`
-
-Nightly, derived, and shaped like `demand_signal_snapshot` (§6) on purpose. Two derived scores over
-overlapping evidence that disagreed about how to order it would be worse than either.
-
-| Column                                                                                     | Shape                                            |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------ |
-| `as_of` / `window_starts_at` / `window_ends_at`                                            | CHECK `window_ends_at > window_starts_at AND as_of >= window_ends_at` |
-| `commodity_id` / `region_id`                                                               | `restrict`. The cell                             |
-| `feasibility_score_points`                                                                 | `integer`, CHECK `BETWEEN 0 AND 100`             |
-| `rank`                                                                                     | `integer`, CHECK `>= 1`                          |
-| `trend_direction` + `previous_feasibility_score_points`                                    | reuses `trend_direction` (§4d); **the same trend-agreement CHECK** as `demand_signal_snapshot` |
-| `import_dependency_points` · `substitute_availability_points` · `supplier_capacity_points` · `leadtime_advantage_points` | the four component sub-scores, stored |
-| `observed_import_value_in_cents` + `currency`                                              | the window's import bill, the input to component 1 |
-| `substitute_count` · `matched_supplier_count` · `verified_supplier_count`                  | `integer`, CHECK `>= 0`                          |
-| `median_supplier_leadtime_days`                                                            | `integer`, **nullable — NULL is "no supplier published one", not zero** |
-| `narrative_status`                                                                         | `localization_narrative_status`: `pending` · `generated` · `skipped_unconfigured` · `failed` |
-| `score_algorithm_version`                                                                  | `integer` default 1                              |
-
-Uniques `(as_of, commodity_id, region_id)` and `(as_of, rank)`.
-
-**The sub-scores are stored, not derived on read**, for the same reason `demand_signal_snapshot`
-stores its inputs: the UI renders "31 of 40" rather than an unfalsifiable total, and a tuning change
-to the score module does not retroactively rewrite what last night's number meant.
-
-`skipped_unconfigured` is a distinct state from `failed` because "no LLM key in this environment" is
-not a failure — `daily_log_analysis_status` (§8) draws the same line for the same reason. A local
-checkout with no key produces assessments with scores and no prose, which is a correct outcome.
-
-#### `localization_pathway_suggestion`
-
-| Column                                                        | Shape                                                                    |
-| ------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `assessment_id`                                               | → `localization_assessment`, **`restrict`** — it is cited evidence         |
-| `title` / `body_text`                                         | the prose                                                                 |
-| `model_name` NOT NULL · `model_version` · `prompt_version` NOT NULL | provenance, exactly as `optimization_suggestion` carries it          |
-| `confidence_bps`                                              | `integer`, nullable, CHECK `BETWEEN 0 AND 10000`                          |
-| `status`                                                      | `localization_pathway_status`: `open` · `accepted` · `dismissed`          |
-| `decided_by_user_id` · `decided_at` · `decision_note`         | CHECK `(status = 'open') = (decided_at IS NULL)`                          |
-
-`confidence_bps` being NULL means **no confidence was recorded**, not zero confidence. §9.6 states
-this for `optimization_suggestion` and it is not restated in the UI's favour here.
+⚠️ **`reporter_region_id` must be a `kind = 'country'` region, and a CHECK cannot see
+another table.** The sync handler enforces it; `db:verify-import-intelligence-constraints`
+proves the handler does.
 
 ### The score is arithmetic, and the model never touches it
 
-`src/modules/rnd/localization-feasibility-score.ts` — pure, integer, no division, a sibling
-`.test.ts`, and module-load assertions that the budgets sum to 100 and each ladder's top rung equals
-its budget. A deliberate mirror of `demand-score.ts` and `opportunity-score.ts`: same rung shape,
-same terminal-zero totality argument, same reasoning about step ladders over curves. Read
-`opportunity-score.ts` first; the argument is stated there in full.
+`src/modules/rnd/import-intelligence/localization-feasibility-score.ts` — pure, integer, no
+division, with `assertLadderIsWellFormed` and `assertBudgetsSumTo` running at module load.
+
+⚠️ **It imports `src/lib/score-ladder.ts` rather than copying `demand-score.ts`.** Those two
+shipped scorers each carry a private copy of the ladder machinery; the shared module exists
+to stop the copy count at three, and five newer scorers already use it.
 
 ```
-importDependency        40   the size of the prize — the annual import bill for this commodity
-substituteAvailability  25   published substitutes, weighted by maturity_level
-supplierCapacity        20   in-country suppliers whose capabilities match a substitute
-leadTimeAdvantage       15   median domestic lead time against the import lane
+importDependency        35   the size of the prize — the annual import bill
+exportCapability        25   the country already exports it, so the capability exists
+substituteAvailability  20   published substitutes, weighted by maturity_level
+supplierCapacity        12   in-country suppliers whose capabilities match a substitute
+leadTimeAdvantage        8   median domestic lead time against the import lane
 ```
 
-The split is the editorial claim this module makes about what "feasible to localize" means. Import
-bill carries the most weight because it is the only input measured outside this platform and the
-only one that says a market already exists. Supplier capacity corroborates and can be inflated by
-one motivated organization, so it may not carry a cell alone. Lead time is smallest deliberately: it
-modifies feasibility, it is not evidence of it.
+**The ladders are calibrated from measured data.** India's 2023 HS6 lines distribute p50
+$7.1M, p90 $144M, p99 $1.38B, max $140B — so a ladder topping out at $10M would saturate
+for a quarter of the catalogue and rank nothing.
+
+The split is the editorial claim: import bill carries the most because it is the only input
+measured entirely outside this platform. Export capability is second because it is the
+hardest evidence available that the thing can already be made here — a supplier count can be
+inflated by one motivated organisation, a national export figure cannot.
+
+⚠️ **`leadTimeAdvantage` IS THE INVERTED LADDER, AND NULL NEVER REACHES IT.** An `atMost`
+ladder pays its FULL budget for the smallest input, so a null lead time coerced to `0` would
+award all 8 points to every commodity for which nobody has published one — turning absent
+evidence into perfect evidence. `demand-score.ts` records the same trap for its scarcity
+component. Relatedly, an evidence-free cell still scores, so **the leaderboard query excludes
+rows with no imports BEFORE ranking** rather than trusting the arithmetic to bury them.
 
 ### The narrative
 
-`src/modules/rnd/import-intelligence/localization-narrative.ts`, over the existing Gemini path.
+`localization-narrative.ts`, over the existing Gemini path. **No new vendor**: the backend
+has no Anthropic and no OpenAI SDK, and `GEMINI_*` was already in `src/config/index.ts`.
 
-**No new vendor.** `src/modules/rnd/gemini.ts` already makes this call over plain `fetch` with no
-SDK, and `GEMINI_API_KEY` / `GEMINI_MODEL` / `GEMINI_TIMEOUT_MS` / `GEMINI_MAX_OUTPUT_TOKENS` are
-already in `src/config/index.ts`. A second provider would mean a second key, a second config block,
-a second error classifier and a second `.env.example` section for a call this repo already makes
-correctly. Swapping provider later is a config change plus one transport module.
+⚠️ **`gemini.ts`'s transport half was EXTRACTED to `gemini-transport.ts`** so a second
+caller reuses the timeout, the status classification, the response guards and the
+finish-reason table rather than duplicating ~130 lines of vendor call. `generateOnce` now
+takes already-built request parts and a response schema. The guard on that refactor is that
+`gemini.test.ts` passes **unedited**, and it does.
 
-⚠️ **One refactor to shipped code**: `gemini.ts` keeps its transport half private. It moves to
-`src/modules/rnd/gemini-transport.ts` — the timeout, the error classification, the single repair
-attempt — and both callers import it. A pure move; the guard is that `gemini.test.ts` stays green
-with no edits to the test file.
-
-The narrative module then mirrors `analyzeDailyLog` exactly:
-
-- `LOCALIZATION_NARRATIVE_PROMPT_VERSION = "localization-narrative-v1"`, stored on every row it
-  produces and bumped on any prompt or schema change.
-- The prompt is handed **the computed score, the four sub-scores, the raw inputs, the substitute
-  list and the matched suppliers**. The model writes prose over arithmetic it did not do and cannot
-  contradict.
-- `responseSchema` on the request and `safeParse` on the way back. Model output is untrusted input.
-- It reuses the exported `GeminiError` union; `GEMINI_NOT_CONFIGURED` maps to
-  `narrative_status = 'skipped_unconfigured'`.
-
-⚠️ **WHAT THIS MODULE MUST NEVER PRODUCE: a score, a rank, or a verdict.** `gemini.ts` states this
-rule for its own module (§8) and it applies here unchanged. Everything it returns is advisory,
-carries its provenance, and is decidable by a human who can see the evidence it cites.
+The model is handed the computed score, its five sub-scores and the trade figures inside the
+prompt. **Its response schema carries no score, no rank and no trade figure**, so it cannot
+contradict the arithmetic — a stronger guarantee than instructing it not to. `confidenceBps`
+is nullable and the prompt says to omit rather than invent one.
 
 ### Jobs
 
 | Job                                   | Trigger                                                     |
 | ------------------------------------- | ------------------------------------------------------------- |
+| `sync-comtrade-trade-flows`           | tick, cron **`20 1 * * 1`** — weekly, Monday                  |
 | `recompute-localization-assessments`  | tick, cron **`50 3 * * *`**                                   |
-| `generate-localization-narrative`     | enqueued per assessment row by the job above. **Never scheduled** |
+| `generate-localization-narrative`     | enqueued per assessment row. **Never scheduled**              |
 
-Both follow §4e's tick/job split — the tick quantizes the clock and enqueues the real job with an
-explicit `asOf`, which is what makes the idempotency key per-day.
+**Weekly, not nightly**, for the ingest: annual trade statistics are revised a handful of
+times a year, so a nightly pull would spend seven times the request budget to observe the
+same numbers. It runs before the daily assessment that reads what it wrote.
 
-⚠️ **The cron time is load-bearing.** `recompute-demand-signals` runs 03:20 and
-`recompute-branch-signals` 03:35. Feasibility reads supplier and commodity state and must run after
-both. As everywhere in §4e, ordering between jobs is expressed in cron times, not in code.
+⚠️ **The daily cron time is load-bearing**, the same way §10's pair is. The assessment reads
+supplier, substitute and trade rows and must land after the other nightlies that touch them:
+02:15 opportunity scores, 02:45 demand signals, 03:20 branch signals, 03:35 programme stats,
+then 03:50 this. Ordering is expressed in cron times, not in code.
 
-`generate-localization-narrative` is on-demand for the same reason `analyze-daily-log` is: a
-scheduled narrative job would either re-write prose nothing asked for or sit idle, and neither is a
-schedule.
+⚠️ **`expireInSeconds` (900) EXCEEDS `COMTRADE_TIMEOUT_MS` (120 s) with room for a
+5,000-row upsert**, the rule `analyze-daily-log` states — otherwise pg-boss reclaims a call
+still in flight and a second worker spends another request against a metered budget.
+
+**The ingest tick is the only tick in `scheduled-ticks.ts` that enqueues more than one job**,
+and it fans out over a CONSTANT rather than a query, so it needs no database connection —
+every other tick in that file has the same property and one that broke it would need a pool
+before it could decide what to schedule.
 
 ### Deliberately not here
 
-- **No tariff or duty table.** A duty rate is jurisdiction-specific, dated, and changes by
-  notification; carrying a stale one is worse than carrying none.
-- **No landed-cost calculator.** It needs a per-supplier price, and `supplier` deliberately has no
-  price column (§11i) — a quote belongs to an engagement, priced in a project's currency.
-- **No `research_project_commodity_link`.** Pinning a commodity to a founder's project is what turns
-  this dataset into per-project advice, and it is the next phase rather than this one.
-- **No admin CSV upload route.** `data_origin` exists for it; the route does not.
-
+- **No tariff or duty table.** Rates are jurisdictional and dated; a stale one is worse than
+  none.
+- **No landed-cost figure.** It needs a per-supplier price, and `supplier` deliberately has
+  none (§11i) — a quote belongs to an engagement, priced in a project's currency.
+- **No `research_project_commodity_link`.** Pinning a commodity to a founder's project is
+  what turns this dataset into per-project advice, and it is the next phase.
+- **No bulk-ingest script.** The weekly job is the ingest. `db:smoke-import-intelligence`
+  makes one live call as a CONNECTIVITY PROOF and discards its rows, because writing 5,000
+  commodities is an operational decision rather than something a smoke test should make on
+  an operator's behalf.
 ---
 
 ## 11. The API
@@ -2989,7 +2941,7 @@ Four states, checked against the actual route files in `src/routes/`, not agains
 | [11j](#11j-gaps--what-the-rd-surface-still-needs)   | **Gaps** — everything above's holes | ✅ Shipped | `market-insights.*`, `discovery-vocabulary.*`, `supplier-engagements.service.ts`, `go-to-market-error-response.ts`, `lib/market-insight-stat.ts`, `applicationInboxRouter`, migration 0022, two smoke scripts       |
 | [11k](#11k-gaps-found-after-11j-shipped)            | **Gaps** found after §11j shipped   | ✅ Shipped | `research-projects.service.ts`'s `findOriginCluster` / `findRelatedInsights`, `project-insight-links.service.ts`, `market_insight_project_link`, migration 0023, `scripts/smoke-project-insight-links.ts`           |
 | [11l](#11l-gaps-found-after-the-frontend-caught-up) | **Gaps** the FRONTEND found         | ⏳ Pending | none — four cheap reads (Appendix D), plus the absences that belong to no route: notifications, platform audit, idempotency on money writes, keyset ledgers, `/ready`, route tests                                  |
-| [11m](#11m-import-intelligence-10a)                | Import intelligence (§10A)          | ⏳ Pending | none — the domain is spec'd in §10A and ordered in §16 phase 9. Root-mounted beside §11i, and nothing already shipped FKs to it                                 |
+| [11m](#11m-import-intelligence-10a)                | Import intelligence (§10A)          | ✅ Shipped | `import-intelligence.routes.ts` + controller/service/error-response, `comtrade.ts`, `hs-chapter-map.ts`, `localization-feasibility-score.ts`, `localization-narrative.ts`, `gemini-transport.ts`, three jobs, migration 0162 |
 
 Each subsection below opens with one line stating its state. **§11c is gone** — it described funding
 and escrow together, and escrow has left this contract. Its funding rows and the §7A rows that
@@ -3654,7 +3606,7 @@ often a settled argument as an oversight, and this table exists so the argument 
 | `GET …/daily-logs/:logId/playback-token`                                 | No playback token exists — the bytes live on youtube.com, so there is nothing to mint (§8, Appendix A1)                                             |
 | `POST …/workshop/files` with bytes                                       | Files are external links. `sizeBytes` stays NULL because nobody measured them (§8, Appendix A2)                                                     |
 | Everything under `/research-programs/*`                                  | Project Immortal, §10 / §11f. Out of scope for this subsection and last in §16                                                                      |
-| `POST` / `PATCH` on `import_commodity` or `import_trade_flow`            | Seeded reference data, like `supplier_capability`. A submission path needs a queue, a limiter and an abuse story that predate any real dataset (§10A, §11m)                |
+| `POST` / `PATCH` on `import_commodity` or `commodity_trade_flow`         | The Comtrade ingest is their only author, and the vocabulary is the WCO's own wording. A submission path needs a queue, a limiter and an abuse story bought before anyone has read the surface (§10A, §11m) |
 | `DELETE /domestic-substitutes/:substituteId`                             | Unpublishing is `publishedAt = NULL`, exactly as `market_insight` retires. A deleted mapping orphans the assessment that counted it (§10A, §11m)                          |
 | Any route that computes or accepts a `feasibilityScorePoints`            | A ranking signal is never client-supplied and never computed on read. It comes from the nightly job and `localization-feasibility-score.ts` alone (§6, §10A)              |
 | A tariff table, a duty rate, or a landed-cost figure                     | Duty rates are jurisdictional and dated, and a landed cost needs a per-supplier price that §11i deliberately refuses to invent (§10A)                                     |
@@ -4099,16 +4051,18 @@ own change.
 
 ### 11m. Import intelligence (§10A)
 
-**⏳ Pending — nothing is built.** The domain is spec'd in [§10A](#10a-the-data--import-intelligence--localization)
-and ordered in §16 phase 9. It lands as `src/modules/rnd/import-intelligence/`, root-mounted,
-beside §11i and just as independent: it FKs to `discovery_region`, `research_category` and
-`supplier_capability`, and nothing already shipped FKs to it.
+**✅ Shipped in full**, backed by `import-intelligence.routes.ts`, `.controller.ts`,
+`.service.ts`, `-error-response.ts`, `comtrade.ts`, `comtrade-reporters.ts`,
+`hs-chapter-map.ts`, `localization-feasibility-score.ts`, `localization-narrative.ts`,
+`gemini-transport.ts`, three job handlers, migration 0162, and seven test files.
+Root-mounted beside §11i and just as independent: it FKs to `discovery_region`,
+`research_category` and `supplier_capability`, and nothing already shipped FKs to it.
 
 | Method & path                                              | Body / input                                                                                             | Behavior & statuses                                                                                                                    |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /import-commodities`                                  | `?commodityKind=&categoryId=&reporterCountryCode=&search=&page=&limit=`                                    | Public. `reporterCountryCode` is ISO-2 and resolves to a `discovery_region` before any query runs — an unknown code is `200` empty, not `404` |
 | `GET /import-commodities/:hsCode`                          | —                                                                                                          | Public detail: the commodity, its latest assessment for the requested country, and the assessment's pathway suggestions. `200` · `404`  |
-| `GET /import-commodities/:hsCode/trade-flows`              | `?periodKind=&reporterCountryCode=&partnerCountryCode=&page=&limit=`                                       | Public. Offset-paginated, ordered by `period_starts_date DESC`. `200` · `404`                                                           |
+| `GET /import-commodities/:hsCode/trade-flows`              | `?flowKind=&reporterCountryCode=&page=&limit=`                                                             | Public. The all-partners aggregate only. Offset-paginated, newest period first. `200` · `404`                                          |
 | `GET /import-commodities/:hsCode/substitutes`              | `?regionCountryCode=&page=&limit=`                                                                         | Public. **Published rows only** unless the caller holds `moderate_taxonomy`. `200` · `404`                                              |
 | `GET /localization-assessments`                            | `?reporterCountryCode=&commodityKind=&page=&limit=`                                                        | Public. The rank-ordered leaderboard for the newest `as_of`. Renders `asOf`; empty means no scoring run, not zero feasibility. `200`     |
 | `GET /import-commodity-kinds`                              | —                                                                                                          | The chip vocabulary. Not paginated. `200`                                                                                              |
@@ -4146,7 +4100,7 @@ overwriting the first decision silently would erase a reviewer's judgement.
 
 **Absent on purpose, recorded so it is not "fixed":** no `DELETE` on a substitute (unpublish by
 setting `publishedAt` to null, exactly as `market_insight` retires), no write route on
-`import_commodity` or `import_trade_flow`, no route that returns a feasibility score computed on
+`import_commodity` or `commodity_trade_flow`, no route that returns a feasibility score computed on
 read, and no route that accepts one in a body. A score is a ranking signal, and §6 is explicit that
 ranking signals are never client-supplied and never computed on read.
 
@@ -4536,7 +4490,7 @@ Do **not** implement the domains in parallel — §9 defines the numbers every o
 | **6. Gaps** (§11j, §11k) ✅          | 40 verbs, then the two read halves shipping the write halves left open                                                                                                   | **Shipped.** What made "complete apart from Project Immortal" checkable                                                                                               |
 | **7. §11l** ✅                       | Four reads + two rulings → notifications + platform audit → idempotency + keyset → ops & tests                                                                           | **Shipped, all eleven.** Migrations 0024–0028. The three deferred items closed; two of their stated reasons were wrong, and §11l.2 records the corrections            |
 | **8. Project Immortal** (§10) ⏳     | Branches, papers, posts, moderation                                                                                                                                      | **Last, and no longer blocked** — the moderator role shipped with §11i. Land it after §11l.2 item 2 so its moderation actions have somewhere to be recorded           |
-| **9. Import intelligence** (§10A) ⏳ | HS6 vocabulary, trade flows, substitute mappings, the deterministic feasibility score, the nightly assessment and its LLM narrative                    | **After everything above, and blocking nothing.** A new domain beside §5 and §11i: it FKs to `discovery_region`, `research_category` and `supplier_capability`, and nothing shipped FKs to it. Needs §11i's supplier rows to score against, so it cannot come first |
+| **9. Import intelligence** (§10A) ✅ | UN Comtrade ingest, HS6 vocabulary, trade flows in both directions, substitute mappings, the five-component feasibility score, the nightly assessment and its LLM narrative | **Shipped.** A new domain beside §5 and §11i: it FKs to `discovery_region`, `research_category` and `supplier_capability`, and nothing shipped FKs to it. Migration 0162, three jobs, 251 tests |
 
 **§7A shipped, and it did delete more surface than it added** — nine escrow routes, three jobs, one
 smoke script and 268 lines of controller went with it.
@@ -4808,10 +4762,9 @@ curl 'https://localhost:8000/daily-logs?cursor=garbage' -b cookies.txt
 # → 422 CURSOR_MALFORMED, never a silent first page.
 ```
 
-**The §10A gates, none of them runnable yet:**
+**The §10A gates:**
 
 ```bash
-pnpm db:seed-import-intelligence                   # ~200 HS6 rows for India; migration 0162 creates the tables only
 pnpm db:verify-import-intelligence-constraints     # both partial uniques, the trend-agreement CHECK,
                                                    # and the service-enforced kind='country' rule a CHECK cannot see
 pnpm db:smoke-import-intelligence                  # seed -> recompute -> narrative -> all six reads -> both writes

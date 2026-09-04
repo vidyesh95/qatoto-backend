@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+import {
+  generateOnce,
+  type FetchImplementation,
+  type GeminiGenerateRequest,
+  type GeminiRequestPart,
+  type GeminiTransportError,
+} from "#src/modules/rnd/gemini-transport.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -39,11 +46,6 @@ import type { Result } from "#src/types/index.js";
  * and §9's override flow needs to know which instruction a human is overriding.
  */
 export const DAILY_LOG_ANALYSIS_PROMPT_VERSION = "daily-log-analysis-v2";
-
-const GENERATIVE_LANGUAGE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-
-const DEFAULT_TIMEOUT_MS = 180_000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
 
 /**
  * How much the model may think before it answers (Gemini 3.x's `thinkingLevel`).
@@ -137,25 +139,17 @@ export type DailyLogAnalysis = z.infer<typeof DailyLogAnalysisSchema>;
 /**
  * The failure modes, split by WHAT THE CALLER SHOULD DO — which is the only split that
  * matters to a job handler deciding between a retry and a dead-letter.
+ *
+ * Four of the five are the provider's and live in `gemini-transport.ts`, shared with every
+ * other caller. `GEMINI_SCHEMA_INVALID` stays here because only a caller that owns a
+ * response schema can decide that a response failed to match it.
  */
 export type GeminiError =
-  /** No API key in this environment. The log records `skipped_unconfigured`, not `failed`. */
-  | { type: "GEMINI_NOT_CONFIGURED" }
-  /** 429, 5xx, timeout, socket reset. Retryable — pg-boss backs off (§4e). */
-  | { type: "GEMINI_UNAVAILABLE"; detail: string }
-  /** The model refused this input: private video, blocked region, safety stop. Permanent. */
-  | { type: "GEMINI_INPUT_REJECTED"; detail: string }
-  /**
-   * The answer hit the output ceiling and came back truncated. Permanent for this budget:
-   * the same log re-analysed with the same `maxOutputTokens` truncates in the same place,
-   * and truncated JSON never parses. Split from GEMINI_INPUT_REJECTED because the fix is
-   * an operator raising GEMINI_MAX_OUTPUT_TOKENS, not a member re-recording their video.
-   */
-  | { type: "GEMINI_OUTPUT_TRUNCATED"; maxOutputTokens: number }
+  | GeminiTransportError
   /** Output that would not parse, after one repair attempt. Permanent (§9.7's rule). */
   | { type: "GEMINI_SCHEMA_INVALID"; issues: readonly string[] };
 
-export type FetchImplementation = typeof globalThis.fetch;
+export type { FetchImplementation };
 
 export interface AnalyzeDailyLogInput {
   /** The verified 11-character id, or null for a text-only log. Never a client URL. */
@@ -304,11 +298,6 @@ const RESPONSE_JSON_SCHEMA = {
   required: ["transcriptSegments", "summaryChips", "extractedClaims", "evidenceLinks"],
 } as const;
 
-interface GeminiRequestPart {
-  readonly text?: string;
-  readonly fileData?: { readonly fileUri: string; readonly mimeType?: string };
-}
-
 function buildRequestParts(input: AnalyzeDailyLogInput): readonly GeminiRequestPart[] {
   const parts: GeminiRequestPart[] = [{ text: buildPrompt(input) }];
 
@@ -324,207 +313,19 @@ function buildRequestParts(input: AnalyzeDailyLogInput): readonly GeminiRequestP
 }
 
 /**
- * The slice of Gemini's response this module reads.
+ * Everything the transport needs, assembled from this module's own prompt, schema and
+ * thinking budget.
  *
- * A type guard rather than an `as` cast (CLAUDE.md §4). Everything is optional because a
- * safety stop, a token-limit truncation and an ordinary answer all come back as a 200
- * with different fields present — and telling those apart is the point of `finishReason`.
+ * The three fields are what USED to be hard-coded inside `generateOnce` when it served one
+ * caller. They are passed rather than defaulted so a second caller cannot silently inherit
+ * the daily-log response schema — which would fail its own parse in a way that reads as a
+ * model fault rather than a wiring one.
  */
-interface GeminiResponsePayload {
-  readonly candidates?: readonly {
-    readonly content?: { readonly parts?: readonly { readonly text?: string }[] };
-    readonly finishReason?: string;
-  }[];
-  readonly promptFeedback?: { readonly blockReason?: string };
-  readonly modelVersion?: string;
-}
-
-function isRecord(candidate: unknown): candidate is Record<string, unknown> {
-  return typeof candidate === "object" && candidate !== null;
-}
-
-function readResponsePayload(candidate: unknown): GeminiResponsePayload | null {
-  if (!isRecord(candidate)) return null;
-
-  const { candidates, promptFeedback, modelVersion } = candidate;
-  if (candidates !== undefined && !Array.isArray(candidates)) return null;
-  if (promptFeedback !== undefined && !isRecord(promptFeedback)) return null;
-  if (modelVersion !== undefined && typeof modelVersion !== "string") return null;
-
-  // The nested shapes are read defensively below rather than validated here; every access
-  // is optional-chained and every miss becomes a GEMINI_UNAVAILABLE rather than a throw.
-  return candidate;
-}
-
-function extractResponseText(payload: GeminiResponsePayload): string | null {
-  const firstCandidate = payload.candidates?.[0];
-  const textParts = firstCandidate?.content?.parts
-    ?.map((part) => part.text)
-    .filter((text): text is string => typeof text === "string");
-
-  if (textParts === undefined || textParts.length === 0) {
-    return null;
-  }
-  return textParts.join("");
-}
-
-/**
- * `finishReason` values that mean the model REFUSED rather than answered.
- *
- * These are PERMANENT for this input: retrying the same video with the same prompt
- * produces the same refusal, and burning five exponential backoff attempts on it only
- * delays the operator's signal by half an hour (§9.7).
- *
- * `MAX_TOKENS` is deliberately NOT here. It is equally permanent, but it is not a refusal
- * — it is our own output ceiling, and it is handled separately so the reason a human reads
- * points at the budget instead of at the member's video.
- */
-const PERMANENT_FINISH_REASONS = new Set([
-  "SAFETY",
-  "RECITATION",
-  "BLOCKLIST",
-  "PROHIBITED_CONTENT",
-  "SPII",
-]);
-
-interface GenerateOutcome {
-  readonly rawText: string;
-  readonly modelVersion: string | null;
-}
-
-async function generateOnce(
-  input: AnalyzeDailyLogInput,
-  options: AnalyzeDailyLogOptions,
-  repairInstruction: string | null,
-): Promise<Result<GenerateOutcome, GeminiError>> {
-  const fetchImplementation = options.fetchImplementation ?? globalThis.fetch;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const apiKey = options.apiKey;
-
-  if (apiKey === undefined || apiKey === "") {
-    return { success: false, error: { type: "GEMINI_NOT_CONFIGURED" } };
-  }
-
-  const parts = buildRequestParts(input);
-  const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
-  const requestBody = {
-    contents: [
-      {
-        role: "user",
-        parts: repairInstruction === null ? parts : [...parts, { text: repairInstruction }],
-      },
-    ],
-    generationConfig: {
-      // Zero, deliberately, and kept at zero on a Gemini 3.x model whose own default is 1.
-      // The output is not formula-produced and is not required to be bit-identical (§4c
-      // governs the FORMULA, not the model), but a stable temperature makes a re-analysis
-      // after a fix comparable to the run it replaced, and makes a prompt regression
-      // visible instead of noise. Verified against `gemini-3.5-flash-lite` on both a
-      // text-only log and a YouTube video: schema-conforming output, `finishReason: STOP`,
-      // no degeneration into a loop.
-      temperature: 0,
-      responseMimeType: "application/json",
-      responseSchema: RESPONSE_JSON_SCHEMA,
-      maxOutputTokens,
-      thinkingConfig: { thinkingLevel: THINKING_LEVEL },
-    },
-  };
-
-  let response: Response;
-  try {
-    response = await fetchImplementation(
-      `${GENERATIVE_LANGUAGE_BASE_URL}/${encodeURIComponent(options.model)}:generateContent`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          // Header, not a query parameter: a key in a URL lands in access logs and in
-          // any proxy in between.
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(timeoutMs),
-      },
-    );
-  } catch (error: unknown) {
-    // A timeout, a DNS failure or a socket reset. Explicitly caught because Express 5
-    // forwards a rejected promise to the error handler, and an unhandled AbortError in a
-    // job would surface as an unclassified crash rather than a retry.
-    return {
-      success: false,
-      error: {
-        type: "GEMINI_UNAVAILABLE",
-        detail: error instanceof Error ? error.message : "network failure",
-      },
-    };
-  }
-
-  if (!response.ok) {
-    if (response.status === 429 || response.status >= 500) {
-      return {
-        success: false,
-        error: { type: "GEMINI_UNAVAILABLE", detail: `HTTP ${response.status}` },
-      };
-    }
-    // 400/403/404: a bad key, a model this project cannot reach, or a video the API
-    // refuses. None of them improve on retry.
-    return {
-      success: false,
-      error: { type: "GEMINI_INPUT_REJECTED", detail: `HTTP ${response.status}` },
-    };
-  }
-
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    return {
-      success: false,
-      error: { type: "GEMINI_UNAVAILABLE", detail: "response was not JSON" },
-    };
-  }
-
-  const readPayload = readResponsePayload(payload);
-  if (readPayload === null) {
-    return {
-      success: false,
-      error: { type: "GEMINI_UNAVAILABLE", detail: "response had an unexpected shape" },
-    };
-  }
-
-  const blockReason = readPayload.promptFeedback?.blockReason;
-  if (blockReason !== undefined) {
-    return {
-      success: false,
-      error: { type: "GEMINI_INPUT_REJECTED", detail: `blocked: ${blockReason}` },
-    };
-  }
-
-  const finishReason = readPayload.candidates?.[0]?.finishReason;
-  if (finishReason !== undefined && PERMANENT_FINISH_REASONS.has(finishReason)) {
-    return {
-      success: false,
-      error: { type: "GEMINI_INPUT_REJECTED", detail: `finishReason: ${finishReason}` },
-    };
-  }
-  // Checked BEFORE the text is read: a truncated response usually still carries text, and
-  // it is exactly the half a JSON document that would otherwise fail the parse with a
-  // syntax error that says nothing about why.
-  if (finishReason === "MAX_TOKENS") {
-    return { success: false, error: { type: "GEMINI_OUTPUT_TRUNCATED", maxOutputTokens } };
-  }
-
-  const rawText = extractResponseText(readPayload);
-  if (rawText === null) {
-    return {
-      success: false,
-      error: { type: "GEMINI_UNAVAILABLE", detail: "response carried no text part" },
-    };
-  }
-
+function buildGenerateRequest(input: AnalyzeDailyLogInput): GeminiGenerateRequest {
   return {
-    success: true,
-    value: { rawText, modelVersion: readPayload.modelVersion ?? null },
+    parts: buildRequestParts(input),
+    responseSchema: RESPONSE_JSON_SCHEMA,
+    thinkingLevel: THINKING_LEVEL,
   };
 }
 
@@ -562,7 +363,7 @@ export async function analyzeDailyLog(
   input: AnalyzeDailyLogInput,
   options: AnalyzeDailyLogOptions,
 ): Promise<Result<DailyLogAnalysisResult, GeminiError>> {
-  const firstAttempt = await generateOnce(input, options, null);
+  const firstAttempt = await generateOnce(buildGenerateRequest(input), options, null);
   if (!firstAttempt.success) {
     return { success: false, error: firstAttempt.error };
   }
@@ -581,7 +382,7 @@ export async function analyzeDailyLog(
   }
 
   const repairAttempt = await generateOnce(
-    input,
+    buildGenerateRequest(input),
     options,
     [
       "Your previous response did not match the required schema. The problems were:",
