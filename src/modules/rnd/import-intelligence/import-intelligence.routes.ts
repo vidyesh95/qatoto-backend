@@ -49,6 +49,13 @@ importIntelligenceRouter.get(
   importIntelligenceController.listImportCommodityKinds,
 );
 
+// --- Which countries have data at all. A literal path, no parameters, no pagination.
+importIntelligenceRouter.get(
+  "/import-reporters",
+  attachOptionalUser,
+  importIntelligenceController.listImportReporters,
+);
+
 // --- The rank-ordered leaderboard for the newest `asOf`.
 importIntelligenceRouter.get(
   "/localization-assessments",

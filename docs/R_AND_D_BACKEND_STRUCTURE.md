@@ -4066,6 +4066,7 @@ Root-mounted beside §11i and just as independent: it FKs to `discovery_region`,
 | `GET /import-commodities/:hsCode/substitutes`              | `?regionCountryCode=&page=&limit=`                                                                         | Public. **Published rows only** unless the caller holds `moderate_taxonomy`. `200` · `404`                                              |
 | `GET /localization-assessments`                            | `?reporterCountryCode=&commodityKind=&page=&limit=`                                                        | Public. The rank-ordered leaderboard for the newest `as_of`. Renders `asOf`; empty means no scoring run, not zero feasibility. `200`     |
 | `GET /import-commodity-kinds`                              | —                                                                                                          | The chip vocabulary. Not paginated. `200`                                                                                              |
+| `GET /import-reporters`                                    | —                                                                                                          | The countries that HAVE trade data, with commodity/flow counts and the year span. Not paginated — the ceiling is countries ingested. `200` |
 | `POST /domestic-substitutes`                               | `{ hsCode, regionSlug, substituteKind, substituteLabel, substituteNotes?, supplierCapabilitySlug?, maturityLevel, evidenceSourceName?, evidenceSourceUrl?, isPublished }` | Platform `moderate_taxonomy`. `201` · `403` · `404` · `409 SUBSTITUTE_ALREADY_MAPPED` · `422`                                           |
 | `PATCH /domestic-substitutes/:substituteId`                | Same minus `hsCode` and `regionSlug`, all `.nullable().optional()`                                         | Platform `moderate_taxonomy`. **The commodity and the region are unwritable** — moving a mapping is deleting one and creating another. `200` · `403` · `404` · `422` |
 | `POST /localization-pathway-suggestions/:suggestionId/decision` | `{ decision: "accepted" \| "dismissed", decisionNote? }`                                              | Platform `moderate_taxonomy`. **Advisory: moves no score, no rank and no row's arithmetic.** A second decision on a decided suggestion is `409 SUGGESTION_ALREADY_DECIDED`. `200` · `403` · `404` · `409` · `422` |
@@ -4088,6 +4089,12 @@ spec claims they need a session.
 directory is a spam surface, and a submission queue needs moderation, a limiter and an abuse story
 that are not worth building before the first real dataset exists. `import_commodity` is seeded and
 has no write route at all — the same shape as `supplier_capability` (§11j.6).
+
+**`GET /import-reporters` exists because a picker built off the taxonomy would lie.**
+`discovery_region` seeds eighteen countries and one has been ingested, so a country selector
+sourced from the taxonomy would offer seventeen dead ends. This read answers "which countries
+can I actually ask about", and the counts ride along so a chip can say how much is behind it
+before it is clicked.
 
 **`hsCode` is a path parameter and it is six digits.** It is not slugified anywhere: not in the
 route, not in a body, not on the wire. §11's kebab-case rule covers identifiers this platform mints,

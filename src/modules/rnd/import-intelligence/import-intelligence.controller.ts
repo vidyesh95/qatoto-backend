@@ -39,6 +39,24 @@ export async function listImportCommodityKinds(_req: Request, res: Response): Pr
   } satisfies ApiResponse);
 }
 
+/**
+ * `GET /import-reporters` — the countries that actually have trade data.
+ *
+ * Not paginated: the ceiling is the number of countries ingested. An EMPTY array means
+ * nothing has been synced yet, which a picker should say plainly rather than rendering
+ * eighteen seeded countries as if they were choices.
+ */
+export async function listImportReporters(_req: Request, res: Response): Promise<void> {
+  const reporters = await importIntelligenceService.listImportReporters();
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Import reporters retrieved successfully",
+    data: reporters,
+  } satisfies ApiResponse);
+}
+
 /** `GET /import-commodities` — the HS6 directory. Public, server-side filtering (§6). */
 export async function listImportCommodities(req: Request, res: Response): Promise<void> {
   const parsedQuery = ListImportCommoditiesQuerySchema.safeParse(req.query);

@@ -144,6 +144,7 @@ const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = 
   // would scatter a six-route surface over a generated client.
   { prefix: "/import-commodities", tag: "Import intelligence" },
   { prefix: "/import-commodity-kinds", tag: "Import intelligence" },
+  { prefix: "/import-reporters", tag: "Import intelligence" },
   { prefix: "/localization-assessments", tag: "Import intelligence" },
   { prefix: "/localization-pathway-suggestions", tag: "Import intelligence" },
   { prefix: "/domestic-substitutes", tag: "Import intelligence" },

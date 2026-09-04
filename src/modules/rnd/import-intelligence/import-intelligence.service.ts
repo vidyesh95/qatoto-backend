@@ -165,6 +165,69 @@ function offsetFor(page: number, limit: number): number {
   return (page - 1) * limit;
 }
 
+/**
+ * One country that actually has trade data, and how much of it.
+ *
+ * WHY IT EXISTS: eighteen countries are seeded in `discovery_region` and exactly one has been
+ * ingested. A picker built off the region taxonomy would offer seventeen dead ends, so this
+ * read answers "which countries can I actually ask about" rather than "which countries exist".
+ * The counts ride along so a chip can say how much is behind it before it is clicked.
+ */
+export interface ImportReporterView {
+  readonly countryCode: string;
+  readonly regionSlug: string;
+  readonly displayLabel: string;
+  readonly commodityCount: number;
+  readonly flowCount: number;
+  readonly earliestPeriodYear: number;
+  readonly latestPeriodYear: number;
+}
+
+interface ImportReporterRow {
+  readonly [column: string]: unknown;
+  readonly country_code: string;
+  readonly region_slug: string;
+  readonly display_label: string;
+  readonly commodity_count: number;
+  readonly flow_count: number;
+  readonly earliest_period_year: number;
+  readonly latest_period_year: number;
+}
+
+/**
+ * Unpaginated, deliberately: the ceiling is the number of countries ingested, which is a
+ * product decision measured in ones. A page cursor over eighteen rows would be ceremony.
+ *
+ * `::int` on every count, because `count(*)` is `bigint` and would otherwise arrive as a
+ * decimal string that a caller has to remember to parse.
+ */
+export async function listImportReporters(): Promise<readonly ImportReporterView[]> {
+  const result = await db.execute<ImportReporterRow>(sql`
+    SELECT g.country_code,
+           g.slug  AS region_slug,
+           g.label AS display_label,
+           count(DISTINCT f.commodity_id)::int                        AS commodity_count,
+           count(*)::int                                              AS flow_count,
+           min(extract(year FROM f.period_starts_date))::int          AS earliest_period_year,
+           max(extract(year FROM f.period_starts_date))::int          AS latest_period_year
+    FROM commodity_trade_flow AS f
+    JOIN discovery_region AS g ON g.id = f.reporter_region_id
+    WHERE g.country_code IS NOT NULL
+    GROUP BY g.country_code, g.slug, g.label
+    ORDER BY commodity_count DESC, g.label ASC
+  `);
+
+  return result.rows.map((row) => ({
+    countryCode: row.country_code,
+    regionSlug: row.region_slug,
+    displayLabel: row.display_label,
+    commodityCount: row.commodity_count,
+    flowCount: row.flow_count,
+    earliestPeriodYear: row.earliest_period_year,
+    latestPeriodYear: row.latest_period_year,
+  }));
+}
+
 export async function listImportCommodities(
   filter: ListImportCommoditiesQuery,
 ): Promise<PagedResult<ImportCommodityView>> {

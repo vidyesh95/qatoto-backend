@@ -40,6 +40,7 @@ vi.mock("#src/middleware/require-identified-user.js", () => ({
   },
 }));
 
+const listImportReporters = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listImportCommodities = vi.fn<(...args: readonly unknown[]) => unknown>();
 const getImportCommodityByHsCode = vi.fn<(...args: readonly unknown[]) => unknown>();
 const getCommodityAssessment = vi.fn<(...args: readonly unknown[]) => unknown>();
@@ -51,6 +52,7 @@ const updateDomesticSubstitute = vi.fn<(...args: readonly unknown[]) => unknown>
 const decidePathwaySuggestion = vi.fn<(...args: readonly unknown[]) => unknown>();
 
 vi.mock("#src/modules/rnd/import-intelligence/import-intelligence.service.js", () => ({
+  listImportReporters: (...args: readonly unknown[]) => listImportReporters(...args),
   listImportCommodities: (...args: readonly unknown[]) => listImportCommodities(...args),
   getImportCommodityByHsCode: (...args: readonly unknown[]) => getImportCommodityByHsCode(...args),
   getCommodityAssessment: (...args: readonly unknown[]) => getCommodityAssessment(...args),
@@ -117,6 +119,29 @@ describe("the six reads are public", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data).toHaveLength(16);
+    expect(response.body.pagination).toBeUndefined();
+  });
+
+  it("serves the reporter list signed out, unpaginated", async () => {
+    signOut();
+    listImportReporters.mockResolvedValue([
+      {
+        countryCode: "IN",
+        regionSlug: "india",
+        displayLabel: "India",
+        commodityCount: 5_668,
+        flowCount: 60_550,
+        earliestPeriodYear: 2019,
+        latestPeriodYear: 2024,
+      },
+    ]);
+
+    const response = await request(app).get("/import-reporters");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toHaveLength(1);
+    // The counts ride along so a picker can say how much is behind a chip before it is clicked.
+    expect(response.body.data[0].commodityCount).toBe(5_668);
     expect(response.body.pagination).toBeUndefined();
   });
 
