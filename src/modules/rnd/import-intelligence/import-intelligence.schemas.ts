@@ -112,6 +112,25 @@ export const ListLocalizationAssessmentsQuerySchema = z
   .strict();
 
 /**
+ * The same population as the leaderboard above, counted per score cell instead of listed.
+ *
+ * ⚠️ NO `page` AND NO `limit`, AND THAT IS THE POINT. Both grouping keys are score-ladder
+ * outputs with nine rungs each — `importDependencyPoints` ∈ {0,2,5,10,15,21,26,31,35} and
+ * `exportCapabilityPoints` ∈ {0,1,3,6,10,14,18,22,25} — so the result can never exceed 81
+ * rows however many commodities exist. Paginating a bounded aggregate would let a caller
+ * receive a PARTIAL distribution and draw it as if it were whole, which is the one thing a
+ * density plot must not do.
+ *
+ * The 5,469 India rows currently occupy 67 of the 81 cells.
+ */
+export const ListLocalizationAssessmentGridQuerySchema = z
+  .object({
+    reporterCountryCode: CountryCodeSchema.optional(),
+    commodityKind: z.enum(IMPORT_COMMODITY_KINDS).optional(),
+  })
+  .strict();
+
+/**
  * Creating a substitute mapping.
  *
  * `isPublished` rather than `publishedAt`: the CLIENT says whether it should be visible
@@ -179,6 +198,9 @@ export type ListTradeFlowsQuery = z.infer<typeof ListTradeFlowsQuerySchema>;
 export type ListSubstitutesQuery = z.infer<typeof ListSubstitutesQuerySchema>;
 export type ListLocalizationAssessmentsQuery = z.infer<
   typeof ListLocalizationAssessmentsQuerySchema
+>;
+export type ListLocalizationAssessmentGridQuery = z.infer<
+  typeof ListLocalizationAssessmentGridQuerySchema
 >;
 export type CreateDomesticSubstituteInput = z.infer<typeof CreateDomesticSubstituteSchema>;
 export type UpdateDomesticSubstituteInput = z.infer<typeof UpdateDomesticSubstituteSchema>;

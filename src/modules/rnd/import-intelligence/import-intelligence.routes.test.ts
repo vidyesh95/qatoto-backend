@@ -47,6 +47,7 @@ const getCommodityAssessment = vi.fn<(...args: readonly unknown[]) => unknown>()
 const listTradeFlowsForCommodity = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listSubstitutesForCommodity = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listLocalizationAssessments = vi.fn<(...args: readonly unknown[]) => unknown>();
+const listLocalizationAssessmentGrid = vi.fn<(...args: readonly unknown[]) => unknown>();
 const createDomesticSubstitute = vi.fn<(...args: readonly unknown[]) => unknown>();
 const updateDomesticSubstitute = vi.fn<(...args: readonly unknown[]) => unknown>();
 const decidePathwaySuggestion = vi.fn<(...args: readonly unknown[]) => unknown>();
@@ -59,6 +60,8 @@ vi.mock("#src/modules/rnd/import-intelligence/import-intelligence.service.js", (
   listTradeFlowsForCommodity: (...args: readonly unknown[]) => listTradeFlowsForCommodity(...args),
   listSubstitutesForCommodity: (...args: readonly unknown[]) => listSubstitutesForCommodity(...args),
   listLocalizationAssessments: (...args: readonly unknown[]) => listLocalizationAssessments(...args),
+  listLocalizationAssessmentGrid: (...args: readonly unknown[]) =>
+    listLocalizationAssessmentGrid(...args),
   createDomesticSubstitute: (...args: readonly unknown[]) => createDomesticSubstitute(...args),
   updateDomesticSubstitute: (...args: readonly unknown[]) => updateDomesticSubstitute(...args),
   decidePathwaySuggestion: (...args: readonly unknown[]) => decidePathwaySuggestion(...args),
@@ -96,7 +99,7 @@ beforeEach(async () => {
   });
 });
 
-describe("the six reads are public", () => {
+describe("the seven reads are public", () => {
   it("serves the commodity directory signed out", async () => {
     signOut();
     listImportCommodities.mockResolvedValue({ rows: [COMMODITY], total: 1 });
@@ -151,6 +154,42 @@ describe("the six reads are public", () => {
 
     const response = await request(app).get("/localization-assessments");
     expect(response.status).toBe(200);
+  });
+
+  it("serves the score grid signed out, unpaginated, and passes the parsed filters", async () => {
+    signOut();
+    listLocalizationAssessmentGrid.mockResolvedValue([
+      {
+        importDependencyPoints: 15,
+        exportCapabilityPoints: 10,
+        commodityCount: 334,
+        asOf: new Date("2026-09-04T00:00:00.000Z"),
+      },
+    ]);
+
+    const response = await request(app).get(
+      "/localization-assessment-grid?reporterCountryCode=IN&commodityKind=metal",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toHaveLength(1);
+    expect(response.body.data[0].commodityCount).toBe(334);
+    // UNPAGINATED BY DESIGN: nine-rung ladders on both axes cap the result at 81 cells, and
+    // a page of a distribution invites a caller to draw a partial one as if it were whole.
+    expect(response.body.pagination).toBeUndefined();
+    expect(listLocalizationAssessmentGrid).toHaveBeenCalledWith({
+      reporterCountryCode: "IN",
+      commodityKind: "metal",
+    });
+  });
+
+  it("422s a `limit` on the score grid rather than silently returning everything", async () => {
+    // The absence of pagination is the contract, so a caller reaching for a page must be
+    // told rather than handed the whole grid and left believing the limit applied.
+    const response = await request(app).get("/localization-assessment-grid?limit=10");
+
+    expect(response.status).toBe(422);
+    expect(listLocalizationAssessmentGrid).not.toHaveBeenCalled();
   });
 
   it("passes parsed filters through to the service, never the raw query", async () => {

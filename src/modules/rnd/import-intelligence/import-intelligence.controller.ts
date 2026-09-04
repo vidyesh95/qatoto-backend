@@ -13,6 +13,7 @@ import {
   HsCodeSchema,
   IMPORT_COMMODITY_KINDS,
   ListImportCommoditiesQuerySchema,
+  ListLocalizationAssessmentGridQuerySchema,
   ListLocalizationAssessmentsQuerySchema,
   ListSubstitutesQuerySchema,
   ListTradeFlowsQuerySchema,
@@ -216,6 +217,31 @@ export async function listLocalizationAssessments(req: Request, res: Response): 
     data: [...page.rows],
     pagination: paginationFor(parsedQuery.data.page, parsedQuery.data.limit, page.total),
   } satisfies PaginatedResponse);
+}
+
+/**
+ * `GET /localization-assessment-grid` — the same population as the leaderboard, counted per
+ * score cell.
+ *
+ * UNPAGINATED, like `/import-reporters`: the two grouping keys are nine-rung ladders, so 81
+ * rows is the ceiling no matter how many commodities are scored. Handing back a page of a
+ * distribution invites a caller to draw a partial one as if it were whole.
+ */
+export async function listLocalizationAssessmentGrid(req: Request, res: Response): Promise<void> {
+  const parsedQuery = ListLocalizationAssessmentGridQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    respondValidationFailed(res, parsedQuery.error);
+    return;
+  }
+
+  const cells = await importIntelligenceService.listLocalizationAssessmentGrid(parsedQuery.data);
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Localization assessment grid retrieved successfully",
+    data: [...cells],
+  } satisfies ApiResponse);
 }
 
 /** `POST /domestic-substitutes` — moderator only, checked inside the service. */

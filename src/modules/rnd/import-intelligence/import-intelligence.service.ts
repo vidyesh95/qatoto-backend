@@ -33,6 +33,7 @@ import type {
   CreateDomesticSubstituteInput,
   DecidePathwaySuggestionInput,
   ListImportCommoditiesQuery,
+  ListLocalizationAssessmentGridQuery,
   ListLocalizationAssessmentsQuery,
   ListSubstitutesQuery,
   ListTradeFlowsQuery,
@@ -434,9 +435,21 @@ export async function listSubstitutesForCommodity(
  * and `localization-feasibility-score.ts` records that a leaderboard must filter before it
  * ranks rather than trusting the arithmetic to bury them.
  */
-export async function listLocalizationAssessments(
-  filter: ListLocalizationAssessmentsQuery,
-): Promise<PagedResult<LocalizationAssessmentView>> {
+/**
+ * The population BOTH the ranked leaderboard and the score grid describe.
+ *
+ * ⚠️ SHARED ON PURPOSE. `listLocalizationAssessmentGrid` renders as a density plot whose
+ * cell counts a reader will compare against the leaderboard's `pagination.total`. If the
+ * two built their own `where` clauses, a later edit to one — a new exclusion, a different
+ * `asOf` rule — would silently make a chart that claims to hold 5,469 commodities disagree
+ * with the list that holds 5,469 commodities, and nothing would fail.
+ */
+function localizationAssessmentPopulation(
+  // The grid query is the assessments query minus `page`/`limit`, so this covers both
+  // without widening `commodityKind` to `string` — the column is a `pgEnum` and a widened
+  // literal is a compile error at the `eq()`, which is the check doing its job.
+  filter: ListLocalizationAssessmentGridQuery,
+): SQL | undefined {
   const conditions: SQL[] = [
     sql`${localizationAssessment.asOf} = (SELECT max(as_of) FROM localization_assessment)`,
     sql`${localizationAssessment.observedImportValueInCents} > 0`,
@@ -447,8 +460,13 @@ export async function listLocalizationAssessments(
   if (filter.commodityKind !== undefined) {
     conditions.push(eq(importCommodity.commodityKind, filter.commodityKind));
   }
+  return and(...conditions);
+}
 
-  const whereClause = and(...conditions);
+export async function listLocalizationAssessments(
+  filter: ListLocalizationAssessmentsQuery,
+): Promise<PagedResult<LocalizationAssessmentView>> {
+  const whereClause = localizationAssessmentPopulation(filter);
   const joined = db
     .select({
       id: localizationAssessment.id,
@@ -496,6 +514,69 @@ export async function listLocalizationAssessments(
   ]);
 
   return { rows, total: totalRow?.value ?? 0 };
+}
+
+/**
+ * One cell of the score grid: how many commodities scored this exact pair of components.
+ *
+ * `asOf` repeats on every cell and is the same instant throughout — the population is
+ * pinned to a single `max(as_of)`. It rides along so a caller can date the chart without a
+ * second read, which is what `listLocalizationAssessments` already does per row.
+ */
+export interface LocalizationAssessmentGridCellView {
+  readonly importDependencyPoints: number;
+  readonly exportCapabilityPoints: number;
+  readonly commodityCount: number;
+  readonly asOf: Date;
+}
+
+/**
+ * The whole distribution, counted per score cell.
+ *
+ * ⚠️ WHY THIS EXISTS RATHER THAN A BIGGER `limit`. The leaderboard is rank-ordered, so its
+ * first page is by construction the top-right corner of the score space — plotting it and
+ * calling it a scatter draws the answer and hides the question. The real distribution of
+ * India's 5,469 scored commodities is 75% "neither", 12% "already made here", 6% "bought
+ * heavily, nobody makes it" and 6% in the corner worth starting in, and none of that is
+ * visible from any single page of a ranking.
+ *
+ * It is complete rather than sampled because both grouping keys are nine-rung ladders: at
+ * most 81 rows describe every commodity there will ever be. That is why the query schema
+ * carries no `page` and no `limit`.
+ *
+ * ⚠️ QUERY BUILDER, NOT `db.execute`. Raw SQL bypasses the global `pg` type parser and
+ * would hand back `as_of` as a naive timestamp STRING — the trap that already cost a
+ * five-and-a-half-hour offset elsewhere in this module. `count()` is mapped to a number by
+ * Drizzle for the same reason.
+ */
+export async function listLocalizationAssessmentGrid(
+  filter: ListLocalizationAssessmentGridQuery,
+): Promise<readonly LocalizationAssessmentGridCellView[]> {
+  const rows = await db
+    .select({
+      importDependencyPoints: localizationAssessment.importDependencyPoints,
+      exportCapabilityPoints: localizationAssessment.exportCapabilityPoints,
+      commodityCount: count(),
+      asOf: localizationAssessment.asOf,
+    })
+    .from(localizationAssessment)
+    .innerJoin(importCommodity, eq(importCommodity.id, localizationAssessment.commodityId))
+    .innerJoin(discoveryRegion, eq(discoveryRegion.id, localizationAssessment.regionId))
+    .where(localizationAssessmentPopulation(filter))
+    .groupBy(
+      localizationAssessment.importDependencyPoints,
+      localizationAssessment.exportCapabilityPoints,
+      // Grouped, not aggregated: the population is already pinned to one `max(as_of)`, so
+      // this adds no rows and keeps the column legal without a `max()` that would imply
+      // the cells could span instants.
+      localizationAssessment.asOf,
+    )
+    .orderBy(
+      asc(localizationAssessment.importDependencyPoints),
+      asc(localizationAssessment.exportCapabilityPoints),
+    );
+
+  return rows;
 }
 
 /** One commodity's newest assessment for one country, with its pathway suggestions. */

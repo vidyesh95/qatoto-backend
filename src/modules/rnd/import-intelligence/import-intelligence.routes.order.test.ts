@@ -83,7 +83,7 @@ describe("import-intelligence router declaration order", () => {
     const routes = declaredRoutes(importIntelligenceRouter);
     // A floor, so a router that stopped declaring anything cannot pass the sweep below by
     // comparing an empty list to an empty list.
-    expect(routes.length).toBe(10);
+    expect(routes.length).toBe(11);
   });
 
   it.each([

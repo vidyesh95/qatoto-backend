@@ -63,6 +63,16 @@ importIntelligenceRouter.get(
   importIntelligenceController.listLocalizationAssessments,
 );
 
+// --- The same population as the leaderboard, counted per score cell. A SIBLING LITERAL of
+//     the route above, not a nested one: `/localization-assessments` declares no `/:id`, but
+//     a nested `/localization-assessments/grid` would put a literal one path-segment away
+//     from any future param route and make the ordering load-bearing for no benefit.
+importIntelligenceRouter.get(
+  "/localization-assessment-grid",
+  attachOptionalUser,
+  importIntelligenceController.listLocalizationAssessmentGrid,
+);
+
 // --- The HS6 directory.
 importIntelligenceRouter.get(
   "/import-commodities",
