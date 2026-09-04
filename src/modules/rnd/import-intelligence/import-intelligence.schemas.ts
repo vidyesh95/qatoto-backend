@@ -27,6 +27,15 @@ const SlugSchema = z
  */
 export const HsCodeSchema = z.string().regex(/^[0-9]{6}$/);
 
+/**
+ * A `localization_assessment` id, as it arrives in a path segment.
+ *
+ * A UUID from `randomUUID()`, matched loosely as a bounded non-empty token rather than a
+ * strict UUID: the column is `text`, and 422ing a well-formed-but-unknown id here would say
+ * something about which ids exist that a 404 already says more honestly.
+ */
+export const AssessmentIdSchema = z.string().trim().min(1).max(80);
+
 /** ISO-3166 alpha-2, uppercase — the shape `discovery_region.country_code` stores. */
 const CountryCodeSchema = z.string().regex(/^[A-Z]{2}$/);
 
@@ -102,10 +111,49 @@ export const ListSubstitutesQuerySchema = z
   })
   .strict();
 
+/**
+ * The kinds you can build a factory for.
+ *
+ * ⚠️ THE FOUR THAT ARE ABSENT ARE THE POINT. India's ranking opens with petroleum, jewellery,
+ * diamonds and unwrought gold — the largest import bills in the country and not one of them a
+ * thing anybody localises by setting up a plant. `energy_fuel` is extracted, `precious_material`
+ * and `mineral_ceramic` are mined, `agricultural_product` is grown. Leaving them in makes a
+ * "what should I manufacture" surface open with five answers that are not manufacturing.
+ *
+ * 4,759 of India's 5,469 scored rows survive the filter.
+ */
+export const MANUFACTURED_COMMODITY_KINDS = [
+  "food_product",
+  "chemical",
+  "pharmaceutical",
+  "plastic_rubber",
+  "wood_paper",
+  "textile_leather",
+  "metal",
+  "machinery",
+  "electronic_subassembly",
+  "transport_equipment",
+  "precision_instrument",
+  "other_manufactured",
+] as const satisfies readonly (typeof IMPORT_COMMODITY_KINDS)[number][];
+
+/**
+ * `?manufacturedOnly=true`.
+ *
+ * ⚠️ A QUERY PARAMETER RATHER THAN A CLIENT-SIDE `filter()`. The page fetches ONE page of the
+ * ranking; dropping four kinds after the fetch would silently return fewer rows than the page
+ * size and call the remainder a top-50.
+ */
+const ManufacturedOnlySchema = z
+  .enum(["true", "false"])
+  .transform((raw) => raw === "true")
+  .optional();
+
 export const ListLocalizationAssessmentsQuerySchema = z
   .object({
     reporterCountryCode: CountryCodeSchema.optional(),
     commodityKind: z.enum(IMPORT_COMMODITY_KINDS).optional(),
+    manufacturedOnly: ManufacturedOnlySchema,
     page: PageSchema,
     limit: LimitSchema,
   })
@@ -127,6 +175,7 @@ export const ListLocalizationAssessmentGridQuerySchema = z
   .object({
     reporterCountryCode: CountryCodeSchema.optional(),
     commodityKind: z.enum(IMPORT_COMMODITY_KINDS).optional(),
+    manufacturedOnly: ManufacturedOnlySchema,
   })
   .strict();
 

@@ -9195,6 +9195,24 @@ export const localizationPathwaySuggestion = pgTable(
     modelVersion: text("model_version"),
     promptVersion: text("prompt_version").notNull(),
     confidenceBps: integer("confidence_bps"),
+    /**
+     * What the model thinks it costs to stand up a first commercial line, as a BAND.
+     *
+     * ⚠️ THE ONLY MODEL-SUPPLIED NUMBER ON THIS SURFACE, and the only one anywhere in §11m
+     * that is not computed from Comtrade rows. `localization-narrative.ts` states at length
+     * why it is admitted: capital is derivable from nothing this system holds, so it is a new
+     * claim rather than one competing with the score. Three rules travel with it and the
+     * CHECK below enforces all three — a RANGE never a point, a basis sentence saying what
+     * scale was costed and what was excluded, and NULL as a legal answer.
+     *
+     * `bigint` in cents, matching `trade_value_in_cents`. It leaves as a decimal string.
+     *
+     * IT IS AN ESTIMATE AND NOT A QUOTE. Every surface must render `model_name`,
+     * `prompt_version` and `as_of` beside it. Nothing on this platform will honour it.
+     */
+    estimatedCapitalMinInCents: bigint("estimated_capital_min_in_cents", { mode: "bigint" }),
+    estimatedCapitalMaxInCents: bigint("estimated_capital_max_in_cents", { mode: "bigint" }),
+    capitalBasisText: text("capital_basis_text"),
     asOf: timestamp("as_of").notNull(),
     decidedByUserId: text("decided_by_user_id").references(() => user.id, {
       onDelete: "restrict",
@@ -9221,6 +9239,23 @@ export const localizationPathwaySuggestion = pgTable(
       "localization_pathway_suggestion_decision_ck",
       sql`(status = 'open') = (decided_at IS NULL)
           AND (decided_at IS NULL) = (decided_by_user_id IS NULL)`,
+    ),
+    // ALL THREE OR NONE, and the band must be ordered. A maximum with no minimum is not a
+    // range, and a band with no basis is an unsourced number about somebody's money.
+    check(
+      "localization_pathway_suggestion_capital_ck",
+      sql`(
+            estimated_capital_min_in_cents IS NULL
+            AND estimated_capital_max_in_cents IS NULL
+            AND capital_basis_text IS NULL
+          ) OR (
+            estimated_capital_min_in_cents IS NOT NULL
+            AND estimated_capital_max_in_cents IS NOT NULL
+            AND capital_basis_text IS NOT NULL
+            AND estimated_capital_min_in_cents >= 0
+            AND estimated_capital_min_in_cents <= estimated_capital_max_in_cents
+            AND char_length(capital_basis_text) BETWEEN 1 AND 400
+          )`,
     ),
   ],
 );

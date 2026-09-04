@@ -83,7 +83,7 @@ describe("import-intelligence router declaration order", () => {
     const routes = declaredRoutes(importIntelligenceRouter);
     // A floor, so a router that stopped declaring anything cannot pass the sweep below by
     // comparing an empty list to an empty list.
-    expect(routes.length).toBe(11);
+    expect(routes.length).toBe(12);
   });
 
   it.each([
@@ -124,6 +124,9 @@ describe("import-intelligence router declaration order", () => {
     expect(writes.map((route) => route.path).toSorted()).toStrictEqual([
       "/domestic-substitutes",
       "/domestic-substitutes/:substituteId",
+      // Authenticated because it spends a metered model call, and a write because it
+      // enqueues one — even though it parses no body.
+      "/localization-assessments/:assessmentId/pathway",
       "/localization-pathway-suggestions/:suggestionId/decision",
     ]);
   });

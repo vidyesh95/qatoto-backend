@@ -29,6 +29,8 @@ export {
  *         exists (edit theirs, do not write a second), and a suggestion somebody has
  *         already decided (re-deciding would silently erase a reviewer's judgement).
  *   422 — parse failures, emitted by `respondValidationFailed` before this mapper runs.
+ *   503 — the job queue refused a pathway request. Retryable, nobody's fault, and NOT a
+ *         model failure: the model has not been called at the point this is decided.
  *
  * The exhaustive `switch` with a `never` default is what makes a new error variant a
  * COMPILE error rather than an unhandled 500.
@@ -58,6 +60,8 @@ export function mapImportIntelligenceErrorToResponse(error: ImportIntelligenceEr
       return { statusCode: 404, message: "Substitute mapping not found." };
     case "SUGGESTION_NOT_FOUND":
       return { statusCode: 404, message: "Pathway suggestion not found." };
+    case "ASSESSMENT_NOT_FOUND":
+      return { statusCode: 404, message: "Localization assessment not found." };
 
     // --- 409: findings, not retries. The message names what to do instead.
     case "SUBSTITUTE_ALREADY_MAPPED":
@@ -72,6 +76,17 @@ export function mapImportIntelligenceErrorToResponse(error: ImportIntelligenceEr
         statusCode: 409,
         message:
           "This suggestion has already been accepted or dismissed. Read the recorded decision rather than replacing it.",
+      };
+
+    // --- 503: the QUEUE would not take the job. Nothing has been asked of the model, so
+    //     this is not a model failure and it is not the caller's fault — it is retryable,
+    //     and the copy says so rather than blaming the request.
+    case "PATHWAY_ENQUEUE_FAILED":
+      return {
+        statusCode: 503,
+        message:
+          "Could not queue the pathway write just now. Nothing was generated and nothing was charged. Try again shortly.",
+        errors: { reason: [error.detail] },
       };
 
     default: {

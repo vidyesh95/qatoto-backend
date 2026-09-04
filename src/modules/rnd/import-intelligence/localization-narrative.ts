@@ -36,7 +36,15 @@ import type { Result } from "#src/types/index.js";
  * indistinguishable in the data even though two different instructions produced them —
  * and a moderator dismissing a suggestion needs to know which instruction produced it.
  */
-export const LOCALIZATION_NARRATIVE_PROMPT_VERSION = "localization-narrative-v1";
+/**
+ * ⚠️ v3 BECAUSE v2 SHIPPED A CONTRADICTION AND A LIVE ROW PROVES IT. v2 added the capital
+ * band but kept "never estimate a value that was not given to you" unscoped, and left the
+ * capital keys out of the provider schema's `required` list. The first live run obeyed the
+ * older, stronger rule and returned a complete narrative with all three capital fields null.
+ * That row is still in the database, correctly stamped `localization-narrative-v2` — which is
+ * exactly what a prompt version is for, and why this constant is bumped rather than edited.
+ */
+export const LOCALIZATION_NARRATIVE_PROMPT_VERSION = "localization-narrative-v3";
 
 /**
  * Low, like the daily-log path. The model is not being asked to reason its way to a
@@ -55,6 +63,43 @@ export type LocalizationNarrativeError =
   | GeminiTransportError
   /** Output that would not parse, after one repair attempt. Permanent. */
   | { type: "GEMINI_SCHEMA_INVALID"; issues: readonly string[] };
+
+/**
+ * A capital figure, in INTEGER CENTS, nullable.
+ *
+ * ⚠️ THIS IS THE ONE NUMERIC FIELD IN THIS SCHEMA, AND IT IS A DELIBERATE EXCEPTION TO THE
+ * RULE THE MODULE HEADER STATES. That rule — "there is no score field, no rank field and no
+ * trade figure" — exists so the model cannot CONTRADICT arithmetic it was handed. Capital to
+ * start is derivable from nothing this system holds: no schedule of plant costs, no supplier
+ * quotes, no equipment catalogue. It is a NEW claim rather than a competing one, so there is
+ * nothing here for it to contradict.
+ *
+ * It is admitted on three conditions, all enforced below and none of them optional:
+ *
+ *   1. A RANGE, never a point. A single figure reads as a quote; a band reads as an estimate.
+ *   2. IT CARRIES ITS BASIS. `capitalBasisText` says what scale and what is excluded, so a
+ *      reader can tell whether the number is about their factory.
+ *   3. NULL IS A LEGAL ANSWER, and the prompt says to use it. A model that must always
+ *      produce a capital figure produces a fabricated one — the same reasoning that made
+ *      `confidenceBps` nullable.
+ *
+ * Every surface rendering it must show `modelName`, `promptVersion` and `asOf` beside it and
+ * call it an estimate. It is not a quote and no part of this platform will honour it.
+ *
+ * Cents rather than dollars for the reason §4b gives everywhere else: a float for money is a
+ * rounding error waiting to be displayed.
+ */
+const CapitalCentsSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(Number.MAX_SAFE_INTEGER)
+  .nullable()
+  // ⚠️ `.default(null)`, so an ABSENT field means "no estimate" rather than failing the parse.
+  // These three are not in the provider schema's `required` list — a model that declines is
+  // supposed to omit them — and treating omission as malformed output would spend the repair
+  // attempt, then the whole narrative, on the model doing exactly what it was told.
+  .default(null);
 
 const PathwayStepSchema = z
   .object({
@@ -80,8 +125,36 @@ const LocalizationNarrativeSchema = z
     pathwaySteps: z.array(PathwayStepSchema).max(MAX_PATHWAY_STEPS),
     keyRisks: z.array(z.string().min(1).max(400)).max(MAX_RISKS),
     confidenceBps: z.number().int().min(0).max(10_000).nullable(),
+    estimatedCapitalMinInCents: CapitalCentsSchema,
+    estimatedCapitalMaxInCents: CapitalCentsSchema,
+    capitalBasisText: z.string().min(1).max(400).nullable().default(null),
   })
-  .strict();
+  .strict()
+  // All three or none of the three. A band with no basis is an unsourced number about money,
+  // and a basis with no band describes nothing. `generate-localization-narrative.ts` writes
+  // NULL for the whole group when this trips, so a malformed capital answer costs the capital
+  // line rather than the whole narrative.
+  .refine(
+    (narrative) =>
+      [
+        narrative.estimatedCapitalMinInCents,
+        narrative.estimatedCapitalMaxInCents,
+        narrative.capitalBasisText,
+      ].every((field) => field === null) ||
+      [
+        narrative.estimatedCapitalMinInCents,
+        narrative.estimatedCapitalMaxInCents,
+        narrative.capitalBasisText,
+      ].every((field) => field !== null),
+    { message: "capital band and its basis must be given together or not at all" },
+  )
+  .refine(
+    (narrative) =>
+      narrative.estimatedCapitalMinInCents === null ||
+      narrative.estimatedCapitalMaxInCents === null ||
+      narrative.estimatedCapitalMinInCents <= narrative.estimatedCapitalMaxInCents,
+    { message: "capital band minimum must not exceed its maximum" },
+  );
 
 export type LocalizationNarrative = z.infer<typeof LocalizationNarrativeSchema>;
 
@@ -169,12 +242,30 @@ function buildPrompt(input: LocalizationNarrativeInput): string {
     "- The score is given, not yours to assign. Do not argue with it, re-score it, or",
     "  describe the commodity as more or less feasible than the score states.",
     "- Where a fact above says NOT RECORDED or NONE RECORDED, say so plainly. Never",
-    "  estimate, infer or illustrate a value that was not given to you.",
+    "  estimate, infer or illustrate a TRADE OR SCORE value that was not given to you.",
+    "  This rule is about the figures listed above. It does NOT apply to the capital",
+    "  estimate below, which is the one thing you are being asked to supply.",
     "- Be concrete about sequencing: what a team does first, what that unblocks.",
     "- Name real risks, including regulatory and capital ones. Do not reassure.",
     "- Set confidenceBps only if you genuinely have a basis for it, on a 0-10000 scale.",
     "  Otherwise set it to null. A guessed confidence is worse than no confidence.",
     "- Do not state a verdict on whether the founder should proceed. That is their call.",
+    "",
+    "CAPITAL TO START. This is the ONE figure you MUST supply that was not given to you above,",
+    "because nothing above implies it and the whole point of this field is that no data source",
+    "here holds it. Estimate what it costs to stand up a first commercial line for this specific",
+    "product, and obey all five rules:",
+    "- Give a RANGE: estimatedCapitalMinInCents and estimatedCapitalMaxInCents, both in",
+    "  INTEGER CENTS of the currency named in the import figure above. A single number would",
+    "  read as a quote.",
+    "- Set capitalBasisText to one sentence naming the scale you costed and what you left out",
+    "  (for example: \"SMT line at 50k units/month, two shifts; excludes land and building\").",
+    "- All three fields together, or all three null. Never a band with no basis.",
+    "- Only if the product is genuinely un-costable at any scale, set all three to null and",
+    "  say why in a key risk. Do not use null merely because you lack a precise figure — a",
+    "  wide, clearly-bounded range with its basis stated is exactly what is wanted here. A",
+    "  fabricated PRECISE figure becomes somebody's loan application; an honest range does not.",
+    "- Do not put a capital figure anywhere else — not in the summary, the steps or the risks.",
   ].join("\n");
 }
 
@@ -197,8 +288,24 @@ const RESPONSE_JSON_SCHEMA = {
     },
     keyRisks: { type: "array", items: { type: "string" } },
     confidenceBps: { type: "integer", nullable: true },
+    estimatedCapitalMinInCents: { type: "integer", nullable: true },
+    estimatedCapitalMaxInCents: { type: "integer", nullable: true },
+    capitalBasisText: { type: "string", nullable: true },
   },
-  required: ["title", "summary", "pathwaySteps", "keyRisks"],
+  // ⚠️ THE CAPITAL KEYS ARE REQUIRED, AND `nullable` IS WHAT MAKES DECLINING POSSIBLE.
+  // Leaving them out of `required` let the model omit them silently, and it did: the first
+  // live run against v2 returned a complete narrative with no capital at all, because an
+  // optional field is easier to skip than to reason about. Required-and-nullable forces the
+  // model to answer the question — with a band, or with an explicit null.
+  required: [
+    "title",
+    "summary",
+    "pathwaySteps",
+    "keyRisks",
+    "estimatedCapitalMinInCents",
+    "estimatedCapitalMaxInCents",
+    "capitalBasisText",
+  ],
 } as const;
 
 function buildGenerateRequest(input: LocalizationNarrativeInput): GeminiGenerateRequest {

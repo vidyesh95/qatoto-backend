@@ -215,6 +215,22 @@ export async function handleGenerateLocalizationNarrative(rawPayload: unknown): 
       // NULL when the model recorded none. Not coerced to zero — that would publish "no
       // confidence" as a finding rather than as an absence.
       confidenceBps: narrative.confidenceBps,
+      // The capital band, or nothing. `localization-narrative.ts` has already refused a
+      // partial one, so these three are null together or present together — which is what
+      // `localization_pathway_suggestion_capital_ck` also demands.
+      //
+      // ⚠️ BigInt, not Number, at the column boundary: the column is `bigint` in cents and
+      // the mode is `bigint`. The schema bounds the model's answer at MAX_SAFE_INTEGER, so
+      // this conversion is exact.
+      estimatedCapitalMinInCents:
+        narrative.estimatedCapitalMinInCents === null
+          ? null
+          : BigInt(narrative.estimatedCapitalMinInCents),
+      estimatedCapitalMaxInCents:
+        narrative.estimatedCapitalMaxInCents === null
+          ? null
+          : BigInt(narrative.estimatedCapitalMaxInCents),
+      capitalBasisText: narrative.capitalBasisText,
       asOf: parseUtcTimestamp(assessment.as_of),
     });
     await transaction

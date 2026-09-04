@@ -102,6 +102,23 @@ importIntelligenceRouter.get(
 
 // --- Writes. Chain order is fixed (§11i): requireAuth -> limiter -> requireIdentifiedUser
 //     -> body parser -> controller.
+
+// --- Ask for one product's pathway narrative and capital band. NO BODY PARSER: the
+//     assessment is named by the path and there is nothing else to say, so there is nothing
+//     to parse and nothing a caller could smuggle in.
+//
+//     ⚠️ THE ONLY AUTHENTICATED ENDPOINT IN THIS ROUTER, and the reason is the bill. Every
+//     read above is public because reading costs a query; this one spends a metered Gemini
+//     call, so leaving it on `attachOptionalUser` like its neighbours would publish a
+//     denial-of-wallet. It answers 202 — a queued job is not a verdict.
+importIntelligenceRouter.post(
+  "/localization-assessments/:assessmentId/pathway",
+  requireAuth,
+  importIntelligenceWriteLimiter,
+  requireIdentifiedUser,
+  importIntelligenceController.requestPathwayNarrative,
+);
+
 importIntelligenceRouter.post(
   "/domestic-substitutes",
   requireAuth,

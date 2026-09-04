@@ -8,6 +8,7 @@ import {
   respondValidationFailed,
 } from "#src/modules/rnd/import-intelligence/import-intelligence-error-response.js";
 import {
+  AssessmentIdSchema,
   CreateDomesticSubstituteSchema,
   DecidePathwaySuggestionSchema,
   HsCodeSchema,
@@ -241,6 +242,51 @@ export async function listLocalizationAssessmentGrid(req: Request, res: Response
     statusCode: 200,
     message: "Localization assessment grid retrieved successfully",
     data: [...cells],
+  } satisfies ApiResponse);
+}
+
+/**
+ * `POST /localization-assessments/:assessmentId/pathway` — ask for one product's pathway
+ * narrative and capital band.
+ *
+ * ⚠️ **202 IS NOT A RESULT.** A queued job means the row exists to be written, not that a
+ * verdict exists — and the verdict here includes a capital figure somebody may borrow
+ * against. The body carries `narrativeStatus` and NOTHING resembling an answer, so a client
+ * cannot mistake acceptance for output. It polls the commodity read.
+ *
+ * 200 when the narrative is already written: re-asking would spend a metered model call to
+ * restate the same thing at the same `asOf`.
+ *
+ * ⚠️ THE ONLY AUTHENTICATED ENDPOINT IN §11m. Every read here is public; this one bills. The
+ * route chain is `requireAuth -> limiter -> requireIdentifiedUser`, the same order the three
+ * substitute writes use.
+ */
+export async function requestPathwayNarrative(req: Request, res: Response): Promise<void> {
+  if (req.user === undefined) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const parsedAssessmentId = AssessmentIdSchema.safeParse(firstParam(req.params.assessmentId));
+  if (!parsedAssessmentId.success) {
+    respondValidationFailed(res, parsedAssessmentId.error);
+    return;
+  }
+
+  const result = await importIntelligenceService.requestPathwayNarrative(parsedAssessmentId.data);
+  if (!result.success) {
+    respondImportIntelligenceError(res, result.error);
+    return;
+  }
+
+  const isAlreadyGenerated = result.value.kind === "already_generated";
+  res.status(isAlreadyGenerated ? 200 : 202).json({
+    status: "success",
+    statusCode: isAlreadyGenerated ? 200 : 202,
+    message: isAlreadyGenerated
+      ? "Pathway narrative already written."
+      : "Pathway narrative queued. Nothing has been written yet.",
+    data: { narrativeStatus: isAlreadyGenerated ? "generated" : "pending" },
   } satisfies ApiResponse);
 }
 

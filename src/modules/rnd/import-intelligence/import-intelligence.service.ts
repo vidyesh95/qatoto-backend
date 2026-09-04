@@ -12,9 +12,10 @@
  * could hold, and a JSON number would hand the client a float to round. node-postgres
  * gives them to us as strings and they stay strings all the way out (§4b).
  */
-import { and, asc, count, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
+import { deterministicJobId, idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import {
   commodityTradeFlow,
   discoveryRegion,
@@ -29,15 +30,16 @@ import {
   requirePlatformCapability,
   type PlatformAccessError,
 } from "#src/modules/platform/roles/platform-role.service.js";
-import type {
-  CreateDomesticSubstituteInput,
-  DecidePathwaySuggestionInput,
-  ListImportCommoditiesQuery,
-  ListLocalizationAssessmentGridQuery,
-  ListLocalizationAssessmentsQuery,
-  ListSubstitutesQuery,
-  ListTradeFlowsQuery,
-  UpdateDomesticSubstituteInput,
+import {
+  MANUFACTURED_COMMODITY_KINDS,
+  type CreateDomesticSubstituteInput,
+  type DecidePathwaySuggestionInput,
+  type ListImportCommoditiesQuery,
+  type ListLocalizationAssessmentGridQuery,
+  type ListLocalizationAssessmentsQuery,
+  type ListSubstitutesQuery,
+  type ListTradeFlowsQuery,
+  type UpdateDomesticSubstituteInput,
 } from "#src/modules/rnd/import-intelligence/import-intelligence.schemas.js";
 import type { Result } from "#src/types/index.js";
 
@@ -49,7 +51,10 @@ export type ImportIntelligenceError =
   | { type: "SUBSTITUTE_NOT_FOUND"; substituteId: string }
   | { type: "SUBSTITUTE_ALREADY_MAPPED"; substituteLabel: string }
   | { type: "SUGGESTION_NOT_FOUND"; suggestionId: string }
-  | { type: "SUGGESTION_ALREADY_DECIDED"; suggestionId: string };
+  | { type: "SUGGESTION_ALREADY_DECIDED"; suggestionId: string }
+  | { type: "ASSESSMENT_NOT_FOUND"; assessmentId: string }
+  /** The queue refused the job. NOT a model failure — nothing has been asked of it yet. */
+  | { type: "PATHWAY_ENQUEUE_FAILED"; assessmentId: string; detail: string };
 
 export interface ImportCommodityView {
   readonly hsCode: string;
@@ -111,6 +116,18 @@ export interface LocalizationPathwaySuggestionView {
   readonly promptVersion: string;
   /** NULL means NO CONFIDENCE WAS RECORDED. It is not zero confidence. */
   readonly confidenceBps: number | null;
+  /**
+   * The model's capital band, in cents, as a DECIMAL STRING — or NULL throughout.
+   *
+   * ⚠️ AN ESTIMATE, NOT A QUOTE, and the only model-supplied number this surface returns.
+   * NULL means the model declined to estimate, which is a legal and expected answer; it does
+   * not mean the product is free to start. Any renderer must show `modelName`,
+   * `promptVersion` and `asOf` beside it, and must never present it as a price.
+   */
+  readonly estimatedCapitalMinInCents: string | null;
+  readonly estimatedCapitalMaxInCents: string | null;
+  /** What scale was costed and what was excluded. Present exactly when the band is. */
+  readonly capitalBasisText: string | null;
   readonly asOf: Date;
   readonly decidedAt: Date | null;
   readonly decisionNote: string | null;
@@ -460,6 +477,11 @@ function localizationAssessmentPopulation(
   if (filter.commodityKind !== undefined) {
     conditions.push(eq(importCommodity.commodityKind, filter.commodityKind));
   }
+  if (filter.manufacturedOnly === true) {
+    // Applied in SQL, so a page of 50 is 50 manufactured rows rather than 50 rows of which
+    // some are petroleum.
+    conditions.push(inArray(importCommodity.commodityKind, MANUFACTURED_COMMODITY_KINDS));
+  }
   return and(...conditions);
 }
 
@@ -579,6 +601,123 @@ export async function listLocalizationAssessmentGrid(
   return rows;
 }
 
+/**
+ * What a pathway request answered.
+ *
+ * `already_generated` is a 200 carrying the existing row; `queued` is a 202 carrying nothing
+ * — the verdict does not exist yet and pretending otherwise on this surface would be an
+ * optimistic capital estimate.
+ */
+export type RequestPathwayOutcome =
+  | { readonly kind: "already_generated" }
+  | { readonly kind: "queued" };
+
+/**
+ * Ask for one assessment's pathway narrative and capital band.
+ *
+ * ⚠️ THIS SPENDS A METERED MODEL CALL, WHICH IS WHY ITS ROUTE IS THE ONLY NON-PUBLIC ONE IN
+ * §11m. Every read here is mounted behind `attachOptionalUser` and answers a signed-out
+ * caller; this one sits behind `requireAuth` plus the write limiter, because an anonymous
+ * endpoint that bills the platform per request is a denial-of-wallet rather than a feature.
+ *
+ * ⚠️ IT ENQUEUES; IT DOES NOT GENERATE. A provider call inside a request handler would hold
+ * an HTTP connection open for the model's latency and lose the work on any timeout. The job
+ * carries the SAME idempotency key `recompute-localization-assessments` uses, so a
+ * double-click, a retry and the nightly recompute all collapse into one job for one
+ * assessment.
+ *
+ * A row already `generated` short-circuits before the enqueue: regenerating prose somebody is
+ * reading, to say the same thing at the same `asOf`, spends a metered call to change nothing.
+ */
+/**
+ * How many times one assessment may be re-queued after a dead-letter.
+ *
+ * Five, matching the queue's own retry count: past that the provider is not having a bad
+ * minute, and clicking again is a way to spend money on the same failure.
+ */
+const PATHWAY_ATTEMPT_LIMIT = 5;
+
+/**
+ * The idempotency key for the NEXT attempt at one assessment's narrative.
+ *
+ * ⚠️ THIS EXISTS BECAUSE A DEAD-LETTERED JOB PERMANENTLY BLOCKS ITS OWN KEY, which is a trap
+ * worth writing down. `sendJob` turns an idempotency key into the pg-boss job's PRIMARY KEY
+ * (`deterministicJobId`), so a second send with the same key is deduplicated — and pg-boss
+ * deduplicates against the row in ANY state, `failed` included, until it is archived. The
+ * first version of this function passed the bare assessment id. The provider returned 503,
+ * the job exhausted its retries, and every later request for that product was silently
+ * swallowed: the button stayed, the panel waited, and no job would ever run again.
+ *
+ * So the key carries the ATTEMPT as well as the assessment. It is still deterministic — two
+ * simultaneous clicks compute the same count and collapse into one job, which is what the key
+ * is for — and it advances only when the previous attempt is genuinely dead.
+ *
+ * Reading `pgboss.job` directly is the coupling this accepts. The alternative is an attempt
+ * counter on `localization_assessment`, which would be a schema change to mirror state the
+ * queue already holds, and would drift from it the first time a job was purged by hand.
+ */
+async function nextPathwayIdempotencyKey(assessmentId: string): Promise<string> {
+  for (let attempt = 1; attempt <= PATHWAY_ATTEMPT_LIMIT; attempt += 1) {
+    const candidateKey =
+      attempt === 1
+        ? idempotencyKeyFor.generateLocalizationNarrative(assessmentId)
+        : `${idempotencyKeyFor.generateLocalizationNarrative(assessmentId)}:retry-${String(attempt)}`;
+    const candidateJobId = await deterministicJobId(candidateKey);
+
+    const existing = await db.execute<{ state: string }>(
+      sql`SELECT state::text AS state FROM pgboss.job WHERE id = ${candidateJobId} LIMIT 1`,
+    );
+    const existingState = existing.rows[0]?.state;
+
+    // Free, or still alive. A live job is exactly what the key should collapse onto.
+    if (existingState === undefined || existingState !== "failed") return candidateKey;
+  }
+
+  // Every attempt is used up. The last key is returned rather than throwing: the send will
+  // deduplicate into the dead job and answer 202, which is the truthful "queued, and it is
+  // not moving" — the panel's give-up copy already says to come back later without blaming
+  // a cause it cannot see.
+  return `${idempotencyKeyFor.generateLocalizationNarrative(assessmentId)}:retry-${String(PATHWAY_ATTEMPT_LIMIT)}`;
+}
+
+export async function requestPathwayNarrative(
+  assessmentId: string,
+): Promise<Result<RequestPathwayOutcome, ImportIntelligenceError>> {
+  const [assessment] = await db
+    .select({
+      id: localizationAssessment.id,
+      narrativeStatus: localizationAssessment.narrativeStatus,
+    })
+    .from(localizationAssessment)
+    .where(eq(localizationAssessment.id, assessmentId))
+    .limit(1);
+
+  if (assessment === undefined) {
+    return { success: false, error: { type: "ASSESSMENT_NOT_FOUND", assessmentId } };
+  }
+
+  if (assessment.narrativeStatus === "generated") {
+    return { success: true, value: { kind: "already_generated" } };
+  }
+
+  // `failed` and `skipped_unconfigured` fall through to a re-enqueue on purpose: the first
+  // is a provider problem worth retrying by hand, and the second means the key was missing
+  // when it last ran and may not be now.
+  const enqueueResult = await sendJob(
+    JOB_NAMES.generateLocalizationNarrative,
+    { assessmentId },
+    { idempotencyKey: await nextPathwayIdempotencyKey(assessmentId) },
+  );
+  if (!enqueueResult.success) {
+    return {
+      success: false,
+      error: { type: "PATHWAY_ENQUEUE_FAILED", assessmentId, detail: enqueueResult.error.type },
+    };
+  }
+
+  return { success: true, value: { kind: "queued" } };
+}
+
 /** One commodity's newest assessment for one country, with its pathway suggestions. */
 export async function getCommodityAssessment(
   hsCode: string,
@@ -642,6 +781,14 @@ export async function getCommodityAssessment(
       modelVersion: localizationPathwaySuggestion.modelVersion,
       promptVersion: localizationPathwaySuggestion.promptVersion,
       confidenceBps: localizationPathwaySuggestion.confidenceBps,
+      // `::text`, like every other money column here — a bigint through JSON becomes a float.
+      estimatedCapitalMinInCents: sql<
+        string | null
+      >`${localizationPathwaySuggestion.estimatedCapitalMinInCents}::text`,
+      estimatedCapitalMaxInCents: sql<
+        string | null
+      >`${localizationPathwaySuggestion.estimatedCapitalMaxInCents}::text`,
+      capitalBasisText: localizationPathwaySuggestion.capitalBasisText,
       asOf: localizationPathwaySuggestion.asOf,
       decidedAt: localizationPathwaySuggestion.decidedAt,
       decisionNote: localizationPathwaySuggestion.decisionNote,
@@ -885,6 +1032,14 @@ export async function decidePathwaySuggestion(
       modelVersion: localizationPathwaySuggestion.modelVersion,
       promptVersion: localizationPathwaySuggestion.promptVersion,
       confidenceBps: localizationPathwaySuggestion.confidenceBps,
+      // `::text`, like every other money column here — a bigint through JSON becomes a float.
+      estimatedCapitalMinInCents: sql<
+        string | null
+      >`${localizationPathwaySuggestion.estimatedCapitalMinInCents}::text`,
+      estimatedCapitalMaxInCents: sql<
+        string | null
+      >`${localizationPathwaySuggestion.estimatedCapitalMaxInCents}::text`,
+      capitalBasisText: localizationPathwaySuggestion.capitalBasisText,
       asOf: localizationPathwaySuggestion.asOf,
       decidedAt: localizationPathwaySuggestion.decidedAt,
       decisionNote: localizationPathwaySuggestion.decisionNote,

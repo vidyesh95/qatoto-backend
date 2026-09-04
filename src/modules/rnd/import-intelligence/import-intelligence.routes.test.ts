@@ -48,6 +48,7 @@ const listTradeFlowsForCommodity = vi.fn<(...args: readonly unknown[]) => unknow
 const listSubstitutesForCommodity = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listLocalizationAssessments = vi.fn<(...args: readonly unknown[]) => unknown>();
 const listLocalizationAssessmentGrid = vi.fn<(...args: readonly unknown[]) => unknown>();
+const requestPathwayNarrative = vi.fn<(...args: readonly unknown[]) => unknown>();
 const createDomesticSubstitute = vi.fn<(...args: readonly unknown[]) => unknown>();
 const updateDomesticSubstitute = vi.fn<(...args: readonly unknown[]) => unknown>();
 const decidePathwaySuggestion = vi.fn<(...args: readonly unknown[]) => unknown>();
@@ -62,6 +63,7 @@ vi.mock("#src/modules/rnd/import-intelligence/import-intelligence.service.js", (
   listLocalizationAssessments: (...args: readonly unknown[]) => listLocalizationAssessments(...args),
   listLocalizationAssessmentGrid: (...args: readonly unknown[]) =>
     listLocalizationAssessmentGrid(...args),
+  requestPathwayNarrative: (...args: readonly unknown[]) => requestPathwayNarrative(...args),
   createDomesticSubstitute: (...args: readonly unknown[]) => createDomesticSubstitute(...args),
   updateDomesticSubstitute: (...args: readonly unknown[]) => updateDomesticSubstitute(...args),
   decidePathwaySuggestion: (...args: readonly unknown[]) => decidePathwaySuggestion(...args),
@@ -296,6 +298,69 @@ describe("the substitutes read widens for a moderator", () => {
     await request(app).get("/import-commodities/854231/substitutes");
 
     expect(listSubstitutesForCommodity).toHaveBeenCalledWith("854231", expect.anything(), { includeDrafts: true });
+  });
+});
+
+describe("the pathway request — the one endpoint here that bills", () => {
+  // Every other route in this router answers a signed-out caller. This one enqueues a
+  // metered Gemini call, so an anonymous endpoint would be a denial-of-wallet rather than
+  // a feature, and that difference is what these cases pin.
+  it("401s a signed-out caller BEFORE reaching the service", async () => {
+    signOut();
+
+    const response = await request(app).post("/localization-assessments/assess-1/pathway");
+
+    expect(response.status).toBe(401);
+    expect(requestPathwayNarrative).not.toHaveBeenCalled();
+  });
+
+  it("202s a first request and returns NO verdict with it", async () => {
+    requestPathwayNarrative.mockResolvedValue({ success: true, value: { kind: "queued" } });
+
+    const response = await request(app).post("/localization-assessments/assess-1/pathway");
+
+    expect(response.status).toBe(202);
+    expect(requestPathwayNarrative).toHaveBeenCalledWith("assess-1");
+    // A QUEUED JOB IS NOT A RESULT. The body carries the status and nothing that could be
+    // mistaken for a capital figure or a pathway.
+    expect(response.body.data).toStrictEqual({ narrativeStatus: "pending" });
+    expect(JSON.stringify(response.body)).not.toMatch(/capital|pathwaySteps|keyRisks/i);
+  });
+
+  it("200s when the narrative already exists rather than spending another model call", async () => {
+    requestPathwayNarrative.mockResolvedValue({
+      success: true,
+      value: { kind: "already_generated" },
+    });
+
+    const response = await request(app).post("/localization-assessments/assess-1/pathway");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toStrictEqual({ narrativeStatus: "generated" });
+  });
+
+  it("404s an unknown assessment, and does not 422 a well-formed id", async () => {
+    requestPathwayNarrative.mockResolvedValue({
+      success: false,
+      error: { type: "ASSESSMENT_NOT_FOUND", assessmentId: "nope" },
+    });
+
+    const response = await request(app).post("/localization-assessments/nope/pathway");
+
+    expect(response.status).toBe(404);
+  });
+
+  it("503s a queue refusal, and says nothing was generated or charged", async () => {
+    requestPathwayNarrative.mockResolvedValue({
+      success: false,
+      error: { type: "PATHWAY_ENQUEUE_FAILED", assessmentId: "assess-1", detail: "BOSS_DOWN" },
+    });
+
+    const response = await request(app).post("/localization-assessments/assess-1/pathway");
+
+    // Not a 500 and not the caller's fault: the model has not been called at this point.
+    expect(response.status).toBe(503);
+    expect(response.body.message).toMatch(/nothing was generated/i);
   });
 });
 
