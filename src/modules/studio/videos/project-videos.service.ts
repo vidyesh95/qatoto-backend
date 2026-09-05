@@ -29,6 +29,19 @@ export interface ProjectVideoRow {
   readonly publishedAt: Date | null;
   readonly durationSeconds: number | null;
   readonly creator: {
+    /**
+     * The creator's user id.
+     *
+     * PROJECTED EVEN THOUGH THIS RAIL RENDERS NO CREATOR LINK OF ITS OWN, because the card's
+     * overflow menu addresses "don't recommend channel" by id — `handle` cannot stand in for
+     * it, being nullable and a display path. Without this the control rendered permanently
+     * inert on every card in the reel, which read as a broken button rather than an absent
+     * feature.
+     *
+     * NOT `viewerState`. The note below still holds: this stays a per-ROW fact the join
+     * already carries, not a per-VIEWER probe.
+     */
+    readonly id: string;
     readonly handle: string | null;
     readonly name: string;
     readonly imageUrl: string | null;
@@ -68,6 +81,7 @@ export async function listProjectVideos(
         thumbnailUrl: video.thumbnailUrl,
         publishedAt: video.publishedAt,
         durationSeconds: video.durationSeconds,
+        creatorId: user.id,
         creatorHandle: user.handle,
         creatorName: user.name,
         creatorImageUrl: user.image,
@@ -91,6 +105,7 @@ export async function listProjectVideos(
       publishedAt: row.publishedAt,
       durationSeconds: row.durationSeconds,
       creator: {
+        id: row.creatorId,
         handle: row.creatorHandle,
         name: row.creatorName,
         imageUrl: row.creatorImageUrl,
