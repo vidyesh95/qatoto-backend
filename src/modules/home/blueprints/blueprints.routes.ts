@@ -1,28 +1,28 @@
 import express from "express";
 
 import { compactBody } from "#src/middleware/json-body.js";
-import { animeHeroImageUploadLimiter, animeHeroWriteLimiter } from "#src/middleware/rate-limit.js";
+import { blueprintHeroImageUploadLimiter, blueprintHeroWriteLimiter } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
-import * as animeHeroController from "#src/modules/home/anime/anime-hero.controller.js";
-import * as animeSeriesController from "#src/modules/home/anime/anime-series.controller.js";
-import { uploadAnimeHeroSlideImageFile } from "#src/modules/home/anime/upload-anime-hero-image.js";
+import * as blueprintHeroController from "#src/modules/home/blueprints/blueprint-hero.controller.js";
+import { uploadBlueprintHeroSlideImageFile } from "#src/modules/home/blueprints/upload-blueprint-hero-image.js";
 
 const router = express.Router();
 
 /**
- * The public `/anime` surface: the hero carousel, and the anime catalogue a stranger can
- * browse.
+ * The public `/blueprints` surface: the hero carousel at the top of the Blueprints hub.
  *
- * THREE PUBLIC ROUTES AND SIX ADMIN ROUTES. The public reads are BARE — no requireAuth, no
+ * ONE PUBLIC ROUTE AND SIX ADMIN ROUTES. The public read is BARE — no requireAuth, no
  * attachOptionalUser, no limiter — for the same reasons as GET /promotions/slides: the
  * payload is identical for every visitor, and an IP-keyed limiter on a page's opening
  * element is a self-inflicted outage behind a CDN or corporate NAT.
  *
- * ROUTE ORDER IS LOAD-BEARING TWICE OVER:
- *   - `/admin/hero-slides/reorder` is a literal and must precede `/admin/hero-slides/:slideId`,
- *     or "reorder" is captured as a slide id and that handler never runs.
- *   - `/series` must precede `/series/:seriesSlug` for the same reason — Express matches in
- *     declaration order, and the list route would otherwise be unreachable.
+ * THIS MODULE WAS `/anime`. The hero carousel is all that survived the vertical's retirement:
+ * the two public series reads (`/series`, `/series/:seriesSlug`) went with it, and with them
+ * the second route-order hazard this comment used to describe.
+ *
+ * ROUTE ORDER IS STILL LOAD-BEARING ONCE: `/admin/hero-slides/reorder` is a literal and must
+ * precede `/admin/hero-slides/:slideId`, or "reorder" is captured as a slide id and that
+ * handler never runs.
  *
  * Capability (`manage_promotions`) is checked INSIDE the service, not as middleware:
  * middleware cannot return a `Result` and so cannot join the controller's exhaustive error
@@ -33,65 +33,59 @@ const router = express.Router();
  * route double-counts every request against the stricter of them.
  */
 
-/** GET /anime/hero-slides — PUBLIC. Live slides only, already ordered. */
-router.get("/hero-slides", animeHeroController.listActiveHeroSlides);
+/** GET /blueprints/hero-slides — PUBLIC. Live slides only, already ordered. */
+router.get("/hero-slides", blueprintHeroController.listActiveHeroSlides);
 
-/** GET /anime/series — PUBLIC. Series with at least one watchable episode. */
-router.get("/series", animeSeriesController.listPublicSeries);
-
-/** GET /anime/series/:seriesSlug — PUBLIC. The detail tree, or 404. */
-router.get("/series/:seriesSlug", animeSeriesController.getPublicSeries);
-
-/** GET /anime/admin/hero-slides — every stored slide. */
+/** GET /blueprints/admin/hero-slides — every stored slide. */
 router.get(
   "/admin/hero-slides",
   requireAuth,
-  animeHeroWriteLimiter,
-  animeHeroController.listHeroSlidesForStaff,
+  blueprintHeroWriteLimiter,
+  blueprintHeroController.listHeroSlidesForStaff,
 );
 
-/** POST /anime/admin/hero-slides — multipart create, image and metadata together. */
+/** POST /blueprints/admin/hero-slides — multipart create, image and metadata together. */
 router.post(
   "/admin/hero-slides",
   requireAuth,
-  animeHeroImageUploadLimiter,
-  uploadAnimeHeroSlideImageFile,
-  animeHeroController.createHeroSlide,
+  blueprintHeroImageUploadLimiter,
+  uploadBlueprintHeroSlideImageFile,
+  blueprintHeroController.createHeroSlide,
 );
 
-/** PATCH /anime/admin/hero-slides/reorder — LITERAL, must stay above /:slideId. */
+/** PATCH /blueprints/admin/hero-slides/reorder — LITERAL, must stay above /:slideId. */
 router.patch(
   "/admin/hero-slides/reorder",
   requireAuth,
-  animeHeroWriteLimiter,
+  blueprintHeroWriteLimiter,
   compactBody,
-  animeHeroController.reorderHeroSlides,
+  blueprintHeroController.reorderHeroSlides,
 );
 
-/** PATCH /anime/admin/hero-slides/:slideId — metadata only. */
+/** PATCH /blueprints/admin/hero-slides/:slideId — metadata only. */
 router.patch(
   "/admin/hero-slides/:slideId",
   requireAuth,
-  animeHeroWriteLimiter,
+  blueprintHeroWriteLimiter,
   compactBody,
-  animeHeroController.updateHeroSlide,
+  blueprintHeroController.updateHeroSlide,
 );
 
-/** PATCH /anime/admin/hero-slides/:slideId/image — multipart, replace in place. */
+/** PATCH /blueprints/admin/hero-slides/:slideId/image — multipart, replace in place. */
 router.patch(
   "/admin/hero-slides/:slideId/image",
   requireAuth,
-  animeHeroImageUploadLimiter,
-  uploadAnimeHeroSlideImageFile,
-  animeHeroController.replaceHeroSlideImage,
+  blueprintHeroImageUploadLimiter,
+  uploadBlueprintHeroSlideImageFile,
+  blueprintHeroController.replaceHeroSlideImage,
 );
 
-/** DELETE /anime/admin/hero-slides/:slideId — remove the slide and its image. */
+/** DELETE /blueprints/admin/hero-slides/:slideId — remove the slide and its image. */
 router.delete(
   "/admin/hero-slides/:slideId",
   requireAuth,
-  animeHeroWriteLimiter,
-  animeHeroController.deleteHeroSlide,
+  blueprintHeroWriteLimiter,
+  blueprintHeroController.deleteHeroSlide,
 );
 
 export default router;

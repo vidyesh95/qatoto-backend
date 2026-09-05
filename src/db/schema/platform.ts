@@ -159,7 +159,7 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // The home-page Spotlight rail — up to three admin-picked catalogue videos. One event
   // because the only write is a whole-set replace (never a per-slot create/update).
   "spotlight_slots_replaced",
-  // The /anime hero carousel — `anime-hero-slides`. Same shape and same reasoning as the
+  // The /blueprints hero carousel — `anime-hero-slides` (the Cloudinary folder keeps its old name). Same shape and same reasoning as the
   // promotional carousel above: every one of these five puts an image in front of every
   // visitor to /anime, or takes one away, so all five are named rather than only the
   // destructive ones.

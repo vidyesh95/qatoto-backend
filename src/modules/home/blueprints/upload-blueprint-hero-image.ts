@@ -1,8 +1,8 @@
 import { acceptsAnyImage, createSingleFileUpload } from "#src/middleware/upload.js";
 
 /**
- * Multipart parser for the single `image` field of the anime hero write routes
- * (POST /anime/admin/hero-slides and PATCH /anime/admin/hero-slides/:slideId/image).
+ * Multipart parser for the single `image` field of the Blueprints hero write routes
+ * (POST /blueprints/admin/hero-slides and PATCH /blueprints/admin/hero-slides/:slideId/image).
  *
  * A copy of upload-promotional-slide-image.ts. Runs INSIDE the route so the global
  * express.json() never touches multipart bodies.
@@ -13,7 +13,7 @@ import { acceptsAnyImage, createSingleFileUpload } from "#src/middleware/upload.
  */
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
 
-export const uploadAnimeHeroSlideImageFile = createSingleFileUpload({
+export const uploadBlueprintHeroSlideImageFile = createSingleFileUpload({
   fieldName: "image",
   maximumBytes: MAX_UPLOAD_BYTES,
   acceptsMediaType: acceptsAnyImage,

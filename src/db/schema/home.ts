@@ -1823,7 +1823,7 @@ export const feedSpotlightSlotRelations = relations(feedSpotlightSlot, ({ one })
 //
 //   1. THIS SURFACE IS INTERNAL-ONLY. A promotional slide carries
 //      `destination_kind ∈ {internal_path, external_url}` because an advertiser link
-//      is supposed to leave the site. An anime hero slide points at a page in this
+//      is supposed to leave the site. A Blueprints hero slide points at a page in this
 //      app or at nothing at all. Folding the two together would put an
 //      external-URL arm one boolean away from a content surface.
 //   2. NO INTRINSIC DIMENSIONS. The promo carousel is `object-contain` inside a

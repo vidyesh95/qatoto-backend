@@ -1,5 +1,5 @@
 /**
- * The /anime hero carousel — the rotating card at the top of the anime page.
+ * The /blueprints hero carousel — the rotating card at the top of the Blueprints hub.
  *
  * PLATFORM-AUTHORED, exactly like `promotional_slide`. A slide has no member owner, so
  * there is nothing to own and nothing to hide: the ENTIRE gate is `manage_promotions`,
@@ -22,7 +22,7 @@
  *      point at files in the frontend's `public/dummy/`, because a migration cannot upload
  *      to Cloudinary and the alternative — a hardcoded fallback slide in the component —
  *      is a mock fallback on a wired surface. Everything an admin uploads is an https
- *      Cloudinary URL as usual; the two coexist and `deleteAnimeHeroSlide` tells them
+ *      Cloudinary URL as usual; the two coexist and `deleteBlueprintHeroSlide` tells them
  *      apart.
  */
 
@@ -33,8 +33,8 @@ import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import { animeHeroSlide } from "#src/db/schema.js";
 import {
-  deleteAnimeHeroSlideImage,
-  uploadAnimeHeroSlideImage,
+  deleteBlueprintHeroSlideImage,
+  uploadBlueprintHeroSlideImage,
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
@@ -55,7 +55,7 @@ import type { Result } from "#src/types/index.js";
  * A PRODUCT DECISION, enforced here rather than in the database, and the same number the
  * promotional carousel uses: a carousel nobody sits through is a carousel nobody reads.
  */
-export const MAX_ANIME_HERO_SLIDES = 12;
+export const MAX_BLUEPRINT_HERO_SLIDES = 12;
 
 /**
  * The output box for a hero image. Smaller than a promotional slide's 2400, because this
@@ -64,7 +64,7 @@ export const MAX_ANIME_HERO_SLIDES = 12;
  */
 const HERO_OUTPUT_MAX_DIMENSION_PX = 1600;
 
-export type AnimeHeroSlideError =
+export type BlueprintHeroSlideError =
   | PlatformAccessError
   | { type: "ANIME_HERO_SLIDE_NOT_FOUND"; slideId: string }
   | { type: "ANIME_HERO_DESTINATION_INVALID"; reason: PromotionalDestinationError }
@@ -85,7 +85,7 @@ export type AnimeHeroSlideError =
  * `title` doubles as the image's alt text on the frontend — one field, two uses, which is
  * what the mock this replaces already did.
  */
-export interface PublicAnimeHeroSlide {
+export interface PublicBlueprintHeroSlide {
   readonly id: string;
   readonly imageUrl: string;
   readonly title: string;
@@ -93,7 +93,7 @@ export interface PublicAnimeHeroSlide {
 }
 
 /** What the admin console sees — everything, including retired and scheduled rows. */
-export interface AdminAnimeHeroSlide extends PublicAnimeHeroSlide {
+export interface AdminBlueprintHeroSlide extends PublicBlueprintHeroSlide {
   readonly position: number;
   readonly isActive: boolean;
   readonly startsAt: Date | null;
@@ -123,7 +123,7 @@ const ADMIN_VIEW_COLUMNS = {
   updatedAt: animeHeroSlide.updatedAt,
 } as const;
 
-export interface CreateAnimeHeroSlideInput {
+export interface CreateBlueprintHeroSlideInput {
   readonly title: string;
   readonly destinationPath: string | null;
   readonly isActive: boolean;
@@ -131,7 +131,7 @@ export interface CreateAnimeHeroSlideInput {
   readonly endsAt: Date | null;
 }
 
-export interface UpdateAnimeHeroSlideInput {
+export interface UpdateBlueprintHeroSlideInput {
   readonly title?: string;
   /** `null` CLEARS the link and makes the slide decorative; omitting the key leaves it. */
   readonly destinationPath?: string | null;
@@ -182,14 +182,14 @@ function isCloudinaryHostedImage(imageUrl: string): boolean {
 }
 
 /**
- * `GET /anime/hero-slides` — THE ONLY UNAUTHENTICATED FUNCTION IN THIS FILE.
+ * `GET /blueprints/hero-slides` — THE ONLY UNAUTHENTICATED FUNCTION IN THIS FILE.
  *
  * Live means active AND inside its schedule window, with a NULL bound meaning unbounded on
  * that side. The `id` tiebreak on the ORDER BY is mandatory, not cosmetic: two slides
  * sharing a position would otherwise come back in whatever order Postgres felt like, and
  * the carousel would reshuffle itself between requests.
  */
-export async function listActiveAnimeHeroSlides(): Promise<readonly PublicAnimeHeroSlide[]> {
+export async function listActiveBlueprintHeroSlides(): Promise<readonly PublicBlueprintHeroSlide[]> {
   const now = new Date();
 
   return db
@@ -205,10 +205,10 @@ export async function listActiveAnimeHeroSlides(): Promise<readonly PublicAnimeH
     .orderBy(asc(animeHeroSlide.position), asc(animeHeroSlide.id));
 }
 
-/** `GET /anime/admin/hero-slides` — every slide, live or not, in display order. */
-export async function listAnimeHeroSlidesForStaff(
+/** `GET /blueprints/admin/hero-slides` — every slide, live or not, in display order. */
+export async function listBlueprintHeroSlidesForStaff(
   actorUserId: string,
-): Promise<Result<readonly AdminAnimeHeroSlide[], AnimeHeroSlideError>> {
+): Promise<Result<readonly AdminBlueprintHeroSlide[], BlueprintHeroSlideError>> {
   // CAPABILITY FIRST. The admin list is gated too — it exposes retired rows, scheduled
   // slides and who authored them.
   const capabilityResult = await requirePlatformCapability(actorUserId, "manage_promotions");
@@ -225,7 +225,7 @@ export async function listAnimeHeroSlidesForStaff(
 }
 
 /**
- * `POST /anime/admin/hero-slides` — mints a slide from an uploaded image in ONE call.
+ * `POST /blueprints/admin/hero-slides` — mints a slide from an uploaded image in ONE call.
  *
  * WHY THE ID IS MINTED BEFORE THE ROW EXISTS. The Cloudinary public id is derived from the
  * slide id, but the insert has not happened yet. Generate the uuid here, upload to that id,
@@ -236,11 +236,11 @@ export async function listAnimeHeroSlidesForStaff(
  * reclaimable precisely because the id is deterministic; every upload path here makes the
  * same trade.
  */
-export async function createAnimeHeroSlide(
+export async function createBlueprintHeroSlide(
   actorUserId: string,
-  input: CreateAnimeHeroSlideInput,
+  input: CreateBlueprintHeroSlideInput,
   rawImageBytes: Buffer,
-): Promise<Result<AdminAnimeHeroSlide, AnimeHeroSlideError>> {
+): Promise<Result<AdminBlueprintHeroSlide, BlueprintHeroSlideError>> {
   // 1. CAPABILITY FIRST — before the body is even looked at.
   const capabilityResult = await requirePlatformCapability(actorUserId, "manage_promotions");
   if (!capabilityResult.success) {
@@ -264,10 +264,10 @@ export async function createAnimeHeroSlide(
     .select({ total: sql<number>`count(*)::int` })
     .from(animeHeroSlide);
   const slideCount = existingCount?.total ?? 0;
-  if (slideCount >= MAX_ANIME_HERO_SLIDES) {
+  if (slideCount >= MAX_BLUEPRINT_HERO_SLIDES) {
     return {
       success: false,
-      error: { type: "ANIME_HERO_SLIDE_LIMIT_REACHED", limit: MAX_ANIME_HERO_SLIDES },
+      error: { type: "ANIME_HERO_SLIDE_LIMIT_REACHED", limit: MAX_BLUEPRINT_HERO_SLIDES },
     };
   }
 
@@ -281,7 +281,7 @@ export async function createAnimeHeroSlide(
   }
 
   const slideId = randomUUID();
-  const uploadResult = await uploadAnimeHeroSlideImage(slideId, normalizedResult.value.buffer);
+  const uploadResult = await uploadBlueprintHeroSlideImage(slideId, normalizedResult.value.buffer);
   if (!uploadResult.success) {
     return { success: false, error: uploadResult.error };
   }
@@ -311,8 +311,8 @@ export async function createAnimeHeroSlide(
             eventKind: "anime_hero_slide_created",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
-            actionLabel: "Created an anime hero slide",
-            targetLabel: `anime hero slide ${slideId}`,
+            actionLabel: "Created a Blueprints hero slide",
+            targetLabel: `Blueprints hero slide ${slideId}`,
             payload: {
               title: input.title,
               destinationPath: destinationResult.value,
@@ -323,26 +323,26 @@ export async function createAnimeHeroSlide(
   );
 
   if (!inserted) {
-    throw new Error("createAnimeHeroSlide: insert returned no row");
+    throw new Error("createBlueprintHeroSlide: insert returned no row");
   }
   return { success: true, value: inserted };
 }
 
 /**
- * `PATCH /anime/admin/hero-slides/:slideId` — title, destination, schedule, active flag.
+ * `PATCH /blueprints/admin/hero-slides/:slideId` — title, destination, schedule, active flag.
  *
- * `position` is NOT here. Order is changed only through `reorderAnimeHeroSlides`, which
+ * `position` is NOT here. Order is changed only through `reorderBlueprintHeroSlides`, which
  * rewrites every row at once; a per-row position write would let two slides claim the same
  * slot with no way to say which the admin meant.
  *
  * `isActive: false` IS the retirement mechanism — the row survives, the public read stops
  * offering it, and DELETE stays the mistake-eraser.
  */
-export async function updateAnimeHeroSlide(
+export async function updateBlueprintHeroSlide(
   actorUserId: string,
   slideId: string,
-  input: UpdateAnimeHeroSlideInput,
-): Promise<Result<AdminAnimeHeroSlide, AnimeHeroSlideError>> {
+  input: UpdateBlueprintHeroSlideInput,
+): Promise<Result<AdminBlueprintHeroSlide, BlueprintHeroSlideError>> {
   // 1. CAPABILITY FIRST — before `slideId` is read.
   const capabilityResult = await requirePlatformCapability(actorUserId, "manage_promotions");
   if (!capabilityResult.success) {
@@ -403,8 +403,8 @@ export async function updateAnimeHeroSlide(
             eventKind: "anime_hero_slide_updated",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
-            actionLabel: "Updated an anime hero slide",
-            targetLabel: `anime hero slide ${slideId}`,
+            actionLabel: "Updated a Blueprints hero slide",
+            targetLabel: `Blueprints hero slide ${slideId}`,
             payload: {
               title: input.title ?? null,
               destinationPath: nextDestinationPath ?? null,
@@ -421,7 +421,7 @@ export async function updateAnimeHeroSlide(
 }
 
 /**
- * `PATCH /anime/admin/hero-slides/:slideId/image` — replaces the image, in place.
+ * `PATCH /blueprints/admin/hero-slides/:slideId/image` — replaces the image, in place.
  *
  * A SEPARATE ROUTE FROM THE METADATA PATCH on purpose. Folding the file into that PATCH
  * would make "leave the image alone" an ABSENT multipart part, which is the ambiguity that
@@ -432,11 +432,11 @@ export async function updateAnimeHeroSlide(
  * Replacing a SEEDED slide's image is how a relative path becomes an uploaded asset, which
  * is the intended migration path off the seed rows.
  */
-export async function replaceAnimeHeroSlideImage(
+export async function replaceBlueprintHeroSlideImage(
   actorUserId: string,
   slideId: string,
   rawImageBytes: Buffer,
-): Promise<Result<AdminAnimeHeroSlide, AnimeHeroSlideError>> {
+): Promise<Result<AdminBlueprintHeroSlide, BlueprintHeroSlideError>> {
   // 1. CAPABILITY FIRST.
   const capabilityResult = await requirePlatformCapability(actorUserId, "manage_promotions");
   if (!capabilityResult.success) {
@@ -462,7 +462,7 @@ export async function replaceAnimeHeroSlideImage(
     return { success: false, error: normalizedResult.error };
   }
 
-  const uploadResult = await uploadAnimeHeroSlideImage(slideId, normalizedResult.value.buffer);
+  const uploadResult = await uploadBlueprintHeroSlideImage(slideId, normalizedResult.value.buffer);
   if (!uploadResult.success) {
     return { success: false, error: uploadResult.error };
   }
@@ -481,8 +481,8 @@ export async function replaceAnimeHeroSlideImage(
             eventKind: "anime_hero_slide_image_replaced",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
-            actionLabel: "Replaced an anime hero slide image",
-            targetLabel: `anime hero slide ${slideId}`,
+            actionLabel: "Replaced a Blueprints hero slide image",
+            targetLabel: `Blueprints hero slide ${slideId}`,
             payload: { imageUrl: uploadResult.value.secureUrl },
             occurredAt: new Date(),
           },
@@ -495,7 +495,7 @@ export async function replaceAnimeHeroSlideImage(
 }
 
 /**
- * `PATCH /anime/admin/hero-slides/reorder` — sets the whole display order at once.
+ * `PATCH /blueprints/admin/hero-slides/reorder` — sets the whole display order at once.
  *
  * `slideIds` must be an EXACT PERMUTATION of every existing slide id. Anything else is a
  * mismatch, never a partial apply: a client working from a stale list would otherwise
@@ -504,10 +504,10 @@ export async function replaceAnimeHeroSlideImage(
  * The rewrite runs inside one transaction, which is also why `position` carries no UNIQUE
  * index — a non-deferrable one would fire halfway through the loop.
  */
-export async function reorderAnimeHeroSlides(
+export async function reorderBlueprintHeroSlides(
   actorUserId: string,
   slideIds: readonly string[],
-): Promise<Result<readonly AdminAnimeHeroSlide[], AnimeHeroSlideError>> {
+): Promise<Result<readonly AdminBlueprintHeroSlide[], BlueprintHeroSlideError>> {
   // 1. CAPABILITY FIRST — before any id in the body is read.
   const capabilityResult = await requirePlatformCapability(actorUserId, "manage_promotions");
   if (!capabilityResult.success) {
@@ -545,8 +545,8 @@ export async function reorderAnimeHeroSlides(
             eventKind: "anime_hero_slide_reordered",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
-            actionLabel: "Reordered the anime hero carousel",
-            targetLabel: `${String(rewrittenCount)} anime hero slides`,
+            actionLabel: "Reordered the Blueprints hero carousel",
+            targetLabel: `${String(rewrittenCount)} Blueprints hero slides`,
             payload: { slideIds: [...slideIds] },
             occurredAt: new Date(),
           },
@@ -561,7 +561,7 @@ export async function reorderAnimeHeroSlides(
 }
 
 /**
- * `DELETE /anime/admin/hero-slides/:slideId` — removes the slide and its image.
+ * `DELETE /blueprints/admin/hero-slides/:slideId` — removes the slide and its image.
  *
  * THE ASSET IS DESTROYED FIRST, and a failure there returns without touching the row: for
  * a hero slide the image IS the content, so a surviving row pointing at a destroyed asset
@@ -575,10 +575,10 @@ export async function reorderAnimeHeroSlides(
  * Positions are re-packed afterwards so the order stays contiguous: delete the 2nd of four
  * and the old 3rd and 4th become 2nd and 3rd, with no gap for the admin to puzzle over.
  */
-export async function deleteAnimeHeroSlide(
+export async function deleteBlueprintHeroSlide(
   actorUserId: string,
   slideId: string,
-): Promise<Result<{ deletedSlideId: string }, AnimeHeroSlideError>> {
+): Promise<Result<{ deletedSlideId: string }, BlueprintHeroSlideError>> {
   // 1. CAPABILITY FIRST.
   const capabilityResult = await requirePlatformCapability(actorUserId, "manage_promotions");
   if (!capabilityResult.success) {
@@ -597,7 +597,7 @@ export async function deleteAnimeHeroSlide(
   }
 
   if (isCloudinaryHostedImage(existing.imageUrl)) {
-    const assetDeletion = await deleteAnimeHeroSlideImage(slideId);
+    const assetDeletion = await deleteBlueprintHeroSlideImage(slideId);
     if (!assetDeletion.success) {
       return { success: false, error: assetDeletion.error };
     }
@@ -636,8 +636,8 @@ export async function deleteAnimeHeroSlide(
             eventKind: "anime_hero_slide_deleted",
             actorUserId,
             actorRoleSnapshot: capabilityResult.value.platformRole,
-            actionLabel: "Deleted an anime hero slide",
-            targetLabel: `anime hero slide ${slideId}`,
+            actionLabel: "Deleted a Blueprints hero slide",
+            targetLabel: `Blueprints hero slide ${slideId}`,
             payload: { slideId },
             occurredAt: new Date(),
           },

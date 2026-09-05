@@ -1,5 +1,14 @@
 # Home Feed — Backend Structure
 
+> ⚠️ **THE ANIME VERTICAL WAS RETIRED; the `/anime` router is now `/blueprints`.** The module
+> moved to `src/modules/home/blueprints/` and mounts at `/blueprints`; its two public series
+> reads (`GET /anime/series`, `GET /anime/series/:seriesSlug`) were DELETED and only the hero
+> carousel survived. **Nothing in the database changed** — `anime_series`, `anime_season`,
+> `anime_episode`, `anime_hero_slide`, the `anime_audio_mode` / `anime_series_status` pgEnums,
+> the `anime_episode` value in `video_type` and the five `anime_hero_slide_*` audit labels all
+> keep their names, because renaming any of them costs a migration. The studio's own `/series`
+> routes and the admin review queue are untouched. Read every `/anime` URL below as historical.
+
 The API contract for Qatoto's homepage (`/`): the filter chip row, the "What's on your mind?"
 category tiles, the 3-video Spotlight, and the one personalized video stream that the frontend
 splits into **Recommended** and **Explore**.

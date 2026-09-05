@@ -1,5 +1,14 @@
 # STUDIO_BACKEND_STRUCTURE.md — Qatoto Creator Studio: Video-Upload API
 
+> ⚠️ **THE ANIME VERTICAL WAS RETIRED; the `/anime` router is now `/blueprints`.** The module
+> moved to `src/modules/home/blueprints/` and mounts at `/blueprints`; its two public series
+> reads (`GET /anime/series`, `GET /anime/series/:seriesSlug`) were DELETED and only the hero
+> carousel survived. **Nothing in the database changed** — `anime_series`, `anime_season`,
+> `anime_episode`, `anime_hero_slide`, the `anime_audio_mode` / `anime_series_status` pgEnums,
+> the `anime_episode` value in `video_type` and the five `anime_hero_slide_*` audit labels all
+> keep their names, because renaming any of them costs a migration. The studio's own `/series`
+> routes and the admin review queue are untouched. Read every `/anime` URL below as historical.
+
 > This document describes the **video-upload** contract the Next.js Creator Studio depends on,
 > and how it is wired on the Express backend (`/Users/vinitchuri/code/backend/qatoto-backend`).
 > It is the sibling of [STORE_BACKEND_STRUCTURE.md](STORE_BACKEND_STRUCTURE.md) (product

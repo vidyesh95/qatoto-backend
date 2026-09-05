@@ -16,7 +16,7 @@ import handlesRouter from "#src/modules/auth/handles/handles.routes.js";
 import authRouter from "#src/modules/auth/session/auth.routes.js";
 import userReportsRouter from "#src/modules/auth/users/user-reports.routes.js";
 import usersRouter from "#src/modules/auth/users/users.routes.js";
-import animeRouter from "#src/modules/home/anime/anime.routes.js";
+import blueprintsRouter from "#src/modules/home/blueprints/blueprints.routes.js";
 import channelsRouter from "#src/modules/home/channels/channels.routes.js";
 import engagementRouter, {
   commentRouter,
@@ -300,10 +300,14 @@ app.use("/promotions", promotionsRouter);
 // The home-page Spotlight rail. GET /spotlight/videos is public; admin routes are gated
 // by `manage_promotions` inside the service (same blast radius as the carousel).
 app.use("/spotlight", spotlightRouter);
-// The /anime surface — the hero carousel and the public anime catalogue. Three bare public
-// GETs; every /anime/admin/* route is gated by `manage_promotions` inside the service, the
-// same grant the two front-page placements above use.
-app.use("/anime", animeRouter);
+// The /blueprints surface — the hero carousel at the top of the Blueprints hub. ONE bare
+// public GET; every /blueprints/admin/* route is gated by `manage_promotions` inside the
+// service, the same grant the two front-page placements above use.
+//
+// This was `/anime`. The vertical was retired; its two public series reads went with it and
+// the hero carousel is what remained. The `anime_hero_slide` TABLE keeps its name — renaming
+// it costs a migration, and a table name is private where a URL is not.
+app.use("/blueprints", blueprintsRouter);
 // The home feed's public read surface (HOME_BACKEND_STRUCTURE.md §5.1). Grouped with the
 // carousel above because both are front-page data sources, but UNLIKE the /research-projects
 // stack below, ordering here is NOT load-bearing: /feed is a single-segment prefix that no
@@ -359,7 +363,7 @@ app.use("/research-projects", projectGoToMarketRouter);
 // public paper library and contribution tracking that is not equity.
 app.use("/research-programs", researchProgramsRouter);
 app.use("/discovery", discoveryRouter);
-// Creator Studio. The anime review queue is nested at /videos/admin/review rather than a
+// Creator Studio. The episode review queue is nested at /videos/admin/review rather than a
 // root /admin, matching /discovery/admin/* — one domain's moderation surface should not
 // claim the global namespace.
 app.use("/videos", videosRouter);

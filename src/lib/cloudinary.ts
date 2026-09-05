@@ -1008,7 +1008,7 @@ export async function deletePromotionalSlideImage(
 
 /**
  * ---------------------------------------------------------------------------------------
- * The /anime hero carousel.
+ * The /blueprints hero carousel.
  *
  * Byte-for-byte the promotional-slide arrangement above, with a different folder. Same
  * deterministic public id derived from the row id, so replacing a slide's art overwrites in
@@ -1017,18 +1017,22 @@ export async function deletePromotionalSlideImage(
  * what busts the browser cache.
  * ---------------------------------------------------------------------------------------
  */
-const ANIME_HERO_SLIDE_FOLDER = "qatoto/anime-hero-slides";
+// THE FOLDER STRING KEEPS ITS OLD NAME ON PURPOSE. Every image the four live slides point at
+// is already stored under `qatoto/anime-hero-slides/`, and Cloudinary public ids are the
+// address, not a label — renaming this constant's VALUE would leave those assets orphaned
+// and every existing slide with a broken image. The identifier is renamed; the path is not.
+const BLUEPRINT_HERO_SLIDE_FOLDER = "qatoto/anime-hero-slides";
 
-/** The stable, deterministic public id an anime hero slide's image always lives at. */
-export function animeHeroSlideImagePublicId(slideId: string): string {
-  return `${ANIME_HERO_SLIDE_FOLDER}/${slideId}`;
+/** The stable, deterministic public id a Blueprints hero slide's image always lives at. */
+export function blueprintHeroSlideImagePublicId(slideId: string): string {
+  return `${BLUEPRINT_HERO_SLIDE_FOLDER}/${slideId}`;
 }
 
 /**
  * Upload (or overwrite) a hero slide's image from an already-validated/re-encoded buffer.
  * The buffer MUST be checked and normalized by the caller first (CLAUDE.md §1.1).
  */
-export async function uploadAnimeHeroSlideImage(
+export async function uploadBlueprintHeroSlideImage(
   slideId: string,
   imageBuffer: Buffer,
 ): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
@@ -1040,7 +1044,7 @@ export async function uploadAnimeHeroSlideImage(
     const secureUrl = await new Promise<string>((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
-          public_id: animeHeroSlideImagePublicId(slideId),
+          public_id: blueprintHeroSlideImagePublicId(slideId),
           resource_type: "image",
           overwrite: true,
           invalidate: true,
@@ -1079,7 +1083,7 @@ export async function uploadAnimeHeroSlideImage(
  * either way. A SEEDED slide has no Cloudinary asset at all (its `image_url` is a
  * site-relative path), so deleting one takes this branch every time and must not fail.
  */
-export async function deleteAnimeHeroSlideImage(
+export async function deleteBlueprintHeroSlideImage(
   slideId: string,
 ): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
   if (!ensureConfigured()) {
@@ -1088,7 +1092,7 @@ export async function deleteAnimeHeroSlideImage(
 
   try {
     const destroyResult: { result?: string } = await cloudinary.uploader.destroy(
-      animeHeroSlideImagePublicId(slideId),
+      blueprintHeroSlideImagePublicId(slideId),
       { invalidate: true },
     );
     return { success: true, value: { deleted: destroyResult.result === "ok" } };

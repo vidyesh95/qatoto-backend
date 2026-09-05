@@ -64,8 +64,8 @@ const BASELINE_SLIDES = [
   {
     id: "seed-promotional-slide-02",
     sourceFileName: "spotlight_image02.avif",
-    altText: "Watch anime on Qatoto",
-    destinationValue: "/anime",
+    altText: "Explore engineering blueprints on Qatoto",
+    destinationValue: "/blueprints",
   },
   {
     id: "seed-promotional-slide-03",

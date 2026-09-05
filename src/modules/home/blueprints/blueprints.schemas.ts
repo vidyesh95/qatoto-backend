@@ -1,5 +1,5 @@
 /**
- * Request schemas for the `/anime` module, kept out of the controllers.
+ * Request schemas for the `/blueprints` module, kept out of the controllers.
  *
  * WHY NOT IN THE CONTROLLERS. They have a second consumer a controller cannot serve:
  * `src/docs/openapi-rnd-bodies.ts` generates request bodies from these schemas, and
@@ -10,14 +10,14 @@
  */
 import { z } from "zod";
 
-import { MAX_ANIME_HERO_SLIDES } from "#src/modules/home/anime/anime-hero.service.js";
+import { MAX_BLUEPRINT_HERO_SLIDES } from "#src/modules/home/blueprints/blueprint-hero.service.js";
 
 /**
  * The slide's caption AND its alt text — one field, two uses. 160 rather than the
  * promotional carousel's 200 because this one is `line-clamp-2` in a 328px card, and a
  * title that cannot fit is a title nobody reads.
  */
-export const AnimeHeroTitleSchema = z.string().trim().min(1).max(160);
+export const BlueprintHeroTitleSchema = z.string().trim().min(1).max(160);
 
 /**
  * The link's SHAPE only — length and emptiness.
@@ -28,7 +28,7 @@ export const AnimeHeroTitleSchema = z.string().trim().min(1).max(160);
  * place the open-redirect logic exists. Duplicating it in a `.refine()` would create a
  * second copy to keep in sync, and the copy that drifted would be the security-relevant one.
  */
-export const AnimeHeroDestinationPathSchema = z.string().trim().min(1).max(512);
+export const BlueprintHeroDestinationPathSchema = z.string().trim().min(1).max(512);
 
 /**
  * A schedule bound on the wire: an ISO 8601 string, parsed into a `Date` by the handler.
@@ -37,7 +37,7 @@ export const AnimeHeroDestinationPathSchema = z.string().trim().min(1).max(512);
  * OpenAPI emitter, so `convertBodySchema` throws on it and the route silently loses its
  * published body — `openapi-rnd-bodies.test.ts` fails the build for exactly that.
  */
-export const AnimeHeroScheduleBoundSchema = z.iso.datetime();
+export const BlueprintHeroScheduleBoundSchema = z.iso.datetime();
 
 /**
  * Multipart text parts arrive as STRINGS — multer does not type them.
@@ -47,16 +47,16 @@ export const AnimeHeroScheduleBoundSchema = z.iso.datetime();
  * `.transform()` either — unrepresentable to the OpenAPI emitter for the same reason a
  * date is.
  */
-export const AnimeHeroMultipartBooleanSchema = z.enum(["true", "false"]);
+export const BlueprintHeroMultipartBooleanSchema = z.enum(["true", "false"]);
 
-export const CreateAnimeHeroSlideSchema = z
+export const CreateBlueprintHeroSlideSchema = z
   .object({
-    title: AnimeHeroTitleSchema,
+    title: BlueprintHeroTitleSchema,
     // Optional because a decorative slide has no link at all — see the column's comment.
-    destinationPath: AnimeHeroDestinationPathSchema.optional(),
-    isActive: AnimeHeroMultipartBooleanSchema.optional(),
-    startsAt: AnimeHeroScheduleBoundSchema.optional(),
-    endsAt: AnimeHeroScheduleBoundSchema.optional(),
+    destinationPath: BlueprintHeroDestinationPathSchema.optional(),
+    isActive: BlueprintHeroMultipartBooleanSchema.optional(),
+    startsAt: BlueprintHeroScheduleBoundSchema.optional(),
+    endsAt: BlueprintHeroScheduleBoundSchema.optional(),
   })
   .strict();
 
@@ -71,13 +71,13 @@ export const CreateAnimeHeroSlideSchema = z
  * `null` means "clear it" and absent means "leave it alone". Those are different edits and
  * the service treats them differently.
  */
-export const UpdateAnimeHeroSlideSchema = z
+export const UpdateBlueprintHeroSlideSchema = z
   .object({
-    title: AnimeHeroTitleSchema.optional(),
-    destinationPath: AnimeHeroDestinationPathSchema.nullable().optional(),
+    title: BlueprintHeroTitleSchema.optional(),
+    destinationPath: BlueprintHeroDestinationPathSchema.nullable().optional(),
     isActive: z.boolean().optional(),
-    startsAt: AnimeHeroScheduleBoundSchema.nullable().optional(),
-    endsAt: AnimeHeroScheduleBoundSchema.nullable().optional(),
+    startsAt: BlueprintHeroScheduleBoundSchema.nullable().optional(),
+    endsAt: BlueprintHeroScheduleBoundSchema.nullable().optional(),
   })
   .strict()
   .refine((patch) => Object.keys(patch).length > 0, {
@@ -86,29 +86,16 @@ export const UpdateAnimeHeroSlideSchema = z
 
 /**
  * The whole order, as a permutation. Not a per-slide position write — see
- * `reorderAnimeHeroSlides` for why a partial order is a mismatch rather than a partial
+ * `reorderBlueprintHeroSlides` for why a partial order is a mismatch rather than a partial
  * apply.
  */
-export const ReorderAnimeHeroSlidesSchema = z
+export const ReorderBlueprintHeroSlidesSchema = z
   .object({
     // BOTH bounds are load-bearing, not decoration. Without them the largest body this
     // schema can produce is unbounded, and `json-body-budget.test.ts` fails the route for
     // being capped below what its own schema allows. The array bound is the service's own
     // ceiling rather than a second number, so the two cannot drift; 64 is the per-id cap
     // because a uuid is 36 characters.
-    slideIds: z.array(z.string().min(1).max(64)).min(1).max(MAX_ANIME_HERO_SLIDES),
-  })
-  .strict();
-
-/**
- * `GET /anime/series` — page and limit and NOTHING else.
- *
- * The frontend's `generateStaticParams` walks this to exhaustion, so the ceiling matters:
- * 50 matches the feed's own cap rather than inventing a second number.
- */
-export const ListPublicAnimeSeriesQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).max(200).default(1),
-    limit: z.coerce.number().int().min(1).max(50).default(24),
+    slideIds: z.array(z.string().min(1).max(64)).min(1).max(MAX_BLUEPRINT_HERO_SLIDES),
   })
   .strict();

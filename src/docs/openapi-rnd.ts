@@ -32,7 +32,7 @@ import researchProgramsRouter, {
 import researchProjectsRouter, {
   applicationInboxRouter,
 } from "#src/modules/rnd/projects/research-projects.routes.js";
-import animeRouter from "#src/modules/home/anime/anime.routes.js";
+import blueprintsRouter from "#src/modules/home/blueprints/blueprints.routes.js";
 import spotlightRouter from "#src/modules/home/spotlight/spotlight.routes.js";
 import importIntelligenceRouter from "#src/modules/rnd/import-intelligence/import-intelligence.routes.js";
 import supplierRouter, { projectGoToMarketRouter } from "#src/modules/rnd/suppliers/suppliers.routes.js";
@@ -84,7 +84,7 @@ const RND_MOUNTS: readonly { readonly mountPath: string; readonly router: unknow
   { mountPath: "/discovery", router: discoveryRouter },
   { mountPath: "/promotions", router: promotionsRouter },
   { mountPath: "/spotlight", router: spotlightRouter },
-  { mountPath: "/anime", router: animeRouter },
+  { mountPath: "/blueprints", router: blueprintsRouter },
   { mountPath: "/", router: researchCatalogRouter },
   { mountPath: "/", router: researchPaperCategoryRouter },
   { mountPath: "/", router: dailyLogFeedRouter },
@@ -126,8 +126,8 @@ const TAG_RULES: readonly { readonly prefix: string; readonly tag: string }[] = 
   { prefix: "/promotions", tag: "Promotions" },
   { prefix: "/spotlight/admin", tag: "Spotlight moderation" },
   { prefix: "/spotlight", tag: "Spotlight" },
-  { prefix: "/anime/admin", tag: "Anime moderation" },
-  { prefix: "/anime", tag: "Anime" },
+  { prefix: "/blueprints/admin", tag: "Blueprints moderation" },
+  { prefix: "/blueprints", tag: "Blueprints" },
   { prefix: "/discovery/admin", tag: "Discovery moderation" },
   { prefix: "/discovery", tag: "Discovery" },
   { prefix: "/admin/audit-trail", tag: "Platform audit" },
@@ -233,11 +233,9 @@ const PUBLICLY_RESOLVABLE = new Set([
   "get /promotions/slides",
   // The home-page Spotlight rail. Bare on purpose — same rationale as promotions.
   "get /spotlight/videos",
-  // The /anime surface — the hero carousel and the public catalogue. Bare on purpose,
-  // same rationale as promotions: nothing in these payloads depends on who is asking.
-  "get /anime/hero-slides",
-  "get /anime/series",
-  "get /anime/series/{seriesSlug}",
+  // The /blueprints surface — the hero carousel. Bare on purpose, same rationale as
+  // promotions: nothing in this payload depends on who is asking.
+  "get /blueprints/hero-slides",
 ]);
 
 const CONTRACT_NOTE =

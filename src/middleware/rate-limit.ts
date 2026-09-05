@@ -1146,14 +1146,14 @@ export const spotlightWriteLimiter = createLimiter({
 });
 
 /**
- * The anime hero carousel's admin writes — list, create, update, reorder, delete.
+ * The Blueprints hero carousel's admin writes — list, create, update, reorder, delete.
  *
  * ONE BUCKET for all of them, and the same numbers as the promotional carousel: these are
  * low-frequency staff actions against a table that holds at most a dozen rows. Splitting
  * them would document a distinction that does not exist.
  */
-export const animeHeroWriteLimiter = createLimiter({
-  namespace: "animeHeroWrite",
+export const blueprintHeroWriteLimiter = createLimiter({
+  namespace: "blueprintHeroWrite",
   windowMs: ONE_MINUTE_MS,
   limit: 30,
 });
@@ -1165,11 +1165,11 @@ export const animeHeroWriteLimiter = createLimiter({
  * round trip, per request. Tighter than the write bucket because the cost is CPU and egress
  * rather than a row.
  *
- * NOTE that POST /anime/admin/hero-slides carries ONLY this limiter, not both — stacking
+ * NOTE that POST /blueprints/admin/hero-slides carries ONLY this limiter, not both — stacking
  * two limiters on one route double-counts every request against the stricter of them.
  */
-export const animeHeroImageUploadLimiter = createLimiter({
-  namespace: "animeHeroImageUpload",
+export const blueprintHeroImageUploadLimiter = createLimiter({
+  namespace: "blueprintHeroImageUpload",
   windowMs: ONE_MINUTE_MS,
   limit: 20,
 });

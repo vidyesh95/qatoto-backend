@@ -1,11 +1,11 @@
 import type { Response } from "express";
 
 import { describeUnsupportedImageFormat } from "#src/lib/image.js";
-import type { AnimeHeroSlideError } from "#src/modules/home/anime/anime-hero.service.js";
+import type { BlueprintHeroSlideError } from "#src/modules/home/blueprints/blueprint-hero.service.js";
 import type { PromotionalDestinationError } from "#src/modules/home/promotions/promotional-destination.js";
 
 /**
- * Error mapping for the `/anime` controllers.
+ * Error mapping for the `/blueprints` controllers.
  *
  * THE STATUS POLICY, restated so this file stands alone:
  *   403 — ONLY the platform-capability refusal, and it is the whole gate for this domain.
@@ -48,9 +48,9 @@ const DESTINATION_REJECTION_MESSAGES: Readonly<
   DESTINATION_TOO_LONG: "That link is too long.",
   DESTINATION_HAS_ILLEGAL_CHARACTERS: "A link cannot contain spaces or control characters.",
   INTERNAL_PATH_NOT_RELATIVE:
-    'A slide links to a page on Qatoto, so it must start with "/", like "/anime/series/one-piece".',
+    'A slide links to a page on Qatoto, so it must start with "/", like "/blueprints/solar-cold-storage-controller-teardown".',
   INTERNAL_PATH_LEAVES_SITE:
-    "That path leaves Qatoto. Use a single leading slash. The anime hero cannot link off-site.",
+    "That path leaves Qatoto. Use a single leading slash. The Blueprints hero cannot link off-site.",
   EXTERNAL_URL_UNPARSEABLE: "That is not a valid web address.",
   EXTERNAL_URL_NOT_HTTPS: "An external destination must use https://.",
   EXTERNAL_URL_HOST_INVALID: "That web address has no valid domain.",
@@ -58,10 +58,10 @@ const DESTINATION_REJECTION_MESSAGES: Readonly<
 };
 
 /**
- * Maps an anime hero slide error to its HTTP shape. Does NOT touch `res` — a pure
+ * Maps a blueprint hero slide error to its HTTP shape. Does NOT touch `res` — a pure
  * function, so it is testable without a request, mirroring every other mapper here.
  */
-export function mapAnimeHeroSlideErrorToResponse(error: AnimeHeroSlideError): {
+export function mapBlueprintHeroSlideErrorToResponse(error: BlueprintHeroSlideError): {
   readonly statusCode: number;
   readonly message: string;
   readonly errors?: Readonly<Record<string, readonly string[]>>;
@@ -71,12 +71,12 @@ export function mapAnimeHeroSlideErrorToResponse(error: AnimeHeroSlideError): {
     case "PLATFORM_CAPABILITY_REQUIRED":
       return {
         statusCode: 403,
-        message: "Managing the anime hero carousel requires the admin role.",
+        message: "Managing the Blueprints hero carousel requires the admin role.",
       };
 
     // --- 404: reached only after the capability check has already passed.
     case "ANIME_HERO_SLIDE_NOT_FOUND":
-      return { statusCode: 404, message: "Anime hero slide not found." };
+      return { statusCode: 404, message: "Blueprint hero slide not found." };
 
     // --- 422: the request itself is wrong and the same payload will keep failing.
     case "ANIME_HERO_DESTINATION_INVALID":
@@ -106,7 +106,7 @@ export function mapAnimeHeroSlideErrorToResponse(error: AnimeHeroSlideError): {
     case "ANIME_HERO_SLIDE_LIMIT_REACHED":
       return {
         statusCode: 409,
-        message: `The anime hero holds at most ${String(error.limit)} slides. Delete one first.`,
+        message: `The Blueprints hero holds at most ${String(error.limit)} slides. Delete one first.`,
       };
 
     // --- Image pipeline, rendered identically to the promotions and product mappers.
@@ -137,15 +137,15 @@ export function mapAnimeHeroSlideErrorToResponse(error: AnimeHeroSlideError): {
       };
 
     default: {
-      // Adding a variant to AnimeHeroSlideError without handling it here breaks the build,
+      // Adding a variant to BlueprintHeroSlideError without handling it here breaks the build,
       // which is the point (CLAUDE.md §3.2).
       const exhaustiveCheck: never = error;
-      throw new Error(`Unhandled anime hero slide error: ${JSON.stringify(exhaustiveCheck)}`);
+      throw new Error(`Unhandled blueprint hero slide error: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
 }
 
-export function respondAnimeHeroSlideError(res: Response, error: AnimeHeroSlideError): void {
-  const { statusCode, message, errors } = mapAnimeHeroSlideErrorToResponse(error);
+export function respondBlueprintHeroSlideError(res: Response, error: BlueprintHeroSlideError): void {
+  const { statusCode, message, errors } = mapBlueprintHeroSlideErrorToResponse(error);
   res.status(statusCode).json({ status: "error", statusCode, message, errors });
 }
