@@ -32,7 +32,7 @@ import {
   localizationPathwaySuggestion,
   researchCategory,
 } from "#src/db/schema.js";
-import { stopSendOnlyBoss } from "#src/lib/jobs.js";
+import { cancelJob, idempotencyKeyFor, JOB_NAMES, stopSendOnlyBoss } from "#src/lib/jobs.js";
 import { fetchAnnualTradeFlows } from "#src/modules/rnd/import-intelligence/comtrade.js";
 import { handleGenerateLocalizationNarrative } from "#src/modules/rnd/import-intelligence/generate-localization-narrative.js";
 import { handleRecomputeLocalizationAssessments } from "#src/modules/rnd/import-intelligence/recompute-localization-assessments.js";
@@ -354,6 +354,32 @@ async function main(): Promise<void> {
         .where(inArray(localizationPathwaySuggestion.assessmentId, assessmentIds));
     }
     if (commodityIds.length > 0) {
+      // THE ENQUEUED NARRATIVES ARE WITHDRAWN BEFORE THE ROWS THEY NAME ARE DELETED.
+      //
+      // `handleRecomputeLocalizationAssessments` above is the REAL job, not a stub, so it
+      // really enqueued `generate-localization-narrative` for the top slice of this
+      // fixture's ranking — into the shared queue, where the deployed worker picks it up
+      // minutes or hours later. Deleting these assessments without withdrawing those jobs
+      // hands that worker an id for a row that no longer exists, and the handler correctly
+      // raises `PermanentJobError` and dead-letters every one of them. Forty-three such
+      // rows accumulated in `generate-localization-narrative-dead` before this existed.
+      //
+      // READ BY COMMODITY, not from `assessmentIds`, so this covers exactly what the
+      // DELETE below covers rather than a single `asOf` slice of it.
+      const orphanedAssessments = await db
+        .select({ id: localizationAssessment.id })
+        .from(localizationAssessment)
+        .where(inArray(localizationAssessment.commodityId, commodityIds));
+
+      for (const orphanedAssessment of orphanedAssessments) {
+        // eslint-disable-next-line no-await-in-loop -- a handful of fixture rows, and a
+        // withdrawal that raced the next one would defeat the point of doing it at all
+        await cancelJob(
+          JOB_NAMES.generateLocalizationNarrative,
+          idempotencyKeyFor.generateLocalizationNarrative(orphanedAssessment.id),
+        );
+      }
+
       await db
         .delete(localizationAssessment)
         .where(inArray(localizationAssessment.commodityId, commodityIds));

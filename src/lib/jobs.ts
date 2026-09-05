@@ -1956,6 +1956,35 @@ export async function sendJob<TName extends JobName>(
 }
 
 /**
+ * Withdraws a job that is still WAITING, because the work it names has ceased to exist.
+ *
+ * THE MIRROR OF {@link sendJob}, and it takes the same idempotency key rather than a job
+ * id: the id is DERIVED from that key and never stored, so the key is the only handle a
+ * caller holds onto after the send.
+ *
+ * BEST EFFORT, AND THAT IS THE HONEST CONTRACT. A job a worker has already claimed is no
+ * longer queued and will run to completion regardless; this removes only what is still
+ * waiting. Withdrawing is therefore never the ONLY defence — the handler must still cope
+ * with the world having moved on, which is why `generate-localization-narrative` raises
+ * `PermanentJobError` on a missing assessment instead of assuming the row is there.
+ *
+ * A job that already ran, was deduplicated away, or aged out of the retention window is
+ * simply not found, and that is a success rather than a fault: either way the queue does
+ * not contain it. pg-boss v12's `CommandResponse` carries no affected count, so there is
+ * nothing truthful to return.
+ */
+export async function cancelJob(jobName: JobName, idempotencyKey: string): Promise<void> {
+  const jobId = await deterministicJobId(idempotencyKey);
+
+  // The worker's own instance when there is one, the lazy send-only instance otherwise —
+  // the same resolution `sendJob` uses, so a withdrawal cannot open a second pg-boss
+  // against a connection budget that is already the tightest thing on this platform.
+  const boss = registeredSendingBoss ?? (await getSendOnlyBoss());
+
+  await boss.deleteJob(jobName, jobId);
+}
+
+/**
  * The payload schemas, exported so a handler can parse with ITS OWN schema.
  *
  * WHY HANDLERS PASS THE SCHEMA rather than just the job name: indexing
