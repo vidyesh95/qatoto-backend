@@ -96,7 +96,7 @@ async function main(): Promise<void> {
 
   console.log(
     `${String(rows.length)} product(s) in scope (limit ${String(limit)}, ` +
-      `${isManufacturedOnly ? "manufactured kinds only" : "all kinds"}` +
+      (isManufacturedOnly ? "manufactured kinds only" : "all kinds") +
       `${countryCode === undefined ? "" : `, ${countryCode}`}).`,
   );
   console.log(`  already written: ${String(alreadyWritten.length)} — skipped, no model call`);
