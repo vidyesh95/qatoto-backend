@@ -28,7 +28,6 @@
  * stale versions it found and leaves them alone.
  */
 import "dotenv/config";
-
 import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";

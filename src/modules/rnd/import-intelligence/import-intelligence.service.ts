@@ -15,7 +15,6 @@
 import { and, asc, count, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "#src/db/index.js";
-import { deterministicJobId, idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import {
   commodityTradeFlow,
   discoveryRegion,
@@ -26,6 +25,7 @@ import {
   researchCategory,
   supplierCapability,
 } from "#src/db/schema.js";
+import { deterministicJobId, idempotencyKeyFor, JOB_NAMES, sendJob } from "#src/lib/jobs.js";
 import {
   requirePlatformCapability,
   type PlatformAccessError,

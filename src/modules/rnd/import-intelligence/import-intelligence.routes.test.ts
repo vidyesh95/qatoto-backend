@@ -61,8 +61,7 @@ vi.mock("#src/modules/rnd/import-intelligence/import-intelligence.service.js", (
   listTradeFlowsForCommodity: (...args: readonly unknown[]) => listTradeFlowsForCommodity(...args),
   listSubstitutesForCommodity: (...args: readonly unknown[]) => listSubstitutesForCommodity(...args),
   listLocalizationAssessments: (...args: readonly unknown[]) => listLocalizationAssessments(...args),
-  listLocalizationAssessmentGrid: (...args: readonly unknown[]) =>
-    listLocalizationAssessmentGrid(...args),
+  listLocalizationAssessmentGrid: (...args: readonly unknown[]) => listLocalizationAssessmentGrid(...args),
   requestPathwayNarrative: (...args: readonly unknown[]) => requestPathwayNarrative(...args),
   createDomesticSubstitute: (...args: readonly unknown[]) => createDomesticSubstitute(...args),
   updateDomesticSubstitute: (...args: readonly unknown[]) => updateDomesticSubstitute(...args),
@@ -169,9 +168,7 @@ describe("the seven reads are public", () => {
       },
     ]);
 
-    const response = await request(app).get(
-      "/localization-assessment-grid?reporterCountryCode=IN&commodityKind=metal",
-    );
+    const response = await request(app).get("/localization-assessment-grid?reporterCountryCode=IN&commodityKind=metal");
 
     expect(response.status).toBe(200);
     expect(response.body.data).toHaveLength(1);

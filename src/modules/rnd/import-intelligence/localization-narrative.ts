@@ -259,7 +259,7 @@ function buildPrompt(input: LocalizationNarrativeInput): string {
     "  INTEGER CENTS of the currency named in the import figure above. A single number would",
     "  read as a quote.",
     "- Set capitalBasisText to one sentence naming the scale you costed and what you left out",
-    "  (for example: \"SMT line at 50k units/month, two shifts; excludes land and building\").",
+    '  (for example: "SMT line at 50k units/month, two shifts; excludes land and building").',
     "- All three fields together, or all three null. Never a band with no basis.",
     "- Only if the product is genuinely un-costable at any scale, set all three to null and",
     "  say why in a key risk. Do not use null merely because you lack a precise figure — a",
