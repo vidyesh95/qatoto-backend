@@ -403,25 +403,32 @@ export interface CofounderProfileWriteInput {
   }[];
 }
 
+/**
+ * Size caps, over whichever collections this caller actually sent.
+ *
+ * AN ABSENT COLLECTION IS NOT AN EMPTY ONE. On a patch, omitting `sectors` means "leave
+ * them alone", so there is nothing to measure and nothing to refuse — checking it as `[]`
+ * would reject a perfectly good edit for having no contributions it never touched.
+ */
 function validateCollectionSizes(
-  input: CofounderProfileWriteInput,
+  input: Partial<CofounderProfileWriteInput>,
 ): CommunityCofounderError | null {
-  if (input.sectors.length > MAXIMUM_SECTORS) {
+  if (input.sectors !== undefined && input.sectors.length > MAXIMUM_SECTORS) {
     return { type: "CONFLICT", message: `At most ${String(MAXIMUM_SECTORS)} sectors are allowed.` };
   }
-  if (input.languages.length > MAXIMUM_LANGUAGES) {
+  if (input.languages !== undefined && input.languages.length > MAXIMUM_LANGUAGES) {
     return {
       type: "CONFLICT",
       message: `At most ${String(MAXIMUM_LANGUAGES)} languages are allowed.`,
     };
   }
-  if (input.priorVentures.length > MAXIMUM_PRIOR_VENTURES) {
+  if (input.priorVentures !== undefined && input.priorVentures.length > MAXIMUM_PRIOR_VENTURES) {
     return {
       type: "CONFLICT",
       message: `At most ${String(MAXIMUM_PRIOR_VENTURES)} prior ventures are allowed.`,
     };
   }
-  if (input.contributionKinds.length === 0) {
+  if (input.contributionKinds !== undefined && input.contributionKinds.length === 0) {
     return {
       type: "CONFLICT",
       message: "State at least one contribution — it is the thing a founder is short of.",
@@ -430,45 +437,61 @@ function validateCollectionSizes(
   return null;
 }
 
-/** Delete-then-insert inside the caller's transaction, the `replaceSiteAccess` idiom. */
+/**
+ * Delete-then-insert inside the caller's transaction, the `replaceSiteAccess` idiom.
+ *
+ * EACH COLLECTION IS REPLACED ONLY IF IT WAS SENT. A create passes all four and so behaves
+ * exactly as it always has; a patch passes only what it means to change, and an absent one
+ * is skipped entirely — no delete, no insert, the existing rows untouched. Deleting first
+ * and then skipping the insert would read as "clear it", which is the opposite of what
+ * omitting a key means.
+ */
 async function replaceProfileCollections(
   transaction: Parameters<Parameters<typeof db.transaction>[0]>[0],
   profileId: string,
-  input: CofounderProfileWriteInput,
+  input: Partial<CofounderProfileWriteInput>,
 ): Promise<void> {
-  await transaction
-    .delete(communityCofounderProfileContribution)
-    .where(eq(communityCofounderProfileContribution.profileId, profileId));
-  await transaction
-    .delete(communityCofounderProfileSector)
-    .where(eq(communityCofounderProfileSector.profileId, profileId));
-  await transaction
-    .delete(communityCofounderProfileLanguage)
-    .where(eq(communityCofounderProfileLanguage.profileId, profileId));
-  await transaction
-    .delete(communityCofounderPriorVenture)
-    .where(eq(communityCofounderPriorVenture.profileId, profileId));
+  if (input.contributionKinds !== undefined) {
+    await transaction
+      .delete(communityCofounderProfileContribution)
+      .where(eq(communityCofounderProfileContribution.profileId, profileId));
+  }
+  if (input.sectors !== undefined) {
+    await transaction
+      .delete(communityCofounderProfileSector)
+      .where(eq(communityCofounderProfileSector.profileId, profileId));
+  }
+  if (input.languages !== undefined) {
+    await transaction
+      .delete(communityCofounderProfileLanguage)
+      .where(eq(communityCofounderProfileLanguage.profileId, profileId));
+  }
+  if (input.priorVentures !== undefined) {
+    await transaction
+      .delete(communityCofounderPriorVenture)
+      .where(eq(communityCofounderPriorVenture.profileId, profileId));
+  }
 
-  const contributionKinds = [...new Set(input.contributionKinds)];
+  const contributionKinds = [...new Set(input.contributionKinds ?? [])];
   if (contributionKinds.length > 0) {
     await transaction
       .insert(communityCofounderProfileContribution)
       .values(contributionKinds.map((contributionKind) => ({ profileId, contributionKind })));
   }
   /** Normalized so "SaaS" and "saas" cannot become two chips on one profile. */
-  const sectors = [...new Set(input.sectors.map((sector) => sector.trim().toLowerCase()))];
+  const sectors = [...new Set((input.sectors ?? []).map((sector) => sector.trim().toLowerCase()))];
   if (sectors.length > 0) {
     await transaction
       .insert(communityCofounderProfileSector)
       .values(sectors.map((sectorLabel) => ({ profileId, sectorLabel })));
   }
-  const languages = [...new Set(input.languages.map((language) => language.toLowerCase()))];
+  const languages = [...new Set((input.languages ?? []).map((language) => language.toLowerCase()))];
   if (languages.length > 0) {
     await transaction
       .insert(communityCofounderProfileLanguage)
       .values(languages.map((languageCode) => ({ profileId, languageCode })));
   }
-  if (input.priorVentures.length > 0) {
+  if (input.priorVentures !== undefined && input.priorVentures.length > 0) {
     await transaction.insert(communityCofounderPriorVenture).values(
       input.priorVentures.map((venture, index) => ({
         profileId,
@@ -584,7 +607,12 @@ export async function getMyCofounderProfile(
  */
 export async function updateMyCofounderProfile(input: {
   readonly userId: string;
-  readonly profile: CofounderProfileWriteInput;
+  /**
+   * A PATCH: only what the caller sent. An absent key leaves that column, or that
+   * collection, exactly as it was — this route used to demand the whole profile on every
+   * edit, which meant no edit could be made at all.
+   */
+  readonly profile: Partial<CofounderProfileWriteInput>;
 }): Promise<Result<OwnedCofounderProfileProjection, CommunityCofounderError>> {
   const sizeError = validateCollectionSizes(input.profile);
   if (sizeError) return { success: false, error: sizeError };
@@ -603,13 +631,22 @@ export async function updateMyCofounderProfile(input: {
     const [row] = await transaction
       .update(communityCofounderProfile)
       .set({
-        displayName: input.profile.displayName,
-        headline: input.profile.headline,
-        bio: input.profile.bio,
-        lookingFor: input.profile.lookingFor,
-        countryCode: input.profile.countryCode,
-        avatarUrl: input.profile.avatarUrl,
-        commitmentLevel: input.profile.commitmentLevel,
+        // Only what was sent. Spreading conditionally rather than writing `?? existing.x`
+        // because `avatarUrl` is genuinely nullable — a caller clearing it sends `null`,
+        // which a coalesce would silently discard.
+        ...(input.profile.displayName === undefined
+          ? {}
+          : { displayName: input.profile.displayName }),
+        ...(input.profile.headline === undefined ? {} : { headline: input.profile.headline }),
+        ...(input.profile.bio === undefined ? {} : { bio: input.profile.bio }),
+        ...(input.profile.lookingFor === undefined ? {} : { lookingFor: input.profile.lookingFor }),
+        ...(input.profile.countryCode === undefined
+          ? {}
+          : { countryCode: input.profile.countryCode }),
+        ...(input.profile.avatarUrl === undefined ? {} : { avatarUrl: input.profile.avatarUrl }),
+        ...(input.profile.commitmentLevel === undefined
+          ? {}
+          : { commitmentLevel: input.profile.commitmentLevel }),
         updatedAt: new Date(),
       })
       .where(eq(communityCofounderProfile.id, existing.id))

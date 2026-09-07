@@ -120,6 +120,19 @@ export const WriteCofounderProfileSchema = z
 export type WriteCofounderProfileInput = z.infer<typeof WriteCofounderProfileSchema>;
 
 /**
+ * The PATCH body. EVERY FIELD OPTIONAL, and that is the whole difference from the create
+ * schema above — `PATCH /cofounder-profiles/mine` used to parse the create schema, which
+ * demanded `displayName` and five other fields on every edit and so refused all of them.
+ *
+ * `.partial()` KEEPS `.strict()` (verified against this Zod version), so an unknown key is
+ * still refused here exactly as it is on create. An omitted key means "leave it alone" —
+ * never "set it empty"; the service reads absence that way and the mapper preserves it.
+ */
+export const UpdateCofounderProfileSchema = WriteCofounderProfileSchema.partial();
+
+export type UpdateCofounderProfileInput = z.infer<typeof UpdateCofounderProfileSchema>;
+
+/**
  * The one edit a PUBLISHED profile may make without re-entering moderation, which is why it
  * is its own route and its own single-field schema.
  */

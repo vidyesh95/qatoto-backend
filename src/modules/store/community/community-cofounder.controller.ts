@@ -13,7 +13,9 @@ import {
   ListCofounderQueueQuerySchema,
   ModerateCofounderProfileSchema,
   SetEngagementStateSchema,
+  UpdateCofounderProfileSchema,
   WriteCofounderProfileSchema,
+  type UpdateCofounderProfileInput,
   type WriteCofounderProfileInput,
 } from "#src/modules/store/community/community-cofounder.schemas.js";
 import * as communityCofounderService from "#src/modules/store/community/community-cofounder.service.js";
@@ -84,6 +86,43 @@ function mapCofounderError(
       throw new Error(`Unhandled community cofounder error: ${JSON.stringify(exhaustiveCheck)}`);
     }
   }
+}
+
+/**
+ * The PATCH body, normalized WITHOUT filling anything in.
+ *
+ * Deliberately not `toProfileWriteInput` below: that one defaults every absent collection
+ * to `[]` and `avatarUrl` to `null`, which is right for a create and destructive for a
+ * patch — omitting `sectors` would silently clear the profile's sectors. Here an absent key
+ * stays `undefined` all the way to the service, which reads that as "leave this column
+ * alone". `avatarUrl` is the one field where `null` is a real value (clear the avatar), so
+ * it is passed through only when the caller actually sent it.
+ */
+function toProfilePatchInput(
+  body: UpdateCofounderProfileInput,
+): Partial<communityCofounderService.CofounderProfileWriteInput> {
+  return {
+    ...(body.displayName === undefined ? {} : { displayName: body.displayName }),
+    ...(body.headline === undefined ? {} : { headline: body.headline }),
+    ...(body.bio === undefined ? {} : { bio: body.bio }),
+    ...(body.lookingFor === undefined ? {} : { lookingFor: body.lookingFor }),
+    ...(body.countryCode === undefined ? {} : { countryCode: body.countryCode }),
+    ...(body.avatarUrl === undefined ? {} : { avatarUrl: body.avatarUrl }),
+    ...(body.commitmentLevel === undefined ? {} : { commitmentLevel: body.commitmentLevel }),
+    ...(body.contributionKinds === undefined ? {} : { contributionKinds: body.contributionKinds }),
+    ...(body.sectors === undefined ? {} : { sectors: body.sectors }),
+    ...(body.languages === undefined ? {} : { languages: body.languages }),
+    ...(body.priorVentures === undefined
+      ? {}
+      : {
+          priorVentures: body.priorVentures.map((venture) => ({
+            name: venture.name,
+            roleLabel: venture.roleLabel,
+            yearsActiveLabel: venture.yearsActiveLabel,
+            outcomeSummary: venture.outcomeSummary ?? null,
+          })),
+        }),
+  };
 }
 
 /** The write body, normalized once so both create and update read the same shape. */
@@ -220,7 +259,7 @@ export async function updateMyCofounderProfile(req: Request, res: Response): Pro
     return;
   }
 
-  const body = WriteCofounderProfileSchema.safeParse(req.body);
+  const body = UpdateCofounderProfileSchema.safeParse(req.body);
   if (!body.success) {
     sendZodError(res, body.error);
     return;
@@ -228,7 +267,7 @@ export async function updateMyCofounderProfile(req: Request, res: Response): Pro
 
   const result = await communityCofounderService.updateMyCofounderProfile({
     userId: user.id,
-    profile: toProfileWriteInput(body.data),
+    profile: toProfilePatchInput(body.data),
   });
   if (!result.success) {
     mapCofounderError(res, result.error);
