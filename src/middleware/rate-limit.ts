@@ -916,6 +916,31 @@ export const productDocumentDownloadLimiter = createLimiter({
   limit: 60,
 });
 
+/**
+ * POST /products/:id/model (A47) — multipart, then a Cloudinary raw upload.
+ *
+ * Same budget as `productDocumentUpload` and for the same reason: a 10 MB buffer plus a PUT is an
+ * expensive path, and a listing holds exactly one model, so ten in fifteen minutes is past normal
+ * use and well under useful for filling storage.
+ */
+export const productModelUploadLimiter = createLimiter({
+  namespace: "productModelUpload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 10,
+});
+
+/**
+ * DELETE /products/:id/model (A47).
+ *
+ * Reaches OUT of the process — a Cloudinary `destroy` before the row goes — which is why it
+ * carries its own budget rather than riding the generic write limiter.
+ */
+export const productModelDeleteLimiter = createLimiter({
+  namespace: "productModelDelete",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 30,
+});
+
 /** POST …/posts and …/posts/:postId/replies — the discussion surface (§11f). */
 export const programPostCreateLimiter = createLimiter({
   namespace: "programPostCreate",

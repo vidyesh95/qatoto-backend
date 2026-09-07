@@ -3224,6 +3224,57 @@ export const commerceProductDocument = pgTable(
   ],
 );
 
+/**
+ * A47. A listing's OPTIONAL 3D model — binary glTF 2.0 (`.glb`) — ONE per product, replaced in
+ * place. The "View in 360°" control on the product page renders it in a lazily loaded
+ * `<model-viewer>`; a listing without a row has no such control.
+ *
+ * PUBLIC DELIVERY FROM CLOUDINARY (`resource_type: "raw"`), WITH A `url` COLUMN — the posture of
+ * `product_image.url`, and deliberately NOT §21.3's. A document is a download a buyer takes away,
+ * which is why it sits in a private bucket behind a gate; a model is rendered in place on the
+ * same public page as the nine gallery images and is the same class of asset. The practical
+ * point is decisive on its own: the viewer loads the file with a browser `fetch()`, which needs
+ * CORS on the final response, and Cloudinary delivery is CORS-open where a presigned
+ * private-bucket link is not.
+ *
+ * The Cloudinary public id is DERIVED from `product_id` (`productModelPublicId`), so there is no
+ * column for it — a column tracking a derivable value could only ever drift. `url` is rewritten
+ * on every replace because the returned secure URL carries a fresh `/v<timestamp>/` segment.
+ *
+ * NOT A `product_media_kind`. `spin_360` is an ordered run of stills within a gallery; this is a
+ * mesh, with its own validator and its own storage type. Both may coexist on one listing.
+ *
+ * The byte cap is NOT a CHECK: it is Cloudinary's per-file raw limit on the current plan and
+ * lives in `glb.ts`, so raising it with the plan is a constant rather than a migration.
+ */
+export const commerceProductModel = pgTable(
+  "commerce_product_model",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    productId: text("product_id")
+      .notNull()
+      .references(() => product.id, { onDelete: "cascade" }),
+    /** Cloudinary secure_url of the raw asset; a fresh `/v<ts>/` segment on every replace. */
+    url: text("url").notNull(),
+    contentSha256: text("content_sha256").notNull(),
+    /** Measured from the decoded bytes, never taken from the multipart header. */
+    byteSize: integer("byte_size").notNull(),
+    /** The uploader's own name, sanitized. Display only. */
+    fileName: text("file_name").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("commerce_product_model_product_uidx").on(table.productId),
+    check("commerce_product_model_byte_size_ck", sql`byte_size > 0`),
+    check("commerce_product_model_sha_ck", sql`content_sha256 ~ '^[0-9a-f]{64}$'`),
+    check("commerce_product_model_file_name_ck", sql`char_length(file_name) BETWEEN 1 AND 120`),
+    check("commerce_product_model_url_ck", sql`char_length(url) <= 2048 AND url LIKE 'https://%'`),
+  ],
+);
+
 export const commerceProductHighlight = pgTable(
   "commerce_product_highlight",
   {

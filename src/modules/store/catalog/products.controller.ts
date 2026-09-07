@@ -112,6 +112,24 @@ function mapProductErrorToResponse(error: productsService.ProductError): {
         statusCode: 503,
         message: "Document storage is unavailable right now. Try again shortly.",
       };
+    /**
+     * A47. 422, for the same reason as `DOCUMENT_REJECTED`: the file in front of the seller is the
+     * thing to change. The reason is the container-header verdict, not the mimetype they sent.
+     */
+    case "MODEL_REJECTED":
+      return {
+        statusCode: 422,
+        message: "That file could not be read as a binary glTF (.glb) 3D model.",
+        errors: { model: [error.reason] },
+      };
+    case "MODEL_NOT_FOUND":
+      return { statusCode: 404, message: "This listing has no 3D model." };
+    /** A47. 503 like its document sibling: a dependency refused, nothing was written. */
+    case "MODEL_STORAGE_UNAVAILABLE":
+      return {
+        statusCode: 503,
+        message: "3D model storage is unavailable right now. Try again shortly.",
+      };
     case "INCOMPLETE_FOR_PUBLISH":
       return {
         statusCode: 422,
@@ -459,6 +477,91 @@ export async function deleteDocument(req: Request, res: Response): Promise<void>
     statusCode: 200,
     message: "Document removed successfully",
     data: { documents: removeResult.value },
+  };
+  res.status(200).json(response);
+}
+
+/**
+ * POST /products/:id/model  (multipart/form-data, field `model`)
+ *
+ * A47. Attach or replace the listing's one `.glb`. Buffered and size-capped by
+ * `uploadProductModelFile`, then the service reads the container header — the mimetype the client
+ * declared is not the validation.
+ *
+ * ⚠️ ANSWERS 201, NOT 202. Nothing happens to the file afterwards — no scan, no moderation — and
+ * a 202 would imply otherwise. No copy on this route may say the file is being checked.
+ */
+export async function uploadModel(req: Request, res: Response): Promise<void> {
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+
+  if (!req.file) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "A .glb file is required (multipart field 'model').",
+    });
+    return;
+  }
+
+  // No text fields ride beside the file. Anything that does is a 422, the way the JSON routes
+  // refuse unknown keys with `.strict()`.
+  const parsedBody = EmptyBodySchema.safeParse(req.body);
+  if (!parsedBody.success) return respondValidationFailed(res, parsedBody.error);
+
+  const attachResult = await productsService.attachProductModel(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+    {
+      // The uploader's own name. Sanitized in the service; display only.
+      fileName: req.file.originalname,
+      bytes: req.file.buffer,
+    },
+  );
+  if (!attachResult.success) {
+    respondProductError(res, attachResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 201,
+    message: "3D model attached successfully",
+    data: { threeDimensionalModel: attachResult.value },
+  };
+  res.status(201).json(response);
+}
+
+/**
+ * DELETE /products/:id/model
+ * A47. Remove the listing's 3D model. The bytes go before the row — see the service.
+ */
+export async function deleteModel(req: Request, res: Response): Promise<void> {
+  const commerceContext = getProductOrganizationContext(req, res);
+  if (!commerceContext) return;
+  const parsedParams = ProductParamsSchema.safeParse(req.params);
+  const parsedQuery = EmptyQuerySchema.safeParse(req.query);
+  if (!parsedParams.success) return respondValidationFailed(res, parsedParams.error);
+  if (!parsedQuery.success) return respondValidationFailed(res, parsedQuery.error);
+
+  const removeResult = await productsService.deleteProductModel(
+    commerceContext.organizationId,
+    parsedParams.data.id,
+  );
+  if (!removeResult.success) {
+    respondProductError(res, removeResult.error);
+    return;
+  }
+
+  const response: ApiResponse = {
+    status: "success",
+    statusCode: 200,
+    message: "3D model removed successfully",
+    data: { threeDimensionalModel: null },
   };
   res.status(200).json(response);
 }

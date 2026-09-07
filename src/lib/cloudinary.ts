@@ -1494,3 +1494,113 @@ export async function deleteCommerceCategoryImage(
 ): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
   return destroyHostedImageAsset(commerceCategoryImagePublicId(categoryId));
 }
+
+/**
+ * A47. A listing's optional 3D model — the FIRST `resource_type: "raw"` family in this file.
+ *
+ * Every family above is an IMAGE family: the bytes are re-encoded by `src/lib/image.ts` before
+ * they arrive here. A `.glb` is not an image and must be stored byte-for-byte, which is what
+ * `raw` is for. It still belongs here rather than in `object-storage.ts` because the asset is
+ * PUBLIC and rendered in place on the product page beside the gallery images — the viewer fetches
+ * it cross-origin, and Cloudinary delivery answers that fetch with CORS where the private bucket
+ * does not. The caller MUST run `validateGlbBytes` first (CLAUDE.md §1.1 posture): this layer
+ * trusts the buffer it is handed, exactly as the image families trust theirs.
+ *
+ * ONE ASSET PER PRODUCT, OVERWRITTEN IN PLACE — the avatar and promotional-slide shape rather than
+ * the per-image shape, because a listing has exactly one model and replacing it should replace
+ * the asset rather than accumulate orphans. The id is derived from the product id, so
+ * `commerce_product_model` carries no `cloudinary_public_id` column (a column tracking a
+ * derivable value could only ever drift), and the secure URL returned on each upload — with its
+ * fresh `/v<timestamp>/` segment — must be written back to the row.
+ *
+ * ⚠️ THE EXTENSION IS PART OF THE PUBLIC ID. For `raw` assets Cloudinary does not infer a format:
+ * the id is the delivery path verbatim, and `.glb` on it is what gives the file its extension and
+ * a sane Content-Type on the CDN.
+ *
+ * Its OWN top-level folder, like every family added since the prefix sweeps existed: a raw asset
+ * under `qatoto/products/<id>/` would be invisible to `deleteAllProductImages`, which sweeps with
+ * `resource_type: "image"`, so nesting it there would only make the orphan harder to find.
+ */
+const PRODUCT_MODEL_FOLDER = "qatoto/commerce-product-models";
+
+/** The stable, deterministic public id a listing's model always lives at. */
+export function productModelPublicId(productId: string): string {
+  return `${PRODUCT_MODEL_FOLDER}/${productId}/model.glb`;
+}
+
+/**
+ * Upload (or overwrite) a listing's 3D model from an already-validated buffer and return the
+ * canonical secure URL. `invalidate` purges the previous bytes from the CDN so the versioned URL
+ * is the only one that ever served them.
+ */
+export async function uploadProductModel(
+  productId: string,
+  modelBytes: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          public_id: productModelPublicId(productId),
+          resource_type: "raw",
+          overwrite: true,
+          invalidate: true,
+        },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(modelBytes);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Destroy a listing's model asset. Treated as success when it is already gone ("not found") —
+ * the desired end state is reached either way.
+ */
+export async function deleteProductModel(
+  productId: string,
+): Promise<Result<{ deleted: boolean }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const destroyResult = await cloudinary.uploader.destroy(productModelPublicId(productId), {
+      resource_type: "raw",
+      invalidate: true,
+    });
+    return { success: true, value: { deleted: destroyResult.result === "ok" } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}

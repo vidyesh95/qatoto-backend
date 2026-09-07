@@ -8,6 +8,8 @@ import {
   productDocumentDeleteLimiter,
   productDocumentUploadLimiter,
   productImageUploadLimiter,
+  productModelDeleteLimiter,
+  productModelUploadLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import * as categoryAttributesController from "#src/modules/store/catalog/commerce-category-attributes.controller.js";
@@ -15,6 +17,7 @@ import * as productsController from "#src/modules/store/catalog/products.control
 import { uploadProductDocumentFile } from "#src/modules/store/catalog/upload-product-document.js";
 import { uploadProductHighlightImageFile } from "#src/modules/store/catalog/upload-product-highlight-image.js";
 import { uploadProductImage } from "#src/modules/store/catalog/upload-product-image.js";
+import { uploadProductModelFile } from "#src/modules/store/catalog/upload-product-model.js";
 import { requireActiveSellerCommerceOrganization } from "#src/modules/store/organizations/require-active-commerce-organization.js";
 
 const router = express.Router();
@@ -187,6 +190,35 @@ router.delete(
   productDocumentDeleteLimiter,
   idempotency({ scope: "active_organization" }),
   productsController.deleteDocument,
+);
+
+/**
+ * POST /products/:id/model  (multipart/form-data, field `model`)
+ *
+ * A47. Attach or replace the listing's one `.glb` 3D model.
+ *
+ * ⚠️ NO `idempotency()` MIDDLEWARE, like the document route above and for a stronger version of
+ * its argument: the Cloudinary public id is derived from the product id and uploaded with
+ * `overwrite`, and the row is upserted on a `product_id` unique index, so a retried upload
+ * converges on the same asset AND the same row. No `longFormBody` — multer owns this body.
+ */
+router.post(
+  "/:id/model",
+  productModelUploadLimiter,
+  uploadProductModelFile,
+  productsController.uploadModel,
+);
+
+/**
+ * DELETE /products/:id/model
+ * A47. Its own limiter because it reaches out of the process — a Cloudinary `destroy` runs
+ * before the row is touched. Idempotent so a replayed delete answers the stored 200, not a 404.
+ */
+router.delete(
+  "/:id/model",
+  productModelDeleteLimiter,
+  idempotency({ scope: "active_organization" }),
+  productsController.deleteModel,
 );
 
 /**

@@ -7,6 +7,7 @@ import {
   commerceProductCustomizationOption,
   commerceProductDocument,
   commerceProductHighlight,
+  commerceProductModel,
   commerceProductSpecification,
   commerceProductVariant,
   product,
@@ -178,6 +179,24 @@ export interface StoreProductDocumentProjection {
   readonly downloadPath: string;
 }
 
+/**
+ * A47. The listing's optional `.glb` 3D model.
+ *
+ * `url` IS HERE, and the contrast with the document projection above is deliberate rather than
+ * an inconsistency. A document is a download a buyer takes away, so it goes back through the gate
+ * every time. A model is rendered in place on this same public page beside the nine public gallery
+ * URLs — the same class of asset as `images[].url` — and the viewer fetches it directly with CORS,
+ * which a presigned private-bucket link could not answer. Unpublishing the listing removes the
+ * page that names the URL, exactly as it does for the gallery.
+ */
+export interface StoreProductModelProjection {
+  readonly id: string;
+  readonly url: string;
+  readonly fileName: string;
+  readonly byteSize: number;
+  readonly updatedAt: Date;
+}
+
 export interface StoreProductHighlightProjection {
   readonly id: string;
   readonly title: string;
@@ -244,6 +263,8 @@ export interface StoreProductDetailProjection extends StoreProductCardProjection
   readonly highlights: readonly StoreProductHighlightProjection[];
   /** §21.3. Public PDFs. `downloadPath` is a path on this API — never a storage URL. */
   readonly documents: readonly StoreProductDocumentProjection[];
+  /** A47. Null is "the seller attached none", and the page renders no 360° control for it. */
+  readonly threeDimensionalModel: StoreProductModelProjection | null;
   readonly customizationOptions: readonly StoreProductCustomizationOptionProjection[];
   readonly specifications: readonly {
     readonly key: string;
@@ -1242,6 +1263,7 @@ export async function getPublicProductBySlug(
     specifications,
     highlights,
     documentRows,
+    modelRows,
     customizationOptions,
     variantRows,
     categoryTrail,
@@ -1313,6 +1335,18 @@ export async function getPublicProductBySlug(
       .from(commerceProductDocument)
       .where(eq(commerceProductDocument.productId, row.id))
       .orderBy(asc(commerceProductDocument.position)),
+    /** A47. At most one row — `commerce_product_model_product_uidx` — so `.limit(1)` is exact. */
+    db
+      .select({
+        id: commerceProductModel.id,
+        url: commerceProductModel.url,
+        fileName: commerceProductModel.fileName,
+        byteSize: commerceProductModel.byteSize,
+        updatedAt: commerceProductModel.updatedAt,
+      })
+      .from(commerceProductModel)
+      .where(eq(commerceProductModel.productId, row.id))
+      .limit(1),
     db
       .select({
         id: commerceProductCustomizationOption.id,
@@ -1463,6 +1497,7 @@ export async function getPublicProductBySlug(
         // though `publicProductEligibility` guarantees it is not, and this avoids asserting that.
         downloadPath: productDocumentDownloadPath(productSlug, documentRow.id),
       })),
+      threeDimensionalModel: modelRows[0] ?? null,
       customizationOptions,
       specifications,
       categoryTrail,

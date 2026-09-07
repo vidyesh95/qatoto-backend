@@ -3606,10 +3606,11 @@ commercial fact — "Sea blue" is part of what was bought, so variants are retir
 
 **Needed by:** `sections/view-in-360-banner.tsx`.
 
-**What exists now:** `mediaKind` (`photo | video | spin_360`, defaulting to `photo`, which is what
-every pre-Phase-8 row is), `altText`, and `widthPx`/`heightPx` measured from the decoded bytes
-rather than accepted from the client. Set through the multipart fields on
-`POST /products/:id/images`.
+**What exists now:** `mediaKind` (`photo | spin_360`, defaulting to `photo`, which is what every
+pre-Phase-8 row is — `video` was removed by migration `0090`), `altText`, and `widthPx`/`heightPx`
+measured from the decoded bytes rather than accepted from the client. Set through the multipart
+fields on `POST /products/:id/images`. A `.glb` 3D model is **A47**, not a media kind: `spin_360`
+is an ordered run of stills, a model is a mesh with its own table and storage type.
 
 **The unique index landed too**, as `(product_id, coalesce(variant_id, ''), position)` — an
 expression index, because a per-variant gallery has its own position 0. Consequence worth knowing:
@@ -5606,3 +5607,56 @@ exact cursor envelope and an empty `items` for a seller with no accepted quotes,
 `smoke-store-phase-27` drove a seller-as-buyer RFQ through invite, quote, submit and accept —
 returned the accepted line itself. The join, the `acceptedRevisionNumber` pin and the buyer-org
 scope are all observed rather than reasoned.
+
+---
+
+### A47. A listing could not carry a 3D model — **SHIPPED (part 1, `0168`)**
+
+**Needed by:** the product page's "View in 360°" control (frontend part 3), which opens a lazily
+loaded `<model-viewer>` over the seller's `.glb`; and the listing editor's optional "3D model"
+slot (frontend part 2). Neither is built yet — this is the contract and the storage.
+
+**What exists now:** `commerce_product_model` — ONE row per product (`product_id` unique),
+`url`, `content_sha256`, `byte_size`, `file_name`, `created_at`, `updated_at`. Two routes on the
+seller router: `POST /products/:id/model` (multipart field `model`, `productModelUploadLimiter`
+10 / 15 min, **no** `idempotency()`) and `DELETE /products/:id/model`
+(`productModelDeleteLimiter` 30 / 15 min, idempotent). Both product reads carry
+`threeDimensionalModel: { id, url, fileName, byteSize, updatedAt } | null`.
+
+**Storage is Cloudinary `resource_type: "raw"`, with a PUBLIC `url` column — the `product_image`
+posture, deliberately not §21.3's.** A document is a download a buyer takes away, which is why it
+lives in a private bucket behind a gate that re-checks eligibility per request. A model is rendered
+in place on the same public page as the nine public gallery URLs and is the same class of asset.
+The practical point settles it on its own: `<model-viewer>` loads the file with a browser
+`fetch()`, which needs CORS on the final response; Cloudinary delivery is CORS-open, and the
+private B2 bucket has no CORS rules anywhere in this repo. This is the FIRST raw family in
+`cloudinary.ts`; the file and `object-storage.ts` both say so. Trade-off recorded: the URL is not
+revoked by unpublishing — the same exposure `product_image.url` already has, so no new class.
+
+**Replace in place.** The public id is derived from the product id
+(`qatoto/commerce-product-models/<productId>/model.glb` — the extension is part of the id, which
+is what puts `.glb` and a sane Content-Type on delivery) and uploaded with `overwrite`; the row is
+upserted on its unique index. There is never a moment where the row names a destroyed asset, and a
+retried upload converges on the same asset and the same row — which is why the route carries no
+idempotency middleware. `updatedAt` is set by hand on the conflict branch.
+
+**The cap is 10 MB and it is Cloudinary's number, not ours.** That is the per-file raw limit on
+the free plan; it rises with the plan, and it lives in `glb.ts` as a constant rather than in a
+CHECK so raising it is not a migration. A Draco- or meshopt-compressed furniture model is
+single-digit megabytes.
+
+**Validated by bytes, never by the header.** `validateGlbBytes` reads the 12-byte container
+header — `glTF` magic, version 2, declared length equal to the bytes received (the truncation
+check) — and requires a `JSON` first chunk, per glTF 2.0 §4.4. `.gltf` text, `.obj`, `.fbx` and a
+renamed HTML page all fail at `NOT_A_GLB`. The multer gate accepts `model/gltf-binary` AND
+`application/octet-stream`, because browsers do not reliably map `.glb` to the registered type and
+the gate is not the validation. ⚠️ Nothing is scanned and no copy may say it was — the route
+answers **201**, the §21.3 posture.
+
+**Product delete grew a fourth sweep.** `deleteAllProductImages` sweeps `resource_type: "image"`
+under `qatoto/products/<id>/` and cannot reach a raw asset in another folder, so `deleteProduct`
+now destroys the model asset explicitly, refusing on failure like its three siblings.
+
+**Deliberately unchanged:** `product_media_kind` and its `spin_360` label. A pgEnum label cannot
+be dropped, the photo-turntable design remains available as a cheaper later path, and a spin and a
+model may coexist on one listing. No per-variant model, no AR/USDZ, no server-side thumbnailing.

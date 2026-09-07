@@ -13,6 +13,7 @@ import {
   commerceRfq,
   commerceProductDocument,
   commerceProductHighlight,
+  commerceProductModel,
   commerceProductRelation,
   commerceProductSpecification,
   commerceProductVariant,
@@ -26,8 +27,10 @@ import {
   deleteAllProductHighlightImages,
   deleteProductHighlightImage,
   deleteProductImage,
+  deleteProductModel as deleteProductModelAsset,
   uploadProductHighlightImage,
   uploadProductImage,
+  uploadProductModel as uploadProductModelAsset,
   type CloudinaryError,
 } from "#src/lib/cloudinary.js";
 import { validateAndNormalizeImage, type ImageValidationError } from "#src/lib/image.js";
@@ -39,6 +42,7 @@ import { isUniqueViolation as isUniqueConstraintViolation } from "#src/lib/pg-er
 import { isPdfValidationError, validatePdfBytes } from "#src/modules/rnd/pdf.js";
 import type { ProductAttributeValueView } from "#src/modules/store/catalog/commerce-category-attributes.service.js";
 import { ensureCommerceProductStatsRow } from "#src/modules/store/catalog/commerce-product-engagement.service.js";
+import { isGlbValidationError, validateGlbBytes } from "#src/modules/store/catalog/glb.js";
 import type {
   CreateProductInput,
   UpdateProductInput,
@@ -103,10 +107,10 @@ export type ProductError =
    * inquiries, RFQ lines, sample credits, relations (both ends) and pathway anchors/candidates.
    *
    * This exists because the delete used to answer a raw **500**: the FK violation escaped unmapped.
-   * Worse, the three asset sweeps run BEFORE the row delete, so a refused delete had already
-   * destroyed every image and document — leaving a listing that survived with no bytes and, with
-   * `imageCount` now 0, could never be published again. The preflight below refuses before anything
-   * is destroyed.
+   * Worse, the four asset sweeps run BEFORE the row delete, so a refused delete had already
+   * destroyed every image, document and 3D model — leaving a listing that survived with no bytes
+   * and, with `imageCount` now 0, could never be published again. The preflight below refuses
+   * before anything is destroyed.
    */
   | { type: "PRODUCT_IN_USE"; references: readonly string[] }
   /** §21.3. The listing already holds `limit` documents. */
@@ -117,6 +121,12 @@ export type ProductError =
   | { type: "DOCUMENT_NOT_FOUND"; documentId: string }
   /** §21.3. Object storage refused or is unconfigured; the row was never written. */
   | { type: "DOCUMENT_STORAGE_UNAVAILABLE"; reason: string }
+  /** A47. The decoded bytes are not a binary glTF — the container-header check, not the mimetype. */
+  | { type: "MODEL_REJECTED"; reason: string }
+  /** A47. No 3D model on this listing. Indistinguishable from "not owned", like NOT_FOUND. */
+  | { type: "MODEL_NOT_FOUND"; productId: string }
+  /** A47. Cloudinary refused the raw upload or is unconfigured; the row was never written. */
+  | { type: "MODEL_STORAGE_UNAVAILABLE"; reason: string }
   | ImageValidationError
   | CloudinaryError;
 
@@ -529,6 +539,12 @@ export interface PublicProduct {
   readonly relations: readonly ProductRelationView[];
   /** §21.3. The public PDFs on this listing, so the wizard can list and remove them. */
   readonly documents: readonly ProductDocumentView[];
+  /**
+   * A47. The optional `.glb` on this listing, or null when the seller attached none. Projected
+   * for the same reason `sourcingQuoteProductLineId` is: the wizard must know a model exists to
+   * offer "Remove" rather than showing an empty slot over a saved file.
+   */
+  readonly threeDimensionalModel: ProductModelView | null;
   readonly customizationOptions: readonly ProductCustomizationOptionView[];
 }
 
@@ -723,6 +739,8 @@ function toPublicProduct(
   documents: readonly ProductDocumentView[] = [],
   /** Defaulted for the same reason — the owner-side relations read. */
   relations: readonly ProductRelationView[] = [],
+  /** A47. Defaulted to null the way the collections default to empty; only the owner read opts in. */
+  threeDimensionalModel: ProductModelView | null = null,
 ): PublicProduct {
   // The defensive `categoryId === null` throw that stood here is gone: migration 0063
   // made the column NOT NULL, so the case it guarded can no longer be represented.
@@ -780,6 +798,7 @@ function toPublicProduct(
     variants,
     highlights,
     documents,
+    threeDimensionalModel,
     customizationOptions,
     relations,
   };
@@ -910,6 +929,9 @@ async function loadOrganizationProduct(
   // §21.3. The seller's own view of the files on this listing, so the wizard can list and remove
   // them. Same read the public projection uses.
   const documents = await listProductDocuments(productId);
+  // A47. Same reason as the documents read above: the wizard cannot offer to remove or replace a
+  // model it does not know is there.
+  const threeDimensionalModel = await findProductModel(productId);
 
   return toPublicProduct(
     row,
@@ -924,6 +946,7 @@ async function loadOrganizationProduct(
     customizationOptions,
     documents,
     relations,
+    threeDimensionalModel,
   );
 }
 
@@ -2516,6 +2539,43 @@ export interface ProductDocumentView {
 }
 
 /**
+ * A47. What a listing's 3D model looks like to its owner.
+ *
+ * `url` IS ON THE WIRE, unlike a document's. The model is a public marketing asset rendered in
+ * place on the product page beside the nine public gallery URLs — the same class of thing as
+ * `product_image.url`, not a gated download — and `<model-viewer>` fetches it directly, which a
+ * presigned private-bucket link could not serve without CORS rules nobody has configured.
+ *
+ * `updatedAt` rather than `createdAt`: the row is replaced in place, and the instant that
+ * matters is when the CURRENT bytes were attached.
+ */
+export interface ProductModelView {
+  readonly id: string;
+  readonly url: string;
+  readonly fileName: string;
+  readonly byteSize: number;
+  readonly updatedAt: Date;
+}
+
+const PRODUCT_MODEL_VIEW_COLUMNS = {
+  id: commerceProductModel.id,
+  url: commerceProductModel.url,
+  fileName: commerceProductModel.fileName,
+  byteSize: commerceProductModel.byteSize,
+  updatedAt: commerceProductModel.updatedAt,
+} as const;
+
+/** A47. The listing's model, or null. The public projection selects its own columns in its fan-out. */
+export async function findProductModel(productId: string): Promise<ProductModelView | null> {
+  const [row] = await db
+    .select(PRODUCT_MODEL_VIEW_COLUMNS)
+    .from(commerceProductModel)
+    .where(eq(commerceProductModel.productId, productId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
  * §21.3. Reduces an uploader's file name to something safe to store and to hand a header.
  *
  * ⚠️ SANITIZED TWICE, ON PURPOSE. `object-storage.ts` runs its own pass building the
@@ -2528,14 +2588,14 @@ export interface ProductDocumentView {
  * becomes an underscore rather than being escaped — escaping a quote inside a header value is
  * exactly the kind of thing that is easy to get wrong once and never revisited.
  */
-function sanitizeStoredDocumentFileName(rawFileName: string): string {
+function sanitizeStoredFileName(rawFileName: string, fallbackFileName: string): string {
   const cleaned = rawFileName
     .normalize("NFKD")
     .replace(/[^A-Za-z0-9 ._-]/g, "_")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 120);
-  return cleaned.length > 0 ? cleaned : "document.pdf";
+  return cleaned.length > 0 ? cleaned : fallbackFileName;
 }
 
 /** §21.3. A listing's documents, in attach order. Shared by the owner read and the public one. */
@@ -2590,7 +2650,7 @@ export async function attachProductDocument(
   }
 
   const contentSha256 = createHash("sha256").update(input.bytes).digest("hex");
-  const storedFileName = sanitizeStoredDocumentFileName(input.fileName);
+  const storedFileName = sanitizeStoredFileName(input.fileName, "document.pdf");
 
   /**
    * Counted BEFORE the upload so an over-cap attempt does not pay for a round-trip it will
@@ -2698,7 +2758,7 @@ export async function deleteProductDocumentById(
     return { success: false, error: { type: "DOCUMENT_NOT_FOUND", documentId } };
   }
 
-  // BYTES BEFORE THE ROW, and refused rather than best-effort — the same posture the two
+  // BYTES BEFORE THE ROW, and refused rather than best-effort — the same posture the
   // Cloudinary sweeps in `deleteProduct` take. Once the row is gone nothing names the object.
   const removed = await deleteProductDocumentObject(row.objectStorageKey);
   if (!removed.success) {
@@ -2718,6 +2778,115 @@ export async function deleteProductDocumentById(
     );
 
   return { success: true, value: await listProductDocuments(productId) };
+}
+
+/**
+ * A47. Attaches — or replaces — the listing's one `.glb` 3D model.
+ *
+ * ⚠️ THE BYTES ARE VALIDATED, NOT THE HEADER. The multipart middleware already refused anything
+ * whose declared mimetype was neither `model/gltf-binary` nor `application/octet-stream`, but
+ * that is a value the client chose. `validateGlbBytes` reads the container header, and it is the
+ * one that decides.
+ *
+ * ⚠️ NOTHING HERE CLAIMS THE FILE IS SAFE. There is no scan, exactly as for documents (§21.3),
+ * and no copy may say otherwise. The route answers 201, not 202: nothing happens to the file
+ * afterwards.
+ *
+ * REPLACE IN PLACE, NOT DESTROY-THEN-UPLOAD. The Cloudinary public id is derived from the product
+ * id and uploaded with `overwrite`, so a re-upload swaps the bytes at the same address and the row
+ * is upserted on its `product_id` unique index. There is never a moment where the row names a
+ * destroyed asset: if the upload fails, the previous model keeps serving and the row is untouched.
+ * That convergence is also why the route carries no `idempotency()` — a retried upload lands on
+ * the same asset and the same row.
+ */
+export async function attachProductModel(
+  sellerOrganizationId: string,
+  productId: string,
+  input: {
+    readonly fileName: string;
+    readonly bytes: Buffer;
+  },
+): Promise<Result<ProductModelView, ProductError>> {
+  const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
+  if (!ownedId) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  const validated = validateGlbBytes(input.bytes);
+  if (isGlbValidationError(validated)) {
+    return { success: false, error: { type: "MODEL_REJECTED", reason: validated.type } };
+  }
+
+  const contentSha256 = createHash("sha256").update(input.bytes).digest("hex");
+  const storedFileName = sanitizeStoredFileName(input.fileName, "model.glb");
+
+  const uploaded = await uploadProductModelAsset(productId, input.bytes);
+  if (!uploaded.success) {
+    return {
+      success: false,
+      error: { type: "MODEL_STORAGE_UNAVAILABLE", reason: uploaded.error.type },
+    };
+  }
+
+  const [row] = await db
+    .insert(commerceProductModel)
+    .values({
+      productId,
+      url: uploaded.value.secureUrl,
+      contentSha256,
+      byteSize: validated.byteSize,
+      fileName: storedFileName,
+    })
+    .onConflictDoUpdate({
+      target: commerceProductModel.productId,
+      // The fresh `/v<timestamp>/` URL MUST land here — reusing the old one serves the old bytes
+      // from the CDN indefinitely. `updatedAt` is set by hand because the column default only
+      // applies on insert.
+      set: {
+        url: uploaded.value.secureUrl,
+        contentSha256,
+        byteSize: validated.byteSize,
+        fileName: storedFileName,
+        updatedAt: new Date(),
+      },
+    })
+    .returning(PRODUCT_MODEL_VIEW_COLUMNS);
+
+  return { success: true, value: row };
+}
+
+/**
+ * A47. Removes the listing's 3D model, bytes first.
+ *
+ * BYTES BEFORE THE ROW, and refused rather than best-effort — the posture every asset removal in
+ * this file takes. Once the row is gone nothing names the asset, and a listing that keeps a row
+ * pointing at a destroyed asset is worse than one that keeps both.
+ */
+export async function deleteProductModel(
+  sellerOrganizationId: string,
+  productId: string,
+): Promise<Result<{ productId: string }, ProductError>> {
+  const ownedId = await findOrganizationProductId(sellerOrganizationId, productId);
+  if (!ownedId) {
+    return { success: false, error: { type: "NOT_FOUND", productId } };
+  }
+
+  const existing = await findProductModel(productId);
+  if (!existing) {
+    return { success: false, error: { type: "MODEL_NOT_FOUND", productId } };
+  }
+
+  const removed = await deleteProductModelAsset(productId);
+  if (!removed.success) {
+    return {
+      success: false,
+      error: { type: "MODEL_STORAGE_UNAVAILABLE", reason: removed.error.type },
+    };
+  }
+
+  await db.delete(commerceProductModel).where(eq(commerceProductModel.productId, productId));
+
+  return { success: true, value: { productId } };
 }
 
 /**
@@ -2766,9 +2935,9 @@ async function findBlockingProductReferences(productId: string): Promise<readonl
 /**
  * §21.3. Destroys every document object a listing owns, before its rows cascade away.
  *
- * ⚠️ REFUSES ON FAILURE rather than logging and continuing, matching the two Cloudinary sweeps it
+ * ⚠️ REFUSES ON FAILURE rather than logging and continuing, matching the Cloudinary sweeps it
  * sits beside in `deleteProduct` — and deliberately NOT matching `deleteVideo`, which is
- * best-effort. Inside one function three near-identical cleanups must behave the same way, and the
+ * best-effort. Inside one function four near-identical cleanups must behave the same way, and the
  * posture already established here is that the row must not outlive its bytes.
  */
 async function deleteAllProductDocumentObjects(
@@ -2789,6 +2958,27 @@ async function deleteAllProductDocumentObjects(
     }
   }
   return { success: true, value: { deleted: rows.length } };
+}
+
+/**
+ * A47. Destroys the listing's model asset if the listing has one, before its row cascades away.
+ * The common case — no model — costs one indexed read and no Cloudinary round-trip.
+ */
+async function deleteProductModelAssetIfPresent(
+  productId: string,
+): Promise<Result<{ deleted: boolean }, ProductError>> {
+  const existing = await findProductModel(productId);
+  if (!existing) {
+    return { success: true, value: { deleted: false } };
+  }
+  const removed = await deleteProductModelAsset(productId);
+  if (!removed.success) {
+    return {
+      success: false,
+      error: { type: "MODEL_STORAGE_UNAVAILABLE", reason: removed.error.type },
+    };
+  }
+  return { success: true, value: { deleted: true } };
 }
 
 export async function deleteProduct(
@@ -2841,13 +3031,23 @@ export async function deleteProduct(
    * nothing names the object keys any more — so the bytes must go first, exactly as the two sweeps
    * above do. SQL cannot reach a bucket and there is no database-level backstop.
    *
-   * ⚠️ Refused rather than best-effort, matching its two siblings in this function rather than
-   * `deleteVideo`, which logs and continues. Three near-identical cleanups inside one function must
+   * ⚠️ Refused rather than best-effort, matching its siblings in this function rather than
+   * `deleteVideo`, which logs and continues. Four near-identical cleanups inside one function must
    * behave the same way, and the posture here is that a row must not outlive its bytes.
    */
   const documentObjectRemoval = await deleteAllProductDocumentObjects(productId);
   if (!documentObjectRemoval.success) {
     return { success: false, error: documentObjectRemoval.error };
+  }
+
+  /**
+   * A47. A FOURTH SWEEP, back on Cloudinary but under `resource_type: "raw"` and its own folder,
+   * which is why neither image sweep above can reach it — `delete_resources_by_prefix` is scoped
+   * to one resource type. Refused on failure like its three siblings, for the same reason.
+   */
+  const modelAssetRemoval = await deleteProductModelAssetIfPresent(productId);
+  if (!modelAssetRemoval.success) {
+    return { success: false, error: modelAssetRemoval.error };
   }
 
   await db.transaction(async (transaction) => {

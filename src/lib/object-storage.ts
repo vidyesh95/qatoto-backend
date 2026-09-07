@@ -14,10 +14,12 @@ import type { Result } from "#src/types/index.js";
  * Today its only caller is the §10 research-paper library.
  *
  * WHY A SECOND STORAGE MODULE ALONGSIDE `src/lib/cloudinary.ts`. Cloudinary is an
- * IMAGE pipeline in this codebase — all five of its families pass
- * `resource_type: "image"`, and everything reaching them is first re-encoded by
- * `src/lib/image.ts`, which answers NOT_AN_IMAGE for a PDF. Papers are documents. They
- * need bytes stored and handed back unchanged, which is what object storage is.
+ * IMAGE pipeline in this codebase — every family but one passes `resource_type: "image"`,
+ * and everything reaching those is first re-encoded by `src/lib/image.ts`, which answers
+ * NOT_AN_IMAGE for a PDF. (The one exception, A47's `raw` product model, is a PUBLIC asset
+ * rendered in place on a public page — see `uploadProductModel` for why it is not here.)
+ * Papers are documents. They need bytes stored and handed back unchanged, and kept PRIVATE,
+ * which is what object storage is.
  *
  * THE CONTRACT IS DELIBERATELY IDENTICAL TO `cloudinary.ts`'s: a lazy
  * `ensureConfigured()` latch, and a `Result` whose error is one of NOT_CONFIGURED /
