@@ -144,18 +144,18 @@ describe("community cofounder routes", () => {
   });
 
   describe("authentication", () => {
-    it.each([
-      ["get", MINE] as const,
-      ["get", "/community/admin/cofounder-profiles"] as const,
-    ])("answers 401 for a signed-out caller on %s %s", async (method, path) => {
-      signOut();
+    it.each([["get", MINE] as const, ["get", "/community/admin/cofounder-profiles"] as const])(
+      "answers 401 for a signed-out caller on %s %s",
+      async (method, path) => {
+        signOut();
 
-      const response = await request(app)[method](path);
+        const response = await request(app)[method](path);
 
-      expect(response.status).toBe(401);
-      expect(getMyCofounderProfile).not.toHaveBeenCalled();
-      expect(listCofounderModerationQueue).not.toHaveBeenCalled();
-    });
+        expect(response.status).toBe(401);
+        expect(getMyCofounderProfile).not.toHaveBeenCalled();
+        expect(listCofounderModerationQueue).not.toHaveBeenCalled();
+      },
+    );
 
     it("answers 401 for a signed-out caller patching their profile", async () => {
       signOut();
@@ -294,9 +294,7 @@ describe("community cofounder routes", () => {
       const response = await request(app).patch(MINE).send({ headline: "A sharper headline here" });
 
       expect(response.status).toBe(409);
-      expect(response.body.message).toBe(
-        "A profile in state published must be withdrawn.",
-      );
+      expect(response.body.message).toBe("A profile in state published must be withdrawn.");
     });
   });
 
@@ -347,9 +345,7 @@ describe("community cofounder routes", () => {
     });
 
     it("refuses an engagement state outside the enum", async () => {
-      const response = await request(app)
-        .patch(`${MINE}/engagement-state`)
-        .send({ engagementState: "ghosting" });
+      const response = await request(app).patch(`${MINE}/engagement-state`).send({ engagementState: "ghosting" });
 
       expect(response.status).toBe(422);
       expect(setMyEngagementState).not.toHaveBeenCalled();
@@ -401,14 +397,8 @@ describe("community cofounder routes", () => {
     it("replays the first answer for a repeated key rather than making a second profile", async () => {
       createCofounderProfile.mockResolvedValue(OK);
 
-      const first = await request(app)
-        .post(BASE)
-        .set("Idempotency-Key", "cofounder_create_2")
-        .send(VALID_CREATE_BODY);
-      const retry = await request(app)
-        .post(BASE)
-        .set("Idempotency-Key", "cofounder_create_2")
-        .send(VALID_CREATE_BODY);
+      const first = await request(app).post(BASE).set("Idempotency-Key", "cofounder_create_2").send(VALID_CREATE_BODY);
+      const retry = await request(app).post(BASE).set("Idempotency-Key", "cofounder_create_2").send(VALID_CREATE_BODY);
 
       expect(first.status).toBe(201);
       expect(retry.status).toBe(201);
@@ -419,10 +409,7 @@ describe("community cofounder routes", () => {
     it("refuses a create missing the required contributionKinds", async () => {
       const { contributionKinds: _contributionKinds, ...withoutKinds } = VALID_CREATE_BODY;
 
-      const response = await request(app)
-        .post(BASE)
-        .set("Idempotency-Key", "cofounder_create_3")
-        .send(withoutKinds);
+      const response = await request(app).post(BASE).set("Idempotency-Key", "cofounder_create_3").send(withoutKinds);
 
       expect(response.status).toBe(422);
       expect(createCofounderProfile).not.toHaveBeenCalled();

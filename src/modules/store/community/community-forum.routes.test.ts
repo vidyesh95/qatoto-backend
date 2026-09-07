@@ -256,10 +256,7 @@ describe("community forum routes", () => {
         value: { id: "thread_1", threadState: "pending_review" },
       });
 
-      const response = await request(app)
-        .post(path)
-        .set("Idempotency-Key", "forum_thread_1")
-        .send(VALID_THREAD_BODY);
+      const response = await request(app).post(path).set("Idempotency-Key", "forum_thread_1").send(VALID_THREAD_BODY);
 
       expect(response.status).toBe(201);
       expect(createForumThread).toHaveBeenCalledWith({
@@ -275,14 +272,8 @@ describe("community forum routes", () => {
     it("replays the cached response for a repeated Idempotency-Key", async () => {
       createForumThread.mockResolvedValue({ success: true, value: { id: "thread_1" } });
 
-      const first = await request(app)
-        .post(path)
-        .set("Idempotency-Key", "forum_thread_retry")
-        .send(VALID_THREAD_BODY);
-      const retry = await request(app)
-        .post(path)
-        .set("Idempotency-Key", "forum_thread_retry")
-        .send(VALID_THREAD_BODY);
+      const first = await request(app).post(path).set("Idempotency-Key", "forum_thread_retry").send(VALID_THREAD_BODY);
+      const retry = await request(app).post(path).set("Idempotency-Key", "forum_thread_retry").send(VALID_THREAD_BODY);
 
       expect(first.status).toBe(201);
       expect(retry.status).toBe(201);
@@ -337,10 +328,7 @@ describe("community forum routes", () => {
     it("posts the reply against the path's thread and answers 201", async () => {
       createForumReply.mockResolvedValue({ success: true, value: { id: "reply_1" } });
 
-      const response = await request(app)
-        .post(path)
-        .set("Idempotency-Key", "forum_reply_1")
-        .send(validReply);
+      const response = await request(app).post(path).set("Idempotency-Key", "forum_reply_1").send(validReply);
 
       expect(response.status).toBe(201);
       expect(createForumReply).toHaveBeenCalledWith({
@@ -354,10 +342,7 @@ describe("community forum routes", () => {
     it("maps NOT_FOUND to 404 for a thread that does not exist", async () => {
       createForumReply.mockResolvedValue(NOT_FOUND);
 
-      const response = await request(app)
-        .post(path)
-        .set("Idempotency-Key", "forum_reply_missing")
-        .send(validReply);
+      const response = await request(app).post(path).set("Idempotency-Key", "forum_reply_missing").send(validReply);
 
       expect(response.status).toBe(404);
     });
@@ -368,10 +353,7 @@ describe("community forum routes", () => {
         error: { type: "INVALID_STATE", message: "This thread is locked." },
       });
 
-      const response = await request(app)
-        .post(path)
-        .set("Idempotency-Key", "forum_reply_locked")
-        .send(validReply);
+      const response = await request(app).post(path).set("Idempotency-Key", "forum_reply_locked").send(validReply);
 
       expect(response.status).toBe(409);
       expect(response.body.message).toBe("This thread is locked.");
@@ -507,13 +489,13 @@ describe("community forum routes", () => {
       const { detailText: _detailText, ...withoutDetail } = validReport;
       await request(app).post(path).send(withoutDetail);
 
-      expect(createCommunityContentReport).toHaveBeenCalledWith(
-        expect.objectContaining({ detailText: null }),
-      );
+      expect(createCommunityContentReport).toHaveBeenCalledWith(expect.objectContaining({ detailText: null }));
     });
 
     it("rejects a reason outside the enum with 422", async () => {
-      const response = await request(app).post(path).send({ ...validReport, reason: "i_dislike_it" });
+      const response = await request(app)
+        .post(path)
+        .send({ ...validReport, reason: "i_dislike_it" });
 
       expect(response.status).toBe(422);
       expect(createCommunityContentReport).not.toHaveBeenCalled();
@@ -607,10 +589,7 @@ describe("community forum routes", () => {
     it("records the decision with the moderator from the session", async () => {
       moderateForumThread.mockResolvedValue({ success: true, value: { threadState: "open" } });
 
-      const response = await request(app)
-        .post(path)
-        .set("Idempotency-Key", "moderate_thread_1")
-        .send(validDecision);
+      const response = await request(app).post(path).set("Idempotency-Key", "moderate_thread_1").send(validDecision);
 
       expect(response.status).toBe(200);
       expect(moderateForumThread).toHaveBeenCalledWith({
@@ -660,10 +639,7 @@ describe("community forum routes", () => {
     it("records the decision against the path's reply", async () => {
       moderateForumReply.mockResolvedValue({ success: true, value: { replyState: "hidden" } });
 
-      const response = await request(app)
-        .post(path)
-        .set("Idempotency-Key", "moderate_reply_1")
-        .send(validDecision);
+      const response = await request(app).post(path).set("Idempotency-Key", "moderate_reply_1").send(validDecision);
 
       expect(response.status).toBe(200);
       expect(moderateForumReply).toHaveBeenCalledWith({
