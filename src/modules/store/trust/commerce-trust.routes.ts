@@ -3,6 +3,7 @@ import express from "express";
 import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
+  commerceChargebackEvidenceLimiter,
   commerceDisputeWriteLimiter,
   commerceReviewMediaUploadLimiter,
   commerceReviewReplyLimiter,
@@ -252,6 +253,23 @@ router.post(
   compactBody,
   idempotency({ required: true, scope: "user" }),
   commerceTrustController.decideDispute,
+);
+
+/**
+ * Chargeback evidence — a card-issuer response, not a Qatoto dispute decision. No capability
+ * middleware here, matching every other admin route in this router: the gate lives inside
+ * `exportOrderChargebackEvidence`'s own `requirePlatformCapability` call, so a 403 can carry the
+ * exhaustive-switch typing `commerce-chargeback-evidence.service.ts`'s error union gives it.
+ *
+ * `commerceChargebackEvidenceLimiter`, not `commerceTrustModerationLimiter` — this hands out
+ * full cross-organization chat and order PII in one call, the same blast-radius class as the
+ * address reveal, not an ordinary moderation-queue read.
+ */
+router.get(
+  "/admin/orders/:orderId/chargeback-evidence",
+  requireAuth,
+  commerceChargebackEvidenceLimiter,
+  commerceTrustController.exportChargebackEvidence,
 );
 
 /**

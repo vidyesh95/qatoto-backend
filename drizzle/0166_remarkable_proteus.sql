@@ -1,0 +1,1 @@
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'chargeback_evidence_exported';

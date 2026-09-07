@@ -7,6 +7,7 @@ import * as commerceCompletionService from "#src/modules/store/orders/commerce-c
 import type { CommerceOrganizationMemberRole } from "#src/modules/store/organizations/commerce-organization-access.service.js";
 import { StoreReviewListQuerySchema } from "#src/modules/store/storefront/store-reviews.schemas.js";
 import * as storeReviewsService from "#src/modules/store/storefront/store-reviews.service.js";
+import * as commerceChargebackEvidenceService from "#src/modules/store/trust/commerce-chargeback-evidence.service.js";
 import {
   AddDisputeNoteSchema,
   AttachReviewPhotoFieldsSchema,
@@ -827,6 +828,62 @@ export async function listSellerReviewInbox(req: Request, res: Response): Promis
     status: "success",
     statusCode: 200,
     message: "Seller review inbox.",
+    data: result.value,
+  } satisfies ApiResponse);
+}
+
+/**
+ * `GET /commerce/admin/orders/:orderId/chargeback-evidence`.
+ *
+ * A DIFFERENT ERROR SHAPE FROM EVERY OTHER HANDLER IN THIS FILE, deliberately not routed
+ * through `mapTrustError`: `exportOrderChargebackEvidence`'s error union is its own
+ * (`ChargebackEvidenceError`), not `CommerceTrustError` — its `PLATFORM_CAPABILITY_REQUIRED`
+ * names `export_chargeback_evidence`, not the `moderate_commerce` literal `mapTrustError`'s
+ * case is typed to.
+ */
+export async function exportChargebackEvidence(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({
+      status: "error",
+      statusCode: 401,
+      message: "Please sign in.",
+    } satisfies ApiResponse);
+    return;
+  }
+  if (!parseNoQuery(req, res)) return;
+
+  const params = OrderIdParamsSchema.safeParse(req.params);
+  if (!params.success) {
+    sendZodError(res, params.error);
+    return;
+  }
+
+  const result = await commerceChargebackEvidenceService.exportOrderChargebackEvidence(
+    req.user.id,
+    params.data.orderId,
+  );
+  if (!result.success) {
+    if (result.error.type === "NOT_FOUND") {
+      res.status(404).json({
+        status: "error",
+        statusCode: 404,
+        message: "Not found.",
+      } satisfies ApiResponse);
+      return;
+    }
+    res.status(403).json({
+      status: "error",
+      statusCode: 403,
+      message: "Platform capability required.",
+      data: { capability: result.error.capability },
+    } satisfies ApiResponse);
+    return;
+  }
+
+  res.status(200).json({
+    status: "success",
+    statusCode: 200,
+    message: "Chargeback evidence loaded.",
     data: result.value,
   } satisfies ApiResponse);
 }

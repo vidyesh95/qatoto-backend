@@ -80,7 +80,20 @@ export type PlatformCapability =
    * to type into a box addressed to the platform. That is a wider and more personal read than
    * judging a post, so it sits beside role management rather than beside a review queue.
    */
-  | "handle_support_cases";
+  | "handle_support_cases"
+  /**
+   * Export one order's order/chat/shipment data as a bundle for a card issuer's chargeback
+   * response. `admin` ONLY, and deliberately NOT folded into `moderate_commerce`.
+   *
+   * `moderate_commerce` is about DECIDING flagged store content — hide this listing, restore
+   * that review. This capability READS: one call hands back full cross-organization chat and
+   * order PII (buyer/seller legal names, payment intent id) in one bundle, addressed to
+   * whichever staff member holds it, for a party neither the buyer nor the seller. That is a
+   * wider and more sensitive read than judging a report, so it sits beside role management
+   * rather than beside a review queue — the same reasoning `view_platform_metrics` and
+   * `handle_support_cases` already state for their own dossiers above.
+   */
+  | "export_chargeback_evidence";
 
 /**
  * The grant table. Explicit and total: every role lists every capability it holds, so
@@ -99,6 +112,7 @@ const PLATFORM_ROLE_GRANTS: Readonly<Record<PlatformRole, readonly PlatformCapab
     "manage_promotions",
     "view_platform_metrics",
     "handle_support_cases",
+    "export_chargeback_evidence",
   ],
 };
 

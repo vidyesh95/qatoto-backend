@@ -1510,6 +1510,19 @@ export const commerceAddressRevealLimiter = createLimiter({
 });
 
 /**
+ * The chargeback-evidence export. Modelled directly on `commerceAddressRevealLimiter` rather
+ * than the looser `commerceTrustModerationLimiter`: this is the other endpoint that hands one
+ * staff member full cross-organization PII in one call — here bundled with the order's whole
+ * chat thread on top — so it carries the same "a few per notification" budget, not a
+ * moderation-queue pace.
+ */
+export const commerceChargebackEvidenceLimiter = createLimiter({
+  namespace: "commerceChargebackEvidence",
+  windowMs: ONE_MINUTE_MS,
+  limit: 10,
+});
+
+/**
  * A30's trade-attachment download. Sits between the address reveal and an ordinary read
  * for the reason its subject sits between them: a drawing is another organization's
  * commercial material, but a buyer legitimately opens every attachment on an RFQ in one

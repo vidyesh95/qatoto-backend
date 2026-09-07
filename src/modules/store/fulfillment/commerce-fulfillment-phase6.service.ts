@@ -557,7 +557,7 @@ const LEG_TRANSITIONS: Readonly<Record<LegState, ReadonlySet<ShipmentLegCommand[
   cancelled: new Set(),
 };
 
-function projectShipmentLeg(leg: LegRow) {
+export function projectShipmentLeg(leg: LegRow) {
   return {
     id: leg.id,
     shipmentId: leg.shipmentId,

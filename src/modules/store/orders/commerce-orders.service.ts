@@ -315,7 +315,7 @@ function projectOrderServiceLine(line: ServiceLineRow): OrderServiceLineProjecti
   };
 }
 
-async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjection> {
+export async function projectOrderDetail(order: OrderRow): Promise<OrderDetailProjection> {
   const [productLines, serviceLines, completionIndex, paymentIntentIdsByOrderId] =
     await Promise.all([
       db

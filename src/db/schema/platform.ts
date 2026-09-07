@@ -280,6 +280,10 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // stamping the chain on every message would drown the entries that record a decision.
   "support_case_resolved",
   "support_case_closed",
+  // Chargeback evidence export — `commerce-chargeback-evidence`. Every call hands one staff
+  // member full cross-organization chat and order PII for a party neither the buyer nor the
+  // seller, so every export is named here, not just a sample of them.
+  "chargeback_evidence_exported",
 ]);
 
 /**
