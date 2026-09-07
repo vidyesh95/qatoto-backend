@@ -5040,10 +5040,22 @@ export const pieBakeEvent = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "restrict" }),
     bakedAt: timestamp("baked_at").defaultNow().notNull(),
+    /**
+     * NULLABLE, and it stays that way: a pie baked before this column existed has no key
+     * and must not be given a synthetic one. A null simply cannot be replayed, which is
+     * the honest answer — that bake is already done.
+     *
+     * Same shape as `daily_log.submit_idempotency_key` above, for the same reason.
+     */
+    idempotencyKey: text("idempotency_key"),
   },
   (table) => [
-    // ONCE, EVER, PER PROJECT.
+    // ONCE, EVER, PER PROJECT. Still the real guarantee; the key below only decides what a
+    // repeat attempt is TOLD, never whether a second bake can exist.
     uniqueIndex("pie_bake_event_project_unq").on(table.projectId),
+    uniqueIndex("pie_bake_event_projectId_idempotencyKey_unq")
+      .on(table.projectId, table.idempotencyKey)
+      .where(sql`idempotency_key IS NOT NULL`),
     check("pie_bake_event_evidence_ck", sql`char_length(trigger_evidence_note) BETWEEN 1 AND 2000`),
     check("pie_bake_event_valuation_ck", sql`valuation_cents IS NULL OR valuation_cents > 0`),
   ],

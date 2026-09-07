@@ -349,18 +349,12 @@ router.post(
   requireAuth,
   fairMarketRateLimiter,
   /**
-   * `required: true`, and this is the ONE route in this domain that insists.
-   *
-   * `idempotency.ts` makes honour-if-present the default deliberately, and every sibling
-   * write here keeps it — a pledge that lands twice is recoverable, because `POST
-   * /pledges/:pledgeId/cancel` exists. A bake is not: it is once ever, and the section
-   * heading above says there is no unbake route because there is no unbake. That is the
-   * "ready to insist" case the middleware's own docs reserve this flag for.
-   *
-   * It closes the retry window AHEAD of the domain check rather than instead of it:
-   * `PIE_ALREADY_BAKED` and its unique index still stand behind this.
+   * NO `idempotency()` middleware, matching the other two §9 writes that dedup — claim
+   * submit and receipt upload. Both carry the key as a BODY field instead, because the
+   * middleware's generic record only answers "have I seen this key?", while a domain
+   * column answers "here is the row you already made", which is what a founder retrying
+   * an irreversible bake actually needs back. See `bakePie` in `pie-bake.service.ts`.
    */
-  idempotency({ required: true }),
   requireIdentifiedUser,
   longFormBody,
   proofOfEffortController.bakePie,

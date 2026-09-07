@@ -221,6 +221,17 @@ export const BakePieSchema = z
       .optional(),
     acknowledgement: z.string(),
     expectedSnapshotId: z.uuid(),
+    /**
+     * OPTIONAL, and only for now. The two §9 writes that already dedup — `SubmitClaimSchema`
+     * and `UploadReceiptSchema` above — both require it, and this should join them once the
+     * frontend is sending it everywhere.
+     *
+     * It cannot be required in the same change that introduces it: this schema is `.strict()`
+     * and the two repos deploy separately, so a required field 422s every bake from the
+     * currently-deployed frontend, while a frontend sending it early would be 422'd by the
+     * currently-deployed backend. Optional is the only value that lets either side go first.
+     */
+    idempotencyKey: z.string().trim().min(8).max(128).optional(),
   })
   .strict();
 

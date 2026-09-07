@@ -55,6 +55,16 @@ export interface BakePieInput {
   readonly valuationCents?: bigint | undefined;
   readonly acknowledgement: string;
   readonly expectedSnapshotId: string;
+  /**
+   * Carried in the BODY, like §9's other two deduped writes, and optional only until the
+   * frontend sends it everywhere (see `BakePieSchema`).
+   *
+   * What it buys, which the `pie_bake_event_project_unq` index alone cannot: a founder
+   * whose connection dropped mid-bake retries and gets THEIR BAKE BACK, rather than a
+   * `PIE_ALREADY_BAKED` that reads like something went wrong on the one action in this
+   * product that cannot be undone.
+   */
+  readonly idempotencyKey?: string | undefined;
 }
 
 export interface PieBakeView {
@@ -83,11 +93,15 @@ export async function bakePie(
   }
 
   const [alreadyBaked] = await db
-    .select({ id: pieBakeEvent.id })
+    .select({ id: pieBakeEvent.id, idempotencyKey: pieBakeEvent.idempotencyKey })
     .from(pieBakeEvent)
     .where(eq(pieBakeEvent.projectId, context.projectId));
 
   if (alreadyBaked) {
+    const replayed = await replayOwnBake(context.projectId, alreadyBaked.idempotencyKey, input);
+    if (replayed) {
+      return { success: true, value: replayed };
+    }
     return { success: false, error: { type: "PIE_ALREADY_BAKED" } };
   }
 
@@ -161,6 +175,7 @@ export async function bakePie(
           acknowledgement: input.acknowledgement,
           bakedByUserId: actorUserId,
           bakedAt,
+          idempotencyKey: input.idempotencyKey ?? null,
         })
         .returning({ id: pieBakeEvent.id });
 
@@ -223,12 +238,45 @@ export async function bakePie(
     };
   } catch (error: unknown) {
     // `pie_bake_event_project_unq` under a genuine race: two founders, two tabs, one
-    // project. The loser gets the same answer as anyone arriving late.
+    // project. The loser gets the same answer as anyone arriving late — UNLESS it is the
+    // same request twice, in which case it is the retry case again, just lost at the index
+    // rather than at the read above.
     if (isUniqueViolation(error)) {
+      const [winner] = await db
+        .select({ idempotencyKey: pieBakeEvent.idempotencyKey })
+        .from(pieBakeEvent)
+        .where(eq(pieBakeEvent.projectId, context.projectId));
+
+      const replayed = await replayOwnBake(
+        context.projectId,
+        winner?.idempotencyKey ?? null,
+        input,
+      );
+      if (replayed) {
+        return { success: true, value: replayed };
+      }
       return { success: false, error: { type: "PIE_ALREADY_BAKED" } };
     }
     throw error;
   }
+}
+
+/**
+ * The already-baked row, but ONLY when this exact request is what baked it.
+ *
+ * A null on either side is never a match: rows predating the column have no key, and a
+ * caller that sent none has nothing to prove the bake was theirs. Both fall through to
+ * `PIE_ALREADY_BAKED`, which is the truthful answer for anyone who is not retrying.
+ */
+async function replayOwnBake(
+  projectId: string,
+  storedKey: string | null,
+  input: BakePieInput,
+): Promise<PieBakeView | null> {
+  if (input.idempotencyKey === undefined || storedKey === null) return null;
+  if (storedKey !== input.idempotencyKey) return null;
+
+  return await findPieBake(projectId);
 }
 
 /** `GET …/pie-bake` — the frozen cap table, or null while the pie is still dynamic. */

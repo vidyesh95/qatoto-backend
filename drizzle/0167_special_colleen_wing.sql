@@ -1,0 +1,2 @@
+ALTER TABLE "pie_bake_event" ADD COLUMN "idempotency_key" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "pie_bake_event_projectId_idempotencyKey_unq" ON "pie_bake_event" USING btree ("project_id","idempotency_key") WHERE idempotency_key IS NOT NULL;

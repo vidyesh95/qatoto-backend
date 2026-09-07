@@ -1103,6 +1103,9 @@ export async function bakePie(req: Request, res: Response): Promise<void> {
         : { valuationCents: BigInt(parsedBody.data.valuationCents) }),
       acknowledgement: parsedBody.data.acknowledgement,
       expectedSnapshotId: parsedBody.data.expectedSnapshotId,
+      ...(parsedBody.data.idempotencyKey === undefined
+        ? {}
+        : { idempotencyKey: parsedBody.data.idempotencyKey }),
     },
     caller.userId,
     caller.context.memberRole,

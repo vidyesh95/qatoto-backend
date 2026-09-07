@@ -1,4 +1,4 @@
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express } from "express";
 import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,18 +13,15 @@ import { buildTestApp } from "#src/test-support/test-app.js";
  * (`pie-bake.service.ts`'s own docs), with no unbake endpoint, so the property that matters
  * most is that a second bake is refused rather than silently accepted.
  *
- * TWO LAYERS STAND BEHIND THAT, and both are exercised below because they fail differently:
+ * DEDUP IS A BODY FIELD HERE, not the `Idempotency-Key` header, matching §9's other two
+ * deduped writes (claim submit, receipt upload) — both of which likewise carry NO
+ * `idempotency()` middleware. The reason is that the middleware's generic record can only
+ * answer "have I seen this key?", whereas the domain column answers "here is the bake you
+ * already made", which is what a founder retrying on a dropped connection needs back.
  *
- *   1. `idempotency({ required: true })` on the route. This is the ONE write in this domain
- *      that insists on a key rather than honouring one if present — `idempotency.ts` makes
- *      honour-if-present the default deliberately, and every sibling here keeps it, because
- *      a pledge landing twice is recoverable and a bake is not. A retry carrying the same
- *      key is answered from the replay cache and never reaches the service at all.
- *   2. `PIE_ALREADY_BAKED` inside the service, backed by its unique index — the answer for
- *      a second attempt that arrives with a DIFFERENT key, which the layer above cannot see.
- *
- * The suite drives the real routes, so every POST here has to carry an `Idempotency-Key`;
- * the one that deliberately omits it asserts the 400.
+ * That replay lives in `pie-bake.service.ts` and is tested at the service tier, in
+ * `pie-bake.service.test.ts` — this file's job is the wiring: that the parsed key reaches
+ * the service, and that a malformed one dies at the parse boundary.
  */
 
 stubServerEnvironment();
@@ -42,49 +39,6 @@ vi.mock("#src/middleware/require-identified-user.js", () => ({
   requireIdentifiedUser: (_req: unknown, _res: unknown, next: (error?: unknown) => void): void => {
     next();
   },
-}));
-
-/**
- * The real `idempotency` middleware writes its record through `db`, which is the inert `{}`
- * from `databaseModuleMock()` — so any request actually carrying a key would 500 on the
- * mock rather than on anything this suite is about. Same `Map`-backed stand-in the commerce
- * suites use (`commerce-cart.routes.test.ts`), kept verbatim so the required-key branch and
- * the replay branch behave here exactly as they do there.
- */
-const idempotencyCache = vi.hoisted(() => new Map<string, { statusCode: number; body: unknown }>());
-
-vi.mock("#src/middleware/idempotency.js", () => ({
-  idempotency:
-    (options: { readonly required?: boolean } = {}) =>
-    (req: Request, res: Response, next: NextFunction): void => {
-      const key = req.header("Idempotency-Key");
-      if (!key) {
-        if (options.required === true) {
-          res.status(400).json({
-            status: "error",
-            statusCode: 400,
-            message: "This request requires an Idempotency-Key header.",
-          });
-          return;
-        }
-        next();
-        return;
-      }
-      const cached = idempotencyCache.get(key);
-      if (cached) {
-        res.setHeader("Idempotency-Replayed", "true");
-        res.status(cached.statusCode).json(cached.body);
-        return;
-      }
-      const originalJson = res.json.bind(res);
-      res.json = ((body: unknown) => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          idempotencyCache.set(key, { statusCode: res.statusCode, body });
-        }
-        return originalJson(body);
-      }) as typeof res.json;
-      next();
-    },
 }));
 
 const requireProjectRole = vi.fn<(...args: readonly unknown[]) => unknown>();
@@ -136,7 +90,6 @@ describe("proof-of-effort pie-bake routes", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    idempotencyCache.clear();
     signInAs();
     await resetRateLimiters();
   });
@@ -151,12 +104,7 @@ describe("proof-of-effort pie-bake routes", () => {
       expect(requireProjectRole).not.toHaveBeenCalled();
     });
 
-    /**
-     * No `Idempotency-Key` here on purpose, and the answer is still 401 rather than the
-     * 400 a missing key earns: `requireAuth` is declared ahead of `idempotency` in the
-     * chain, so an anonymous caller never learns which headers the route wants.
-     */
-    it("answers 401 for a signed-out caller on POST, before the idempotency guard runs", async () => {
+    it("answers 401 for a signed-out caller on POST", async () => {
       signOut();
 
       const response = await request(app).post(PATH).send(VALID_BAKE_BODY);
@@ -176,10 +124,7 @@ describe("proof-of-effort pie-bake routes", () => {
     it("answers 404 for a signed-in non-member on POST", async () => {
       requireProjectRole.mockResolvedValue(NOT_FOUND);
 
-      const response = await request(app)
-        .post(PATH)
-        .set("Idempotency-Key", "pie_bake_non_member")
-        .send(VALID_BAKE_BODY);
+      const response = await request(app).post(PATH).send(VALID_BAKE_BODY);
 
       expect(response.status).toBe(404);
       expect(bakePie).not.toHaveBeenCalled();
@@ -243,7 +188,7 @@ describe("proof-of-effort pie-bake routes", () => {
         },
       });
 
-      await request(app).post(PATH).set("Idempotency-Key", "pie_bake_role_floor").send(VALID_BAKE_BODY);
+      await request(app).post(PATH).send(VALID_BAKE_BODY);
 
       expect(requireProjectRole).toHaveBeenCalledWith(SLUG, "user_test_caller", "founder");
     });
@@ -261,10 +206,7 @@ describe("proof-of-effort pie-bake routes", () => {
         },
       });
 
-      const response = await request(app)
-        .post(PATH)
-        .set("Idempotency-Key", "pie_bake_happy_path")
-        .send(VALID_BAKE_BODY);
+      const response = await request(app).post(PATH).send(VALID_BAKE_BODY);
 
       expect(response.status).toBe(201);
       expect(bakePie).toHaveBeenCalledWith(
@@ -286,10 +228,7 @@ describe("proof-of-effort pie-bake routes", () => {
       requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
       const { acknowledgement: _acknowledgement, ...withoutAck } = VALID_BAKE_BODY;
 
-      const response = await request(app)
-        .post(PATH)
-        .set("Idempotency-Key", "pie_bake_no_acknowledgement")
-        .send(withoutAck);
+      const response = await request(app).post(PATH).send(withoutAck);
 
       expect(response.status).toBe(422);
       expect(bakePie).not.toHaveBeenCalled();
@@ -299,10 +238,7 @@ describe("proof-of-effort pie-bake routes", () => {
       requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
       const { expectedSnapshotId: _expectedSnapshotId, ...withoutSnapshot } = VALID_BAKE_BODY;
 
-      const response = await request(app)
-        .post(PATH)
-        .set("Idempotency-Key", "pie_bake_no_snapshot_id")
-        .send(withoutSnapshot);
+      const response = await request(app).post(PATH).send(withoutSnapshot);
 
       expect(response.status).toBe(422);
       expect(bakePie).not.toHaveBeenCalled();
@@ -317,7 +253,6 @@ describe("proof-of-effort pie-bake routes", () => {
 
       const response = await request(app)
         .post(PATH)
-        .set("Idempotency-Key", "pie_bake_acknowledgement_mismatch")
         .send({ ...VALID_BAKE_BODY, acknowledgement: "bake the pie" });
 
       expect(response.status).toBe(422);
@@ -330,10 +265,7 @@ describe("proof-of-effort pie-bake routes", () => {
         error: { type: "SNAPSHOT_STALE", latestSnapshotId: "snapshot_2" },
       });
 
-      const response = await request(app)
-        .post(PATH)
-        .set("Idempotency-Key", "pie_bake_snapshot_stale")
-        .send(VALID_BAKE_BODY);
+      const response = await request(app).post(PATH).send(VALID_BAKE_BODY);
 
       expect(response.status).toBe(409);
     });
@@ -345,10 +277,7 @@ describe("proof-of-effort pie-bake routes", () => {
         error: { type: "SNAPSHOT_NOT_FOUND", snapshotId: VALID_BAKE_BODY.expectedSnapshotId },
       });
 
-      const response = await request(app)
-        .post(PATH)
-        .set("Idempotency-Key", "pie_bake_snapshot_not_found")
-        .send(VALID_BAKE_BODY);
+      const response = await request(app).post(PATH).send(VALID_BAKE_BODY);
 
       expect(response.status).toBe(404);
     });
@@ -360,10 +289,7 @@ describe("proof-of-effort pie-bake routes", () => {
         error: { type: "UNSETTLED_ALLOCATIONS", openCount: 2, disputedCount: 1 },
       });
 
-      const response = await request(app)
-        .post(PATH)
-        .set("Idempotency-Key", "pie_bake_unsettled_allocations")
-        .send(VALID_BAKE_BODY);
+      const response = await request(app).post(PATH).send(VALID_BAKE_BODY);
 
       expect(response.status).toBe(409);
     });
@@ -373,42 +299,20 @@ describe("proof-of-effort pie-bake routes", () => {
      * once-ever, and a SECOND attempt — even with a perfectly valid body — must be refused,
      * never silently re-applied or treated as a no-op success.
      *
-     * This is the DOMAIN layer's answer, for a retry that arrives with a different key (a
-     * fresh client, a new session) and so is invisible to the replay cache above it.
+     * This is the answer for someone who is NOT retrying. A caller replaying their own
+     * request gets their bake back instead; that branch is `pie-bake.service.test.ts`.
      */
     it("refuses a second bake attempt with 409 PIE_ALREADY_BAKED, never a silent success", async () => {
       requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
       bakePie.mockResolvedValue({ success: false, error: { type: "PIE_ALREADY_BAKED" } });
 
-      const response = await request(app)
-        .post(PATH)
-        .set("Idempotency-Key", "pie_bake_already_baked")
-        .send(VALID_BAKE_BODY);
+      const response = await request(app).post(PATH).send(VALID_BAKE_BODY);
 
       expect(response.status).toBe(409);
       expect(response.body.status).toBe("error");
     });
 
-    /**
-     * The route insists on a key rather than honouring one if present — the only write in
-     * this domain that does. A bake cannot be undone, so the retry window is closed ahead
-     * of the service rather than left to the domain check alone.
-     */
-    it("refuses a bake with no Idempotency-Key, before the service is reached", async () => {
-      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
-
-      const response = await request(app).post(PATH).send(VALID_BAKE_BODY);
-
-      expect(response.status).toBe(400);
-      expect(bakePie).not.toHaveBeenCalled();
-    });
-
-    /**
-     * The window this closes: the same request arriving twice — a retry on a flaky
-     * connection — must bake ONCE. The second answer comes from the replay cache, and the
-     * service never sees it, so it cannot depend on `PIE_ALREADY_BAKED` having landed yet.
-     */
-    it("replays the first response for a retried key rather than baking twice", async () => {
+    it("passes a body-carried idempotencyKey through to the service", async () => {
       requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
       bakePie.mockResolvedValue({
         success: true,
@@ -421,14 +325,52 @@ describe("proof-of-effort pie-bake routes", () => {
         },
       });
 
-      const first = await request(app).post(PATH).set("Idempotency-Key", "pie_bake_retried_once").send(VALID_BAKE_BODY);
-      const retry = await request(app).post(PATH).set("Idempotency-Key", "pie_bake_retried_once").send(VALID_BAKE_BODY);
+      const response = await request(app)
+        .post(PATH)
+        .send({ ...VALID_BAKE_BODY, idempotencyKey: "bake-key-0001" });
 
-      expect(first.status).toBe(201);
-      expect(retry.status).toBe(201);
-      expect(retry.headers["idempotency-replayed"]).toBe("true");
-      expect(retry.body.data.bakeEventId).toBe("bake_1");
-      expect(bakePie).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(201);
+      expect(bakePie).toHaveBeenCalledWith(
+        MEMBER_CONTEXT.value,
+        expect.objectContaining({ idempotencyKey: "bake-key-0001" }),
+        "user_test_caller",
+        "founder",
+      );
+    });
+
+    /**
+     * Omitted is still valid — the field is optional until the frontend ships it, and the
+     * key must be ABSENT rather than `undefined` so the service's "did this caller send
+     * one?" check is a real question.
+     */
+    it("omits idempotencyKey entirely when the caller sends none", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+      bakePie.mockResolvedValue({
+        success: true,
+        value: {
+          bakeEventId: "bake_1",
+          trigger: "priced_round",
+          valuationCents: "1200000000",
+          bakedAt: new Date("2026-03-01T00:00:00.000Z"),
+          snapshot: { id: "snapshot_1" },
+        },
+      });
+
+      await request(app).post(PATH).send(VALID_BAKE_BODY);
+
+      const [, passedInput] = bakePie.mock.calls[0] ?? [];
+      expect(passedInput).not.toHaveProperty("idempotencyKey");
+    });
+
+    it("rejects an idempotencyKey below the 8-character floor at the parse boundary", async () => {
+      requireProjectRole.mockResolvedValue(MEMBER_CONTEXT);
+
+      const response = await request(app)
+        .post(PATH)
+        .send({ ...VALID_BAKE_BODY, idempotencyKey: "short" });
+
+      expect(response.status).toBe(422);
+      expect(bakePie).not.toHaveBeenCalled();
     });
   });
 });
