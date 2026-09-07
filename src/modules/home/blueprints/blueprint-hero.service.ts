@@ -189,7 +189,9 @@ function isCloudinaryHostedImage(imageUrl: string): boolean {
  * sharing a position would otherwise come back in whatever order Postgres felt like, and
  * the carousel would reshuffle itself between requests.
  */
-export async function listActiveBlueprintHeroSlides(): Promise<readonly PublicBlueprintHeroSlide[]> {
+export async function listActiveBlueprintHeroSlides(): Promise<
+  readonly PublicBlueprintHeroSlide[]
+> {
   const now = new Date();
 
   return db

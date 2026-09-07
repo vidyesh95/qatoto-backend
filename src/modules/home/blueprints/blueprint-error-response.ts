@@ -145,7 +145,10 @@ export function mapBlueprintHeroSlideErrorToResponse(error: BlueprintHeroSlideEr
   }
 }
 
-export function respondBlueprintHeroSlideError(res: Response, error: BlueprintHeroSlideError): void {
+export function respondBlueprintHeroSlideError(
+  res: Response,
+  error: BlueprintHeroSlideError,
+): void {
   const { statusCode, message, errors } = mapBlueprintHeroSlideErrorToResponse(error);
   res.status(statusCode).json({ status: "error", statusCode, message, errors });
 }

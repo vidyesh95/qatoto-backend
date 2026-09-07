@@ -1,7 +1,10 @@
 import express from "express";
 
 import { compactBody } from "#src/middleware/json-body.js";
-import { blueprintHeroImageUploadLimiter, blueprintHeroWriteLimiter } from "#src/middleware/rate-limit.js";
+import {
+  blueprintHeroImageUploadLimiter,
+  blueprintHeroWriteLimiter,
+} from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import * as blueprintHeroController from "#src/modules/home/blueprints/blueprint-hero.controller.js";
 import { uploadBlueprintHeroSlideImageFile } from "#src/modules/home/blueprints/upload-blueprint-hero-image.js";
