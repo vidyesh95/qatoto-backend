@@ -131,11 +131,11 @@
     "gate": "pnpm check:specifiers && pnpm typecheck && pnpm fmt:check && pnpm lint; pnpm test"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1126.0",
-    "@aws-sdk/s3-request-presigner": "^3.1126.0",
-    "@better-auth/passkey": "^1.7.2",
+    "@aws-sdk/client-s3": "^3.1127.0",
+    "@aws-sdk/s3-request-presigner": "^3.1127.0",
+    "@better-auth/passkey": "^1.7.3",
     "@node-rs/argon2": "^2.2.0",
-    "better-auth": "^1.7.2",
+    "better-auth": "^1.7.3",
     "cloudinary": "^2.11.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
