@@ -489,7 +489,7 @@ async function buildExportDocument(userId: string): Promise<Record<string, unkno
     // dangerous line in this module.
     linkedAccounts: await collect(
       "linkedAccounts",
-      sql`SELECT provider_id, issuer, email, created_at FROM account WHERE user_id = ${userId}`,
+      sql`SELECT provider_id, email, created_at FROM account WHERE user_id = ${userId}`,
     ),
     // `public_key` excluded for the same reason.
     passkeys: await collect(

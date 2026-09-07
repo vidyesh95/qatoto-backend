@@ -1156,6 +1156,13 @@
       "when": 1788524885457,
       "tag": "0164_lame_monster_badoon",
       "breakpoints": true
+    },
+    {
+      "idx": 165,
+      "version": "7",
+      "when": 1788755635243,
+      "tag": "0165_lumpy_nitro",
+      "breakpoints": true
     }
   ]
 }

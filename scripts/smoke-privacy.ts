@@ -75,7 +75,6 @@ async function createSmokeUser(options: { readonly isStaff: boolean }): Promise<
     id: randomUUID(),
     accountId: id,
     providerId: "credential",
-    issuer: "local:credential",
     userId: id,
     password: passwordHash,
     updatedAt: new Date(),
