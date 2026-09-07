@@ -27,19 +27,19 @@ vi.mock("#src/lib/auth.js", async () => (await import("#src/test-support/auth-mo
 const replaceSeriesPoster = vi.fn<(...args: readonly unknown[]) => unknown>();
 
 vi.mock("#src/modules/studio/series/series.service.js", () => ({
-  createSeries: vi.fn(),
-  listMySeries: vi.fn(),
-  getSeries: vi.fn(),
-  updateSeries: vi.fn(),
-  deleteSeries: vi.fn(),
-  createSeason: vi.fn(),
-  updateSeason: vi.fn(),
-  deleteSeason: vi.fn(),
-  createEpisode: vi.fn(),
-  updateEpisode: vi.fn(),
-  deleteEpisode: vi.fn(),
+  createSeries: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  listMySeries: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  getSeries: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  updateSeries: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  deleteSeries: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  createSeason: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  updateSeason: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  deleteSeason: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  createEpisode: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  updateEpisode: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  deleteEpisode: vi.fn<(...args: readonly unknown[]) => unknown>(),
   replaceSeriesPoster: (...args: readonly unknown[]) => replaceSeriesPoster(...args),
-  removeSeriesPoster: vi.fn(),
+  removeSeriesPoster: vi.fn<(...args: readonly unknown[]) => unknown>(),
 }));
 
 /** A real PNG signature, matching `commerce-documents.routes.test.ts`'s fixture shape. */

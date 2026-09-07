@@ -89,7 +89,7 @@ vi.mock("#src/modules/studio/video-content-reports.service.js", () => ({
   // `listMyVideoReports` is used by a different route (`GET /users/me/video-reports`,
   // mounted on the auth users router) — stubbed here only because the controller module
   // exports it alongside the four above and the mock replaces the whole module.
-  listMyVideoReports: vi.fn(),
+  listMyVideoReports: vi.fn<(...args: readonly unknown[]) => unknown>(),
 }));
 
 const CAPABILITY_REQUIRED = {

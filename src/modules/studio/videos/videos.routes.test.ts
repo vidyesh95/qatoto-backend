@@ -68,9 +68,9 @@ vi.mock("#src/modules/studio/videos/videos.service.js", () => ({
   respondToCollaborationInvite: (...args: readonly unknown[]) => respondToCollaborationInvite(...args),
   // Read routes mounted elsewhere (`/users/me/collaborations` etc.) reuse this same
   // service module; stub them too so importing it doesn't throw on an undefined export.
-  listMyCollaborationInvites: vi.fn(),
-  listMyVideoCollaborators: vi.fn(),
-  listMyVideoModerationNotices: vi.fn(),
+  listMyCollaborationInvites: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  listMyVideoCollaborators: vi.fn<(...args: readonly unknown[]) => unknown>(),
+  listMyVideoModerationNotices: vi.fn<(...args: readonly unknown[]) => unknown>(),
 }));
 
 const VALID_CREATE_BODY = {

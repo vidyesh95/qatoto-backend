@@ -40,19 +40,23 @@ let userLookupRows: readonly (typeof user.$inferSelect)[] = [];
 /** What the next `db.select().from(account)...limit(1)` resolves to. */
 let accountLookupRows: readonly (typeof account.$inferSelect)[] = [];
 
-const updateSetMock = vi.fn(() => ({ where: vi.fn(async () => undefined) }));
-const updateMock = vi.fn(() => ({ set: updateSetMock }));
+const updateSetMock = vi.fn<() => { where: () => Promise<undefined> }>(() => ({
+  where: vi.fn<() => Promise<undefined>>(async () => undefined),
+}));
+const updateMock = vi.fn<() => { set: typeof updateSetMock }>(() => ({ set: updateSetMock }));
 
-const fromMock = vi.fn((table: unknown) => {
-  if (table === user) {
-    return { where: () => ({ limit: async () => userLookupRows }) };
-  }
-  if (table === account) {
-    return { where: () => ({ limit: async () => accountLookupRows }) };
-  }
-  throw new Error("Unexpected table passed to mocked db.select().from() in auth.routes.test.ts");
-});
-const selectMock = vi.fn(() => ({ from: fromMock }));
+const fromMock = vi.fn<(table: unknown) => { where: () => { limit: () => Promise<readonly unknown[]> } }>(
+  (table: unknown) => {
+    if (table === user) {
+      return { where: () => ({ limit: async () => userLookupRows }) };
+    }
+    if (table === account) {
+      return { where: () => ({ limit: async () => accountLookupRows }) };
+    }
+    throw new Error("Unexpected table passed to mocked db.select().from() in auth.routes.test.ts");
+  },
+);
+const selectMock = vi.fn<() => { from: typeof fromMock }>(() => ({ from: fromMock }));
 
 vi.mock("#src/db/index.js", () => ({ db: { select: selectMock, update: updateMock } }));
 

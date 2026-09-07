@@ -23,15 +23,15 @@ stubServerEnvironment();
 vi.mock("dotenv/config", () => ({}));
 
 const whereMock = vi.fn<(...args: readonly unknown[]) => Promise<readonly unknown[]>>();
-const fromMock = vi.fn(() => ({ where: whereMock }));
-const selectMock = vi.fn(() => ({ from: fromMock }));
+const fromMock = vi.fn<() => { where: typeof whereMock }>(() => ({ where: whereMock }));
+const selectMock = vi.fn<() => { from: typeof fromMock }>(() => ({ from: fromMock }));
 
 vi.mock("#src/db/index.js", () => ({ db: { select: selectMock } }));
 
 const findSnapshot = vi.fn<(...args: readonly unknown[]) => unknown>();
 vi.mock("#src/modules/rnd/funding/equity-snapshot.service.js", () => ({
   findSnapshot: (...args: readonly unknown[]) => findSnapshot(...args),
-  recomputeEquitySnapshot: vi.fn(),
+  recomputeEquitySnapshot: vi.fn<(...args: readonly unknown[]) => unknown>(),
 }));
 
 const { bakePie, PIE_BAKE_ACKNOWLEDGEMENT } = await import("#src/modules/rnd/funding/pie-bake.service.js");
