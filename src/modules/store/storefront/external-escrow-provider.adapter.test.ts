@@ -1,8 +1,7 @@
-import { createHmac } from "node:crypto";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { stubServerEnvironment } from "#src/test-support/server-env.js";
+import { buildSignedWebhookRequest, signWebhookBody } from "#src/test-support/webhook-signing.js";
 
 stubServerEnvironment();
 vi.mock("#src/db/index.js", () => ({ db: {}, pool: {} }));
@@ -18,10 +17,7 @@ const {
 const SIGNING_SECRET = "escrow_signing_secret_for_tests";
 
 function signBody(rawBody: Buffer, timestampSeconds: number, secret = SIGNING_SECRET): string {
-  return createHmac("sha256", secret)
-    .update(`${String(timestampSeconds)}.`)
-    .update(rawBody)
-    .digest("hex");
+  return signWebhookBody(rawBody, timestampSeconds, secret);
 }
 
 function buildSignedWebhook(
@@ -31,15 +27,9 @@ function buildSignedWebhook(
   readonly rawBody: Buffer;
   readonly headers: Record<string, string>;
 } {
-  const rawBody = Buffer.from(JSON.stringify(body), "utf8");
-  const timestampSeconds = options.timestampSeconds ?? Math.floor(Date.now() / 1000);
-  return {
-    rawBody,
-    headers: {
-      "x-qatoto-escrow-timestamp": String(timestampSeconds),
-      "x-qatoto-escrow-signature": signBody(rawBody, timestampSeconds, options.secret),
-    },
-  };
+  return buildSignedWebhookRequest(body, options.secret ?? SIGNING_SECRET, {
+    timestampSeconds: options.timestampSeconds,
+  });
 }
 
 const MILESTONE_PLAN = [

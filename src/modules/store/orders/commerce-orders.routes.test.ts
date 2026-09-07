@@ -129,6 +129,19 @@ const arrivalWindowStubs = vi.hoisted(() => ({
 
 vi.mock("#src/modules/store/fulfillment/commerce-arrival-window.service.js", () => arrivalWindowStubs);
 
+const earningsStubs = vi.hoisted(() => ({
+  getSellerEarnings: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
+
+vi.mock("#src/modules/store/orders/commerce-earnings.service.js", () => earningsStubs);
+
+const settlementAttestationStubs = vi.hoisted(() => ({
+  listSettlementAttestations: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+  recordSettlementAttestation: vi.fn<(...arguments_: readonly unknown[]) => unknown>(),
+}));
+
+vi.mock("#src/modules/store/orders/commerce-settlement-attestation.service.js", () => settlementAttestationStubs);
+
 const ORDER_SUMMARY = {
   id: "order-1",
   buyerOrganizationId: BUYER_ORGANIZATION_ID,
@@ -286,5 +299,155 @@ describe("commerce order routes", () => {
     const response = await request(app).get("/commerce/orders/order-owned-by-another-tenant/arrival-window");
 
     expect(response.status).toBe(404);
+  });
+
+  describe("GET /commerce/provider/earnings", () => {
+    it("loads lifetime earnings when no window is given", async () => {
+      earningsStubs.getSellerEarnings.mockResolvedValue({
+        success: true,
+        value: { rows: [{ currency: "USD", totalInCents: 500_000 }] },
+      });
+
+      const response = await request(app).get("/commerce/provider/earnings");
+
+      expect(response.status).toBe(200);
+      expect(earningsStubs.getSellerEarnings).toHaveBeenCalledWith(
+        { organizationId: BUYER_ORGANIZATION_ID },
+        { from: undefined, to: undefined },
+      );
+      expect(response.headers["cache-control"]).toBe("no-store");
+    });
+
+    it("passes a from/to window through as dates", async () => {
+      earningsStubs.getSellerEarnings.mockResolvedValue({ success: true, value: { rows: [] } });
+
+      const response = await request(app)
+        .get("/commerce/provider/earnings")
+        .query({ from: "2026-01-01T00:00:00.000Z", to: "2026-02-01T00:00:00.000Z" });
+
+      expect(response.status).toBe(200);
+      expect(earningsStubs.getSellerEarnings).toHaveBeenCalledWith(
+        { organizationId: BUYER_ORGANIZATION_ID },
+        { from: new Date("2026-01-01T00:00:00.000Z"), to: new Date("2026-02-01T00:00:00.000Z") },
+      );
+    });
+
+    it("rejects a currency filter — the schema declares none", async () => {
+      const response = await request(app).get("/commerce/provider/earnings").query({ currency: "USD" });
+
+      expect(response.status).toBe(422);
+      expect(earningsStubs.getSellerEarnings).not.toHaveBeenCalled();
+    });
+
+    it("maps INVALID_WINDOW to 422", async () => {
+      earningsStubs.getSellerEarnings.mockResolvedValue({
+        success: false,
+        error: { type: "INVALID_WINDOW", message: "`from` must be before `to`." },
+      });
+
+      const response = await request(app)
+        .get("/commerce/provider/earnings")
+        .query({ from: "2026-02-01T00:00:00.000Z", to: "2026-01-01T00:00:00.000Z" });
+
+      expect(response.status).toBe(422);
+    });
+  });
+
+  describe("GET /commerce/orders/:orderId/settlement-attestations", () => {
+    it("lists both parties' attestations for an order", async () => {
+      settlementAttestationStubs.listSettlementAttestations.mockResolvedValue({
+        success: true,
+        value: [{ id: "attestation_1", attestationKind: "payment_sent" }],
+      });
+
+      const response = await request(app).get("/commerce/orders/order-1/settlement-attestations");
+
+      expect(response.status).toBe(200);
+      expect(settlementAttestationStubs.listSettlementAttestations).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
+        "order-1",
+      );
+      expect(response.body.data).toEqual([{ id: "attestation_1", attestationKind: "payment_sent" }]);
+    });
+
+    it("answers 404, not 403, for an order this organization is not a party to", async () => {
+      settlementAttestationStubs.listSettlementAttestations.mockResolvedValue({
+        success: false,
+        error: { type: "NOT_FOUND" },
+      });
+
+      const response = await request(app).get("/commerce/orders/order-owned-by-another-tenant/settlement-attestations");
+
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe("POST /commerce/orders/:orderId/settlement-attestations", () => {
+    const path = "/commerce/orders/order-1/settlement-attestations";
+    const validBody = { amountInCents: 100_000, occurredAt: "2026-03-01T00:00:00.000Z" };
+
+    it("requires an Idempotency-Key header", async () => {
+      const response = await request(app).post(path).send(validBody);
+
+      expect(response.status).toBe(400);
+      expect(settlementAttestationStubs.recordSettlementAttestation).not.toHaveBeenCalled();
+    });
+
+    it("records the attestation and answers 201 with the whole list", async () => {
+      settlementAttestationStubs.recordSettlementAttestation.mockResolvedValue({
+        success: true,
+        value: [{ id: "attestation_1", attestationKind: "payment_sent" }],
+      });
+
+      const response = await request(app).post(path).set("Idempotency-Key", "attestation_key_1").send(validBody);
+
+      expect(response.status).toBe(201);
+      expect(settlementAttestationStubs.recordSettlementAttestation).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: BUYER_ORGANIZATION_ID }),
+        "order-1",
+        {
+          amountInCents: 100_000,
+          occurredAt: new Date("2026-03-01T00:00:00.000Z"),
+          referenceNote: null,
+        },
+      );
+    });
+
+    /**
+     * The kind (payment_sent vs payment_received) is derived server-side from which party
+     * the caller is, per the schema's own docs — a client cannot claim the other side's role.
+     */
+    it("rejects a client-supplied attestationKind with 422", async () => {
+      const response = await request(app)
+        .post(path)
+        .set("Idempotency-Key", "attestation_key_2")
+        .send({ ...validBody, attestationKind: "payment_received" });
+
+      expect(response.status).toBe(422);
+      expect(settlementAttestationStubs.recordSettlementAttestation).not.toHaveBeenCalled();
+    });
+
+    it("maps RAIL_NOT_ATTESTABLE to 409 with the settlement rail in the response", async () => {
+      settlementAttestationStubs.recordSettlementAttestation.mockResolvedValue({
+        success: false,
+        error: { type: "RAIL_NOT_ATTESTABLE", settlementRail: "external_escrow" },
+      });
+
+      const response = await request(app).post(path).set("Idempotency-Key", "attestation_key_3").send(validBody);
+
+      expect(response.status).toBe(409);
+      expect(response.body.data).toEqual({ settlementRail: "external_escrow" });
+    });
+
+    it("maps ALREADY_ATTESTED to 409, since recorded payments are never edited", async () => {
+      settlementAttestationStubs.recordSettlementAttestation.mockResolvedValue({
+        success: false,
+        error: { type: "ALREADY_ATTESTED", attestationKind: "payment_sent" },
+      });
+
+      const response = await request(app).post(path).set("Idempotency-Key", "attestation_key_4").send(validBody);
+
+      expect(response.status).toBe(409);
+    });
   });
 });

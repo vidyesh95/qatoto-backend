@@ -1,3 +1,4 @@
+import { APIError } from "better-auth/api";
 import { vi } from "vitest";
 import { z } from "zod";
 
@@ -81,7 +82,60 @@ export function stampTestSession(
 }
 
 /**
- * The `#src/lib/auth.js` surface the middleware touches.
+ * ---- Signup OTP flow (`auth.controller.ts`'s `createNewUserAccount` / `linkPasswordOrReject`) ----
+ *
+ * Same mutable-box reasoning as `currentSessionUser` above: `vi.mock` factories are
+ * hoisted, so these have to be read at call time rather than closed over per test.
+ */
+
+/**
+ * What `auth.api.getVerificationOTP` answers with. `null` (the default) means "no code
+ * was ever sent" — every `/signup/complete` attempt reports 401 until a test calls this
+ * with the code it's about to submit.
+ */
+let stubbedVerificationOtp: string | null = null;
+
+export function stubVerificationOtp(otp: string | null): void {
+  stubbedVerificationOtp = otp;
+}
+
+type SignupPathOutcome = "success" | "throws";
+
+/**
+ * Forces `auth.api.signUpEmail` (brand-new-email path) to either resolve or throw the
+ * same `APIError` Better Auth throws when the email was claimed between the lookup and
+ * the call — `createNewUserAccount` maps that race to a 409.
+ */
+let stubbedSignUpEmailOutcome: SignupPathOutcome = "success";
+export function stubSignUpEmailOutcome(outcome: SignupPathOutcome): void {
+  stubbedSignUpEmailOutcome = outcome;
+}
+
+/**
+ * Forces `auth.api.signInEmailOTP` (existing-OAuth-user attach-password path) to either
+ * resolve or throw — `linkPasswordOrReject` maps a thrown `APIError` here to a 401
+ * (wrong/expired OTP).
+ */
+let stubbedSignInEmailOtpOutcome: SignupPathOutcome = "success";
+export function stubSignInEmailOtpOutcome(outcome: SignupPathOutcome): void {
+  stubbedSignInEmailOtpOutcome = outcome;
+}
+
+/** Resets every signup stub to its default — call from `beforeEach` in signup tests. */
+export function resetSignupStubs(): void {
+  stubbedVerificationOtp = null;
+  stubbedSignUpEmailOutcome = "success";
+  stubbedSignInEmailOtpOutcome = "success";
+}
+
+function fakeAuthHeaders(setCookies: readonly string[] = ["better-auth.session=test; Path=/"]): {
+  getSetCookie: () => string[];
+} {
+  return { getSetCookie: () => [...setCookies] };
+}
+
+/**
+ * The `#src/lib/auth.js` surface the middleware and the signup controller touch.
  *
  * `requireAuth` calls `auth.api.getSession`; `attachOptionalUser` and
  * `requireIdentifiedUser` read the same session. Returning `null` is what a signed-out
@@ -90,6 +144,11 @@ export function stampTestSession(
  *
  * Reads the stamped header when there is one, and falls back to the box otherwise — a unit
  * test that calls `getSession` directly, with no request behind it, still works.
+ *
+ * The signup-flow methods (`getVerificationOTP`, `signUpEmail`, `signInEmailOTP`,
+ * `setPassword`) and the sibling `sendSignupOtp` export are stubbed here too, driven by
+ * the boxes above, so `auth.controller.ts`'s signup handlers can be exercised at the HTTP
+ * layer without a real Better Auth instance or database.
  */
 export function authModuleMock(): Record<string, unknown> {
   return {
@@ -113,8 +172,23 @@ export function authModuleMock(): Record<string, unknown> {
             return user === null ? null : { user, session: { id: "session_test" } };
           },
         ),
+        getVerificationOTP: vi.fn(async () => ({ otp: stubbedVerificationOtp })),
+        signUpEmail: vi.fn(async () => {
+          if (stubbedSignUpEmailOutcome === "throws") {
+            throw new APIError("CONFLICT", { message: "Email already claimed." });
+          }
+          return { headers: fakeAuthHeaders() };
+        }),
+        signInEmailOTP: vi.fn(async () => {
+          if (stubbedSignInEmailOtpOutcome === "throws") {
+            throw new APIError("UNAUTHORIZED", { message: "Invalid or expired code." });
+          }
+          return { headers: fakeAuthHeaders() };
+        }),
+        setPassword: vi.fn(async () => undefined),
       },
       handler: vi.fn(),
     },
+    sendSignupOtp: vi.fn(async () => ({ success: true, value: undefined })),
   };
 }
