@@ -42,6 +42,7 @@
     "db:seed-supplier-capabilities": "tsx --conditions=development scripts/seed-supplier-capabilities.ts",
     "db:seed-research-programs": "tsx --conditions=development scripts/seed-research-programs.ts",
     "db:seed-promotional-slides": "tsx --conditions=development scripts/seed-promotional-slides.ts",
+    "db:seed-blueprint-hero-slides": "tsx --conditions=development scripts/seed-blueprint-hero-slides.ts",
     "db:seed-store-demo": "tsx --conditions=development scripts/seed-store-demo.ts",
     "db:seed-store-ranking-dev": "tsx --conditions=development scripts/seed-store-ranking-dev.ts",
     "db:seed-content-categories": "tsx --conditions=development scripts/seed-content-categories.ts",

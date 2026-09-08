@@ -1017,10 +1017,15 @@ export async function deletePromotionalSlideImage(
  * what busts the browser cache.
  * ---------------------------------------------------------------------------------------
  */
-// THE FOLDER STRING KEEPS ITS OLD NAME ON PURPOSE. Every image the four live slides point at
-// is already stored under `qatoto/anime-hero-slides/`, and Cloudinary public ids are the
-// address, not a label — renaming this constant's VALUE would leave those assets orphaned
-// and every existing slide with a broken image. The identifier is renamed; the path is not.
+// THE FOLDER STRING KEEPS ITS OLD NAME ON PURPOSE. Every uploaded hero image ever written is
+// stored under `qatoto/anime-hero-slides/`, and Cloudinary public ids are the address, not a
+// label — renaming this constant's VALUE would leave those assets orphaned and every existing
+// slide with a broken image. The identifier is renamed; the path is not.
+//
+// (This comment previously claimed the four LIVE slides were already in this folder. They were
+// not: they were the rows migration 0149 seeded with site-relative `/dummy/…` paths, exactly as
+// `deleteBlueprintHeroSlideImage` below still describes. `db:seed-blueprint-hero-slides` moved
+// those four in here after the frontend deleted the files they pointed at.)
 const BLUEPRINT_HERO_SLIDE_FOLDER = "qatoto/anime-hero-slides";
 
 /** The stable, deterministic public id a Blueprints hero slide's image always lives at. */
