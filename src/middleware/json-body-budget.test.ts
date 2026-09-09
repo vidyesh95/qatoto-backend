@@ -214,6 +214,19 @@ describe("per-route body caps", () => {
       // sweep would treat it as a JSON body-reading route, and it would be reported as
       // missing a declared cap.
       import("#src/modules/store/catalog/upload-commerce-category-image.js"),
+      // A47's product 3D model (`61a9095`). THIS ONE IS NOT HERE FOR THE TEXT-PART REASON the
+      // four entries above give — no text field rides beside the file. It reads `req.body`
+      // precisely in order to REFUSE one: `uploadModel` runs `EmptyBodySchema.safeParse(req.body)`
+      // so a stray field is a 422, the way the JSON routes refuse unknown keys with `.strict()`.
+      // That read is what `READS_BODY` matches, so without this import the sweep would treat the
+      // route as a JSON body-reading one and report it as missing a declared cap.
+      //
+      // A cap is not the answer and must not be added: multer owns this stream, so
+      // `rawBodyBytes` is never set and `longFormBody` would be inert — `products.routes.ts`
+      // says so on the route itself. The bytes are bounded by multer's 10 MB cap,
+      // `MAX_PRODUCT_MODEL_BYTES`, imported from `src/modules/store/catalog/glb.ts` so the two
+      // cannot disagree.
+      import("#src/modules/store/catalog/upload-product-model.js"),
     ]);
 
     const router: unknown = Reflect.get(app, "router");
