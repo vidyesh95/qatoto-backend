@@ -6,6 +6,33 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     /**
+     * `clearMocks` IS ABSENT ON PURPOSE, and since Vitest 5 that means TRUE.
+     *
+     * v5 flipped the default, so `vi.clearAllMocks()` now runs before every test. Three facts
+     * make that safe here, and none of them is obvious from the option name:
+     *
+     * 1. IT CLEARS HISTORY, NOT IMPLEMENTATIONS. `mockClear` empties `mock.calls`/`results`;
+     *    only `mockReset` would drop a stub. Every stub in this suite is a `.mockResolvedValue`
+     *    or a `vi.fn(impl)` — `test-support/database-mock.ts`, `auth-mock.ts`, the factories in
+     *    `rate-limit.test.ts` — and all of them survive.
+     * 2. IT FIRES BEFORE `beforeEach`, not after. The clear runs in the runner's
+     *    `onBeforeTryTask`, which the runner calls immediately ahead of the `beforeEach` chain.
+     *    So per-test setup is never clobbered — including `pie-bake.service.test.ts`, the one
+     *    file that calls `vi.resetAllMocks()` and then rebuilds its query chain in `beforeEach`.
+     * 3. THE ONLY EXPOSURE WOULD BE A MOCK CALLED IN `beforeAll` AND ASSERTED IN AN `it()`,
+     *    because that call history is now gone by the time the test body runs. Measured, not
+     *    assumed: none of the 76 `beforeAll` bodies configures or invokes a stub — they build
+     *    the app, dynamic-import, or `vi.stubEnv`.
+     *
+     * MEASURED BEFORE UPGRADING, by setting `clearMocks: true` on Vitest 4 — same hook, same
+     * position, so an exact simulation — and running the suite four times. Zero deterministic
+     * casualties. The failures that did appear were a different file each run and passed when
+     * run alone: the flake documented below, not this.
+     *
+     * The 84 `vi.clearAllMocks()` calls in `beforeEach` around the suite are now redundant.
+     * They are harmless and deliberately left in place; removing them is a separate change.
+     */
+    /**
      * FOUR TIMES THE 5000 ms DEFAULT, and the reason is contention rather than slow code.
      *
      * `test:shuffle` runs with `--maxWorkers=50%`, and this machine reports

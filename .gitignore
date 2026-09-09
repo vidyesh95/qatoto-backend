@@ -7,3 +7,10 @@
 .env
 /certs
 .DS_Store
+
+# Vitest 5 writes every generated artifact here — blob reports, html, json, junit,
+# and test attachments. Nothing in `scripts` emits them today, but `--reporter=json`
+# during a debugging session would otherwise leave untracked files in the repo root.
+.vitest
+# `test:coverage` (v8 provider) writes here.
+/coverage
