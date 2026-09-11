@@ -1,20 +1,30 @@
 import express from "express";
 
+import { idempotency } from "#src/middleware/idempotency.js";
 import { compactBody } from "#src/middleware/json-body.js";
 import {
   blueprintHeroImageUploadLimiter,
   blueprintHeroWriteLimiter,
+  showcaseLaunchModerationLimiter,
+  showcaseLaunchSubmitLimiter,
+  showcaseWriteUpImageUploadLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
+import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as blueprintHeroController from "#src/modules/home/blueprints/blueprint-hero.controller.js";
+import * as showcaseLaunchController from "#src/modules/home/blueprints/showcase-launch.controller.js";
 import { uploadBlueprintHeroSlideImageFile } from "#src/modules/home/blueprints/upload-blueprint-hero-image.js";
+import {
+  uploadShowcaseLaunchSubmissionFiles,
+  uploadShowcaseWriteUpImageFile,
+} from "#src/modules/home/blueprints/upload-showcase-launch-images.js";
 
 const router = express.Router();
 
 /**
- * The public `/blueprints` surface: the hero carousel at the top of the Blueprints hub.
+ * The `/blueprints` surface: the hero carousel, and posting and moderating showcase launches.
  *
- * ONE PUBLIC ROUTE AND SIX ADMIN ROUTES. The public read is BARE — no requireAuth, no
+ * THE HERO: ONE PUBLIC ROUTE AND SIX ADMIN ROUTES. The public read is BARE — no requireAuth, no
  * attachOptionalUser, no limiter — for the same reasons as GET /promotions/slides: the
  * payload is identical for every visitor, and an IP-keyed limiter on a page's opening
  * element is a self-inflicted outage behind a CDN or corporate NAT.
@@ -89,6 +99,62 @@ router.delete(
   requireAuth,
   blueprintHeroWriteLimiter,
   blueprintHeroController.deleteHeroSlide,
+);
+
+/**
+ * SHOWCASE LAUNCHES — three maker routes and two moderator routes. NONE IS PUBLIC: the public
+ * showcase pages still read frontend fixtures, so nothing here serves a reader.
+ *
+ * CHAIN ORDER ON THE MULTIPART ROUTES IS auth -> limiter -> requireIdentifiedUser -> parser ->
+ * idempotency, which differs from the JSON write routes elsewhere on purpose:
+ *   * identity BEFORE the parser, so an anonymous session is refused before multer buffers
+ *     5 MB into memory;
+ *   * idempotency AFTER the parser, because its fingerprint hashes the uploaded file — before the
+ *     parser there is no file to hash, and one key reused with a different image would replay.
+ *
+ * The moderator routes check `moderate_content` inside the controller, before any id is read.
+ *
+ * ROUTE ORDER: `/showcases/write-up-images` and `/showcases/mine` are literals. No
+ * `/showcases/:param` route exists yet; when public reads add one, it must be declared below
+ * both.
+ */
+
+/** POST /blueprints/showcases/write-up-images — one image, stored unclaimed until a launch uses it. */
+router.post(
+  "/showcases/write-up-images",
+  requireAuth,
+  showcaseWriteUpImageUploadLimiter,
+  requireIdentifiedUser,
+  uploadShowcaseWriteUpImageFile,
+  showcaseLaunchController.uploadWriteUpImage,
+);
+
+/** POST /blueprints/showcases — multipart: `draft` JSON text part, then `headingImage`. */
+router.post(
+  "/showcases",
+  requireAuth,
+  showcaseLaunchSubmitLimiter,
+  requireIdentifiedUser,
+  uploadShowcaseLaunchSubmissionFiles,
+  idempotency({ required: true }),
+  showcaseLaunchController.submitLaunch,
+);
+
+/** GET /blueprints/showcases/mine — the maker's own launches, every state. */
+router.get("/showcases/mine", requireAuth, showcaseLaunchController.listMyLaunches);
+
+/** GET /blueprints/admin/showcases/review-queue — `moderate_content`, oldest first. */
+router.get("/admin/showcases/review-queue", requireAuth, showcaseLaunchController.listReviewQueue);
+
+/** POST /blueprints/admin/showcases/:submissionId/moderate — publish or send back. */
+router.post(
+  "/admin/showcases/:submissionId/moderate",
+  requireAuth,
+  showcaseLaunchModerationLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  idempotency({ required: true }),
+  showcaseLaunchController.moderateLaunch,
 );
 
 export default router;

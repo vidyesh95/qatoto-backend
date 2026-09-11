@@ -785,6 +785,31 @@ export async function handleSweepPendingDocumentScansTick(
 }
 
 /**
+ * The daily showcase image sweep tick (Blueprints showcase launches).
+ *
+ * Quantized to the UTC day, so a double cron fire collapses into one real job, and the job's
+ * 24-hour cutoff is measured from a stable instant rather than from whenever it happened to run.
+ */
+export async function handleSweepOrphanShowcaseImagesTick(
+  _rawPayload: unknown,
+  readClock: ClockReader = systemClock,
+): Promise<void> {
+  const asOfIso = truncateToUtcDayStart(readClock()).toISOString();
+
+  const enqueueResult = await sendJob(
+    JOB_NAMES.sweepOrphanShowcaseImages,
+    { asOf: asOfIso },
+    { idempotencyKey: idempotencyKeyFor.sweepOrphanShowcaseImages(asOfIso) },
+  );
+
+  if (!enqueueResult.success) {
+    throw new Error(
+      `sweep-orphan-showcase-images-tick: enqueue failed (${enqueueResult.error.type})`,
+    );
+  }
+}
+
+/**
  * The hourly external-connector reconciliation tick (STORE Phase 14).
  *
  * Quantized to the HOUR like its siblings, so a double cron fire collapses to one real job.

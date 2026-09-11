@@ -168,6 +168,11 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   "anime_hero_slide_reordered",
   "anime_hero_slide_image_replaced",
   "anime_hero_slide_deleted",
+  // Blueprints showcase launches — `showcase-launch-moderation`. A published launch puts a
+  // maker's claims under a public address; a rejection sends their work back with a reason.
+  // Both name an accountable human. Posting a launch is a member action and is not here.
+  "showcase_launch_published",
+  "showcase_launch_rejected",
   // Commerce content moderation — `commerce-content-reports` (Appendix A12). Staff
   // decisions only. An AUTOMATIC threshold hide never reaches this chain: this table's
   // `actorUserId` is NOT NULL because every entry must name an accountable human, and

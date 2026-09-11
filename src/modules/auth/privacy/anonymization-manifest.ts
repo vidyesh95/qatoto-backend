@@ -74,6 +74,10 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 5(2) accountability",
       note: "This IS the record that an erasure happened. Erasing it would destroy the only proof the right was honoured.",
     },
+    // Nullable `set null` attribution on a platform-authored slide; the audit chain is the
+    // accountability record. These two were missing, which the coverage script reported.
+    "anime_hero_slide.created_by_user_id": { kind: "null_out" },
+    "anime_hero_slide.updated_by_user_id": { kind: "null_out" },
     "anime_series.owner_id": { kind: "delete_rows" },
     "claim_verification_run.triggered_by_user_id": {
       kind: "retain",
@@ -503,6 +507,15 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       note: "Names who owns or founded a thing other people are still working on or buying from. The row outlives the account by design (rule R1).",
     },
     "session.user_id": { kind: "delete_rows" },
+    // Deleting an account deletes its launches (owner decision). The team rows cascade with the
+    // launch; the images are removed from Cloudinary by `purge_showcase_launch_images` first.
+    "showcase_launch.author_user_id": { kind: "delete_rows" },
+    "showcase_launch.reviewed_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
+    },
+    "showcase_launch_write_up_image.uploaded_by_user_id": { kind: "delete_rows" },
     "store_pathway.created_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",

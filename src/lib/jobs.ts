@@ -181,6 +181,10 @@ export const JOB_NAMES = {
   scanEncryptedDocument: "scan-encrypted-document",
   sweepPendingDocumentScansTick: "sweep-pending-document-scans-tick",
   sweepPendingDocumentScans: "sweep-pending-document-scans",
+  // BLUEPRINTS — showcase launches. Daily: deletes write-up images no launch claimed within a
+  // day, and any showcase asset left with no row naming it.
+  sweepOrphanShowcaseImagesTick: "sweep-orphan-showcase-images-tick",
+  sweepOrphanShowcaseImages: "sweep-orphan-showcase-images",
   // R&D §10A — import intelligence. The ingest is weekly because annual trade statistics
   // are revised a few times a year, not nightly; the assessment is daily because the
   // supplier and substitute inputs it also reads change whenever a moderator edits one.
@@ -1369,6 +1373,31 @@ export const JOB_DEFINITIONS = {
       deadLetter: deadLetterNameFor(JOB_NAMES.sweepPendingDocumentScans),
     },
   },
+  [JOB_NAMES.sweepOrphanShowcaseImagesTick]: {
+    name: JOB_NAMES.sweepOrphanShowcaseImagesTick,
+    payloadSchema: TickPayloadSchema,
+    queueOptions: {
+      policy: "exclusive",
+      retryLimit: 2,
+      retryDelay: 60,
+      retryBackoff: true,
+      retryDelayMax: 600,
+      expireInSeconds: 60,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepOrphanShowcaseImagesTick),
+    },
+  },
+  [JOB_NAMES.sweepOrphanShowcaseImages]: {
+    name: JOB_NAMES.sweepOrphanShowcaseImages,
+    payloadSchema: AsOfOnlyPayloadSchema,
+    queueOptions: {
+      // `singleton`: two concurrent sweeps would list and delete the same assets. Harmless — a
+      // delete of a gone asset succeeds — but it spends the Admin API budget twice.
+      policy: "singleton",
+      ...RECOMPUTE_RETRY,
+      expireInSeconds: 900,
+      deadLetter: deadLetterNameFor(JOB_NAMES.sweepOrphanShowcaseImages),
+    },
+  },
   [JOB_NAMES.deriveProductRelationsTick]: {
     name: JOB_NAMES.deriveProductRelationsTick,
     payloadSchema: TickPayloadSchema,
@@ -1702,6 +1731,10 @@ export const SCHEDULED_JOB_CRONS: Readonly<Record<string, string>> = {
   // STORE Phase 14b — the lost-enqueue sweep. Every fifteen minutes rather than hourly:
   // a buyer waiting on artwork to become attachable is blocked until it runs.
   [JOB_NAMES.sweepPendingDocumentScansTick]: "*/15 * * * *",
+  // BLUEPRINTS — the showcase image sweep. Daily at 04:25 UTC, a slot nothing else occupies.
+  // Nothing waits on it: an unclaimed upload is invisible to readers, so a late run only costs
+  // storage for a few more hours.
+  [JOB_NAMES.sweepOrphanShowcaseImagesTick]: "25 4 * * *",
   // STORE Phase 9 — nightly relation derivation. 02:40 UTC sits after the 01:xx
   // recompute chain and well before the 04:55 prune, so a night's completed orders are
   // settled before their co-occurrence is mined.
@@ -2068,6 +2101,8 @@ export const JOB_PAYLOAD_SCHEMAS = {
   [JOB_NAMES.scanEncryptedDocument]: ScanEncryptedDocumentPayloadSchema,
   [JOB_NAMES.sweepPendingDocumentScansTick]: TickPayloadSchema,
   [JOB_NAMES.sweepPendingDocumentScans]: AsOfOnlyPayloadSchema,
+  [JOB_NAMES.sweepOrphanShowcaseImagesTick]: TickPayloadSchema,
+  [JOB_NAMES.sweepOrphanShowcaseImages]: AsOfOnlyPayloadSchema,
   [JOB_NAMES.syncComtradeTradeFlowsTick]: TickPayloadSchema,
   [JOB_NAMES.syncComtradeTradeFlows]: SyncComtradeTradeFlowsPayloadSchema,
   [JOB_NAMES.recomputeLocalizationAssessmentsTick]: TickPayloadSchema,
@@ -2269,6 +2304,8 @@ export const idempotencyKeyFor = {
     `${JOB_NAMES.scanEncryptedDocument}:${documentId}`,
   sweepPendingDocumentScans: (asOfIso: string): string =>
     `${JOB_NAMES.sweepPendingDocumentScans}:${asOfIso}`,
+  sweepOrphanShowcaseImages: (asOfIso: string): string =>
+    `${JOB_NAMES.sweepOrphanShowcaseImages}:${asOfIso}`,
   reconcileCommercePayments: (asOfIso: string): string =>
     `${JOB_NAMES.reconcileCommercePayments}:${asOfIso}`,
   deriveProductRelations: (asOfIso: string): string =>

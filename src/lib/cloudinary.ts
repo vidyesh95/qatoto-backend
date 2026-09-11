@@ -1,4 +1,5 @@
 import { v2 as cloudinary } from "cloudinary";
+import { z } from "zod";
 
 import { config } from "#src/config/index.js";
 import type { Result } from "#src/types/index.js";
@@ -1110,6 +1111,188 @@ export async function deleteBlueprintHeroSlideImage(
       },
     };
   }
+}
+
+/**
+ * ---------------------------------------------------------------------------------------
+ * Blueprints showcase launch images — the square heading image and write-up images.
+ *
+ * TWO ADDRESS SHAPES IN ONE FOLDER, and the difference is when the owning row exists:
+ *   * `qatoto/showcase-images/<launchId>/heading` — the launch id is minted before the upload,
+ *     so the heading image lives under its launch;
+ *   * `qatoto/showcase-images/write-up/<imageId>` — a write-up image is uploaded while the maker
+ *     is still writing, before any launch exists, so it is addressed by its own row id.
+ *
+ * NOT DETERMINISTIC-OVERWRITE LIKE THE HERO SLIDES. Every public id here is fresh, and the
+ * caller stores both the returned `secure_url` and the public id, so a delete never rebuilds an
+ * address and the orphan sweep can match assets to rows by public id.
+ * ---------------------------------------------------------------------------------------
+ */
+const SHOWCASE_IMAGE_FOLDER = "qatoto/showcase-images";
+
+/** Cloudinary's Admin API deletes at most this many public ids per call. */
+const CLOUDINARY_DELETE_BATCH_SIZE = 100;
+
+export function showcaseLaunchHeadingImagePublicId(launchId: string): string {
+  return `${SHOWCASE_IMAGE_FOLDER}/${launchId}/heading`;
+}
+
+export function showcaseWriteUpImagePublicId(imageId: string): string {
+  return `${SHOWCASE_IMAGE_FOLDER}/write-up/${imageId}`;
+}
+
+/**
+ * Upload one showcase image from an already-validated, re-encoded buffer. The buffer MUST have
+ * been through `validateAndNormalizeImage` first (CLAUDE.md §1.1).
+ */
+export async function uploadShowcaseImage(
+  publicId: string,
+  imageBuffer: Buffer,
+): Promise<Result<{ secureUrl: string }, CloudinaryError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const secureUrl = await new Promise<string>((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { public_id: publicId, resource_type: "image", overwrite: false },
+        (error, uploadResult) => {
+          if (error) {
+            reject(new Error(error.message));
+            return;
+          }
+          if (!uploadResult) {
+            reject(new Error("Cloudinary returned no result"));
+            return;
+          }
+          resolve(uploadResult.secure_url);
+        },
+      );
+      uploadStream.end(imageBuffer);
+    });
+
+    return { success: true, value: { secureUrl } };
+  } catch (uploadError) {
+    return {
+      success: false,
+      error: {
+        type: "UPLOAD_FAILED",
+        cause: uploadError instanceof Error ? uploadError.message : String(uploadError),
+      },
+    };
+  }
+}
+
+/**
+ * Delete showcase images by public id. An id that is already gone counts as deleted — the end
+ * state is reached either way.
+ *
+ * ONE ID GOES THROUGH `uploader.destroy`, MANY THROUGH THE ADMIN API. The Admin API is rate
+ * limited per hour on this account's plan, and the common single delete — a heading image whose
+ * launch lost a name race — should not spend that budget.
+ */
+export async function deleteShowcaseImages(
+  publicIds: readonly string[],
+): Promise<Result<{ requestedCount: number }, CloudinaryError>> {
+  if (publicIds.length === 0) {
+    return { success: true, value: { requestedCount: 0 } };
+  }
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  try {
+    const [onlyPublicId] = publicIds;
+    if (publicIds.length === 1 && onlyPublicId !== undefined) {
+      await cloudinary.uploader.destroy(onlyPublicId, { invalidate: true });
+    } else {
+      for (
+        let batchStart = 0;
+        batchStart < publicIds.length;
+        batchStart += CLOUDINARY_DELETE_BATCH_SIZE
+      ) {
+        await cloudinary.api.delete_resources(
+          publicIds.slice(batchStart, batchStart + CLOUDINARY_DELETE_BATCH_SIZE),
+          { resource_type: "image", invalidate: true },
+        );
+      }
+    }
+    return { success: true, value: { requestedCount: publicIds.length } };
+  } catch (deleteError) {
+    return {
+      success: false,
+      error: {
+        type: "DELETE_FAILED",
+        cause: deleteError instanceof Error ? deleteError.message : String(deleteError),
+      },
+    };
+  }
+}
+
+export type ShowcaseImageListingError =
+  | { type: "NOT_CONFIGURED" }
+  | { type: "LIST_FAILED"; cause: string };
+
+export interface ShowcaseImageAssetPage {
+  readonly assets: readonly { readonly publicId: string; readonly createdAt: Date }[];
+  readonly nextCursor: string | null;
+}
+
+/**
+ * The SDK types this response as `any`, so it is parsed rather than trusted — a changed field name
+ * must become a listing failure, never a sweep that decides every asset is unreferenced.
+ */
+const CloudinaryResourceListingSchema = z.object({
+  resources: z.array(z.object({ public_id: z.string(), created_at: z.iso.datetime() })),
+  next_cursor: z.string().optional(),
+});
+
+/** One page of every asset under the showcase folder, for the orphan sweep. */
+export async function listShowcaseImageAssets(
+  nextCursor: string | null,
+): Promise<Result<ShowcaseImageAssetPage, ShowcaseImageListingError>> {
+  if (!ensureConfigured()) {
+    return { success: false, error: { type: "NOT_CONFIGURED" } };
+  }
+
+  let rawListing: unknown;
+  try {
+    rawListing = await cloudinary.api.resources({
+      type: "upload",
+      resource_type: "image",
+      prefix: `${SHOWCASE_IMAGE_FOLDER}/`,
+      max_results: 500,
+      ...(nextCursor === null ? {} : { next_cursor: nextCursor }),
+    });
+  } catch (listError) {
+    return {
+      success: false,
+      error: {
+        type: "LIST_FAILED",
+        cause: listError instanceof Error ? listError.message : String(listError),
+      },
+    };
+  }
+
+  const parsedListing = CloudinaryResourceListingSchema.safeParse(rawListing);
+  if (!parsedListing.success) {
+    return {
+      success: false,
+      error: { type: "LIST_FAILED", cause: "Cloudinary returned a listing in an unexpected shape" },
+    };
+  }
+
+  return {
+    success: true,
+    value: {
+      assets: parsedListing.data.resources.map((resource) => ({
+        publicId: resource.public_id,
+        createdAt: new Date(resource.created_at),
+      })),
+      nextCursor: parsedListing.data.next_cursor ?? null,
+    },
+  };
 }
 
 /**

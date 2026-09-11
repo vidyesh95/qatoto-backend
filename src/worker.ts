@@ -38,6 +38,7 @@ import {
   handleReconcileCommercePaymentsTick,
   handleReconcileConnectorStateTick,
   handleRecomputeLocalizationAssessmentsTick,
+  handleSweepOrphanShowcaseImagesTick,
   handleSweepPendingDocumentScansTick,
   handleSyncComtradeTradeFlowsTick,
 } from "#src/jobs/scheduled-ticks.js";
@@ -57,6 +58,7 @@ import {
   handleAssembleDataExport,
   handlePruneExpiredDataExports,
 } from "#src/modules/auth/privacy/data-export.job.js";
+import { handleSweepOrphanShowcaseImages } from "#src/modules/home/blueprints/sweep-orphan-showcase-images.js";
 import { handlePruneEngagementData } from "#src/modules/home/engagement/prune-engagement-data.js";
 import { handleRecomputeUserAffinities } from "#src/modules/home/engagement/recompute-user-affinities.js";
 import { handleRollupUserWatchActivity } from "#src/modules/home/engagement/rollup-user-watch-activity.js";
@@ -627,6 +629,19 @@ async function startWorker(): Promise<void> {
     JOB_NAMES.sweepPendingDocumentScans,
     workOptions,
     runJob(JOB_NAMES.sweepPendingDocumentScans, handleSweepPendingDocumentScans),
+  );
+
+  // Blueprints showcase launches — the daily sweep of unclaimed write-up images and of any
+  // showcase asset left with no row naming it.
+  await boss.work(
+    JOB_NAMES.sweepOrphanShowcaseImagesTick,
+    workOptions,
+    runJob(JOB_NAMES.sweepOrphanShowcaseImagesTick, handleSweepOrphanShowcaseImagesTick),
+  );
+  await boss.work(
+    JOB_NAMES.sweepOrphanShowcaseImages,
+    workOptions,
+    runJob(JOB_NAMES.sweepOrphanShowcaseImages, handleSweepOrphanShowcaseImages),
   );
 
   // R&D §10A — import intelligence. The weekly Comtrade ingest, the nightly feasibility

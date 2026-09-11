@@ -121,6 +121,10 @@ import {
   ReorderBlueprintHeroSlidesSchema,
   UpdateBlueprintHeroSlideSchema,
 } from "#src/modules/home/blueprints/blueprints.schemas.js";
+import {
+  ModerateShowcaseLaunchSchema,
+  SubmitShowcaseLaunchMultipartSchema,
+} from "#src/modules/home/blueprints/showcase-launch.schemas.js";
 import { ReplaceSpotlightSlotsSchema } from "#src/modules/home/spotlight/spotlight.schemas.js";
 import {
   CreateSupplierEngagementSchema,
@@ -482,6 +486,20 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   // PATCH /blueprints/admin/hero-slides/{slideId}/image is deliberately ABSENT, for the same
   // reason its promotional twin is: it carries only the file and its controller never
   // touches `req.body`, so an entry here would be an orphan the sweep reports.
+  // A launch travels as ONE `draft` JSON text part beside the file; this entry documents the
+  // parts, and the controller validates the parsed draft against `ShowcaseLaunchDraftSchema`.
+  "post /blueprints/showcases": {
+    schema: SubmitShowcaseLaunchMultipartSchema,
+    required: true,
+    contentType: "multipart/form-data",
+    binaryField: "headingImage",
+  },
+  // POST /blueprints/showcases/write-up-images is deliberately ABSENT: it carries only the file
+  // and its controller never touches `req.body`.
+  "post /blueprints/admin/showcases/{submissionId}/moderate": {
+    schema: ModerateShowcaseLaunchSchema,
+    required: true,
+  },
   "post /research-programs/{programSlug}/papers/{paperId}/file": {
     schema: AttachPaperFileSchema,
     required: true,

@@ -6,11 +6,13 @@ import {
   accountDeletionRequest,
   anonymizationStepLog,
   handleReservation,
+  showcaseLaunch,
+  showcaseLaunchWriteUpImage,
   user,
   video,
   videoDocument,
 } from "#src/db/schema.js";
-import { deleteUserAvatar } from "#src/lib/cloudinary.js";
+import { deleteShowcaseImages, deleteUserAvatar } from "#src/lib/cloudinary.js";
 import { PermanentJobError } from "#src/lib/jobs.js";
 import { logger } from "#src/lib/logger.js";
 import { readSqlStateCode } from "#src/lib/pg-errors.js";
@@ -350,6 +352,33 @@ export async function anonymizeAccount(
     );
   }
 
+  /**
+   * --- 1.6. Showcase launch images, before the loop below deletes the rows that name them.
+   *
+   * THE SAME POSITION ARGUMENT AS 1.5. `showcase_launch` and `showcase_launch_write_up_image` are
+   * `delete_rows` in the manifest, so after the loop no row is left carrying these public ids and
+   * the heading images and write-up screenshots would sit on Cloudinary forever.
+   *
+   * NOT THE `deleteUserAvatar` SHAPE, although that is also a Cloudinary delete: an avatar's
+   * public id is derived from the user id, so it can be found after the rows are gone. These
+   * cannot.
+   *
+   * A CDN FAILURE DOES NOT STOP THE ERASURE. The step logs the failure and records itself done;
+   * once the rows are deleted the assets have no row naming them, and the daily
+   * `sweep-orphan-showcase-images` job deletes them. An erasure stuck behind an image host would
+   * be the worse outcome for the person asking for it.
+   */
+  if (!completedSteps.has("purge_showcase_launch_images")) {
+    const stillPending = await assertStillPending(requestId);
+    if (!stillPending.success) return stillPending;
+
+    rowsByStep["purge_showcase_launch_images"] = await purgeShowcaseLaunchImages(
+      requestId,
+      userId,
+      isEnabled,
+    );
+  }
+
   for (const step of steps) {
     if (completedSteps.has(step.stepName)) continue;
 
@@ -509,6 +538,49 @@ async function purgeVideoDocumentObjects(
   }
 
   return documentCount;
+}
+
+/**
+ * Deletes every showcase launch heading image and write-up image this person uploaded, and
+ * reports how many. DRY RUN COUNTS RATHER THAN DELETES, like the step above.
+ */
+async function purgeShowcaseLaunchImages(
+  requestId: string,
+  userId: string,
+  isEnabled: boolean,
+): Promise<number> {
+  const [headingImageRows, writeUpImageRows] = await Promise.all([
+    db
+      .select({ publicId: showcaseLaunch.headingImagePublicId })
+      .from(showcaseLaunch)
+      .where(eq(showcaseLaunch.authorUserId, userId)),
+    db
+      .select({ publicId: showcaseLaunchWriteUpImage.publicId })
+      .from(showcaseLaunchWriteUpImage)
+      .where(eq(showcaseLaunchWriteUpImage.uploadedByUserId, userId)),
+  ]);
+  const imagePublicIds = [...headingImageRows, ...writeUpImageRows].map(
+    (imageRow) => imageRow.publicId,
+  );
+
+  if (!isEnabled) return imagePublicIds.length;
+
+  const deleteResult = await deleteShowcaseImages(imagePublicIds);
+  if (!deleteResult.success) {
+    logger.error(
+      "showcase launch images not deleted during anonymization; the orphan sweep removes them",
+      { userId, imageCount: imagePublicIds.length, errorType: deleteResult.error.type },
+    );
+  }
+
+  await db.insert(anonymizationStepLog).values({
+    requestId,
+    stepName: "purge_showcase_launch_images",
+    tableName: "showcase_launch",
+    rowsAffected: imagePublicIds.length,
+  });
+
+  return imagePublicIds.length;
 }
 
 async function purgeExportArchives(

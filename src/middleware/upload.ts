@@ -65,13 +65,39 @@ export interface SingleFileUploadOptions {
    * which pins it at 2 precisely so a different route cannot quietly widen it.
    */
   readonly textFieldLimit?: number;
+  /**
+   * Cap, in bytes, on each non-file part (multer's `fieldSize`). Unset keeps multer's default,
+   * which is right for routes whose text parts are a few short strings. Set it where a text part
+   * carries a whole document — the launch route's `draft` — so its size is part of the contract.
+   */
+  readonly textFieldMaximumBytes?: number;
+  /**
+   * When set, every 422 this parser answers ALSO carries `errors: { [field]: [message] }`, keyed
+   * by the part multer names or, failing that, by this key.
+   *
+   * WHY. A form that shows refusals next to the field they concern cannot place a bare message.
+   * The launch form puts "that is not an image" under its image picker; without a key the same
+   * sentence can only land in a generic banner. Opt-in, so every existing route keeps its bytes.
+   */
+  readonly fieldErrorKey?: string;
 }
 
 /** Thrown by the mimetype gate and caught below; never escapes this module. */
 const UNSUPPORTED_MEDIA_TYPE = "UNSUPPORTED_MEDIA_TYPE";
 
-function respond(res: Response, statusCode: 413 | 422, message: string): void {
-  res.status(statusCode).json({ status: "error", statusCode, message } satisfies ApiResponse);
+function respond(
+  res: Response,
+  statusCode: 413 | 422,
+  message: string,
+  errorFieldKey?: string,
+): void {
+  const body: ApiResponse & { readonly errors?: Readonly<Record<string, readonly string[]>> } = {
+    status: "error",
+    statusCode,
+    message,
+    ...(errorFieldKey === undefined ? {} : { errors: { [errorFieldKey]: [message] } }),
+  };
+  res.status(statusCode).json(body);
 }
 
 export function createSingleFileUpload(
@@ -83,6 +109,9 @@ export function createSingleFileUpload(
       fileSize: options.maximumBytes,
       files: 1,
       ...(options.textFieldLimit === undefined ? {} : { fields: options.textFieldLimit }),
+      ...(options.textFieldMaximumBytes === undefined
+        ? {}
+        : { fieldSize: options.textFieldMaximumBytes }),
     },
     fileFilter: (_req, file, callback) => {
       if (options.acceptsMediaType(file.mimetype)) {
@@ -108,12 +137,18 @@ export function createSingleFileUpload(
       // Checked before the general MulterError branch, and the order is safe either way:
       // the gate above throws a plain Error, so a MulterError can never carry this message.
       if (uploadError instanceof Error && uploadError.message === UNSUPPORTED_MEDIA_TYPE) {
-        respond(res, 422, options.unsupportedMediaTypeMessage);
+        respond(res, 422, options.unsupportedMediaTypeMessage, options.fieldErrorKey);
         return;
       }
 
       if (uploadError instanceof multer.MulterError) {
-        respond(res, 422, options.invalidUploadMessage);
+        // multer names the offending part when it knows it (an oversized text part, an
+        // unexpected file field), which is a more precise key than the route's default.
+        const errorFieldKey =
+          options.fieldErrorKey === undefined
+            ? undefined
+            : (uploadError.field ?? options.fieldErrorKey);
+        respond(res, 422, options.invalidUploadMessage, errorFieldKey);
         return;
       }
 

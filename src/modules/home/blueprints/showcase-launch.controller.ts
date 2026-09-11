@@ -1,0 +1,231 @@
+import type { Request, Response } from "express";
+
+import { decodeInstantCursor } from "#src/lib/instant-cursor.js";
+import {
+  firstParam,
+  respondShowcaseLaunchError,
+  respondUnauthenticated,
+  respondValidationFailed,
+} from "#src/modules/home/blueprints/showcase-launch-error-response.js";
+import * as showcaseLaunchModerationService from "#src/modules/home/blueprints/showcase-launch-moderation.service.js";
+import {
+  ModerateShowcaseLaunchSchema,
+  ShowcaseLaunchDraftSchema,
+  ShowcaseReviewQueueQuerySchema,
+  SubmitShowcaseLaunchMultipartSchema,
+} from "#src/modules/home/blueprints/showcase-launch.schemas.js";
+import * as showcaseLaunchService from "#src/modules/home/blueprints/showcase-launch.service.js";
+import {
+  requirePlatformCapability,
+  type PlatformStaffContext,
+} from "#src/modules/platform/roles/platform-role.service.js";
+import {
+  buildValidationFailureBody,
+  respondFieldRefusal,
+} from "#src/modules/rnd/projects/project-error-response.js";
+import type { ApiResponse, Result } from "#src/types/index.js";
+
+function respondOk(res: Response, message: string, data: unknown): void {
+  res.status(200).json({ status: "success", statusCode: 200, message, data } satisfies ApiResponse);
+}
+
+function respondCreated(res: Response, message: string, data: unknown): void {
+  res.status(201).json({ status: "success", statusCode: 201, message, data } satisfies ApiResponse);
+}
+
+/**
+ * Parses the multipart `draft` text part.
+ *
+ * ⚠️ A JSON PARSE ON AN UPLOAD ROUTE, WHICH `commerce-categories.schemas.ts` ARGUES AGAINST — and
+ * the argument is answered rather than ignored. That route could send flat text parts; this one
+ * cannot, because a launch's team rows and tags are nested. What keeps the parse safe:
+ *   * multer caps the part at `SHOWCASE_DRAFT_PART_MAXIMUM_BYTES` before this runs, and Zod checks
+ *     the string's length again;
+ *   * this is the ONE guarded parse, and its failure is a value, not a throw;
+ *   * the result is `unknown` and goes straight into a `.strict()` schema, which refuses every key
+ *     it does not name — `__proto__` included, since `JSON.parse` makes that an ordinary own key.
+ */
+function parseDraftJson(rawDraft: string): Result<unknown, "DRAFT_NOT_JSON"> {
+  try {
+    const parsedDraft: unknown = JSON.parse(rawDraft);
+    return { success: true, value: parsedDraft };
+  } catch {
+    return { success: false, error: "DRAFT_NOT_JSON" };
+  }
+}
+
+/**
+ * `POST /blueprints/showcases/write-up-images` (multipart, field `image`) — one image, unclaimed.
+ *
+ * Never reads a body: the file is the whole request.
+ */
+export async function uploadWriteUpImage(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  if (!req.file) {
+    respondFieldRefusal(res, "image", "Choose an image to upload.");
+    return;
+  }
+
+  const uploadResult = await showcaseLaunchService.uploadShowcaseWriteUpImage(
+    req.user.id,
+    req.file.buffer,
+  );
+  if (!uploadResult.success) {
+    respondShowcaseLaunchError(res, uploadResult.error, "image");
+    return;
+  }
+
+  respondCreated(res, "Write-up image uploaded", uploadResult.value);
+}
+
+/**
+ * `POST /blueprints/showcases` (multipart: `draft` JSON text part, `headingImage` file).
+ *
+ * 201, not 202: the launch row exists when this answers, and its state is in the receipt. What a
+ * moderator will decide is not a result this call is waiting on.
+ *
+ * VALIDATED AS THE PARSED DRAFT, not as a `{ draft }` wrapper, so a field refusal arrives keyed by
+ * the draft's own field names (`title`, `team`, …) — the keys the form renders beside its inputs.
+ * A missing image is folded into the same 422, so the maker learns everything wrong in one round.
+ */
+export async function submitLaunch(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const partsParse = SubmitShowcaseLaunchMultipartSchema.safeParse(req.body);
+  if (!partsParse.success) {
+    respondValidationFailed(res, partsParse.error);
+    return;
+  }
+
+  const draftJson = parseDraftJson(partsParse.data.draft);
+  if (!draftJson.success) {
+    respondFieldRefusal(
+      res,
+      "draft",
+      "The launch could not be read. Reload the page and try again.",
+    );
+    return;
+  }
+
+  const missingHeadingImageMessage = "Choose a square heading image.";
+  const draftParse = ShowcaseLaunchDraftSchema.safeParse(draftJson.value);
+  if (!draftParse.success) {
+    const validationFailure = buildValidationFailureBody(draftParse.error);
+    res.status(422).json({
+      ...validationFailure,
+      errors: req.file
+        ? validationFailure.errors
+        : { ...validationFailure.errors, headingImage: [missingHeadingImageMessage] },
+    });
+    return;
+  }
+
+  if (!req.file) {
+    respondFieldRefusal(res, "headingImage", missingHeadingImageMessage);
+    return;
+  }
+
+  const submitResult = await showcaseLaunchService.submitShowcaseLaunch({
+    authorUserId: req.user.id,
+    draft: draftParse.data,
+    rawHeadingImageBytes: req.file.buffer,
+    receivedAt: new Date(),
+  });
+  if (!submitResult.success) {
+    respondShowcaseLaunchError(res, submitResult.error, "headingImage");
+    return;
+  }
+
+  respondCreated(res, "Launch posted for review", submitResult.value);
+}
+
+/** `GET /blueprints/showcases/mine` — the maker's own launches, newest first. */
+export async function listMyLaunches(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return;
+  }
+
+  const launches = await showcaseLaunchService.listMyShowcaseLaunches(req.user.id);
+  respondOk(res, "Launches retrieved successfully", launches);
+}
+
+/**
+ * Proves `moderate_content` BEFORE any id or query is read — reversed, a 403 becomes an oracle
+ * for which launch ids exist.
+ */
+async function resolveModerator(req: Request, res: Response): Promise<PlatformStaffContext | null> {
+  if (!req.user) {
+    respondUnauthenticated(res);
+    return null;
+  }
+  const capabilityResult = await requirePlatformCapability(req.user.id, "moderate_content");
+  if (!capabilityResult.success) {
+    respondShowcaseLaunchError(res, capabilityResult.error);
+    return null;
+  }
+  return capabilityResult.value;
+}
+
+/** `GET /blueprints/admin/showcases/review-queue` — oldest first, keyset-paged. */
+export async function listReviewQueue(req: Request, res: Response): Promise<void> {
+  const staff = await resolveModerator(req, res);
+  if (!staff) return;
+
+  const queryParse = ShowcaseReviewQueueQuerySchema.safeParse(req.query);
+  if (!queryParse.success) {
+    respondValidationFailed(res, queryParse.error);
+    return;
+  }
+
+  // NEVER a silent first page on a bad cursor: a client that silently restarts a queue shows a
+  // moderator launches they already decided.
+  const cursor =
+    queryParse.data.cursor === undefined ? undefined : decodeInstantCursor(queryParse.data.cursor);
+  if (cursor === null) {
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "Malformed cursor.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  const queuePage = await showcaseLaunchModerationService.listShowcaseReviewQueue({
+    staff,
+    limit: queryParse.data.limit,
+    cursor,
+  });
+  respondOk(res, "Launch review queue retrieved successfully", queuePage);
+}
+
+/** `POST /blueprints/admin/showcases/:submissionId/moderate` — publish or send back. */
+export async function moderateLaunch(req: Request, res: Response): Promise<void> {
+  const staff = await resolveModerator(req, res);
+  if (!staff) return;
+
+  const decisionParse = ModerateShowcaseLaunchSchema.safeParse(req.body);
+  if (!decisionParse.success) {
+    respondValidationFailed(res, decisionParse.error);
+    return;
+  }
+
+  const decisionResult = await showcaseLaunchModerationService.decideShowcaseLaunch({
+    submissionId: firstParam(req.params.submissionId ?? ""),
+    decision: decisionParse.data,
+    staff,
+  });
+  if (!decisionResult.success) {
+    respondShowcaseLaunchError(res, decisionResult.error);
+    return;
+  }
+
+  respondOk(res, "Launch decision recorded", decisionResult.value);
+}

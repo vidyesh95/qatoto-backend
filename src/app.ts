@@ -300,9 +300,10 @@ app.use("/promotions", promotionsRouter);
 // The home-page Spotlight rail. GET /spotlight/videos is public; admin routes are gated
 // by `manage_promotions` inside the service (same blast radius as the carousel).
 app.use("/spotlight", spotlightRouter);
-// The /blueprints surface — the hero carousel at the top of the Blueprints hub. ONE bare
-// public GET; every /blueprints/admin/* route is gated by `manage_promotions` inside the
-// service, the same grant the two front-page placements above use.
+// The /blueprints surface — the hero carousel at the top of the Blueprints hub, and posting
+// and moderating showcase launches. ONE bare public GET (the carousel); the hero's admin routes
+// are gated by `manage_promotions` inside the service, the launch review routes by
+// `moderate_content` inside the controller.
 //
 // This was `/anime`. The vertical was retired; its two public series reads went with it and
 // the hero carousel is what remained. The `anime_hero_slide` TABLE keeps its name — renaming

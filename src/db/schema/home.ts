@@ -1952,6 +1952,353 @@ export const animeHeroSlideRelations = relations(animeHeroSlide, ({ one }) => ({
 }));
 
 // ---------------------------------------------------------------------------
+// BLUEPRINTS — showcase launches (`/blueprints/showcase`), frontend todo.md "Posting a launch" 2b.
+//
+// THE FIRST BLUEPRINTS CONTENT TABLE. Until this, `anime_hero_slide` was the whole server-side
+// surface; teardowns, launches and case studies were all frontend fixtures.
+//
+// ⚠️ TWO ENUMS SHARED BY EVERY BLUEPRINT KIND, NOT ONE PER TABLE. `blueprint_moderation_state`
+// carries all seven labels the frontend's `BLUEPRINT_MODERATION_STATES` byte-matches, although a
+// launch can reach only three of them today (see `showcase_launch_moderation_state_ck`). Case
+// studies and teardowns will reuse both enums, and there is a hard reason not to grow a
+// per-table enum later: Postgres refuses a label added by `ALTER TYPE … ADD VALUE` inside the
+// same transaction that uses it, and `db:migrate` applies a batch in one transaction. Widening a
+// CHECK is a drop-and-add of one constraint. `draft` is never stored — a draft lives in the
+// browser — and is in the enum only so the label set matches the contract.
+//
+// ⚠️ ONE UNIQUE SLUG PER TABLE, NO CROSS-KIND REGISTRY. A launch's address is
+// `/blueprints/showcase/<slug>`; a teardown's is `/blueprints/teardowns/<slug>`. Nothing needs a
+// slug to be unique across kinds — `/blueprints/[slug]` on the frontend only redirects the old
+// flat URLs of fixtures.
+//
+// ⚠️ EVERY TIMESTAMP HERE IS precision 3. The review queue pages on `(created_at, id)`, and a
+// cursor carries a JavaScript millisecond; a microsecond column would never compare equal to it.
+// ---------------------------------------------------------------------------
+
+export const BLUEPRINT_MODERATION_STATES = [
+  "draft",
+  "pending_review",
+  "published",
+  "rejected",
+  "flagged",
+  "quarantined",
+  "removed",
+] as const;
+
+export const blueprintModerationStateEnum = pgEnum(
+  "blueprint_moderation_state",
+  BLUEPRINT_MODERATION_STATES,
+);
+
+/** Byte-matches the frontend's `BLUEPRINT_DIFFICULTIES`. */
+export const blueprintDifficultyEnum = pgEnum("blueprint_difficulty", [
+  "beginner",
+  "intermediate",
+  "advanced",
+]);
+
+/** Slugs a launch may never take, because a literal route already sits at that address. */
+export const SHOWCASE_LAUNCH_RESERVED_SLUGS = ["new", "mine", "write-up-images"] as const;
+
+export const showcaseLaunch = pgTable(
+  "showcase_launch",
+  {
+    /** Minted by the service BEFORE the heading image uploads, because the asset path uses it. */
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /** `cascade`: deleting an account deletes its launches (owner decision, todo.md 2b). */
+    authorUserId: text("author_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    /**
+     * The name as the uniqueness rule sees it: trimmed, internal whitespace collapsed, lowercased.
+     *
+     * `[[:space:]]` rather than `\s`, which would have to survive two layers of escaping (a TS
+     * template and a SQL string) to reach the regex engine intact. The service's duplicate
+     * pre-check runs this SAME expression in SQL, never a JavaScript copy of it.
+     */
+    titleNormalized: text("title_normalized").generatedAlwaysAs(
+      sql`lower(regexp_replace(btrim(title), '[[:space:]]+', ' ', 'g'))`,
+    ),
+    tagline: text("tagline").notNull(),
+    summary: text("summary").notNull(),
+    /** GitHub-style Markdown. NULL when the maker wrote none; never an empty string. */
+    writeUp: text("write_up"),
+    /** Chosen by the maker, at most a few minutes ahead of the server clock. */
+    launchedAt: timestamp("launched_at", { precision: 3 }).notNull(),
+    difficulty: blueprintDifficultyEnum("difficulty").notNull(),
+    /** Integer cents. All three cost columns are NULL together — half a range is no answer. */
+    billOfMaterialsMinimumCents: integer("bill_of_materials_minimum_cents"),
+    billOfMaterialsMaximumCents: integer("bill_of_materials_maximum_cents"),
+    billOfMaterialsCurrency: text("bill_of_materials_currency"),
+    tags: text("tags")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /**
+     * FREE TEXT WITH A SLUG SHAPE, NO FOREIGN KEY. It names a teardown, and there is no teardown
+     * table yet — the "Built from a teardown" select still lists frontend fixtures. A foreign key
+     * would refuse every pick; an existence check would too.
+     */
+    builtFromBlueprintSlug: text("built_from_blueprint_slug"),
+    /** The launch's one outbound link. NULL together. */
+    callToActionLabel: text("call_to_action_label"),
+    callToActionUrl: text("call_to_action_url"),
+    /** The two statements the maker ticked. Kept because the moderator reads them. */
+    acceptedLaunchStatementIds: text("accepted_launch_statement_ids").array().notNull(),
+    /** Cloudinary `secure_url` as returned — never rebuilt from the public id. */
+    headingImageUrl: text("heading_image_url").notNull(),
+    headingImagePublicId: text("heading_image_public_id").notNull().unique(),
+    moderationState: blueprintModerationStateEnum("moderation_state")
+      .default("pending_review")
+      .notNull(),
+    /** `restrict`: a moderation decision is attributable for as long as the launch exists. */
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    reviewedAt: timestamp("reviewed_at", { precision: 3 }),
+    /** What the moderator told the maker. Required for a rejection. */
+    moderatorNote: text("moderator_note"),
+    /** Minted when a moderator publishes, and not before. */
+    publicSlug: text("public_slug").unique(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 })
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    /**
+     * A NAME IS TAKEN WHILE IT IS IN REVIEW OR LIVE, NOT AFTER A REJECTION — so a maker who was
+     * sent back can post again under the same name.
+     */
+    uniqueIndex("showcase_launch_title_live_uidx")
+      .on(table.titleNormalized)
+      .where(sql`moderation_state IN ('pending_review', 'published')`),
+    // My Launches, newest first.
+    index("showcase_launch_author_idx").on(table.authorUserId, table.createdAt, table.id),
+    // The review queue, oldest first. Partial, because a decided launch never re-enters it.
+    index("showcase_launch_review_queue_idx")
+      .on(table.createdAt, table.id)
+      .where(sql`moderation_state = 'pending_review'`),
+
+    check(
+      "showcase_launch_moderation_state_ck",
+      sql`moderation_state IN ('pending_review', 'published', 'rejected')`,
+    ),
+    check(
+      "showcase_launch_text_lengths_ck",
+      sql`char_length(title) BETWEEN 8 AND 120
+          AND char_length(tagline) BETWEEN 10 AND 80
+          AND char_length(summary) BETWEEN 40 AND 1000
+          AND (write_up IS NULL OR char_length(write_up) BETWEEN 1 AND 10000)`,
+    ),
+    check("showcase_launch_tags_ck", sql`cardinality(tags) <= 10`),
+    check(
+      "showcase_launch_cost_range_ck",
+      sql`(bill_of_materials_minimum_cents IS NULL
+           AND bill_of_materials_maximum_cents IS NULL
+           AND bill_of_materials_currency IS NULL)
+          OR (bill_of_materials_minimum_cents IS NOT NULL
+              AND bill_of_materials_maximum_cents IS NOT NULL
+              AND bill_of_materials_currency = 'USD'
+              AND bill_of_materials_minimum_cents >= 0
+              AND bill_of_materials_maximum_cents >= bill_of_materials_minimum_cents
+              AND bill_of_materials_maximum_cents <= 100000000)`,
+    ),
+    check(
+      "showcase_launch_call_to_action_ck",
+      sql`(call_to_action_label IS NULL AND call_to_action_url IS NULL)
+          OR (char_length(call_to_action_label) BETWEEN 1 AND 40
+              AND char_length(call_to_action_url) BETWEEN 1 AND 2048
+              AND call_to_action_url LIKE 'https://%'
+              AND call_to_action_url !~ '[[:space:][:cntrl:]]')`,
+    ),
+    check(
+      "showcase_launch_built_from_slug_ck",
+      sql`built_from_blueprint_slug IS NULL
+          OR (char_length(built_from_blueprint_slug) BETWEEN 3 AND 120
+              AND built_from_blueprint_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$')`,
+    ),
+    check(
+      "showcase_launch_heading_image_url_ck",
+      sql`char_length(heading_image_url) BETWEEN 1 AND 2048
+          AND heading_image_url LIKE 'https://%'
+          AND heading_image_url !~ '[[:space:][:cntrl:]]'`,
+    ),
+    check(
+      "showcase_launch_statements_ck",
+      sql`accepted_launch_statement_ids @> ARRAY['built_it_ourselves', 'results_are_our_own']::text[]
+          AND cardinality(accepted_launch_statement_ids) = 2`,
+    ),
+    /**
+     * THE DECISION COLUMNS MOVE TOGETHER. A launch in review has no reviewer, no decision time and
+     * no note; a decided one has a reviewer and a time; a rejection carries its reason; and a
+     * launch has a public address exactly when it is published.
+     */
+    check(
+      "showcase_launch_decision_ck",
+      sql`(moderation_state = 'pending_review') = (reviewed_at IS NULL)
+          AND (reviewed_at IS NULL) = (reviewed_by_user_id IS NULL)
+          AND (moderation_state <> 'pending_review' OR moderator_note IS NULL)
+          AND (moderation_state <> 'rejected' OR moderator_note IS NOT NULL)
+          AND (moderation_state = 'published') = (public_slug IS NOT NULL)`,
+    ),
+    check(
+      "showcase_launch_moderator_note_ck",
+      sql`moderator_note IS NULL OR char_length(moderator_note) BETWEEN 1 AND 2000`,
+    ),
+    check(
+      "showcase_launch_public_slug_ck",
+      sql`public_slug IS NULL
+          OR (char_length(public_slug) BETWEEN 3 AND 120
+              AND public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+              AND public_slug NOT IN ('new', 'mine', 'write-up-images'))`,
+    ),
+  ],
+);
+
+/**
+ * One person on a launch, as the maker typed them.
+ *
+ * FREE TEXT, NOT AN ACCOUNT LINK. Handles are not verified, and the moderator card says so. A
+ * nullable `user_id` and a verified badge are deferred (todo.md 2b, "Still open").
+ */
+export const showcaseLaunchTeamMember = pgTable(
+  "showcase_launch_team_member",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    launchId: text("launch_id")
+      .notNull()
+      .references(() => showcaseLaunch.id, { onDelete: "cascade" }),
+    /** 0-based, in the order the maker listed them. */
+    position: integer("position").notNull(),
+    displayName: text("display_name").notNull(),
+    handle: text("handle").notNull(),
+    /**
+     * `lower()` equals JavaScript's `toLowerCase()` here only because the handle CHECK admits
+     * ASCII alone — the same reason the request schema's duplicate rule and this index agree.
+     */
+    handleNormalized: text("handle_normalized").generatedAlwaysAs(sql`lower(handle)`),
+    role: text("role").notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("showcase_launch_team_member_position_uidx").on(table.launchId, table.position),
+    uniqueIndex("showcase_launch_team_member_handle_uidx").on(
+      table.launchId,
+      table.handleNormalized,
+    ),
+    check("showcase_launch_team_member_position_ck", sql`position BETWEEN 0 AND 11`),
+    check(
+      "showcase_launch_team_member_text_ck",
+      sql`char_length(display_name) BETWEEN 1 AND 80
+          AND char_length(role) BETWEEN 1 AND 60
+          AND char_length(handle) BETWEEN 1 AND 64
+          AND handle ~ '^[A-Za-z0-9_.-]+$'`,
+    ),
+  ],
+);
+
+/**
+ * One image a maker uploaded for a write-up.
+ *
+ * ⚠️ `launch_id` IS NULL UNTIL A LAUNCH CLAIMS IT, and that is the design, not a gap. The form
+ * uploads an image the moment it is added to the write-up, which is before any launch exists, so
+ * the row is created unclaimed and the submit transaction sets `launch_id` for every image the
+ * write-up references. An image nobody claims within 24 hours is deleted by
+ * `sweep-orphan-showcase-images`, row and asset.
+ *
+ * THE SIZE IS THE SERVER'S. `width_px` and `height_px` are read from sharp's re-encoded output,
+ * never from the client, and the frontend reserves each image's box from them so nothing below it
+ * moves as it loads.
+ */
+export const showcaseLaunchWriteUpImage = pgTable(
+  "showcase_launch_write_up_image",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    launchId: text("launch_id").references(() => showcaseLaunch.id, { onDelete: "cascade" }),
+    uploadedByUserId: text("uploaded_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** Stored so a delete never has to rebuild it. */
+    publicId: text("public_id").notNull().unique(),
+    url: text("url").notNull().unique(),
+    widthPx: integer("width_px").notNull(),
+    heightPx: integer("height_px").notNull(),
+    /** A 16px WebP as a base64 data URL, painted in the reserved box until the file loads. */
+    blurDataUrl: text("blur_data_url").notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("showcase_launch_write_up_image_launch_idx").on(table.launchId),
+    // The staging cap and the sweeper both ask "which of this maker's uploads are unclaimed".
+    index("showcase_launch_write_up_image_unclaimed_idx")
+      .on(table.uploadedByUserId, table.createdAt)
+      .where(sql`launch_id IS NULL`),
+    check(
+      "showcase_launch_write_up_image_dimensions_ck",
+      sql`width_px BETWEEN 1 AND 8192 AND height_px BETWEEN 1 AND 8192`,
+    ),
+    check(
+      "showcase_launch_write_up_image_url_ck",
+      sql`char_length(url) BETWEEN 1 AND 2048
+          AND url LIKE 'https://%'
+          AND url !~ '[[:space:][:cntrl:]]'`,
+    ),
+    /**
+     * THE SAME PATTERN THE FRONTEND ENFORCES ON READ, because `next/image` writes this value into
+     * an inline CSS `url()`. Anything but a base64 image data URL there is an injection.
+     *
+     * ⚠️ NO LITERAL SEMICOLON IN THIS EXPRESSION, and `chr(59)` is why it reads oddly. drizzle-kit
+     * cuts a CHECK body at its first `;` when it writes the migration, so the natural
+     * `~ '^data:image/webp;base64,…'` generated a truncated, unterminated statement. The prefix is
+     * compared as text (23 characters) and only the base64 tail goes through the regex.
+     */
+    check(
+      "showcase_launch_write_up_image_blur_ck",
+      sql`char_length(blur_data_url) <= 2048
+          AND left(blur_data_url, 23) = ('data:image/webp' || chr(59) || 'base64,')
+          AND substr(blur_data_url, 24) ~ '^[A-Za-z0-9+/]+={0,2}$'`,
+    ),
+  ],
+);
+
+export const showcaseLaunchRelations = relations(showcaseLaunch, ({ one, many }) => ({
+  author: one(user, { fields: [showcaseLaunch.authorUserId], references: [user.id] }),
+  reviewedBy: one(user, { fields: [showcaseLaunch.reviewedByUserId], references: [user.id] }),
+  teamMembers: many(showcaseLaunchTeamMember),
+  writeUpImages: many(showcaseLaunchWriteUpImage),
+}));
+
+export const showcaseLaunchTeamMemberRelations = relations(showcaseLaunchTeamMember, ({ one }) => ({
+  launch: one(showcaseLaunch, {
+    fields: [showcaseLaunchTeamMember.launchId],
+    references: [showcaseLaunch.id],
+  }),
+}));
+
+export const showcaseLaunchWriteUpImageRelations = relations(
+  showcaseLaunchWriteUpImage,
+  ({ one }) => ({
+    launch: one(showcaseLaunch, {
+      fields: [showcaseLaunchWriteUpImage.launchId],
+      references: [showcaseLaunch.id],
+    }),
+    uploadedBy: one(user, {
+      fields: [showcaseLaunchWriteUpImage.uploadedByUserId],
+      references: [user.id],
+    }),
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // WATCH TIME AND ACTIVITY ROLLUPS (§3.3a)
 // ---------------------------------------------------------------------------
 //

@@ -69,6 +69,15 @@ interface LimiterSpec {
    * it cannot be expressed by passing something.
    */
   readonly keyGenerator?: ((req: Request) => string) | "ip";
+  /**
+   * When true, a response with status >= 400 gives its slot back.
+   *
+   * FOR A LIMIT THAT COUNTS SUCCESSES, not attempts. The launch submit allows five posts per
+   * fifteen minutes; a maker whose first four tries were refused for a missing field has posted
+   * nothing, and should not be locked out of posting it correctly. Relies on the shared store's
+   * `decrement`, which it implements.
+   */
+  readonly skipFailedRequests?: boolean;
 }
 
 /**
@@ -89,6 +98,7 @@ function createLimiter(spec: LimiterSpec): RateLimitRequestHandler {
     legacyHeaders: false,
     handler: rateLimitExceededHandler,
     store: createRateLimitStore(spec.namespace, spec.windowMs),
+    ...(spec.skipFailedRequests === true ? { skipFailedRequests: true } : {}),
   };
 
   // Genuinely absent rather than `undefined`, so the library applies its own default instead
@@ -1197,6 +1207,39 @@ export const blueprintHeroImageUploadLimiter = createLimiter({
   namespace: "blueprintHeroImageUpload",
   windowMs: ONE_MINUTE_MS,
   limit: 20,
+});
+
+/**
+ * POST /blueprints/showcases — posting a launch.
+ *
+ * FIVE SUCCESSFUL POSTS PER FIFTEEN MINUTES, and failures do not count (`skipFailedRequests`).
+ * The limit is on launches, not on attempts: a maker refused four times for a square-image or
+ * name problem has posted nothing yet. Keyed per account.
+ */
+export const showcaseLaunchSubmitLimiter = createLimiter({
+  namespace: "showcaseLaunchSubmit",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 5,
+  skipFailedRequests: true,
+});
+
+/**
+ * POST /blueprints/showcases/write-up-images — one image per request, added while writing.
+ *
+ * Failures DO count here: a refused upload still cost a 5 MB buffer and a sharp decode. Sixty in
+ * fifteen minutes is far above a write-up's twenty-image ceiling.
+ */
+export const showcaseWriteUpImageUploadLimiter = createLimiter({
+  namespace: "showcaseWriteUpImageUpload",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 60,
+});
+
+/** POST /blueprints/admin/showcases/:submissionId/moderate — a moderator working a queue. */
+export const showcaseLaunchModerationLimiter = createLimiter({
+  namespace: "showcaseLaunchModeration",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 200,
 });
 
 // ---------------------------------------------------------------------------

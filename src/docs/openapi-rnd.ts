@@ -207,9 +207,25 @@ const NESTED_TAG_RULES: readonly { readonly segment: string; readonly tag: strin
   { segment: "review-queue", tag: "Research programs" },
 ];
 
+/**
+ * Front-page and Blueprints surfaces, which are not project- or program-scoped.
+ *
+ * Their paths can contain a segment word the nested rules claim for R&D —
+ * `/blueprints/admin/showcases/review-queue` contains `review-queue`, which would tag a launch
+ * queue "Research programs" — so for these the prefix decides and the segment rules are skipped.
+ * No path these three routers served before that route contains a nested segment, so no existing
+ * tag moves.
+ */
+const PREFIX_TAGGED_SURFACES = ["/promotions", "/spotlight", "/blueprints"] as const;
+
 function tagFor(openApiPath: string): string {
-  for (const rule of NESTED_TAG_RULES) {
-    if (openApiPath.includes(`/${rule.segment}`)) return rule.tag;
+  const isPrefixTaggedSurface = PREFIX_TAGGED_SURFACES.some(
+    (surfacePrefix) => openApiPath === surfacePrefix || openApiPath.startsWith(`${surfacePrefix}/`),
+  );
+  if (!isPrefixTaggedSurface) {
+    for (const rule of NESTED_TAG_RULES) {
+      if (openApiPath.includes(`/${rule.segment}`)) return rule.tag;
+    }
   }
   for (const rule of TAG_RULES) {
     if (openApiPath.startsWith(rule.prefix)) return rule.tag;
