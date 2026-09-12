@@ -13,6 +13,10 @@
 import { z } from "zod";
 
 import { blueprintDifficultyEnum } from "#src/db/schema.js";
+import {
+  deepestWriteUpNestingDepth,
+  MAX_SHOWCASE_WRITE_UP_NESTING_DEPTH,
+} from "#src/modules/home/blueprints/showcase-write-up-nesting.js";
 
 export const SHOWCASE_LAUNCH_STATEMENT_IDS = ["built_it_ourselves", "results_are_our_own"] as const;
 
@@ -140,10 +144,16 @@ export const ShowcaseLaunchDraftSchema = z
     writeUp: z
       .string()
       .max(10_000, "Keep the write-up under 10,000 characters.")
+      // Markup first, then nesting: a genuinely over-formatted write-up hits the markup cap, and
+      // that is the message worth listing first when a maker trips both.
       .refine(
         (writeUp) =>
           countWriteUpMarkupCharacters(writeUp) <= MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS,
         `Simplify the formatting — a write-up can hold at most ${String(MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS)} of the characters *, _, [ and ].`,
+      )
+      .refine(
+        (writeUp) => deepestWriteUpNestingDepth(writeUp) <= MAX_SHOWCASE_WRITE_UP_NESTING_DEPTH,
+        `Simplify the structure — a write-up can nest lists and quotes at most ${String(MAX_SHOWCASE_WRITE_UP_NESTING_DEPTH)} levels deep.`,
       )
       .nullable(),
     launchedAt: z.iso.datetime({ error: "Pick the day it launched." }),

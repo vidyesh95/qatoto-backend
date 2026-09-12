@@ -4,6 +4,7 @@ import { gfm } from "micromark-extension-gfm";
 import { describe, expect, it } from "vitest";
 
 import { extractWriteUpImageAddresses } from "#src/modules/home/blueprints/showcase-launch-markdown.js";
+import { MAX_SHOWCASE_WRITE_UP_NESTING_DEPTH } from "#src/modules/home/blueprints/showcase-write-up-nesting.js";
 
 /**
  * UNIT tests for the write-up image extractor — the gate that decides whether an image a maker
@@ -253,5 +254,41 @@ describe("the GFM mdast extensions this module reconfigures", () => {
 
     expect(JSON.stringify(tree)).toContain('"type":"link"');
     expect(JSON.stringify(tree)).toContain("https://example.test/x");
+  });
+});
+
+/**
+ * THE OTHER ASSUMPTION THIS MODULE'S NEIGHBOURS MAKE, pinned in the same spirit as the block above.
+ *
+ * `showcase-write-up-nesting.ts` refuses a write-up whose block nesting is too deep, and its claim
+ * to be COMPLETE rests on the container-opener alphabet being closed: micromark opens a block
+ * container for `*`, `+`, `-`, a digit or `>`, and `micromark-extension-gfm` adds exactly one more,
+ * `[`, for footnote definitions. If an upgrade adds a container the scanner does not know, it would
+ * not fail — it would quietly under-count, and a write-up that stalls the server for seconds would
+ * start being accepted again. These two cases turn that into a gate failure.
+ */
+describe("the block-container openers the nesting scanner accounts for", () => {
+  it("gives GFM exactly one document-level construct, the footnote definition's bracket", () => {
+    const gfmSyntaxExtension = gfm();
+
+    expect(Object.keys(gfmSyntaxExtension.document ?? {})).toEqual(["91"]);
+  });
+
+  /**
+   * EVERY WRITE-UP THE SCHEMA ACCEPTS, THE SUBMIT PATH CAN PARSE — the invariant the cap exists to
+   * hold, stated as behaviour rather than as a number. A document at exactly the cap, for each
+   * opener the scanner counts, must come back from the parser rather than stalling or throwing.
+   */
+  it.each([
+    ["blockquote", ">"],
+    ["dash list", "- "],
+    ["star list", "* "],
+    ["plus list", "+ "],
+    ["ordered list", "1. "],
+    ["footnote definition", "[^1]: "],
+  ])("parses a %s nested to exactly the cap", (_label, marker) => {
+    const atTheCap = `${marker.repeat(MAX_SHOWCASE_WRITE_UP_NESTING_DEPTH)}![Deep](https://cdn.test/deep.avif)`;
+
+    expect(extractWriteUpImageAddresses(atTheCap)).toEqual(["https://cdn.test/deep.avif"]);
   });
 });

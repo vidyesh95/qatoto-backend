@@ -11,6 +11,7 @@ import {
   ShowcaseReviewQueueQuerySchema,
   SubmitShowcaseLaunchMultipartSchema,
 } from "#src/modules/home/blueprints/showcase-launch.schemas.js";
+import { MAX_SHOWCASE_WRITE_UP_NESTING_DEPTH } from "#src/modules/home/blueprints/showcase-write-up-nesting.js";
 
 /**
  * UNIT tests for the showcase launch request schemas — the boundary the frontend's authoring form
@@ -171,6 +172,43 @@ describe("ShowcaseLaunchDraftSchema", () => {
 
       expect(ShowcaseLaunchDraftSchema.safeParse({ ...buildValidDraft(), writeUp: atTheCap }).success).toBe(true);
       expect(ShowcaseLaunchDraftSchema.safeParse({ ...buildValidDraft(), writeUp: overTheCap }).success).toBe(false);
+    });
+
+    /**
+     * THE SECOND SHAPE CAP, and the one the markup budget cannot stand in for.
+     *
+     * Every write-up below is UNDER the 10,000-character cap and was ACCEPTED before this rule
+     * existed. `"- ".repeat(4900)` took seven seconds of synchronous parse on this server and the
+     * tab variant took ten — the markup cap misses both, because it counts `*`, `_`, `[` and `]`
+     * and the expensive markers here are `-`, `+` and the ordered ones. The same inputs throw
+     * `RangeError` inside the frontend's renderer, so accepting them also stores a launch nobody
+     * can open.
+     */
+    it.each([
+      ["dash list run", "- ".repeat(4_900)],
+      ["dash list run delimited by tabs", "-\t".repeat(4_900)],
+      ["plus list run", "+ ".repeat(3_200)],
+      ["ordered list run", "1. ".repeat(3_300)],
+      ["blockquote run", ">".repeat(9_900)],
+      ["footnote definition wrapping a blockquote run", `[^1]: ${">".repeat(9_000)}`],
+      ["a deep line hidden behind a bare carriage return", `prose\r${">".repeat(9_000)}`],
+    ])("refuses a write-up nested as %s", (_label, nestedWriteUp) => {
+      const parsed = ShowcaseLaunchDraftSchema.safeParse({
+        ...buildValidDraft(),
+        writeUp: nestedWriteUp,
+      });
+
+      expect(nestedWriteUp.length, "the character cap must not be what refuses this").toBeLessThan(10_000);
+      expect(parsed.success).toBe(false);
+      expect(parsed.error?.issues[0]?.path).toEqual(["writeUp"]);
+    });
+
+    it("accepts nesting at exactly the cap and refuses one level more", () => {
+      const atTheCap = `${"> ".repeat(MAX_SHOWCASE_WRITE_UP_NESTING_DEPTH)}deep but allowed`;
+      const oneOver = `${"> ".repeat(MAX_SHOWCASE_WRITE_UP_NESTING_DEPTH + 1)}one too deep`;
+
+      expect(ShowcaseLaunchDraftSchema.safeParse({ ...buildValidDraft(), writeUp: atTheCap }).success).toBe(true);
+      expect(ShowcaseLaunchDraftSchema.safeParse({ ...buildValidDraft(), writeUp: oneOver }).success).toBe(false);
     });
 
     /**
@@ -543,6 +581,7 @@ describe("the exported limits the frontend form mirrors", () => {
   it("states the write-up image cap and the staging cap it has to stay under", () => {
     expect(MAX_SHOWCASE_WRITE_UP_IMAGES).toBe(20);
     expect(MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS).toBe(3000);
+    expect(MAX_SHOWCASE_WRITE_UP_NESTING_DEPTH).toBe(32);
     expect(SHOWCASE_DRAFT_PART_MAXIMUM_BYTES).toBe(128 * 1024);
     expect(SHOWCASE_LAUNCH_STATEMENT_IDS).toEqual(["built_it_ourselves", "results_are_our_own"]);
   });
