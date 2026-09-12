@@ -371,6 +371,23 @@ describe("blueprints showcase launch routes", () => {
       expect(submitShowcaseLaunch).not.toHaveBeenCalled();
     });
 
+    /**
+     * THE MARKUP CAP, refused at the boundary so the quadratic parse never runs. Asserted here and
+     * not only in the schema suite because the point is that it costs the SERVER nothing: the
+     * service is never called, so nothing parses the write-up.
+     */
+    it("refuses a markup-storm write-up with 422 keyed to writeUp, without parsing it", async () => {
+      const markupStorm = "*".repeat(4_900) + "x" + "*".repeat(4_900);
+
+      const response = await postLaunch({
+        draft: JSON.stringify({ ...buildValidDraft(), writeUp: markupStorm }),
+      });
+
+      expect(response.status).toBe(422);
+      expect(response.body.errors.writeUp).toHaveLength(1);
+      expect(submitShowcaseLaunch).not.toHaveBeenCalled();
+    });
+
     it("refuses a server-owned field in the draft with 422", async () => {
       const response = await postLaunch({
         draft: JSON.stringify({ ...buildValidDraft(), moderationState: "published" }),

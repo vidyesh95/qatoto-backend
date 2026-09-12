@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_SHOWCASE_WRITE_UP_IMAGES,
+  MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS,
   ModerateShowcaseLaunchSchema,
   SHOWCASE_DRAFT_PART_MAXIMUM_BYTES,
   SHOWCASE_LAUNCH_STATEMENT_IDS,
@@ -145,6 +146,69 @@ describe("ShowcaseLaunchDraftSchema", () => {
       expect(
         ShowcaseLaunchDraftSchema.safeParse({ ...buildValidDraft(), title: `   ${"a".repeat(7)}   ` }).success,
       ).toBe(false);
+    });
+
+    /**
+     * THE SECOND CAP ON THE WRITE-UP, and the one that is not about length.
+     *
+     * Matching emphasis and link delimiters is quadratic, and the submit path parses every
+     * write-up, so a 9,801-character input of nothing but `*` stalled the event loop for ~800 ms —
+     * every request in flight, not just this maker's. The character cap cannot catch it, because
+     * the worst input is comfortably under the character cap.
+     */
+    it("refuses a write-up that is mostly markup characters", () => {
+      const markupStorm = "*".repeat(4_900) + "x" + "*".repeat(4_900);
+      const parsed = ShowcaseLaunchDraftSchema.safeParse({ ...buildValidDraft(), writeUp: markupStorm });
+
+      expect(markupStorm.length).toBeLessThan(10_000);
+      expect(parsed.success, "the length cap alone must not be what refuses this").toBe(false);
+      expect(parsed.error?.issues[0]?.path).toEqual(["writeUp"]);
+    });
+
+    it.each(["*", "_", "[", "]"])("counts %s toward the markup budget", (markupCharacter) => {
+      const atTheCap = markupCharacter.repeat(MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS);
+      const overTheCap = markupCharacter.repeat(MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS + 1);
+
+      expect(ShowcaseLaunchDraftSchema.safeParse({ ...buildValidDraft(), writeUp: atTheCap }).success).toBe(true);
+      expect(ShowcaseLaunchDraftSchema.safeParse({ ...buildValidDraft(), writeUp: overTheCap }).success).toBe(false);
+    });
+
+    /**
+     * THE CASE THAT KEEPS THE CAP HONEST. A cap that refuses real write-ups is worse than the stall
+     * it prevents, so this is a deliberately over-formatted build log — bold or italic in every
+     * sentence, bulleted specs, a block quote, an image and two links — repeated to the character
+     * limit. It measures ~1,188 markup characters, well inside the budget.
+     */
+    it("accepts a heavily formatted write-up at the character limit", () => {
+      const section = [
+        "## **Thermal** design",
+        "",
+        "We started with a *broken* chest freezer and rebuilt the **evaporator** loop.",
+        "The _first_ prototype held **4 degrees** for *six hours*; the _second_ held **eleven**.",
+        "",
+        "- **Panel**: 220W, *monocrystalline*",
+        "- **Controller**: _custom_ MPPT, **12V**",
+        "",
+        "> The **key** insight was *airflow*, not _capacity_.",
+        "",
+        "![Build step](https://cdn.test/step.avif)",
+        "",
+        "See [the teardown](https://cdn.test/teardown) and [the notes](https://cdn.test/notes).",
+        "",
+      ].join("\n");
+      let heavilyFormattedWriteUp = "";
+      while (heavilyFormattedWriteUp.length + section.length < 10_000) {
+        heavilyFormattedWriteUp += section;
+      }
+
+      const parsed = ShowcaseLaunchDraftSchema.safeParse({
+        ...buildValidDraft(),
+        writeUp: heavilyFormattedWriteUp,
+      });
+
+      expect(heavilyFormattedWriteUp.length).toBeGreaterThan(9_000);
+      expect(parsed.error?.issues ?? []).toEqual([]);
+      expect(parsed.success).toBe(true);
     });
 
     it("accepts a 10,000-character write-up and refuses one character more", () => {
@@ -478,6 +542,7 @@ describe("ShowcaseReviewQueueQuerySchema", () => {
 describe("the exported limits the frontend form mirrors", () => {
   it("states the write-up image cap and the staging cap it has to stay under", () => {
     expect(MAX_SHOWCASE_WRITE_UP_IMAGES).toBe(20);
+    expect(MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS).toBe(3000);
     expect(SHOWCASE_DRAFT_PART_MAXIMUM_BYTES).toBe(128 * 1024);
     expect(SHOWCASE_LAUNCH_STATEMENT_IDS).toEqual(["built_it_ourselves", "results_are_our_own"]);
   });

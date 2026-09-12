@@ -39,6 +39,46 @@ export const SHOWCASE_DRAFT_PART_MAXIMUM_BYTES = 128 * 1024;
 
 export const SHOWCASE_MODERATOR_NOTE_MAXIMUM_CHARACTERS = 2000;
 
+/**
+ * How many MARKUP characters — `*`, `_`, `[`, `]` — one write-up may hold.
+ *
+ * WHY A SECOND CAP ON A FIELD THAT ALREADY HAS ONE. Matching emphasis and link delimiters is
+ * QUADRATIC in the number of delimiters, and `extractWriteUpImageAddresses` parses every write-up
+ * on the submit path. Measured on this machine, at the 10,000-character limit alone:
+ *
+ *   9,800 delimiters (`****…x…****`)  ~800 ms
+ *   3,000 delimiters                   ~105 ms
+ *   1,188 delimiters                   ~32 ms
+ *
+ * That cost is synchronous and Node is single-threaded, so the top of that range stalls EVERY
+ * other request in flight, not just the maker's own. The character cap cannot bound it: the worst
+ * input is well under 10,000 characters.
+ *
+ * WHY 3,000, AND WHY IT WILL NOT REFUSE REAL WRITE-UPS. A deliberately over-formatted build
+ * write-up — bold or italic in every sentence, bulleted specs, block quotes, images and links —
+ * measures 1,188 of these characters in 9,746, already 12% of the document. 3,000 leaves 2.5x
+ * headroom above that and holds the worst case near 100 ms — measured across giant runs, dense
+ * singles, and delimiters interleaved with brackets. Reaching the cap needs roughly one delimiter
+ * every three characters, which is not prose.
+ *
+ * ⚠️ COUNTS ALL FOUR CHARACTERS, not just the emphasis pair. Brackets take part in the same
+ * matching: 3,000 emphasis markers interleaved with brackets measured 189 ms, against ~65 ms once
+ * the brackets counted toward the same budget. A write-up's links and images contribute a handful
+ * of brackets each, so including them costs legitimate content nothing.
+ */
+export const MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS = 3000;
+
+/** `*`, `_`, `[` and `]` — the characters micromark matches into emphasis and link runs. */
+function countWriteUpMarkupCharacters(writeUp: string): number {
+  let markupCharacterCount = 0;
+  for (const character of writeUp) {
+    if (character === "*" || character === "_" || character === "[" || character === "]") {
+      markupCharacterCount += 1;
+    }
+  }
+  return markupCharacterCount;
+}
+
 const KEBAB_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const TEAM_HANDLE_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
@@ -97,7 +137,15 @@ export const ShowcaseLaunchDraftSchema = z
       .trim()
       .min(40, "One paragraph: what it is, and what it proved.")
       .max(1000, "Keep the summary under 1,000 characters."),
-    writeUp: z.string().max(10_000, "Keep the write-up under 10,000 characters.").nullable(),
+    writeUp: z
+      .string()
+      .max(10_000, "Keep the write-up under 10,000 characters.")
+      .refine(
+        (writeUp) =>
+          countWriteUpMarkupCharacters(writeUp) <= MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS,
+        `Simplify the formatting — a write-up can hold at most ${String(MAX_SHOWCASE_WRITE_UP_MARKUP_CHARACTERS)} of the characters *, _, [ and ].`,
+      )
+      .nullable(),
     launchedAt: z.iso.datetime({ error: "Pick the day it launched." }),
     difficulty: z.enum(blueprintDifficultyEnum.enumValues, {
       error: "Say how hard it would be to build again.",
