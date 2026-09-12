@@ -39,6 +39,37 @@
 > back. It exists because vitest mocks `#src/db/index.js` wholesale, so no test here can prove
 > anything about Postgres; its first run found nine CHECKs that accepted half a block, because a
 > CHECK passes on NULL as well as on true (migration 0172).
+>
+> - **Case studies** — the third arm, and **the first with a write path on the backend**: eight
+>   routes, four public reads plus `POST /blueprints/case-studies`, `GET /case-studies/mine` and the
+>   two moderator routes the admin queue has been driving from mocks since 2026-09-11. Ten rows
+>   arrive through `pnpm db:seed-blueprint-case-studies`.
+>
+> ⚠️ **THIS ARM HAS ONE GATE, NOT TWO** — `published, flagged` — and copying the teardown shape here
+> would be the more expensive mistake. A teardown needs LIST and READABLE because a quarantine
+> withholds its FILES while leaving its address alive; a case study has no files, and a report moves
+> a published row to `flagged`, full stop.
+>
+> ⚠️ **WHAT IT WITHHOLDS INSTEAD IS ONE FIELD, BY A PER-ROW FLAG.** A first-hand writer may keep a
+> company's name from READERS — an NDA is the ordinary reason — and a moderator still sees it,
+> because a company nobody at Qatoto can see is a claim nobody can check. A query cannot express
+> that, so ONE serializer does (`toPublicCompany`), and exactly one route in the whole router serves
+> the real name: `GET /blueprints/admin/case-studies/review-queue`. `/case-studies/mine` carries no
+> companies at all, so the name reaches one route rather than two.
+>
+> **The guarantee is narrow, and saying so is part of it.** It nulls one column. The writer could
+> still have named the company in the summary, a step, a tag or a source's publisher label — the
+> fixtures contain exactly that shape — so the submit gate sweeps every reader-visible field for a
+> withheld name, and `case-study-withheld-name.test.ts` proves the other half by driving the real
+> routes over a sentinel and sweeping raw response bytes. Two things worth knowing about the leak
+> paths: the audit payload is ids and flags only (the chain is hash-linked and unerasable), and the
+> submit transaction strips bound parameters out of any database fault before it can reach the
+> logger, because `DrizzleQueryError`'s message carries them and `errorFields` logs `error.message`.
+>
+> `pnpm db:verify-case-study-constraints` — 46 assertions, which corrected the schema on their first
+> run (a `btrim(url)` unique index was dead code, since the URL CHECK already refuses whitespace) and
+> which include two that exist solely for the array-element NULL hole: `text[] NOT NULL` says nothing
+> about its ELEMENTS, so `ARRAY['a', NULL] @> ARRAY[...]` is NULL and a NULL CHECK passes.
 
 The API contract for Qatoto's homepage (`/`): the filter chip row, the "What's on your mind?"
 category tiles, the 3-video Spotlight, and the one personalized video stream that the frontend
