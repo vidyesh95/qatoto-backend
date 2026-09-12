@@ -9,6 +9,37 @@
 > keep their names, because renaming any of them costs a migration. The studio's own `/series`
 > routes and the admin review queue are untouched. Read every `/anime` URL below as historical.
 
+> **WHAT `/blueprints` SERVES NOW**, none of which this document otherwise covers — it is a feed
+> ranking contract, and the blueprints surface has no ranking:
+>
+> - **The hero carousel** — one public read, six admin routes. All that survived the retirement.
+> - **Showcase launches** — three maker routes, two moderator routes, and three public reads
+>   (`GET /blueprints/showcases`, `/showcases/slugs`, `/showcases/:launchSlug`). Only `published`
+>   launches are ever visible, and the gate is applied to the tag facets as well as to the list.
+> - **Teardowns** — five public reads and no write path yet; the twelve rows arrive through
+>   `pnpm db:seed-blueprint-teardowns`, which parses the frontend's fixtures with
+>   `teardown-import.schemas.ts` — the same gate an authoring route will use.
+>
+> ⚠️ **TEARDOWNS HAVE TWO VISIBILITY GATES AND THEY ARE NOT THE SAME PREDICATE.** LIST
+> (`published`, `flagged`) decides where a teardown may APPEAR: the index, the tag facets, the
+> launch composer's select. READABLE adds `quarantined` and decides where it may be REACHED: the
+> detail page, the prerender slug list, and `/:teardownSlug/claim-targets`. **A quarantine
+> withholds a publisher's files; it does not delete the address.** Merging the two predicates —
+> which they invite, differing by one label — produces either a teardown advertised while under an
+> unresolved rights claim, or a live URL that 404s.
+>
+> The withholding is SERVER-SIDE. It used to live in a React component, where the disputed files
+> were already on the wire; that is not a control at all (CLAUDE.md §1.1), and the component had
+> also missed `repairabilityIndex`. `claim-targets` exists so that moving it did not break the
+> rights-claim flow: it serves ids and titles with no column that could hold a URL, so a second
+> rights holder can still name the specific file they mean.
+>
+> Constraints on those tables are proven against a real database by
+> `pnpm db:verify-teardown-constraints` — 65 assertions inside a transaction that is always rolled
+> back. It exists because vitest mocks `#src/db/index.js` wholesale, so no test here can prove
+> anything about Postgres; its first run found nine CHECKs that accepted half a block, because a
+> CHECK passes on NULL as well as on true (migration 0172).
+
 The API contract for Qatoto's homepage (`/`): the filter chip row, the "What's on your mind?"
 category tiles, the 3-video Spotlight, and the one personalized video stream that the frontend
 splits into **Recommended** and **Explore**.
