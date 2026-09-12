@@ -53,16 +53,23 @@ const SubmittedFileUrlSchema = createExternalUrlSchema(512);
 /**
  * One file a submission points at. NO `id` and NO `byteSize`: the wire carries neither.
  *
- * ⚠️ `kind` ACCEPTS BOTH VOCABULARIES, AND THAT IS A BUG BEING ABSORBED RATHER THAN A DESIGN.
- * The frontend serves `documents[]` and `manufacturingFiles[]` from ONE schema whose `kind` is the
- * manufacturing-file enum, and its composer defaults both lists to `"step"` — so today every
- * `documents[]` row arrives carrying a label `teardown_document.kind` cannot store.
+ * ⚠️ `kind` ACCEPTS BOTH VOCABULARIES, AND IT STILL SHOULD, THOUGH THE BUG IT ABSORBED IS GONE.
  *
- * The three ways out were: refuse the whole array with a 422 (breaks a step that ships today);
- * translate `step` into `datasheet` (the platform deciding what somebody's file is, unrecoverably,
- * at write time); or accept both vocabularies and let the PUBLISH route by which set the label
- * belongs to. The third keeps the author's word intact, needs no frontend release to start working,
- * and needs no backend release when that release lands.
+ * The wizard used to serve `documents[]` and `manufacturingFiles[]` from ONE schema whose `kind` was
+ * the manufacturing-file enum, defaulting both lists to `"step"`, so every `documents[]` row arrived
+ * carrying a label `teardown_document.kind` cannot store. That was split on the frontend, and an
+ * audit found NO stored submission had ever carried the mixed shape — `teardown_submission` was
+ * empty, so no backfill was needed and none was run.
+ *
+ * What keeps the tolerance is not that bug but the next one like it: a browser holding a cached
+ * pre-fix bundle still posts the old shape, and this is a zero-trust boundary that should file an
+ * honest label correctly rather than refuse it. The three ways out were: 422 the whole array (which
+ * hands that author a refusal they cannot act on); translate `step` into `datasheet` (the platform
+ * deciding what somebody's file is, unrecoverably, at write time); or accept both and let the PUBLISH
+ * route by which set the label belongs to. The third keeps the author's word intact.
+ *
+ * ⚠️ SO THE TWO ENUMS MUST STAY DISJOINT. Routing by label is only unambiguous while no value
+ * appears in both, which `teardown-submission.schemas.test.ts` asserts.
  */
 const SubmittedFileSchema = z
   .object({

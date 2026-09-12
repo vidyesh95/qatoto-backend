@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  TEARDOWN_DOCUMENT_KINDS,
+  TEARDOWN_MANUFACTURING_FILE_KINDS,
+} from "#src/modules/home/blueprints/teardown-import.schemas.js";
+import {
   isTeardownDocumentKind,
   TeardownModerationDecisionSchema,
   TeardownSubmissionSchema,
@@ -172,9 +176,9 @@ describe("TeardownSubmissionSchema", () => {
   });
 
   /**
-   * BOTH VOCABULARIES ARE ACCEPTED IN `documents[]`, which absorbs a frontend bug rather than
-   * translating it: that composer serves both file lists from one schema whose `kind` is the
-   * manufacturing-file enum. The publish routes each file by its own label.
+   * BOTH VOCABULARIES ARE ACCEPTED IN `documents[]`. The wizard bug that made this urgent is fixed
+   * and no submission carrying the mixed shape was ever stored — what the tolerance guards now is a
+   * caller on a cached bundle, which this boundary should file correctly rather than refuse.
    */
   it("accepts either file vocabulary in documents[]", () => {
     for (const kind of ["schematic", "gerber"]) {
@@ -190,6 +194,25 @@ describe("TeardownSubmissionSchema", () => {
   it("sorts the two vocabularies apart", () => {
     expect(isTeardownDocumentKind("schematic")).toBe(true);
     expect(isTeardownDocumentKind("gerber")).toBe(false);
+  });
+
+  /**
+   * ⚠️ THE ONE CHANGE THAT WOULD BREAK ROUTING-BY-LABEL SILENTLY.
+   *
+   * `copySubmissionIntoTeardown` decides which table a file belongs in by asking whether its `kind`
+   * is a document kind. That question only has one answer while the two enums share no value — add
+   * an overlapping label to either and a file starts landing in whichever table the predicate
+   * happens to name first, with nothing failing anywhere to say so.
+   *
+   * Both lists are read here rather than spot-checked, so a new value in EITHER is covered the day
+   * it is added.
+   */
+  it("keeps the two file vocabularies disjoint", () => {
+    const sharedKinds = TEARDOWN_DOCUMENT_KINDS.filter((documentKind) =>
+      TEARDOWN_MANUFACTURING_FILE_KINDS.some((manufacturingKind) => String(manufacturingKind) === String(documentKind)),
+    );
+
+    expect(sharedKinds).toEqual([]);
   });
 
   it("refuses a survey dated in the future", () => {

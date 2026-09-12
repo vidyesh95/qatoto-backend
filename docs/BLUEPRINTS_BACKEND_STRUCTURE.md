@@ -184,24 +184,33 @@ part's `manufacturingMethod`, a node name or a `.glb` are **facts about the phys
 moderator who never held it would be fabricating them. This surface asks for the first two and will
 never ask for the others.
 
-### 3.5 `documents[].kind` — a frontend bug the backend absorbs rather than translates
+### 3.5 `documents[].kind` — a frontend bug the backend absorbed, and why the tolerance stays
 
-The frontend serves `documents[]` and `manufacturingFiles[]` from ONE schema whose `kind` is the
-manufacturing-file enum, and its composer defaults both lists to `"step"`. `teardown_document.kind` is
-`schematic | bill_of_materials | assembly_guide | datasheet` — **zero shared labels** — and the
-frontend's own read contract agrees with the backend.
+The wizard **used to** serve `documents[]` and `manufacturingFiles[]` from ONE schema whose `kind` was
+the manufacturing-file enum, defaulting both lists to `"step"`. `teardown_document.kind` is
+`schematic | bill_of_materials | assembly_guide | datasheet` — **zero shared labels** — so every
+`documents[]` row arrived carrying a label that column cannot store.
 
 Three ways out, and why the third won:
 
-1. **422 the whole array** until the frontend splits its schema — breaks a wizard step that ships
-   today.
+1. **422 the whole array** until the frontend split its schema — which breaks a wizard step that was
+   shipping at the time.
 2. **Translate `step` → `datasheet`** — the platform deciding what somebody's file is, unrecoverably,
    at write time.
 3. **Accept both vocabularies and route each file by its OWN label at publish.** The author's word
-   survives intact, it works with no frontend release, and it keeps working when that release lands.
+   survives intact, it worked with no frontend release, and it kept working when that release landed.
 
-A `gerber` filed under `documents[]` therefore appears under Manufacturing files on the published
-page — wrong but honest, and reversible by one backfill.
+⚠️ **THE FRONTEND HAS SINCE BEEN SPLIT, AND NO BACKFILL WAS EVER NEEDED.** An audit found
+`teardown_submission` empty — no submission carrying the mixed shape was ever stored — and every
+seeded row in `teardown_document` and `teardown_manufacturing_file` correctly labelled. The prose
+here used to end "reversible by one backfill"; there was nothing to reverse.
+
+**The tolerance stays anyway, and not out of inertia.** A browser holding a cached pre-fix bundle
+still posts the old shape, and this is a zero-trust boundary: filing an honest label correctly is a
+better answer than a 422 its author cannot act on. What the decision costs is one branch in
+`copySubmissionIntoTeardown` and one rule — **the two enums must stay disjoint**, because routing by
+label is unambiguous only while no value appears in both. `teardown-submission.schemas.test.ts`
+asserts it over both lists, so a new value in either is covered the day it is added.
 
 ### 3.6 Two oracle rules
 
@@ -313,21 +322,18 @@ and case studies are proven against a real database.
 
 ---
 
-## 8. What the frontend must change
+## 8. What the frontend was asked for, and what landed
 
-None of these are backend bugs, and none of them block the routes above.
+This section was a handover list. Every item on it has since shipped, and it is kept as a record
+rather than deleted, because the reasoning is what stops each one being re-introduced.
 
-1. **`documents[].kind`** — `TeardownSubmissionFileSchema` must split into a document schema (the
-   4-value `blueprint_document_kind`) and a manufacturing-file schema (the 7-value enum). Until then
-   §3.5 applies and a backfill is the exit.
-2. **`materials[].id`** — the wizard sends `"mat-1"`; the server mints material ids because that
-   column is a global primary key with no default. `.strict()` refuses the field, so it must be
-   dropped on the way out. `.strip()`ing it here is what the frontend's own schema header bans by
-   name.
-3. **`byteSize: number | null`** must reach `BlueprintDocumentSchema` and
-   `TeardownManufacturingFileSchema` on the read side.
-4. **`partsList`** on `TeardownBlueprintSchema` — additive, and the backend already emits it. Read
-   shapes `.strip()`, so nothing breaks until the field is added; nothing renders until it is.
-5. **The admin teardown queue page does not exist**, and the publish form needs three fields it has
-   never had: thumbnail URL, difficulty, and an optional slug.
-6. **The `/mine` fixture's `draft` row is unreachable** — the real endpoint can never return one.
+| # | Asked for | Landed as |
+| --- | --- | --- |
+| 1 | Split `TeardownSubmissionFileSchema` into a document schema (4-value) and a manufacturing-file schema (7-value) | Two schemas and two draft row types; a new document row now defaults to `schematic`. See §3.5 for why the backend still accepts both. |
+| 2 | Stop sending `materials[].id` — the server mints it, and the column is a global primary key with no default | Dropped at the conversion point; the derived material schema ends `.strict()`, so a leftover is a loud refusal rather than a silent strip. |
+| 3 | `byteSize: number \| null` on the read side | Nullable on documents and fabrication files; a model's stays positive and non-null, because that is an upload rather than a pasted link. |
+| 4 | `partsList` on `TeardownBlueprintSchema` | Added **and rendered** — the frontend ships a checked sweep asserting every teardown field has a renderer. |
+| 5 | The admin teardown queue, with a publish form carrying thumbnail, difficulty and an optional slug | `/admin/teardowns`, mirroring the case-study queue, with a live thumbnail preview. |
+| 6 | Retire the `/mine` fixture's `draft` row — the endpoint can never return one | Went with the mock file when the transport was wired. |
+
+**Nothing on this surface is waiting on the frontend.**

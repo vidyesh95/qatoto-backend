@@ -278,11 +278,11 @@ async function insertTeardownUnderFreeSlug(
  * `teardown_part_arm_shape_ck` is never consulted — the author's parts go to
  * `teardown_part_listing`, which is a contents page rather than a viewer.
  *
- * ⚠️ `documents[]` IS ROUTED BY ITS OWN LABEL, not by the array it arrived in. The frontend serves
- * both file lists from one schema whose `kind` is the manufacturing-file enum, so today most
- * "documents" carry a fab label. Routing by label puts each file in the table that can hold what the
- * author actually said it was, and the day the frontend splits its schema the same code files them
- * correctly with no release here.
+ * ⚠️ `documents[]` IS ROUTED BY ITS OWN LABEL, not by the array it arrived in. The wizard once served
+ * both file lists from one schema whose `kind` was the manufacturing-file enum; it has since been
+ * split, and no submission carrying the mixed shape was ever stored. Routing by label is what made
+ * that release a no-op here, and it now stands as the backstop for a caller on a cached bundle:
+ * whatever array a file arrives in, it lands in the table that can hold what its author said it was.
  */
 async function copySubmissionIntoTeardown(
   transaction: DatabaseExecutor,
