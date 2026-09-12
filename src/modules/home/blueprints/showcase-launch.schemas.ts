@@ -179,9 +179,22 @@ export const ModerateShowcaseLaunchSchema = z.discriminatedUnion("decision", [
 ]);
 export type ModerateShowcaseLaunchInput = z.infer<typeof ModerateShowcaseLaunchSchema>;
 
+/**
+ * The moderator queue's paging controls.
+ *
+ * ⚠️ `.strip()`, AND IT IS THE ONLY QUERY SCHEMA IN THIS CODEBASE THAT IS — every other one is
+ * `.strict()`. The departure is deliberate, so do not "correct" it back.
+ *
+ * WHY. `.strict()` earns its keep on a BODY, where an unknown key is a client trying to set
+ * something the server owns. A query string is not that: it collects parameters nobody in this
+ * codebase put there — a `utm_source` from a link in an email, a stale `?page=` in a moderator's
+ * bookmark — and refusing the whole request for one of them means the review queue does not load
+ * and the reason shown is a key the moderator never typed. Unknown keys are dropped; the ones that
+ * decide what is read are still parsed exactly, so `?limit=51` is still a 422.
+ */
 export const ShowcaseReviewQueueQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).default(20),
     cursor: z.string().min(1).max(200).optional(),
   })
-  .strict();
+  .strip();

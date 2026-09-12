@@ -453,14 +453,25 @@ describe("ShowcaseReviewQueueQuerySchema", () => {
   });
 
   /**
-   * ⚠️ PINS A BEHAVIOR WORTH RECONSIDERING, not endorsing it. `.strict()` over `req.query` means any
-   * stray parameter — a `utm_source`, a stale `?page=` in a bookmarked moderator link — answers 422
-   * instead of listing the queue. Strictness is right for a body, where an unknown key is a client
-   * that thinks it can set something; on a GET query string the extra keys are usually not the
-   * client's doing at all.
+   * STRIPS RATHER THAN REFUSING, which is this schema's one deliberate departure from every other
+   * query schema in the codebase. A `utm_source` from an emailed link or a stale `?page=` in a
+   * bookmark is not a client trying to set something — it is noise the moderator never typed, and
+   * refusing the request for it means the queue simply does not load.
    */
-  it("refuses an unknown query key, so a stray utm parameter 422s the queue", () => {
-    expect(ShowcaseReviewQueueQuerySchema.safeParse({ limit: "20", utm_source: "newsletter" }).success).toBe(false);
+  it("ignores an unknown query key rather than refusing the whole request", () => {
+    const parsed = ShowcaseReviewQueueQuerySchema.safeParse({
+      limit: "20",
+      cursor: "abc",
+      utm_source: "newsletter",
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toEqual({ limit: 20, cursor: "abc" });
+  });
+
+  /** Stripping the unknown ones does not soften the known ones. */
+  it("still refuses an out-of-range limit sent beside an unknown key", () => {
+    expect(ShowcaseReviewQueueQuerySchema.safeParse({ limit: "51", utm_source: "newsletter" }).success).toBe(false);
   });
 });
 
