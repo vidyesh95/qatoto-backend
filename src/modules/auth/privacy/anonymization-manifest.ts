@@ -506,6 +506,26 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 17(3)(e)",
       note: "Names who owns or founded a thing other people are still working on or buying from. The row outlives the account by design (rule R1).",
     },
+    /*
+     * ⚠️ `delete_rows` IS THE ONLY LAWFUL DISPOSITION HERE, AND A `null_out` WOULD BE ILLEGAL RATHER
+     * THAN MERELY WRONG. `case_study_author_arm_ck` admits a row that names an account OR one that
+     * carries a byline as text, never neither — so clearing this column mid-scrub raises 23514 and
+     * dead-letters the job.
+     *
+     * ⚠️ AND `db:verify-anonymization-coverage` CANNOT SEE THAT. It flags a `null_out` on a NOT NULL
+     * column, and this column is nullable (a seeded row names no account), so the script would go
+     * green on the one disposition that explodes at runtime. `db:verify-case-study-constraints`
+     * proves the refusal against a real database instead.
+     *
+     * Deleting an account deletes its case studies, which is the `showcase_launch` owner decision
+     * applied to the same kind of content written through the same kind of route.
+     */
+    "case_study.author_user_id": { kind: "delete_rows" },
+    "case_study.reviewed_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
+    },
     "session.user_id": { kind: "delete_rows" },
     // Deleting an account deletes its launches (owner decision). The team rows cascade with the
     // launch; the images are removed from Cloudinary by `purge_showcase_launch_images` first.
