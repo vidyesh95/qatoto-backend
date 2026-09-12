@@ -252,6 +252,11 @@ const PUBLICLY_RESOLVABLE = new Set([
   // The /blueprints surface — the hero carousel. Bare on purpose, same rationale as
   // promotions: nothing in this payload depends on who is asking.
   "get /blueprints/hero-slides",
+  // The public showcase surface — the feed, its slug list and one launch. Bare on purpose, same
+  // rationale as promotions: nothing in these payloads depends on who is asking.
+  "get /blueprints/showcases",
+  "get /blueprints/showcases/slugs",
+  "get /blueprints/showcases/{launchSlug}",
 ]);
 
 const CONTRACT_NOTE =

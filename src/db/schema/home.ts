@@ -2083,6 +2083,23 @@ export const showcaseLaunch = pgTable(
     index("showcase_launch_review_queue_idx")
       .on(table.createdAt, table.id)
       .where(sql`moderation_state = 'pending_review'`),
+    /*
+     * THE PUBLIC FEED'S `newest` PAGE, and the column DIRECTIONS are the whole point.
+     *
+     * That keyset is `launched_at DESC, id ASC` — MIXED, unlike every other cursor in this
+     * codebase, because the frontend's comparator breaks ties on `id` ascending. Postgres will only
+     * walk an index for an ORDER BY whose directions match it pair for pair, so a plain
+     * `(launched_at, id)` index would be ignored and the feed would sort in memory.
+     *
+     * Partial on `published`: nothing else is ever public, and keeping drafts and rejected rows out
+     * keeps the index the size of the readable set rather than the size of the table.
+     *
+     * The `top` page has no index here on purpose — its leading key is `upvote_count`, which lives
+     * in `showcase_launch_stats`, and no single index spans two tables.
+     */
+    index("showcase_launch_public_newest_idx")
+      .on(desc(table.launchedAt), table.id)
+      .where(sql`moderation_state = 'published'`),
 
     check(
       "showcase_launch_moderation_state_ck",
@@ -2270,11 +2287,67 @@ export const showcaseLaunchWriteUpImage = pgTable(
   ],
 );
 
+/**
+ * Denormalised counters for one published launch — a read cache, never a source of truth.
+ *
+ * WHY A SIDECAR RATHER THAN COLUMNS ON `showcase_launch`. Same reason as `video_stats`: a counter
+ * moves on a different cadence from the row it counts, and a launch row is append-mostly after
+ * moderation. Keeping them apart means a view never contends with an edit.
+ *
+ * ⚠️ THESE COUNTERS HAVE NO SOURCE OF TRUTH YET, and that is the one way this differs from
+ * `video_stats`. There is no vote table, no like table and no comment table, because the frontend
+ * offers none of those controls — its vote box is deliberately a `<span>` rather than a `<button>`.
+ * So every counter here reads 0 through `coalesce`, and 0 is TRUE rather than a placeholder. When
+ * the write routes land they bring their own source tables and reconcile into this one.
+ *
+ * NO ROWS ARE WRITTEN ON PUBLISH. Every read left-joins and coalesces, exactly as the video reads
+ * do, so a launch with no row and a launch with a row of zeroes are the same answer. That also
+ * keeps `publishUnderFreeSlug` — a savepoint-retry transaction that is correct today — out of this.
+ *
+ * NO `save_count`. Saving is on the TEARDOWN arm of the frontend's contract, not the showcase one,
+ * and a column nothing renders is the unverified code the field sweep exists to catch.
+ *
+ * `integer`, NOT `bigint`, on all four. node-postgres hands `int8` back as a STRING, so a bigint
+ * behind a `sql<number>` projection would be a type that lies about its own value.
+ */
+export const showcaseLaunchStats = pgTable(
+  "showcase_launch_stats",
+  {
+    launchId: text("launch_id")
+      .primaryKey()
+      .references(() => showcaseLaunch.id, { onDelete: "cascade" }),
+    viewCount: integer("view_count").default(0).notNull(),
+    likeCount: integer("like_count").default(0).notNull(),
+    upvoteCount: integer("upvote_count").default(0).notNull(),
+    commentCount: integer("comment_count").default(0).notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    // The `top` page's leading key. `launch_id` rides along so the tie-break is covered too.
+    index("showcase_launch_stats_top_idx").on(desc(table.upvoteCount), table.launchId),
+    check(
+      "showcase_launch_stats_nonnegative_ck",
+      sql`view_count >= 0 AND like_count >= 0 AND upvote_count >= 0 AND comment_count >= 0`,
+    ),
+  ],
+);
+
+export const showcaseLaunchStatsRelations = relations(showcaseLaunchStats, ({ one }) => ({
+  launch: one(showcaseLaunch, {
+    fields: [showcaseLaunchStats.launchId],
+    references: [showcaseLaunch.id],
+  }),
+}));
+
 export const showcaseLaunchRelations = relations(showcaseLaunch, ({ one, many }) => ({
   author: one(user, { fields: [showcaseLaunch.authorUserId], references: [user.id] }),
   reviewedBy: one(user, { fields: [showcaseLaunch.reviewedByUserId], references: [user.id] }),
   teamMembers: many(showcaseLaunchTeamMember),
   writeUpImages: many(showcaseLaunchWriteUpImage),
+  stats: one(showcaseLaunchStats, {
+    fields: [showcaseLaunch.id],
+    references: [showcaseLaunchStats.launchId],
+  }),
 }));
 
 export const showcaseLaunchTeamMemberRelations = relations(showcaseLaunchTeamMember, ({ one }) => ({

@@ -114,9 +114,11 @@ router.delete(
  *
  * The moderator routes check `moderate_content` inside the controller, before any id is read.
  *
- * ROUTE ORDER: `/showcases/write-up-images` and `/showcases/mine` are literals. No
- * `/showcases/:param` route exists yet; when public reads add one, it must be declared below
- * both.
+ * ROUTE ORDER: every literal under `/showcases/` — `write-up-images`, `mine`, `slugs` — is declared
+ * above `/showcases/:launchSlug`, which must stay LAST. Express matches in declaration order, so a
+ * param route above them would swallow `mine` as a slug and answer a stranger's launch to a maker
+ * asking for their own. `blueprints.routes.order.test.ts` derives the literal list rather than
+ * naming it, so the next literal is guarded without anyone remembering to add it.
  */
 
 /** POST /blueprints/showcases/write-up-images — one image, stored unclaimed until a launch uses it. */
@@ -142,6 +144,27 @@ router.post(
 
 /** GET /blueprints/showcases/mine — the maker's own launches, every state. */
 router.get("/showcases/mine", requireAuth, showcaseLaunchController.listMyLaunches);
+
+/*
+ * THE PUBLIC READS. Bare — no `requireAuth`, no `attachOptionalUser`, no limiter — for the reason
+ * `/hero-slides` above is bare and `GET /feed/categories` is: the answer is identical for every
+ * visitor, so there is no session worth resolving and nothing to key a bucket on but an IP, which
+ * behind a CDN or a NAT is an outage aimed at ourselves. These are cacheable; a cache belongs in
+ * front of them rather than a limiter inside them.
+ *
+ * Only `published` launches are ever visible, and the service applies that to the facet counts as
+ * well as the list — a tag chip that promises more launches than the list can show is a count the
+ * reader can see is wrong.
+ */
+
+/** GET /blueprints/showcases/slugs — published slugs for the frontend's prerender step. */
+router.get("/showcases/slugs", showcaseLaunchController.listPublicShowcaseSlugs);
+
+/** GET /blueprints/showcases — the public feed, with its tag facets in the same payload. */
+router.get("/showcases", showcaseLaunchController.listPublicShowcaseFeed);
+
+/** GET /blueprints/showcases/:launchSlug — one published launch. DECLARED LAST, see the docblock. */
+router.get("/showcases/:launchSlug", showcaseLaunchController.getPublicShowcaseLaunch);
 
 /** GET /blueprints/admin/showcases/review-queue — `moderate_content`, oldest first. */
 router.get("/admin/showcases/review-queue", requireAuth, showcaseLaunchController.listReviewQueue);

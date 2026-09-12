@@ -250,6 +250,48 @@ export type ModerateShowcaseLaunchInput = z.infer<typeof ModerateShowcaseLaunchS
  * and the reason shown is a key the moderator never typed. Unknown keys are dropped; the ones that
  * decide what is read are still parsed exactly, so `?limit=51` is still a 422.
  */
+/**
+ * The public feed's two orders. Byte-matches the frontend's `SHOWCASE_SORTS`, because these are wire
+ * values a query string carries.
+ */
+export const SHOWCASE_FEED_SORTS = ["newest", "top"] as const;
+export const DEFAULT_SHOWCASE_FEED_SORT = "newest";
+
+/** Byte-matches the frontend's `SHOWCASE_PAGE_LIMIT`, so an unpaged request renders one full page. */
+export const SHOWCASE_FEED_DEFAULT_LIMIT = 6;
+
+/**
+ * The public showcase feed's query.
+ *
+ * ⚠️ `.strip()`, NOT `.strict()`, and unlike the moderator queue this is not a close call. This
+ * feed is a public page people share: a link pasted into a chat comes back with `utm_source`, a
+ * campaign tag or a tracking parameter nobody in this codebase put there, and refusing the whole
+ * request for one of them means the page does not load and the reason names a key the reader never
+ * typed. Unknown keys are dropped; the ones that decide what is read are still parsed exactly.
+ */
+export const PublicShowcaseFeedQuerySchema = z
+  .object({
+    tag: z.string().trim().min(1).max(40).optional(),
+    sort: z.enum(SHOWCASE_FEED_SORTS).default(DEFAULT_SHOWCASE_FEED_SORT),
+    limit: z.coerce.number().int().min(1).max(24).default(SHOWCASE_FEED_DEFAULT_LIMIT),
+    cursor: z.string().min(1).max(200).optional(),
+  })
+  .strip();
+
+/**
+ * A public slug, shaped exactly as `showcase_launch_public_slug_ck` stores one.
+ *
+ * ⚠️ A FAILURE HERE ANSWERS 404, NOT 422, which departs from §3.1's parse-failure rule on purpose.
+ * A 422 for a malformed slug beside a 404 for a well-formed one that does not exist tells a stranger
+ * which shapes are real, one request at a time. The parse still runs at the boundary; only the
+ * status differs, and both answers are the same answer: there is nothing here.
+ */
+export const PublicShowcaseSlugSchema = z
+  .string()
+  .min(3)
+  .max(120)
+  .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+
 export const ShowcaseReviewQueueQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(50).default(20),

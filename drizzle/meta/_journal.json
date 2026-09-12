@@ -1191,6 +1191,13 @@
       "when": 1789128945097,
       "tag": "0169_showcase_launch",
       "breakpoints": true
+    },
+    {
+      "idx": 170,
+      "version": "7",
+      "when": 1789194666273,
+      "tag": "0170_slow_maginty",
+      "breakpoints": true
     }
   ]
 }

@@ -8,8 +8,11 @@ import {
   respondValidationFailed,
 } from "#src/modules/home/blueprints/showcase-launch-error-response.js";
 import * as showcaseLaunchModerationService from "#src/modules/home/blueprints/showcase-launch-moderation.service.js";
+import * as showcaseLaunchPublicReadService from "#src/modules/home/blueprints/showcase-launch-public-read.service.js";
 import {
   ModerateShowcaseLaunchSchema,
+  PublicShowcaseFeedQuerySchema,
+  PublicShowcaseSlugSchema,
   ShowcaseLaunchDraftSchema,
   ShowcaseReviewQueueQuerySchema,
   SubmitShowcaseLaunchMultipartSchema,
@@ -251,4 +254,73 @@ export async function moderateLaunch(req: Request, res: Response): Promise<void>
   }
 
   respondOk(res, "Launch decision recorded", decisionResult.value);
+}
+
+/**
+ * `GET /blueprints/showcases` — the public feed, plus the tag counts that sit beside it.
+ *
+ * NO SESSION IS READ, and that is deliberate rather than an omission: the payload is identical for
+ * every visitor, so there is nothing to personalise and nothing to leak.
+ *
+ * THE FACETS RIDE ALONG rather than living on their own route, because they are counted over the
+ * same population the list filters and a second route could answer 200 while this one failed —
+ * leaving chips that promise launches the list never shows.
+ */
+export async function listPublicShowcaseFeed(req: Request, res: Response): Promise<void> {
+  const queryParse = PublicShowcaseFeedQuerySchema.safeParse(req.query);
+  if (!queryParse.success) {
+    respondValidationFailed(res, queryParse.error);
+    return;
+  }
+
+  const feedResult = await showcaseLaunchPublicReadService.listPublicShowcases({
+    sort: queryParse.data.sort,
+    limit: queryParse.data.limit,
+    tag: queryParse.data.tag,
+    cursor: queryParse.data.cursor,
+  });
+
+  if (!feedResult.success) {
+    // A cursor this server did not mint, or one minted under the other sort. Never a silent first
+    // page: a feed that quietly restarts shows the reader duplicates.
+    res.status(422).json({
+      status: "error",
+      statusCode: 422,
+      message: "Malformed cursor.",
+    } satisfies ApiResponse);
+    return;
+  }
+
+  respondOk(res, "Showcase launches retrieved successfully", feedResult.value);
+}
+
+/** `GET /blueprints/showcases/slugs` — every published slug, for the frontend's prerender step. */
+export async function listPublicShowcaseSlugs(_req: Request, res: Response): Promise<void> {
+  const slugs = await showcaseLaunchPublicReadService.listPublicShowcaseSlugs();
+  respondOk(res, "Showcase launch slugs retrieved successfully", slugs);
+}
+
+/**
+ * `GET /blueprints/showcases/:launchSlug` — one published launch.
+ *
+ * A MALFORMED SLUG ANSWERS 404, NOT 422. The parse runs, so the boundary rule holds; only the status
+ * differs, because a 422 here and a 404 for a well-formed miss would together tell a stranger which
+ * slug shapes exist. Both answers mean the same thing to an honest caller: there is nothing here.
+ */
+export async function getPublicShowcaseLaunch(req: Request, res: Response): Promise<void> {
+  const slugParse = PublicShowcaseSlugSchema.safeParse(firstParam(req.params.launchSlug ?? ""));
+  if (!slugParse.success) {
+    respondShowcaseLaunchError(res, { type: "SHOWCASE_LAUNCH_NOT_FOUND" });
+    return;
+  }
+
+  const launchResult = await showcaseLaunchPublicReadService.getPublicShowcaseBySlug(
+    slugParse.data,
+  );
+  if (!launchResult.success) {
+    respondShowcaseLaunchError(res, launchResult.error);
+    return;
+  }
+
+  respondOk(res, "Showcase launch retrieved successfully", launchResult.value);
 }

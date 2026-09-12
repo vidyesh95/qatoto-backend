@@ -113,6 +113,16 @@ vi.mock("#src/modules/home/blueprints/showcase-launch.service.js", () => ({
   listMyShowcaseLaunches: (...args: readonly unknown[]) => listMyShowcaseLaunches(...args),
 }));
 
+const listPublicShowcases = vi.fn<(...args: readonly unknown[]) => unknown>();
+const getPublicShowcaseBySlug = vi.fn<(...args: readonly unknown[]) => unknown>();
+const listPublicShowcaseSlugs = vi.fn<(...args: readonly unknown[]) => unknown>();
+
+vi.mock("#src/modules/home/blueprints/showcase-launch-public-read.service.js", () => ({
+  listPublicShowcases: (...args: readonly unknown[]) => listPublicShowcases(...args),
+  getPublicShowcaseBySlug: (...args: readonly unknown[]) => getPublicShowcaseBySlug(...args),
+  listPublicShowcaseSlugs: (...args: readonly unknown[]) => listPublicShowcaseSlugs(...args),
+}));
+
 const listShowcaseReviewQueue = vi.fn<(...args: readonly unknown[]) => unknown>();
 const decideShowcaseLaunch = vi.fn<(...args: readonly unknown[]) => unknown>();
 
@@ -782,6 +792,183 @@ describe("blueprints showcase launch routes", () => {
       const response = await postDecision({ decision: "published", moderatorNote: null });
 
       expect(response.status).toBe(expectedStatus);
+    });
+  });
+
+  /**
+   * THE PUBLIC READS. Every case here signs OUT first, because answering a stranger is the entire
+   * point of the round — a published launch that only a signed-in caller can read is still a
+   * launch with no page to link to.
+   */
+  describe("the public showcase reads", () => {
+    const EMPTY_FEED = {
+      success: true,
+      value: { items: [], page: { nextCursor: null, hasMore: false }, tagFacets: [] },
+    } as const;
+
+    describe("GET /blueprints/showcases", () => {
+      const path = "/blueprints/showcases";
+
+      it("answers a signed-out visitor with 200", async () => {
+        signOut();
+        listPublicShowcases.mockResolvedValue(EMPTY_FEED);
+
+        const response = await request(app).get(path);
+
+        expect(response.status).toBe(200);
+      });
+
+      it("defaults to the newest sort and a six-launch page", async () => {
+        signOut();
+        listPublicShowcases.mockResolvedValue(EMPTY_FEED);
+
+        await request(app).get(path);
+
+        expect(listPublicShowcases).toHaveBeenCalledWith({
+          sort: "newest",
+          limit: 6,
+          tag: undefined,
+          cursor: undefined,
+        });
+      });
+
+      it("passes the tag, sort and cursor through", async () => {
+        signOut();
+        listPublicShowcases.mockResolvedValue(EMPTY_FEED);
+
+        await request(app).get(`${path}?tag=solar&sort=top&limit=12&cursor=t_0_1_launch_1`);
+
+        expect(listPublicShowcases).toHaveBeenCalledWith({
+          sort: "top",
+          limit: 12,
+          tag: "solar",
+          cursor: "t_0_1_launch_1",
+        });
+      });
+
+      it("returns the items, the page footer and the tag facets in one payload", async () => {
+        signOut();
+        listPublicShowcases.mockResolvedValue({
+          success: true,
+          value: {
+            items: [{ slug: "solar-cold-storage-unit", category: "showcase" }],
+            page: { nextCursor: "n_1_launch_1", hasMore: true },
+            tagFacets: [{ value: "solar", count: 3 }],
+          },
+        });
+
+        const response = await request(app).get(path);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data.items).toHaveLength(1);
+        expect(response.body.data.page).toEqual({ nextCursor: "n_1_launch_1", hasMore: true });
+        expect(response.body.data.tagFacets).toEqual([{ value: "solar", count: 3 }]);
+      });
+
+      it.each([
+        ["an unrecognised sort", "?sort=banana"],
+        ["a limit of zero", "?limit=0"],
+        ["a limit past the maximum", "?limit=999"],
+        ["an empty tag", "?tag="],
+      ])("answers 422 for %s", async (_label, queryString) => {
+        signOut();
+
+        const response = await request(app).get(`${path}${queryString}`);
+
+        expect(response.status).toBe(422);
+        expect(listPublicShowcases).not.toHaveBeenCalled();
+      });
+
+      /** A shared link comes back carrying campaign parameters nobody here put there. */
+      it("ignores an unknown query key rather than refusing a shared link", async () => {
+        signOut();
+        listPublicShowcases.mockResolvedValue(EMPTY_FEED);
+
+        const response = await request(app).get(`${path}?utm_source=newsletter&sort=top`);
+
+        expect(response.status).toBe(200);
+        expect(listPublicShowcases).toHaveBeenCalledWith(expect.objectContaining({ sort: "top", limit: 6 }));
+      });
+
+      /** Never a silent first page: a feed that quietly restarts shows the reader duplicates. */
+      it("answers 422 for a cursor it did not mint", async () => {
+        signOut();
+        listPublicShowcases.mockResolvedValue({
+          success: false,
+          error: { type: "SHOWCASE_FEED_CURSOR_MALFORMED" },
+        });
+
+        const response = await request(app).get(`${path}?cursor=not-a-real-cursor`);
+
+        expect(response.status).toBe(422);
+        expect(response.body.message).toBe("Malformed cursor.");
+      });
+    });
+
+    describe("GET /blueprints/showcases/slugs", () => {
+      it("answers a signed-out visitor with the published slugs", async () => {
+        signOut();
+        listPublicShowcaseSlugs.mockResolvedValue(["solar-cold-storage-unit", "bike-trailer"]);
+
+        const response = await request(app).get("/blueprints/showcases/slugs");
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toEqual(["solar-cold-storage-unit", "bike-trailer"]);
+      });
+    });
+
+    describe("GET /blueprints/showcases/:launchSlug", () => {
+      it("answers a signed-out visitor with the launch", async () => {
+        signOut();
+        getPublicShowcaseBySlug.mockResolvedValue({
+          success: true,
+          value: { slug: "solar-cold-storage-unit", category: "showcase" },
+        });
+
+        const response = await request(app).get("/blueprints/showcases/solar-cold-storage-unit");
+
+        expect(response.status).toBe(200);
+        expect(getPublicShowcaseBySlug).toHaveBeenCalledWith("solar-cold-storage-unit");
+      });
+
+      it("answers 404 for a slug with no published launch", async () => {
+        signOut();
+        getPublicShowcaseBySlug.mockResolvedValue({
+          success: false,
+          error: { type: "SHOWCASE_LAUNCH_NOT_FOUND" },
+        });
+
+        const response = await request(app).get("/blueprints/showcases/never-existed");
+
+        expect(response.status).toBe(404);
+      });
+
+      /**
+       * 404 RATHER THAN 422, and the pair is the point: a malformed slug answering 422 beside a
+       * well-formed miss answering 404 would tell a stranger which slug shapes are real.
+       */
+      it("answers 404 for a malformed slug, without asking the database", async () => {
+        signOut();
+
+        const response = await request(app).get("/blueprints/showcases/Not_A_Slug");
+
+        expect(response.status).toBe(404);
+        expect(getPublicShowcaseBySlug).not.toHaveBeenCalled();
+      });
+    });
+
+    /**
+     * THE RUNTIME PROOF THAT `:launchSlug` DID NOT SWALLOW THE LITERALS. The order test reads the
+     * declaration order in the source; this reads what Express actually does with a request. A 401
+     * here means `mine` reached the maker's route; a 404 would mean it was treated as a slug.
+     */
+    it("still routes /showcases/mine to the maker's own launches, not the public detail", async () => {
+      signOut();
+
+      const response = await request(app).get("/blueprints/showcases/mine");
+
+      expect(response.status).toBe(401);
+      expect(getPublicShowcaseBySlug).not.toHaveBeenCalled();
     });
   });
 });

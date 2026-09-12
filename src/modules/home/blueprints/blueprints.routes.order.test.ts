@@ -35,6 +35,25 @@ interface DeclaredRoute {
   readonly methods: readonly string[];
 }
 
+/**
+ * Handler counts keyed by `"<method> <path>"`, NOT by path alone.
+ *
+ * `GET /showcases` and `POST /showcases` share a path and differ by six handlers — the public read
+ * is bare, the submit carries auth, a limiter, identity, a parser and idempotency. Keyed by path,
+ * whichever was declared last would silently win and the other's chain would go unchecked.
+ */
+function handlerCountsByMethodAndPath(router: unknown): Map<string, number> {
+  if (!isRouterInternals(router)) throw new Error("router has no layer stack");
+  return new Map(
+    router.stack.flatMap((layer) => {
+      const path = layer.route?.path;
+      if (typeof path !== "string") return [];
+      const handlerCount = layer.route?.stack?.length ?? 0;
+      return Object.keys(layer.route?.methods ?? {}).map((method) => [`${method} ${path}`, handlerCount] as const);
+    }),
+  );
+}
+
 function declaredRoutes(router: unknown): readonly DeclaredRoute[] {
   if (!isRouterInternals(router)) throw new Error("router has no layer stack");
   return router.stack.flatMap((layer) => {
@@ -57,23 +76,33 @@ describe("the blueprints router", () => {
     expect(reorderIndex).toBeLessThan(paramIndex);
   });
 
-  it("declares the public read with no auth middleware and every admin route with at least one guard", async () => {
+  it("declares every bare public read with one handler and every guarded route with at least two", async () => {
     const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
     const routes = declaredRoutes(blueprintsRouter);
-    if (!isRouterInternals(blueprintsRouter)) throw new Error("router has no layer stack");
+    const handlerCounts = handlerCountsByMethodAndPath(blueprintsRouter);
 
-    const handlerCounts = new Map(
-      blueprintsRouter.stack.flatMap((layer) => {
-        const path = layer.route?.path;
-        if (typeof path !== "string") return [];
-        return [[path, layer.route?.stack?.length ?? 0] as const];
-      }),
-    );
+    /*
+     * THE BARE PUBLIC READS, listed rather than inferred. Each is a controller and nothing else —
+     * no auth, no optional user, no limiter — because its answer is identical for every visitor.
+     * Listing them by hand is the point: adding a route to this set is a decision to serve it to
+     * anyone, and it should cost an edit here rather than happening because a count changed.
+     */
+    const barePublicRoutes = new Set([
+      "get /hero-slides",
+      "get /showcases",
+      "get /showcases/slugs",
+      "get /showcases/:launchSlug",
+    ]);
 
-    expect(handlerCounts.get("/hero-slides")).toBe(1);
+    for (const routeKey of barePublicRoutes) {
+      expect(handlerCounts.get(routeKey), `${routeKey} must be declared and bare`).toBe(1);
+    }
     for (const route of routes) {
-      if (route.path === "/hero-slides") continue;
-      expect(handlerCounts.get(route.path) ?? 0).toBeGreaterThanOrEqual(2);
+      for (const method of route.methods) {
+        const routeKey = `${method} ${route.path}`;
+        if (barePublicRoutes.has(routeKey)) continue;
+        expect(handlerCounts.get(routeKey) ?? 0, `${routeKey} must carry a guard`).toBeGreaterThanOrEqual(2);
+      }
     }
   });
 
@@ -108,21 +137,17 @@ describe("the blueprints router", () => {
    */
   it("gives each showcase route its exact guard chain", async () => {
     const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
-    if (!isRouterInternals(blueprintsRouter)) throw new Error("router has no layer stack");
+    const handlerCounts = handlerCountsByMethodAndPath(blueprintsRouter);
 
-    const handlerCounts = new Map(
-      blueprintsRouter.stack.flatMap((layer) => {
-        const path = layer.route?.path;
-        if (typeof path !== "string") return [];
-        return [[path, layer.route?.stack?.length ?? 0] as const];
-      }),
-    );
-
-    expect(handlerCounts.get("/showcases/write-up-images")).toBe(5);
-    expect(handlerCounts.get("/showcases")).toBe(6);
-    expect(handlerCounts.get("/showcases/mine")).toBe(2);
-    expect(handlerCounts.get("/admin/showcases/review-queue")).toBe(2);
-    expect(handlerCounts.get("/admin/showcases/:submissionId/moderate")).toBe(6);
+    expect(handlerCounts.get("post /showcases/write-up-images")).toBe(5);
+    expect(handlerCounts.get("post /showcases")).toBe(6);
+    expect(handlerCounts.get("get /showcases/mine")).toBe(2);
+    expect(handlerCounts.get("get /admin/showcases/review-queue")).toBe(2);
+    // The public reads: a controller and nothing else.
+    expect(handlerCounts.get("get /showcases")).toBe(1);
+    expect(handlerCounts.get("get /showcases/slugs")).toBe(1);
+    expect(handlerCounts.get("get /showcases/:launchSlug")).toBe(1);
+    expect(handlerCounts.get("post /admin/showcases/:submissionId/moderate")).toBe(6);
   });
 
   /**
