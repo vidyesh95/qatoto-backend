@@ -1117,26 +1117,111 @@ because `anonymize-account.service.ts` issues the statement, driven by iterating
 `src/modules/auth/privacy/anonymization-manifest.ts` (163 entries: 35 `delete_rows`, 46
 `null_out`, 82 `retain` with a cited lawful basis).
 
-**THREE things the verifier cannot see, and one it now covers.** `user_profile_link.user_id` is a
-foreign key, so it is in the manifest (`delete_rows`) and the script checks it. **`user.bio` is a
-SCALAR COLUMN and therefore invisible to that script** — it is scrubbed by one explicit line in
-`anonymize-account.service.ts`, and if that line were deleted nothing would turn red. Its only
-executable guard is the `"the identity is gone"` assertion in `scripts/smoke-privacy.ts`; the two
-belong together. `user_profile_link` rows also ride in the Art. 15 export beside the bio.
+**THE MANIFEST IS KEYED ON FOREIGN KEYS, AND THAT IS ITS BLIND SPOT.**
+`db:verify-anonymization-coverage` finds its candidates by walking keys into `user(id)`, so
+personal data held as free **text** has nothing to walk and cannot turn it red. This section
+used to say that about three columns, with `user.bio` as the example — "scrubbed by one explicit
+line, and if that line were deleted nothing would turn red". The claim was accurate and the
+count was not: a sweep of all 363 tables found **102 person-shaped text columns**, and two of
+the interesting ones are copies of `user.name` on tables with no `user` reference at all.
 
-**`user.is_channel_listed` IS THE THIRD, AND IT IS THE SAME SHAPE AS `bio`.** A scalar column, so
-the manifest cannot hold it and the verifier stays green whether or not the scrub clears it. It is
-the creator's consent to appear in `GET /channels`, which builds the public sitemap — so leaving it
-`true` through an erasure would keep advertising a handle to search engines for somebody who asked
-to be deleted. The scrub sets it `false` by one explicit line, and `scripts/smoke-privacy.ts` now
-creates its probe user with the flag ALREADY TRUE so that assertion can actually fail; asserting
-`false` against a column that defaults `false` would have been a guard that could only ever pass.
+**So there is a SECOND register and a second verifier.**
+`src/modules/auth/privacy/text-pii-register.ts` classifies **116 columns** — the 102 the scan
+finds, plus every column the scrub writes that no pattern would catch (`user.bio`,
+`user.location_label`, `user.is_channel_listed`, `store_search_document.search_text`, the three
+forum-thread columns). Five kinds, all machine-checked by
+`pnpm db:verify-text-pii-coverage`:
 
-**A THIRD THING THE VERIFIER CANNOT SEE, AND IT IS NOT A COLUMN — IT IS BYTES.** `video_document`
+| kind | what it claims | how it is checked |
+|---|---|---|
+| `scrub` | the erasure overwrites it | `stepName` resolves against `PLANNED_ANONYMIZATION_STEP_NAMES`, which the service DERIVES from its own step list |
+| `covered_by_row_delete` | the whole row dies | `manifestKey` is a `delete_rows` entry in the FK manifest whose table IS this table or reaches it by `ON DELETE cascade`, asked of `pg_constraint` |
+| `retain` | left in place | non-empty `lawfulBasis` citing the Art. 17(3) limb |
+| `no_erasure_subject` | a person's name no erasure can reach | a CHECK or a table with no `user` key makes it provable; the note must say which |
+| `not_personal_data` | a company, product, asset id or hash | non-empty note saying what it holds |
+
+`not_personal_data` is a **disposition rather than a regex exclusion** on purpose. A column
+dropped by a pattern is reasoning nobody can read or disagree with; a column carrying "this is a
+mesh node's label, not a person's" is reasoning the next reader can check. It is also what keeps
+the file a *coverage* check rather than a highlights reel.
+
+**⚠️ WHAT THE SWEEP ACTUALLY FOUND: `user.name` IS COPIED INTO A PUBLIC PAGE.**
+`mintBuyerWorkspace` (`commerce-buyer-workspace.service.ts:85-96`) writes `user.name` into
+`commerce_organization.display_name`, `legal_name` and `normalized_legal_name` — the
+auto-provisioned shell every buyer gets who never declared a company, because "a shell borrows
+the account holder's name because that is the only true thing the server knows about who is
+buying". Correct at mint time. Five hops follow, and the table says which stop where:
+
+| hop | where the name lands | disposition |
+|---|---|---|
+| 1 | `user.name` | **scrub** — `scrub_user`, and always was |
+| 2 | `commerce_organization`, three NOT NULL columns | **scrub** — `tombstone:commerce_organization`, scoped to `auto_provisioned` |
+| 3 | `commerce_order.buyer_legal_name_snapshot` / `counterparty_legal_name_snapshot` | **retain** 17(3)(b) — *impossible*, see below |
+| 4 | `commerce_dispute.order_snapshot_json` | **retain** 17(3)(b) and (e) — an immutable JSON copy of hop 3 |
+| 5 | `store_search_document.title` / `organization_display_name` / `search_text` | **scrub** — `tombstone:store_search_document` |
+
+**Hop 2 is the live exposure, and it is not the search index.** `community-forum.service.ts`
+joins `commerce_organization.display_name` and renders it as `authorOrganizationName` on
+`GET /store/forum/threads`, a public read — so a departed person's real name was being published
+on other people's forum pages. Hop 5 is the quieter half and worth stating precisely: all three
+indexed columns feed a GENERATED tsvector behind the non-partial `store_search_document_fts_idx`,
+but every `/store/search` query filters `is_eligible = true` and a buyer shell is `pending` +
+`private`, so those documents are not returned **today**. Eligibility is a mutable flag, not a
+guarantee. `title` is the column no name-pattern would ever have caught, and it is the
+highest-weighted one in the vector.
+
+**Hop 3 genuinely cannot be fixed, and that was verified rather than assumed.**
+`commerce_prevent_order_snapshot_mutation` (`drizzle/0045_tough_sunfire.sql:600-625`) names both
+snapshot columns in its immutability list and raises `23514` on any UPDATE — and on DELETE. So
+`retain` is the only **executable** disposition there, which is also the lawful one: Art. 17(3)(b),
+a transaction record the counterparty holds.
+
+**FIVE NEW TOMBSTONE STEPS, all before the manifest loop**, because the manifest is what severs
+the links they need. `commerce_organization` and `store_search_document` above, plus three
+credits on rows the person does not own — and those three are the ones nothing could have found:
+
+- **`tombstone:video_collaborator`** — `invited_email` is NOT NULL `citext` under a unique index,
+  so the replacement is derived from the row id on `user.email`'s precedent. It matches **on the
+  address as well as the FK**, because an invite that was never accepted has `user_id IS NULL`
+  from the start and no foreign-key walk has ever been able to see it.
+- **`tombstone:video_team_member`** — `studio.ts:719` sets `linked_user_id` null "because
+  deleting a user must never erase the credit itself", which is right about the credit and wrong
+  about the name. The credit stays; the name becomes `Former member`.
+- **`tombstone:showcase_launch_team_member`** — ⚠️ **no `user` foreign key at all.** A maker types
+  a collaborator's `display_name` and `handle` by hand, so a launch somebody else authored kept a
+  departed person's name and handle on a public page forever. Matched **by handle**, which is
+  exact: handles are unique platform-wide and `burn_handle` parks the matched one at `'infinity'`.
+
+**ONE SHARED CONSTANT.** `REMOVED_AUTHOR_DISPLAY_NAME = "Former member"` moved from
+`community-forum.service.ts` to `src/modules/auth/privacy/redaction.ts`, so the name a reader
+sees for a `set null` author and the name **stored** in a scrubbed NOT NULL credit cannot drift
+apart. `"Deleted user"` stays separate — it is what `user.name` itself becomes, a different
+sentence about a different thing.
+
+**`user.bio` AND `user.is_channel_listed` FINALLY HAVE A GUARD.** Both are scalars, so the FK
+manifest still cannot hold them — but `TEXT_PII_REGISTER` classifies both `scrub` with
+`stepName: "scrub_user"`, and `buildAnonymizedUserColumns` is now **exported** so the verifier
+applies the real object to a probe row and asks Postgres what survived. Delete either line and
+`db:verify-text-pii-coverage` reds. `scripts/smoke-privacy.ts` remains the end-to-end proof, and
+it still creates its probe with `is_channel_listed` ALREADY TRUE, because asserting `false`
+against a column that defaults `false` is a guard that can only ever pass.
+
+**THIRD-PARTY TEXT IS REGISTERED, NOT SILENTLY SKIPPED.**
+`commerce_organization_stakeholder.full_name` (a company officer who never consented),
+`commerce_organization_address.recipient_name_encrypted` (a delivery recipient) and
+`commerce_organization_site_audit.auditor_name` (an external auditor) are all `retain` with a
+limb — they are not the erasing user's data, so they are out of *this* job's scope. Each note says
+the exposure is a **collection** question rather than a non-question. `pitch.external_contact_url`
+is registered as a **named gap**: it is the erasing user's own contact surface, but `pitch` carries
+no `user` reference, and withdrawing a project-owned public offer belongs to a pitch-withdrawal
+flow rather than to this job.
+
+**A THIRD THING NEITHER VERIFIER CAN SEE, AND IT IS NOT A COLUMN — IT IS BYTES.** `video_document`
 rows hold decks and whitepapers in Backblaze object storage, and the table has **no foreign key into
 `user`**: it reaches a person only through `video.creator_id`. So it is correctly ABSENT from the
-manifest — an entry would fail check 2 as stale, exactly as one for `user.bio` would — and the
-verifier stays green while saying nothing about it. Two consequences that must both be held:
+FK manifest — an entry would fail check 2 as stale — and its `file_name` is
+`covered_by_row_delete` in the text register, which the cascade check proves. Two consequences that
+must both be held:
 
 - **SQL cannot reach object storage.** `video_document` cascades from `video`, which cascades from
   `user`, so an erasure deletes every row and leaves every byte. The obligation lives in
@@ -1148,17 +1233,29 @@ verifier stays green while saying nothing about it. Two consequences that must b
   and never `object_storage_key`, which is an internal address into a private bucket rather than
   personal data.
 
+`user_profile_link.user_id` is a foreign key, so it is in the FK manifest (`delete_rows`) and that
+script checks it; its rows also ride in the Art. 15 export beside the bio.
+
 **`user_report.reported_user_id` is `retain`, and the reasoning is worth keeping.** A report filed
 ABOUT somebody survives that person's erasure. If it did not, requesting deletion would erase the
 enforcement history against you — deletion would become a ban-evasion route, and the record a future
 moderator needs would be the thing it destroyed. The reporter's own id is `null_out` and the
 resolving moderator's is `retain`, matching `commerce_content_report` exactly.
 
-> **Run `pnpm db:verify-anonymization-coverage` after ANY migration that adds a `user`
-> reference.** A table missing from the manifest is personal data that survives an erasure
-> with nothing anywhere reporting it. The script fails on a missing entry, a stale entry, a
-> `null_out` on a NOT NULL column, an uncited `retain`, and on any statement that will not
-> execute.
+> **Run BOTH verifiers after ANY migration that touches `user` or adds a text column that
+> could hold a person's name.**
+>
+> - `pnpm db:verify-anonymization-coverage` — 180 foreign keys, 6 checks. Fails on a missing
+>   entry, a stale entry, a `null_out` on a NOT NULL column, an uncited `retain`, and on any
+>   statement that will not execute.
+> - `pnpm db:verify-text-pii-coverage` — 116 text columns, 8 checks. Fails on an unclassified
+>   person-shaped column, a stale entry, a `scrub` naming a step that does not exist, a
+>   `covered_by_row_delete` whose manifest key is not `delete_rows` or does not reach the table,
+>   an unexplained disposition, a step that will not execute, a `scrub` column that still holds
+>   the probe's name, and a `self_declared` organization that the scope wrongly caught.
+>
+> A column missing from either register is personal data that survives an erasure with nothing
+> anywhere reporting it. Each check has been probed by breaking it.
 
 ### Lifecycle
 
@@ -1196,7 +1293,10 @@ seven-day retention. Two flags in `src/config/index.ts`, **both default false**:
 
 ### Verified by
 
-`pnpm db:smoke-privacy` (add `ACCOUNT_ANONYMIZATION_ENABLED=true` for the destructive half)
+`pnpm db:smoke-privacy` (add `ACCOUNT_ANONYMIZATION_ENABLED=true` for the destructive half) —
+which now also seeds the five free-text rows no foreign key can reach, asserts the public search
+index no longer names the person **by querying it the way `/store/search` does**, and keeps a
+`self_declared` organization beside them as the control
 and `pnpm db:smoke-data-export` (real upload, real presigned download, real purge). The
 first signs in for real rather than simulating the hook, because the invariant above is the
 thing most worth proving.

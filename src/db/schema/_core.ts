@@ -85,11 +85,15 @@ export const user = pgTable(
      * here is REACTIVE instead: `user_report` plus `profileModerationState` below, which is why
      * those two must never be removed while this column is public.
      *
-     * NOT IN THE ANONYMIZATION MANIFEST, because that file is keyed on FOREIGN KEYS into `user`
-     * and this is a scalar. It is scrubbed by the one explicit line in
-     * `anonymize-account.service.ts` beside `locationLabel`, and the ONLY executable guard on
-     * that line is `scripts/smoke-privacy.ts`'s "the identity is gone" assertion. Nothing else
-     * will notice if it is dropped.
+     * NOT IN THE FK ANONYMIZATION MANIFEST, because that file is keyed on FOREIGN KEYS into
+     * `user` and this is a scalar. It is scrubbed by the one explicit line in
+     * `anonymize-account.service.ts` beside `locationLabel`.
+     *
+     * ⚠️ THIS COLUMN IS WHY A SECOND REGISTER EXISTS. For a long time the only executable guard
+     * on that line was `scripts/smoke-privacy.ts`'s "the identity is gone" assertion, and nothing
+     * else would have noticed it being dropped. `TEXT_PII_REGISTER` now classifies it `scrub`
+     * with `stepName: "scrub_user"`, and `db:verify-text-pii-coverage` resolves that against the
+     * step list the service derives from itself — so deleting the line reds a script.
      */
     bio: text("bio"),
     /**
@@ -139,10 +143,12 @@ export const user = pgTable(
      * because nobody ticks a box they are never shown. The control remains, as an opt-OUT, which
      * is stricter than YouTube: it indexes channel pages by default and offers no toggle at all.
      *
-     * ⚠️ SCALAR, SO THE ANONYMIZATION VERIFIER CANNOT SEE IT — the same trap as `bio` above. It is
-     * forced FALSE by one explicit line in `anonymize-account.service.ts`, nothing turns red if that
-     * line is deleted, and `scripts/smoke-privacy.ts` is its only executable guard. An erased
-     * account must leave the directory rather than keep being advertised.
+     * ⚠️ SCALAR, SO THE **FK** ANONYMIZATION VERIFIER CANNOT SEE IT — the same trap as `bio` above.
+     * It is forced FALSE by one explicit line in `anonymize-account.service.ts`. That line now has a
+     * guard: `TEXT_PII_REGISTER` classifies it `scrub`, and `db:verify-text-pii-coverage` applies
+     * the real `buildAnonymizedUserColumns` object to a probe row, so deleting the line reds that
+     * script. `scripts/smoke-privacy.ts` is still the end-to-end proof. An erased account must leave
+     * the directory rather than keep being advertised.
      */
     isChannelListed: boolean("is_channel_listed").default(true).notNull(),
     // `precision: 3` — LOAD-BEARING: keyset-paginated with a millisecond cursor; a
