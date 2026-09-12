@@ -1,75 +1,17 @@
 # Home Feed — Backend Structure
 
-> ⚠️ **THE ANIME VERTICAL WAS RETIRED; the `/anime` router is now `/blueprints`.** The module
-> moved to `src/modules/home/blueprints/` and mounts at `/blueprints`; its two public series
-> reads (`GET /anime/series`, `GET /anime/series/:seriesSlug`) were DELETED and only the hero
-> carousel survived. **Nothing in the database changed** — `anime_series`, `anime_season`,
-> `anime_episode`, `anime_hero_slide`, the `anime_audio_mode` / `anime_series_status` pgEnums,
-> the `anime_episode` value in `video_type` and the five `anime_hero_slide_*` audit labels all
-> keep their names, because renaming any of them costs a migration. The studio's own `/series`
-> routes and the admin review queue are untouched. Read every `/anime` URL below as historical.
-
-> **WHAT `/blueprints` SERVES NOW**, none of which this document otherwise covers — it is a feed
-> ranking contract, and the blueprints surface has no ranking:
+> ⚠️ **THE ANIME VERTICAL WAS RETIRED; the `/anime` router is now `/blueprints`.** The module moved
+> to `src/modules/home/blueprints/` and mounts at `/blueprints`. **Nothing in the database changed** —
+> `anime_series`, `anime_hero_slide`, the two pgEnums, the `anime_episode` value in `video_type` and
+> the five `anime_hero_slide_*` audit labels all keep their names. The studio's own `/series` routes
+> and the admin review queue are untouched. Read every `/anime` URL below as historical.
 >
-> - **The hero carousel** — one public read, six admin routes. All that survived the retirement.
-> - **Showcase launches** — three maker routes, two moderator routes, and three public reads
->   (`GET /blueprints/showcases`, `/showcases/slugs`, `/showcases/:launchSlug`). Only `published`
->   launches are ever visible, and the gate is applied to the tag facets as well as to the list.
-> - **Teardowns** — five public reads and no write path yet; the twelve rows arrive through
->   `pnpm db:seed-blueprint-teardowns`, which parses the frontend's fixtures with
->   `teardown-import.schemas.ts` — the same gate an authoring route will use.
->
-> ⚠️ **TEARDOWNS HAVE TWO VISIBILITY GATES AND THEY ARE NOT THE SAME PREDICATE.** LIST
-> (`published`, `flagged`) decides where a teardown may APPEAR: the index, the tag facets, the
-> launch composer's select. READABLE adds `quarantined` and decides where it may be REACHED: the
-> detail page, the prerender slug list, and `/:teardownSlug/claim-targets`. **A quarantine
-> withholds a publisher's files; it does not delete the address.** Merging the two predicates —
-> which they invite, differing by one label — produces either a teardown advertised while under an
-> unresolved rights claim, or a live URL that 404s.
->
-> The withholding is SERVER-SIDE. It used to live in a React component, where the disputed files
-> were already on the wire; that is not a control at all (CLAUDE.md §1.1), and the component had
-> also missed `repairabilityIndex`. `claim-targets` exists so that moving it did not break the
-> rights-claim flow: it serves ids and titles with no column that could hold a URL, so a second
-> rights holder can still name the specific file they mean.
->
-> Constraints on those tables are proven against a real database by
-> `pnpm db:verify-teardown-constraints` — 65 assertions inside a transaction that is always rolled
-> back. It exists because vitest mocks `#src/db/index.js` wholesale, so no test here can prove
-> anything about Postgres; its first run found nine CHECKs that accepted half a block, because a
-> CHECK passes on NULL as well as on true (migration 0172).
->
-> - **Case studies** — the third arm, and **the first with a write path on the backend**: eight
->   routes, four public reads plus `POST /blueprints/case-studies`, `GET /case-studies/mine` and the
->   two moderator routes the admin queue has been driving from mocks since 2026-09-11. Ten rows
->   arrive through `pnpm db:seed-blueprint-case-studies`.
->
-> ⚠️ **THIS ARM HAS ONE GATE, NOT TWO** — `published, flagged` — and copying the teardown shape here
-> would be the more expensive mistake. A teardown needs LIST and READABLE because a quarantine
-> withholds its FILES while leaving its address alive; a case study has no files, and a report moves
-> a published row to `flagged`, full stop.
->
-> ⚠️ **WHAT IT WITHHOLDS INSTEAD IS ONE FIELD, BY A PER-ROW FLAG.** A first-hand writer may keep a
-> company's name from READERS — an NDA is the ordinary reason — and a moderator still sees it,
-> because a company nobody at Qatoto can see is a claim nobody can check. A query cannot express
-> that, so ONE serializer does (`toPublicCompany`), and exactly one route in the whole router serves
-> the real name: `GET /blueprints/admin/case-studies/review-queue`. `/case-studies/mine` carries no
-> companies at all, so the name reaches one route rather than two.
->
-> **The guarantee is narrow, and saying so is part of it.** It nulls one column. The writer could
-> still have named the company in the summary, a step, a tag or a source's publisher label — the
-> fixtures contain exactly that shape — so the submit gate sweeps every reader-visible field for a
-> withheld name, and `case-study-withheld-name.test.ts` proves the other half by driving the real
-> routes over a sentinel and sweeping raw response bytes. Two things worth knowing about the leak
-> paths: the audit payload is ids and flags only (the chain is hash-linked and unerasable), and the
-> submit transaction strips bound parameters out of any database fault before it can reach the
-> logger, because `DrizzleQueryError`'s message carries them and `errorFields` logs `error.message`.
->
-> `pnpm db:verify-case-study-constraints` — 46 assertions, which corrected the schema on their first
-> run (a `btrim(url)` unique index was dead code, since the URL CHECK already refuses whitespace) and
-> which include two that exist solely for the array-element NULL hole: `text[] NOT NULL` says nothing
-> about its ELEMENTS, so `ARRAY['a', NULL] @> ARRAY[...]` is NULL and a NULL CHECK passes.
+> **THE SEVENTY-FOUR LINES THAT USED TO BE HERE NOW LIVE IN
+> [BLUEPRINTS_BACKEND_STRUCTURE.md](BLUEPRINTS_BACKEND_STRUCTURE.md)**, which owns that surface:
+> the four arms and their routes, the two teardown visibility gates, the case study's withheld
+> company name, and the teardown write path (submission staging, what a publish materialises, and
+> what it refuses to invent). They were living in a feed-ranking contract that never mentioned
+> blueprints again after line 74 — and the blueprints surface has no ranking.
 
 The API contract for Qatoto's homepage (`/`): the filter chip row, the "What's on your mind?"
 category tiles, the 3-video Spotlight, and the one personalized video stream that the frontend

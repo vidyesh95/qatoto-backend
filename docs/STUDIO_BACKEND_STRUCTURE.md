@@ -8,6 +8,9 @@
 > the `anime_episode` value in `video_type` and the five `anime_hero_slide_*` audit labels all
 > keep their names, because renaming any of them costs a migration. The studio's own `/series`
 > routes and the admin review queue are untouched. Read every `/anime` URL below as historical.
+>
+> That surface has its own document now:
+> [BLUEPRINTS_BACKEND_STRUCTURE.md](BLUEPRINTS_BACKEND_STRUCTURE.md).
 
 > This document describes the **video-upload** contract the Next.js Creator Studio depends on,
 > and how it is wired on the Express backend (`/Users/vinitchuri/code/backend/qatoto-backend`).
