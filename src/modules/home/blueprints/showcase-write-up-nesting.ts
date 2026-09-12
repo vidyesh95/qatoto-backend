@@ -1,17 +1,19 @@
 /**
  * How deeply a write-up nests block containers — quotes, lists and footnote definitions.
  *
- * ⚠️ BYTE-IDENTICAL BY INTENT with the frontend's copy at
- * `qatoto-frontend/src/lib/blueprints/showcase-write-up-nesting.ts`. There is no shared package
- * between the two repositories, so the two files are kept in step by hand; the constant below is
- * pinned on both sides by a test, and a change here needs the same change there.
+ * ⚠️ A DELIBERATE COPY of the frontend's
+ * `qatoto-frontend/src/lib/blueprints/showcase-write-up-nesting.ts`.
+ * Everything below this comment is identical in both files, down to the constant; only the
+ * pointer above differs. There is no package shared between the two repositories, so they are
+ * kept in step by hand and diffed when either changes — a test on each side pins the constant,
+ * so the two cannot drift silently.
  *
  * WHY A WRITE-UP NEEDS A SECOND SHAPE RULE, when it already has a character cap and a markup cap.
  * Nesting is where a markdown parser meets a call stack, and the character cap does not bound it —
  * one marker character buys one level. Measured on this machine, all UNDER the 10,000-character
  * cap and all accepted before this rule existed:
  *
- *   `"- ".repeat(4900)`    7,073 ms of synchronous parse on this server
+ *   `"- ".repeat(4900)`    7,073 ms of synchronous parse on the server
  *   `"-\t".repeat(4900)`  10,273 ms
  *   `"1. ".repeat(3300)`     458 ms
  *
