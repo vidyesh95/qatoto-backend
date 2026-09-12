@@ -1264,6 +1264,29 @@ export const caseStudyModerationLimiter = createLimiter({
   limit: 200,
 });
 
+/**
+ * POST /blueprints/teardowns — sending in a survey of somebody else's product.
+ *
+ * FIVE SUCCESSFUL SENDS PER FIFTEEN MINUTES, failures uncounted, on the same reasoning as the two
+ * limiters above — and with more room to spare here than on either of them: a teardown is a
+ * multi-hour instrumented survey of a physical unit, so five in a quarter of an hour is already far
+ * past what an honest author can produce. An author refused four times over a duplicate unit or a
+ * bad link has submitted nothing, and must not be locked out of submitting it correctly.
+ */
+export const teardownSubmitLimiter = createLimiter({
+  namespace: "teardownSubmit",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 5,
+  skipFailedRequests: true,
+});
+
+/** POST /blueprints/admin/teardowns/:submissionId/moderate — a moderator working a queue. */
+export const teardownModerationLimiter = createLimiter({
+  namespace: "teardownModeration",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 200,
+});
+
 // ---------------------------------------------------------------------------
 // HOME FEED ENGAGEMENT (HOME_BACKEND_STRUCTURE.md §7)
 //

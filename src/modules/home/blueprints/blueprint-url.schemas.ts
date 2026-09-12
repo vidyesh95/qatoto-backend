@@ -25,25 +25,42 @@ const ILLEGAL_URL_CHARACTERS = /[\u0000-\u0020\u007F]/;
 /** A leading `/\` is read as protocol-relative by a browser, exactly as `//` is. */
 const PROTOCOL_RELATIVE_BACKSLASH_PREFIX = `/${String.fromCharCode(92)}`;
 
-/** An asset this site may serve: https, or a site-relative path that is genuinely same-site. */
-export const AssetUrlSchema = z
-  .string()
-  .min(1)
-  .max(2048)
-  .refine((url) => url.startsWith("https://") || url.startsWith("/"), {
-    message: "An asset address must be https:// or a site-relative path.",
-  })
-  /*
-   * PROTOCOL-RELATIVE IS REFUSED IN BOTH SPELLINGS. A browser reads `//host` and the backslash
-   * variant as "same scheme, different host", so a leading-slash test alone is not a same-site test
-   * — it is an open redirect wearing one.
-   */
-  .refine((url) => !url.startsWith("//") && !url.startsWith(PROTOCOL_RELATIVE_BACKSLASH_PREFIX), {
-    message: "An asset address may not be protocol-relative.",
-  })
-  .refine((url) => !ILLEGAL_URL_CHARACTERS.test(url), {
-    message: "An address may not contain spaces or control characters.",
-  });
+/**
+ * An asset this site may serve: https, or a site-relative path that is genuinely same-site.
+ *
+ * ⚠️ THE LENGTH IS A PARAMETER FOR THE REASON `createExternalUrlSchema` BELOW GIVES, and one
+ * surface has already needed it: a moderator's publish body carries a 2,000-character note beside
+ * the thumbnail address, and at the four-bytes-per-character worst case `json-body-budget.test.ts`
+ * computes, a 2,048-character URL puts that body over the 16 KB compact tier. The rule is one
+ * spelling either way — only the ceiling moves.
+ */
+export function createAssetUrlSchema(maximumCharacters: number) {
+  return (
+    z
+      .string()
+      .min(1)
+      .max(maximumCharacters)
+      .refine((url) => url.startsWith("https://") || url.startsWith("/"), {
+        message: "An asset address must be https:// or a site-relative path.",
+      })
+      /*
+       * PROTOCOL-RELATIVE IS REFUSED IN BOTH SPELLINGS. A browser reads `//host` and the backslash
+       * variant as "same scheme, different host", so a leading-slash test alone is not a same-site
+       * test — it is an open redirect wearing one.
+       */
+      .refine(
+        (url) => !url.startsWith("//") && !url.startsWith(PROTOCOL_RELATIVE_BACKSLASH_PREFIX),
+        {
+          message: "An asset address may not be protocol-relative.",
+        },
+      )
+      .refine((url) => !ILLEGAL_URL_CHARACTERS.test(url), {
+        message: "An address may not contain spaces or control characters.",
+      })
+  );
+}
+
+export const AssetUrlSchema = createAssetUrlSchema(2048);
 
 /** The default outbound cap, matching the frontend's `createExternalHttpsUrlSchema(2048)`. */
 const DEFAULT_EXTERNAL_URL_MAXIMUM_CHARACTERS = 2048;

@@ -12,7 +12,8 @@ import {
   caseStudyStats,
 } from "#src/db/schema.js";
 import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
-import { isUniqueViolation, readSqlStateCode } from "#src/lib/pg-errors.js";
+import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { buildErrorWithoutQueryParameters } from "#src/modules/home/blueprints/blueprint-write-errors.js";
 import { findUnresolvableRelatedSlugs } from "#src/modules/home/blueprints/case-study-public-read.service.js";
 import type { CaseStudySubmission } from "#src/modules/home/blueprints/case-study-submission.schemas.js";
 import type { Result } from "#src/types/index.js";
@@ -89,22 +90,6 @@ function titleAlreadyTakenCondition(title: string) {
   return and(
     sql`${caseStudy.titleNormalized} = lower(regexp_replace(btrim(${title}::text), '[[:space:]]+', ' ', 'g'))`,
     inArray(caseStudy.moderationState, ["pending_review", "published", "flagged"]),
-  );
-}
-
-/**
- * Re-throws a database fault with the bound parameters stripped.
- *
- * ⚠️ THE WHOLE POINT IS WHAT IS *NOT* CARRIED. A drizzle query error's message contains the
- * statement and every bound parameter, one of which is a withheld company name. The SQLSTATE is the
- * diagnostically useful part and it is not personal, so that is all that survives. The original
- * error is deliberately NOT attached as `cause`, because a logger that walks `cause` would undo
- * this.
- */
-function buildErrorWithoutQueryParameters(error: unknown, statementContext: string): Error {
-  const sqlStateCode = readSqlStateCode(error);
-  return new Error(
-    `Case study write failed in ${statementContext}: SQLSTATE ${sqlStateCode ?? "unknown"}. Parameters withheld — this transaction carries a withheld company name.`,
   );
 }
 
@@ -265,7 +250,11 @@ export async function submitCaseStudy(input: {
       return { success: false, error: { type: "CASE_STUDY_TITLE_TAKEN" } };
     }
     // ⚠️ STRIPPED, NOT RE-THROWN AS IT CAME. See `buildErrorWithoutQueryParameters`.
-    throw buildErrorWithoutQueryParameters(transactionError, "submitCaseStudy");
+    throw buildErrorWithoutQueryParameters(
+      transactionError,
+      "submitCaseStudy",
+      "this transaction carries a withheld company name",
+    );
   }
 }
 

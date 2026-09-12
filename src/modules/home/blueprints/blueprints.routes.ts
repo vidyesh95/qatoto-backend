@@ -10,6 +10,8 @@ import {
   showcaseLaunchModerationLimiter,
   showcaseLaunchSubmitLimiter,
   showcaseWriteUpImageUploadLimiter,
+  teardownModerationLimiter,
+  teardownSubmitLimiter,
 } from "#src/middleware/rate-limit.js";
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
@@ -190,6 +192,40 @@ router.get("/showcases/:launchSlug", showcaseLaunchController.getPublicShowcaseL
  * a path segment, so Express cannot confuse them.
  */
 
+/**
+ * POST /blueprints/teardowns — the authoring wizard's one submit. 202 and a three-field receipt.
+ *
+ * ⚠️ `longFormBody` (128 KB), NOT `compactBody` (16 KB), AND THE NUMBER IS DERIVED. `summary` alone
+ * is 2,000 characters, which `json-body-budget.test.ts` counts at four bytes each — 8 KB before a
+ * single part, material or link. The same test refuses a cap below what the schema accepts, and
+ * `teardown-submission.schemas.ts` caps every array for that reason: the frontend's draft schema
+ * bounds none of them, and an unbounded array would pass the budget test while the parser 413s a
+ * real submission with nothing in the schema to explain why.
+ *
+ * IDENTITY BEFORE THE PARSER. `requireIdentifiedUser` refuses an anonymous session before 128 KB is
+ * buffered, and a teardown is a named byline and a one-survey-per-unit quota — exactly the class of
+ * write that gate exists for.
+ */
+router.post(
+  "/teardowns",
+  requireAuth,
+  teardownSubmitLimiter,
+  requireIdentifiedUser,
+  longFormBody,
+  idempotency({ required: true }),
+  teardownController.submitTeardown,
+);
+
+/**
+ * GET /blueprints/teardowns/mine — LITERAL, must stay above /:teardownSlug.
+ *
+ * ⚠️ CAPTURED AS A SLUG, THIS WOULD ANSWER A STRANGER'S PUBLISHED TEARDOWN TO AN AUTHOR ASKING FOR
+ * THEIR OWN — the hazard the showcase and case-study lists carry the same warning about. `mine` is
+ * also in `RESERVED_TEARDOWN_SLUGS` and in `teardown_slug_ck`, so no teardown can be published at an
+ * address this literal shadows.
+ */
+router.get("/teardowns/mine", requireAuth, teardownController.listMyTeardowns);
+
 /** GET /blueprints/teardowns/options — LITERAL, must stay above /:teardownSlug. */
 router.get("/teardowns/options", teardownController.listTeardownOptions);
 
@@ -283,6 +319,34 @@ router.post(
   compactBody,
   idempotency({ required: true }),
   showcaseLaunchController.moderateLaunch,
+);
+
+/** GET /blueprints/admin/teardowns/review-queue — `moderate_content`, oldest first. */
+router.get(
+  "/admin/teardowns/review-queue",
+  requireAuth,
+  teardownController.listTeardownReviewQueue,
+);
+
+/**
+ * POST /blueprints/admin/teardowns/:submissionId/moderate — publish or send back.
+ *
+ * ⚠️ PUBLISHING IS WHERE A `teardown` ROW IS BORN, which is why this body carries two fields the
+ * author never sent: `thumbnailUrl` and `difficulty` are NOT NULL on that table and the wizard
+ * collects neither. They are editorial judgements about the write-up, which is the same kind of
+ * decision as the public slug every other arm already asks a moderator to mint — and the line that
+ * keeps a moderator from being asked to invent a fact about a unit they never held.
+ *
+ * `compactBody`, because a decision is a five-field object and a note.
+ */
+router.post(
+  "/admin/teardowns/:submissionId/moderate",
+  requireAuth,
+  teardownModerationLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  idempotency({ required: true }),
+  teardownController.moderateTeardown,
 );
 
 export default router;

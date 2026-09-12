@@ -179,6 +179,38 @@ describe("the blueprints router", () => {
   });
 
   /**
+   * The four guarded teardown routes, EXACT counts for the reason the showcase case gives: the
+   * failure mode of a dropped guard is silent.
+   *
+   * `post /teardowns` is six — auth, limiter, identity, parser, idempotency, controller — and the
+   * two reads are two, matching `get /showcases/mine` and both existing review queues. A limiter on
+   * either read would be a change of surface, not a tightening: an author refreshing their own list
+   * is not a write.
+   */
+  it("gives each guarded teardown route its exact chain", async () => {
+    const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
+    const handlerCounts = handlerCountsByMethodAndPath(blueprintsRouter);
+
+    expect(handlerCounts.get("post /teardowns")).toBe(6);
+    expect(handlerCounts.get("get /teardowns/mine")).toBe(2);
+    expect(handlerCounts.get("get /admin/teardowns/review-queue")).toBe(2);
+    expect(handlerCounts.get("post /admin/teardowns/:submissionId/moderate")).toBe(6);
+  });
+
+  /**
+   * `GET` and `POST /teardowns` share a path and differ by method, which is why every count above is
+   * keyed by "<method> <path>". Asserted rather than assumed: keyed by path alone, the submit route
+   * and the public index would collapse into one entry and a dropped guard on either would read as
+   * the other's chain.
+   */
+  it("keeps the teardown index and the teardown submit apart by method", async () => {
+    const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
+    const routes = declaredRoutes(blueprintsRouter).filter((route) => route.path === "/teardowns");
+
+    expect(routes.flatMap((route) => route.methods).sort()).toEqual(["get", "post"]);
+  });
+
+  /**
    * `options` and `slugs` are literals under `/teardowns/`, and `/teardowns/:teardownSlug` captures
    * either word as a slug if it is declared first — answering "no such teardown" to the launch
    * composer's select and to the frontend's prerender step, both of which would then fall back to
@@ -196,6 +228,7 @@ describe("the blueprints router", () => {
 
     const literalPaths = paths.filter((path) => path.startsWith("/teardowns/") && !path.includes(":"));
     expect(literalPaths, "the derived literal list must not be empty").toEqual([
+      "/teardowns/mine",
       "/teardowns/options",
       "/teardowns/slugs",
     ]);

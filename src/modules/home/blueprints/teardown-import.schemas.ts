@@ -80,7 +80,7 @@ export const TEARDOWN_MANUFACTURING_METHODS = [
 /** The four methods that are measurements. The other two are statements about not measuring. */
 const MEASURED_ANALYSIS_METHODS = ["xrf", "oes", "eds", "icp_oes"] as const;
 
-const CompositionElementSchema = z
+export const CompositionElementSchema = z
   .object({
     symbol: z.string().min(1).max(3),
     weightPercentRange: z
@@ -122,7 +122,7 @@ const CompositionElementSchema = z
     },
   );
 
-const MaterialSchema = z
+export const MaterialSchema = z
   .object({
     id: z.string().min(1).max(120),
     appliesToLabel: z.string().min(1).max(120),
@@ -153,10 +153,29 @@ const MaterialSchema = z
   })
   .strict();
 
+/** What a reader opens. Shares no label with `TEARDOWN_MANUFACTURING_FILE_KINDS` below. */
+export const TEARDOWN_DOCUMENT_KINDS = [
+  "schematic",
+  "bill_of_materials",
+  "assembly_guide",
+  "datasheet",
+] as const;
+
+/** What a fab consumes. Shares no label with `TEARDOWN_DOCUMENT_KINDS` above. */
+export const TEARDOWN_MANUFACTURING_FILE_KINDS = [
+  "step",
+  "stl",
+  "dxf",
+  "gerber",
+  "drill",
+  "pick_and_place",
+  "bill_of_materials_csv",
+] as const;
+
 const DocumentSchema = z
   .object({
     id: z.string().min(1).max(120),
-    kind: z.enum(["schematic", "bill_of_materials", "assembly_guide", "datasheet"]),
+    kind: z.enum(TEARDOWN_DOCUMENT_KINDS),
     title: z.string().min(1).max(200),
     url: AssetUrlSchema,
     /**
@@ -175,15 +194,7 @@ const DocumentSchema = z
 const ManufacturingFileSchema = z
   .object({
     id: z.string().min(1).max(120),
-    kind: z.enum([
-      "step",
-      "stl",
-      "dxf",
-      "gerber",
-      "drill",
-      "pick_and_place",
-      "bill_of_materials_csv",
-    ]),
+    kind: z.enum(TEARDOWN_MANUFACTURING_FILE_KINDS),
     title: z.string().min(1).max(200),
     url: AssetUrlSchema,
     /**

@@ -124,6 +124,10 @@ import {
 import { CaseStudyModerationDecisionSchema } from "#src/modules/home/blueprints/case-study-public.schemas.js";
 import { CaseStudySubmissionSchema } from "#src/modules/home/blueprints/case-study-submission.schemas.js";
 import {
+  TeardownModerationDecisionSchema,
+  TeardownSubmissionSchema,
+} from "#src/modules/home/blueprints/teardown-submission.schemas.js";
+import {
   ModerateShowcaseLaunchSchema,
   SubmitShowcaseLaunchMultipartSchema,
 } from "#src/modules/home/blueprints/showcase-launch.schemas.js";
@@ -515,6 +519,25 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   },
   "post /blueprints/admin/case-studies/{submissionId}/moderate": {
     schema: CaseStudyModerationDecisionSchema,
+    required: true,
+  },
+  /*
+   * ⚠️ EXPECT AN `x-unrepresentable-constraints` NOTE ON THIS ONE. The submit schema carries
+   * cross-field refinements JSON Schema cannot express — all four attestation clauses, the
+   * three-arm provenance permission table, a survey date that is not in the future — and
+   * `describeUnrepresentableConstraints` discloses them rather than letting the spec quietly
+   * promise a looser contract than the route enforces.
+   *
+   * GET /blueprints/teardowns/mine and GET /blueprints/admin/teardowns/review-queue are
+   * DELIBERATELY ABSENT: both are GETs that never touch `req.body`, and an orphan entry here fails
+   * the build exactly as a missing one does.
+   */
+  "post /blueprints/teardowns": {
+    schema: TeardownSubmissionSchema,
+    required: true,
+  },
+  "post /blueprints/admin/teardowns/{submissionId}/moderate": {
+    schema: TeardownModerationDecisionSchema,
     required: true,
   },
   "post /research-programs/{programSlug}/papers/{paperId}/file": {
