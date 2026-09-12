@@ -72,8 +72,8 @@ export interface SingleFileUploadOptions {
    */
   readonly textFieldMaximumBytes?: number;
   /**
-   * When set, every 422 this parser answers ALSO carries `errors: { [field]: [message] }`, keyed
-   * by the part multer names or, failing that, by this key.
+   * When set, every refusal this parser answers ALSO carries `errors: { [field]: [message] }`,
+   * keyed by the part multer names or, failing that, by this key.
    *
    * WHY. A form that shows refusals next to the field they concern cannot place a bare message.
    * The launch form puts "that is not an image" under its image picker; without a key the same
@@ -130,7 +130,10 @@ export function createSingleFileUpload(
       }
 
       if (uploadError instanceof multer.MulterError && uploadError.code === "LIMIT_FILE_SIZE") {
-        respond(res, 413, options.tooLargeMessage);
+        // KEYED LIKE EVERY OTHER REFUSAL FROM THIS PARSER. "Your image is over the 5 MB limit" is
+        // the one a maker is most likely to hit, and without the key it is the only image refusal
+        // the form cannot render under its own file picker.
+        respond(res, 413, options.tooLargeMessage, options.fieldErrorKey);
         return;
       }
 

@@ -469,12 +469,11 @@ describe("blueprints showcase launch routes", () => {
     });
 
     /**
-     * ⚠️ PINS A GAP RATHER THAN ENDORSING IT. Every 422 from the same parser carries
-     * `errors.headingImage`, but the 413 path in `src/middleware/upload.ts` answers with a bare
-     * message and no `errors` key — so the one image refusal a maker is most likely to hit is the
-     * one the form cannot render under the file picker.
+     * KEYED LIKE EVERY OTHER IMAGE REFUSAL. This is the one a maker is most likely to hit — a photo
+     * straight off a phone clears 5 MB easily — so a bare message it cannot render beside the file
+     * picker would be the worst place for the form to fall back to a generic banner.
      */
-    it("answers 413 over the 5 MB cap, today with no field key to render", async () => {
+    it("answers 413 over the 5 MB cap, keyed to the heading image", async () => {
       const oversized = Buffer.concat([PNG_BYTES, Buffer.alloc(5 * 1024 * 1024)]);
 
       const response = await request(app)
@@ -484,8 +483,43 @@ describe("blueprints showcase launch routes", () => {
         .attach("headingImage", oversized, { filename: "heading.png", contentType: "image/png" });
 
       expect(response.status).toBe(413);
-      expect(response.body.errors).toBeUndefined();
+      expect(response.body.errors.headingImage).toHaveLength(1);
       expect(submitShowcaseLaunch).not.toHaveBeenCalled();
+    });
+
+    /**
+     * A REQUEST WITH NO PARTS AT ALL, which used to be told only that the body was wrong — under
+     * the reserved `form` key, since a missing body is an object-level issue rather than a field
+     * one — while the missing image went unmentioned entirely. Both now arrive together.
+     */
+    it("reports the malformed body and the missing image in one 422", async () => {
+      const response = await request(app).post(path).set("Idempotency-Key", "idem_launch_empty");
+
+      expect(response.status).toBe(422);
+      expect(response.body.errors.headingImage).toEqual(["Choose a square heading image."]);
+      expect(Object.keys(response.body.errors)).toContain("form");
+      expect(submitShowcaseLaunch).not.toHaveBeenCalled();
+    });
+
+    /** The same fusion when the parts are present but `draft` is not among them. */
+    it("reports the missing draft part and the missing image in one 422", async () => {
+      const response = await request(app)
+        .post(path)
+        .set("Idempotency-Key", "idem_launch_no_draft")
+        .field("unexpectedPart", "x");
+
+      expect(response.status).toBe(422);
+      expect(response.body.errors.headingImage).toEqual(["Choose a square heading image."]);
+      expect(submitShowcaseLaunch).not.toHaveBeenCalled();
+    });
+
+    /** The same fusion when the draft is present but unreadable. */
+    it("reports an unreadable draft and the missing image in one 422", async () => {
+      const response = await postLaunch({ draft: "{not json", attachImage: false });
+
+      expect(response.status).toBe(422);
+      expect(response.body.errors.draft).toHaveLength(1);
+      expect(response.body.errors.headingImage).toEqual(["Choose a square heading image."]);
     });
   });
 

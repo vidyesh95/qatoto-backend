@@ -21,6 +21,7 @@ import {
 } from "#src/modules/platform/roles/platform-role.service.js";
 import {
   buildValidationFailureBody,
+  fieldRefusal,
   respondFieldRefusal,
 } from "#src/modules/rnd/projects/project-error-response.js";
 import type { ApiResponse, Result } from "#src/types/index.js";
@@ -31,6 +32,33 @@ function respondOk(res: Response, message: string, data: unknown): void {
 
 function respondCreated(res: Response, message: string, data: unknown): void {
   res.status(201).json({ status: "success", statusCode: 201, message, data } satisfies ApiResponse);
+}
+
+const MISSING_HEADING_IMAGE_MESSAGE = "Choose a square heading image.";
+
+/**
+ * A 422 for `POST /showcases` that reports the missing heading image ALONGSIDE whatever else was
+ * wrong, rather than whichever refusal the controller happened to reach first.
+ *
+ * WHY EVERY REFUSAL ON THIS ROUTE GOES THROUGH HERE. The image travels as a file part and the rest
+ * of the launch as one JSON text part, so the two are checked in different places — and a maker who
+ * submits an empty form has both problems at once. Reporting only the first means they fix it,
+ * resubmit, and are refused again for something the server already knew. Worse, the earliest
+ * refusal is keyed to `draft`, which is not a field their form renders at all, so the one thing
+ * they could act on was the one thing they were not told.
+ */
+function respondSubmitRefusal(
+  req: Request,
+  res: Response,
+  message: string,
+  errors: Readonly<Record<string, readonly string[]>>,
+): void {
+  res.status(422).json({
+    status: "error",
+    statusCode: 422,
+    message,
+    errors: req.file ? errors : { ...errors, headingImage: [MISSING_HEADING_IMAGE_MESSAGE] },
+  });
 }
 
 /**
@@ -100,35 +128,30 @@ export async function submitLaunch(req: Request, res: Response): Promise<void> {
 
   const partsParse = SubmitShowcaseLaunchMultipartSchema.safeParse(req.body);
   if (!partsParse.success) {
-    respondValidationFailed(res, partsParse.error);
+    const partsFailure = buildValidationFailureBody(partsParse.error);
+    respondSubmitRefusal(req, res, partsFailure.message, partsFailure.errors);
     return;
   }
 
   const draftJson = parseDraftJson(partsParse.data.draft);
   if (!draftJson.success) {
-    respondFieldRefusal(
-      res,
+    const unreadableDraft = fieldRefusal(
       "draft",
       "The launch could not be read. Reload the page and try again.",
     );
+    respondSubmitRefusal(req, res, unreadableDraft.message, unreadableDraft.errors);
     return;
   }
 
-  const missingHeadingImageMessage = "Choose a square heading image.";
   const draftParse = ShowcaseLaunchDraftSchema.safeParse(draftJson.value);
   if (!draftParse.success) {
-    const validationFailure = buildValidationFailureBody(draftParse.error);
-    res.status(422).json({
-      ...validationFailure,
-      errors: req.file
-        ? validationFailure.errors
-        : { ...validationFailure.errors, headingImage: [missingHeadingImageMessage] },
-    });
+    const draftFailure = buildValidationFailureBody(draftParse.error);
+    respondSubmitRefusal(req, res, draftFailure.message, draftFailure.errors);
     return;
   }
 
   if (!req.file) {
-    respondFieldRefusal(res, "headingImage", missingHeadingImageMessage);
+    respondFieldRefusal(res, "headingImage", MISSING_HEADING_IMAGE_MESSAGE);
     return;
   }
 
