@@ -39,6 +39,7 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
 import { pool } from "#src/db/index.js";
+import { RESERVED_TEARDOWN_SLUGS } from "#src/modules/home/blueprints/teardown-import.schemas.js";
 
 const PG_CHECK_VIOLATION = "23514";
 const PG_UNIQUE_VIOLATION = "23505";
@@ -767,6 +768,16 @@ async function main(): Promise<void> {
      * one statement rather than a reconciliation across eight tables.
      */
     await client.query(`SAVEPOINT cascade_probe`);
+    /*
+     * The sixth child table, added when the authoring route did. Inserted inside the probe so the
+     * claim below keeps meaning EVERY child table rather than the five that existed when it was
+     * written.
+     */
+    await client.query(
+      `INSERT INTO teardown_part_listing (id, teardown_id, position, label, material)
+       VALUES ($1, $2, 0, 'Gearbox housing', 'Glass-filled nylon')`,
+      [`${suffix}-listing`, teardownId],
+    );
     await client.query(`DELETE FROM teardown WHERE id = $1`, [teardownId]);
     const survivors = await client.query<{ table_name: string; remaining: string }>(
       `SELECT 'teardown_assembly' AS table_name, count(*)::text AS remaining
@@ -777,7 +788,9 @@ async function main(): Promise<void> {
        UNION ALL SELECT 'teardown_material', count(*)::text
          FROM teardown_material WHERE teardown_id = $1
        UNION ALL SELECT 'teardown_material_element', count(*)::text
-         FROM teardown_material_element WHERE material_id = $3`,
+         FROM teardown_material_element WHERE material_id = $3
+       UNION ALL SELECT 'teardown_part_listing', count(*)::text
+         FROM teardown_part_listing WHERE teardown_id = $1`,
       [teardownId, assemblyId, materialId],
     );
     const orphans = survivors.rows.filter((row) => row.remaining !== "0");
@@ -785,10 +798,380 @@ async function main(): Promise<void> {
       "deleting a teardown cascades to every child table",
       orphans.length === 0,
       orphans.length === 0
-        ? "no orphans in five child tables"
+        ? "no orphans in six child tables"
         : `orphans remain in ${orphans.map((row) => row.table_name).join(", ")}`,
     );
     await client.query(`ROLLBACK TO SAVEPOINT cascade_probe`);
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 10. the parts listing (the authoring route's arm) ---");
+
+    const listingStatement = `INSERT INTO teardown_part_listing (id, teardown_id, position, label, material)
+                              VALUES ($1, $2, $3, $4, $5)`;
+
+    await expectAccepted("a listed part is accepted", listingStatement, [
+      `${suffix}-listing-ok`,
+      teardownId,
+      0,
+      "Gearbox housing",
+      "Glass-filled nylon",
+    ]);
+    await expectRefused(
+      "a negative position is refused (teardown_part_listing_scalars_ck)",
+      "23514",
+      listingStatement,
+      [`${suffix}-listing-neg`, teardownId, -1, "Gearbox housing", "Glass-filled nylon"],
+    );
+    await expectRefused(
+      "an over-long label is refused (teardown_part_listing_scalars_ck)",
+      "23514",
+      listingStatement,
+      [`${suffix}-listing-label`, teardownId, 0, "x".repeat(121), "Glass-filled nylon"],
+    );
+    await expectRefused(
+      "an empty material is refused (teardown_part_listing_scalars_ck)",
+      "23514",
+      listingStatement,
+      [`${suffix}-listing-material`, teardownId, 0, "Gearbox housing", ""],
+    );
+
+    await client.query(`SAVEPOINT listing_dupe`);
+    await client.query(listingStatement, [
+      `${suffix}-listing-first`,
+      teardownId,
+      7,
+      "Trigger",
+      "ABS",
+    ]);
+    await expectRefused(
+      "two listed parts cannot share a slot (teardown_part_listing_position_uidx)",
+      "23505",
+      listingStatement,
+      [`${suffix}-listing-second`, teardownId, 7, "Trigger", "ABS"],
+    );
+    await client.query(`ROLLBACK TO SAVEPOINT listing_dupe`);
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 11. file byte sizes, which the authoring route made nullable ---");
+
+    /*
+     * ⚠️ NULL IS "UNMEASURED", WHICH IS NOT ZERO. The wizard sends a pasted link and no size, and
+     * the two ways to invent one were a network HEAD inside the publish transaction or a moderator
+     * typing a number about a file they never opened. The BOUNDS on a PRESENT value survive the
+     * relaxation, and the `>= 0` / `> 0` split between the two tables survives it too.
+     */
+    const documentStatement = `INSERT INTO teardown_document (id, teardown_id, position, kind, title, url, byte_size)
+                               VALUES ($1, $2, $3, 'schematic', 'Verify document', 'https://files.example.com/a.pdf', $4)`;
+    const manufacturingFileStatement = `INSERT INTO teardown_manufacturing_file (id, teardown_id, position, kind, title, url, byte_size)
+                                        VALUES ($1, $2, $3, 'gerber', 'Verify file', 'https://files.example.com/a.zip', $4)`;
+
+    await expectAccepted("a document with no measured size is accepted", documentStatement, [
+      `${suffix}-doc-null`,
+      teardownId,
+      90,
+      null,
+    ]);
+    await expectRefused(
+      "a negative document size is still refused (teardown_document_scalars_ck)",
+      "23514",
+      documentStatement,
+      [`${suffix}-doc-neg`, teardownId, 91, -1],
+    );
+    await expectAccepted(
+      "a manufacturing file with no measured size is accepted",
+      manufacturingFileStatement,
+      [`${suffix}-mfg-null`, teardownId, 90, null],
+    );
+    await expectRefused(
+      "a zero-byte manufacturing file is still refused (teardown_manufacturing_file_scalars_ck)",
+      "23514",
+      manufacturingFileStatement,
+      [`${suffix}-mfg-zero`, teardownId, 91, 0],
+    );
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 12. the author link, and the reserved-slug list ---");
+
+    await expectRefused(
+      "an author_user_id naming nobody is refused (teardown_author_user_id_user_id_fk)",
+      "23503",
+      `UPDATE teardown SET author_user_id = $2 WHERE id = $1`,
+      [teardownId, `no-such-user-${suffix}`],
+    );
+    /*
+     * The NULL arm is the twelve seeded rows, and it must stay legal — they name no account and
+     * nobody submitted them. The CASCADE half of this column is proven by
+     * `db:verify-anonymization-coverage`, which walks every foreign key into `user(id)` and runs the
+     * manifest's delete against a probe account; duplicating it here would be a second, weaker copy.
+     */
+    await expectAccepted(
+      "a teardown with no account behind it is accepted",
+      `UPDATE teardown SET author_user_id = NULL WHERE id = $1`,
+      [teardownId],
+    );
+
+    await expectRefused(
+      "a teardown cannot be published at the /teardowns/mine address (teardown_slug_ck)",
+      "23514",
+      `UPDATE teardown SET slug = 'mine' WHERE id = $1`,
+      [teardownId],
+    );
+
+    /*
+     * ⚠️ THE TS CONST AND THE SQL LITERAL ARE TWO SPELLINGS OF ONE RULE, and nothing but this
+     * assertion keeps them together. A CHECK cannot read `RESERVED_TEARDOWN_SLUGS`, so an edit that
+     * adds a route literal to one and not the other lets the publish minter hand out an address the
+     * table refuses — at publish time, inside a transaction, to a moderator.
+     */
+    const slugConstraint = await client.query<{ definition: string }>(
+      `SELECT pg_get_constraintdef(oid) AS definition
+         FROM pg_constraint WHERE conname = 'teardown_slug_ck'`,
+    );
+    const slugConstraintDefinition = slugConstraint.rows[0]?.definition ?? "";
+    const unreservedSlugs = RESERVED_TEARDOWN_SLUGS.filter(
+      (reservedSlug) => !slugConstraintDefinition.includes(`'${reservedSlug}'`),
+    );
+    check(
+      "teardown_slug_ck reserves every slug RESERVED_TEARDOWN_SLUGS does",
+      slugConstraintDefinition.length > 0 && unreservedSlugs.length === 0,
+      slugConstraintDefinition.length === 0
+        ? "teardown_slug_ck was not found at all"
+        : unreservedSlugs.length === 0
+          ? `all ${String(RESERVED_TEARDOWN_SLUGS.length)} reserved slugs are in the CHECK`
+          : `the CHECK is missing ${unreservedSlugs.join(", ")}`,
+    );
+
+    // -----------------------------------------------------------------------
+    console.log("\n--- 13. the submission table ---");
+
+    const authorRow = await client.query<{ id: string }>(`SELECT id FROM "user" LIMIT 1`);
+    const authorUserId = authorRow.rows[0]?.id;
+
+    if (authorUserId === undefined) {
+      check(
+        "the submission probes need an account",
+        false,
+        "no user rows — sign someone up first, author_user_id is NOT NULL",
+      );
+    } else {
+      const submissionStatement = `INSERT INTO teardown_submission (
+            id, author_user_id, title, subject_product_name, document_json,
+            document_schema_version, moderation_state, moderator_note, reviewed_by_user_id,
+            reviewed_at, published_teardown_id)
+          VALUES ($1, $2, 'Inside a supermarket drill', $3, $4, $5, $6, $7, $8, $9, $10)`;
+
+      const validDocument = '{"title":"Inside a supermarket drill"}';
+      const pendingParameters = (id: string, subject: string): unknown[] => [
+        id,
+        authorUserId,
+        subject,
+        validDocument,
+        1,
+        "pending_review",
+        null,
+        null,
+        null,
+        null,
+      ];
+
+      await expectAccepted(
+        "a pending submission is accepted",
+        submissionStatement,
+        pendingParameters(`${suffix}-sub-ok`, `Rotel RD-18 ${suffix}`),
+      );
+
+      // --- the decision block, both directions on every clause.
+      await expectRefused(
+        "a pending submission carrying a review time is refused (teardown_submission_decision_ck)",
+        "23514",
+        submissionStatement,
+        [
+          `${suffix}-sub-reviewed`,
+          authorUserId,
+          `Rotel RD-18 reviewed ${suffix}`,
+          validDocument,
+          1,
+          "pending_review",
+          null,
+          authorUserId,
+          new Date(),
+          null,
+        ],
+      );
+      await expectRefused(
+        "a pending submission carrying a note is refused (teardown_submission_decision_ck)",
+        "23514",
+        submissionStatement,
+        [
+          `${suffix}-sub-note`,
+          authorUserId,
+          `Rotel RD-18 note ${suffix}`,
+          validDocument,
+          1,
+          "pending_review",
+          "Not yet",
+          null,
+          null,
+          null,
+        ],
+      );
+      await expectRefused(
+        "a rejection with no note is refused (teardown_submission_decision_ck)",
+        "23514",
+        submissionStatement,
+        [
+          `${suffix}-sub-rejected`,
+          authorUserId,
+          `Rotel RD-18 rejected ${suffix}`,
+          validDocument,
+          1,
+          "rejected",
+          null,
+          authorUserId,
+          new Date(),
+          null,
+        ],
+      );
+      await expectRefused(
+        "a reviewer with no review time is refused (teardown_submission_decision_ck)",
+        "23514",
+        submissionStatement,
+        [
+          `${suffix}-sub-halfpair`,
+          authorUserId,
+          `Rotel RD-18 halfpair ${suffix}`,
+          validDocument,
+          1,
+          "rejected",
+          "Survey the unit again",
+          authorUserId,
+          null,
+          null,
+        ],
+      );
+      await expectRefused(
+        "a published submission naming no teardown is refused (teardown_submission_decision_ck)",
+        "23514",
+        submissionStatement,
+        [
+          `${suffix}-sub-published`,
+          authorUserId,
+          `Rotel RD-18 published ${suffix}`,
+          validDocument,
+          1,
+          "published",
+          null,
+          authorUserId,
+          new Date(),
+          null,
+        ],
+      );
+
+      /*
+       * The four states the PAPERWORK cannot be in. `flagged` and `quarantined` are states of a
+       * published teardown, and `/mine` reads them off that row rather than copying them here.
+       */
+      for (const refusedState of ["draft", "flagged", "quarantined", "removed"]) {
+        await expectRefused(
+          `moderation_state '${refusedState}' is refused (teardown_submission_moderation_state_ck)`,
+          "23514",
+          submissionStatement,
+          [
+            `${suffix}-sub-${refusedState}`,
+            authorUserId,
+            `Rotel RD-18 ${refusedState} ${suffix}`,
+            validDocument,
+            1,
+            refusedState,
+            null,
+            null,
+            null,
+            null,
+          ],
+        );
+      }
+
+      // --- the document column.
+      for (const [label, document] of [
+        ["an array", "[]"],
+        ["an empty string", ""],
+        ["a bare scalar", "7"],
+      ] as const) {
+        await expectRefused(
+          `a document that is ${label} is refused (teardown_submission_document_ck)`,
+          "23514",
+          submissionStatement,
+          [
+            `${suffix}-sub-doc-${label.replaceAll(" ", "-")}`,
+            authorUserId,
+            `Rotel RD-18 ${label} ${suffix}`,
+            document,
+            1,
+            "pending_review",
+            null,
+            null,
+            null,
+            null,
+          ],
+        );
+      }
+      await expectRefused(
+        "a schema version below 1 is refused (teardown_submission_document_version_ck)",
+        "23514",
+        submissionStatement,
+        [
+          `${suffix}-sub-version`,
+          authorUserId,
+          `Rotel RD-18 version ${suffix}`,
+          validDocument,
+          0,
+          "pending_review",
+          null,
+          null,
+          null,
+          null,
+        ],
+      );
+
+      /*
+       * ⚠️ ONE PROBE, TWO GUARANTEES: that the generated column really normalises (trim, collapse,
+       * lowercase) and that the partial unique index really refuses the second row. A JavaScript
+       * copy of that expression would answer a different question than the index does.
+       */
+      await client.query(`SAVEPOINT subject_probe`);
+      await client.query(submissionStatement, pendingParameters(`${suffix}-sub-a`, "Widget  X"));
+      await expectRefused(
+        "two live submissions cannot survey one unit (teardown_submission_subject_live_uidx)",
+        "23505",
+        submissionStatement,
+        pendingParameters(`${suffix}-sub-b`, " widget x "),
+      );
+      await client.query(`ROLLBACK TO SAVEPOINT subject_probe`);
+
+      /*
+       * AND THE OTHER DIRECTION: a rejection frees the unit. An author sent back must be able to
+       * survey the same product again, or a refusal is a ban wearing a refusal's clothes.
+       */
+      await client.query(`SAVEPOINT rejected_probe`);
+      await client.query(submissionStatement, [
+        `${suffix}-sub-rejected-first`,
+        authorUserId,
+        "Widget Y",
+        validDocument,
+        1,
+        "rejected",
+        "Survey the unit again",
+        authorUserId,
+        new Date(),
+        null,
+      ]);
+      await expectAccepted(
+        "a rejection frees the unit for a fresh survey",
+        submissionStatement,
+        pendingParameters(`${suffix}-sub-rejected-second`, "widget y"),
+      );
+      await client.query(`ROLLBACK TO SAVEPOINT rejected_probe`);
+    }
   } finally {
     // THE ROLLBACK IS THE CLEANUP, and it cannot be skipped by a failed assertion or a throw.
     await client.query("ROLLBACK");

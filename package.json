@@ -115,6 +115,7 @@
     "db:smoke-daily-log-feed": "tsx --conditions=development scripts/smoke-daily-log-feed.ts",
     "db:smoke-proof-of-effort": "tsx --conditions=development scripts/smoke-proof-of-effort.ts",
     "db:smoke-funding": "tsx --conditions=development scripts/smoke-funding.ts",
+    "db:smoke-teardown-authoring": "tsx --conditions=development scripts/smoke-teardown-authoring.ts",
     "db:smoke-compensation": "tsx --conditions=development scripts/smoke-compensation.ts",
     "db:smoke-object-storage": "tsx --conditions=development scripts/smoke-object-storage.ts",
     "db:expire-stale-project-requests": "tsx --conditions=development scripts/expire-stale-project-requests.ts",
