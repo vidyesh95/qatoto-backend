@@ -1212,6 +1212,13 @@
       "when": 1789201206299,
       "tag": "0172_lush_crusher_hogan",
       "breakpoints": true
+    },
+    {
+      "idx": 173,
+      "version": "7",
+      "when": 1789204010352,
+      "tag": "0173_illegal_susan_delgado",
+      "breakpoints": true
     }
   ]
 }

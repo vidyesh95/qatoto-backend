@@ -3607,3 +3607,654 @@ export const teardownMaterialElementRelations = relations(teardownMaterialElemen
     references: [teardownMaterial.id],
   }),
 }));
+
+// ---------------------------------------------------------------------------
+// CASE STUDIES — the third blueprint arm, and the first with a write path.
+//
+// ⚠️ A CASE STUDY IS A CLAIM ABOUT A BUSINESS, OFTEN SOMEBODY ELSE'S. The writer states how they
+// know it (`author_relationship`), the two statements they ticked follow from that answer, and a
+// case study written from public sources must link what it drew on. None of that makes a claim
+// true. It makes the writer say which claim they are making, and a moderator stays the gate.
+//
+// ⚠️ THE ONE RULE THESE TABLES EXIST TO ENFORCE: a FIRST-HAND writer may withhold a company's name
+// from READERS — an NDA is the ordinary reason — and a moderator still sees it. So `name` is NOT
+// NULL and `is_name_withheld` is the flag; `null` is written by the PUBLIC SERIALIZER, never stored.
+// A nullable `name` beside the flag would be two spellings of one fact, and the moderator read's
+// contract requires a non-null name.
+//
+// ⚠️ THE GUARANTEE IS NARROW, AND SAYING SO IS PART OF IT. This withholds ONE COLUMN. A writer can
+// still name the company in `summary`, in a step, in a tag, or in a source's publisher label — the
+// fixtures contain exactly that shape ("Verdant Sensing build log" is a company name in a
+// `publisher_label`). The submit service sweeps a withheld name against every published free-text
+// field for that reason, but the column is what these tables promise and the moderator is the gate.
+//
+// ⚠️ ONE VISIBILITY GATE, NOT TWO — do NOT copy the teardown shape here. A teardown needs LIST and
+// READABLE because a quarantine withholds its FILES while leaving its address alive. A case study
+// has no files: a report moves a published row to `flagged`, and nothing is withheld by state. So
+// `published, flagged` is the whole gate, and `moderation_state` is checked down to the FOUR states
+// this arm can reach. A second predicate identical to the first would teach the next reader that
+// the difference is meaningful.
+//
+// DECLARED AT THE END OF THIS FILE ON PURPOSE: `assetUrlCheck` and `externalUrlCheck` are declared
+// above the teardown tables, and a table above them cannot call them.
+
+export const blueprintDisciplineEnum = pgEnum("blueprint_discipline", [
+  "tooling",
+  "supply_chain",
+  "quality",
+  "distribution",
+  "unit_economics",
+]);
+
+/**
+ * How the writer knows the story.
+ *
+ * ⚠️ APPEND-ONLY ONCE A COMPANY ROW EXISTS, and that is enforced rather than hoped for: the
+ * composite foreign key on `case_study_evidence_company` carries this value down with
+ * `ON UPDATE RESTRICT`, so changing it on a row that has companies raises 23503. That is correct —
+ * flipping it would edit somebody else's sworn statement, and it would silently invalidate the two
+ * statement ids they ticked. The two decision verbs a moderator has (`published`, `rejected`) cannot
+ * reach it; changing this answer means resubmitting.
+ */
+export const caseStudyAuthorRelationshipEnum = pgEnum("case_study_author_relationship", [
+  "first_hand",
+  "public_sources",
+]);
+
+/**
+ * The three shapes a figure can take.
+ *
+ * A PERCENTAGE IS BASIS POINTS so a fraction survives the integer — 43.8% is 4380 — which is the
+ * frontend's rule and the reason there is no float here.
+ */
+export const caseStudyMetricKindEnum = pgEnum("case_study_metric_kind", [
+  "count",
+  "money",
+  "percentage",
+]);
+
+/** The route literals under `/blueprints/case-studies/`, which no slug may shadow. */
+export const CASE_STUDY_RESERVED_SLUGS = ["new", "mine", "slugs", "options"] as const;
+
+/** The two statement ids each answer to "how do you know this" requires. */
+export const CASE_STUDY_FIRST_HAND_STATEMENT_IDS = [
+  "was_part_of_it",
+  "figures_from_records",
+] as const;
+export const CASE_STUDY_PUBLIC_SOURCES_STATEMENT_IDS = [
+  "figures_in_linked_sources",
+  "says_only_what_sources_say",
+] as const;
+
+/**
+ * One written-up lesson.
+ *
+ * ⚠️ NO `thumbnail_url`, `difficulty`, `cad_format` OR COST RANGE, and their absence is a decision
+ * `todo.md` asked to take before this migration. The composer collects none of the four and no
+ * case-study component renders any; they were on the frontend's shared blueprint shape only because
+ * a since-deleted shared card once read them. Columns nothing writes and nothing shows are the
+ * unverified code the field sweeps exist to catch.
+ *
+ * ⚠️ THE AUTHOR IS ONE OF TWO ARMS, AND EXACTLY ONE. An authored row names an account
+ * (`author_user_id`); a SEEDED row carries the byline as text, because the ten fixture writers are
+ * invented people and minting them as accounts would spend ten entries in a UNIQUE handle namespace,
+ * ten account-closure obligations and ten rows in every job that walks `user` — to render ten
+ * bylines. The teardown arm denormalised its byline entirely for this reason; that was available
+ * there because nothing wrote a teardown, and it is not available here.
+ *
+ * ⚠️ AND SO A `null_out` ON `author_user_id` IS NOT MERELY WRONG, IT IS ILLEGAL: the arm CHECK
+ * refuses a row with neither an account nor a byline, so clearing the column mid-scrub raises 23514
+ * and dead-letters the anonymization job. `db:verify-anonymization-coverage` CANNOT SEE THIS — it
+ * flags `null_out` on a NOT NULL column and this column is nullable — so the manifest entry says it
+ * in words and `db:verify-case-study-constraints` proves it against a real database.
+ *
+ * MONEY IS `bigint` AND THE CURRENCY IS NOT PINNED TO USD, which departs from the other two
+ * blueprint arms. The write contract offers USD and INR, and one fixture carries ₹1 crore —
+ * 1,000,000,000 paise. That clears int4 by a factor of two, which is not a margin: `rnd.ts`'s §4b
+ * rule ("int4 caps at $21.5M — a single round overflows it") is about exactly this figure.
+ */
+export const caseStudy = pgTable(
+  "case_study",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /**
+     * The public address, `/blueprints/case-studies/<slug>`.
+     *
+     * MINT-ONCE AND NEVER CLEARED, and that is a PRECONDITION rather than an observation:
+     * `case_study_related_lesson.related_public_slug` is a foreign key onto this column, so the day
+     * something clears a slug every inbound edge raises 23503 and that moderation action fails.
+     * NULL until a moderator publishes.
+     */
+    publicSlug: text("public_slug").unique(),
+    /** THE LESSON, AS ONE INSTRUCTION — "Budget for a second mould." There is no second title. */
+    title: text("title").notNull(),
+    /**
+     * ⚠️ THE EXPRESSION IS COPIED BYTE-FOR-BYTE FROM `showcase_launch.title_normalized`, and it must
+     * stay that way. POSIX `[[:space:]]` is not JavaScript's `\s` and `lower()` is not
+     * `toLowerCase()` — they disagree on a Turkish dotted İ and on ß — so the uniqueness question is
+     * answered by THIS expression and never by a JavaScript copy of it.
+     */
+    titleNormalized: text("title_normalized").generatedAlwaysAs(
+      sql`lower(regexp_replace(btrim(title), '[[:space:]]+', ' ', 'g'))`,
+    ),
+    /** The one thing a reader should do, one line, under the title. */
+    oneLineAction: text("one_line_action").notNull(),
+    summary: text("summary").notNull(),
+    problem: text("problem").notNull(),
+    context: text("context").notNull(),
+    discipline: blueprintDisciplineEnum("discipline").notNull(),
+    /**
+     * FREE TEXT, AND NOT A DUPLICATE OF `discipline`. One is a typed axis that filters the index,
+     * the other describes the business — "Hardware", "Packaged food". A closed list would refuse the
+     * first sector somebody actually worked in.
+     */
+    sector: text("sector").notNull(),
+    /**
+     * What happened after. NULL means nobody can say tidily; it is NOT "Unknown" and NOT a failure.
+     *
+     * There is deliberately no `scaled | failed | pivoted` enum beside it — that badge was specified
+     * and rejected, because a renderer that requires an outcome invites people to invent one.
+     */
+    outcomeSummary: text("outcome_summary"),
+    /** Free text, e.g. "14 months, two production runs". NULL when nobody recorded it. */
+    timelineLabel: text("timeline_label"),
+    authorRelationship: caseStudyAuthorRelationshipEnum("author_relationship").notNull(),
+    /** The two statements the writer ticked. Kept because the moderator holds them to it. */
+    acceptedStatementIds: text("accepted_statement_ids").array().notNull(),
+    tags: text("tags")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /** Integer minor units — paise for INR, cents for USD. Both move with the currency or neither. */
+    capitalRaisedAmountCents: bigint("capital_raised_amount_cents", { mode: "number" }),
+    capitalRaisedCurrency: text("capital_raised_currency"),
+
+    // --- The author, one arm of two. See the table docblock. ---
+    /** `cascade`: deleting an account deletes its case studies (the `showcase_launch` decision). */
+    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "cascade" }),
+    authorDisplayName: text("author_display_name"),
+    /** Nullable WITHIN the byline arm, exactly as `user.handle` is — nothing guarantees one. */
+    authorHandle: text("author_handle"),
+
+    // --- The decision. ---
+    moderationState: blueprintModerationStateEnum("moderation_state")
+      .default("pending_review")
+      .notNull(),
+    /** What the moderator told the writer. Required for a rejection; it is all the writer sees. */
+    moderatorNote: text("moderator_note"),
+    /** `restrict`: a moderation decision stays attributable for as long as the row exists. */
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    reviewedAt: timestamp("reviewed_at", { precision: 3 }),
+    createdAt: timestamp("created_at", { precision: 3 }).notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    /**
+     * ⚠️ THE TITLE IS TAKEN WHILE IT IS IN REVIEW OR READABLE, AND FREED BY A REJECTION.
+     *
+     * `pending_review` is in the predicate, which is what makes the interesting race impossible: two
+     * writers sending the same title a millisecond apart both pass any SELECT, and the second INSERT
+     * raises 23505 — so two pending rows can never share a title and the clash-at-publish a
+     * submit-time check would permit never arises. Uniqueness is the database's answer, never a
+     * check-then-insert.
+     *
+     * ⚠️ `flagged` IS IN THE PREDICATE, which `showcase_launch_title_uidx` has no need for. A
+     * flagged case study was published and its address still answers, so its title is still live;
+     * freeing it would let a second row claim a title a reader can reach. `rejected` is OUT, so a
+     * writer who was sent back can resubmit under the same title.
+     */
+    uniqueIndex("case_study_title_live_uidx")
+      .on(table.titleNormalized)
+      .where(sql`moderation_state IN ('pending_review', 'published', 'flagged')`),
+    /**
+     * The first hop of `case_study_evidence_company`'s composite foreign key, which is how "only a
+     * first-hand writer may withhold a name" becomes a per-row CHECK instead of a trigger.
+     */
+    unique("case_study_author_relationship_uidx").on(table.id, table.authorRelationship),
+    /** My Case Studies, newest first. */
+    index("case_study_author_idx").on(table.authorUserId, table.createdAt, table.id),
+    /** The review queue, oldest first. Partial, because a decided row never re-enters it. */
+    index("case_study_review_queue_idx")
+      .on(table.createdAt, table.id)
+      .where(sql`moderation_state = 'pending_review'`),
+    /**
+     * The public index's page. Directions matter: the keyset is `created_at DESC, id ASC` and
+     * Postgres only walks an index whose directions match pair for pair. Partial on the one gate,
+     * so the index and the predicate cannot drift apart.
+     */
+    index("case_study_public_newest_idx")
+      .on(desc(table.createdAt), table.id)
+      .where(sql`moderation_state IN ('published', 'flagged')`),
+    /** The four states this arm can reach. Narrower than the seven-label shared enum, deliberately. */
+    check(
+      "case_study_moderation_state_ck",
+      sql`moderation_state IN ('pending_review', 'published', 'rejected', 'flagged')`,
+    ),
+    /**
+     * ⚠️ THE STATEMENT PAIR, AND THE TWO GUARDS THAT LOOK REDUNDANT AND ARE NOT.
+     *
+     * `array_position(..., NULL) IS NULL` is there because `text[] NOT NULL` says NOTHING ABOUT ITS
+     * ELEMENTS: `ARRAY['was_part_of_it', NULL] @> ARRAY['was_part_of_it','figures_from_records']`
+     * evaluates to NULL, `false OR NULL` is NULL, and a NULL CHECK PASSES. That is migration 0172's
+     * bug in a new disguise — every constraint that one fixed was a scalar arm, so recognising the
+     * scalar shape does not catch this one.
+     *
+     * `cardinality = 2` is there because containment is not set equality: `@>` is satisfied by
+     * `{was_part_of_it, was_part_of_it}`. With the cardinality pinned, `@>` becomes exact, which is
+     * what refuses a tick carried over from the other answer — a statement about a different claim.
+     */
+    check(
+      "case_study_statements_ck",
+      sql`cardinality(accepted_statement_ids) = 2
+          AND array_position(accepted_statement_ids, NULL) IS NULL
+          AND ((author_relationship = 'first_hand'
+                AND accepted_statement_ids @> ARRAY['was_part_of_it', 'figures_from_records']::text[])
+            OR (author_relationship = 'public_sources'
+                AND accepted_statement_ids @> ARRAY['figures_in_linked_sources', 'says_only_what_sources_say']::text[]))`,
+    ),
+    /** Ten tags, and not one of them NULL — see the statement CHECK for why that is spelled out. */
+    check(
+      "case_study_tags_ck",
+      sql`cardinality(tags) <= 10 AND array_position(tags, NULL) IS NULL`,
+    ),
+    /**
+     * EXACTLY ONE AUTHOR ARM. An account-authored row names one and carries no byline text; a seeded
+     * row carries the byline and names no account. See the table docblock on why a `null_out` on
+     * `author_user_id` is illegal rather than merely wrong.
+     */
+    check(
+      "case_study_author_arm_ck",
+      sql`(author_user_id IS NOT NULL
+           AND author_display_name IS NULL
+           AND author_handle IS NULL)
+          OR (author_user_id IS NULL AND author_display_name IS NOT NULL)`,
+    ),
+    /**
+     * THE DECISION COLUMNS MOVE TOGETHER — with one clause deliberately absent.
+     *
+     * ⚠️ THERE IS NO "published IMPLIES A REVIEWER" CLAUSE, which `showcase_launch_decision_ck` does
+     * carry. The seed publishes ten rows nobody reviewed, and satisfying that clause would mean
+     * inventing a reviewer for each — a fact about a person that never happened. A reviewer and a
+     * review time still travel together, a rejection still carries its reason, and a row in review
+     * still carries no note.
+     */
+    check(
+      "case_study_decision_ck",
+      sql`(reviewed_at IS NULL) = (reviewed_by_user_id IS NULL)
+          AND (moderation_state <> 'pending_review' OR moderator_note IS NULL)
+          AND (moderation_state <> 'rejected' OR moderator_note IS NOT NULL)
+          AND (public_slug IS NOT NULL) = (moderation_state IN ('published', 'flagged'))`,
+    ),
+    check(
+      "case_study_slug_ck",
+      sql`public_slug IS NULL
+          OR (char_length(public_slug) BETWEEN 3 AND 120
+              AND public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+              AND public_slug NOT IN ('new', 'mine', 'slugs', 'options'))`,
+    ),
+    /** Mirrors the draft contract's caps, so a payload the form accepts is one this table takes. */
+    check(
+      "case_study_text_lengths_ck",
+      sql`char_length(title) BETWEEN 12 AND 140
+          AND char_length(one_line_action) BETWEEN 10 AND 140
+          AND char_length(summary) BETWEEN 40 AND 600
+          AND char_length(problem) BETWEEN 20 AND 2000
+          AND char_length(context) BETWEEN 20 AND 2000
+          AND char_length(sector) BETWEEN 1 AND 60
+          AND (outcome_summary IS NULL OR char_length(outcome_summary) BETWEEN 1 AND 120)
+          AND (timeline_label IS NULL OR char_length(timeline_label) BETWEEN 1 AND 60)
+          AND (moderator_note IS NULL OR char_length(moderator_note) BETWEEN 1 AND 2000)
+          AND (author_display_name IS NULL OR char_length(author_display_name) BETWEEN 1 AND 80)
+          AND (author_handle IS NULL
+               OR (char_length(author_handle) BETWEEN 1 AND 64
+                   AND author_handle ~ '^[A-Za-z0-9_.-]+$'))`,
+    ),
+    /**
+     * NULL MEANS NOT DISCLOSED, NEVER ZERO — the row says nothing about money rather than say a
+     * number. Both columns or neither, and every arm opens with `IS NOT NULL` for 0172's reason.
+     */
+    check(
+      "case_study_capital_raised_ck",
+      sql`(capital_raised_amount_cents IS NULL AND capital_raised_currency IS NULL)
+          OR (capital_raised_amount_cents IS NOT NULL
+              AND capital_raised_amount_cents >= 0
+              AND capital_raised_currency IS NOT NULL
+              AND capital_raised_currency IN ('USD', 'INR'))`,
+    ),
+  ],
+);
+
+/**
+ * Denormalised counters for one case study — a read cache, never a source of truth.
+ *
+ * ⚠️ TWO COUNTERS, NOT FOUR. A case study has no `comment_count` and no `upvote_count`, and that is
+ * the contract's decision rather than an omission: it "is a numbered lesson with no discussion
+ * surface". The showcase arm carries both and the teardown arm carries comments; this one renders
+ * views and likes as inert spans and nothing else.
+ *
+ * A ROW PER CASE STUDY, like the teardown sidecar and unlike the showcase one — the ten seeded rows
+ * carry real figures the fixture states, so the read's `coalesce` is defence rather than mechanism.
+ */
+export const caseStudyStats = pgTable(
+  "case_study_stats",
+  {
+    caseStudyId: text("case_study_id")
+      .primaryKey()
+      .references(() => caseStudy.id, { onDelete: "cascade" }),
+    viewCount: integer("view_count").default(0).notNull(),
+    likeCount: integer("like_count").default(0).notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  () => [check("case_study_stats_nonnegative_ck", sql`view_count >= 0 AND like_count >= 0`)],
+);
+
+/**
+ * One thing they did, in order.
+ *
+ * ⚠️ THE ORDER IS A CLAIM HERE AND NOT ON `case_study_pitfall`, which is why both carry `position`
+ * and only one is rendered as a numbered list: "the actions happened in that sequence, the pitfalls
+ * did not. Numbering a list of mistakes would assert an order nobody recorded." The column exists on
+ * both so the author's arrangement survives a round trip either way; the renderer draws the line.
+ *
+ * ⚠️ THE DUPLICATE INDEX IS `lower(btrim(body))` AND MUST NOT COLLAPSE INTERNAL WHITESPACE. The form
+ * compares `value.trim().toLowerCase()`, so an index that also collapsed runs of spaces would be
+ * STRICTER than the form — and a draft the form accepts would arrive as a 23505 the service has no
+ * error type for. The title's expression is the whitespace-collapsing one; these are not.
+ */
+export const caseStudyActionStep = pgTable(
+  "case_study_action_step",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    caseStudyId: text("case_study_id")
+      .notNull()
+      .references(() => caseStudy.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    body: text("body").notNull(),
+  },
+  (table) => [
+    uniqueIndex("case_study_action_step_position_uidx").on(table.caseStudyId, table.position),
+    uniqueIndex("case_study_action_step_body_uidx").on(table.caseStudyId, sql`lower(btrim(body))`),
+    check("case_study_action_step_ck", sql`position >= 0 AND char_length(body) BETWEEN 1 AND 300`),
+  ],
+);
+
+/** What to avoid. NOT the inverse of the steps — these are the things that went wrong. */
+export const caseStudyPitfall = pgTable(
+  "case_study_pitfall",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    caseStudyId: text("case_study_id")
+      .notNull()
+      .references(() => caseStudy.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    body: text("body").notNull(),
+  },
+  (table) => [
+    uniqueIndex("case_study_pitfall_position_uidx").on(table.caseStudyId, table.position),
+    uniqueIndex("case_study_pitfall_body_uidx").on(table.caseStudyId, sql`lower(btrim(body))`),
+    check("case_study_pitfall_ck", sql`position >= 0 AND char_length(body) BETWEEN 1 AND 300`),
+  ],
+);
+
+/**
+ * A company the case study is about.
+ *
+ * ⚠️ `name` IS NOT NULL EVEN WHEN IT IS WITHHELD, and the public serializer writes `null` in its
+ * place. A withheld name is withheld from READERS, not from Qatoto: a moderator has to be able to
+ * check the case study against the company, and a company nobody at Qatoto can see is a claim nobody
+ * can check. That is also why a PUBLIC-SOURCES case study may not withhold one — there the company
+ * is a source a reader could otherwise verify.
+ *
+ * ⚠️ "ONLY A FIRST-HAND WRITER MAY WITHHOLD" IS DECLARATIVE, via the trick `teardown_part` uses for
+ * its arm discriminator: `author_relationship` is carried down here, forced to agree with the parent
+ * by a composite foreign key, and then a per-row CHECK can read it. Without the denormalised column
+ * that CHECK would have to reach into another table.
+ *
+ * ⚠️ AND THE FOREIGN KEY IS `ON UPDATE RESTRICT` ON PURPOSE, WHICH MAKES THE PARENT'S
+ * `author_relationship` APPEND-ONLY once any company row exists. That is the outcome to want, so it
+ * is stated rather than inherited from a default: changing the answer would edit somebody else's
+ * sworn statement and silently invalidate the two statement ids they ticked. `ON UPDATE CASCADE`
+ * would be worse — it would propagate the new value down and this CHECK would fire 23514 in the
+ * middle of a moderator's transaction. The rule, once: never put a moderation-owned mutable column
+ * in a composite foreign key that a child CHECK reads.
+ */
+export const caseStudyEvidenceCompany = pgTable(
+  "case_study_evidence_company",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    caseStudyId: text("case_study_id")
+      .notNull()
+      .references(() => caseStudy.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    /** ALWAYS THE REAL NAME. The public read returns `null` for it when withheld. */
+    name: text("name").notNull(),
+    isNameWithheld: boolean("is_name_withheld").default(false).notNull(),
+    /** Denormalised from the parent and forced to agree with it. See the docblock. */
+    authorRelationship: caseStudyAuthorRelationshipEnum("author_relationship").notNull(),
+    /** FREE TEXT, not a place id — "Porto", "Western Norway". */
+    locationLabel: text("location_label").notNull(),
+    /** FREE TEXT, not a date — "2024". */
+    yearLabel: text("year_label").notNull(),
+  },
+  (table) => [
+    uniqueIndex("case_study_evidence_company_position_uidx").on(table.caseStudyId, table.position),
+    /** The detail page keys its fact rows by label, so a repeat would collide there. */
+    uniqueIndex("case_study_evidence_company_name_uidx").on(
+      table.caseStudyId,
+      sql`lower(btrim(name))`,
+    ),
+    foreignKey({
+      name: "case_study_evidence_company_relationship_fk",
+      columns: [table.caseStudyId, table.authorRelationship],
+      foreignColumns: [caseStudy.id, caseStudy.authorRelationship],
+    })
+      .onDelete("cascade")
+      .onUpdate("restrict"),
+    /** Both columns are NOT NULL, so there is no NULL arm for this one to fall through. */
+    check(
+      "case_study_evidence_company_withheld_ck",
+      sql`NOT (is_name_withheld AND author_relationship <> 'first_hand')`,
+    ),
+    check(
+      "case_study_evidence_company_text_ck",
+      sql`position >= 0
+          AND char_length(name) BETWEEN 1 AND 80
+          AND char_length(location_label) BETWEEN 1 AND 60
+          AND char_length(year_label) BETWEEN 1 AND 20`,
+    ),
+  ],
+);
+
+/**
+ * One figure the lesson rests on.
+ *
+ * THE THREE ARMS ARE COLUMNS, NOT A JSON BLOB, so each one's bounds are a CHECK rather than a hope.
+ * A percentage is BASIS POINTS and money is integer minor units; there is no float on this row.
+ *
+ * ⚠️ A LABEL MAY NOT IMPERSONATE A WITHHELD COMPANY. The form's version of this rule is conditional
+ * — "if any company is withheld, no figure may be labelled `Name withheld`" — which would need to
+ * read a sibling row. Dropping the condition makes it a per-row CHECK: it is stricter than the form
+ * and harmless, because no honest figure is called that. Converting a conditional cross-row rule
+ * into an unconditional per-row one is the move worth reusing.
+ *
+ * NOT declarative, and so left to the submit service: a label that equals a company's NAME. The
+ * detail page puts companies and figures in one keyspace, but they are two tables and a CHECK may
+ * not cross one.
+ */
+export const caseStudyOutcomeMetric = pgTable(
+  "case_study_outcome_metric",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    caseStudyId: text("case_study_id")
+      .notNull()
+      .references(() => caseStudy.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    label: text("label").notNull(),
+    kind: caseStudyMetricKindEnum("kind").notNull(),
+    countAmount: integer("count_amount"),
+    moneyAmountCents: bigint("money_amount_cents", { mode: "number" }),
+    moneyCurrency: text("money_currency"),
+    basisPoints: integer("basis_points"),
+  },
+  (table) => [
+    uniqueIndex("case_study_outcome_metric_position_uidx").on(table.caseStudyId, table.position),
+    uniqueIndex("case_study_outcome_metric_label_uidx").on(
+      table.caseStudyId,
+      sql`lower(btrim(label))`,
+    ),
+    /** Exactly one arm's columns are present, and every arm opens with `IS NOT NULL` (0172). */
+    check(
+      "case_study_outcome_metric_kind_ck",
+      sql`(kind = 'count'
+           AND count_amount IS NOT NULL
+           AND count_amount >= 0
+           AND money_amount_cents IS NULL
+           AND money_currency IS NULL
+           AND basis_points IS NULL)
+          OR (kind = 'money'
+              AND money_amount_cents IS NOT NULL
+              AND money_amount_cents >= 0
+              AND money_currency IS NOT NULL
+              AND money_currency IN ('USD', 'INR')
+              AND count_amount IS NULL
+              AND basis_points IS NULL)
+          OR (kind = 'percentage'
+              AND basis_points IS NOT NULL
+              AND count_amount IS NULL
+              AND money_amount_cents IS NULL
+              AND money_currency IS NULL)`,
+    ),
+    check(
+      "case_study_outcome_metric_label_ck",
+      sql`position >= 0
+          AND char_length(label) BETWEEN 1 AND 60
+          AND lower(btrim(label)) NOT LIKE 'name withheld%'`,
+    ),
+  ],
+);
+
+/**
+ * Where a figure came from.
+ *
+ * OUTBOUND, SO https ONLY — there is no same-site case for a citation. A source is a label AND a
+ * publisher, which is the whole reason this is not a bare link: "Name the source of a number. An
+ * unattributed figure reads as invented on this product, because on comparable products it usually
+ * is."
+ *
+ * ⚠️ THE URL INDEX IS `btrim(url)` AND CASE-SENSITIVE, deliberately laxer than the form. The form
+ * compares URLs lowercased, which is wrong — a URL path is case-sensitive — so two addresses the
+ * form calls the same are two addresses. Being laxer than the form is the safe direction; being
+ * stricter would turn an accepted draft into an untranslatable 23505.
+ */
+export const caseStudySource = pgTable(
+  "case_study_source",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    caseStudyId: text("case_study_id")
+      .notNull()
+      .references(() => caseStudy.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    label: text("label").notNull(),
+    publisherLabel: text("publisher_label").notNull(),
+    url: text("url").notNull(),
+  },
+  (table) => [
+    uniqueIndex("case_study_source_position_uidx").on(table.caseStudyId, table.position),
+    /** The detail page keys its source list by address. */
+    uniqueIndex("case_study_source_url_uidx").on(table.caseStudyId, sql`btrim(url)`),
+    check("case_study_source_url_ck", externalUrlCheck("url")),
+    check(
+      "case_study_source_text_ck",
+      sql`position >= 0
+          AND char_length(label) BETWEEN 1 AND 120
+          AND char_length(publisher_label) BETWEEN 1 AND 80`,
+    ),
+  ],
+);
+
+/**
+ * One lesson this one links to — a case-study-to-case-study edge, the only intra-arm reference on
+ * this surface.
+ *
+ * ⚠️ IT IS A REAL FOREIGN KEY, AND `showcase_launch.built_from_blueprint_slug` IS NOT A PRECEDENT
+ * FOR DOING OTHERWISE. That column is free text because it names a teardown and there was no
+ * teardown table — "a foreign key would refuse every pick". The reason does not transfer: the target
+ * here is this same table. Copying the shape without the reason would be cargo-culting a workaround.
+ *
+ * ⚠️ THE FOREIGN KEY'S PRECONDITION IS THAT `public_slug` IS NEVER CLEARED, which is why the parent
+ * says so. `ON UPDATE RESTRICT` makes an attempt to change one fail loudly rather than silently
+ * rewrite everybody's links.
+ *
+ * ⚠️ `moderation_state` IS DELIBERATELY NOT PART OF THIS KEY. The tempting version — a composite FK
+ * on `(public_slug, moderation_state)` with `ON UPDATE CASCADE` and a child CHECK pinning
+ * `'published'` — would make visibility declarative and would turn "flag a popular lesson" into a
+ * 23514, because the cascade propagates the new state into the child and the child CHECK fires. So:
+ * THE KEY IS FOR REFERENTIAL INTEGRITY, THE SERIALIZER IS FOR VISIBILITY. A rejected or flagged
+ * target keeps its slug and its edge and is dropped by the resolver, which is what the frontend
+ * already promises — "an unresolvable slug is DROPPED, not rendered as a dead row".
+ *
+ * CYCLES ARE INTENDED — the ten fixtures carry sixteen edges including five mutual pairs — and this
+ * key does not care, because the resolver is one hop deep by construction. The order is the
+ * author's, which is what `position` is for: the resolver "resolves slugs; it does not rank".
+ *
+ * A side effect worth keeping: a PENDING case study cannot name itself, because its own
+ * `public_slug` does not exist yet. Self-edges are impossible by construction for an author.
+ */
+export const caseStudyRelatedLesson = pgTable(
+  "case_study_related_lesson",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    caseStudyId: text("case_study_id")
+      .notNull()
+      .references(() => caseStudy.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    relatedPublicSlug: text("related_public_slug")
+      .notNull()
+      .references((): AnyPgColumn => caseStudy.publicSlug, {
+        onDelete: "cascade",
+        onUpdate: "restrict",
+      }),
+  },
+  (table) => [
+    uniqueIndex("case_study_related_lesson_position_uidx").on(table.caseStudyId, table.position),
+    /** The same lesson linked twice is a repeat the detail page would render twice. */
+    uniqueIndex("case_study_related_lesson_slug_uidx").on(
+      table.caseStudyId,
+      table.relatedPublicSlug,
+    ),
+    check(
+      "case_study_related_lesson_ck",
+      sql`position >= 0 AND related_public_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
+    ),
+  ],
+);
+
+export const caseStudyRelations = relations(caseStudy, ({ one, many }) => ({
+  author: one(user, { fields: [caseStudy.authorUserId], references: [user.id] }),
+  stats: one(caseStudyStats, {
+    fields: [caseStudy.id],
+    references: [caseStudyStats.caseStudyId],
+  }),
+  actionSteps: many(caseStudyActionStep),
+  pitfalls: many(caseStudyPitfall),
+  evidenceCompanies: many(caseStudyEvidenceCompany),
+  outcomeMetrics: many(caseStudyOutcomeMetric),
+  sources: many(caseStudySource),
+  relatedLessons: many(caseStudyRelatedLesson),
+}));
