@@ -14,8 +14,14 @@
  *   4. Reactivation clears the flag and cancels the request — the sign-in path's write.
  *   5. The scrub's DRY RUN reports counts and changes nothing.
  *   6. The scrub, applied, leaves the account unrecognizable and the request `completed`.
+ *   7. ⚠️ THE FREE TEXT NO FOREIGN KEY CAN REACH. An auto-provisioned commerce organization, the
+ *      public search index it feeds, a video invite, a video credit and a showcase credit — five
+ *      rows across five tables, none of which carries a `user` reference on the row that
+ *      matters, so `db:verify-anonymization-coverage` is blind to every one of them. A
+ *      `self_declared` organization sits beside them as the control and must come out unchanged.
  *
- * EVERY ACCOUNT IT TOUCHES IS ONE IT CREATED, with an `@privacy-smoke.invalid` address,
+ * EVERY ACCOUNT AND ROW IT TOUCHES IS ONE IT CREATED — accounts with an
+ * `@privacy-smoke.invalid` address, and fixtures whose ids all begin `smoke-` —
  * and step 6 is the reason that matters: it runs a real, irreversible anonymization. It
  * refuses to start if `ACCOUNT_ANONYMIZATION_ENABLED` is not set, so the destructive half
  * cannot be reached by running this by accident.
@@ -47,11 +53,23 @@ function check(label: string, passed: boolean, detail: string): void {
 /** Long enough for `minPasswordLength: 8`, and never reused outside this script. */
 const SMOKE_PASSWORD = "privacy-smoke-password-2026";
 
+/**
+ * ⚠️ DISTINCTIVE PER ACCOUNT, AND THAT IS AN ASSERTION, NOT TIDINESS.
+ *
+ * Every account used to be called "Privacy Smoke". The text-PII assertions below ask whether
+ * the person's NAME survived in a commerce organization and in the public search index, and a
+ * name shared by two rows cannot answer that — nor could a `to_tsquery` distinguish this run's
+ * leftovers from the last one's.
+ */
+function smokeUserName(userId: string): string {
+  return `Privacy Smoke ${userId.slice(-8)}`;
+}
+
 async function createSmokeUser(options: { readonly isStaff: boolean }): Promise<string> {
   const id = `privacy-smoke-${randomUUID()}`;
   await db.insert(user).values({
     id,
-    name: "Privacy Smoke",
+    name: smokeUserName(id),
     email: `${id}@privacy-smoke.invalid`,
     emailVerified: false,
     handle: `smoke_${id.slice(-12)}`,
@@ -112,6 +130,16 @@ async function destroySmokeUser(userId: string): Promise<void> {
   await db.delete(session).where(eq(session.userId, userId));
   await db.delete(account).where(eq(account.userId, userId));
   await db.execute(sql`DELETE FROM handle_reservations WHERE user_id = ${userId}`);
+  /**
+   * THE TEXT-PII FIXTURES. Every one of these is a table with NO `user` foreign key on the row
+   * that matters, which is exactly why the scrub needs explicit steps for them — and why the
+   * teardown needs explicit lines here. `store_search_document`, `video_collaborator`,
+   * `video_team_member` and `showcase_launch_team_member` all cascade from the three parents
+   * named below, so those three are the whole list.
+   */
+  await db.execute(sql`DELETE FROM showcase_launch WHERE author_user_id = ${userId}`);
+  await db.execute(sql`DELETE FROM video WHERE creator_id = ${userId}`);
+  await db.execute(sql`DELETE FROM commerce_organization WHERE created_by_user_id = ${userId}`);
   await db.delete(user).where(eq(user.id, userId));
 }
 
@@ -314,6 +342,74 @@ async function main(): Promise<void> {
               'A smoke thread title', 'A smoke thread body long enough to satisfy the check.',
               ${subjectId}, 'open', now())`);
 
+    /**
+     * ⚠️ THE TEXT-PII FIXTURES — five rows, none of which any foreign-key walk can find.
+     *
+     * `db:verify-anonymization-coverage` walks keys into `user`, so none of these tables is
+     * visible to it; `db:verify-text-pii-coverage` runs the same statements in a rolled-back
+     * transaction. This is the only place they run for real, through `anonymizeAccount` itself.
+     *
+     * THE VIDEO AND THE LAUNCH BELONG TO THE STAFF ACCOUNT, which is the only configuration
+     * that exercises the steps: a video the subject OWNED would be deleted outright by
+     * `video.creator_id`, taking its credits with it. What survives an erasure today is the
+     * subject's name on somebody else's row.
+     */
+    const subjectName = smokeUserName(subjectId);
+    const subjectHandle = `smoke_${subjectId.slice(-12)}`;
+    const autoOrganizationId = `smoke-auto-${randomUUID()}`;
+    const declaredOrganizationId = `smoke-self-${randomUUID()}`;
+    const declaredOrganizationName = `Norrfall Bracketworks ${subjectId.slice(-8)}`;
+    const fixtureVideoId = `smoke-video-${randomUUID()}`;
+    const fixtureLaunchId = `smoke-launch-${randomUUID()}`;
+    const searchDocumentId = `smoke-doc-${randomUUID()}`;
+
+    await db.execute(sql`
+      INSERT INTO commerce_organization
+        (id, slug, legal_name, normalized_legal_name, display_name, organization_type,
+         trade_state, visibility, provisioning_origin, created_by_user_id, created_at, updated_at)
+      VALUES (${autoOrganizationId}, ${`buyer-${autoOrganizationId.slice(-12)}`},
+              ${subjectName}, ${subjectName.toLowerCase()}, ${subjectName},
+              'sole_proprietor', 'pending', 'private', 'auto_provisioned',
+              ${subjectId}, now(), now()),
+             (${declaredOrganizationId}, ${`seller-${declaredOrganizationId.slice(-12)}`},
+              ${declaredOrganizationName}, ${declaredOrganizationName.toLowerCase()},
+              ${declaredOrganizationName},
+              'company', 'pending', 'private', 'self_declared',
+              ${subjectId}, now(), now())`);
+
+    await db.execute(sql`
+      INSERT INTO store_search_document
+        (id, document_kind, entity_id, public_slug, title, organization_id, organization_slug,
+         organization_display_name, search_text, is_eligible, created_at, updated_at)
+      VALUES (${searchDocumentId}, 'organization', ${autoOrganizationId},
+              ${`buyer-${autoOrganizationId.slice(-12)}`}, ${subjectName}, ${autoOrganizationId},
+              ${`buyer-${autoOrganizationId.slice(-12)}`}, ${subjectName},
+              ${`${subjectName} ${subjectName} precision gaskets`}, false, now(), now())`);
+
+    await db.execute(sql`
+      INSERT INTO video (id, creator_id, title, youtube_video_id)
+      VALUES (${fixtureVideoId}, ${staffId}, 'A smoke fixture video', 'smokeFixt01')`);
+    await db.execute(sql`
+      INSERT INTO video_collaborator (id, video_id, invited_email, user_id, status)
+      VALUES (${randomUUID()}, ${fixtureVideoId}, ${subjectEmail}, ${subjectId}, 'accepted')`);
+    await db.execute(sql`
+      INSERT INTO video_team_member (id, video_id, member_name, linked_user_id, position)
+      VALUES (${randomUUID()}, ${fixtureVideoId}, ${subjectName}, ${subjectId}, 0)`);
+
+    await db.execute(sql`
+      INSERT INTO showcase_launch
+        (id, author_user_id, title, tagline, summary, launched_at, difficulty,
+         accepted_launch_statement_ids, heading_image_url, heading_image_public_id)
+      VALUES (${fixtureLaunchId}, ${staffId}, 'A smoke fixture launch',
+              'A tagline of a workable length',
+              'A summary long enough to satisfy the forty character floor this table sets.',
+              now(), 'beginner',
+              ARRAY['built_it_ourselves', 'results_are_our_own']::text[],
+              'https://example.invalid/smoke-fixture.png', 'smoke/fixture')`);
+    await db.execute(sql`
+      INSERT INTO showcase_launch_team_member (id, launch_id, position, display_name, handle, role)
+      VALUES (${randomUUID()}, ${fixtureLaunchId}, 0, ${subjectName}, ${subjectHandle}, 'Engineer')`);
+
     const scrubbed = await anonymizeAccount(forScrub.value.requestId);
     check("the scrub ran", scrubbed.success, JSON.stringify(scrubbed));
     if (!scrubbed.success) return;
@@ -341,11 +437,10 @@ async function main(): Promise<void> {
        * `bio` AND `isChannelListed` ARE IN HERE BECAUSE NOTHING ELSE CHECKS THEM.
        *
        * `db:verify-anonymization-coverage` walks foreign keys into `user`; both of these are
-       * SCALAR columns, so they are invisible to that script and the scrub's single line for each
-       * could be deleted without turning anything red. This assertion is the only thing standing
-       * between that and public free text surviving an erasure — and, for `isChannelListed`,
-       * between that and an erased person's handle still being advertised to search engines by
-       * `GET /channels`.
+       * SCALAR columns, so they are invisible to that script. `TEXT_PII_REGISTER` now classifies
+       * both as `scrub`, and `db:verify-text-pii-coverage` resolves that claim against the step
+       * list — so deleting either line turns something red at last. This assertion remains the
+       * END-TO-END one: it is the only place the real `anonymizeAccount` writes them.
        */
       check(
         "the identity is gone",
@@ -390,6 +485,129 @@ async function main(): Promise<void> {
         `title=${threadAfter?.title ?? "?"} slug=${threadAfter?.slug ?? "?"} author=${String(threadAfter?.author_user_id)}`,
       );
 
+      /**
+       * ⚠️ THE COMMERCE NAME CHAIN — `user.name` into an auto-provisioned organization shell,
+       * and from there into the public search index. Nothing in this repo checked it until the
+       * text-PII register existed, because neither table carries a `user` foreign key.
+       */
+      const [organizationAfter] = (
+        await db.execute<{
+          display_name: string;
+          legal_name: string;
+          normalized_legal_name: string;
+        }>(
+          sql`SELECT display_name, legal_name, normalized_legal_name FROM commerce_organization
+              WHERE id = ${autoOrganizationId}`,
+        )
+      ).rows;
+      check(
+        "an auto-provisioned organization loses the person's name",
+        organizationAfter?.display_name === "Former member" &&
+          organizationAfter.legal_name === "Former member" &&
+          organizationAfter.normalized_legal_name === "former member",
+        `display=${organizationAfter?.display_name ?? "?"} legal=${organizationAfter?.legal_name ?? "?"} normalized=${organizationAfter?.normalized_legal_name ?? "?"}`,
+      );
+
+      /**
+       * ⚠️ THE CONTROL, WITHOUT WHICH THE ASSERTION ABOVE IS HALF A TEST. A `self_declared`
+       * organization is a real company other people trade with, and its name is not one
+       * member's to erase. "Scrub every organization this user created" would pass the previous
+       * check and destroy it.
+       */
+      const [declaredAfter] = (
+        await db.execute<{ display_name: string }>(
+          sql`SELECT display_name FROM commerce_organization WHERE id = ${declaredOrganizationId}`,
+        )
+      ).rows;
+      check(
+        "a self_declared organization is left alone",
+        declaredAfter?.display_name === declaredOrganizationName,
+        `display=${declaredAfter?.display_name ?? "?"} (expected ${declaredOrganizationName})`,
+      );
+
+      /**
+       * ⚠️ THE ASSERTION THAT MATTERS MOST, AND THE REASON IT IS A `to_tsquery` RATHER THAN A
+       * COLUMN COMPARISON.
+       *
+       * `search_document` is a GENERATED tsvector over `title` (weight A),
+       * `organization_display_name` (B) and `search_text` (C), behind a GIN index. Asking the
+       * columns proves the UPDATE landed; asking the INDEX the way `/store/search` asks it is
+       * what proves a departed person's name is not findable. Delete
+       * `tombstone:store_search_document` and this is the check that reds.
+       */
+      const [documentAfter] = (
+        await db.execute<{
+          title: string;
+          organization_display_name: string;
+          search_text: string;
+          index_hits: string;
+        }>(
+          sql`SELECT title, organization_display_name, search_text,
+                     (SELECT count(*)::text FROM store_search_document
+                      WHERE search_document @@ plainto_tsquery('english', ${subjectId.slice(-8)}))
+                     AS index_hits
+              FROM store_search_document WHERE id = ${searchDocumentId}`,
+        )
+      ).rows;
+      check(
+        "the public search index no longer names the person",
+        documentAfter?.index_hits === "0" &&
+          !(documentAfter.title ?? "").includes(subjectName) &&
+          !(documentAfter.organization_display_name ?? "").includes(subjectName) &&
+          !(documentAfter.search_text ?? "").includes(subjectName),
+        `tsquery hits=${documentAfter?.index_hits ?? "?"} title=${documentAfter?.title ?? "?"} search_text=${documentAfter?.search_text ?? "?"}`,
+      );
+      check(
+        "and the product terms beside it are still searchable",
+        (documentAfter?.search_text ?? "").includes("precision gaskets"),
+        `search_text=${documentAfter?.search_text ?? "?"} — the replace must be targeted, not an overwrite`,
+      );
+
+      /**
+       * THE CREDITS AND THE INVITE, all three on rows the subject does not own. The invite is
+       * the one worth naming: `video_collaborator.user_id` is a `null_out`, so after the
+       * manifest runs the row reads as an un-accepted invite that still carries a live address.
+       */
+      const [collaboratorAfter] = (
+        await db.execute<{ invited_email: string }>(
+          sql`SELECT invited_email FROM video_collaborator WHERE video_id = ${fixtureVideoId}`,
+        )
+      ).rows;
+      check(
+        "a video invite's address does not survive the erasure",
+        (collaboratorAfter?.invited_email ?? "").endsWith("@deleted.qatoto.invalid"),
+        `invited_email=${collaboratorAfter?.invited_email ?? "?"}`,
+      );
+
+      const [creditAfter] = (
+        await db.execute<{ member_name: string }>(
+          sql`SELECT member_name FROM video_team_member WHERE video_id = ${fixtureVideoId}`,
+        )
+      ).rows;
+      check(
+        "a video credit keeps the credit and loses the name",
+        creditAfter?.member_name === "Former member",
+        `member_name=${creditAfter?.member_name ?? "?"}`,
+      );
+
+      /**
+       * ⚠️ NO FOREIGN KEY AT ALL — a maker typed this name and handle by hand, so it is matched
+       * by the handle rather than a key. The handle is also the one `burn_handle` parks forever
+       * two assertions down, which is what makes the match exact.
+       */
+      const [launchMemberAfter] = (
+        await db.execute<{ display_name: string; handle: string }>(
+          sql`SELECT display_name, handle FROM showcase_launch_team_member
+              WHERE launch_id = ${fixtureLaunchId}`,
+        )
+      ).rows;
+      check(
+        "a showcase credit loses the name and the handle",
+        launchMemberAfter?.display_name === "Former member" &&
+          (launchMemberAfter.handle ?? "").startsWith("removed-"),
+        `display_name=${launchMemberAfter?.display_name ?? "?"} handle=${launchMemberAfter?.handle ?? "?"}`,
+      );
+
       const burned = await db.execute(
         sql`SELECT expires_at FROM handle_reservations WHERE user_id = ${subjectId}`,
       );
@@ -401,7 +619,7 @@ async function main(): Promise<void> {
     } else {
       check(
         "DRY RUN changed nothing",
-        afterScrub?.anonymizedAt === null && afterScrub.name === "Privacy Smoke",
+        afterScrub?.anonymizedAt === null && afterScrub.name === smokeUserName(subjectId),
         "set ACCOUNT_ANONYMIZATION_ENABLED=true to exercise the destructive half",
       );
     }
