@@ -216,6 +216,26 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 17(3)(b) and (e)",
       note: "Part of a transaction record the counterparty also holds, and which a dispute may still be open against.",
     },
+    /*
+     * A `moderate_commerce` verdict ABOUT another party's claim, which is why it outranks the
+     * seller's own edit: `replaceSellerDeclaredRelations` excludes dismissed rows from its delete,
+     * so re-saving cannot clear it. The service says why — "they are the party it was made
+     * against."
+     *
+     * ⚠️ A `null_out` HERE IS ILLEGAL RATHER THAN MERELY WRONG, and the coverage script cannot see
+     * it. `commerce_product_relation_dismissed_ck` makes the dismissal attribution all-or-nothing
+     * with `dismissed_at`, so clearing this column alone raises 23514 mid-scrub. Check 3 only flags
+     * a `null_out` on a NOT NULL column and this one is nullable; check 5's probe user owns zero
+     * rows, so no CHECK is ever evaluated. Same blind spot as `case_study.author_user_id`.
+     *
+     * `delete_rows` would be worse than wrong: deleting the row RESURRECTS a dismissed
+     * compatibility claim on a live storefront, and in these categories that is a safety claim.
+     */
+    "commerce_product_relation.dismissed_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
+    },
     "commerce_product_relation.verified_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(b) and (e)",
@@ -297,6 +317,10 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       lawfulBasis: "Art. 17(3)(e)",
       note: "A shared record: this person's slice is the denominator of everyone else's. Erasing it changes other people's equity, which is not this person's to do.",
     },
+    // Curated editorial reference data whose content stands without its author, on the
+    // `market_insight` convention its own schema comment invokes. Tagged in the schema as "R2:
+    // attribution that must never block an account deletion", nullable, and named by no CHECK.
+    "domestic_substitute_mapping.created_by_user_id": { kind: "null_out" },
     "effort_claim.overridden_by_user_id": {
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",
@@ -339,6 +363,27 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",
       note: "Hash-chained. The actor label inside the chain is already pseudonymous (pseudonymousActorLabel), so scrubbing user.name removes the identity without touching a byte the hash covers.",
+    },
+    /*
+     * A `moderate_taxonomy` holder's verdict on a machine opinion, and THE ATTRIBUTION IS THE
+     * COLUMN'S PURPOSE rather than incidental to it: "the row's whole purpose is that a reader can
+     * see a suggestion was read and judged, and by whom." Nulling it leaves "judged" with no judge.
+     *
+     * ⚠️ NOT the note on `optimization_suggestion.decided_by_user_id`, even though this table's
+     * docblock says it is "`optimization_suggestion`'s shape exactly". That note rests on the
+     * decision being hash-chained, and this one is NOT: `import-intelligence.service.ts` appends no
+     * platform audit entry. Copying it would put a false statement in a privacy record.
+     *
+     * ⚠️ AND A `null_out` IS ILLEGAL, invisibly to the coverage script — see
+     * `commerce_product_relation.dismissed_by_user_id`. Here it is
+     * `localization_pathway_suggestion_decision_ck`, which ties `decided_by_user_id`,
+     * `decided_at` and `status` together. `delete_rows` would destroy an LLM-authored reference
+     * row that `localization_assessment.substitute_count` counts.
+     */
+    "localization_pathway_suggestion.decided_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
     },
     "market_insight.created_by_user_id": { kind: "null_out" },
     "market_insight_project_link.linked_by_user_id": { kind: "null_out" },
@@ -384,6 +429,59 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
       kind: "retain",
       lawfulBasis: "Art. 17(3)(e)",
       note: "A shared record: this person's slice is the denominator of everyone else's. Erasing it changes other people's equity, which is not this person's to do.",
+    },
+    /*
+     * THE THREE PARTIES TO A FUNDING ATTESTATION, and they get two different answers.
+     *
+     * The row records money that changed hands SOMEWHERE ELSE, on the same contract
+     * `compensation_payment_record` carries — which is why the two `retain` entries below reuse
+     * that table's wording verbatim rather than inventing a seventh spelling of it. It is
+     * append-only by design ("a correction is a new row, because an attestation somebody signed
+     * must not change under them"), so `delete_rows` is wrong for every column here: it would
+     * destroy the counterparty's record of their own funding.
+     */
+    /*
+     * The counterparty's SIGNATURE. Until it exists the row is a claim by one side, and every read
+     * on this surface renders it as one — so an attestation with the signature removed is not a
+     * quieter record, it is a different one.
+     *
+     * ⚠️ A `null_out` is illegal and invisible to the coverage script:
+     * `pitch_funding_outcome_confirmed_ck` is `(confirmed_by_user_id IS NULL) = (confirmed_at IS
+     * NULL)`, so clearing this alone raises 23514. See
+     * `commerce_product_relation.dismissed_by_user_id` for the blind spot.
+     */
+    "pitch_funding_outcome.confirmed_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(b) and (e)",
+      note: "A financial ledger row. Removing the actor makes the entry unattributable and breaks the tax/accounting record it exists to be.",
+    },
+    /*
+     * ⚠️ THE ONE `null_out` ON THIS TABLE, AND THE SCHEMA DECIDED IT: "`set null` on their account
+     * deletion, since the record of the funding outlives the account and `funder_name_text` still
+     * names who it was." The funder may be a stranger to this platform — an angel, a fund, a family
+     * member — so unlike `funding_round_pledge.backer_user_id` there is no on-platform ledger row
+     * to make unattributable. Named by no CHECK, so this one is executable.
+     *
+     * ⚠️ THIS SCRUB IS PARTIAL BY DESIGN, AND NOTHING ELSE IN THIS FILE WILL TELL YOU SO.
+     * `funder_name_text` is NOT NULL and keeps naming the departed funder. That is what the table
+     * intends — the funding record outlives the account — but it means the erasure removes the LINK
+     * to an account, not the name. `db:verify-anonymization-coverage` walks foreign keys, so it can
+     * never see that column; do not read a green script as "the funder was erased".
+     *
+     * One consequence worth knowing: `isConfirmable` is `funderUserId !== null`, so nulling this
+     * makes an unconfirmed row permanently unconfirmable. Correct — a funder whose account is gone
+     * can never countersign.
+     */
+    "pitch_funding_outcome.funder_user_id": { kind: "null_out" },
+    /*
+     * Whoever typed it, and one of the two parties rather than staff. NOT NULL, so a `null_out`
+     * here is illegal in the way the coverage script DOES catch (check 3). It is also half of
+     * `pitch_funding_outcome_idempotency_unq`.
+     */
+    "pitch_funding_outcome.recorded_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(b) and (e)",
+      note: "A financial ledger row. Removing the actor makes the entry unattributable and breaks the tax/accounting record it exists to be.",
     },
     "platform_audit_entry.actor_user_id": {
       kind: "retain",
