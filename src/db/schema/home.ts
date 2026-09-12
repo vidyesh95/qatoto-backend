@@ -3775,8 +3775,9 @@ export const caseStudy = pgTable(
     /** `cascade`: deleting an account deletes its case studies (the `showcase_launch` decision). */
     authorUserId: text("author_user_id").references(() => user.id, { onDelete: "cascade" }),
     authorDisplayName: text("author_display_name"),
-    /** Nullable WITHIN the byline arm, exactly as `user.handle` is — nothing guarantees one. */
+    /** Nullable WITHIN the byline arm, exactly as `user.handle` and `user.image` are. */
     authorHandle: text("author_handle"),
+    authorAvatarUrl: text("author_avatar_url"),
 
     // --- The decision. ---
     moderationState: blueprintModerationStateEnum("moderation_state")
@@ -3870,7 +3871,8 @@ export const caseStudy = pgTable(
       "case_study_author_arm_ck",
       sql`(author_user_id IS NOT NULL
            AND author_display_name IS NULL
-           AND author_handle IS NULL)
+           AND author_handle IS NULL
+           AND author_avatar_url IS NULL)
           OR (author_user_id IS NULL AND author_display_name IS NOT NULL)`,
     ),
     /**
@@ -3912,6 +3914,10 @@ export const caseStudy = pgTable(
           AND (author_handle IS NULL
                OR (char_length(author_handle) BETWEEN 1 AND 64
                    AND author_handle ~ '^[A-Za-z0-9_.-]+$'))`,
+    ),
+    check(
+      "case_study_author_avatar_url_ck",
+      sql`author_avatar_url IS NULL OR (${assetUrlCheck("author_avatar_url")})`,
     ),
     /**
      * NULL MEANS NOT DISCLOSED, NEVER ZERO — the row says nothing about money rather than say a
