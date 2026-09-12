@@ -25,6 +25,7 @@ import {
   teardownMaterial,
   teardownMaterialElement,
   teardownPart,
+  teardownPartListing,
   teardownStats,
 } from "#src/db/schema.js";
 import { decodeInstantCursor, encodeInstantCursor } from "#src/lib/instant-cursor.js";
@@ -150,6 +151,7 @@ type TeardownChildRows = {
   readonly stepRows: readonly (typeof teardownAssemblyStep.$inferSelect)[];
   readonly materialRows: readonly (typeof teardownMaterial.$inferSelect)[];
   readonly elementRows: readonly (typeof teardownMaterialElement.$inferSelect)[];
+  readonly partListingRows: readonly (typeof teardownPartListing.$inferSelect)[];
 };
 
 /** Reassembles a stored `_x/_y/_z` triple, which is present as three columns or as none. */
@@ -460,6 +462,7 @@ function withheldPayload(): Pick<
   | "fasteners"
   | "manufacturingFiles"
   | "materials"
+  | "partsList"
   | "repairabilityIndex"
   | "simulationTelemetry"
   | "walkthroughVideo"
@@ -472,6 +475,7 @@ function withheldPayload(): Pick<
     fasteners: [],
     manufacturingFiles: [],
     materials: [],
+    partsList: [],
     repairabilityIndex: null,
     simulationTelemetry: null,
     walkthroughVideo: null,
@@ -557,6 +561,19 @@ function buildTeardownView(row: TeardownRow, childRows: TeardownChildRows): Publ
               byteSize: manufacturingFileRow.byteSize,
             })),
           materials: buildMaterials(materialRows, childRows.elementRows),
+          /*
+           * WITHHELD BY A QUARANTINE, beside `materials` and for the same reason. A listing carries
+           * no file, so the "it withholds files" shorthand does not decide it — but what a rights
+           * claim disputes is the SURVEY, and a part list is the survey's findings about somebody
+           * else's product in the plainest form it takes. Withholding the composition table while
+           * publishing the parts it describes would be a distinction nobody could defend.
+           */
+          partsList: childRows.partListingRows
+            .filter((candidate) => candidate.teardownId === row.id)
+            .map((partListingRow) => ({
+              label: partListingRow.label,
+              material: partListingRow.material,
+            })),
           repairabilityIndex: buildRepairabilityIndex(row),
           simulationTelemetry: buildSimulationTelemetry(row),
           walkthroughVideo: buildWalkthroughVideo(row),
@@ -648,6 +665,7 @@ async function loadTeardownChildren(teardownIds: readonly string[]): Promise<Tea
       stepRows: [],
       materialRows: [],
       elementRows: [],
+      partListingRows: [],
     };
   }
 
@@ -660,6 +678,7 @@ async function loadTeardownChildren(teardownIds: readonly string[]): Promise<Tea
     fastenerRows,
     stepRows,
     materialRows,
+    partListingRows,
   ] = await Promise.all([
     db.select().from(teardownStats).where(inArray(teardownStats.teardownId, ids)),
     db.select().from(teardownAssembly).where(inArray(teardownAssembly.teardownId, ids)),
@@ -689,6 +708,11 @@ async function loadTeardownChildren(teardownIds: readonly string[]): Promise<Tea
       .from(teardownMaterial)
       .where(inArray(teardownMaterial.teardownId, ids))
       .orderBy(asc(teardownMaterial.teardownId), asc(teardownMaterial.position)),
+    db
+      .select()
+      .from(teardownPartListing)
+      .where(inArray(teardownPartListing.teardownId, ids))
+      .orderBy(asc(teardownPartListing.teardownId), asc(teardownPartListing.position)),
   ]);
 
   const assemblyIds = assemblyRows.map((assemblyRow) => assemblyRow.id);
@@ -721,6 +745,7 @@ async function loadTeardownChildren(teardownIds: readonly string[]): Promise<Tea
     stepRows,
     materialRows,
     elementRows,
+    partListingRows,
   };
 }
 

@@ -471,17 +471,30 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
     kind: "no_erasure_subject",
     note: "The same exclusive arm. A fixture portrait on a row with no account.",
   },
+  /*
+   * ⚠️ THESE THREE WERE `no_erasure_subject` UNTIL THE AUTHORING ROUTE LANDED, on the stated ground
+   * that "`teardown` and all ten `teardown_*` tables carry NO `user` reference of any kind". That
+   * stopped being true the moment `teardown.author_user_id` existed, and leaving the old
+   * disposition would have been a claim about the schema that the schema contradicts.
+   *
+   * TWO POPULATIONS SHARE THESE COLUMNS. The twelve seeded rows carry invented bylines and a NULL
+   * `author_user_id`; no erasure reaches them, and none needs to. An authored row names an account,
+   * and the whole row goes when that account does.
+   */
   "teardown.author_display_name": {
-    kind: "no_erasure_subject",
-    note: "PROVABLE FROM THE SCHEMA: `teardown` and all ten `teardown_*` tables carry NO `user` reference of any kind, so no erasure can reach them and no byline here can belong to an account. These hold the seeded blueprint authors.",
+    kind: "covered_by_row_delete",
+    manifestKey: "teardown.author_user_id",
+    note: "The publisher's name as it appeared at publish — a snapshot, so renaming an account never rewrote it. An authored row dies whole with the account; the seeded rows name none.",
   },
   "teardown.author_handle": {
-    kind: "no_erasure_subject",
-    note: "As above — the teardown tables have no `user` foreign key at all.",
+    kind: "covered_by_row_delete",
+    manifestKey: "teardown.author_user_id",
+    note: "The same snapshot, one column over.",
   },
   "teardown.author_avatar_url": {
-    kind: "no_erasure_subject",
-    note: "As above — the teardown tables have no `user` foreign key at all.",
+    kind: "covered_by_row_delete",
+    manifestKey: "teardown.author_user_id",
+    note: "The same snapshot, one column over.",
   },
 
   // -------------------------------------------------------------------------
@@ -633,6 +646,20 @@ export const TEXT_PII_REGISTER: Readonly<Record<TextPiiColumnKey, TextPiiDisposi
   "teardown.provenance_subject_product_name": {
     kind: "not_personal_data",
     note: "The product that was taken apart.",
+  },
+  /*
+   * ⚠️ BOTH OF THESE ARE HERE ONLY BECAUSE THEY END IN `_name`. `PERSON_SHAPED_COLUMN_PATTERN` in
+   * `verify-text-pii-coverage.ts` matches on the suffix, not on meaning, so a column naming a
+   * washing machine is asked the same question as one naming a person. The answer is the same as
+   * `teardown.provenance_subject_product_name` above.
+   */
+  "teardown_submission.subject_product_name": {
+    kind: "not_personal_data",
+    note: "The product the submitter took apart — somebody else's washing machine, not a person.",
+  },
+  "teardown_submission.subject_product_name_normalized": {
+    kind: "not_personal_data",
+    note: "The same product name, lowercased and whitespace-collapsed, so one live survey per unit is a unique index rather than an application rule.",
   },
   "teardown.provenance_licence_name": {
     kind: "not_personal_data",

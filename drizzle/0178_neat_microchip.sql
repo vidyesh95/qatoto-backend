@@ -1,0 +1,2 @@
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'teardown_published' BEFORE 'commerce_content_hidden';--> statement-breakpoint
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'teardown_rejected' BEFORE 'commerce_content_hidden';

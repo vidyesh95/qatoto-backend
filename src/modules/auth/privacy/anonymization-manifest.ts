@@ -667,6 +667,32 @@ export const ANONYMIZATION_MANIFEST: Readonly<Record<UserReferenceKey, Anonymiza
     // still read does not lose half its turns when a staff account is erased.
     "support_case_message.author_user_id": { kind: "null_out" },
     "talent_profile.user_id": { kind: "delete_rows" },
+    /*
+     * Deleting an account deletes its teardowns — the `showcase_launch` and `case_study` owner
+     * decision, applied to the same kind of content written through the same kind of route. The nine
+     * child tables and `teardown_part_listing` cascade with the row.
+     *
+     * ⚠️ THIS COLUMN IS WHY THE FK EXISTS AT ALL. The byline is denormalised onto
+     * `author_display_name` / `author_handle` / `author_avatar_url`, so a teardown could have been
+     * written with no `user` reference — and then `db:verify-anonymization-coverage`, which finds its
+     * candidates by walking foreign keys into `user(id)`, would never have seen it. Two populations
+     * live in that table: the twelve seeded rows name no account and survive; an authored row names
+     * one and dies whole with it.
+     */
+    "teardown.author_user_id": { kind: "delete_rows" },
+    /*
+     * ⚠️ ORDER MATTERS HERE IN A WAY THE MANIFEST CANNOT EXPRESS. `teardown_submission` names its
+     * published teardown by a `set null` foreign key, and `teardown_submission_decision_ck` reads
+     * `(moderation_state = 'published') = (published_teardown_id IS NOT NULL)` — so deleting the
+     * teardown FIRST nulls that column under a `published` row and raises 23514, dead-lettering the
+     * scrub. The submission must go first. `anonymize-account.service.ts` orders it explicitly.
+     */
+    "teardown_submission.author_user_id": { kind: "delete_rows" },
+    "teardown_submission.reviewed_by_user_id": {
+      kind: "retain",
+      lawfulBasis: "Art. 17(3)(e)",
+      note: "A moderation decision taken ABOUT someone else. An unattributable enforcement action cannot be appealed or defended.",
+    },
     "user_activity_hour.user_id": { kind: "delete_rows" },
     "user_creator_affinity_snapshot.creator_id": { kind: "delete_rows" },
     "user_creator_affinity_snapshot.user_id": { kind: "delete_rows" },

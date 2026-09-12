@@ -2724,13 +2724,27 @@ function externalUrlCheck(columnName: string) {
  * THE COUNTERS ARE NOT HERE. They live in `teardown_stats`, on the `video_stats` precedent, because
  * a counter moves on a different cadence from the row it counts.
  *
- * THE AUTHOR IS DENORMALISED, and the reason is the privacy machinery rather than convenience.
- * Every foreign key into `user` must be named in `anonymization-manifest.ts`, and
- * `db:verify-anonymization-coverage` asks Postgres and exits non-zero if one is missing. A teardown
- * has no authoring path yet, so an `author_user_id` would mean minting credential-less accounts and
- * then carrying them through account closure, handle uniqueness and data export — to render a
- * byline. When authoring lands it adds `author_user_id` AND the manifest entry in the same commit,
- * or that script fails the build.
+ * THE AUTHOR IS BOTH A FOREIGN KEY AND A SNAPSHOT, and they answer different questions.
+ *
+ * This block used to say a teardown had no authoring path, so an `author_user_id` would mean
+ * carrying invented accounts through account closure to render a byline — and that when authoring
+ * landed it would add the column AND the `anonymization-manifest.ts` entry in the same commit, or
+ * `db:verify-anonymization-coverage` would fail the build. Authoring has landed and it did exactly
+ * that.
+ *
+ * ⚠️ THE FK IS NOT REDUNDANT WITH THE BYLINE, and the reason is mechanical rather than aesthetic:
+ * `verify-anonymization-coverage.ts` finds its candidates by walking foreign keys into `user(id)`.
+ * A published teardown reachable only by a join THROUGH `teardown_submission` is invisible to that
+ * walk. The FK is what makes erasure verifiable; the three `author_*` columns are what makes the
+ * read cheap.
+ *
+ * ⚠️ THE BYLINE IS A SNAPSHOT TAKEN AT PUBLISH. Renaming an account does not rename it. The
+ * alternative — `case_study`'s two-arm XOR — would mean dropping three NOT NULLs and teaching the
+ * hot public read to join `user`, to benefit rows that do not exist yet.
+ *
+ * TWO POPULATIONS LIVE HERE. The twelve seeded rows carry invented bylines and a NULL
+ * `author_user_id`; they survive any erasure. An authored row names an account and dies whole with
+ * it (`delete_rows`, the owner decision `showcase_launch` and `case_study` both took).
  */
 export const teardown = pgTable(
   "teardown",
@@ -2749,6 +2763,11 @@ export const teardown = pgTable(
     summary: text("summary").notNull(),
     thumbnailUrl: text("thumbnail_url").notNull(),
 
+    /**
+     * NULL for the twelve seeded rows, which name no account. `cascade`: deleting an account
+     * deletes its teardowns, the same owner decision `showcase_launch.author_user_id` records.
+     */
+    authorUserId: text("author_user_id").references(() => user.id, { onDelete: "cascade" }),
     authorDisplayName: text("author_display_name").notNull(),
     /** Nullable exactly as `user.handle` is — nothing guarantees a contributor has one. */
     authorHandle: text("author_handle"),
@@ -2862,6 +2881,9 @@ export const teardown = pgTable(
       .on(desc(table.createdAt), table.id)
       .where(sql`moderation_state IN ('published', 'flagged')`),
 
+    /** "What has this account published" — the erasure walk and the author's own list. */
+    index("teardown_author_idx").on(table.authorUserId, table.createdAt, table.id),
+
     /**
      * The four states a teardown can actually be in today. Narrower than the seven-label enum, in
      * the same way `showcase_launch_moderation_state_ck` narrows it to three — written from what
@@ -2880,7 +2902,8 @@ export const teardown = pgTable(
       "teardown_slug_ck",
       sql`char_length(slug) BETWEEN 3 AND 120
           AND slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
-          AND slug NOT IN ('teardowns', 'showcase', 'case-studies', 'new', 'slugs', 'options')`,
+          AND slug NOT IN ('teardowns', 'showcase', 'case-studies', 'new', 'slugs', 'options',
+                           'mine')`,
     ),
     check(
       "teardown_text_lengths_ck",
@@ -3292,6 +3315,54 @@ export const teardownPart = pgTable(
   ],
 );
 
+/**
+ * The parts an author LISTED, as a table of contents — not as an assembly.
+ *
+ * ⚠️ DELIBERATELY NOT `teardown_part`, and the frontend draws the same line: its parts step is
+ * headed "THE PARTS LIST — AND DELIBERATELY NOT AN ASSEMBLY", while `teardown_assembly` below opens
+ * "The 3D view of one teardown". One is a contents page, the other is a viewer.
+ *
+ * The authoring wizard collects `{label, material}` and nothing else — there is no upload route, so
+ * there is no model, no node name, no manufacturing method and no geometry. Such a part satisfies
+ * NEITHER arm of `teardown_part_arm_shape_ck`, and admitting it there would have cost a third
+ * `teardown_assembly_kind` label (an `ALTER TYPE` whose CHECK rewrites cannot ship in the same
+ * migration), third arms on two CHECKs, `manufacturing_method` losing NOT NULL — a regression on the
+ * modelled surface rather than an addition — a third arm on `AssemblySchema` that breaks the seed's
+ * `"model" in part` test, and `?media=assembly` quietly answering with teardowns that have no 3D
+ * view, because that filter is a bare EXISTS over `teardown_assembly`.
+ *
+ * A separate table costs one migration and touches none of them. When uploads land, a teardown may
+ * carry a listing AND an assembly — "twelve parts listed, nine of them modelled" — with no
+ * conversion and no kind flip.
+ */
+export const teardownPartListing = pgTable(
+  "teardown_part_listing",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    /** Publication order, so the list comes back the way the author wrote it. */
+    position: integer("position").notNull(),
+    label: text("label").notNull(),
+    /** Free text, exactly as `teardown_part.material` is — a row says "6063-T5 aluminium". */
+    material: text("material").notNull(),
+  },
+  (table) => [
+    /** One label per slot, so a retry cannot double a list. */
+    unique("teardown_part_listing_position_uidx").on(table.teardownId, table.position),
+    /** The two length bounds lifted verbatim from `teardown_part_scalars_ck`. */
+    check(
+      "teardown_part_listing_scalars_ck",
+      sql`position >= 0
+          AND char_length(label) BETWEEN 1 AND 120
+          AND char_length(material) BETWEEN 1 AND 120`,
+    ),
+  ],
+);
+
 /** Something a reader opens: a schematic, a bill of materials, an assembly guide, a datasheet. */
 export const teardownDocument = pgTable(
   "teardown_document",
@@ -3304,7 +3375,15 @@ export const teardownDocument = pgTable(
     kind: blueprintDocumentKindEnum("kind").notNull(),
     title: text("title").notNull(),
     url: text("url").notNull(),
-    byteSize: integer("byte_size").notNull(),
+    /**
+     * NULL means nobody measured it — which is not zero bytes.
+     *
+     * ⚠️ NULLABLE SINCE THE AUTHORING ROUTE LANDED. The seed carries a fixture figure, but the
+     * wizard sends a pasted URL and no size, and the two honest ways to fill it were a network HEAD
+     * inside the publish transaction or a moderator typing a number about a file they never opened.
+     * A NULL says "unmeasured"; either of those would have said something false.
+     */
+    byteSize: integer("byte_size"),
     /** NULL means nobody counted the pages — which is not zero pages. */
     pageCount: integer("page_count"),
   },
@@ -3314,7 +3393,7 @@ export const teardownDocument = pgTable(
     check("teardown_document_url_ck", assetUrlCheck("url")),
     check(
       "teardown_document_scalars_ck",
-      sql`byte_size >= 0
+      sql`(byte_size IS NULL OR byte_size >= 0)
           AND position >= 0
           AND (page_count IS NULL OR page_count > 0)
           AND char_length(title) BETWEEN 1 AND 200`,
@@ -3340,14 +3419,17 @@ export const teardownManufacturingFile = pgTable(
     kind: teardownManufacturingFileKindEnum("kind").notNull(),
     title: text("title").notNull(),
     url: text("url").notNull(),
-    byteSize: integer("byte_size").notNull(),
+    /** NULL means unmeasured — see `teardown_document.byte_size` for why it became nullable. */
+    byteSize: integer("byte_size"),
   },
   (table) => [
     index("teardown_manufacturing_file_teardown_idx").on(table.teardownId, table.position),
     check("teardown_manufacturing_file_url_ck", assetUrlCheck("url")),
     check(
       "teardown_manufacturing_file_scalars_ck",
-      sql`byte_size > 0 AND position >= 0 AND char_length(title) BETWEEN 1 AND 200`,
+      sql`(byte_size IS NULL OR byte_size > 0)
+          AND position >= 0
+          AND char_length(title) BETWEEN 1 AND 200`,
     ),
   ],
 );
@@ -3573,6 +3655,7 @@ export const teardownRelations = relations(teardown, ({ one, many }) => ({
   }),
   documents: many(teardownDocument),
   manufacturingFiles: many(teardownManufacturingFile),
+  partsListing: many(teardownPartListing),
   fasteners: many(teardownFastener),
   assemblySteps: many(teardownAssemblyStep),
   materials: many(teardownMaterial),
@@ -3605,6 +3688,199 @@ export const teardownMaterialElementRelations = relations(teardownMaterialElemen
   material: one(teardownMaterial, {
     fields: [teardownMaterialElement.materialId],
     references: [teardownMaterial.id],
+  }),
+}));
+
+export const teardownPartListingRelations = relations(teardownPartListing, ({ one }) => ({
+  teardown: one(teardown, {
+    fields: [teardownPartListing.teardownId],
+    references: [teardown.id],
+  }),
+}));
+
+/**
+ * THE FOUR THINGS A PUBLISHER SWEARS TO, by id.
+ *
+ * Exported so the table's CHECK, the submit gate and any future copy share ONE spelling. The labels
+ * live on the frontend, where they are read; only the ids are a contract.
+ */
+export const TEARDOWN_ATTESTATION_CLAUSE_IDS = [
+  "lawful_acquisition",
+  "own_measurement",
+  "no_confidential_material",
+  "independent_discovery",
+] as const;
+
+/**
+ * One submitted teardown, before anybody has decided anything about it.
+ *
+ * ⚠️ THIS IS NOT A `teardown` ROW IN WAITING, AND THAT IS THE WHOLE DESIGN. `teardown` is a table
+ * made of CHECKs — its own header says the six inlined blocks exist so an illegal state cannot be
+ * represented. The authoring wizard cannot fill it: it collects no thumbnail and no difficulty, both
+ * NOT NULL here and both REQUIRED NON-NULL by the frontend's read schema, so a relaxed `teardown`
+ * row would not be a draft, it would be a detail page that fails to parse. And admitting a
+ * half-answered row would mean adding `moderation_state = 'draft' OR (…)` to nine all-or-none
+ * CHECKs, in the one file that documents how a CHECK passing on NULL accepted five of six telemetry
+ * figures (migration 0172).
+ *
+ * So a submission is a DIFFERENT domain object — "a survey somebody has sent in" — and it gets its
+ * own table. `teardown` and its ten tables are untouched by the authoring path; the 65 assertions in
+ * `db:verify-teardown-constraints` stand unedited, including the two that prove `draft` and
+ * `removed` are refused.
+ *
+ * ⚠️ THE FRONTEND ALREADY DESCRIBED THIS TABLE IN ITS OWN WORDS: the receipt "carries no slug and no
+ * public URL, deliberately… its public address is a thing a moderator creates by publishing it", and
+ * its list row carries `publicSlug: string | null`. `submissionId` is THIS id; it is not a teardown
+ * id and must never be served as one.
+ *
+ * ⚠️ HYBRID ON PURPOSE: five columns promoted, everything else in `document_json`. The promoted set
+ * is exactly what is QUERIED — the duplicate-unit rule needs the normalised name indexed, the queue
+ * needs `created_at` and the state, and the author's list needs the title and the note. The payoff
+ * is that `GET /blueprints/teardowns/mine` parses ZERO documents; the document is read twice in a
+ * submission's life, once per queue row and once at publish.
+ *
+ * ⚠️ TEXT, NOT jsonb, for the reason `platform_audit_entry.payload_json` gives: jsonb reorders keys,
+ * coerces numbers to `numeric` and reads back as `unknown`, which forces either a banned `as` or a
+ * parse — and we parse anyway. `document_schema_version` travels beside it because a document
+ * written in March is read by a publish in June: the reader's `unparseable` arm handles the failure,
+ * the version decides WHICH schema to try. That is `canonical-hash.ts`'s "store the version beside
+ * the row" applied to a payload. Free now, impossible to add later.
+ */
+export const teardownSubmission = pgTable(
+  "teardown_submission",
+  {
+    /** The frontend's `submissionId`. NOT a teardown id, and never served as one. */
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /** `cascade`: closing an account withdraws its submissions, decided and undecided alike. */
+    authorUserId: text("author_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+
+    /** Promoted out of the document so the author's list renders without parsing it. */
+    title: text("title").notNull(),
+    /** The unit that was surveyed — somebody else's product name, as the publisher wrote it. */
+    subjectProductName: text("subject_product_name").notNull(),
+    /**
+     * The unit name as the uniqueness rule sees it: trimmed, whitespace collapsed, lowercased.
+     *
+     * `[[:space:]]` rather than `\s`, which would have to survive two layers of escaping to reach
+     * the regex engine intact. The service's duplicate pre-check runs THIS expression in SQL, never
+     * a JavaScript copy — `lower()` is not `toLowerCase()` and they disagree on a dotted İ.
+     */
+    subjectProductNameNormalized: text("subject_product_name_normalized").generatedAlwaysAs(
+      sql`lower(regexp_replace(btrim(subject_product_name), '[[:space:]]+', ' ', 'g'))`,
+    ),
+
+    /** Everything the wizard sent that no query needs. Canonical only in the sense of "parsed". */
+    documentJson: text("document_json").notNull(),
+    documentSchemaVersion: integer("document_schema_version").notNull(),
+
+    moderationState: blueprintModerationStateEnum("moderation_state")
+      .notNull()
+      .default("pending_review"),
+    /** The moderator's own words, shown to the author verbatim. Required on a rejection. */
+    moderatorNote: text("moderator_note"),
+    /** `restrict`: an enforcement decision nobody can be named for is one nobody can appeal. */
+    reviewedByUserId: text("reviewed_by_user_id").references(() => user.id, {
+      onDelete: "restrict",
+    }),
+    reviewedAt: timestamp("reviewed_at", { precision: 3 }),
+    /**
+     * ⚠️ `set null`, NOT `cascade`, and the pairing below turns that into a refusal.
+     *
+     * The paperwork — who submitted what, when, and what they swore to — must outlive the teardown
+     * it produced. With `set null` plus the decision CHECK, hard-deleting a published teardown
+     * raises 23514 instead of silently orphaning the record, which forces the delete through a
+     * service that transitions both. One consequence to honour: erasure must delete the SUBMISSION
+     * before the teardown.
+     */
+    publishedTeardownId: text("published_teardown_id")
+      .unique()
+      .references(() => teardown.id, { onDelete: "set null" }),
+
+    /** This IS `submittedAt` on the wire. A second column would be one that can disagree. */
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    /**
+     * THE 409'S AUTHORITY — one live survey per unit.
+     *
+     * `rejected` is deliberately OUTSIDE the predicate: a sent-back author may resurvey the same
+     * unit, and a rejection that parked the name forever would be a ban wearing a refusal's clothes.
+     */
+    uniqueIndex("teardown_submission_subject_live_uidx")
+      .on(table.subjectProductNameNormalized)
+      .where(sql`moderation_state IN ('pending_review', 'published')`),
+
+    /** The author's own list, newest first. */
+    index("teardown_submission_author_idx").on(table.authorUserId, table.createdAt, table.id),
+
+    /** The queue, oldest first. Partial, because a decided row never re-enters it. */
+    index("teardown_submission_review_queue_idx")
+      .on(table.createdAt, table.id)
+      .where(sql`moderation_state = 'pending_review'`),
+
+    /**
+     * The three states the PAPERWORK can be in. `flagged` and `quarantined` are states of a
+     * published teardown, not of the submission that produced it, and `/mine` reads them off that
+     * row. `draft` and `removed` have no writer on either side.
+     */
+    check(
+      "teardown_submission_moderation_state_ck",
+      sql`moderation_state IN ('pending_review', 'published', 'rejected')`,
+    ),
+
+    /**
+     * `showcase_launch_decision_ck`, with `public_slug` swapped for `published_teardown_id`.
+     *
+     * ⚠️ USABLE VERBATIM ONLY BECAUSE THIS TABLE IS NEW. The identical constraint on `teardown`
+     * would refuse all twelve seeded rows, which are `published` and name no reviewer — and no staff
+     * account exists to backfill them with, because `reviewed_by_user_id` is `restrict`.
+     */
+    check(
+      "teardown_submission_decision_ck",
+      sql`(moderation_state = 'pending_review') = (reviewed_at IS NULL)
+          AND (reviewed_at IS NULL) = (reviewed_by_user_id IS NULL)
+          AND (moderation_state <> 'pending_review' OR moderator_note IS NULL)
+          AND (moderation_state <> 'rejected' OR moderator_note IS NOT NULL)
+          AND (moderation_state = 'published') = (published_teardown_id IS NOT NULL)`,
+    ),
+
+    check(
+      "teardown_submission_text_ck",
+      sql`char_length(title) BETWEEN 8 AND 160
+          AND char_length(subject_product_name) BETWEEN 1 AND 200`,
+    ),
+    check(
+      "teardown_submission_moderator_note_ck",
+      sql`moderator_note IS NULL OR char_length(moderator_note) BETWEEN 1 AND 2000`,
+    ),
+
+    /**
+     * An object, not an array and not a bare scalar — the `notification_payload_ck` idiom.
+     *
+     * ⚠️ THE ROUTE'S JSON BODY CAP MUST BE AT LEAST THIS NUMBER or the CHECK is unreachable and the
+     * 413 arrives first. `json-body-budget.test.ts` computes four bytes per character.
+     */
+    check(
+      "teardown_submission_document_ck",
+      sql`char_length(document_json) BETWEEN 2 AND 262144 AND left(document_json, 1) = '{'`,
+    ),
+    check("teardown_submission_document_version_ck", sql`document_schema_version >= 1`),
+  ],
+);
+
+export const teardownSubmissionRelations = relations(teardownSubmission, ({ one }) => ({
+  author: one(user, {
+    fields: [teardownSubmission.authorUserId],
+    references: [user.id],
+  }),
+  publishedTeardown: one(teardown, {
+    fields: [teardownSubmission.publishedTeardownId],
+    references: [teardown.id],
   }),
 }));
 

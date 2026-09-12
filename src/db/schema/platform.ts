@@ -179,6 +179,13 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // named one could never be erased.
   "case_study_published",
   "case_study_rejected",
+  // Blueprints teardowns — `teardown-moderation`. A publish materialises somebody's survey of
+  // ANOTHER COMPANY'S PRODUCT at a public address; a rejection sends it back with a reason. Both
+  // name an accountable human. Submitting is a member action and is not here. Only two labels: a
+  // teardown's `flagged`/`quarantined` states have no writer yet, and a label no transition writes
+  // is the unverified code the field sweeps exist to catch.
+  "teardown_published",
+  "teardown_rejected",
   // Commerce content moderation — `commerce-content-reports` (Appendix A12). Staff
   // decisions only. An AUTOMATIC threshold hide never reaches this chain: this table's
   // `actorUserId` is NOT NULL because every entry must name an accountable human, and

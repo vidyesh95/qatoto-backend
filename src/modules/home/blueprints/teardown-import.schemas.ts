@@ -46,14 +46,25 @@ const KEBAB_SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 const HANDLE_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
-/** The addresses a category segment or a route on this surface already owns. */
-const RESERVED_TEARDOWN_SLUGS = [
+/**
+ * The addresses a category segment or a route on this surface already owns.
+ *
+ * ⚠️ TWO SPELLINGS OF ONE RULE. `teardown_slug_ck` repeats this list as SQL literals, because a
+ * CHECK cannot read a TS const. `db:verify-teardown-constraints` reads the constraint back out of
+ * `pg_get_constraintdef` and asserts it contains every member of this array — without that, an edit
+ * to one spelling and not the other lets the slug minter hand out an address the table refuses.
+ *
+ * `mine` joined the list when `GET /blueprints/teardowns/mine` did: a literal route above
+ * `/:teardownSlug` permanently shadows a teardown published at that slug.
+ */
+export const RESERVED_TEARDOWN_SLUGS = [
   "teardowns",
   "showcase",
   "case-studies",
   "new",
   "slugs",
   "options",
+  "mine",
 ] as const;
 
 export const TEARDOWN_MANUFACTURING_METHODS = [
@@ -148,7 +159,15 @@ const DocumentSchema = z
     kind: z.enum(["schematic", "bill_of_materials", "assembly_guide", "datasheet"]),
     title: z.string().min(1).max(200),
     url: AssetUrlSchema,
-    byteSize: z.number().int().nonnegative(),
+    /**
+     * NULL means unmeasured, which is not zero bytes.
+     *
+     * ⚠️ NULLABLE SINCE THE AUTHORING ROUTE LANDED, and the column followed. The seed's fixtures
+     * carry a figure; the wizard sends a pasted link and no size, and the two ways to invent one
+     * were a network HEAD inside the publish transaction or a moderator typing a number about a
+     * file they never opened.
+     */
+    byteSize: z.number().int().nonnegative().nullable(),
     pageCount: z.number().int().positive().nullable(),
   })
   .strict();
@@ -167,8 +186,11 @@ const ManufacturingFileSchema = z
     ]),
     title: z.string().min(1).max(200),
     url: AssetUrlSchema,
-    /** Positive, unlike a document's byte size — the contract draws that distinction. */
-    byteSize: z.number().int().positive(),
+    /**
+     * Positive, unlike a document's byte size — the contract draws that distinction — and nullable
+     * for the same reason the document's is.
+     */
+    byteSize: z.number().int().positive().nullable(),
   })
   .strict();
 
@@ -265,11 +287,11 @@ const AssemblySchema = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 
-const RepairabilityCriterionSchema = z
+export const RepairabilityCriterionSchema = z
   .object({ scoreOutOfTen: z.number().int().min(0).max(10), note: z.string().min(1).max(400) })
   .strict();
 
-const ProvenanceSchema = z
+export const ProvenanceSchema = z
   .object({
     kind: z.enum([
       "licensed_open_source",
@@ -336,7 +358,15 @@ const ProvenanceSchema = z
     }
   });
 
-export const TeardownImportSchema = z
+/**
+ * The document shape, WITHOUT the cross-row rules.
+ *
+ * Split out from `TeardownImportSchema` so the authoring path can reuse the refinement without
+ * inheriting the seed's fields. `.superRefine()` returns a `ZodEffects`, which has no `.omit()` and
+ * no `.extend()` — so a schema that needs a different field set has to compose from the object, and
+ * the object has to exist separately for that to be possible.
+ */
+export const TeardownImportDocumentShape = z
   .object({
     id: z.string().min(1).max(120),
     slug: z
@@ -420,6 +450,25 @@ export const TeardownImportSchema = z
       })
       .strict()
       .nullable(),
+    /**
+     * The parts an author LISTED, as a table of contents — not as an assembly.
+     *
+     * ⚠️ `.default([])` IS WHAT KEEPS THE SEED WORKING. `.strict()` rejects unknown keys, not absent
+     * ones, so the twelve fixtures — written before this field existed and edited in another
+     * repository — parse to `[]`. And because `TeardownImport` is the OUTPUT type, the field is
+     * required on the read and optional on the wire: the public serializer must always emit it, and
+     * no fixture has to be touched to supply it.
+     *
+     * A listing is not an assembly. See `teardown_part_listing` in the schema for the eight places
+     * that forcing one through the other's shape would have cost.
+     */
+    partsList: z
+      .array(
+        z
+          .object({ label: z.string().min(1).max(120), material: z.string().min(1).max(120) })
+          .strict(),
+      )
+      .default([]),
     simulationTelemetry: z
       .object({
         factorOfSafety: z.number().positive(),
@@ -433,87 +482,102 @@ export const TeardownImportSchema = z
       .strict()
       .nullable(),
   })
-  .strict()
-  .superRefine((teardown, context) => {
-    const parts = teardown.assembly?.parts ?? [];
-    const partIds = new Set(parts.map((part) => part.id));
-    const parentByPartId = new Map(parts.map((part) => [part.id, part.parentPartId]));
+  .strict();
 
-    // 1. The part tree is acyclic. The column CHECK catches a part parenting itself; a longer cycle
-    //    needs the walk, bounded by the part count so a cycle terminates rather than hangs.
-    for (const part of parts) {
-      let ancestorId = part.parentPartId;
-      let stepsWalked = 0;
-      while (ancestorId !== null && stepsWalked <= parts.length) {
-        if (ancestorId === part.id) {
-          context.addIssue({
-            code: "custom",
-            path: ["assembly", "parts"],
-            message: `Part ${part.id} is its own ancestor.`,
-          });
-          break;
-        }
-        ancestorId = parentByPartId.get(ancestorId) ?? null;
-        stepsWalked += 1;
-      }
-    }
+/**
+ * The five rules a Postgres CHECK cannot express, because each needs to see more than one row.
+ *
+ * Exported as a function rather than left inline so the authoring gate can apply the same rules to
+ * a different field set. Its parameter type is inferred from the shape above — never hand-written,
+ * or the two drift and the refinement starts reading fields the document no longer has.
+ */
+export function refineTeardownCrossSectionRules(
+  teardown: z.infer<typeof TeardownImportDocumentShape>,
+  context: z.core.$RefinementCtx,
+): void {
+  const parts = teardown.assembly?.parts ?? [];
+  const partIds = new Set(parts.map((part) => part.id));
+  const parentByPartId = new Map(parts.map((part) => [part.id, part.parentPartId]));
 
-    // 2. Every named parent resolves. A dangling parent renders as a part that never appears.
-    for (const part of parts) {
-      if (part.parentPartId !== null && !partIds.has(part.parentPartId)) {
+  // 1. The part tree is acyclic. The column CHECK catches a part parenting itself; a longer cycle
+  //    needs the walk, bounded by the part count so a cycle terminates rather than hangs.
+  for (const part of parts) {
+    let ancestorId = part.parentPartId;
+    let stepsWalked = 0;
+    while (ancestorId !== null && stepsWalked <= parts.length) {
+      if (ancestorId === part.id) {
         context.addIssue({
           code: "custom",
           path: ["assembly", "parts"],
-          message: `Part ${part.id} names a parent that is not in this assembly.`,
+          message: `Part ${part.id} is its own ancestor.`,
+        });
+        break;
+      }
+      ancestorId = parentByPartId.get(ancestorId) ?? null;
+      stepsWalked += 1;
+    }
+  }
+
+  // 2. Every named parent resolves. A dangling parent renders as a part that never appears.
+  for (const part of parts) {
+    if (part.parentPartId !== null && !partIds.has(part.parentPartId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["assembly", "parts"],
+        message: `Part ${part.id} names a parent that is not in this assembly.`,
+      });
+    }
+  }
+
+  // 3. Layering is all-or-nothing. An axis with no layers scatters the exploded view; layers with
+  //    no axis are an ordering along no direction.
+  if (teardown.assembly !== null) {
+    const hasExplosionAxis = teardown.assembly.explosionAxis !== null;
+    for (const part of parts) {
+      if (hasExplosionAxis === (part.layerIndex === null)) {
+        context.addIssue({
+          code: "custom",
+          path: ["assembly", "parts"],
+          message: hasExplosionAxis
+            ? `Part ${part.id} carries no layer index, but the assembly states an explosion axis.`
+            : `Part ${part.id} carries a layer index, but the assembly states no explosion axis.`,
         });
       }
     }
+  }
 
-    // 3. Layering is all-or-nothing. An axis with no layers scatters the exploded view; layers with
-    //    no axis are an ordering along no direction.
-    if (teardown.assembly !== null) {
-      const hasExplosionAxis = teardown.assembly.explosionAxis !== null;
-      for (const part of parts) {
-        if (hasExplosionAxis === (part.layerIndex === null)) {
-          context.addIssue({
-            code: "custom",
-            path: ["assembly", "parts"],
-            message: hasExplosionAxis
-              ? `Part ${part.id} carries no layer index, but the assembly states an explosion axis.`
-              : `Part ${part.id} carries a layer index, but the assembly states no explosion axis.`,
-          });
-        }
-      }
+  // 4. Step numbers are a dense sequence from 1 in array order. A UNIQUE permits 1, 2, 4.
+  teardown.assemblySteps.forEach((step, index) => {
+    if (step.stepNumber !== index + 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["assemblySteps", index, "stepNumber"],
+        message: `Steps are numbered from 1 in array order; position ${String(index)} carries ${String(step.stepNumber)}.`,
+      });
     }
-
-    // 4. Step numbers are a dense sequence from 1 in array order. A UNIQUE permits 1, 2, 4.
-    teardown.assemblySteps.forEach((step, index) => {
-      if (step.stepNumber !== index + 1) {
-        context.addIssue({
-          code: "custom",
-          path: ["assemblySteps", index, "stepNumber"],
-          message: `Steps are numbered from 1 in array order; position ${String(index)} carries ${String(step.stepNumber)}.`,
-        });
-      }
-      if (step.focusedPartId !== null && !partIds.has(step.focusedPartId)) {
-        context.addIssue({
-          code: "custom",
-          path: ["assemblySteps", index, "focusedPartId"],
-          message: "This step focuses a part that is not in this assembly.",
-        });
-      }
-    });
-
-    // 5. A material's part, likewise.
-    teardown.materials.forEach((material, index) => {
-      if (material.partId !== null && !partIds.has(material.partId)) {
-        context.addIssue({
-          code: "custom",
-          path: ["materials", index, "partId"],
-          message: `Material ${material.id} names a part that is not in this assembly.`,
-        });
-      }
-    });
+    if (step.focusedPartId !== null && !partIds.has(step.focusedPartId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["assemblySteps", index, "focusedPartId"],
+        message: "This step focuses a part that is not in this assembly.",
+      });
+    }
   });
+
+  // 5. A material's part, likewise.
+  teardown.materials.forEach((material, index) => {
+    if (material.partId !== null && !partIds.has(material.partId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["materials", index, "partId"],
+        message: `Material ${material.id} names a part that is not in this assembly.`,
+      });
+    }
+  });
+}
+
+export const TeardownImportSchema = TeardownImportDocumentShape.superRefine(
+  refineTeardownCrossSectionRules,
+);
 
 export type TeardownImport = z.infer<typeof TeardownImportSchema>;
