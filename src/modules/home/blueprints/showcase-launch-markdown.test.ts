@@ -1,3 +1,6 @@
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 import { describe, expect, it } from "vitest";
 
 import { extractWriteUpImageAddresses } from "#src/modules/home/blueprints/showcase-launch-markdown.js";
@@ -15,6 +18,11 @@ import { extractWriteUpImageAddresses } from "#src/modules/home/blueprints/showc
  *     past the check that would make every reader's browser call a host nobody approved;
  *   * the "a regex FINDS this" cases (code spans, fenced blocks) are the write-ups a regex would
  *     wrongly refuse — a maker documenting Markdown syntax.
+ *
+ * A THIRD GROUP was added after this surface answered 500 in production shape: the depth case and
+ * the `describe` at the foot of this file, which pin the PARSER CONFIGURATION rather than the
+ * parse. The module under test strips GFM's recursive tree transform, and nothing reachable
+ * through its public API can tell you whether that is still true.
  */
 
 describe("extractWriteUpImageAddresses", () => {
@@ -94,10 +102,10 @@ describe("extractWriteUpImageAddresses", () => {
    *
    * The walk collects `image` nodes as it goes and resolves `imageReference` identifiers in a
    * second pass after the loop, so the returned order is "every inline address, then every
-   * referenced address". This CONTRADICTS the function's own docblock, which promises source
-   * order. Pinned rather than fixed because the only caller compares a count and a set, where
-   * order cannot matter — but a future caller rendering a gallery from this list would be wrong,
-   * and this case is what will tell them.
+   * referenced address". The function's docblock says so explicitly — order is not part of its
+   * contract. Pinned here because the only caller compares a count and a set, where order cannot
+   * matter, so nothing else would notice if this changed; a future caller rendering a gallery from
+   * this list needs to know it must sort first.
    */
   it("returns reference-resolved addresses after the inline ones, not in source order", () => {
     const writeUp = [
@@ -162,27 +170,88 @@ describe("extractWriteUpImageAddresses", () => {
   });
 
   /**
-   * THE REASON THE WALK IS ITERATIVE RATHER THAN RECURSIVE, asserted rather than only claimed.
-   * Three thousand `>` characters is a blockquote three thousand deep, inside the 10,000-character
-   * write-up cap, and it would overflow a recursive walk's call stack.
+   * THE DEEPEST BLOCKQUOTE THE SCHEMA CAN EXPRESS, at exactly the size it allows.
    *
-   * ⚠️ THE DOCBLOCK'S "ten thousand" FIGURE DOES NOT HOLD, AND THE WALK IS NOT WHY.
-   * `fromMarkdown` with NO extensions parses 10,000-deep input fine, and this function's own loop
-   * is iterative as advertised — but `gfmFromMarkdown()`'s transform walks the tree RECURSIVELY
-   * (`mdast-util-gfm-autolink-literal` -> `mdast-util-find-and-replace` -> `unist-util-visit-parents`)
-   * and throws `RangeError: Maximum call stack size exceeded` first. Measured on this machine: the
-   * smallest overflowing input is 5,630 nested blockquotes, a write-up of 5,658 characters, which
-   * is UNDER the 10,000-character cap and therefore reaches the service through the route. The
-   * throw is not caught anywhere, so `POST /blueprints/showcases` answers 500 rather than refusing
-   * the write-up.
+   * Nesting is where a markdown parser meets a call stack. 9,964 `>` characters plus the shortest
+   * useful image is exactly 10,000 — the largest `writeUp` `ShowcaseLaunchDraftSchema` accepts — so
+   * this is the worst input a maker can actually send, derived from the cap rather than chosen
+   * near it. The length is asserted so the number cannot drift away from that reasoning.
    *
-   * The depth here is 3,000 — comfortably below that threshold on any stack size — so this case
-   * proves the claim it can prove and stays deterministic. Raising it to the documented ten
-   * thousand would make the suite assert the bug instead of the contract.
+   * A REGRESSION LOCK, NOT A CAPABILITY CLAIM. Until the module under test stopped running GFM's
+   * recursive autolink transform, 5,630 levels — a 5,658-character write-up, comfortably inside
+   * the cap — threw `RangeError: Maximum call stack size exceeded`, and the route answered 500 to
+   * a launch the schema had already accepted. Anything that puts a recursive tree walk back into
+   * that parse fails here first.
    */
-  it("walks three thousand nested blockquotes without overflowing the stack", () => {
-    const deeplyNestedWriteUp = `${">".repeat(3_000)} ![Deep](https://cdn.test/deep.avif)`;
+  it("extracts from the deepest blockquote the ten-thousand-character cap allows", () => {
+    const maximallyNestedWriteUp = `${">".repeat(9_964)} ![Deep](https://cdn.test/deep.avif)`;
 
-    expect(extractWriteUpImageAddresses(deeplyNestedWriteUp)).toEqual(["https://cdn.test/deep.avif"]);
+    expect(maximallyNestedWriteUp).toHaveLength(10_000);
+    expect(extractWriteUpImageAddresses(maximallyNestedWriteUp)).toEqual(["https://cdn.test/deep.avif"]);
+  });
+
+  /**
+   * THE PROPERTY THAT MAKES DROPPING THE AUTOLINK TRANSFORM SAFE, asserted rather than argued. A
+   * bare URL is a link to the renderer and to nobody here — even one ending in `.png`. This gate
+   * vets images, and a URL sitting in prose is not one.
+   */
+  it("ignores a bare URL beside a real image, even one that looks like an image file", () => {
+    const writeUp = "See https://elsewhere.test/photo.png ![Real](https://cdn.test/real.avif)";
+
+    expect(extractWriteUpImageAddresses(writeUp)).toEqual(["https://cdn.test/real.avif"]);
+  });
+
+  it("still resolves a reference image in a table cell that also holds a www autolink", () => {
+    const writeUp = [
+      "| Source | Evidence |",
+      "| --- | --- |",
+      "| www.maker.test | ![Run][run] |",
+      "",
+      "[run]: https://cdn.test/run.avif",
+    ].join("\n");
+
+    expect(extractWriteUpImageAddresses(writeUp)).toEqual(["https://cdn.test/run.avif"]);
+  });
+});
+
+/**
+ * THE ASSUMPTION THE MODULE UNDER TEST MAKES ABOUT ITS DEPENDENCY, restated here on purpose.
+ *
+ * `showcase-launch-markdown.ts` strips `transforms` from GFM's mdast extensions because exactly one
+ * of them — autolink literals — walks the finished tree recursively. It asserts that at module load
+ * and refuses to boot otherwise. This is the same assertion somewhere that fails during `pnpm gate`
+ * rather than during a deploy: if an upgrade adds a tree transform to another extension, or moves
+ * autolink detection out of micromark's tokenizer and into the transform, this says so by name.
+ */
+describe("the GFM mdast extensions this module reconfigures", () => {
+  it("gives autolink literals the only tree transform among the five", () => {
+    const gfmExtensions = gfmFromMarkdown();
+    const extensionsCarryingTreeTransforms = gfmExtensions.filter(
+      (extension) => (extension.transforms?.length ?? 0) > 0,
+    );
+
+    expect(gfmExtensions).toHaveLength(5);
+    expect(extensionsCarryingTreeTransforms).toHaveLength(1);
+    expect(extensionsCarryingTreeTransforms[0]?.enter?.literalAutolink).toBeTypeOf("function");
+  });
+
+  /**
+   * Bare URLs are recognised by micromark's TOKENIZER, not by the stripped transform — which is
+   * why removing the transform costs no text. If this ever fails, the transform has become
+   * load-bearing and the module under test is silently dropping link content.
+   */
+  it("keeps building link nodes from micromark's tokens without the transform", () => {
+    const extensionsWithoutTreeTransforms = gfmFromMarkdown().map((extension) => ({
+      ...extension,
+      transforms: undefined,
+    }));
+
+    const tree = fromMarkdown("Visit https://example.test/x now.", {
+      extensions: [gfm()],
+      mdastExtensions: [...extensionsWithoutTreeTransforms],
+    });
+
+    expect(JSON.stringify(tree)).toContain('"type":"link"');
+    expect(JSON.stringify(tree)).toContain("https://example.test/x");
   });
 });

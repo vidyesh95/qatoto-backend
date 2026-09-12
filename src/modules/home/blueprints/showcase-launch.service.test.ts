@@ -454,6 +454,23 @@ describe("submitShowcaseLaunch", () => {
       expect(databaseState.insertedRows[0]?.values).toMatchObject({ writeUp: null });
     });
 
+    /**
+     * THE SHAPE THAT USED TO ANSWER 500, asserted at the layer where the route actually reaches it.
+     * This file leaves `showcase-launch-markdown.js` real, so it exercises the parser configuration
+     * rather than a stub of it — which is the only reason this case means anything.
+     */
+    it("accepts a maximally nested write-up instead of throwing out of the parser", async () => {
+      const writeUp = `${">".repeat(9_964)} ![Step](https://cdn.test/step.avif)`;
+      databaseState.availableImageRows = [{ url: "https://cdn.test/step.avif" }];
+      databaseState.lockedImageRows = [{ imageId: "image_1" }];
+      const { submitShowcaseLaunch } = await import("#src/modules/home/blueprints/showcase-launch.service.js");
+
+      const result = await submitShowcaseLaunch(submitInput({ writeUp }));
+
+      expect(writeUp).toHaveLength(10_000);
+      expect(result.success).toBe(true);
+    });
+
     it("refuses a write-up image that is not one of the maker's own unclaimed uploads", async () => {
       databaseState.availableImageRows = [];
       const { submitShowcaseLaunch } = await import("#src/modules/home/blueprints/showcase-launch.service.js");
