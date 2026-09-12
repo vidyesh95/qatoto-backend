@@ -1233,6 +1233,13 @@
       "when": 1789204855678,
       "tag": "0175_careful_warbound",
       "breakpoints": true
+    },
+    {
+      "idx": 176,
+      "version": "7",
+      "when": 1789206116093,
+      "tag": "0176_cynical_sprite",
+      "breakpoints": true
     }
   ]
 }

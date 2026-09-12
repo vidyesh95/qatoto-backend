@@ -4180,8 +4180,20 @@ export const caseStudySource = pgTable(
   },
   (table) => [
     uniqueIndex("case_study_source_position_uidx").on(table.caseStudyId, table.position),
-    /** The detail page keys its source list by address. */
-    uniqueIndex("case_study_source_url_uidx").on(table.caseStudyId, sql`btrim(url)`),
+    /**
+     * The detail page keys its source list by address.
+     *
+     * ⚠️ A PLAIN COLUMN INDEX, NOT `btrim(url)`, AND THE VERIFIER IS WHY. It was written as
+     * `btrim(url)` by analogy with the text lists, and `db:verify-case-study-constraints` showed the
+     * `btrim` was dead code: `case_study_source_url_ck` refuses whitespace anywhere in the value, so
+     * a space-padded URL is a 23514 and never reaches this index at all. An expression index that
+     * normalises something the column cannot contain implies a case that does not exist.
+     *
+     * CASE-SENSITIVE, deliberately laxer than the write gate, which compares URLs case-insensitively
+     * for a better message. A URL path IS case-sensitive, so two addresses differing in case are two
+     * addresses, and the database is the wrong layer to decide otherwise.
+     */
+    uniqueIndex("case_study_source_url_uidx").on(table.caseStudyId, table.url),
     check("case_study_source_url_ck", externalUrlCheck("url")),
     check(
       "case_study_source_text_ck",

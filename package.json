@@ -51,6 +51,7 @@
     "db:seed-commerce-categories": "tsx --conditions=development scripts/seed-commerce-categories.ts",
     "db:verify-research-program-constraints": "tsx --conditions=development scripts/verify-research-program-constraints.ts",
     "db:verify-teardown-constraints": "tsx --conditions=development scripts/verify-teardown-constraints.ts",
+    "db:verify-case-study-constraints": "tsx --conditions=development scripts/verify-case-study-constraints.ts",
     "db:smoke-promotional-slides": "tsx --conditions=development scripts/smoke-promotional-slides.ts",
     "db:smoke-store-phase-10": "tsx --conditions=development scripts/smoke-store-phase-10.ts",
     "db:smoke-store-phase-12": "tsx --conditions=development scripts/smoke-store-phase-12.ts",
