@@ -51,7 +51,9 @@ describe("ShowcaseLaunchDraftSchema", () => {
   it("accepts a draft with every field at a legal value", () => {
     const parsed = ShowcaseLaunchDraftSchema.safeParse(buildValidDraft());
 
-    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    // Asserted as the issue list rather than as a boolean, so a failure PRINTS what was refused.
+    expect(parsed.error?.issues ?? []).toEqual([]);
+    expect(parsed.success).toBe(true);
   });
 
   it("accepts a draft with every nullable field null", () => {
@@ -63,7 +65,8 @@ describe("ShowcaseLaunchDraftSchema", () => {
       callToAction: null,
     });
 
-    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    expect(parsed.error?.issues ?? []).toEqual([]);
+    expect(parsed.success).toBe(true);
   });
 
   describe("server-owned fields", () => {

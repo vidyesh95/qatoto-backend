@@ -83,27 +83,27 @@ function findBoundDate(condition: unknown): Date | null {
   return null;
 }
 
-const returningMock = vi.fn(async () => {
+const returningMock = vi.fn<() => Promise<{ publicId: string }[]>>(async () => {
   sweepState.callOrder.push("db.delete.returning");
   return sweepState.expiredUploadRows;
 });
-const deleteWhereMock = vi.fn((condition: unknown) => {
+const deleteWhereMock = vi.fn<(condition: unknown) => { returning: typeof returningMock }>((condition) => {
   sweepState.deleteCutoff = findBoundDate(condition);
   return { returning: returningMock };
 });
-const deleteMock = vi.fn(() => ({ where: deleteWhereMock }));
+const deleteMock = vi.fn<() => { where: typeof deleteWhereMock }>(() => ({ where: deleteWhereMock }));
 
 /**
  * Both reference lookups run through one `select`, and the sweep fires them together with
  * `Promise.all`. They are told apart by call order: the heading-image query is built first.
  */
-const selectWhereMock = vi.fn(async () => {
+const selectWhereMock = vi.fn<() => Promise<{ publicId: string }[]>>(async () => {
   sweepState.referenceLookupCount += 1;
   sweepState.callOrder.push("db.select.where");
   return sweepState.referenceLookupCount % 2 === 1 ? sweepState.headingImageRows : sweepState.writeUpImageRows;
 });
-const selectFromMock = vi.fn(() => ({ where: selectWhereMock }));
-const selectMock = vi.fn(() => ({ from: selectFromMock }));
+const selectFromMock = vi.fn<() => { where: typeof selectWhereMock }>(() => ({ where: selectWhereMock }));
+const selectMock = vi.fn<() => { from: typeof selectFromMock }>(() => ({ from: selectFromMock }));
 
 vi.mock("#src/db/index.js", () => ({
   db: { delete: deleteMock, select: selectMock },
@@ -121,7 +121,12 @@ const loggerWarn = vi.fn<(...args: readonly unknown[]) => void>();
 const loggerInfo = vi.fn<(...args: readonly unknown[]) => void>();
 
 vi.mock("#src/lib/logger.js", () => ({
-  logger: { warn: loggerWarn, info: loggerInfo, error: vi.fn(), debug: vi.fn() },
+  logger: {
+    warn: loggerWarn,
+    info: loggerInfo,
+    error: vi.fn<(...args: readonly unknown[]) => void>(),
+    debug: vi.fn<(...args: readonly unknown[]) => void>(),
+  },
 }));
 
 const SWEEP_AS_OF = new Date("2026-09-12T00:00:00.000Z");
@@ -378,7 +383,7 @@ describe("handleSweepOrphanShowcaseImages", () => {
     const { handleSweepOrphanShowcaseImages } =
       await import("#src/modules/home/blueprints/sweep-orphan-showcase-images.js");
 
-    await expect(handleSweepOrphanShowcaseImages(rawPayload)).rejects.toThrow();
+    await expect(handleSweepOrphanShowcaseImages(rawPayload)).rejects.toThrow(/payload failed its schema/);
     expect(deleteMock).not.toHaveBeenCalled();
   });
 });

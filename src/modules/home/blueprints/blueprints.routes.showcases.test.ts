@@ -625,7 +625,7 @@ describe("blueprints showcase launch routes", () => {
   describe("POST /blueprints/admin/showcases/:submissionId/moderate", () => {
     const path = "/blueprints/admin/showcases/launch_1/moderate";
 
-    function postDecision(body: unknown, idempotencyKey: string | null = "idem_decision_1") {
+    function postDecision(body: Record<string, unknown>, idempotencyKey: string | null = "idem_decision_1") {
       const pending = request(app).post(path);
       if (idempotencyKey !== null) pending.set("Idempotency-Key", idempotencyKey);
       return pending.send(body);

@@ -90,14 +90,15 @@ describe("the blueprints router", () => {
 
     const writeUpImagesIndex = paths.indexOf("/showcases/write-up-images");
     const mineIndex = paths.indexOf("/showcases/mine");
-    const parameterizedIndex = paths.findIndex((path) => /^\/showcases\/:/.test(path));
+    const parameterizedIndex = paths.findIndex((path) => path.startsWith("/showcases/:"));
+    // No `/showcases/:param` route exists yet, and "not declared" has to pass the same comparison as
+    // "declared last" — otherwise this case would have to skip itself today and would never fail.
+    const effectiveParameterizedIndex = parameterizedIndex === -1 ? Number.MAX_SAFE_INTEGER : parameterizedIndex;
 
     expect(writeUpImagesIndex, "/showcases/write-up-images must be declared at all").toBeGreaterThanOrEqual(0);
     expect(mineIndex, "/showcases/mine must be declared at all").toBeGreaterThanOrEqual(0);
-    if (parameterizedIndex >= 0) {
-      expect(parameterizedIndex).toBeGreaterThan(writeUpImagesIndex);
-      expect(parameterizedIndex).toBeGreaterThan(mineIndex);
-    }
+    expect(effectiveParameterizedIndex).toBeGreaterThan(writeUpImagesIndex);
+    expect(effectiveParameterizedIndex).toBeGreaterThan(mineIndex);
   });
 
   /**
