@@ -23,6 +23,10 @@ import {
   parseUserReferenceKey,
   type UserReferenceKey,
 } from "#src/modules/auth/privacy/anonymization-manifest.js";
+import {
+  ANONYMIZED_EMAIL_DOMAIN,
+  REMOVED_AUTHOR_DISPLAY_NAME,
+} from "#src/modules/auth/privacy/redaction.js";
 import type { Result } from "#src/types/index.js";
 
 /**
@@ -102,7 +106,7 @@ export interface AnonymizeAccountOutcome {
   readonly totalRowsAffected: number;
 }
 
-interface StepPlan {
+export interface StepPlan {
   readonly stepName: string;
   readonly tableName: string;
   readonly countSql: ReturnType<typeof sql>;
@@ -141,7 +145,7 @@ function planManifestStep(key: UserReferenceKey, userId: string): StepPlan {
  * so once that step runs there is no way left to find this person's comments. Everything
  * that needs the author link must happen here, first.
  */
-function planFreeTextSteps(userId: string): readonly StepPlan[] {
+export function planFreeTextSteps(userId: string): readonly StepPlan[] {
   return [
     {
       /**
@@ -207,8 +211,214 @@ function planFreeTextSteps(userId: string): readonly StepPlan[] {
                         slug = 'removed-' || id
                     WHERE author_user_id = ${userId} AND title <> '[removed]'`,
     },
+    {
+      /**
+       * ⚠️ THE AUTO-PROVISIONED ORGANIZATION SHELL, WHICH *IS* THE PERSON.
+       *
+       * `mintBuyerWorkspace` (commerce-buyer-workspace.service.ts:85-96) writes `user.name`
+       * into `legal_name`, `normalized_legal_name` AND `display_name` — because "a shell
+       * borrows the account holder's name because that is the only true thing the server
+       * knows about who is buying". Correct at mint time, and it means three NOT NULL columns
+       * on a table with NO `user` foreign key hold a real name that no FK walk can find.
+       *
+       * IT IS NOT MERELY STORED. `community-forum.service.ts` joins
+       * `commerce_organization.display_name` and renders it as `authorOrganizationName` on
+       * `GET /store/forum/threads`, which is a public read. Leaving this would keep publishing
+       * a departed person's name on somebody else's forum page.
+       *
+       * SCOPED TO `auto_provisioned`, AND THAT SCOPE IS THE WHOLE SAFETY ARGUMENT. A
+       * `self_declared` row is a real company other people trade with, whose name is not this
+       * person's to erase — `provisioning_origin` is exactly the column that distinguishes
+       * them, and `scripts/smoke-privacy.ts` asserts a `self_declared` row comes out unchanged.
+       *
+       * A FIXED LITERAL IS SAFE HERE, which needed checking rather than assuming: there is no
+       * unique index on `normalized_legal_name`, and the table's only other unique index is
+       * `commerce_organization_auto_provisioned_owner_uidx` on the owner column, which this
+       * does not touch. `commerce_organization_name_ck` caps all three at 200 characters.
+       *
+       * `lower()` rather than a second literal: `normalizeLegalName` is NFKC + trim + collapse
+       * + lowercase, and for this constant all three of the first steps are no-ops.
+       */
+      stepName: "tombstone:commerce_organization",
+      tableName: "commerce_organization",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM commerce_organization
+                    WHERE created_by_user_id = ${userId}
+                      AND provisioning_origin = 'auto_provisioned'
+                      AND display_name <> ${REMOVED_AUTHOR_DISPLAY_NAME}`,
+      applySql: sql`UPDATE commerce_organization
+                    SET display_name = ${REMOVED_AUTHOR_DISPLAY_NAME},
+                        legal_name = ${REMOVED_AUTHOR_DISPLAY_NAME},
+                        normalized_legal_name = lower(${REMOVED_AUTHOR_DISPLAY_NAME}),
+                        updated_at = now()
+                    WHERE created_by_user_id = ${userId}
+                      AND provisioning_origin = 'auto_provisioned'
+                      AND display_name <> ${REMOVED_AUTHOR_DISPLAY_NAME}`,
+    },
+    {
+      /**
+       * THE SEARCH INDEX THE SHELL ABOVE FEEDS — three columns, and the one the pattern scan
+       * would never have caught is `title`.
+       *
+       * `refreshOrganizationSearchDocument` (store-search.service.ts:1786-1806) sets
+       * `title = row.displayName`, `organization_display_name = row.displayName`, and
+       * `search_text = displayName + legalName + summary + category names`. All three are
+       * inside the GENERATED `search_document` tsvector — `title` at weight A,
+       * `organization_display_name` at B, `search_text` at C — behind
+       * `store_search_document_fts_idx`, which is a NON-PARTIAL GIN index.
+       *
+       * ⚠️ BE PRECISE ABOUT THE EXPOSURE, BECAUSE THE FIRST VERSION OF THIS COMMENT WAS NOT.
+       * Every `/store/search` query filters `is_eligible = true` (store-search.service.ts:286),
+       * and an auto-provisioned shell is `pending` + `private`, so `is_eligible` is false and
+       * the document is NOT returned today. What is true: the name sits in three columns and in
+       * a GIN index, eligibility is a mutable flag rather than a guarantee, and the same name
+       * on the parent row IS served publicly by the forum read named in the step above.
+       *
+       * `title` IS SCRUBBED ONLY ON THE ORGANIZATION DOCUMENT. On a product document the title
+       * is the product's name and has nothing to do with the seller.
+       *
+       * `search_text` IS A TARGETED REPLACE, NOT AN OVERWRITE, because on a product document
+       * it also carries the product and its categories, which are not this person's data and
+       * must stay searchable. The `char_length >= 3` arm exists because `user.name` carries no
+       * length CHECK: a one-character name would make `replace` shred every other term, so
+       * below that threshold the column is overwritten wholesale instead.
+       *
+       * RUNS AFTER THE SHELL STEP so a later refresh rebuilds from an already-scrubbed parent
+       * and converges on the same value. `store_search_document_preserve_discovery_score` is
+       * the only trigger here and it restores `discovery_score_points` /
+       * `discovery_score_computed_at` and nothing else — verified, because a trigger that
+       * rejected the write would dead-letter the job instead of failing loudly.
+       */
+      stepName: "tombstone:store_search_document",
+      tableName: "store_search_document",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM store_search_document
+                    WHERE organization_id IN (
+                            SELECT id FROM commerce_organization
+                            WHERE created_by_user_id = ${userId}
+                              AND provisioning_origin = 'auto_provisioned')
+                      AND organization_display_name <> ${REMOVED_AUTHOR_DISPLAY_NAME}`,
+      applySql: sql`UPDATE store_search_document AS document
+                    SET organization_display_name = ${REMOVED_AUTHOR_DISPLAY_NAME},
+                        title = CASE WHEN document.document_kind = 'organization'
+                                     THEN ${REMOVED_AUTHOR_DISPLAY_NAME}
+                                     ELSE document.title END,
+                        search_text = CASE WHEN char_length(subject.name) >= 3
+                                           THEN replace(document.search_text, subject.name,
+                                                        ${REMOVED_AUTHOR_DISPLAY_NAME})
+                                           ELSE ${REMOVED_AUTHOR_DISPLAY_NAME} END,
+                        updated_at = now()
+                    FROM "user" AS subject
+                    WHERE subject.id = ${userId}
+                      AND document.organization_id IN (
+                            SELECT id FROM commerce_organization
+                            WHERE created_by_user_id = ${userId}
+                              AND provisioning_origin = 'auto_provisioned')
+                      AND document.organization_display_name <> ${REMOVED_AUTHOR_DISPLAY_NAME}`,
+    },
+    {
+      /**
+       * A VIDEO INVITE ON SOMEBODY ELSE'S VIDEO, which is the case the FK cannot cover.
+       *
+       * `video_collaborator.user_id` is a `null_out` in the manifest, so after that step the
+       * row reads as an un-accepted invite — one that still carries a live, unique-indexed
+       * email address. The creator's own videos are gone by then (`video.creator_id` is
+       * `delete_rows`); what survives is every invite somebody else sent this person.
+       *
+       * ⚠️ IT MATCHES ON THE ADDRESS AS WELL AS THE FK, and that second arm is not belt-and-
+       * braces. An invite that was NEVER ACCEPTED has `user_id IS NULL` from the start, so no
+       * FK walk in this codebase has ever been able to see it. `invited_email` is `citext`, so
+       * both the comparison and the `NOT LIKE` guard below are case-insensitive.
+       *
+       * DERIVED FROM THE ROW ID, on `user.email`'s precedent, because `invited_email` is NOT
+       * NULL under a unique `(video_id, invited_email)` index — a fixed literal would collide
+       * the moment one person had two invites on the same video.
+       */
+      stepName: "tombstone:video_collaborator",
+      tableName: "video_collaborator",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM video_collaborator
+                    WHERE (user_id = ${userId}
+                           OR invited_email = (SELECT email FROM "user" WHERE id = ${userId}))
+                      AND invited_email NOT LIKE ${`%@${ANONYMIZED_EMAIL_DOMAIN}`}`,
+      applySql: sql`UPDATE video_collaborator
+                    SET invited_email = 'anonymized+' || id || ${`@${ANONYMIZED_EMAIL_DOMAIN}`}
+                    WHERE (user_id = ${userId}
+                           OR invited_email = (SELECT email FROM "user" WHERE id = ${userId}))
+                      AND invited_email NOT LIKE ${`%@${ANONYMIZED_EMAIL_DOMAIN}`}`,
+    },
+    {
+      /**
+       * A CREDIT ON SOMEBODY ELSE'S VIDEO. `studio.ts:719` says `linked_user_id` is set null
+       * "because deleting a user must never erase the credit itself" — which is right about
+       * the credit and wrong about the name. `member_name` is NOT NULL free text, so the
+       * credit stays and the name goes, which is the same trade the forum reads already make.
+       */
+      stepName: "tombstone:video_team_member",
+      tableName: "video_team_member",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM video_team_member
+                    WHERE linked_user_id = ${userId}
+                      AND member_name <> ${REMOVED_AUTHOR_DISPLAY_NAME}`,
+      applySql: sql`UPDATE video_team_member SET member_name = ${REMOVED_AUTHOR_DISPLAY_NAME}
+                    WHERE linked_user_id = ${userId}
+                      AND member_name <> ${REMOVED_AUTHOR_DISPLAY_NAME}`,
+    },
+    {
+      /**
+       * ⚠️ THE ONE WITH NO FOREIGN KEY AT ALL, AND THEREFORE THE ONE NOTHING COULD HAVE FOUND.
+       *
+       * A maker lists their team on a showcase launch by typing a `display_name` and a
+       * `handle` by hand — `showcase_launch_team_member` references `showcase_launch` and
+       * nothing else. So a launch this person AUTHORED takes its credits with it (cascade from
+       * a `delete_rows` row), and a launch somebody ELSE authored keeps their name and handle
+       * on a public page forever.
+       *
+       * MATCHED BY HANDLE, WHICH IS EXACT RATHER THAN FUZZY: handles are unique platform-wide,
+       * `handle_normalized` is `lower(handle)` on both sides, and the `burn_handle` step parks
+       * the matched string at `'infinity'` so nobody else can ever hold it. A NULL subquery
+       * result — a person who never set a handle — matches nothing, which is the correct
+       * outcome rather than a special case.
+       *
+       * THE REPLACEMENT SATISFIES BOTH CONSTRAINTS BY CONSTRUCTION.
+       * `showcase_launch_team_member_text_ck` demands `char_length(handle) BETWEEN 1 AND 64`
+       * and `handle ~ '^[A-Za-z0-9_.-]+$'`; `id` is a `randomUUID()`, so `'removed-' || id` is
+       * 44 characters of hex and hyphens. It is also globally unique, which the
+       * `(launch_id, handle_normalized)` unique index needs.
+       */
+      stepName: "tombstone:showcase_launch_team_member",
+      tableName: "showcase_launch_team_member",
+      countSql: sql`SELECT count(*)::int AS affected_count FROM showcase_launch_team_member
+                    WHERE handle_normalized = (SELECT lower(handle) FROM "user" WHERE id = ${userId})
+                      AND handle NOT LIKE 'removed-%'`,
+      applySql: sql`UPDATE showcase_launch_team_member
+                    SET display_name = ${REMOVED_AUTHOR_DISPLAY_NAME}, handle = 'removed-' || id
+                    WHERE handle_normalized = (SELECT lower(handle) FROM "user" WHERE id = ${userId})
+                      AND handle NOT LIKE 'removed-%'`,
+    },
   ];
 }
+
+/**
+ * Every step name this job can plan, for `db:verify-text-pii-coverage` to resolve
+ * `TEXT_PII_REGISTER`'s `scrub` entries against.
+ *
+ * ⚠️ DERIVED, NOT LISTED. A hand-written second list would be a copy that can disagree with
+ * the first — which is the exact failure `anonymization-manifest.ts` exists to prevent one
+ * level up. `planFreeTextSteps` is called with a placeholder id purely to read its shape;
+ * nothing is executed.
+ *
+ * The `purge_*`, `burn_handle` and `scrub_user` names are added by hand because they are not
+ * `StepPlan`s: they are whole functions with their own transactions, and their names appear as
+ * literals in the `anonymization_step_log` inserts at the end of each. The manifest keys are
+ * spread in from the manifest itself, for the same no-second-copy reason.
+ */
+export const PLANNED_ANONYMIZATION_STEP_NAMES: readonly string[] = [
+  ...planFreeTextSteps("step-name-probe").map((step) => step.stepName),
+  "purge_video_document_objects",
+  "purge_showcase_launch_images",
+  "purge_data_exports",
+  ...DELETE_ROW_KEYS,
+  ...NULL_OUT_KEYS,
+  "burn_handle",
+  "scrub_user",
+];
 
 type CountRow = { readonly affected_count: number };
 
@@ -761,6 +971,66 @@ async function burnHandle(
 }
 
 /**
+ * Every column the identity scrub overwrites, as one object.
+ *
+ * ⚠️ EXPORTED SO THERE IS ONE COPY. `db:verify-text-pii-coverage` applies these exact values
+ * to a probe row inside a rolled-back transaction and then asks Postgres whether the probe's
+ * name, handle or address survived anywhere. A verifier holding its own list of columns would
+ * pass while this function quietly stopped nulling one of them, which is the whole failure
+ * `TEXT_PII_REGISTER` exists to make impossible.
+ */
+export function buildAnonymizedUserColumns(userId: string) {
+  return {
+    name: "Deleted user",
+    /**
+     * `email` is citext NOT NULL UNIQUE, so it needs a VALUE rather than a NULL.
+     * Derived from the id, which is already opaque, so uniqueness is free; `.invalid`
+     * is RFC 2606's reserved TLD, so a misconfigured mailer fails to resolve it
+     * rather than delivering somebody's erasure notice to a real stranger.
+     *
+     * The real address is released by this, which is correct: the person may sign up
+     * again, and they inherit nothing when they do.
+     */
+    email: sql`'anonymized+' || ${userId} || '@deleted.qatoto.invalid'`,
+    emailVerified: false,
+    nameSetByUser: false,
+    image: null,
+    imageSource: null,
+    handle: null,
+    handleUpdatedAt: null,
+    handleChangeCount: 0,
+    handleWindowStartedAt: null,
+    locationLabel: null,
+    /**
+     * ⚠️ INVISIBLE TO THE FK MANIFEST, AND THE COLUMN THAT PROMPTED A SECOND REGISTER.
+     * `anonymization-manifest.ts` is keyed on FOREIGN KEYS into `user`, and `bio` is a
+     * scalar — so `db:verify-anonymization-coverage` cannot see it and stays green if this
+     * line is deleted. It is public free text the person wrote about themselves.
+     *
+     * IT NOW HAS A GUARD: `TEXT_PII_REGISTER` classifies it `scrub` with
+     * `stepName: "scrub_user"`, and `db:verify-text-pii-coverage` applies this very object
+     * to a probe row and asks Postgres whether the probe's text survived. Deleting this line
+     * turns that script red. `scripts/smoke-privacy.ts` still asserts it end to end.
+     */
+    bio: null,
+    /**
+     * ⚠️ THE SAME BLIND SPOT AS `bio` DIRECTLY ABOVE, and covered the same new way: a scalar
+     * column cannot appear in a foreign-key-keyed manifest, so
+     * `db:verify-anonymization-coverage` stays green whether or not this line exists, and
+     * `TEXT_PII_REGISTER` is what now names it.
+     *
+     * IT IS NOT COSMETIC. `GET /channels` reads this flag to build the public sitemap, so
+     * leaving it `true` would keep advertising a handle to search engines for a person who
+     * asked to be erased — an erasure that ends with the subject still being indexed. The
+     * handle itself is nulled two lines up, which makes the row unreachable, but consent to be
+     * listed is its own fact and it dies with the account.
+     */
+    isChannelListed: false,
+    anonymizedAt: new Date(),
+  } as const;
+}
+
+/**
  * The identity, and the request's terminal state, in one transaction.
  *
  * LAST, ALWAYS. Every step before this is resumable because the account still reads as
@@ -792,50 +1062,7 @@ async function scrubUserAndComplete(requestId: string, userId: string): Promise<
 
     const scrubbed = await tx
       .update(user)
-      .set({
-        name: "Deleted user",
-        /**
-         * `email` is citext NOT NULL UNIQUE, so it needs a VALUE rather than a NULL.
-         * Derived from the id, which is already opaque, so uniqueness is free; `.invalid`
-         * is RFC 2606's reserved TLD, so a misconfigured mailer fails to resolve it
-         * rather than delivering somebody's erasure notice to a real stranger.
-         *
-         * The real address is released by this, which is correct: the person may sign up
-         * again, and they inherit nothing when they do.
-         */
-        email: sql`'anonymized+' || ${userId} || '@deleted.qatoto.invalid'`,
-        emailVerified: false,
-        nameSetByUser: false,
-        image: null,
-        imageSource: null,
-        handle: null,
-        handleUpdatedAt: null,
-        handleChangeCount: 0,
-        handleWindowStartedAt: null,
-        locationLabel: null,
-        /**
-         * ⚠️ NOT COVERED BY THE MANIFEST OR ITS VERIFIER. `anonymization-manifest.ts` is keyed on
-         * FOREIGN KEYS into `user`, and `bio` is a scalar — so `db:verify-anonymization-coverage`
-         * cannot see it and will stay green if this line is deleted. It is public free text the
-         * person wrote about themselves, which makes it exactly the kind of thing an erasure is
-         * for. The only executable guard is the "the identity is gone" assertion in
-         * `scripts/smoke-privacy.ts`; keep them together.
-         */
-        bio: null,
-        /**
-         * ⚠️ THE SAME BLIND SPOT AS `bio` DIRECTLY ABOVE, and for the same reason: a scalar column
-         * cannot appear in a foreign-key-keyed manifest, so `db:verify-anonymization-coverage`
-         * stays green whether or not this line exists.
-         *
-         * IT IS NOT COSMETIC. `GET /channels` reads this flag to build the public sitemap, so
-         * leaving it `true` would keep advertising a handle to search engines for a person who
-         * asked to be erased — an erasure that ends with the subject still being indexed. The
-         * handle itself is nulled two lines up, which makes the row unreachable, but consent to be
-         * listed is its own fact and it dies with the account.
-         */
-        isChannelListed: false,
-        anonymizedAt: new Date(),
-      })
+      .set(buildAnonymizedUserColumns(userId))
       /**
        * THE PREDICATE IS THE LAST LINE OF DEFENCE, and its absence was the defect this
        * whole function was rewritten for.
