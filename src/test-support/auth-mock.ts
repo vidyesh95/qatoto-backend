@@ -71,6 +71,21 @@ const TEST_SESSION_HEADER = "x-test-session";
  * over 25 runs, it did not narrow it enough to matter. Carrying the identity removes it.
  *
  * Mounted ahead of the real app by `buildTestApp`.
+ *
+ * ## ⚠️ WHAT STAMPING DOES NOT CLOSE, AND WHAT NOW DOES
+ *
+ * This closes the window between a request ARRIVING and `getSession` RESOLVING. It does nothing
+ * about the window BEFORE arrival: supertest dispatches over a real socket, so a request nobody
+ * awaits can arrive after the test boundary too, and the stamp then records the next test's
+ * session exactly as the old box did. `8fe09c2` said so and left it: "closing it properly means
+ * the suites awaiting their own requests to completion so an orphan cannot exist. That is
+ * structural and not attempted here."
+ *
+ * That structural part is `src/test-support/test-isolation.test.ts`, which fails if any test
+ * discards a `request(…)` — so an orphan cannot be written, and the pre-arrival window has
+ * nothing to arrive through. It has to scan source for it: the rule that sounds right,
+ * `typescript/no-floating-promises`, is already enabled and is BLIND here, because supertest's
+ * `Test` is a thenable rather than a `Promise`. Proven with a probe file, not assumed.
  */
 export function stampTestSession(
   req: { headers: Record<string, string | string[] | undefined> },
@@ -162,12 +177,32 @@ export function authModuleMock(): Record<string, unknown> {
             const parsedStampedSession =
               stamped === null ? null : StampedSessionSchema.safeParse(JSON.parse(stamped));
 
+            /**
+             * ⚠️ A MALFORMED STAMP THROWS. IT USED TO BECOME AN ANONYMOUS CALLER.
+             *
+             * This arm returned `null` on a parse failure, which `requireAuth` renders as a
+             * 401 — indistinguishable from a caller who really is signed out. `signInAs` is
+             * the only writer and always spreads over `TEST_SESSION_USER`, so a stamp that
+             * fails this schema is a HARNESS bug and never a signed-out request. One
+             * `signInAs({ handle: undefined })` would have silently 401'd an entire file, and
+             * the assertion would have read `expected 401 to be 200` with nothing pointing
+             * upstream of the route — the exact failure shape that cost a month on the
+             * order-dependent 401 this mock was already fixed for once.
+             *
+             * Unreachable today: no test in the suite calls `signInAs` with arguments. That is
+             * what makes throwing safe rather than a gamble, and it is also why the guard has
+             * to go in NOW rather than after somebody writes the call.
+             */
+            if (parsedStampedSession !== null && !parsedStampedSession.success) {
+              throw new Error(
+                `auth-mock: the stamped session is malformed, which is a harness bug rather ` +
+                  `than a signed-out caller. Issues: ` +
+                  `${JSON.stringify(parsedStampedSession.error.issues)}. Stamp: ${stamped ?? "none"}`,
+              );
+            }
+
             const user =
-              parsedStampedSession === null
-                ? currentSessionUser
-                : parsedStampedSession.success
-                  ? parsedStampedSession.data
-                  : null;
+              parsedStampedSession === null ? currentSessionUser : parsedStampedSession.data;
 
             return user === null ? null : { user, session: { id: "session_test" } };
           },
