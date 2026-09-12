@@ -99,6 +99,17 @@ function rowsForSelectedColumns(selectedColumns: readonly string[]): Record<stri
   return databaseState.childQueryCount % 2 === 1 ? databaseState.teamRows : databaseState.imageRows;
 }
 
+/** The chainable stand-in for a drizzle query builder — awaitable, and every method returns itself. */
+interface QueryBuilderStub extends Promise<Record<string, unknown>[]> {
+  from: () => QueryBuilderStub;
+  innerJoin: () => QueryBuilderStub;
+  leftJoin: () => QueryBuilderStub;
+  groupBy: () => QueryBuilderStub;
+  orderBy: (...orderByArguments: readonly unknown[]) => QueryBuilderStub;
+  limit: (limit: number) => QueryBuilderStub;
+  where: (condition: unknown) => QueryBuilderStub;
+}
+
 const selectMock = vi.fn<(columns?: unknown) => unknown>((columns) => {
   const selectedColumns = Object.keys(columns ?? {});
   const capture: {
@@ -128,9 +139,18 @@ const selectMock = vi.fn<(columns?: unknown) => unknown>((columns) => {
    * `then`. Drizzle awaits the chain directly, so the stub has to be awaitable — but a hand-written
    * `then` is the thenable trap `unicorn/no-thenable` exists to catch. Resolving up front is safe
    * because which rows come back is decided by the selected columns, which are known here.
+   *
+   * ⚠️ THE BUILDER IS TYPED AS AN INTERFACE EXTENDING `Promise`, not as `Record<string, unknown>`.
+   * `Promise` is an interface, so it carries no implicit index signature and the record annotation
+   * was a TS2322 that only `tsconfig.test.json` sees — `pnpm test` was green while `pnpm typecheck`
+   * was not. The interface also makes the chain self-typed, so a method returning the wrong thing is
+   * a compile error rather than a runtime `undefined is not a function`.
    */
   const rows = rowsForSelectedColumns(selectedColumns);
-  const builder: Record<string, unknown> = Object.assign(Promise.resolve(rows), {
+  const builder: QueryBuilderStub = Object.assign(Promise.resolve(rows), {
+    from: () => builder,
+    innerJoin: () => builder,
+    leftJoin: () => builder,
     groupBy: () => {
       capture.grouped = true;
       return builder;
@@ -143,14 +163,11 @@ const selectMock = vi.fn<(columns?: unknown) => unknown>((columns) => {
       capture.limit = limit;
       return builder;
     },
+    where: (condition: unknown) => {
+      capture.conditionText = describeCondition(condition);
+      return builder;
+    },
   });
-  for (const method of ["from", "innerJoin", "leftJoin"]) {
-    builder[method] = () => builder;
-  }
-  builder.where = (condition: unknown) => {
-    capture.conditionText = describeCondition(condition);
-    return builder;
-  };
   return builder;
 });
 

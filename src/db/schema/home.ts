@@ -2124,6 +2124,7 @@ export const showcaseLaunch = pgTable(
            AND bill_of_materials_currency IS NULL)
           OR (bill_of_materials_minimum_cents IS NOT NULL
               AND bill_of_materials_maximum_cents IS NOT NULL
+              AND bill_of_materials_currency IS NOT NULL
               AND bill_of_materials_currency = 'USD'
               AND bill_of_materials_minimum_cents >= 0
               AND bill_of_materials_maximum_cents >= bill_of_materials_minimum_cents
@@ -2909,6 +2910,7 @@ export const teardown = pgTable(
            AND bill_of_materials_currency IS NULL)
           OR (bill_of_materials_minimum_cents IS NOT NULL
               AND bill_of_materials_maximum_cents IS NOT NULL
+              AND bill_of_materials_currency IS NOT NULL
               AND bill_of_materials_currency = 'USD'
               AND bill_of_materials_minimum_cents >= 0
               AND bill_of_materials_maximum_cents >= bill_of_materials_minimum_cents
@@ -2964,17 +2966,35 @@ export const teardown = pgTable(
            AND repairability_modular_independence_score IS NULL
            AND repairability_modular_independence_note IS NULL
            AND repairability_overall_score IS NULL)
-          OR (repairability_fastener_uniformity_score BETWEEN 0 AND 10
+          OR (repairability_fastener_uniformity_score IS NOT NULL
+              AND repairability_fastener_uniformity_score BETWEEN 0 AND 10
               AND repairability_fastener_uniformity_note IS NOT NULL
+              AND repairability_tool_accessibility_score IS NOT NULL
               AND repairability_tool_accessibility_score BETWEEN 0 AND 10
               AND repairability_tool_accessibility_note IS NOT NULL
+              AND repairability_disassembly_step_count_score IS NOT NULL
               AND repairability_disassembly_step_count_score BETWEEN 0 AND 10
               AND repairability_disassembly_step_count_note IS NOT NULL
+              AND repairability_modular_independence_score IS NOT NULL
               AND repairability_modular_independence_score BETWEEN 0 AND 10
               AND repairability_modular_independence_note IS NOT NULL
+              AND repairability_overall_score IS NOT NULL
               AND repairability_overall_score BETWEEN 0 AND 10)`,
     ),
     /** Six figures or none. `thermal_delta_kelvin` is the only one allowed to be negative. */
+    /**
+     * ⚠️ EVERY ALL-OR-NONE ARM BELOW OPENS WITH `IS NOT NULL`, AND THAT IS NOT BELT-AND-BRACES.
+     *
+     * A CHECK passes on NULL, not just on true. `telemetry_source = 'author_reported'` is NULL when
+     * the column is NULL, so an arm reading `five comparisons AND source = 'author_reported'`
+     * evaluates to NULL for a row carrying five of the six figures — and `false OR NULL` is NULL,
+     * which Postgres ACCEPTS. `pnpm db:verify-teardown-constraints` caught exactly that: five of six
+     * telemetry figures was written and the constraint did not fire.
+     *
+     * The same hole was in eight sibling CHECKs across this file, including `showcase_launch`'s cost
+     * range. Anywhere a nullable column is compared rather than tested for presence, the comparison
+     * needs an `IS NOT NULL` beside it.
+     */
     check(
       "teardown_telemetry_ck",
       sql`(telemetry_factor_of_safety IS NULL
@@ -2983,11 +3003,16 @@ export const teardown = pgTable(
            AND telemetry_thermal_delta_kelvin IS NULL
            AND telemetry_rated_load_newtons IS NULL
            AND telemetry_source IS NULL)
-          OR (telemetry_factor_of_safety > 0
+          OR (telemetry_factor_of_safety IS NOT NULL
+              AND telemetry_factor_of_safety > 0
+              AND telemetry_peak_von_mises_stress_megapascals IS NOT NULL
               AND telemetry_peak_von_mises_stress_megapascals >= 0
+              AND telemetry_max_displacement_micrometres IS NOT NULL
               AND telemetry_max_displacement_micrometres >= 0
               AND telemetry_thermal_delta_kelvin IS NOT NULL
+              AND telemetry_rated_load_newtons IS NOT NULL
               AND telemetry_rated_load_newtons > 0
+              AND telemetry_source IS NOT NULL
               AND telemetry_source = 'author_reported')`,
     ),
     /**
@@ -3001,7 +3026,9 @@ export const teardown = pgTable(
     check(
       "teardown_store_product_class_ck",
       sql`(store_product_class_category_slug IS NULL AND store_product_class_label IS NULL)
-          OR (store_product_class_category_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+          OR (store_product_class_category_slug IS NOT NULL
+              AND store_product_class_category_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+              AND store_product_class_label IS NOT NULL
               AND char_length(store_product_class_label) BETWEEN 1 AND 80)`,
     ),
     /**
@@ -3017,7 +3044,9 @@ export const teardown = pgTable(
            AND walkthrough_youtube_video_id IS NULL
            AND walkthrough_poster_url IS NULL
            AND walkthrough_duration_seconds IS NULL)
-          OR (walkthrough_video_source = 'youtube'
+          OR (walkthrough_video_source IS NOT NULL
+              AND walkthrough_video_source = 'youtube'
+              AND walkthrough_youtube_video_id IS NOT NULL
               AND walkthrough_youtube_video_id ~ '^[A-Za-z0-9_-]{11}$'
               AND walkthrough_poster_url IS NOT NULL
               AND (walkthrough_duration_seconds IS NULL OR walkthrough_duration_seconds > 0))`,
@@ -3100,7 +3129,10 @@ export const teardownAssembly = pgTable(
     /** A composite assembly has the model; an individual-parts one has none. */
     check(
       "teardown_assembly_kind_shape_ck",
-      sql`(kind = 'composite' AND model_url IS NOT NULL AND model_byte_size > 0)
+      sql`(kind = 'composite'
+           AND model_url IS NOT NULL
+           AND model_byte_size IS NOT NULL
+           AND model_byte_size > 0)
           OR (kind = 'individual_parts' AND model_url IS NULL AND model_byte_size IS NULL)`,
     ),
     check(
@@ -3207,6 +3239,7 @@ export const teardownPart = pgTable(
           OR (assembly_kind = 'individual_parts'
               AND node_name IS NULL
               AND model_url IS NOT NULL
+              AND model_byte_size IS NOT NULL
               AND model_byte_size > 0)`,
     ),
     check("teardown_part_model_url_ck", sql`model_url IS NULL OR (${assetUrlCheck("model_url")})`),
@@ -3348,7 +3381,9 @@ export const teardownFastener = pgTable(
     check(
       "teardown_fastener_supplier_ck",
       sql`(supplier_label IS NULL AND supplier_url IS NULL)
-          OR (char_length(supplier_label) BETWEEN 1 AND 80 AND supplier_url IS NOT NULL)`,
+          OR (supplier_label IS NOT NULL
+              AND char_length(supplier_label) BETWEEN 1 AND 80
+              AND supplier_url IS NOT NULL)`,
     ),
     /** Outbound, so https only — there is no same-site supplier. */
     check(
@@ -3500,7 +3535,9 @@ export const teardownMaterialElement = pgTable(
     check(
       "teardown_material_element_range_ck",
       sql`(minimum_percent IS NULL AND maximum_percent IS NULL)
-          OR (minimum_percent >= 0
+          OR (minimum_percent IS NOT NULL
+              AND maximum_percent IS NOT NULL
+              AND minimum_percent >= 0
               AND maximum_percent <= 100
               AND maximum_percent >= minimum_percent)`,
     ),

@@ -122,6 +122,17 @@ function rowsFor(tableName: string, selectedColumns: readonly string[]): Record<
   );
 }
 
+/** The chainable stand-in for a drizzle query builder — awaitable, and every method returns itself. */
+interface QueryBuilderStub extends Promise<Record<string, unknown>[]> {
+  from: (table: unknown) => QueryBuilderStub;
+  innerJoin: () => QueryBuilderStub;
+  leftJoin: () => QueryBuilderStub;
+  groupBy: () => QueryBuilderStub;
+  orderBy: (...orderByArguments: readonly unknown[]) => QueryBuilderStub;
+  limit: (limit: number) => QueryBuilderStub;
+  where: (condition: unknown) => QueryBuilderStub;
+}
+
 const selectMock = vi.fn<(columns?: unknown) => unknown>((columns) => {
   const selectedColumns = Object.keys(columns ?? {});
   const capture: {
@@ -156,16 +167,31 @@ const selectMock = vi.fn<(columns?: unknown) => unknown>((columns) => {
    * `then` — a hand-written `then` is the thenable trap `unicorn/no-thenable` exists to catch. The
    * rows are not known at `select()` time here (the table is named by `from()`), so the promise is
    * deferred and settled the moment the table is known.
+   *
+   * ⚠️ A DEFERRED PROMISE, not `Promise.withResolvers`: this repository's `lib` is below es2024, so
+   * that helper exists at runtime and not in the type system — `pnpm test` green, `pnpm typecheck`
+   * red. The executor runs synchronously, so `settleRows` is assigned before anything can call it.
+   *
+   * ⚠️ AND THE BUILDER IS TYPED AS AN INTERFACE EXTENDING `Promise`, not as `Record<string,
+   * unknown>`. `Promise` is an interface, so it carries no implicit index signature and the record
+   * annotation is a TS2322 that only `tsconfig.test.json` sees. The interface also self-types the
+   * chain, so a method returning the wrong thing is a compile error rather than a runtime
+   * `undefined is not a function`.
    */
-  const { promise: rowsPromise, resolve: settleRows } = Promise.withResolvers<Record<string, unknown>[]>();
+  let settleRows: ((rows: Record<string, unknown>[]) => void) | undefined;
+  const rowsPromise = new Promise<Record<string, unknown>[]>((resolve) => {
+    settleRows = resolve;
+  });
 
-  const builder: Record<string, unknown> = Object.assign(rowsPromise, {
+  const builder: QueryBuilderStub = Object.assign(rowsPromise, {
+    innerJoin: () => builder,
+    leftJoin: () => builder,
     from: (table: unknown) => {
       // Drizzle's own type guard rather than a cast — an assertion here would let a future refactor
       // hand this stub something that is not a table and get an empty string back in silence.
       if (!is(table, Table)) throw new Error("select().from() was handed something that is not a table");
       capture.tableName = getTableName(table);
-      settleRows(rowsFor(capture.tableName, selectedColumns));
+      settleRows?.(rowsFor(capture.tableName, selectedColumns));
       return builder;
     },
     groupBy: () => {
@@ -185,9 +211,6 @@ const selectMock = vi.fn<(columns?: unknown) => unknown>((columns) => {
       return builder;
     },
   });
-  for (const method of ["innerJoin", "leftJoin"]) {
-    builder[method] = () => builder;
-  }
   return builder;
 });
 
