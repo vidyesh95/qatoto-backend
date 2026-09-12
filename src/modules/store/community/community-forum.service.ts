@@ -12,6 +12,7 @@ import {
   user,
 } from "#src/db/schema.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
+import { REMOVED_AUTHOR_DISPLAY_NAME } from "#src/modules/auth/privacy/redaction.js";
 import { appendPlatformAuditEntry } from "#src/modules/platform/audit/platform-audit.service.js";
 import {
   requirePlatformCapability,
@@ -199,8 +200,11 @@ export interface OwnForumThreadListPage {
  * "Somebody who has since left" is the honest reading of a `set null` author, and it is a
  * different fact from an individual posting without an organization — which is why this
  * constant is not reused for `authorOrganizationName`.
+ *
+ * MOVED TO `privacy/redaction.ts`, because the erasure's tombstone steps WRITE this same
+ * string into NOT NULL credit columns that have no FK to null and no name to join. The
+ * string a reader sees and the string stored must not be able to drift.
  */
-const REMOVED_AUTHOR_DISPLAY_NAME = "Former member";
 
 interface AuthorNames {
   readonly displayNameByUserId: ReadonlyMap<string, string>;
