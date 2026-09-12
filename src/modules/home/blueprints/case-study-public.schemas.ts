@@ -47,3 +47,33 @@ export const CaseStudyCursorPageQuerySchema = z
     cursor: z.string().min(1).max(200).optional(),
   })
   .strip();
+
+export const CASE_STUDY_MODERATOR_NOTE_MAXIMUM_CHARACTERS = 2000;
+
+/**
+ * A moderator's decision on one case study.
+ *
+ * ⚠️ `published` / `rejected`, THE MODERATION STATE NAMES, matching the launch contract. The
+ * pathway route spells its decisions `publish` / `reject`; that spelling is deliberately not
+ * copied here, because the frontend's contract already uses the state names.
+ *
+ * ⚠️ A SEND-BACK MUST SAY WHY. The note is the only thing the writer sees, so a rejection nobody
+ * can act on comes back unchanged. Publishing may carry a note or none.
+ */
+export const CaseStudyModerationDecisionSchema = z.discriminatedUnion("decision", [
+  z
+    .object({
+      decision: z.literal("published"),
+      moderatorNote: z.string().max(CASE_STUDY_MODERATOR_NOTE_MAXIMUM_CHARACTERS).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      decision: z.literal("rejected"),
+      moderatorNote: z
+        .string()
+        .min(1, "Sending back needs a note. It is the only thing the writer sees.")
+        .max(CASE_STUDY_MODERATOR_NOTE_MAXIMUM_CHARACTERS),
+    })
+    .strict(),
+]);

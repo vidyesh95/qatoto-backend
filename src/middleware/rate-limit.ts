@@ -1242,6 +1242,28 @@ export const showcaseLaunchModerationLimiter = createLimiter({
   limit: 200,
 });
 
+/**
+ * POST /blueprints/case-studies — writing up a lesson.
+ *
+ * FIVE SUCCESSFUL SENDS PER FIFTEEN MINUTES, and failures do not count (`skipFailedRequests`), on
+ * the launch limiter's reasoning: the limit is on case studies, not on attempts, and a writer
+ * refused four times over a duplicate title or an unresolvable related lesson has sent nothing yet.
+ * Keyed per account.
+ */
+export const caseStudySubmitLimiter = createLimiter({
+  namespace: "caseStudySubmit",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 5,
+  skipFailedRequests: true,
+});
+
+/** POST /blueprints/admin/case-studies/:submissionId/moderate — a moderator working a queue. */
+export const caseStudyModerationLimiter = createLimiter({
+  namespace: "caseStudyModeration",
+  windowMs: FIFTEEN_MINUTES_MS,
+  limit: 200,
+});
+
 // ---------------------------------------------------------------------------
 // HOME FEED ENGAGEMENT (HOME_BACKEND_STRUCTURE.md §7)
 //

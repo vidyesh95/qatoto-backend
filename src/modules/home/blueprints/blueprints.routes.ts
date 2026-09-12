@@ -1,10 +1,12 @@
 import express from "express";
 
 import { idempotency } from "#src/middleware/idempotency.js";
-import { compactBody } from "#src/middleware/json-body.js";
+import { compactBody, longFormBody } from "#src/middleware/json-body.js";
 import {
   blueprintHeroImageUploadLimiter,
   blueprintHeroWriteLimiter,
+  caseStudyModerationLimiter,
+  caseStudySubmitLimiter,
   showcaseLaunchModerationLimiter,
   showcaseLaunchSubmitLimiter,
   showcaseWriteUpImageUploadLimiter,
@@ -12,6 +14,7 @@ import {
 import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as blueprintHeroController from "#src/modules/home/blueprints/blueprint-hero.controller.js";
+import * as caseStudyController from "#src/modules/home/blueprints/case-study.controller.js";
 import * as showcaseLaunchController from "#src/modules/home/blueprints/showcase-launch.controller.js";
 import * as teardownController from "#src/modules/home/blueprints/teardown.controller.js";
 import { uploadBlueprintHeroSlideImageFile } from "#src/modules/home/blueprints/upload-blueprint-hero-image.js";
@@ -201,6 +204,72 @@ router.get("/teardowns/:teardownSlug/claim-targets", teardownController.getTeard
 
 /** GET /blueprints/teardowns/:teardownSlug — one readable teardown. DECLARED LAST of the five. */
 router.get("/teardowns/:teardownSlug", teardownController.getPublicTeardown);
+
+/*
+ * CASE STUDIES — the third arm, and the first with a write path on the backend. Four PUBLIC reads,
+ * two writer routes and two moderator routes.
+ *
+ * ⚠️ ONE GATE, NOT TWO. A teardown needs LIST and READABLE because a quarantine withholds its files
+ * while leaving its address alive; a case study has no files, so `published, flagged` is the whole
+ * gate. What this arm withholds instead is ONE FIELD — a first-hand writer may keep a company's name
+ * from readers — and `GET /admin/case-studies/review-queue` is the only route in this router that
+ * serves the real one.
+ *
+ * ROUTE ORDER: `mine`, `options` and `slugs` are literals and must stay above
+ * `/:caseStudySlug`, or each word is captured as a slug — and `mine` captured as a slug would answer
+ * a stranger's case study to a writer asking for their own. `GET` and `POST /case-studies` share a
+ * path and differ by method, which is why the order test keys handler counts by "<method> <path>".
+ *
+ * The four bare reads carry no limiter, for the reason the showcase reads above are bare: the answer
+ * is identical for every visitor, so there is nothing to key a bucket on but an IP, which behind a
+ * CDN or a NAT is an outage aimed at ourselves.
+ */
+
+/** POST /blueprints/case-studies — JSON submit, lands `pending_review`. */
+router.post(
+  "/case-studies",
+  requireAuth,
+  caseStudySubmitLimiter,
+  requireIdentifiedUser,
+  /*
+   * ⚠️ `longFormBody` (128 KB), NOT `compactBody` (16 KB), AND THE NUMBER IS DERIVED. A case study
+   * carries two 2,000-character prose fields, twelve steps, twelve pitfalls and ten sources; at the
+   * four-bytes-per-character worst case `json-body-budget.test.ts` computes, that is about 90 KB —
+   * the largest JSON body on this surface, and a 16 KB cap would 413 a draft the form accepts.
+   */
+  longFormBody,
+  idempotency({ required: true }),
+  caseStudyController.submitCaseStudy,
+);
+
+/** GET /blueprints/case-studies/mine — LITERAL, must stay above /:caseStudySlug. */
+router.get("/case-studies/mine", requireAuth, caseStudyController.listMyCaseStudies);
+
+/** GET /blueprints/case-studies/options — LITERAL. Slug and title for the composer's select. */
+router.get("/case-studies/options", caseStudyController.listCaseStudyOptions);
+
+/** GET /blueprints/case-studies/slugs — LITERAL. Visible slugs for the prerender step. */
+router.get("/case-studies/slugs", caseStudyController.listPublicCaseStudySlugs);
+
+/** GET /blueprints/case-studies — the index, with its one discipline filter. */
+router.get("/case-studies", caseStudyController.listPublicCaseStudies);
+
+/** GET /blueprints/case-studies/:caseStudySlug — one case study. DECLARED LAST of the reads. */
+router.get("/case-studies/:caseStudySlug", caseStudyController.getPublicCaseStudy);
+
+/** GET /blueprints/admin/case-studies/review-queue — `moderate_content`, oldest first. */
+router.get("/admin/case-studies/review-queue", requireAuth, caseStudyController.listReviewQueue);
+
+/** POST /blueprints/admin/case-studies/:submissionId/moderate — publish or send back. */
+router.post(
+  "/admin/case-studies/:submissionId/moderate",
+  requireAuth,
+  caseStudyModerationLimiter,
+  requireIdentifiedUser,
+  compactBody,
+  idempotency({ required: true }),
+  caseStudyController.moderateCaseStudy,
+);
 
 /** GET /blueprints/admin/showcases/review-queue — `moderate_content`, oldest first. */
 router.get("/admin/showcases/review-queue", requireAuth, showcaseLaunchController.listReviewQueue);

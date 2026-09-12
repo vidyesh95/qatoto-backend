@@ -265,6 +265,14 @@ const PUBLICLY_RESOLVABLE = new Set([
   "get /blueprints/teardowns/slugs",
   "get /blueprints/teardowns/{teardownSlug}",
   "get /blueprints/teardowns/{teardownSlug}/claim-targets",
+  // The public case-study surface. Bare for the same reason. The other four case-study routes are
+  // deliberately NOT here: two need an account and two need `moderate_content` — and one of those
+  // two is the only route on this surface that serves a company name its writer withheld from
+  // readers.
+  "get /blueprints/case-studies",
+  "get /blueprints/case-studies/options",
+  "get /blueprints/case-studies/slugs",
+  "get /blueprints/case-studies/{caseStudySlug}",
 ]);
 
 const CONTRACT_NOTE =

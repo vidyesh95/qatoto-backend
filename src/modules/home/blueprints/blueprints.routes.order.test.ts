@@ -97,6 +97,10 @@ describe("the blueprints router", () => {
       "get /teardowns/slugs",
       "get /teardowns/:teardownSlug",
       "get /teardowns/:teardownSlug/claim-targets",
+      "get /case-studies",
+      "get /case-studies/options",
+      "get /case-studies/slugs",
+      "get /case-studies/:caseStudySlug",
     ]);
 
     for (const routeKey of barePublicRoutes) {
@@ -231,6 +235,59 @@ describe("the blueprints router", () => {
     expect(idempotencyIndex, "the idempotency guard must be in the chain").toBeGreaterThanOrEqual(0);
     expect(identityIndex).toBeLessThan(parserIndex);
     expect(parserIndex).toBeLessThan(idempotencyIndex);
+  });
+
+  /**
+   * The case-study chains, exact.
+   *
+   * ⚠️ FOUR BARE AND FOUR GUARDED, and the split is the surface. A guard added to one of the four
+   * reads would take the public case-study pages away from a reader; a guard DROPPED from one of the
+   * four writer or moderator routes would open a write path or the one read that serves a withheld
+   * company's real name. Exact counts fail on either.
+   */
+  it("gives each case-study route its exact chain", async () => {
+    const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
+    const handlerCounts = handlerCountsByMethodAndPath(blueprintsRouter);
+
+    // The public reads: a controller and nothing else.
+    expect(handlerCounts.get("get /case-studies")).toBe(1);
+    expect(handlerCounts.get("get /case-studies/options")).toBe(1);
+    expect(handlerCounts.get("get /case-studies/slugs")).toBe(1);
+    expect(handlerCounts.get("get /case-studies/:caseStudySlug")).toBe(1);
+    // auth, limiter, identity, compactBody, idempotency, controller.
+    expect(handlerCounts.get("post /case-studies")).toBe(6);
+    expect(handlerCounts.get("get /case-studies/mine")).toBe(2);
+    expect(handlerCounts.get("get /admin/case-studies/review-queue")).toBe(2);
+    expect(handlerCounts.get("post /admin/case-studies/:submissionId/moderate")).toBe(6);
+  });
+
+  /**
+   * `mine`, `options` and `slugs` are literals under `/case-studies/`, and `/:caseStudySlug`
+   * captures any of them as a slug if declared first.
+   *
+   * ⚠️ `mine` IS THE ONE THAT MATTERS. Captured as a slug it would answer a STRANGER'S published
+   * case study to a writer asking for their own — the hazard the router docblock already states for
+   * `/showcases/mine`. The literal list is DERIVED, so the next literal is guarded without anyone
+   * remembering to add it here.
+   */
+  it("declares every /case-studies literal before /case-studies/:caseStudySlug", async () => {
+    const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
+    const paths = declaredRoutes(blueprintsRouter).map((route) => route.path);
+
+    const parameterizedIndex = paths.indexOf("/case-studies/:caseStudySlug");
+    expect(parameterizedIndex, "/case-studies/:caseStudySlug must be declared at all").toBeGreaterThanOrEqual(0);
+
+    const literalPaths = paths.filter((path) => path.startsWith("/case-studies/") && !path.includes(":"));
+    expect(literalPaths, "the derived literal list must not be empty").toEqual([
+      "/case-studies/mine",
+      "/case-studies/options",
+      "/case-studies/slugs",
+    ]);
+    for (const literalPath of literalPaths) {
+      expect(paths.indexOf(literalPath), `${literalPath} must precede /case-studies/:caseStudySlug`).toBeLessThan(
+        parameterizedIndex,
+      );
+    }
   });
 
   /**

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ExternalUrlSchema } from "#src/modules/home/blueprints/blueprint-url.schemas.js";
+import { createExternalUrlSchema } from "#src/modules/home/blueprints/blueprint-url.schemas.js";
 
 /**
  * THE WRITE GATE for a case study: what `POST /blueprints/case-studies` parses, and what the seed
@@ -125,11 +125,21 @@ const OutcomeMetricSubmissionSchema = z
   })
   .strict();
 
+/**
+ * ⚠️ 512, NOT THE 2,048 EVERY OTHER OUTBOUND LINK ON THIS SURFACE ALLOWS, and the reason is a body
+ * budget rather than taste. A case study may link ten sources; ten 2,048-character URLs put this
+ * route's worst-case body at 148 KB, above the platform's 128 KB ceiling, and
+ * `json-body-budget.test.ts` refuses a route whose cap is below what its own schema accepts. The
+ * frontend's `CaseStudySourceDraftSchema` carries the same 512 so the two still agree — a server
+ * stricter than the form it serves is the mismatch this codebase keeps finding.
+ */
+export const CASE_STUDY_SOURCE_URL_MAXIMUM_CHARACTERS = 512;
+
 const SourceSubmissionSchema = z
   .object({
     label: z.string().min(1).max(120),
     publisherLabel: z.string().min(1).max(80),
-    url: ExternalUrlSchema,
+    url: createExternalUrlSchema(CASE_STUDY_SOURCE_URL_MAXIMUM_CHARACTERS),
   })
   .strict();
 
@@ -187,7 +197,16 @@ export const CaseStudySubmissionSchema = z
       )
       .max(3),
     tags: z.array(z.string().min(1).max(40)).max(10),
-    acceptedStatementIds: z.array(z.enum(CASE_STUDY_STATEMENT_IDS)),
+    /*
+     * ⚠️ BOUNDED AT THE ENUM'S SIZE, NOT AT TWO, even though the rule below requires exactly two.
+     * A `.max(2)` would answer a three-tick payload with "too many" instead of "a statement for the
+     * other way of knowing this is ticked", which is the message a writer can act on. The bound
+     * exists at all because `json-body-budget.test.ts` requires every array in a request body to
+     * have one — an unbounded array makes the route's worst-case body size uncomputable.
+     */
+    acceptedStatementIds: z
+      .array(z.enum(CASE_STUDY_STATEMENT_IDS))
+      .max(CASE_STUDY_STATEMENT_IDS.length),
   })
   .strict()
   .superRefine((submission, context) => {

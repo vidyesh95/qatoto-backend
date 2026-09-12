@@ -121,6 +121,8 @@ import {
   ReorderBlueprintHeroSlidesSchema,
   UpdateBlueprintHeroSlideSchema,
 } from "#src/modules/home/blueprints/blueprints.schemas.js";
+import { CaseStudyModerationDecisionSchema } from "#src/modules/home/blueprints/case-study-public.schemas.js";
+import { CaseStudySubmissionSchema } from "#src/modules/home/blueprints/case-study-submission.schemas.js";
 import {
   ModerateShowcaseLaunchSchema,
   SubmitShowcaseLaunchMultipartSchema,
@@ -498,6 +500,21 @@ export const RND_REQUEST_BODIES: Readonly<Record<string, RndRequestBody>> = {
   // and its controller never touches `req.body`.
   "post /blueprints/admin/showcases/{submissionId}/moderate": {
     schema: ModerateShowcaseLaunchSchema,
+    required: true,
+  },
+  /*
+   * A case study travels as ONE JSON body, unlike a launch's multipart — it carries no image.
+   *
+   * ⚠️ THIS SCHEMA DOCUMENTS THAT A SUBMISSION CARRIES A COMPANY NAME, WHICH IS CORRECT: the
+   * writer does send it, and withholding happens on the way OUT. No hand-written `example` may be
+   * added here with a plausible withheld name in it — the spec is public.
+   */
+  "post /blueprints/case-studies": {
+    schema: CaseStudySubmissionSchema,
+    required: true,
+  },
+  "post /blueprints/admin/case-studies/{submissionId}/moderate": {
+    schema: CaseStudyModerationDecisionSchema,
     required: true,
   },
   "post /research-programs/{programSlug}/papers/{paperId}/file": {

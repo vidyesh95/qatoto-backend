@@ -45,11 +45,33 @@ export const AssetUrlSchema = z
     message: "An address may not contain spaces or control characters.",
   });
 
-/** An outbound link — a supplier, a licence, a citation. https only; there is no same-site case. */
+/** The default outbound cap, matching the frontend's `createExternalHttpsUrlSchema(2048)`. */
+const DEFAULT_EXTERNAL_URL_MAXIMUM_CHARACTERS = 2048;
+
+/**
+ * An outbound link — a supplier, a licence, a citation. https only; there is no same-site case.
+ *
+ * ⚠️ THE LENGTH IS A PARAMETER BECAUSE ONE SURFACE HAD TO TIGHTEN IT. A case study may link ten
+ * sources, and ten 2,048-character URLs put that route's worst-case body above the platform's
+ * 128 KB ceiling — `json-body-budget.test.ts` computes it at four bytes per character and refuses a
+ * route whose cap is below what its own schema accepts. So case-study sources cap at 512, on both
+ * sides of the wire, and a URL that long is a tracking-parameter-laden mess rather than a citation.
+ */
+export function createExternalUrlSchema(maximumCharacters: number) {
+  return z
+    .string()
+    .min(1)
+    .max(maximumCharacters)
+    .refine((url) => url.startsWith("https://"), { message: "An outbound link must be https://." })
+    .refine((url) => !ILLEGAL_URL_CHARACTERS.test(url), {
+      message: "An address may not contain spaces or control characters.",
+    });
+}
+
 export const ExternalUrlSchema = z
   .string()
   .min(1)
-  .max(2048)
+  .max(DEFAULT_EXTERNAL_URL_MAXIMUM_CHARACTERS)
   .refine((url) => url.startsWith("https://"), { message: "An outbound link must be https://." })
   .refine((url) => !ILLEGAL_URL_CHARACTERS.test(url), {
     message: "An address may not contain spaces or control characters.",
