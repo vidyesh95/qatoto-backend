@@ -14,6 +14,9 @@ import {
   check,
   primaryKey,
   pgEnum,
+  doublePrecision,
+  foreignKey,
+  unique,
 } from "drizzle-orm/pg-core";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
@@ -41,6 +44,7 @@ import {
   videoMilestone,
   videoOpenRole,
   videoTeamMember,
+  videoSourceEnum,
 } from "#src/db/schema/studio.js";
 
 // ---------------------------------------------------------------------------
@@ -2535,4 +2539,1034 @@ export const userActivityHourRelations = relations(userActivityHour, ({ one }) =
 
 export const userWatchDailyRelations = relations(userWatchDaily, ({ one }) => ({
   user: one(user, { fields: [userWatchDaily.userId], references: [user.id] }),
+}));
+
+// ---------------------------------------------------------------------------
+// BLUEPRINTS — TEARDOWNS (§home). The second blueprint kind, and the largest.
+//
+// ⚠️ A CLEAN-ROOM SURFACE. A teardown documents somebody else's shipped product, surveyed by the
+// publisher. There is deliberately NO column here that could hold a vendor's own drawing, an
+// internal document or NDA material: the absence is the guarantee. Do not add one.
+//
+// TWO SHARED ENUMS ARE REUSED, not redeclared — `blueprint_moderation_state` and
+// `blueprint_difficulty` above, exactly as their header promised ("Case studies and teardowns will
+// reuse both enums"). `video_source` comes from `studio.ts` for the same reason.
+//
+// THE SLUG IS ALWAYS PRESENT, which is the one place this departs from `showcase_launch`. A launch
+// mints its address on publication, so its CHECK ties state and slug together. A teardown carries a
+// slug from the moment it exists — a `pending_review` row has one — so the reading gates are
+// computed from `moderation_state` alone and there is no decision CHECK here.
+//
+// THE ASSET URLS ARE SITE-RELATIVE-OR-HTTPS, not https-only. That is the frontend's own contract
+// (`createHttpsOrSiteRelativeUrlSchema`), because a teardown's documents and models are served from
+// this site. Only the two OUTBOUND links — a fastener's supplier and a licence — are https-only
+// (`createExternalHttpsUrlSchema`). Protocol-relative values are refused in both cases.
+// ---------------------------------------------------------------------------
+
+/** Byte-matches the frontend's `BLUEPRINT_PROVENANCE_KINDS`. */
+export const blueprintProvenanceKindEnum = pgEnum("blueprint_provenance_kind", [
+  "licensed_open_source",
+  "authorized_by_manufacturer",
+  "community_reverse_engineered",
+]);
+
+/** Byte-matches `TEARDOWN_SUBJECT_KINDS`. Only the first is publishable — see the CHECK below. */
+export const teardownSubjectKindEnum = pgEnum("teardown_subject_kind", [
+  "existing_physical_product",
+  "proposed_design",
+]);
+
+export const teardownUnitAcquisitionEnum = pgEnum("teardown_unit_acquisition", [
+  "retail_purchase",
+  "secondary_market",
+  "manufacturer_supplied",
+  "donated_unit",
+]);
+
+export const teardownSurveyMethodEnum = pgEnum("teardown_survey_method", [
+  "dimensional_survey",
+  "empirical_teardown",
+  "material_spectroscopy",
+]);
+
+export const teardownMaterialClassEnum = pgEnum("teardown_material_class", [
+  "metal_alloy",
+  "polymer",
+  "elastomer",
+  "composite",
+  "ceramic",
+  "glass",
+  "laminate",
+  "semiconductor_package",
+  "coating",
+  "other",
+]);
+
+export const teardownDesignationSourceEnum = pgEnum("teardown_designation_source", [
+  "measured_spectroscopy",
+  "manufacturer_marking",
+  "public_datasheet",
+  "supplier_declared",
+  "contributor_freetext",
+]);
+
+/**
+ * How a composition figure was established.
+ *
+ * ⚠️ THE FIRST FOUR ARE MEASUREMENTS, the last two are not, and an `instrument_label` may only
+ * accompany a measurement — see `teardown_material_element_instrument_ck`. A label beside
+ * `declared_not_measured` would claim an instrument read a number nobody measured.
+ */
+export const teardownCompositionAnalysisMethodEnum = pgEnum(
+  "teardown_composition_analysis_method",
+  ["xrf", "oes", "eds", "icp_oes", "declared_not_measured", "synthetic_example"],
+);
+
+/** One enum, two columns: a part's `manufacturing_method` and a material's `process`. */
+export const teardownManufacturingMethodEnum = pgEnum("teardown_manufacturing_method", [
+  "cnc_milled",
+  "injection_molded",
+  "sheet_metal",
+  "fdm_printed",
+  "pcb_assembly",
+  "cast",
+  "off_the_shelf",
+]);
+
+export const teardownFastenerDriveEnum = pgEnum("teardown_fastener_drive", [
+  "torx",
+  "hex_socket",
+  "phillips",
+  "slotted",
+  "adhesive",
+  "snap_fit",
+  "press_fit",
+]);
+
+export const blueprintDocumentKindEnum = pgEnum("blueprint_document_kind", [
+  "schematic",
+  "bill_of_materials",
+  "assembly_guide",
+  "datasheet",
+]);
+
+/**
+ * Fabrication files.
+ *
+ * ⚠️ NEVER MERGED WITH `blueprint_document_kind`, which the contract argues at length: a schematic
+ * is something a reader opens, a Gerber is something a fab consumes. Two arrays, two renderers.
+ */
+export const teardownManufacturingFileKindEnum = pgEnum("teardown_manufacturing_file_kind", [
+  "step",
+  "stl",
+  "dxf",
+  "gerber",
+  "drill",
+  "pick_and_place",
+  "bill_of_materials_csv",
+]);
+
+/**
+ * How a teardown's 3D view is assembled.
+ *
+ * `composite` is ONE model file whose named nodes are the parts; `individual_parts` is one file per
+ * part. The two are structurally different and a row may not be half of each — see the composite
+ * foreign key on `teardown_part`, which carries this discriminator down so a per-row CHECK can
+ * close it without a trigger.
+ */
+export const teardownAssemblyKindEnum = pgEnum("teardown_assembly_kind", [
+  "composite",
+  "individual_parts",
+]);
+
+/**
+ * The SQL fragment behind every in-site asset URL on this surface.
+ *
+ * ⚠️ `chr(92)` IS A BACKSLASH, and it is written that way for the same reason
+ * `showcase_launch_write_up_image_blur_ck` writes `chr(59)`: drizzle-kit truncates a CHECK body at
+ * the first literal it mishandles, and a `\` inside a generated migration is not worth the risk.
+ *
+ * Refuses protocol-relative values in both spellings. `//evil.tld` and `/\evil.tld` are read as
+ * "same scheme, different host" by a browser, so a leading-slash test alone is not a same-site test.
+ */
+function assetUrlCheck(columnName: string) {
+  return sql.raw(
+    `char_length(${columnName}) BETWEEN 1 AND 2048
+          AND ${columnName} !~ '[[:space:][:cntrl:]]'
+          AND (${columnName} LIKE 'https://%'
+               OR (left(${columnName}, 1) = '/'
+                   AND left(${columnName}, 2) <> '//'
+                   AND left(${columnName}, 2) <> ('/' || chr(92))))`,
+  );
+}
+
+/** Outbound links — a supplier, a licence. https only; there is no same-site case for these. */
+function externalUrlCheck(columnName: string) {
+  return sql.raw(
+    `char_length(${columnName}) BETWEEN 1 AND 2048
+          AND ${columnName} !~ '[[:space:][:cntrl:]]'
+          AND ${columnName} LIKE 'https://%'`,
+  );
+}
+
+/**
+ * One teardown: a survey of somebody else's shipped product.
+ *
+ * WIDE ON PURPOSE. Six blocks are inlined rather than given side tables — provenance, the
+ * repairability index, the telemetry readings, the store class, the walkthrough video and the
+ * bill-of-materials cost range. Each is 1:1 with the row and each, moved out, would make an illegal
+ * state representable: a teardown with NO provenance (which the contract forbids outright), three
+ * repairability criteria instead of four, five of six telemetry figures, a category slug with no
+ * label. A side table would need a trigger to say what a CHECK says here for free. That is
+ * CLAUDE.md §2's "make illegal states unrepresentable", not a preference about joins.
+ *
+ * THE COUNTERS ARE NOT HERE. They live in `teardown_stats`, on the `video_stats` precedent, because
+ * a counter moves on a different cadence from the row it counts.
+ *
+ * THE AUTHOR IS DENORMALISED, and the reason is the privacy machinery rather than convenience.
+ * Every foreign key into `user` must be named in `anonymization-manifest.ts`, and
+ * `db:verify-anonymization-coverage` asks Postgres and exits non-zero if one is missing. A teardown
+ * has no authoring path yet, so an `author_user_id` would mean minting credential-less accounts and
+ * then carrying them through account closure, handle uniqueness and data export — to render a
+ * byline. When authoring lands it adds `author_user_id` AND the manifest entry in the same commit,
+ * or that script fails the build.
+ */
+export const teardown = pgTable(
+  "teardown",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    /**
+     * The public address, `/blueprints/teardowns/<slug>`.
+     *
+     * PRESENT FROM THE START, unlike a launch's `public_slug`. A `pending_review` teardown has an
+     * address; whether a reader may follow it is decided by `moderation_state` alone.
+     */
+    slug: text("slug").notNull().unique(),
+    title: text("title").notNull(),
+    summary: text("summary").notNull(),
+    thumbnailUrl: text("thumbnail_url").notNull(),
+
+    authorDisplayName: text("author_display_name").notNull(),
+    /** Nullable exactly as `user.handle` is — nothing guarantees a contributor has one. */
+    authorHandle: text("author_handle"),
+    authorAvatarUrl: text("author_avatar_url"),
+
+    difficulty: blueprintDifficultyEnum("difficulty").notNull(),
+    /** Free text, e.g. "STEP / Fusion 360". NULL when no CAD source was published. */
+    cadFormat: text("cad_format"),
+    tags: text("tags")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /**
+     * THE AUTHOR'S OWN TALLY, and deliberately unrelated to how many parts the model carries. The
+     * solar controller says 148 while its assembly lists 9, because a model shows the parts worth
+     * exploding rather than every screw. There is NO CHECK tying the two: 148 is not nine and must
+     * not become nine.
+     */
+    partCount: integer("part_count"),
+    subjectKind: teardownSubjectKindEnum("subject_kind").notNull(),
+    moderationState: blueprintModerationStateEnum("moderation_state").notNull(),
+
+    billOfMaterialsMinimumCents: integer("bill_of_materials_minimum_cents"),
+    billOfMaterialsMaximumCents: integer("bill_of_materials_maximum_cents"),
+    billOfMaterialsCurrency: text("bill_of_materials_currency"),
+
+    // --- Provenance. NOT NULL as a block: a teardown with no stated origin may not exist. ---
+    provenanceKind: blueprintProvenanceKindEnum("provenance_kind").notNull(),
+    /** Somebody else's product name, as the publisher wrote it. */
+    provenanceSubjectProductName: text("provenance_subject_product_name").notNull(),
+    provenanceUnitAcquisition: teardownUnitAcquisitionEnum("provenance_unit_acquisition").notNull(),
+    provenanceSurveyMethods: teardownSurveyMethodEnum("provenance_survey_methods")
+      .array()
+      .notNull(),
+    /** When the unit was measured — which is not when the write-up was posted. */
+    provenanceSurveyedAt: timestamp("provenance_surveyed_at", { precision: 3 }).notNull(),
+    provenanceLicenceName: text("provenance_licence_name"),
+    provenanceLicenceUrl: text("provenance_licence_url"),
+    /**
+     * The publisher's own words about a private permission. IT IS NOT A LICENCE and no renderer may
+     * dress it as one — which is why it is a separate column from the licence pair rather than a
+     * third variant of it.
+     */
+    provenanceAuthorizationNote: text("provenance_authorization_note"),
+    /** That the attestation clauses were accepted. An attestation nobody can see is none. */
+    provenanceAttestationAcceptedAt: timestamp("provenance_attestation_accepted_at", {
+      precision: 3,
+    }).notNull(),
+    provenanceNotes: text("provenance_notes"),
+
+    // --- Repairability index. All nine or none — half an index is not an index. ---
+    repairabilityFastenerUniformityScore: integer("repairability_fastener_uniformity_score"),
+    repairabilityFastenerUniformityNote: text("repairability_fastener_uniformity_note"),
+    repairabilityToolAccessibilityScore: integer("repairability_tool_accessibility_score"),
+    repairabilityToolAccessibilityNote: text("repairability_tool_accessibility_note"),
+    repairabilityDisassemblyStepCountScore: integer("repairability_disassembly_step_count_score"),
+    repairabilityDisassemblyStepCountNote: text("repairability_disassembly_step_count_note"),
+    repairabilityModularIndependenceScore: integer("repairability_modular_independence_score"),
+    repairabilityModularIndependenceNote: text("repairability_modular_independence_note"),
+    /**
+     * STORED, NEVER AVERAGED from the four criteria. They are not equally weighted, and the
+     * weighting is an editorial decision the publisher owns.
+     */
+    repairabilityOverallScore: integer("repairability_overall_score"),
+
+    // --- Simulation telemetry. Author-reported measurements; no solver exists on either side. ---
+    telemetryFactorOfSafety: doublePrecision("telemetry_factor_of_safety"),
+    telemetryPeakVonMisesStressMegapascals: doublePrecision(
+      "telemetry_peak_von_mises_stress_megapascals",
+    ),
+    telemetryMaxDisplacementMicrometres: integer("telemetry_max_displacement_micrometres"),
+    /** SIGNED — a thermal delta can be a drop. */
+    telemetryThermalDeltaKelvin: doublePrecision("telemetry_thermal_delta_kelvin"),
+    telemetryRatedLoadNewtons: doublePrecision("telemetry_rated_load_newtons"),
+    /**
+     * Text with a CHECK rather than a one-label enum, because the contract calls this the first arm
+     * of a future union: a `platform_simulated` arm would carry a run id and a mesh count this row
+     * cannot. Widening a CHECK is a drop-and-add; widening an enum inside a migration batch is the
+     * `ALTER TYPE … ADD VALUE` trap the blueprint header above records.
+     */
+    telemetrySource: text("telemetry_source"),
+
+    // --- Where the surveyed product sits in the store. ---
+    storeProductClassCategorySlug: text("store_product_class_category_slug"),
+    /** STORED, not un-kebabbed from the slug — a heading is not a slug with dashes removed. */
+    storeProductClassLabel: text("store_product_class_label"),
+
+    // --- The walkthrough video, when somebody filmed it. ---
+    walkthroughVideoSource: videoSourceEnum("walkthrough_video_source"),
+    walkthroughYoutubeVideoId: text("walkthrough_youtube_video_id"),
+    walkthroughPosterUrl: text("walkthrough_poster_url"),
+    /**
+     * NULLABLE INSIDE A PRESENT BLOCK. YouTube's oEmbed returns no duration and nothing on either
+     * side of the wire can measure one, so a typed runtime would be a guess. NULL is the honest
+     * value and the all-or-none CHECK below spans the other three fields only.
+     */
+    walkthroughDurationSeconds: integer("walkthrough_duration_seconds"),
+
+    createdAt: timestamp("created_at", { precision: 3 }).notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    /*
+     * THE PUBLIC INDEX'S PAGE, and the directions matter. The keyset is `created_at DESC, id ASC`,
+     * mixed, because the frontend's comparator breaks ties on the id ascending and Postgres only
+     * walks an index whose directions match pair for pair.
+     *
+     * Partial on the LIST gate, so the index and the predicate cannot drift apart.
+     */
+    index("teardown_public_newest_idx")
+      .on(desc(table.createdAt), table.id)
+      .where(sql`moderation_state IN ('published', 'flagged')`),
+
+    /**
+     * The four states a teardown can actually be in today. Narrower than the seven-label enum, in
+     * the same way `showcase_launch_moderation_state_ck` narrows it to three — written from what
+     * exists rather than from what the enum permits.
+     */
+    check(
+      "teardown_moderation_state_ck",
+      sql`moderation_state IN ('published', 'flagged', 'quarantined', 'pending_review')`,
+    ),
+    /**
+     * Only an existing physical product is publishable. The enum keeps both labels because the
+     * authoring wizard needs to name the one it refuses; the CHECK is the gate.
+     */
+    check("teardown_subject_kind_ck", sql`subject_kind = 'existing_physical_product'`),
+    check(
+      "teardown_slug_ck",
+      sql`char_length(slug) BETWEEN 3 AND 120
+          AND slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+          AND slug NOT IN ('teardowns', 'showcase', 'case-studies', 'new', 'slugs', 'options')`,
+    ),
+    check(
+      "teardown_text_lengths_ck",
+      sql`char_length(title) BETWEEN 8 AND 160
+          AND char_length(summary) BETWEEN 40 AND 2000
+          AND (cad_format IS NULL OR char_length(cad_format) BETWEEN 1 AND 120)`,
+    ),
+    check("teardown_thumbnail_url_ck", assetUrlCheck("thumbnail_url")),
+    check(
+      "teardown_author_ck",
+      sql`char_length(author_display_name) BETWEEN 1 AND 80
+          AND (author_handle IS NULL
+               OR (char_length(author_handle) BETWEEN 1 AND 64
+                   AND author_handle ~ '^[A-Za-z0-9_.-]+$'))`,
+    ),
+    check(
+      "teardown_author_avatar_url_ck",
+      sql`author_avatar_url IS NULL OR (${assetUrlCheck("author_avatar_url")})`,
+    ),
+    check("teardown_tags_ck", sql`cardinality(tags) <= 12`),
+    /** Never zero — a zero-part teardown is not a teardown. NULL means nobody counted. */
+    check("teardown_part_count_ck", sql`part_count IS NULL OR part_count > 0`),
+    check(
+      "teardown_cost_range_ck",
+      sql`(bill_of_materials_minimum_cents IS NULL
+           AND bill_of_materials_maximum_cents IS NULL
+           AND bill_of_materials_currency IS NULL)
+          OR (bill_of_materials_minimum_cents IS NOT NULL
+              AND bill_of_materials_maximum_cents IS NOT NULL
+              AND bill_of_materials_currency = 'USD'
+              AND bill_of_materials_minimum_cents >= 0
+              AND bill_of_materials_maximum_cents >= bill_of_materials_minimum_cents
+              AND bill_of_materials_maximum_cents <= 100000000)`,
+    ),
+    /**
+     * THE PERMISSION TRUTH TABLE, all three arms enumerated rather than two tested and the
+     * remainder let through.
+     *
+     * An open-source teardown carries a licence and no private note; an authorized one carries the
+     * note and no licence; a reverse-engineered one carries neither, because there was no
+     * permission to record. Each arm refuses BOTH the missing required field and the present
+     * forbidden one.
+     */
+    check(
+      "teardown_provenance_permission_ck",
+      sql`(provenance_kind = 'licensed_open_source'
+           AND provenance_licence_name IS NOT NULL
+           AND provenance_licence_url IS NOT NULL
+           AND provenance_authorization_note IS NULL)
+          OR (provenance_kind = 'authorized_by_manufacturer'
+              AND provenance_licence_name IS NULL
+              AND provenance_licence_url IS NULL
+              AND provenance_authorization_note IS NOT NULL)
+          OR (provenance_kind = 'community_reverse_engineered'
+              AND provenance_licence_name IS NULL
+              AND provenance_licence_url IS NULL
+              AND provenance_authorization_note IS NULL)`,
+    ),
+    check(
+      "teardown_provenance_licence_url_ck",
+      sql`provenance_licence_url IS NULL OR (${externalUrlCheck("provenance_licence_url")})`,
+    ),
+    /**
+     * At least one survey method, at most one of each kind's worth.
+     *
+     * Distinctness is NOT here: a CHECK may not hold the subquery `SELECT DISTINCT unnest(...)`
+     * needs, and the contract itself permits duplicates. The import schema normalises instead.
+     */
+    check(
+      "teardown_provenance_survey_methods_ck",
+      sql`cardinality(provenance_survey_methods) BETWEEN 1 AND 3`,
+    ),
+    /** Nine columns or none, and every score inside 0..10. */
+    check(
+      "teardown_repairability_ck",
+      sql`(repairability_fastener_uniformity_score IS NULL
+           AND repairability_fastener_uniformity_note IS NULL
+           AND repairability_tool_accessibility_score IS NULL
+           AND repairability_tool_accessibility_note IS NULL
+           AND repairability_disassembly_step_count_score IS NULL
+           AND repairability_disassembly_step_count_note IS NULL
+           AND repairability_modular_independence_score IS NULL
+           AND repairability_modular_independence_note IS NULL
+           AND repairability_overall_score IS NULL)
+          OR (repairability_fastener_uniformity_score BETWEEN 0 AND 10
+              AND repairability_fastener_uniformity_note IS NOT NULL
+              AND repairability_tool_accessibility_score BETWEEN 0 AND 10
+              AND repairability_tool_accessibility_note IS NOT NULL
+              AND repairability_disassembly_step_count_score BETWEEN 0 AND 10
+              AND repairability_disassembly_step_count_note IS NOT NULL
+              AND repairability_modular_independence_score BETWEEN 0 AND 10
+              AND repairability_modular_independence_note IS NOT NULL
+              AND repairability_overall_score BETWEEN 0 AND 10)`,
+    ),
+    /** Six figures or none. `thermal_delta_kelvin` is the only one allowed to be negative. */
+    check(
+      "teardown_telemetry_ck",
+      sql`(telemetry_factor_of_safety IS NULL
+           AND telemetry_peak_von_mises_stress_megapascals IS NULL
+           AND telemetry_max_displacement_micrometres IS NULL
+           AND telemetry_thermal_delta_kelvin IS NULL
+           AND telemetry_rated_load_newtons IS NULL
+           AND telemetry_source IS NULL)
+          OR (telemetry_factor_of_safety > 0
+              AND telemetry_peak_von_mises_stress_megapascals >= 0
+              AND telemetry_max_displacement_micrometres >= 0
+              AND telemetry_thermal_delta_kelvin IS NOT NULL
+              AND telemetry_rated_load_newtons > 0
+              AND telemetry_source = 'author_reported')`,
+    ),
+    /**
+     * A slug and its label, or neither.
+     *
+     * ⚠️ DELIBERATELY NOT A FOREIGN KEY into `commerce_category`. The publisher places the surveyed
+     * product in a class that may not be a category this store carries yet, and a foreign key would
+     * refuse the placement rather than record it — the same argument
+     * `showcase_launch_built_from_slug_ck` already makes for naming a teardown.
+     */
+    check(
+      "teardown_store_product_class_ck",
+      sql`(store_product_class_category_slug IS NULL AND store_product_class_label IS NULL)
+          OR (store_product_class_category_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
+              AND char_length(store_product_class_label) BETWEEN 1 AND 80)`,
+    ),
+    /**
+     * ⚠️ PINS THE SOURCE TO `youtube`, and that is not redundancy.
+     *
+     * This column reuses the `video_source` enum, which also carries `hosted` — but the frontend's
+     * video shape is a ONE-ARM union. A `hosted` row is not a field the page ignores; it is a parse
+     * failure that blanks the detail page. The enum is shared, so the CHECK is what narrows it.
+     */
+    check(
+      "teardown_walkthrough_video_ck",
+      sql`(walkthrough_video_source IS NULL
+           AND walkthrough_youtube_video_id IS NULL
+           AND walkthrough_poster_url IS NULL
+           AND walkthrough_duration_seconds IS NULL)
+          OR (walkthrough_video_source = 'youtube'
+              AND walkthrough_youtube_video_id ~ '^[A-Za-z0-9_-]{11}$'
+              AND walkthrough_poster_url IS NOT NULL
+              AND (walkthrough_duration_seconds IS NULL OR walkthrough_duration_seconds > 0))`,
+    ),
+    check(
+      "teardown_walkthrough_poster_url_ck",
+      sql`walkthrough_poster_url IS NULL OR (${assetUrlCheck("walkthrough_poster_url")})`,
+    ),
+  ],
+);
+
+/**
+ * Denormalised counters for one teardown — a read cache, never a source of truth.
+ *
+ * ⚠️ ONE DIFFERENCE FROM `showcase_launch_stats`, and it inverts that table's argument. There, no
+ * route writes a counter, so no rows exist and every read coalesces to zero. Here the seeded
+ * teardowns carry real figures a publisher reported, so the seed DOES write a row per teardown and
+ * the `coalesce` on the read is defence rather than the mechanism.
+ *
+ * Still no source-of-truth tables behind these: there is no view beacon, no like route and no
+ * comment table for a teardown, because the frontend renders all four as inert spans. When those
+ * routes land they bring their own tables and reconcile into this one.
+ */
+export const teardownStats = pgTable(
+  "teardown_stats",
+  {
+    teardownId: text("teardown_id")
+      .primaryKey()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    viewCount: integer("view_count").default(0).notNull(),
+    likeCount: integer("like_count").default(0).notNull(),
+    commentCount: integer("comment_count").default(0).notNull(),
+    saveCount: integer("save_count").default(0).notNull(),
+    updatedAt: timestamp("updated_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  () => [
+    check(
+      "teardown_stats_nonnegative_ck",
+      sql`view_count >= 0 AND like_count >= 0 AND comment_count >= 0 AND save_count >= 0`,
+    ),
+  ],
+);
+
+/**
+ * The 3D view of one teardown, when a model was published.
+ *
+ * ONE PER TEARDOWN — `unique(teardown_id)` — so `?media=assembly` is an index-only semi-join and
+ * the 1:1 shape is declared rather than assumed.
+ *
+ * `unique(teardown_id, id)` exists for a different reason: it is the first hop of the composite
+ * foreign keys on `teardown_assembly_step` and `teardown_material`, which is how "this step's
+ * focused part belongs to THIS teardown's assembly" becomes a declarative rule instead of a trigger.
+ */
+export const teardownAssembly = pgTable(
+  "teardown_assembly",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    kind: teardownAssemblyKindEnum("kind").notNull(),
+    /**
+     * The direction parts fly apart in. NULL means the author did not state one, and then no part
+     * may carry a `layer_index` either — see the import schema, which is where that cross-row rule
+     * lives because a CHECK cannot see sibling rows.
+     */
+    explosionAxisX: doublePrecision("explosion_axis_x"),
+    explosionAxisY: doublePrecision("explosion_axis_y"),
+    explosionAxisZ: doublePrecision("explosion_axis_z"),
+    /** The one composite model file. NULL on the `individual_parts` arm, where parts carry their own. */
+    modelUrl: text("model_url"),
+    modelByteSize: integer("model_byte_size"),
+  },
+  (table) => [
+    unique("teardown_assembly_teardown_uidx").on(table.teardownId),
+    unique("teardown_assembly_teardown_id_uidx").on(table.teardownId, table.id),
+    unique("teardown_assembly_kind_uidx").on(table.id, table.kind),
+    /** A composite assembly has the model; an individual-parts one has none. */
+    check(
+      "teardown_assembly_kind_shape_ck",
+      sql`(kind = 'composite' AND model_url IS NOT NULL AND model_byte_size > 0)
+          OR (kind = 'individual_parts' AND model_url IS NULL AND model_byte_size IS NULL)`,
+    ),
+    check(
+      "teardown_assembly_model_url_ck",
+      sql`model_url IS NULL OR (${assetUrlCheck("model_url")})`,
+    ),
+    /** Three components or none, and never the zero vector — a zero axis explodes nothing. */
+    check(
+      "teardown_assembly_explosion_axis_ck",
+      sql`(explosion_axis_x IS NULL AND explosion_axis_y IS NULL AND explosion_axis_z IS NULL)
+          OR (explosion_axis_x IS NOT NULL
+              AND explosion_axis_y IS NOT NULL
+              AND explosion_axis_z IS NOT NULL
+              AND (explosion_axis_x <> 0 OR explosion_axis_y <> 0 OR explosion_axis_z <> 0))`,
+    ),
+  ],
+);
+
+/**
+ * One part of one assembly, in a tree.
+ *
+ * ⚠️ `assembly_kind` IS DENORMALISED ON PURPOSE, and it is what makes the union's shape a
+ * declarative rule. The composite foreign key `(assembly_id, assembly_kind)` forces it to agree
+ * with the parent assembly, and then a per-row CHECK can say "a composite part names a node and
+ * carries no model; an individual part carries a model and names no node" — with no trigger and no
+ * application rule. Without the denormalised column that CHECK would need to read another table.
+ *
+ * `parent_part_id` is a composite self-reference, so a parent must be a part of the SAME assembly —
+ * a bare `references()` would have let a part adopt a parent from another teardown.
+ *
+ * ⚠️ ACYCLICITY BEYOND SELF-PARENTING IS NOT HERE. A cycle needs a recursive walk, which a CHECK
+ * cannot do; `teardown-import.schemas.ts` walks it instead, because the seed is the only writer on
+ * this surface and a trigger for a rule no route can break is machinery with no caller.
+ */
+export const teardownPart = pgTable(
+  "teardown_part",
+  {
+    id: text("id").notNull(),
+    assemblyId: text("assembly_id")
+      .notNull()
+      .references(() => teardownAssembly.id, { onDelete: "cascade" }),
+    assemblyKind: teardownAssemblyKindEnum("assembly_kind").notNull(),
+    parentPartId: text("parent_part_id"),
+    /** Publication order, so the tree comes back the way the author wrote it. */
+    position: integer("position").notNull(),
+    label: text("label").notNull(),
+    /** Free text, and unrelated to the `teardown_material` rows — a part says "6063-T5 aluminium". */
+    material: text("material").notNull(),
+    manufacturingMethod: teardownManufacturingMethodEnum("manufacturing_method").notNull(),
+    explosionDirectionX: doublePrecision("explosion_direction_x"),
+    explosionDirectionY: doublePrecision("explosion_direction_y"),
+    explosionDirectionZ: doublePrecision("explosion_direction_z"),
+    explosionDistanceMm: doublePrecision("explosion_distance_mm"),
+    /** Duplicates and zero are BOTH legal — three buttons can share one plane. */
+    layerIndex: integer("layer_index"),
+    /**
+     * AN AUTHOR-ASSIGNED HEAT-MAP WEIGHT IN [0,1], NOT A SOLVER RESULT. It tints a part; it claims
+     * nothing about a load case, and must never be conflated with the telemetry figures.
+     */
+    stressRating: doublePrecision("stress_rating"),
+    calloutText: text("callout_text"),
+    /** Composite arm only: the node name inside the shared `.glb`, byte-matched by the viewer. */
+    nodeName: text("node_name"),
+    /** Individual arm only. */
+    modelUrl: text("model_url"),
+    modelByteSize: integer("model_byte_size"),
+    placementPositionX: doublePrecision("placement_position_x"),
+    placementPositionY: doublePrecision("placement_position_y"),
+    placementPositionZ: doublePrecision("placement_position_z"),
+    placementRotationX: doublePrecision("placement_rotation_x"),
+    placementRotationY: doublePrecision("placement_rotation_y"),
+    placementRotationZ: doublePrecision("placement_rotation_z"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.assemblyId, table.id] }),
+    // The target of the self-reference and of the two child tables' second hop.
+    unique("teardown_part_assembly_id_uidx").on(table.assemblyId, table.id),
+    // Composite arm only, so partial: an individual part names no node.
+    uniqueIndex("teardown_part_node_name_uidx")
+      .on(table.assemblyId, table.nodeName)
+      .where(sql`node_name IS NOT NULL`),
+    foreignKey({
+      name: "teardown_part_assembly_kind_fk",
+      columns: [table.assemblyId, table.assemblyKind],
+      foreignColumns: [teardownAssembly.id, teardownAssembly.kind],
+    }).onDelete("cascade"),
+    /** Deleting a part takes its subtree with it — an orphaned child is not a tree. */
+    foreignKey({
+      name: "teardown_part_parent_fk",
+      columns: [table.assemblyId, table.parentPartId],
+      foreignColumns: [table.assemblyId, table.id],
+    }).onDelete("cascade"),
+    /** The 1-cycle. Longer ones are the import schema's job. */
+    check("teardown_part_not_own_parent_ck", sql`parent_part_id IS NULL OR parent_part_id <> id`),
+    /** The union's shape, readable on the row because `assembly_kind` travels with it. */
+    check(
+      "teardown_part_arm_shape_ck",
+      sql`(assembly_kind = 'composite'
+           AND node_name IS NOT NULL
+           AND model_url IS NULL
+           AND model_byte_size IS NULL
+           AND placement_position_x IS NULL
+           AND placement_rotation_x IS NULL)
+          OR (assembly_kind = 'individual_parts'
+              AND node_name IS NULL
+              AND model_url IS NOT NULL
+              AND model_byte_size > 0)`,
+    ),
+    check("teardown_part_model_url_ck", sql`model_url IS NULL OR (${assetUrlCheck("model_url")})`),
+    /**
+     * Three components or none, never the zero vector.
+     *
+     * ⚠️ `explosion_distance_mm` IS INDEPENDENTLY NULLABLE, which departs from this file's usual
+     * co-required-pair rule and does so because the contract says to: a direction with no distance
+     * means "move it this way by the viewer's default", which is a different statement from "do not
+     * move it".
+     */
+    check(
+      "teardown_part_explosion_direction_ck",
+      sql`(explosion_direction_x IS NULL
+           AND explosion_direction_y IS NULL
+           AND explosion_direction_z IS NULL)
+          OR (explosion_direction_x IS NOT NULL
+              AND explosion_direction_y IS NOT NULL
+              AND explosion_direction_z IS NOT NULL
+              AND (explosion_direction_x <> 0
+                   OR explosion_direction_y <> 0
+                   OR explosion_direction_z <> 0))`,
+    ),
+    check(
+      "teardown_part_placement_ck",
+      sql`(placement_position_x IS NULL
+           AND placement_position_y IS NULL
+           AND placement_position_z IS NULL
+           AND placement_rotation_x IS NULL
+           AND placement_rotation_y IS NULL
+           AND placement_rotation_z IS NULL)
+          OR (placement_position_x IS NOT NULL
+              AND placement_position_y IS NOT NULL
+              AND placement_position_z IS NOT NULL
+              AND placement_rotation_x IS NOT NULL
+              AND placement_rotation_y IS NOT NULL
+              AND placement_rotation_z IS NOT NULL)`,
+    ),
+    check(
+      "teardown_part_scalars_ck",
+      sql`(explosion_distance_mm IS NULL OR explosion_distance_mm > 0)
+          AND (layer_index IS NULL OR layer_index >= 0)
+          AND (stress_rating IS NULL OR (stress_rating >= 0 AND stress_rating <= 1))
+          AND position >= 0
+          AND char_length(label) BETWEEN 1 AND 120
+          AND char_length(material) BETWEEN 1 AND 120
+          AND (node_name IS NULL OR char_length(node_name) BETWEEN 1 AND 120)
+          AND (callout_text IS NULL OR char_length(callout_text) BETWEEN 1 AND 400)`,
+    ),
+  ],
+);
+
+/** Something a reader opens: a schematic, a bill of materials, an assembly guide, a datasheet. */
+export const teardownDocument = pgTable(
+  "teardown_document",
+  {
+    id: text("id").primaryKey(),
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    kind: blueprintDocumentKindEnum("kind").notNull(),
+    title: text("title").notNull(),
+    url: text("url").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    /** NULL means nobody counted the pages — which is not zero pages. */
+    pageCount: integer("page_count"),
+  },
+  (table) => [
+    // `?media=documents` is an EXISTS over this index, and the page's child load is an IN over it.
+    index("teardown_document_teardown_idx").on(table.teardownId, table.position),
+    check("teardown_document_url_ck", assetUrlCheck("url")),
+    check(
+      "teardown_document_scalars_ck",
+      sql`byte_size >= 0
+          AND position >= 0
+          AND (page_count IS NULL OR page_count > 0)
+          AND char_length(title) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
+/**
+ * Something a fab consumes: STEP, STL, DXF, Gerber, drill, pick-and-place, a BOM csv.
+ *
+ * A SEPARATE TABLE FROM `teardown_document`, which the contract argues at length — two kinds, two
+ * renderers, and a `page_count` that means nothing for a Gerber. Note `byte_size > 0` here against
+ * `>= 0` on a document: the contract draws that distinction and this mirrors it.
+ */
+export const teardownManufacturingFile = pgTable(
+  "teardown_manufacturing_file",
+  {
+    id: text("id").primaryKey(),
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    kind: teardownManufacturingFileKindEnum("kind").notNull(),
+    title: text("title").notNull(),
+    url: text("url").notNull(),
+    byteSize: integer("byte_size").notNull(),
+  },
+  (table) => [
+    index("teardown_manufacturing_file_teardown_idx").on(table.teardownId, table.position),
+    check("teardown_manufacturing_file_url_ck", assetUrlCheck("url")),
+    check(
+      "teardown_manufacturing_file_scalars_ck",
+      sql`byte_size > 0 AND position >= 0 AND char_length(title) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
+/** One line of the fastener bill of materials. */
+export const teardownFastener = pgTable(
+  "teardown_fastener",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    /** NULL for a proprietary part — never the string "N/A". */
+    standardCode: text("standard_code"),
+    /**
+     * A DESIGNATION, NOT A MEASUREMENT. "M3 × 8", "#6-32 × ½″" and "12 mm × 40 mm" come from three
+     * different standards and do not reduce to a number pair.
+     */
+    sizeLabel: text("size_label").notNull(),
+    drive: teardownFastenerDriveEnum("drive").notNull(),
+    quantity: integer("quantity").notNull(),
+    supplierLabel: text("supplier_label"),
+    supplierUrl: text("supplier_url"),
+  },
+  (table) => [
+    index("teardown_fastener_teardown_idx").on(table.teardownId, table.position),
+    /** A supplier is a label and a link together, or neither. */
+    check(
+      "teardown_fastener_supplier_ck",
+      sql`(supplier_label IS NULL AND supplier_url IS NULL)
+          OR (char_length(supplier_label) BETWEEN 1 AND 80 AND supplier_url IS NOT NULL)`,
+    ),
+    /** Outbound, so https only — there is no same-site supplier. */
+    check(
+      "teardown_fastener_supplier_url_ck",
+      sql`supplier_url IS NULL OR (${externalUrlCheck("supplier_url")})`,
+    ),
+    check(
+      "teardown_fastener_scalars_ck",
+      sql`quantity > 0
+          AND position >= 0
+          AND char_length(size_label) BETWEEN 1 AND 80
+          AND (standard_code IS NULL OR char_length(standard_code) BETWEEN 1 AND 80)`,
+    ),
+  ],
+);
+
+/**
+ * One numbered disassembly step.
+ *
+ * `focused_part_id` NAMES A PART OF THIS TEARDOWN'S OWN ASSEMBLY, and that is enforced in two hops:
+ * `(teardown_id, assembly_id)` proves the assembly belongs to this teardown, then
+ * `(assembly_id, focused_part_id)` proves the part belongs to that assembly. The denormalised
+ * `assembly_id` is the price of not needing a trigger.
+ *
+ * ⚠️ THE DENSE 1..N SEQUENCE IS NOT ENFORCED HERE. `unique(teardown_id, step_number)` stops a
+ * duplicate, but "no gaps, starting at 1" needs a count over sibling rows, which a CHECK cannot do.
+ * `teardown-import.schemas.ts` checks it, and the read orders by `step_number` so the API cannot
+ * emit them out of order even if a gap ever appeared.
+ */
+export const teardownAssemblyStep = pgTable(
+  "teardown_assembly_step",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    stepNumber: integer("step_number").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    assemblyId: text("assembly_id"),
+    focusedPartId: text("focused_part_id"),
+  },
+  (table) => [
+    unique("teardown_assembly_step_number_uidx").on(table.teardownId, table.stepNumber),
+    foreignKey({
+      name: "teardown_assembly_step_assembly_fk",
+      columns: [table.teardownId, table.assemblyId],
+      foreignColumns: [teardownAssembly.teardownId, teardownAssembly.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "teardown_assembly_step_part_fk",
+      columns: [table.assemblyId, table.focusedPartId],
+      foreignColumns: [teardownPart.assemblyId, teardownPart.id],
+    }).onDelete("cascade"),
+    /** A focused part needs the assembly it lives in; neither travels alone. */
+    check(
+      "teardown_assembly_step_focus_ck",
+      sql`(assembly_id IS NULL) = (focused_part_id IS NULL)`,
+    ),
+    check(
+      "teardown_assembly_step_scalars_ck",
+      sql`step_number BETWEEN 1 AND 64
+          AND char_length(title) BETWEEN 1 AND 200
+          AND char_length(description) BETWEEN 1 AND 2000`,
+    ),
+  ],
+);
+
+/**
+ * One composition record: what a named piece of the product is made of.
+ *
+ * `part_id` resolves through the same two hops as a step's focused part. Most materials name no
+ * part at all — a housing nobody modelled is still worth recording.
+ */
+export const teardownMaterial = pgTable(
+  "teardown_material",
+  {
+    id: text("id").primaryKey(),
+    teardownId: text("teardown_id")
+      .notNull()
+      .references(() => teardown.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    appliesToLabel: text("applies_to_label").notNull(),
+    /**
+     * FREE TEXT BY DECREE. A closed enum would refuse the first unusual polymer somebody actually
+     * measured; the form offers a combobox of suggestions instead.
+     */
+    designation: text("designation").notNull(),
+    /** Travels with the designation everywhere it renders — no renderer may drop it to save a line. */
+    designationSource: teardownDesignationSourceEnum("designation_source").notNull(),
+    materialClass: teardownMaterialClassEnum("material_class").notNull(),
+    process: teardownManufacturingMethodEnum("process"),
+    finish: text("finish"),
+    assemblyId: text("assembly_id"),
+    partId: text("part_id"),
+  },
+  (table) => [
+    index("teardown_material_teardown_idx").on(table.teardownId, table.position),
+    foreignKey({
+      name: "teardown_material_assembly_fk",
+      columns: [table.teardownId, table.assemblyId],
+      foreignColumns: [teardownAssembly.teardownId, teardownAssembly.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "teardown_material_part_fk",
+      columns: [table.assemblyId, table.partId],
+      foreignColumns: [teardownPart.assemblyId, teardownPart.id],
+    }).onDelete("cascade"),
+    check("teardown_material_part_ck", sql`(assembly_id IS NULL) = (part_id IS NULL)`),
+    check(
+      "teardown_material_scalars_ck",
+      sql`position >= 0
+          AND char_length(applies_to_label) BETWEEN 1 AND 120
+          AND char_length(designation) BETWEEN 1 AND 120
+          AND (finish IS NULL OR char_length(finish) BETWEEN 1 AND 120)`,
+    ),
+  ],
+);
+
+/**
+ * One element inside one material's composition.
+ *
+ * ⚠️ A WEIGHT RANGE OF NULL IS NOT ZERO PERCENT. "Iron is present but we did not quantify it" is a
+ * different statement from "there is no iron", and the fixtures contain exactly that case.
+ */
+export const teardownMaterialElement = pgTable(
+  "teardown_material_element",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    materialId: text("material_id")
+      .notNull()
+      .references(() => teardownMaterial.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    /** A chemical symbol: one to three characters. */
+    symbol: text("symbol").notNull(),
+    minimumPercent: doublePrecision("minimum_percent"),
+    maximumPercent: doublePrecision("maximum_percent"),
+    analysisMethod: teardownCompositionAnalysisMethodEnum("analysis_method").notNull(),
+    instrumentLabel: text("instrument_label"),
+    operatorNote: text("operator_note"),
+  },
+  (table) => [
+    index("teardown_material_element_material_idx").on(table.materialId, table.position),
+    /** Both bounds or neither, and ordered. */
+    check(
+      "teardown_material_element_range_ck",
+      sql`(minimum_percent IS NULL AND maximum_percent IS NULL)
+          OR (minimum_percent >= 0
+              AND maximum_percent <= 100
+              AND maximum_percent >= minimum_percent)`,
+    ),
+    /**
+     * AN INSTRUMENT MAY ONLY ACCOMPANY A MEASUREMENT. `declared_not_measured` and
+     * `synthetic_example` are honest values, and naming a spectrometer beside either would claim it
+     * read a number nobody measured. One-directional, exactly as the contract is: a measured row
+     * may still leave the instrument unnamed.
+     */
+    check(
+      "teardown_material_element_instrument_ck",
+      sql`instrument_label IS NULL
+          OR analysis_method IN ('xrf', 'oes', 'eds', 'icp_oes')`,
+    ),
+    check(
+      "teardown_material_element_scalars_ck",
+      sql`position >= 0
+          AND char_length(symbol) BETWEEN 1 AND 3
+          AND (instrument_label IS NULL OR char_length(instrument_label) BETWEEN 1 AND 120)
+          AND (operator_note IS NULL OR char_length(operator_note) BETWEEN 1 AND 400)`,
+    ),
+  ],
+);
+
+export const teardownRelations = relations(teardown, ({ one, many }) => ({
+  stats: one(teardownStats, {
+    fields: [teardown.id],
+    references: [teardownStats.teardownId],
+  }),
+  assembly: one(teardownAssembly, {
+    fields: [teardown.id],
+    references: [teardownAssembly.teardownId],
+  }),
+  documents: many(teardownDocument),
+  manufacturingFiles: many(teardownManufacturingFile),
+  fasteners: many(teardownFastener),
+  assemblySteps: many(teardownAssemblyStep),
+  materials: many(teardownMaterial),
+}));
+
+export const teardownAssemblyRelations = relations(teardownAssembly, ({ one, many }) => ({
+  teardown: one(teardown, {
+    fields: [teardownAssembly.teardownId],
+    references: [teardown.id],
+  }),
+  parts: many(teardownPart),
+}));
+
+export const teardownPartRelations = relations(teardownPart, ({ one }) => ({
+  assembly: one(teardownAssembly, {
+    fields: [teardownPart.assemblyId],
+    references: [teardownAssembly.id],
+  }),
+}));
+
+export const teardownMaterialRelations = relations(teardownMaterial, ({ one, many }) => ({
+  teardown: one(teardown, {
+    fields: [teardownMaterial.teardownId],
+    references: [teardown.id],
+  }),
+  elements: many(teardownMaterialElement),
+}));
+
+export const teardownMaterialElementRelations = relations(teardownMaterialElement, ({ one }) => ({
+  material: one(teardownMaterial, {
+    fields: [teardownMaterialElement.materialId],
+    references: [teardownMaterial.id],
+  }),
 }));
