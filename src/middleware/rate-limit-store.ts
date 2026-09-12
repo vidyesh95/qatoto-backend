@@ -65,11 +65,29 @@ const claimedNamespaces = new Set<string>();
  * asserting a partial one through `as`, which CLAUDE.md §2 bans outright. Twenty lines of
  * Map is cheaper than either, and it is the same accounting.
  */
+/**
+ * How many buckets may accumulate before `increment` drops the expired ones.
+ *
+ * ⚠️ THIS EXISTS BECAUSE THE MAP NEVER SHRANK, WHICH WAS A REAL LEAK AND NOT A TEST CONCERN.
+ * Nothing here removed a key once its window closed — only `clear()` emptied the map — and in
+ * production this class is reached through degraded mode, keyed on the CALLER'S IP. So every
+ * database blip added IP-keyed entries that outlived their window and stayed for the life of
+ * the process. `purgeExpiredRateLimitBuckets` sweeps the Postgres table; nothing swept this.
+ *
+ * A THRESHOLD RATHER THAN A TIMER, deliberately. express-rate-limit's own MemoryStore uses
+ * `setInterval(...).unref()`, and an unref'd handle per limiter is 111 timers whose whole job is
+ * to wake up and find nothing — and in a test worker they are 111 things to leak. Sweeping on
+ * write costs nothing until the map is actually big.
+ */
+const MEMORY_BUCKET_SWEEP_THRESHOLD = 10_000;
+
 class InMemoryBuckets {
   private readonly buckets = new Map<string, { hitCount: number; expiresAtEpochMs: number }>();
 
   increment(key: string, windowMs: number): ClientRateLimitInfo {
     const now = Date.now();
+    if (this.buckets.size >= MEMORY_BUCKET_SWEEP_THRESHOLD) this.sweepExpired(now);
+
     const existing = this.buckets.get(key);
     // An expired bucket ROLLS rather than resuming, matching the SQL's CASE arms.
     const bucket =
@@ -81,6 +99,16 @@ class InMemoryBuckets {
     return { totalHits: bucket.hitCount, resetTime: new Date(bucket.expiresAtEpochMs) };
   }
 
+  /**
+   * Drops every bucket whose window has closed. Safe at any moment: an expired bucket is
+   * indistinguishable from an absent one, because `increment` rolls both to a fresh count of 1.
+   */
+  private sweepExpired(now: number): void {
+    for (const [bucketKey, bucket] of this.buckets) {
+      if (bucket.expiresAtEpochMs <= now) this.buckets.delete(bucketKey);
+    }
+  }
+
   decrement(key: string): void {
     const existing = this.buckets.get(key);
     if (existing && existing.expiresAtEpochMs > Date.now()) {
@@ -90,6 +118,13 @@ class InMemoryBuckets {
 
   resetKey(key: string): void {
     this.buckets.delete(key);
+  }
+
+  /** A live bucket, or `undefined` for one that is absent or whose window has closed. */
+  peek(key: string): ClientRateLimitInfo | undefined {
+    const existing = this.buckets.get(key);
+    if (!existing || existing.expiresAtEpochMs <= Date.now()) return undefined;
+    return { totalHits: existing.hitCount, resetTime: new Date(existing.expiresAtEpochMs) };
   }
 
   clear(): void {
@@ -314,8 +349,97 @@ export class PostgresRateLimitStore implements Store {
 }
 
 /**
- * The store for one limiter, or `undefined` in dev and test so the library builds its own
- * MemoryStore (see `isRateLimitStoreShared` for why those environments stay local).
+ * The per-process store dev and test run on, and THE REASON IT IS OURS RATHER THAN THE
+ * LIBRARY'S.
+ *
+ * ⚠️ THIS CLASS EXISTS TO FIX A TEST FLAKE THAT WAS UNFIXABLE WITHOUT IT. `createRateLimitStore`
+ * used to return `undefined` outside production, which makes express-rate-limit construct its
+ * own `MemoryStore` per limiter — an object nothing in this repo holds a reference to. The only
+ * handle a test had was the middleware's `resetKey(key)`, which requires KNOWING EVERY KEY, so
+ * `src/test-support/rate-limit-reset.ts` guessed one: `TEST_SESSION_USER.id`.
+ *
+ * That guess is right for the ~108 limiters behind `requireAuth` and wrong for the three that
+ * are not. `signupCompleteIpLimiter` is keyed on the IP, so its bucket was never reset, and
+ * `auth.routes.test.ts` accumulated hits against a limit of 12 across its whole run — passing
+ * in declaration order and failing under `--sequence.shuffle`, reported against whichever test
+ * happened to run after the budget ran out.
+ *
+ * Owning the store replaces the guess with `resetAll()`, which is key-independent by
+ * construction and therefore cannot rot the next time somebody adds an IP- or email-keyed route.
+ *
+ * IT ALSO MAKES DEV AND TEST COUNT THE WAY PRODUCTION COUNTS. `InMemoryBuckets` implements the
+ * same fixed window as the SQL's `CASE` arms; the library's `MemoryStore` keeps a current and a
+ * previous window instead. Those agree on "the 13th request is refused" and disagree at the
+ * edges, and the one worth rehearsing locally is the one that ships.
+ *
+ * `localKeys = true` MIRRORS `MemoryStore`, and it is what makes a `prefix` unnecessary here.
+ * The library's double-count check keys on `store.localKeys ? store : store.constructor.name`
+ * (`express-rate-limit@8.7.0`, `singleCount`) — so a local store is separated by INSTANCE, and
+ * `/signup/start`'s two stacked limiters cannot collide however similar their keys look.
+ * `PostgresRateLimitStore` sets `localKeys = false` and therefore does need its `prefix`: all of
+ * its instances share one constructor name.
+ */
+export class MemoryRateLimitStore implements Store {
+  /** Per-process by definition, so the library separates these stores by instance. */
+  readonly localKeys = true;
+
+  private windowMs: number;
+  private readonly buckets = new InMemoryBuckets();
+
+  constructor(
+    readonly namespace: string,
+    windowMs: number,
+  ) {
+    this.windowMs = windowMs;
+  }
+
+  /** `Pick<Options, "windowMs">` for the reason `PostgresRateLimitStore.init` gives. */
+  init(options: Pick<Options, "windowMs">): void {
+    this.windowMs = options.windowMs;
+  }
+
+  /**
+   * `normalizeBucketKey` on every key, exactly as the Postgres store does. Nothing here needs
+   * the length bound, but a store whose keys differed from its sibling's would make a
+   * dev-versus-production discrepancy out of an attacker-supplied email length.
+   */
+  increment(key: string): ClientRateLimitInfo {
+    return this.buckets.increment(normalizeBucketKey(key), this.windowMs);
+  }
+
+  decrement(key: string): void {
+    this.buckets.decrement(normalizeBucketKey(key));
+  }
+
+  resetKey(key: string): void {
+    this.buckets.resetKey(normalizeBucketKey(key));
+  }
+
+  get(key: string): ClientRateLimitInfo | undefined {
+    return this.buckets.peek(normalizeBucketKey(key));
+  }
+
+  /** Every bucket of this limiter, whatever its key. The test seam's whole point. */
+  resetAll(): void {
+    this.buckets.clear();
+  }
+
+  shutdown(): void {
+    this.buckets.clear();
+  }
+}
+
+/**
+ * Every memory store handed out, so a test can empty all of them.
+ *
+ * Empty in production, where `createRateLimitStore` returns Postgres-backed stores instead —
+ * which is why `resetAllRateLimitBuckets` refuses to be a silent no-op there.
+ */
+const resettableMemoryStores: MemoryRateLimitStore[] = [];
+
+/**
+ * The store for one limiter — Postgres-backed where the limit must hold across instances, and a
+ * resettable per-process store in dev and test (see `isRateLimitStoreShared`).
  *
  * THROWS ON A DUPLICATE NAMESPACE, at module load. Two limiters sharing a namespace would
  * silently merge their buckets — a stricter limit on one route and a looser one on another,
@@ -330,7 +454,31 @@ export function createRateLimitStore(namespace: string, windowMs: number): Store
   claimedNamespaces.add(namespace);
   registrations.push({ namespace, storeKind: isRateLimitStoreShared ? "postgres" : "memory" });
 
-  return isRateLimitStoreShared ? new PostgresRateLimitStore(namespace, windowMs) : undefined;
+  if (isRateLimitStoreShared) return new PostgresRateLimitStore(namespace, windowMs);
+
+  const store = new MemoryRateLimitStore(namespace, windowMs);
+  resettableMemoryStores.push(store);
+  return store;
+}
+
+/**
+ * TEST SEAM. Empties every bucket of every memory-backed limiter, whatever its key.
+ *
+ * ⚠️ THROWS RATHER THAN RETURNING QUIETLY when there is nothing to reset. A no-op here does not
+ * look like a failure — it looks like a suite that passes until the day its test order changes,
+ * which is precisely the bug this replaced. If `isRateLimitStoreShared` is ever true under test,
+ * the caller needs to know now.
+ */
+export function resetAllRateLimitBuckets(): void {
+  if (resettableMemoryStores.length === 0) {
+    throw new Error(
+      "resetAllRateLimitBuckets(): no memory-backed limiters are registered. Either " +
+        "src/middleware/rate-limit.ts was never imported, or isRateLimitStoreShared is true " +
+        "and the limiters are on Postgres — in which case this reset would silently do nothing.",
+    );
+  }
+
+  for (const store of resettableMemoryStores) store.resetAll();
 }
 
 /**
