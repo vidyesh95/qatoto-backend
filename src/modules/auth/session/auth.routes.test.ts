@@ -117,26 +117,34 @@ describe("auth session routes", () => {
     });
 
     /**
-     * Loops until blocked rather than asserting an exact count. `resetRateLimiters()` only
-     * resets USER-id-keyed buckets (see its own doc comment); `otpRequestIpLimiter` and
-     * `otpRequestEmailLimiter` are IP/email-keyed and share one bucket for this whole file's
-     * lifetime, so how many requests remain before a 429 depends on how many earlier tests
-     * in this describe already hit `/signup/start`. Proving "eventually 429, and every
-     * response before it was 200" is the property that survives that shared state.
+     * ⚠️ AN EXACT COUNT, WHICH THIS COULD NOT ASSERT BEFORE.
+     *
+     * It used to loop until it saw a 429 and only claim "eventually blocked", because
+     * `resetRateLimiters()` reset one key per limiter — `TEST_SESSION_USER.id` — and these two
+     * limiters are keyed on the IP and the email. Their buckets survived the whole file, so how
+     * many requests remained was a function of test order, which is also what made the nine
+     * `/signup/complete` tests below fail under `--sequence.shuffle`.
+     *
+     * The reset is key-independent now, so the budget is knowable and the real contract is
+     * assertable: `otpRequestEmailLimiter` allows 4 per email per 15 minutes.
+     *
+     * KEYED ON THE EMAIL, NOT THE IP, and one address is what proves it. The stacked
+     * `otpRequestIpLimiter` allows 8, so five requests cannot be what trips here — this is the
+     * anti-email-bomb limit, and the assertion would still pass if it were the IP one only
+     * because 5 < 8 is not the boundary being crossed.
      */
-    it("eventually rate-limits repeated requests for the same email", async () => {
+    it("blocks the 5th code to one inbox — the per-email limit is 4", async () => {
       const email = "rate-limited-signup@example.test";
-      const statuses: number[] = [];
-      for (let attempt = 0; attempt < 10; attempt += 1) {
+
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
         // eslint-disable-next-line no-await-in-loop
-        const response = await request(app).post("/signup/start").send({ email });
-        statuses.push(response.status);
-        if (response.status === 429) break;
+        const allowed = await request(app).post("/signup/start").send({ email });
+        expect(allowed.status).toBe(200);
       }
 
-      const blockedIndex = statuses.indexOf(429);
-      expect(blockedIndex).toBeGreaterThan(-1);
-      expect(statuses.slice(0, blockedIndex).every((status) => status === 200)).toBe(true);
+      const blocked = await request(app).post("/signup/start").send({ email });
+
+      expect(blocked.status).toBe(429);
     });
   });
 
@@ -253,28 +261,35 @@ describe("auth session routes", () => {
 
   describe("POST /signup/complete — rate limiting", () => {
     /**
-     * Same reasoning as the `/signup/start` rate-limit test above: `signupCompleteIpLimiter`
-     * shares one bucket across every test in this file (its key is the request IP, never
-     * reset between tests), so this loops until blocked rather than asserting an exact
-     * count.
+     * ⚠️ THE TEST THAT USED TO POISON THE OTHER NINE.
+     *
+     * `signupCompleteIpLimiter` allows 12 per IP per 15 minutes, and this test spends all of
+     * them. Its key is the request IP, which the old `resetRateLimiters()` never reset — so in
+     * declaration order this ran last and the nine functional `/signup/complete` tests above
+     * had 9 of 12 to themselves, while any shuffle that ran this first left them nothing and
+     * every one of them failed with a 429 that read as "expected 429 to be 401".
+     *
+     * Now that the reset empties every bucket whatever its key, the exact boundary is the thing
+     * worth asserting — and the 401s on the way there are asserted too, because a limiter that
+     * started refusing at the 3rd attempt would also produce "the 13th is not 200".
      */
-    it("eventually rate-limits repeated attempts per IP", async () => {
+    it("allows 12 attempts per IP then blocks the 13th", async () => {
       userLookupRows = [];
       stubVerificationOtp("000000"); // always wrong, so every attempt is fast/cheap (401s)
 
-      const statuses: number[] = [];
-      for (let attempt = 0; attempt < 15; attempt += 1) {
+      for (let attempt = 1; attempt <= 12; attempt += 1) {
         // eslint-disable-next-line no-await-in-loop
-        const response = await request(app)
+        const allowed = await request(app)
           .post("/signup/complete")
           .send({ email: `attempt-${attempt}@example.test`, otp: "123456", password: "a-strong-password-1" });
-        statuses.push(response.status);
-        if (response.status === 429) break;
+        expect(allowed.status).toBe(401);
       }
 
-      const blockedIndex = statuses.indexOf(429);
-      expect(blockedIndex).toBeGreaterThan(-1);
-      expect(statuses.slice(0, blockedIndex).every((status) => status === 401)).toBe(true);
+      const blocked = await request(app)
+        .post("/signup/complete")
+        .send({ email: "attempt-13@example.test", otp: "123456", password: "a-strong-password-1" });
+
+      expect(blocked.status).toBe(429);
     });
   });
 

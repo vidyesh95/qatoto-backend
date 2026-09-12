@@ -189,12 +189,71 @@ describe("PostgresRateLimitStore", () => {
       expect(() => createRateLimitStore("uniqueProbeNamespace", 1000)).toThrow(/Duplicate/);
     });
 
-    it("returns no store outside production, leaving the library on MemoryStore", async () => {
-      const { createRateLimitStore } = await loadStoreModule();
+    /**
+     * ⚠️ THIS ASSERTION USED TO BE `toBeUndefined()`, AND THAT WAS THE FLAKE.
+     *
+     * Returning `undefined` makes express-rate-limit build its own `MemoryStore`, which nothing
+     * in this repo holds a reference to — so `resetRateLimiters()` could only reach a bucket by
+     * NAMING ITS KEY, and it guessed `TEST_SESSION_USER.id`. That is right for the ~108 limiters
+     * behind `requireAuth` and wrong for the three signup ones, whose buckets are keyed on the
+     * IP and the email and were therefore never emptied between tests.
+     *
+     * Owning the store is what makes the reset key-independent, so this is now the guarantee
+     * every one of the 62 suites that calls `resetRateLimiters()` depends on.
+     */
+    it("returns a store this module owns and can reset, outside production", async () => {
+      const { createRateLimitStore, MemoryRateLimitStore } = await loadStoreModule();
 
-      // stubServerEnvironment() pins NODE_ENV to "test", so this is the dev/test branch —
-      // which is what keeps rate-limit.test.ts working against a mocked database.
-      expect(createRateLimitStore("anotherProbeNamespace", 1000)).toBeUndefined();
+      // stubServerEnvironment() pins NODE_ENV to "test", so this is the dev/test branch.
+      const store = createRateLimitStore("anotherProbeNamespace", 1000);
+
+      expect(store).toBeInstanceOf(MemoryRateLimitStore);
+    });
+  });
+
+  describe("resetAllRateLimitBuckets", () => {
+    /**
+     * THE PROPERTY THE OLD RESET COULD NOT HAVE: emptying a bucket WITHOUT KNOWING ITS KEY.
+     *
+     * The key here is deliberately not a user id — it is the shape `signupCompleteIpLimiter`
+     * produces, which is exactly the bucket the previous implementation left behind.
+     */
+    it("empties a bucket nobody named, whatever its key", async () => {
+      const { createRateLimitStore, resetAllRateLimitBuckets, MemoryRateLimitStore } = await loadStoreModule();
+
+      const created = createRateLimitStore("resetProbeNamespace", 60_000);
+      // Narrowed by `instanceof` rather than an assertion: `Store["init"]` is declared over the
+      // whole `Options` object, and only the concrete class exposes the `Pick` this can satisfy.
+      if (!(created instanceof MemoryRateLimitStore)) {
+        throw new Error("the dev/test branch must return a MemoryRateLimitStore");
+      }
+      created.init({ windowMs: 60_000 });
+
+      const key = "::ffff:127.0.0.1";
+      created.increment(key);
+      const beforeReset = created.get(key);
+
+      resetAllRateLimitBuckets();
+
+      expect(beforeReset?.totalHits).toBe(1);
+      expect(created.get(key)).toBeUndefined();
+    });
+
+    /**
+     * ⚠️ A NO-OP HERE DOES NOT LOOK LIKE A FAILURE — it looks like a suite that passes until the
+     * day its test order changes, which is the bug this whole change replaced. So the absence of
+     * anything to reset has to be loud.
+     *
+     * `vi.resetModules()` IS THE WHOLE TEST. `resettableMemoryStores` is module state, and every
+     * other case in this file has already pushed into it, so the empty case is unreachable
+     * without a fresh module registry. An earlier draft asserted the guard's MESSAGE TEXT
+     * instead, which would have passed just as happily with the throw unreachable.
+     */
+    it("throws rather than silently resetting nothing", async () => {
+      vi.resetModules();
+      const { resetAllRateLimitBuckets } = await loadStoreModule();
+
+      expect(() => resetAllRateLimitBuckets()).toThrow(/silently do nothing/);
     });
   });
 });
