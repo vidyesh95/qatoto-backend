@@ -1,0 +1,2 @@
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'case_study_published' BEFORE 'commerce_content_hidden';--> statement-breakpoint
+ALTER TYPE "public"."platform_audit_event_kind" ADD VALUE 'case_study_rejected' BEFORE 'commerce_content_hidden';

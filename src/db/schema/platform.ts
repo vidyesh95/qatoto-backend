@@ -173,6 +173,12 @@ export const platformAuditEventKindEnum = pgEnum("platform_audit_event_kind", [
   // Both name an accountable human. Posting a launch is a member action and is not here.
   "showcase_launch_published",
   "showcase_launch_rejected",
+  // Blueprints case studies — `case-study-moderation`. Same two decisions as a launch, and one
+  // extra reason to keep the payload to ids: a case study's evidence row can carry a company name
+  // its writer withheld from readers, and this chain is hash-linked and kept forever. An entry that
+  // named one could never be erased.
+  "case_study_published",
+  "case_study_rejected",
   // Commerce content moderation — `commerce-content-reports` (Appendix A12). Staff
   // decisions only. An AUTOMATIC threshold hide never reaches this chain: this table's
   // `actorUserId` is NOT NULL because every entry must name an accountable human, and
