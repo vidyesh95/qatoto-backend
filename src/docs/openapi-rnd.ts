@@ -257,6 +257,14 @@ const PUBLICLY_RESOLVABLE = new Set([
   "get /blueprints/showcases",
   "get /blueprints/showcases/slugs",
   "get /blueprints/showcases/{launchSlug}",
+  // The public teardown surface. Bare for the same reason, with one thing worth stating here: the
+  // last two are gated on READABLE rather than LIST, so a quarantined teardown answers 200 with its
+  // files withheld. That is the design — the address survives a rights claim, the payload does not.
+  "get /blueprints/teardowns",
+  "get /blueprints/teardowns/options",
+  "get /blueprints/teardowns/slugs",
+  "get /blueprints/teardowns/{teardownSlug}",
+  "get /blueprints/teardowns/{teardownSlug}/claim-targets",
 ]);
 
 const CONTRACT_NOTE =

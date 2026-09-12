@@ -92,6 +92,11 @@ describe("the blueprints router", () => {
       "get /showcases",
       "get /showcases/slugs",
       "get /showcases/:launchSlug",
+      "get /teardowns",
+      "get /teardowns/options",
+      "get /teardowns/slugs",
+      "get /teardowns/:teardownSlug",
+      "get /teardowns/:teardownSlug/claim-targets",
     ]);
 
     for (const routeKey of barePublicRoutes) {
@@ -148,6 +153,53 @@ describe("the blueprints router", () => {
     expect(handlerCounts.get("get /showcases/slugs")).toBe(1);
     expect(handlerCounts.get("get /showcases/:launchSlug")).toBe(1);
     expect(handlerCounts.get("post /admin/showcases/:submissionId/moderate")).toBe(6);
+  });
+
+  /**
+   * The five teardown reads, each a controller and nothing else.
+   *
+   * EXACT COUNTS, so a guard added here is a failure rather than a silent change of surface. It
+   * would be a change of surface: two of these five are READABLE-gated and serve a quarantined
+   * teardown its notice, and anything that turned them into authenticated routes would take that
+   * page away from the reader who followed an existing link.
+   */
+  it("gives each teardown read its exact bare chain", async () => {
+    const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
+    const handlerCounts = handlerCountsByMethodAndPath(blueprintsRouter);
+
+    expect(handlerCounts.get("get /teardowns")).toBe(1);
+    expect(handlerCounts.get("get /teardowns/options")).toBe(1);
+    expect(handlerCounts.get("get /teardowns/slugs")).toBe(1);
+    expect(handlerCounts.get("get /teardowns/:teardownSlug")).toBe(1);
+    expect(handlerCounts.get("get /teardowns/:teardownSlug/claim-targets")).toBe(1);
+  });
+
+  /**
+   * `options` and `slugs` are literals under `/teardowns/`, and `/teardowns/:teardownSlug` captures
+   * either word as a slug if it is declared first — answering "no such teardown" to the launch
+   * composer's select and to the frontend's prerender step, both of which would then fall back to
+   * an empty list rather than an error anybody notices.
+   *
+   * The literal list is DERIVED rather than named, so the next literal under `/teardowns/` is
+   * guarded without anyone remembering to add it here.
+   */
+  it("declares every /teardowns literal before /teardowns/:teardownSlug", async () => {
+    const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
+    const paths = declaredRoutes(blueprintsRouter).map((route) => route.path);
+
+    const parameterizedIndex = paths.indexOf("/teardowns/:teardownSlug");
+    expect(parameterizedIndex, "/teardowns/:teardownSlug must be declared at all").toBeGreaterThanOrEqual(0);
+
+    const literalPaths = paths.filter((path) => path.startsWith("/teardowns/") && !path.includes(":"));
+    expect(literalPaths, "the derived literal list must not be empty").toEqual([
+      "/teardowns/options",
+      "/teardowns/slugs",
+    ]);
+    for (const literalPath of literalPaths) {
+      expect(paths.indexOf(literalPath), `${literalPath} must precede /teardowns/:teardownSlug`).toBeLessThan(
+        parameterizedIndex,
+      );
+    }
   });
 
   /**

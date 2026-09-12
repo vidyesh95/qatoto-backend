@@ -13,6 +13,7 @@ import { requireAuth } from "#src/middleware/require-auth.js";
 import { requireIdentifiedUser } from "#src/middleware/require-identified-user.js";
 import * as blueprintHeroController from "#src/modules/home/blueprints/blueprint-hero.controller.js";
 import * as showcaseLaunchController from "#src/modules/home/blueprints/showcase-launch.controller.js";
+import * as teardownController from "#src/modules/home/blueprints/teardown.controller.js";
 import { uploadBlueprintHeroSlideImageFile } from "#src/modules/home/blueprints/upload-blueprint-hero-image.js";
 import {
   uploadShowcaseLaunchSubmissionFiles,
@@ -165,6 +166,41 @@ router.get("/showcases", showcaseLaunchController.listPublicShowcaseFeed);
 
 /** GET /blueprints/showcases/:launchSlug — one published launch. DECLARED LAST, see the docblock. */
 router.get("/showcases/:launchSlug", showcaseLaunchController.getPublicShowcaseLaunch);
+
+/*
+ * TEARDOWNS — five PUBLIC reads and nothing else. There is no teardown write path yet; the twelve
+ * rows arrive through `pnpm db:seed-blueprint-teardowns`, which parses them with the same schema an
+ * authoring route will.
+ *
+ * Bare, for the reason the showcase reads above are bare: the answer is identical for every
+ * visitor, so there is no session worth resolving and nothing to key a bucket on but an IP, which
+ * behind a CDN or a NAT is an outage aimed at ourselves.
+ *
+ * ⚠️ TWO DIFFERENT GATES SIT BEHIND THESE FIVE ROUTES, and the service holds them apart on purpose.
+ * `/teardowns` and `/teardowns/options` LIST (`published`, `flagged`); `/teardowns/slugs`,
+ * `/teardowns/:teardownSlug` and its `claim-targets` are READABLE (those two plus `quarantined`).
+ * A quarantine withholds a teardown's files; it does not delete its address.
+ *
+ * ROUTE ORDER: `options` and `slugs` are literals and must stay above `/:teardownSlug`, or either
+ * word is captured as a slug and the wrong handler answers. `:teardownSlug/claim-targets` is
+ * declared before the bare `:teardownSlug` for readability rather than necessity — the two differ by
+ * a path segment, so Express cannot confuse them.
+ */
+
+/** GET /blueprints/teardowns/options — LITERAL, must stay above /:teardownSlug. */
+router.get("/teardowns/options", teardownController.listTeardownOptions);
+
+/** GET /blueprints/teardowns/slugs — LITERAL, must stay above /:teardownSlug. Readable gate. */
+router.get("/teardowns/slugs", teardownController.listPublicTeardownSlugs);
+
+/** GET /blueprints/teardowns — the index, its filters and its tag facets in one payload. */
+router.get("/teardowns", teardownController.listPublicTeardowns);
+
+/** GET /blueprints/teardowns/:teardownSlug/claim-targets — ids and titles, provably no URLs. */
+router.get("/teardowns/:teardownSlug/claim-targets", teardownController.getTeardownClaimTargets);
+
+/** GET /blueprints/teardowns/:teardownSlug — one readable teardown. DECLARED LAST of the five. */
+router.get("/teardowns/:teardownSlug", teardownController.getPublicTeardown);
 
 /** GET /blueprints/admin/showcases/review-queue — `moderate_content`, oldest first. */
 router.get("/admin/showcases/review-queue", requireAuth, showcaseLaunchController.listReviewQueue);
