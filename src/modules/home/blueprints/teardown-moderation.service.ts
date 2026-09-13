@@ -5,8 +5,12 @@ import { and, asc, eq, gt, or, type SQL } from "drizzle-orm";
 import { db } from "#src/db/index.js";
 import {
   teardown,
+  teardownAssembly,
+  teardownAssemblyStep,
   teardownDocument,
+  teardownFastener,
   teardownManufacturingFile,
+  teardownPart,
   teardownSubmissionFileUpload,
   teardownMaterial,
   teardownMaterialElement,
@@ -18,7 +22,15 @@ import {
 import { encodeInstantCursor, type InstantCursor } from "#src/lib/instant-cursor.js";
 import { isUniqueViolation } from "#src/lib/pg-errors.js";
 import { buildErrorWithoutQueryParameters } from "#src/modules/home/blueprints/blueprint-write-errors.js";
-import { RESERVED_TEARDOWN_SLUGS } from "#src/modules/home/blueprints/teardown-import.schemas.js";
+import {
+  noModelColumns,
+  orderPartsParentsFirst,
+  uploadedModelColumns,
+} from "#src/modules/home/blueprints/teardown-assembly-write.js";
+import {
+  RESERVED_TEARDOWN_SLUGS,
+  TEARDOWN_MANUFACTURING_METHODS,
+} from "#src/modules/home/blueprints/teardown-import.schemas.js";
 import {
   isTeardownDocumentKind,
   type SubmittedTeardownFile,
@@ -346,6 +358,25 @@ function storageColumnsForSubmittedFile(
   }
 }
 
+/**
+ * The staged row an id names, or a throw.
+ *
+ * A throw is correct here and a `Result` is not: `submitTeardown` already proved every id belongs
+ * to this author and claimed it, and this runs inside the publish transaction that loaded them. An
+ * absent row means the claim and this read disagree about the same table — a programmer error, and
+ * rolling the publish back is the only safe answer.
+ */
+function requireStagedUpload(
+  uploadId: string,
+  stagedUploadsById: ReadonlyMap<string, StagedUploadRow>,
+): StagedUploadRow {
+  const staged = stagedUploadsById.get(uploadId);
+  if (staged === undefined) {
+    throw new Error(`Submission names upload ${uploadId}, which no longer exists.`);
+  }
+  return staged;
+}
+
 interface StagedUploadRow {
   readonly objectStorageKey: string;
   readonly contentSha256: string;
@@ -427,6 +458,134 @@ async function copySubmissionIntoTeardown(
         kind: file.kind,
         title: file.title,
         ...storageColumnsForSubmittedFile(file, stagedUploadsById),
+      })),
+    );
+  }
+
+  /*
+   * THE ASSEMBLY, ITS PARTS, ITS STEPS AND ITS FASTENERS — in the order the seed proved legal.
+   *
+   * ⚠️ THE FOUR TABLES NEEDED NO DDL TO ACCEPT AUTHORED ROWS, which is the strongest evidence the
+   * authoring path belongs on the submit route rather than on a post-publish surface: they were
+   * built for exactly this shape. §3.1's argument against relaxing `teardown` does not transfer —
+   * none of these has a moderator-supplied column or a NOT NULL an author cannot answer.
+   */
+  if (document.assembly !== null) {
+    const assemblyModel =
+      document.assembly.kind === "composite"
+        ? uploadedModelColumns(
+            requireStagedUpload(document.assembly.model.modelUploadId, stagedUploadsById),
+          )
+        : noModelColumns();
+
+    const [insertedAssembly] = await transaction
+      .insert(teardownAssembly)
+      .values({
+        teardownId,
+        kind: document.assembly.kind,
+        explosionAxisX: document.assembly.explosionAxis?.[0] ?? null,
+        explosionAxisY: document.assembly.explosionAxis?.[1] ?? null,
+        explosionAxisZ: document.assembly.explosionAxis?.[2] ?? null,
+        ...assemblyModel,
+      })
+      .returning({ id: teardownAssembly.id });
+    if (!insertedAssembly) throw new Error("teardown assembly insert returned no row");
+
+    /*
+     * ⚠️ BRANCHED ON `kind` RATHER THAN PROBED WITH `"model" in part`, because the two arms are a
+     * discriminated union and only the discriminant narrows them. The `in` test compiles and then
+     * collapses both arms to their intersection, which loses `placement` and types `model` as
+     * unknown — the union's whole point, defeated by the shorthand.
+     */
+    const sharedPartColumns = (
+      part: {
+        readonly id: string;
+        readonly label: string;
+        readonly parentPartId: string | null;
+        readonly material: string;
+        readonly manufacturingMethod: (typeof TEARDOWN_MANUFACTURING_METHODS)[number];
+        readonly explosionDirection: readonly [number, number, number] | null;
+        readonly explosionDistanceMm: number | null;
+        readonly layerIndex: number | null;
+        readonly stressRating: number | null;
+        readonly calloutText: string | null;
+      },
+      position: number,
+    ) => ({
+      id: part.id,
+      assemblyId: insertedAssembly.id,
+      parentPartId: part.parentPartId,
+      position,
+      label: part.label,
+      material: part.material,
+      manufacturingMethod: part.manufacturingMethod,
+      explosionDirectionX: part.explosionDirection?.[0] ?? null,
+      explosionDirectionY: part.explosionDirection?.[1] ?? null,
+      explosionDirectionZ: part.explosionDirection?.[2] ?? null,
+      explosionDistanceMm: part.explosionDistanceMm,
+      layerIndex: part.layerIndex,
+      stressRating: part.stressRating,
+      calloutText: part.calloutText,
+    });
+
+    if (document.assembly.kind === "composite") {
+      for (const { part, position } of orderPartsParentsFirst(document.assembly.parts)) {
+        await transaction.insert(teardownPart).values({
+          ...sharedPartColumns(part, position),
+          assemblyKind: "composite",
+          nodeName: part.nodeName,
+          ...noModelColumns(),
+          placementPositionX: null,
+          placementPositionY: null,
+          placementPositionZ: null,
+          placementRotationX: null,
+          placementRotationY: null,
+          placementRotationZ: null,
+        });
+      }
+    } else {
+      for (const { part, position } of orderPartsParentsFirst(document.assembly.parts)) {
+        await transaction.insert(teardownPart).values({
+          ...sharedPartColumns(part, position),
+          assemblyKind: "individual_parts",
+          nodeName: null,
+          ...uploadedModelColumns(requireStagedUpload(part.model.modelUploadId, stagedUploadsById)),
+          placementPositionX: part.placement?.positionMm[0] ?? null,
+          placementPositionY: part.placement?.positionMm[1] ?? null,
+          placementPositionZ: part.placement?.positionMm[2] ?? null,
+          placementRotationX: part.placement?.rotationDegrees[0] ?? null,
+          placementRotationY: part.placement?.rotationDegrees[1] ?? null,
+          placementRotationZ: part.placement?.rotationDegrees[2] ?? null,
+        });
+      }
+    }
+
+    if (document.assemblySteps.length > 0) {
+      await transaction.insert(teardownAssemblyStep).values(
+        document.assemblySteps.map((step) => ({
+          teardownId,
+          stepNumber: step.stepNumber,
+          title: step.title,
+          description: step.description,
+          // Both columns travel together — the CHECK says so, and the composite FK needs the pair.
+          assemblyId: step.focusedPartId === null ? null : insertedAssembly.id,
+          focusedPartId: step.focusedPartId,
+        })),
+      );
+    }
+  }
+
+  if (document.fasteners.length > 0) {
+    await transaction.insert(teardownFastener).values(
+      document.fasteners.map((fastener, position) => ({
+        teardownId,
+        position,
+        standardCode: fastener.standardCode,
+        sizeLabel: fastener.sizeLabel,
+        drive: fastener.drive,
+        quantity: fastener.quantity,
+        supplierLabel: fastener.supplier?.label ?? null,
+        supplierUrl: fastener.supplier?.url ?? null,
       })),
     );
   }

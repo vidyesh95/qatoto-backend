@@ -148,6 +148,14 @@ function buildSubmission(
         url: "https://files.example.com/housing.step",
       },
     ],
+    /*
+     * ⚠️ PRESENT AND EMPTY RATHER THAN OMITTED. They carry Zod defaults, so the WIRE may omit them —
+     * but `TeardownSubmissionInput` is the OUTPUT type, where a defaulted field is required. The
+     * assembly half of this smoke is driven separately below, against a real upload.
+     */
+    assembly: null,
+    assemblySteps: [],
+    fasteners: [],
     walkthroughVideo: {
       source: "youtube",
       youtubeVideoId: "dQw4w9WgXcQ",

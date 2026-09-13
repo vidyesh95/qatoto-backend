@@ -4072,6 +4072,13 @@ export const teardownUploadFormatEnum = pgEnum("teardown_upload_format", [
   "step",
   "stl",
   "dxf",
+  /**
+   * ⚠️ A MODEL, NOT A DOCUMENT, AND IT IS NEVER FILED INTO EITHER FILE TABLE. A `.glb` uploaded
+   * here lands on `teardown_assembly.model_object_storage_key` or a part's. It shares the upload
+   * route so there is one staging table, one ceiling, one sweep and one download gate rather than
+   * a second of each for one format.
+   */
+  "glb",
 ]);
 
 /**

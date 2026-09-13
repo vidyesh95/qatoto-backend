@@ -1,0 +1,1 @@
+ALTER TYPE "public"."teardown_upload_format" ADD VALUE 'glb';

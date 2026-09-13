@@ -18,6 +18,11 @@ import {
   teardownStats,
 } from "#src/db/schema.js";
 import {
+  noModelColumns,
+  orderPartsParentsFirst,
+  pastedModelColumns,
+} from "#src/modules/home/blueprints/teardown-assembly-write.js";
+import {
   TeardownImportSchema,
   type TeardownImport,
 } from "#src/modules/home/blueprints/teardown-import.schemas.js";
@@ -252,9 +257,9 @@ async function writeTeardown(
         explosionAxisX: fixture.assembly.explosionAxis?.[0] ?? null,
         explosionAxisY: fixture.assembly.explosionAxis?.[1] ?? null,
         explosionAxisZ: fixture.assembly.explosionAxis?.[2] ?? null,
-        modelUrl: fixture.assembly.kind === "composite" ? fixture.assembly.model.url : null,
-        modelByteSize:
-          fixture.assembly.kind === "composite" ? fixture.assembly.model.byteSize : null,
+        ...(fixture.assembly.kind === "composite"
+          ? pastedModelColumns(fixture.assembly.model)
+          : noModelColumns()),
       })
       .returning({ id: teardownAssembly.id });
     if (!insertedAssembly) throw new Error(`${fixture.slug}: assembly insert returned no row`);
@@ -265,25 +270,13 @@ async function writeTeardown(
      * inserted ahead of its parent is a 23503 — sorting by depth is what makes one bulk insert
      * legal. The import schema has already proved the tree is acyclic, so this terminates.
      */
-    const parentByPartId = new Map(
-      fixture.assembly.parts.map((part) => [part.id, part.parentPartId]),
-    );
-    function depthOf(partId: string): number {
-      let depth = 0;
-      let ancestorId = parentByPartId.get(partId) ?? null;
-      while (ancestorId !== null) {
-        depth += 1;
-        ancestorId = parentByPartId.get(ancestorId) ?? null;
-      }
-      return depth;
-    }
-
-    const orderedParts = fixture.assembly.parts
-      .map((part, position) => ({ part, position }))
-      .toSorted(
-        (left, right) =>
-          depthOf(left.part.id) - depthOf(right.part.id) || left.position - right.position,
-      );
+    /*
+     * ⚠️ SPREAD, NOT PASSED DIRECTLY. `parts` is `Composite[] | Individual[]` — a union of ARRAYS,
+     * which a generic over `readonly PartShape[]` cannot unify. Spreading makes it one array of the
+     * union, which infers. The publish path avoids this by branching on `kind` first, because it
+     * has to narrow anyway to know which model columns to write.
+     */
+    const orderedParts = orderPartsParentsFirst([...fixture.assembly.parts]);
 
     const assemblyKind = fixture.assembly.kind;
     for (const { part, position } of orderedParts) {
@@ -305,8 +298,7 @@ async function writeTeardown(
         stressRating: part.stressRating,
         calloutText: part.calloutText,
         nodeName: isIndividual ? null : part.nodeName,
-        modelUrl: isIndividual ? part.model.url : null,
-        modelByteSize: isIndividual ? part.model.byteSize : null,
+        ...(isIndividual ? pastedModelColumns(part.model) : noModelColumns()),
         placementPositionX: isIndividual ? (part.placement?.positionMm[0] ?? null) : null,
         placementPositionY: isIndividual ? (part.placement?.positionMm[1] ?? null) : null,
         placementPositionZ: isIndividual ? (part.placement?.positionMm[2] ?? null) : null,

@@ -32,9 +32,10 @@ export const uploadTeardownSubmissionFileParser = createSingleFileUpload({
     mediaType === "application/sla" ||
     mediaType === "image/vnd.dxf" ||
     mediaType === "application/dxf" ||
+    mediaType === "model/gltf-binary" ||
     mediaType === "text/plain",
   tooLargeMessage: "That file is over the 50 MB limit.",
-  unsupportedMediaTypeMessage: "Upload a PDF, STEP, STL or DXF file.",
+  unsupportedMediaTypeMessage: "Upload a PDF, STEP, STL, DXF or GLB file.",
   invalidUploadMessage: "That upload could not be read. Send one file and its format.",
   // Exactly one text part: `format`. A second is a request this route does not understand.
   textFieldLimit: 1,

@@ -1,4 +1,5 @@
 import { isPdfValidationError, MAX_PAPER_BYTES, validatePdfBytes } from "#src/modules/rnd/pdf.js";
+import { isGlbValidationError, validateGlbBytes } from "#src/modules/store/catalog/glb.js";
 
 /**
  * Byte-level validation for an uploaded teardown document or fabrication file. Bytes only — no
@@ -34,8 +35,16 @@ import { isPdfValidationError, MAX_PAPER_BYTES, validatePdfBytes } from "#src/mo
  * `evidenceBytesMatchMediaType` in the commerce verification upload.
  */
 
-/** The four formats the uploaded arm accepts. A pasted link may still be any of the eight kinds. */
-export const TEARDOWN_UPLOAD_FORMATS = ["pdf", "step", "stl", "dxf"] as const;
+/**
+ * The five formats the uploaded arm accepts. A pasted link may still be any of the eight kinds.
+ *
+ * ⚠️ `glb` IS A MODEL, NOT A DOCUMENT, AND IT TRAVELS THE SAME ROUTE ANYWAY. It is never filed into
+ * `teardown_document` or `teardown_manufacturing_file` — it lands on `teardown_assembly.model_url`'s
+ * uploaded arm, or on a part's. Sharing the upload route is what keeps one staging table, one
+ * ceiling, one sweep and one download gate; a second route for one format would have been a second
+ * of each.
+ */
+export const TEARDOWN_UPLOAD_FORMATS = ["pdf", "step", "stl", "dxf", "glb"] as const;
 export type TeardownUploadFormat = (typeof TEARDOWN_UPLOAD_FORMATS)[number];
 
 /**
@@ -171,6 +180,39 @@ export function validateTeardownFileBytes(
     return { type: "TOO_LARGE", byteSize: bytes.length };
   }
 
+  if (declaredFormat === "glb") {
+    /*
+     * ⚠️ DELEGATED TO `validateGlbBytes`, NEVER RE-IMPLEMENTED — the same rule the `pdf` arm
+     * follows. That module proves the glTF container magic, container version 2, a declared total
+     * length matching the bytes received (the truncation check) and a JSON first chunk, and it has
+     * its own test suite. It also hardcodes `MAX_PRODUCT_MODEL_BYTES` in its own `TOO_LARGE`
+     * branch, so a second cap here would mean two limits that eventually disagree.
+     */
+    const validated = validateGlbBytes(bytes);
+    if (isGlbValidationError(validated)) {
+      switch (validated.type) {
+        case "EMPTY":
+          return { type: "EMPTY" };
+        case "TOO_SMALL":
+          return { type: "TOO_SMALL", byteSize: validated.byteSize };
+        case "TOO_LARGE":
+          return { type: "TOO_LARGE", byteSize: validated.byteSize };
+        // The glTF container declares its own total length; a mismatch is a truncated transfer.
+        case "LENGTH_MISMATCH":
+          return { type: "TRUNCATED", declaredFormat };
+        case "NOT_A_GLB":
+        case "UNSUPPORTED_GLTF_VERSION":
+        case "MISSING_JSON_CHUNK":
+          return { type: "FORMAT_MISMATCH", declaredFormat };
+        default: {
+          const exhaustiveCheck: never = validated;
+          throw new Error(`Unhandled GLB validation error: ${JSON.stringify(exhaustiveCheck)}`);
+        }
+      }
+    }
+    return { byteSize: validated.byteSize, format: "glb" };
+  }
+
   switch (declaredFormat) {
     case "step":
       return stepBytesAreWellFramed(bytes)
@@ -193,6 +235,10 @@ export function validateTeardownFileBytes(
 
 /** The per-format ceiling, so the multipart layer and this module cannot disagree. */
 export function maximumBytesForTeardownUpload(): number {
-  // The multer cap must admit the LARGEST format; the per-format checks narrow it afterwards.
+  /*
+   * The multer cap must admit the LARGEST format; the per-format checks narrow it afterwards. GLB's
+   * own ceiling lives in `validateGlbBytes` and is smaller than both of these, so it is not part of
+   * the maximum — it is enforced where it is hardcoded.
+   */
   return Math.max(MAX_PAPER_BYTES, MAX_TEARDOWN_FABRICATION_FILE_BYTES);
 }
