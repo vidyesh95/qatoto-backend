@@ -358,16 +358,36 @@ async function main(): Promise<void> {
         : `the CHECK is missing ${missingReservations.join(", ")}`,
     );
 
-    console.log("\n--- 3. the three states this arm can reach ---");
+    console.log("\n--- 3. the four states this arm can reach ---");
 
-    // ⚠️ `flagged` AND `quarantined` ARE REFUSED BY DECISION, NOT BY OVERSIGHT. The teardown and
-    // case-study arms admit `flagged`; this one does not, and no flag/quarantine/restore verb is
-    // built for showcases. If that changes, these two assertions are the ones to edit — which is
-    // the point of asserting them rather than leaving the absence implicit.
+    /*
+     * ⚠️ THIS BLOCK USED TO REFUSE `flagged`, AND THE COMMENT IT CARRIED SAID THE REFUSAL WAS A
+     * DECISION: "If that changes, these two assertions are the ones to edit — which is the point of
+     * asserting them rather than leaving the absence implicit." That is exactly what happened, so
+     * the assertion is EDITED rather than deleted, and `quarantined` stays refused with its
+     * reasoning rewritten to say why this arm still has no such label.
+     *
+     * A flagged launch must carry the full decision set — slug, reviewer, review time — because
+     * `showcase_launch_decision_ck` now binds the slug to `IN ('published','flagged')`. That it is
+     * accepted WITH those and refused without (assertion below) is the whole feature.
+     */
+    await expectAccepted(
+      "a flagged launch is accepted — the arm has a flag verb now",
+      INSERT_LAUNCH,
+      launchParameters({
+        moderationState: "flagged",
+        publicSlug: `verify-flagged-${randomUUID().slice(0, 8)}`,
+        reviewedByUserId: authorId,
+        reviewedAt: new Date().toISOString(),
+      }),
+    );
+
     for (const [label, state] of [
       ["a draft launch is refused — a draft lives in the browser", "draft"],
-      ["a flagged launch is refused — this arm has no flag verb", "flagged"],
-      ["a quarantined launch is refused — this arm has no files to withhold", "quarantined"],
+      [
+        "a quarantined launch is refused — a showcase's files are its own maker's, so there is no third-party claim to withhold them under",
+        "quarantined",
+      ],
       ["a removed launch is refused", "removed"],
     ] as const) {
       await expectRefused(
@@ -377,6 +397,72 @@ async function main(): Promise<void> {
         launchParameters({ moderationState: state }),
       );
     }
+
+    /*
+     * ⚠️ THE SLUG CLAUSE, BOTH DIRECTIONS. Forgetting the forward one would let a flag strip a live
+     * page's address; forgetting the reverse would let a rejected launch keep a public one.
+     */
+    await expectRefused(
+      "a flagged launch with no public slug is refused — a flag must not un-address a live page",
+      PG_CHECK_VIOLATION,
+      INSERT_LAUNCH,
+      launchParameters({
+        moderationState: "flagged",
+        publicSlug: null,
+        reviewedByUserId: authorId,
+        reviewedAt: new Date().toISOString(),
+      }),
+    );
+
+    await expectRefused(
+      "a rejected launch with a public slug is refused — a rejection has no public address",
+      PG_CHECK_VIOLATION,
+      INSERT_LAUNCH,
+      launchParameters({
+        moderationState: "rejected",
+        publicSlug: `verify-rejected-${randomUUID().slice(0, 8)}`,
+        reviewedByUserId: authorId,
+        reviewedAt: new Date().toISOString(),
+        moderatorNote: "Not built by this team.",
+      }),
+    );
+
+    /*
+     * ⚠️ DERIVED FROM THE CATALOG, NOT RETYPED. Reading the predicate back out of
+     * `pg_get_indexdef` is what stops the public feed's gate and the index it is meant to use
+     * drifting apart — the failure mode there is silent, because a mismatched predicate does not
+     * error, it just stops the index being used.
+     */
+    const publicFeedIndexDefinition = await client.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes WHERE indexname = 'showcase_launch_public_newest_idx'`,
+    );
+    const publicFeedPredicate = publicFeedIndexDefinition.rows[0]?.indexdef ?? "";
+    check(
+      "the public feed index admits flagged launches, matching publiclyVisibleLaunchCondition()",
+      publicFeedPredicate.includes("flagged") && publicFeedPredicate.includes("published"),
+      publicFeedPredicate.includes("flagged")
+        ? "the predicate carries both labels"
+        : `the predicate is ${publicFeedPredicate || "missing"}`,
+    );
+
+    const liveTitleIndexDefinition = await client.query<{ indexdef: string }>(
+      `SELECT indexdef FROM pg_indexes WHERE indexname = 'showcase_launch_title_live_uidx'`,
+    );
+    const liveTitlePredicate = liveTitleIndexDefinition.rows[0]?.indexdef ?? "";
+    check(
+      "the live-title index admits flagged launches — a flagged title is still reachable",
+      liveTitlePredicate.includes("flagged"),
+      liveTitlePredicate.includes("flagged")
+        ? "the predicate carries the label"
+        : `the predicate is ${liveTitlePredicate || "missing"}`,
+    );
+    check(
+      "the live-title index still EXCLUDES rejected — a sent-back maker may reuse their name",
+      !liveTitlePredicate.includes("rejected"),
+      liveTitlePredicate.includes("rejected")
+        ? "the predicate now carries 'rejected', which strands a rejected maker's title"
+        : "the predicate omits it",
+    );
 
     console.log("\n--- 4. the decision columns move together ---");
 
@@ -1113,7 +1199,101 @@ async function main(): Promise<void> {
       ],
     );
 
-    console.log("\n--- 15. what the database deliberately does NOT enforce ---");
+    console.log("\n--- 15. the report and decision tables' third arm ---");
+
+    /*
+     * ⚠️ `blueprint_content_report` AND `blueprint_moderation_action` ARE VERIFIED HERE RATHER THAN
+     * IN THEIR OWN SCRIPT, because what this change added to them is a SHOWCASE arm — and the rows
+     * it needs (a published launch, its author) are already built above. The teardown and
+     * case-study arms of both tables predate this work and are unverified by any script; that gap
+     * is real and is called out in the blueprints doc rather than silently half-closed here.
+     */
+    await expectAccepted(
+      "a report naming a showcase launch is accepted",
+      `INSERT INTO blueprint_content_report (id, target_kind, showcase_launch_id, reason, reporter_user_id)
+       VALUES ($1, 'showcase', $2, 'spam', $3)`,
+      [randomUUID(), publishedId, reviewerId],
+    );
+
+    // ⚠️ THE DISCRIMINATOR AND THE COLUMN MUST AGREE — a report that says 'showcase' while pointing
+    // at nothing is a queue row no moderator can open.
+    await expectRefused(
+      "a report claiming the showcase arm with no showcase id is refused",
+      PG_CHECK_VIOLATION,
+      `INSERT INTO blueprint_content_report (id, target_kind, reason, reporter_user_id)
+       VALUES ($1, 'showcase', 'spam', $2)`,
+      [randomUUID(), reviewerId],
+    );
+
+    await expectRefused(
+      "a report naming a showcase launch under the teardown kind is refused",
+      PG_CHECK_VIOLATION,
+      `INSERT INTO blueprint_content_report (id, target_kind, showcase_launch_id, reason, reporter_user_id)
+       VALUES ($1, 'teardown', $2, 'spam', $3)`,
+      [randomUUID(), publishedId, reviewerId],
+    );
+
+    /*
+     * ⚠️ ONE REPORT PER PERSON PER TARGET — the anti-brigading control, on the third arm too. The
+     * partial unique index is what makes "You have already reported this" an honest answer rather
+     * than a guess, and it is why the intake requires an identified reporter.
+     */
+    await client.query(`SAVEPOINT duplicate_report_probe`);
+    await client.query(
+      `INSERT INTO blueprint_content_report (id, target_kind, showcase_launch_id, reason, reporter_user_id)
+       VALUES ($1, 'showcase', $2, 'spam', $3)`,
+      [randomUUID(), publishedId, reviewerId],
+    );
+    await expectRefused(
+      "the same reporter cannot report one launch twice",
+      PG_UNIQUE_VIOLATION,
+      `INSERT INTO blueprint_content_report (id, target_kind, showcase_launch_id, reason, reporter_user_id)
+       VALUES ($1, 'showcase', $2, 'other', $3)`,
+      [randomUUID(), publishedId, reviewerId],
+    );
+    await client.query(`ROLLBACK TO SAVEPOINT duplicate_report_probe`);
+
+    /*
+     * ⚠️ QUARANTINE IS REFUSED ON THIS ARM AT THE LOG LEVEL TOO. This is the third of the three
+     * independent refusals — the other two being `showcase_launch_moderation_state_ck`, which has
+     * no such label, and the transition matrix's arm guard. Nothing else would stop a LOG entry
+     * claiming a quarantine happened on an arm that cannot hold one.
+     */
+    await expectRefused(
+      "a quarantine ACTION naming a showcase launch is refused — quarantine is teardown-only",
+      PG_CHECK_VIOLATION,
+      `INSERT INTO blueprint_moderation_action
+         (id, action_kind, target_kind, showcase_launch_id, moderator_user_id,
+          moderator_role_snapshot, reason_note, audit_entry_id)
+       VALUES ($1, 'content_quarantined', 'showcase', $2, $3, 'admin', 'A rights holder wrote in.', $4)`,
+      [randomUUID(), publishedId, reviewerId, randomUUID()],
+    );
+
+    await expectAccepted(
+      "a flag ACTION naming a showcase launch is accepted",
+      `INSERT INTO blueprint_moderation_action
+         (id, action_kind, target_kind, showcase_launch_id, moderator_user_id,
+          moderator_role_snapshot, reason_note, audit_entry_id)
+       VALUES ($1, 'content_flagged', 'showcase', $2, $3, 'admin', 'Reported as not the stated product.', $4)`,
+      [randomUUID(), publishedId, reviewerId, randomUUID()],
+    );
+
+    /*
+     * ⚠️ `<= 1` ON THE ACTION TABLE, `= 1` ON THE REPORT TABLE, AND BOTH ARE RIGHT. A decision's
+     * targets are `set null`, so a decision whose subject was deleted keeps only `target_kind` —
+     * it has to outlive its subject. A report's targets CASCADE, so a targetless report cannot
+     * exist at all. This assertion is the one that would catch somebody "harmonising" the two.
+     */
+    await expectAccepted(
+      "a decision with NO target survives — it outlives the row it was about",
+      `INSERT INTO blueprint_moderation_action
+         (id, action_kind, target_kind, moderator_user_id,
+          moderator_role_snapshot, reason_note, audit_entry_id)
+       VALUES ($1, 'content_flagged', 'showcase', $2, 'admin', 'The launch was deleted afterwards.', $3)`,
+      [randomUUID(), reviewerId, randomUUID()],
+    );
+
+    console.log("\n--- 16. what the database deliberately does NOT enforce ---");
 
     // ⚠️ THE SKEW WINDOW IS THE WRITE GATE'S, AND NO CHECK HOLDS IT. Writing that down is what
     // stops somebody assuming the table is holding it and relaxing the gate.

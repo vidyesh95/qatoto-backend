@@ -16,6 +16,8 @@
  *   decideShowcaseLaunch       → a slug, and the five decision columns landing together
  *   getPublicShowcaseBySlug    → the write-up and its images, every counter reading 0
  *   listPublicShowcases        → `sort=top` and `sort=newest` agree while nothing writes an upvote
+ *   applyShowcaseLaunchModerationVerb → a flag keeps the slug, the page and the feed row; a
+ *                                quarantine is refused and writes nothing; a restore undoes it
  *
  *   pnpm db:smoke-showcase-authoring
  *
@@ -42,6 +44,8 @@ import sharp from "sharp";
 
 import { db, pool } from "#src/db/index.js";
 import {
+  blueprintModerationAction,
+  platformAuditEntry,
   showcaseLaunch,
   showcaseLaunchStats,
   showcaseLaunchWriteUpImage,
@@ -53,6 +57,7 @@ import {
   showcaseWriteUpImagePublicId,
 } from "#src/lib/cloudinary.js";
 import { stopSendOnlyBoss } from "#src/lib/jobs.js";
+import { applyShowcaseLaunchModerationVerb } from "#src/modules/home/blueprints/blueprint-moderation.service.js";
 import { decideShowcaseLaunch } from "#src/modules/home/blueprints/showcase-launch-moderation.service.js";
 import {
   getPublicShowcaseBySlug,
@@ -377,6 +382,128 @@ async function main(): Promise<void> {
       !secondDecision.success && secondDecision.error.type === "SHOWCASE_LAUNCH_ALREADY_DECIDED",
       secondDecision.success ? "it was ACCEPTED" : secondDecision.error.type,
     );
+
+    /*
+     * --- 9. The post-publish verbs.
+     *
+     * ⚠️ THE TWO TRIPWIRES ABOVE ARE DELIBERATELY UNTOUCHED BY THIS SECTION. Both are about the
+     * ENGAGEMENT write path — a stats row minted on first engagement, and an upvote breaking the
+     * `top`/`newest` tie — and flagging writes neither. A reader of this diff will reach for them;
+     * they are still waiting on the write path that will actually falsify them.
+     *
+     * ⚠️ THE POINT OF THIS WALK IS THE PAIR NO VITEST CAN PROVE: that a flag moves the state and
+     * LEAVES THE PUBLIC SLUG AND THE PAGE ALONE. Under the old `showcase_launch_decision_ck` the
+     * flag would have raised 23514 — the constraint bound the slug to `published` alone — so this
+     * is the transaction, against a real database, that shows the widened clause is what makes the
+     * verb possible at all.
+     */
+    const flagResult = await applyShowcaseLaunchModerationVerb({
+      targetId: submittedLaunchId,
+      verb: "flag",
+      reasonNote: "A reader reported this as not the stated product.",
+      staff: { staffUserId: moderatorUserId, platformRole: "admin" },
+    });
+    check(
+      "a published launch can be flagged",
+      flagResult.success,
+      flagResult.success ? flagResult.value.moderationState : JSON.stringify(flagResult.error),
+    );
+
+    const [flaggedRow] = await db
+      .select({
+        moderationState: showcaseLaunch.moderationState,
+        publicSlug: showcaseLaunch.publicSlug,
+      })
+      .from(showcaseLaunch)
+      .where(eq(showcaseLaunch.id, submittedLaunchId));
+    check(
+      "the flag KEPT the public slug — a flag must not un-address a live page",
+      flaggedRow?.moderationState === "flagged" && flaggedRow.publicSlug === publicSlug,
+      `${flaggedRow?.moderationState ?? "(absent)"}, slug ${flaggedRow?.publicSlug ?? "(null)"}`,
+    );
+
+    const flaggedRead = await getPublicShowcaseBySlug(publicSlug);
+    check(
+      "a flagged launch is STILL readable at its address — a flag is not a takedown",
+      flaggedRead.success,
+      flaggedRead.success ? "the page still answers" : JSON.stringify(flaggedRead.error),
+    );
+
+    const flaggedFeed = await listPublicShowcases({
+      sort: "newest",
+      limit: 50,
+      tag: undefined,
+      cursor: undefined,
+    });
+    check(
+      "a flagged launch is STILL in the public feed",
+      flaggedFeed.success && flaggedFeed.value.items.some((item) => item.slug === publicSlug),
+      flaggedFeed.success ? "present in the feed" : "the feed read failed",
+    );
+
+    /*
+     * ⚠️ A REFUSAL WRITES NOTHING — no action row, no audit entry, no state change. A log that
+     * recorded attempts would make "three moderators looked at this" indistinguishable from "three
+     * moderators acted".
+     */
+    const actionsBeforeRefusal = await db
+      .select({ id: blueprintModerationAction.id })
+      .from(blueprintModerationAction)
+      .where(eq(blueprintModerationAction.showcaseLaunchId, submittedLaunchId));
+
+    const quarantineResult = await applyShowcaseLaunchModerationVerb({
+      targetId: submittedLaunchId,
+      verb: "quarantine",
+      reasonNote: "A rights holder emailed about the hero image.",
+      staff: { staffUserId: moderatorUserId, platformRole: "admin" },
+    });
+    check(
+      "quarantine is REFUSED on this arm — a showcase's files are its own maker's",
+      !quarantineResult.success &&
+        quarantineResult.error.type === "BLUEPRINT_TRANSITION_NOT_AVAILABLE",
+      quarantineResult.success ? "it was ACCEPTED" : quarantineResult.error.type,
+    );
+
+    const actionsAfterRefusal = await db
+      .select({ id: blueprintModerationAction.id })
+      .from(blueprintModerationAction)
+      .where(eq(blueprintModerationAction.showcaseLaunchId, submittedLaunchId));
+    check(
+      "the refused quarantine wrote NO action row",
+      actionsAfterRefusal.length === actionsBeforeRefusal.length,
+      `${String(actionsBeforeRefusal.length)} before, ${String(actionsAfterRefusal.length)} after`,
+    );
+
+    /*
+     * ⚠️ THE NOTE STAYS OFF THE HASH-LINKED CHAIN. `buildHashDocument` hashes `detailNote` into a
+     * chain kept forever, and a moderation note names one party's account of somebody's work. The
+     * payload carries `hasReasonNote: true` and nothing else — this is the byte sweep that proves
+     * it, mirroring the teardown smoke's.
+     */
+    const auditRows = await db
+      .select({ payloadJson: platformAuditEntry.payloadJson })
+      .from(platformAuditEntry)
+      .where(eq(platformAuditEntry.eventKind, "blueprint_content_flagged"));
+    const noteLeaked = auditRows.some((row) => row.payloadJson.includes("not the stated product"));
+    check(
+      "the reason note is NOT in the audit chain — only hasReasonNote travels",
+      !noteLeaked,
+      noteLeaked ? "THE NOTE TEXT LEAKED INTO platform_audit_entry" : "no note text in any payload",
+    );
+
+    const restoreResult = await applyShowcaseLaunchModerationVerb({
+      targetId: submittedLaunchId,
+      verb: "restore",
+      reasonNote: "Reviewed the report; the build is the makers' own.",
+      staff: { staffUserId: moderatorUserId, platformRole: "admin" },
+    });
+    check(
+      "restore returns the launch to published",
+      restoreResult.success && restoreResult.value.moderationState === "published",
+      restoreResult.success
+        ? restoreResult.value.moderationState
+        : JSON.stringify(restoreResult.error),
+    );
   } finally {
     /*
      * ⚠️ THE ROW CASCADE DOES NOT REACH CLOUDINARY, so the assets are destroyed explicitly and
@@ -410,7 +537,7 @@ async function main(): Promise<void> {
 
   console.log(
     failureCount === 0
-      ? "\nThe showcase write path works end to end, and the publish still mints no stats row."
+      ? "\nThe showcase write path works end to end: the publish still mints no stats row, and a flag keeps the page at its address."
       : `\n${String(failureCount)} assertion(s) FAILED.`,
   );
   process.exit(failureCount === 0 ? 0 : 1);
