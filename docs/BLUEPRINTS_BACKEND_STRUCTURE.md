@@ -243,15 +243,18 @@ sending a non-moderator a request that is ALSO malformed and requiring **403, no
 
 ### 3.7 What does not exist yet, deliberately
 
-- **No drafts.** The wizard parses its whole draft once at submit and keeps its state in React; there
-  is no draft id, no autosave and no resume-later on either side.
+- ~~**No drafts.**~~ **THE DRAFT STORE LANDED — see §13.** The wizard kept its state in React, so a
+  closed tab lost it. There is now a draft id, and resume-later works across devices.
 - ~~**No uploads.**~~ **UPLOADS LANDED — see §11.** Documents and manufacturing files could only be
   pasted `https://` links. Both tables now carry a `pasted_link | uploaded` union, and the pasted
   arm is unchanged: the bullet's reasoning still describes it exactly, which is why it is struck
   through rather than deleted.
-- **No edit-and-resubmit.** A rejection is terminal, which is why the note is mandatory on one: it is
-  the author's entire remedy. The partial unique index deliberately excludes `rejected`, so a
-  sent-back author may survey the same unit again as a fresh submission.
+- **No edit-and-resubmit.** ⚠️ **STILL TRUE OF THE ROW, AND NOW SURVIVABLE FOR THE AUTHOR.** A
+  rejection is terminal, the note is mandatory on one because it is the author's entire remedy, and
+  nothing reopens a decided submission. What §13.4 adds is the read this bullet always implied: the
+  partial unique index excludes `rejected` precisely so "a sent-back author may survey the same unit
+  again as a fresh submission", and an author can now pre-fill that fresh submission from their own
+  stored document rather than retyping it.
 - ~~**No `flag` / `quarantine` / `restore` verb.**~~ **THESE LANDED — see §9.** They brought exactly
   the three audit labels this bullet predicted, in their own enum-only migration. The bullet is kept
   struck through rather than deleted because its reasoning is what kept a label from being added
@@ -329,6 +332,7 @@ pnpm db:verify-case-study-constraints      # 46
 pnpm db:verify-showcase-launch-constraints # 103
 pnpm db:verify-blueprint-hero-constraints  # 27
 pnpm db:verify-blueprint-engagement-constraints # 33
+pnpm db:verify-blueprint-draft-constraints # 14
 pnpm db:reconcile-blueprint-stats          # counter drift; -- --fix repairs
 pnpm db:smoke-teardown-authoring           # 41: upload, assembly, publish, read, quarantine withholds
 pnpm db:smoke-case-study-authoring         # 16, and a byte sweep for the withheld company name
@@ -849,3 +853,111 @@ ceilings: `longFormBody` at 128 KB and `teardown_submission_document_ck` at 262,
 document at 133,256 bytes against a 131,072-byte cap. The caps are **48**, measured rather than
 chosen, and the test imports the constants so the two cannot drift. `MAX_JSON_BODY_BYTES` is
 untouched — it is the ceiling every route behind it inherits.
+
+---
+
+## 13. The draft store
+
+```
+POST   /blueprints/drafts               201 { draftId, revision, updatedAt }
+GET    /blueprints/drafts               labels only, never documents
+GET    /blueprints/drafts/:draftId      one document
+PUT    /blueprints/drafts/:draftId      requires the revision it loaded
+DELETE /blueprints/drafts/:draftId
+```
+
+### 13.1 One table for three arms
+
+⚠️ **THIS IS THE OPPOSITE OF THE RULE `_core.ts` STATES, AND THE RULE DOES NOT REACH HERE.** That
+rule — quoted in §10.2 — is that each **moderation queue** gets its own table "because a queue's
+columns, its REASONS and its VERDICT are its own". Every clause of the justification is about a
+queue. A draft has no verdict, no reasons, and, decisively, **no columns of its own**: the promoted
+set is `owner_user_id`, `arm`, `label`, `updated_at`, identical for all three wizards, because the
+only two queries are "list mine" and "load one".
+
+`blueprint_draft_arm` is its **own** type rather than a widened `blueprint_content_target_kind`.
+Widening that would need an isolated `ALTER TYPE` migration *and* would contradict what §9.3 records
+about it: its members are the arms a moderation VERB can reach. A draft is never moderated.
+
+⚠️ **AND IT IS NOT `teardown_submission` WITH `moderation_state = 'draft'`.** Four refusals, any one
+sufficient: that CHECK admits three labels and `draft` is not among them; `subject_product_name` is
+NOT NULL and a draft has no subject yet; the live-survey index would need a fourth predicate
+decision; and it would put an **unparsed** document in the column `decideTeardown` parses. The unused
+`draft` label on `blueprint_moderation_state` stays unused.
+
+### 13.2 The document is opaque, and the submit gate is still the only gate
+
+⚠️ **A DRAFT IS UNVALIDATED BY DEFINITION** — half-answered is the state it exists to hold — so a
+schema admitting only submittable documents would refuse exactly the drafts worth saving. The
+envelope is parsed `.strict()`; the document is checked for being a JSON **object** and nothing more.
+
+What makes that safe: the document never reaches a public serializer, a publish, or another account;
+the submit gate is unchanged, so a draft that cannot be submitted is simply a draft; and the bytes
+are bounded twice, by `longFormBody` and by `blueprint_draft_document_ck`.
+
+The rejected alternative was three hand-built "everything optional" mirrors of the submit schemas.
+Zod 4 has no `.deepPartial()`, so each would be maintained by hand forever and every new wizard field
+would touch two files — a drift machine, buying feedback the wizard already gives locally.
+
+⚠️ **`document_schema_version` MEANS SOMETHING DIFFERENT HERE than on `teardown_submission`.** There
+it selects a server-side parser. Here **the reader is the client**: a resumed draft goes back to the
+wizard, which parses it with its own draft schema. The two columns look like copies and are not.
+
+### 13.3 Two traps this feature had to disarm
+
+⚠️ **THE SWEEPER WOULD HAVE EATEN A RESUMED DRAFT'S IMAGES, SILENTLY.** Every image a showcase draft
+references carries a NULL `launch_id` — a draft has no launch — and
+`sweep-orphan-showcase-images` deletes exactly that after 24 hours. An author resuming a week later
+would find a write-up full of dead links with nothing failing anywhere. `draft_id` is now a conjunct
+in **three** places that must agree: the partial index, the sweeper, and the staging cap (a draft's
+images are claimed, so they do not spend that budget).
+
+⚠️ **OPTIMISTIC CONCURRENCY IS NOT OPTIONAL.** Two tabs autosaving one draft with no `revision` means
+the last writer silently destroys the other's work — the exact failure "resume later across devices"
+is sold as preventing, and the cheapest thing here to add now. The UPDATE guards on the revision AND
+the owner, so a stranger's draft, a missing one and a stale write all produce zero rows; a second
+owner-scoped read separates the last case, because "somebody else saved this" is actionable while the
+other two must stay indistinguishable.
+
+⚠️ **THE DOCUMENT BOUND WAS DECORATION TWICE BEFORE IT WAS RIGHT.** First 262,144 — the column's own
+number — which `estimateBodyBytes` (four bytes per character) makes 1,049,569B against a 131,072B
+cap, so no request could reach the CHECK. Then 32,768, which is exactly the cap and leaves nothing
+for `label`, `documentSchemaVersion` and `revision`. It is **32,000** on both, and the verifier
+asserts one character past it is refused.
+
+### 13.4 There is no staff route, and that is the point
+
+⚠️ **§6's GUARANTEE IS THAT EXACTLY ONE ROUTE SERVES A WITHHELD COMPANY'S REAL NAME.** A draft
+document is opaque, so it can hold that name and nothing can detect it — a moderator-visible draft
+would make it two, which is the widening §10.4 already refuses. `case-study-withheld-name.test.ts`
+asserts both halves: the list carries labels only, and two plausible staff paths 404.
+
+For the same reason the manifest entry is `delete_rows`. `text-pii-register.ts` works per column on
+structured text and cannot reach inside a blob, so deleting the row is the only operation that
+provably reaches the name.
+
+### 13.5 Edit-and-resubmit, without reopening a decision
+
+```
+GET /blueprints/teardowns/mine/:submissionId    owner-scoped; a stranger's id answers 404
+```
+
+⚠️ **A REJECTION STAYS TERMINAL, AND IN-PLACE EDITING IS REFUSED BY POSTGRES ANYWAY.**
+`teardown_submission_decision_ck` reads `(moderation_state = 'pending_review') = (reviewed_at IS
+NULL)`, `(reviewed_at IS NULL) = (reviewed_by_user_id IS NULL)` and `(moderation_state <> 'rejected'
+OR moderator_note IS NOT NULL)` — so moving a rejected row back to `pending_review` forces the
+reviewer, the decision time **and** the mandatory note all to NULL. The constraint deletes the
+evidence as the price of the edit. A revision chain would be the shape if lineage is ever wanted.
+
+So this route changes nothing: the author reads their own document, seeds a **draft** from it, edits
+and submits afresh — which `teardown_submission_subject_live_uidx` already permits by excluding
+`rejected`. The moderator note travels with it, because that note is the instructions.
+
+⚠️ **NESTED UNDER `/mine/` TO AVOID A SHADOW.** The obvious `/teardowns/submissions/:submissionId` is
+three segments, the same shape as `/teardowns/:teardownSlug/claim-targets` — so a teardown slugged
+`submissions` would have its claim-targets shadowed by it. `mine` is already in `teardown_slug_ck`'s
+reserved list, so nesting costs no migration and cannot collide with any slug that could exist.
+
+⚠️ **THIS IS TEARDOWN-ONLY, STRUCTURALLY.** The showcase and case-study arms have no submission
+document table — they write straight into `showcase_launch` and `case_study`, so "the pending row IS
+the public row". There is nothing to hand back that is not already the published object.

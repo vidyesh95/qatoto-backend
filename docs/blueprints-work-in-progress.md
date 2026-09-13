@@ -4,6 +4,12 @@ The `/blueprints` backend is substantially complete and already wired end-to-end
 
 Below is a breakdown of the current operational status, what was recently completed, and the deliberate architectural boundaries or potential next-phase items remaining.
 
+⚠️ **FOUR OF THE FIVE ITEMS IN §2 HAVE SINCE SHIPPED** — A, B, C and D. They are struck through
+rather than deleted, because the reasoning under each is what kept it from being built before its
+lever existed, and the same rule governs whatever is proposed next. **E (in-platform rights-claim
+intake) remains deliberately unbuilt**; the `mailto:` flow behind `claim-targets` is still the
+design.
+
 ---
 
 ## 1. What Is Fully Implemented & Verified
@@ -15,10 +21,10 @@ Every API client in `qatoto-frontend/src/lib/blueprints/` maps to an active Expr
 | **Hero Carousel** | `GET /hero-slides` | — | — | Full CRUD + atomic reordering (`/admin/hero-slides/*`) |
 | **Showcase Launches** | Feed (`/showcases`), slugs (`/slugs`), detail (`/:launchSlug`) | Multipart submit (`POST /showcases`), write-up image uploads, `/mine` | View beacons, likes, upvotes, threaded comments with likes | Review queue & publish/reject, reader reports, plus `flag` / `restore` (`/admin/showcases/*`) |
 | **Case Studies** | Index (`/case-studies`), slugs, options, detail (`/:caseStudySlug`) | JSON submit (`POST /case-studies`), cursor-paged `/mine` | View beacons, likes | Review queue (with withheld company reveal) + flag/restore |
-| **Teardowns** | Index (`/teardowns`), options, slugs, detail, claim targets, market signal | Submission intake (`POST /teardowns`), `/mine` | View beacons, likes, saves, threaded comments with likes | Review queue + flag, quarantine, and restore verbs |
-| **Cross-arm** | `/engagement/state` | — | `/comments/:commentId` (edit/delete/like) | `/admin/content-reports` (reader report queue + dismissal) |
+| **Teardowns** | Index (`/teardowns`), options, slugs, detail, claim targets, market signal, gated file + model downloads | Submission intake (`POST /teardowns`) with assembly geometry, file uploads (`/uploads`), `/mine` and `/mine/:submissionId` | View beacons, likes, saves, threaded comments with likes | Review queue + flag, quarantine, and restore verbs |
+| **Cross-arm** | `/engagement/state` | `/drafts` (autosave + resume, all three wizards) | `/comments/:commentId` (edit/delete/like) | `/admin/content-reports` (reader report queue + dismissal) |
 
-All 32 backend blueprint test suites (810 tests), 5 database constraint verification scripts, and 4 end-to-end smoke scripts pass cleanly. The full project gate is 207 files / 4029 tests.
+All 33 backend blueprint test suites (830 tests), 6 database constraint verification scripts, and 4 end-to-end smoke scripts pass cleanly. The full project gate is 208 files / 4049 tests.
 
 ---
 
@@ -63,9 +69,16 @@ If you are planning the next phase of capabilities, the following features are n
   container framing, not safety. See `BLUEPRINTS_BACKEND_STRUCTURE.md` §11.4.
 - **Still pasted-link-only:** `gerber`, `drill`, `pick_and_place`, `bill_of_materials_csv`.
 
-### D. Server-Side Draft Storage & Edit-and-Resubmit
-- **Current State:** The authoring wizards for teardowns, showcases, and case studies retain draft state entirely on the client side (React state).
-- **What's Missing:** There is no draft persistence endpoint (no autosave or resume-later across devices). Furthermore, moderator rejections are terminal (authors must submit a fresh submission rather than editing an existing record).
+### ~~D. Server-Side Draft Storage & Edit-and-Resubmit~~ — **DONE**
+- **Landed:** `/blueprints/drafts` serves all three wizards from one table, with optimistic
+  concurrency so two tabs cannot silently overwrite each other. `GET /blueprints/teardowns/mine/:submissionId`
+  lets an author pre-fill a fresh submission from their own rejected one.
+- ⚠️ **Rejections are still terminal, and that did not need changing.** In-place editing is refused
+  by `teardown_submission_decision_ck` anyway — it would force the reviewer, the decision time and
+  the mandatory note all to NULL. The live-survey index already excluded `rejected` so a sent-back
+  author could survey the same unit again; this just spares them retyping it.
+- ⚠️ **No staff draft route, ever.** A draft can hold a withheld company name, and §6's guarantee is
+  that exactly one route serves such a name. See `BLUEPRINTS_BACKEND_STRUCTURE.md` §13.
 
 ### E. Direct Rights-Claim / DMCA Intake
 - **Current State:** `GET /teardowns/:teardownSlug/claim-targets` provides the list of items for an IP claim. The frontend `/report` route generates a structured `mailto:` notice.
@@ -85,6 +98,9 @@ To have frontend and backend run seamlessly in your local or production environm
    pnpm db:seed-blueprint-case-studies
    pnpm db:seed-blueprint-store-categories
    ```
+
+   Object storage (Backblaze B2) must be configured for the teardown upload and download routes;
+   without it those routes answer 503 and the smoke scripts skip that half loudly.
 
 2. **Remove Frontend `noindex` and Restore Sitemap:**
    Once seeded, in `qatoto-frontend`:
