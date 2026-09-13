@@ -328,6 +328,124 @@ describe("the blueprints router", () => {
    * `rate-limit-coverage.test.ts` and `test-support/rate-limit-reset.ts` both use: an
    * express-rate-limit handler is a function carrying `resetKey` and `getKey`.
    */
+  /**
+   * THE 22 ENGAGEMENT ROUTES, EXACT.
+   *
+   * ⚠️ THE HIGHEST-VALUE ASSERTION IN THIS FILE IS THAT THE THREE DERIVED LITERAL LISTS ARE
+   * UNCHANGED — the cases above already assert them with `toEqual`, and every engagement path
+   * contains a `:`, so none of them can join those lists. A new LITERAL under `/teardowns/` would
+   * be captured as a slug and answer a stranger's teardown to an author asking for their own.
+   */
+  it("gives each engagement route its exact chain", async () => {
+    const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
+    const handlerCounts = handlerCountsByMethodAndPath(blueprintsRouter);
+
+    // The beacon: attachOptionalUser + two limiters + the controller. NO body parser.
+    for (const routeKey of [
+      "post /showcases/:launchSlug/view-beacon",
+      "post /teardowns/:teardownSlug/view-beacon",
+      "post /case-studies/:caseStudySlug/view-beacon",
+    ]) {
+      expect(handlerCounts.get(routeKey), `${routeKey} must carry exactly four handlers`).toBe(4);
+    }
+
+    // The toggles: requireAuth + limiter + requireIdentifiedUser + controller. No body, no
+    // idempotency — the composite primary key is the idempotence and the method is the direction.
+    for (const routeKey of [
+      "put /showcases/:launchSlug/like",
+      "delete /showcases/:launchSlug/like",
+      "put /showcases/:launchSlug/upvote",
+      "delete /showcases/:launchSlug/upvote",
+      "put /teardowns/:teardownSlug/like",
+      "delete /teardowns/:teardownSlug/like",
+      "put /teardowns/:teardownSlug/save",
+      "delete /teardowns/:teardownSlug/save",
+      "put /case-studies/:caseStudySlug/like",
+      "delete /case-studies/:caseStudySlug/like",
+      "put /comments/:commentId/like",
+      "delete /comments/:commentId/like",
+    ]) {
+      expect(handlerCounts.get(routeKey), `${routeKey} must carry exactly four handlers`).toBe(4);
+    }
+
+    // The comment reads carry a limiter, which the bare-read rule otherwise forbids: they are
+    // per-viewer, so no cache absorbs them. See `blueprintEngagementReadLimiter`.
+    expect(handlerCounts.get("get /showcases/:launchSlug/comments")).toBe(3);
+    expect(handlerCounts.get("get /teardowns/:teardownSlug/comments")).toBe(3);
+    expect(handlerCounts.get("get /engagement/state")).toBe(3);
+
+    // Comment create is the only engagement write with an idempotency key.
+    expect(handlerCounts.get("post /showcases/:launchSlug/comments")).toBe(6);
+    expect(handlerCounts.get("post /teardowns/:teardownSlug/comments")).toBe(6);
+
+    expect(handlerCounts.get("patch /comments/:commentId")).toBe(5);
+    expect(handlerCounts.get("delete /comments/:commentId")).toBe(4);
+  });
+
+  /**
+   * ⚠️ THE CASE-STUDY ARM HAS NO COMMENT ROUTES AND NO UPVOTE OR SAVE, AND THE ABSENCE IS ASSERTED.
+   *
+   * `case_study_stats` has exactly two counters and that arm is "a numbered lesson with no
+   * discussion surface". Declaring the routes anyway would be unverified code the field sweeps
+   * exist to catch, so their absence is a decision — and a decision worth a failing test if
+   * somebody adds one without adding the column.
+   */
+  it("declares no comment, upvote or save route on the case-study arm", async () => {
+    const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
+    const routes = declaredRoutes(blueprintsRouter);
+    const paths = routes.map((route) => route.path);
+
+    expect(paths).not.toContain("/case-studies/:caseStudySlug/comments");
+    expect(paths).not.toContain("/case-studies/:caseStudySlug/upvote");
+    expect(paths).not.toContain("/case-studies/:caseStudySlug/save");
+    // And the two other arms keep exactly the verb the schema gives them a column for.
+    expect(paths).not.toContain("/showcases/:launchSlug/save");
+    expect(paths).not.toContain("/teardowns/:teardownSlug/upvote");
+  });
+
+  /**
+   * ⚠️ `attachOptionalUser` MUST PRECEDE BOTH BEACON LIMITERS.
+   *
+   * They use the default `userKey`, which prefers `req.user.id` and falls back to the IP. Mounted
+   * before the optional-auth middleware, every signed-in reader would be keyed by IP into one
+   * shared NAT bucket — so an office would exhaust a budget meant to be per-account. The
+   * feed-engagement block in `rate-limit.ts` records the same hazard.
+   */
+  it("runs attachOptionalUser before both limiters on every view beacon", async () => {
+    const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
+    if (!isRouterInternals(blueprintsRouter)) throw new Error("router has no layer stack");
+
+    for (const beaconPath of [
+      "/showcases/:launchSlug/view-beacon",
+      "/teardowns/:teardownSlug/view-beacon",
+      "/case-studies/:caseStudySlug/view-beacon",
+    ]) {
+      const layer = blueprintsRouter.stack.find((candidate) => candidate.route?.path === beaconPath);
+      const handlerNames = (layer?.route?.stack ?? []).map((handler) => {
+        const handle = handler.handle;
+        return typeof handle === "function" ? handle.name : "";
+      });
+
+      /*
+       * ⚠️ ASSERTED BY POSITION, BECAUSE `createLimiter` RETURNS AN ANONYMOUS FUNCTION. Matching on
+       * a name would silently pass the day express-rate-limit stopped naming its middleware — which
+       * it already does. What is checkable is the SHAPE: the optional-auth middleware first, then
+       * exactly two unnamed guards, then the controller. That is the ordering the hazard is about.
+       */
+      expect(handlerNames[0], `${beaconPath} must attach the optional user FIRST`).toBe("attachOptionalUser");
+      expect(handlerNames.at(-1), `${beaconPath} must end at its controller`).toBe("recordBlueprintView");
+      expect(
+        handlerNames.slice(1, -1),
+        `${beaconPath} must carry exactly two limiters between the optional user and the controller`,
+      ).toHaveLength(2);
+
+      // And NO body parser: a blueprint page has no duration and no position, so there is nothing
+      // a client could honestly send. `json-body-budget.test.ts` fails a cap mounted on this route.
+      expect(handlerNames).not.toContain("compactBody");
+      expect(handlerNames).not.toContain("longFormBody");
+    }
+  });
+
   it("carries exactly one rate limiter on each mutating showcase route and none on the reads", async () => {
     const blueprintsRouter = (await import("#src/modules/home/blueprints/blueprints.routes.js")).default;
     if (!isRouterInternals(blueprintsRouter)) throw new Error("router has no layer stack");
