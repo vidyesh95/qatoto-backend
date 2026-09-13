@@ -97,6 +97,11 @@ describe("the blueprints router", () => {
       "get /teardowns/slugs",
       "get /teardowns/:teardownSlug",
       "get /teardowns/:teardownSlug/claim-targets",
+      // ⚠️ BARE, AND READABLE-GATED LIKE THE DETAIL READ. A quarantine is a claim about the
+      // publisher's FILES and says nothing about whether a market for the product exists, so this
+      // band survives one — suppressing it would let a moderation action quietly delete an
+      // unrelated fact.
+      "get /teardowns/:teardownSlug/market-signal",
       "get /case-studies",
       "get /case-studies/options",
       "get /case-studies/slugs",

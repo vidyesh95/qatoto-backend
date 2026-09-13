@@ -326,6 +326,15 @@ router.get("/teardowns", teardownController.listPublicTeardowns);
 /** GET /blueprints/teardowns/:teardownSlug/claim-targets — ids and titles, provably no URLs. */
 router.get("/teardowns/:teardownSlug/claim-targets", teardownController.getTeardownClaimTargets);
 
+/**
+ * GET /blueprints/teardowns/:teardownSlug/market-signal — BARE, and READABLE-gated.
+ *
+ * ⚠️ IT SURVIVES A QUARANTINE, deliberately. A quarantine is a claim about the publisher's FILES
+ * and says nothing about whether a market for the product exists — so suppressing this band would
+ * let a moderation action quietly delete an unrelated fact. Same gate as the detail read beside it.
+ */
+router.get("/teardowns/:teardownSlug/market-signal", teardownController.getTeardownMarketSignal);
+
 /** GET /blueprints/teardowns/:teardownSlug — one readable teardown. DECLARED LAST of the five. */
 router.get("/teardowns/:teardownSlug", teardownController.getPublicTeardown);
 

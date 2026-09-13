@@ -1243,6 +1243,18 @@ Search documents contain only public eligible fields. Product/category/provider 
 refresh jobs after commit. Search may initially use PostgreSQL full-text/trigram indexes; an
 external search engine is an adapter added only when measured scale requires it.
 
+⚠️ **`store_search_document` HAS ONE INDEX WHOSE ONLY CALLER IS OUTSIDE THE STORE.**
+`store_search_document_category_price_idx` — `(is_eligible, category_slug, price_in_cents, id)
+WHERE is_eligible` — is read by the BLUEPRINTS market-signal band
+(`src/modules/home/blueprints/teardown-market-signal.service.ts`), which asks "what is the cheapest
+thing anybody is selling in this product class?" under a teardown.
+
+`store_search_document_eligible_category_idx` already scopes by eligibility and category, but it
+ends in `id`: filtering one category is a range scan, and sorting that range BY PRICE is then a sort
+of the whole category — on the table this section calls the hottest read in the store. It is
+recorded here because an index with no local caller is exactly the kind of thing that gets deleted
+as dead.
+
 **A FILTER AND ITS COUNT ARE ONE QUERY (A39).** Both are built from `buildStoreSearchFilters` and
 both read `store_search_document`. Written separately they will eventually disagree, and the
 disagreement is invisible in review because each half is correct on its own — that is exactly how a

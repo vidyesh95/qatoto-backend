@@ -5212,6 +5212,22 @@ export const storeSearchDocument = pgTable(
     index("store_search_document_eligible_category_idx")
       .on(table.isEligible, table.categorySlug, table.id)
       .where(sql`is_eligible`),
+    /**
+     * ⚠️ A CROSS-MODULE INDEX WITH NO LOCAL CALLER — the blueprints market-signal band is its only
+     * consumer, and it is named here so this does not get deleted as dead.
+     *
+     * `store_search_document_eligible_category_idx` above already scopes by eligibility and
+     * category, but it ends in `id`: filtering one category is an index range scan, and then
+     * SORTING that range BY PRICE is a sort of the whole category. This table carries the hottest
+     * read in the store, and the band's whole claim is "somebody is selling this, at a price,
+     * today" — so the cheapest comparable listing is the number worth reaching for, and reaching
+     * for it must not cost a sort.
+     *
+     * See `teardown-market-signal.service.ts` and STORE_BACKEND_STRUCTURE.md.
+     */
+    index("store_search_document_category_price_idx")
+      .on(table.isEligible, table.categorySlug, table.priceInCents, table.id)
+      .where(sql`is_eligible`),
     index("store_search_document_provider_kind_idx").on(table.providerKind, table.id),
     index("store_search_document_fts_idx").using("gin", table.searchDocument),
     index("store_search_document_stock_idx")

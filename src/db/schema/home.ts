@@ -2108,6 +2108,17 @@ export const showcaseLaunch = pgTable(
       .on(table.titleNormalized)
       .where(sql`moderation_state IN ('pending_review', 'published')`),
     // My Launches, newest first.
+    /**
+     * ⚠️ THE REVERSE LOOKUP FOR THE TEARDOWN MARKET SIGNAL — "which launches were built from this
+     * teardown?" — and its only caller is in another module, so it is named here rather than
+     * inferred from a query somebody might delete.
+     *
+     * Partial on both conditions the query carries, because a launch with no
+     * `built_from_blueprint_slug` can never match and most of them have none.
+     */
+    index("showcase_launch_built_from_idx")
+      .on(table.builtFromBlueprintSlug, desc(table.launchedAt), table.id)
+      .where(sql`moderation_state = 'published' AND built_from_blueprint_slug IS NOT NULL`),
     index("showcase_launch_author_idx").on(table.authorUserId, table.createdAt, table.id),
     // The review queue, oldest first. Partial, because a decided launch never re-enters it.
     index("showcase_launch_review_queue_idx")

@@ -9,6 +9,7 @@ import { respondUnauthenticated } from "#src/modules/home/blueprints/blueprint-e
 import { respondBlueprintModerationError } from "#src/modules/home/blueprints/blueprint-moderation-error-response.js";
 import { BlueprintModerationCommandSchema } from "#src/modules/home/blueprints/blueprint-moderation.schemas.js";
 import * as blueprintModerationService from "#src/modules/home/blueprints/blueprint-moderation.service.js";
+import * as teardownMarketSignalService from "#src/modules/home/blueprints/teardown-market-signal.service.js";
 import * as teardownModerationService from "#src/modules/home/blueprints/teardown-moderation.service.js";
 import * as teardownPublicReadService from "#src/modules/home/blueprints/teardown-public-read.service.js";
 import {
@@ -363,4 +364,33 @@ export async function setTeardownModerationState(req: Request, res: Response): P
   }
 
   respondOk(res, "The teardown's state was changed.", result.value);
+}
+
+/**
+ * `GET /blueprints/teardowns/:teardownSlug/market-signal` — is anybody selling this, and has
+ * anybody built one?
+ *
+ * ⚠️ BARE-PUBLIC, like the five reads above it. The payload is a list of public store listings and
+ * published launches with nothing keyed to a session, so there is nothing to personalise and
+ * nothing to leak — and an IP-keyed limiter on a detail-page element behind a CDN or a corporate
+ * NAT is a self-inflicted outage. A cache belongs in front of this, not a limiter inside it.
+ *
+ * ⚠️ A MALFORMED SLUG ANSWERS 404, NOT 422. The parse still runs — the boundary rule holds — but a
+ * 422 sitting beside a 404 would together tell a stranger which slug SHAPES exist, one request at
+ * a time. The five reads above answer the same way for the same reason.
+ */
+export async function getTeardownMarketSignal(req: Request, res: Response): Promise<void> {
+  const slugParse = PublicTeardownSlugSchema.safeParse(firstParam(req.params.teardownSlug ?? ""));
+  if (!slugParse.success) {
+    respondTeardownNotFound(res);
+    return;
+  }
+
+  const result = await teardownMarketSignalService.getTeardownMarketSignal(slugParse.data);
+  if (!result.success) {
+    respondTeardownNotFound(res);
+    return;
+  }
+
+  respondOk(res, "What the market is doing around this teardown.", result.value);
 }

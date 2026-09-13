@@ -265,6 +265,8 @@ const PUBLICLY_RESOLVABLE = new Set([
   "get /blueprints/teardowns/slugs",
   "get /blueprints/teardowns/{teardownSlug}",
   "get /blueprints/teardowns/{teardownSlug}/claim-targets",
+  // The market-signal band. Bare and READABLE-gated for the same reason as the two above it.
+  "get /blueprints/teardowns/{teardownSlug}/market-signal",
   // The public case-study surface. Bare for the same reason. The other four case-study routes are
   // deliberately NOT here: two need an account and two need `moderate_content` — and one of those
   // two is the only route on this surface that serves a company name its writer withheld from

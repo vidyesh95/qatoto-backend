@@ -1,0 +1,2 @@
+CREATE INDEX "showcase_launch_built_from_idx" ON "showcase_launch" USING btree ("built_from_blueprint_slug","launched_at" desc,"id") WHERE moderation_state = 'published' AND built_from_blueprint_slug IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "store_search_document_category_price_idx" ON "store_search_document" USING btree ("is_eligible","category_slug","price_in_cents","id") WHERE is_eligible;
