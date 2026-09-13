@@ -483,6 +483,46 @@ function withheldPayload(): Pick<
 }
 
 /**
+ * The address a reader follows for one file, whichever way it arrived.
+ *
+ * ⚠️ THE UPLOADED ARM'S ADDRESS IS COMPUTED, NEVER STORED, and that is forced rather than chosen: a
+ * presigned URL expires in 300 seconds, so persisting one stores a dead link. What is stored is the
+ * object key; what is served is a route on this server that re-checks the READABLE gate and
+ * redirects to a freshly minted presign. It is the same move `/teardowns/mine` makes for
+ * `publicSlug` — computed from the state rather than projected raw.
+ *
+ * ⚠️ AND IT IS WHAT MAKES A QUARANTINE A REAL WITHHOLDING. A pasted link points at somebody else's
+ * host, so withholding one only ever meant "we stop advertising it" — anyone who saved the URL
+ * still had the file. An uploaded file's only address is the route below, which refuses to mint a
+ * presign for a quarantined teardown, so a saved link dies the moment the quarantine lands.
+ *
+ * ⚠️ RETURNS `null` FOR A ROW THAT IS NEITHER, WHICH `teardown_document_source_ck` MAKES
+ * IMPOSSIBLE. TypeScript cannot see a CHECK, and the banned way to close that gap is `as`. The
+ * caller drops such a row instead — a file with no address is not renderable, and dropping one is
+ * better than emitting `url: null` into a contract that does not admit it.
+ */
+function resolveTeardownFileAddress(
+  teardownSlug: string,
+  segment: "documents" | "fabrication-files",
+  fileRow: {
+    readonly id: string;
+    readonly source: "pasted_link" | "uploaded";
+    readonly url: string | null;
+  },
+): string | null {
+  switch (fileRow.source) {
+    case "pasted_link":
+      return fileRow.url;
+    case "uploaded":
+      return `/blueprints/teardowns/${teardownSlug}/${segment}/${fileRow.id}`;
+    default: {
+      const exhaustiveCheck: never = fileRow.source;
+      throw new Error(`Unhandled teardown file source: ${JSON.stringify(exhaustiveCheck)}`);
+    }
+  }
+}
+
+/**
  * One teardown, with the quarantine decision applied.
  *
  * ⚠️ WHAT SURVIVES A QUARANTINE IS AS DELIBERATE AS WHAT DOES NOT. Every field outside
@@ -531,14 +571,21 @@ function buildTeardownView(row: TeardownRow, childRows: TeardownChildRows): Publ
               : null,
           documents: childRows.documentRows
             .filter((candidate) => candidate.teardownId === row.id)
-            .map((documentRow) => ({
-              id: documentRow.id,
-              kind: documentRow.kind,
-              title: documentRow.title,
-              url: documentRow.url,
-              byteSize: documentRow.byteSize,
-              pageCount: documentRow.pageCount,
-            })),
+            .flatMap((documentRow) => {
+              const url = resolveTeardownFileAddress(row.slug, "documents", documentRow);
+              // Unreachable while `teardown_document_source_ck` holds — see the resolver.
+              if (url === null) return [];
+              return [
+                {
+                  id: documentRow.id,
+                  kind: documentRow.kind,
+                  title: documentRow.title,
+                  url,
+                  byteSize: documentRow.byteSize,
+                  pageCount: documentRow.pageCount,
+                },
+              ];
+            }),
           fasteners: childRows.fastenerRows
             .filter((candidate) => candidate.teardownId === row.id)
             .map((fastenerRow) => ({
@@ -553,13 +600,23 @@ function buildTeardownView(row: TeardownRow, childRows: TeardownChildRows): Publ
             })),
           manufacturingFiles: childRows.manufacturingFileRows
             .filter((candidate) => candidate.teardownId === row.id)
-            .map((manufacturingFileRow) => ({
-              id: manufacturingFileRow.id,
-              kind: manufacturingFileRow.kind,
-              title: manufacturingFileRow.title,
-              url: manufacturingFileRow.url,
-              byteSize: manufacturingFileRow.byteSize,
-            })),
+            .flatMap((manufacturingFileRow) => {
+              const url = resolveTeardownFileAddress(
+                row.slug,
+                "fabrication-files",
+                manufacturingFileRow,
+              );
+              if (url === null) return [];
+              return [
+                {
+                  id: manufacturingFileRow.id,
+                  kind: manufacturingFileRow.kind,
+                  title: manufacturingFileRow.title,
+                  url,
+                  byteSize: manufacturingFileRow.byteSize,
+                },
+              ];
+            }),
           materials: buildMaterials(materialRows, childRows.elementRows),
           /*
            * WITHHELD BY A QUARANTINE, beside `materials` and for the same reason. A listing carries

@@ -3090,6 +3090,68 @@ function assetUrlCheck(columnName: string) {
   );
 }
 
+/**
+ * An object-storage key, which is NOT a URL and must never be checked as one.
+ *
+ * ⚠️ `assetUrlCheck` WOULD REFUSE EVERY VALID KEY. It admits `https://…` or a leading `/`, and a key
+ * is `teardowns/<uploader>/uploads/<sha>.step` — no scheme, no leading slash. That is the whole
+ * reason the uploaded arm gets its own column rather than reusing `url`: a presigned URL cannot be
+ * stored because it expires in 300 seconds, and a raw key cannot go in `url` because the CHECK
+ * there would reject it at insert.
+ *
+ * SHAPE ONLY, deliberately — no prefix is pinned here. Writing `^teardowns/` into SQL would make
+ * any change to `teardownFileObjectKey` a migration; the verify script derives the tight assertion
+ * by running the TypeScript builder and checking its output against this constraint instead.
+ */
+function objectStorageKeyCheck(columnName: string) {
+  return sql.raw(
+    `char_length(${columnName}) BETWEEN 1 AND 512
+          AND ${columnName} !~ '[[:space:][:cntrl:]]'
+          AND left(${columnName}, 1) <> '/'
+          AND ${columnName} !~ '\\.\\.'
+          AND ${columnName} ~ '^[A-Za-z0-9][A-Za-z0-9/_.%-]*$'`,
+  );
+}
+
+/**
+ * The union's shape, shared by `teardown_document` and `teardown_manufacturing_file`.
+ *
+ * ⚠️ ALL FOUR COMBINATIONS ARE DECIDED, NOT JUST THE TWO GOOD ONES. A pasted-link row has a URL and
+ * no storage columns; an uploaded row has the storage columns, a measured size, and no URL. The two
+ * mixed shapes — a row with both, and a row with neither — are what this makes unrepresentable, and
+ * a row with neither is the one a nullable `url` would otherwise have admitted for free.
+ *
+ * ⚠️ `byte_size IS NOT NULL` ON THE UPLOADED ARM ONLY. The pasted arm keeps its NULL and §3.3's
+ * reasoning stays true of it; an upload measured the bytes, so a NULL there would be a fact nobody
+ * had to guess being thrown away.
+ */
+function teardownFileSourceCheck() {
+  return sql.raw(
+    `(source = 'pasted_link'
+           AND url IS NOT NULL
+           AND object_storage_key IS NULL
+           AND content_sha256 IS NULL)
+       OR (source = 'uploaded'
+           AND url IS NULL
+           AND object_storage_key IS NOT NULL
+           AND content_sha256 IS NOT NULL
+           AND byte_size IS NOT NULL)`,
+  );
+}
+
+/** The storage columns' own shape, independent of which arm the row is on. */
+function teardownFileStorageColumnsCheck() {
+  return sql.raw(
+    `(object_storage_key IS NULL OR (
+            char_length(object_storage_key) BETWEEN 1 AND 512
+            AND object_storage_key !~ '[[:space:][:cntrl:]]'
+            AND left(object_storage_key, 1) <> '/'
+            AND object_storage_key !~ '\\.\\.'
+            AND object_storage_key ~ '^[A-Za-z0-9][A-Za-z0-9/_.%-]*$'))
+       AND (content_sha256 IS NULL OR content_sha256 ~ '^[0-9a-f]{64}$')`,
+  );
+}
+
 /** Outbound links — a supplier, a licence. https only; there is no same-site case for these. */
 function externalUrlCheck(columnName: string) {
   return sql.raw(
@@ -3289,10 +3351,13 @@ export const teardown = pgTable(
     check("teardown_subject_kind_ck", sql`subject_kind = 'existing_physical_product'`),
     check(
       "teardown_slug_ck",
+      // ⚠️ `uploads` JOINS THE LIST BECAUSE `POST /blueprints/teardowns/uploads` IS A NEW LITERAL
+      // under this arm's prefix. `RESERVED_TEARDOWN_SLUGS` carries the same members, and
+      // `verify-teardown-constraints` compares the two AS DATA rather than retyping either.
       sql`char_length(slug) BETWEEN 3 AND 120
           AND slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'
           AND slug NOT IN ('teardowns', 'showcase', 'case-studies', 'new', 'slugs', 'options',
-                           'mine')`,
+                           'mine', 'uploads')`,
     ),
     check(
       "teardown_text_lengths_ck",
@@ -4226,6 +4291,32 @@ export const teardownPartListing = pgTable(
   ],
 );
 
+/**
+ * ⚠️ THE FOUR FORMATS THE UPLOADED ARM ACCEPTS, WHICH IS FEWER THAN THE EIGHT `kind`s A FILE MAY
+ * CARRY. `gerber`, `drill`, `pick_and_place` and `bill_of_materials_csv` stay pasted-link-only, and
+ * the omission is a decision rather than a gap: the first two have sniffable preambles and can be
+ * added when somebody wants them, but a pick-and-place file and a BOM csv are plain text with no
+ * framing at all, so a "validator" for them would assert nothing while reading as though it did.
+ * §3.7's rule applies — do not add a label before its lever exists.
+ */
+export const teardownUploadFormatEnum = pgEnum("teardown_upload_format", [
+  "pdf",
+  "step",
+  "stl",
+  "dxf",
+]);
+
+/**
+ * Which of the two ways a file arrived, and therefore which columns may be non-null.
+ *
+ * ⚠️ A DISCRIMINATED UNION ON THE ROW, NOT A NULLABLE COLUMN SOUP. `url` used to be NOT NULL and is
+ * now nullable, which on its own would admit a row that is neither a link nor an upload — so
+ * `source` pins which shape a row holds and a CHECK makes the other three combinations
+ * unrepresentable. CLAUDE.md §2's rule, in the file whose own header says its CHECKs exist so an
+ * illegal state cannot be written.
+ */
+export const teardownFileSourceEnum = pgEnum("teardown_file_source", ["pasted_link", "uploaded"]);
+
 /** Something a reader opens: a schematic, a bill of materials, an assembly guide, a datasheet. */
 export const teardownDocument = pgTable(
   "teardown_document",
@@ -4237,14 +4328,25 @@ export const teardownDocument = pgTable(
     position: integer("position").notNull(),
     kind: blueprintDocumentKindEnum("kind").notNull(),
     title: text("title").notNull(),
-    url: text("url").notNull(),
+    /**
+     * ⚠️ NULLABLE SINCE UPLOADS LANDED, AND PINNED BY `..._source_ck` RATHER THAN LEFT OPEN. A
+     * pasted-link row carries a URL and no key; an uploaded row carries a key and no URL. The
+     * address a reader follows for an uploaded file is COMPUTED by the read service — a route on
+     * this server — because a presigned URL expires in 300 seconds and cannot be stored.
+     */
+    url: text("url"),
+    source: teardownFileSourceEnum("source").default("pasted_link").notNull(),
+    /** The uploaded arm only. Not a URL, so `assetUrlCheck` would refuse it — see the key check. */
+    objectStorageKey: text("object_storage_key"),
+    contentSha256: text("content_sha256"),
     /**
      * NULL means nobody measured it — which is not zero bytes.
      *
-     * ⚠️ NULLABLE SINCE THE AUTHORING ROUTE LANDED. The seed carries a fixture figure, but the
-     * wizard sends a pasted URL and no size, and the two honest ways to fill it were a network HEAD
-     * inside the publish transaction or a moderator typing a number about a file they never opened.
-     * A NULL says "unmeasured"; either of those would have said something false.
+     * ⚠️ NULLABLE FOR THE PASTED ARM AND NOT NULL FOR THE UPLOADED ONE. The wizard sends a pasted
+     * URL and no size, and the two honest ways to fill it were a network HEAD inside the publish
+     * transaction or a moderator typing a number about a file they never opened — so NULL says
+     * "unmeasured". An UPLOAD measures the bytes for free, which is the condition that reasoning
+     * always lacked, so `..._source_ck` requires a real figure on that arm.
      */
     byteSize: integer("byte_size"),
     /** NULL means nobody counted the pages — which is not zero pages. */
@@ -4253,7 +4355,11 @@ export const teardownDocument = pgTable(
   (table) => [
     // `?media=documents` is an EXISTS over this index, and the page's child load is an IN over it.
     index("teardown_document_teardown_idx").on(table.teardownId, table.position),
-    check("teardown_document_url_ck", assetUrlCheck("url")),
+    // ⚠️ NULL-TOLERANT, reusing `assetUrlCheck` under an `IS NULL OR` — the exact shape
+    // `teardown_fastener_supplier_url_ck` already uses. The predicate itself is unchanged.
+    check("teardown_document_url_ck", sql`url IS NULL OR (${assetUrlCheck("url")})`),
+    check("teardown_document_source_ck", teardownFileSourceCheck()),
+    check("teardown_document_object_key_ck", teardownFileStorageColumnsCheck()),
     check(
       "teardown_document_scalars_ck",
       sql`(byte_size IS NULL OR byte_size >= 0)
@@ -4281,13 +4387,19 @@ export const teardownManufacturingFile = pgTable(
     position: integer("position").notNull(),
     kind: teardownManufacturingFileKindEnum("kind").notNull(),
     title: text("title").notNull(),
-    url: text("url").notNull(),
+    /** Nullable on the uploaded arm — see `teardown_document.url`. */
+    url: text("url"),
+    source: teardownFileSourceEnum("source").default("pasted_link").notNull(),
+    objectStorageKey: text("object_storage_key"),
+    contentSha256: text("content_sha256"),
     /** NULL means unmeasured — see `teardown_document.byte_size` for why it became nullable. */
     byteSize: integer("byte_size"),
   },
   (table) => [
     index("teardown_manufacturing_file_teardown_idx").on(table.teardownId, table.position),
-    check("teardown_manufacturing_file_url_ck", assetUrlCheck("url")),
+    check("teardown_manufacturing_file_url_ck", sql`url IS NULL OR (${assetUrlCheck("url")})`),
+    check("teardown_manufacturing_file_source_ck", teardownFileSourceCheck()),
+    check("teardown_manufacturing_file_object_key_ck", teardownFileStorageColumnsCheck()),
     check(
       "teardown_manufacturing_file_scalars_ck",
       sql`(byte_size IS NULL OR byte_size > 0)
@@ -4746,6 +4858,71 @@ export const teardownSubmissionRelations = relations(teardownSubmission, ({ one 
     references: [teardown.id],
   }),
 }));
+
+/**
+ * One file an author uploaded, before any submission has claimed it.
+ *
+ * ⚠️ IT HANGS OFF THE SUBMISSION FAMILY, NOT THE TEARDOWN FAMILY, and §3.1 is why: "a submission is
+ * not a teardown in waiting" — the paperwork is a different domain object, and an unclaimed upload
+ * is paperwork. The published `teardown_*` tables gain only `source`, `object_storage_key` and
+ * `content_sha256`; none of them gains a `user` reference, so the sentence
+ * `text-pii-register.ts` keeps about that family survives.
+ *
+ * ⚠️ `uploaded_by_user_id` IS WHAT MAKES THE CEILING AND THE SWEEP POSSIBLE. Neither an
+ * unclaimed-count-per-author limit nor an orphan reaper can exist without knowing whose bytes these
+ * are — and `db:verify-anonymization-coverage` fails the build until the manifest names this
+ * column, which is the forcing function rather than an afterthought.
+ *
+ * ⚠️ THE CLAIM HAPPENS AT SUBMIT, NOT AT PUBLISH, and that is the one place this differs from the
+ * showcase image pattern it otherwise copies. `sweep-orphan-showcase-images` reaps anything
+ * unclaimed after 24 hours; a teardown submission can sit in the review queue for weeks, so
+ * claiming at publish would let the sweeper delete files out from under a pending submission.
+ * `submission_id` is set by the submit transaction and the sweeper only ever touches rows where it
+ * is still NULL.
+ */
+export const teardownSubmissionFileUpload = pgTable(
+  "teardown_submission_file_upload",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => randomUUID()),
+    uploadedByUserId: text("uploaded_by_user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** NULL until a submit claims it. `cascade`: the paperwork's files go with the paperwork. */
+    submissionId: text("submission_id").references(() => teardownSubmission.id, {
+      onDelete: "cascade",
+    }),
+    /**
+     * ⚠️ UNIQUE, AND THAT IS THE IDEMPOTENCY. The key is content-addressed on `(uploader, sha256)`,
+     * so the same author re-uploading the same bytes converges on this row instead of minting a
+     * second one — which is why the upload route carries no `Idempotency-Key`.
+     */
+    objectStorageKey: text("object_storage_key").notNull().unique(),
+    contentSha256: text("content_sha256").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    format: teardownUploadFormatEnum("format").notNull(),
+    /** The author's own filename, kept for the download disposition. Never used to build a key. */
+    originalFileName: text("original_file_name").notNull(),
+    createdAt: timestamp("created_at", { precision: 3 }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("teardown_submission_file_upload_submission_idx")
+      .on(table.submissionId)
+      .where(sql`submission_id IS NOT NULL`),
+    /** The sweeper's index and the per-author ceiling's, in one: unclaimed rows by who owns them. */
+    index("teardown_submission_file_upload_unclaimed_idx")
+      .on(table.uploadedByUserId, table.createdAt)
+      .where(sql`submission_id IS NULL`),
+    check(
+      "teardown_submission_file_upload_scalars_ck",
+      sql`byte_size > 0
+          AND content_sha256 ~ '^[0-9a-f]{64}$'
+          AND char_length(original_file_name) BETWEEN 1 AND 255`,
+    ),
+    check("teardown_submission_file_upload_key_ck", objectStorageKeyCheck("object_storage_key")),
+  ],
+);
 
 // ---------------------------------------------------------------------------
 // CASE STUDIES — the third blueprint arm, and the first with a write path.

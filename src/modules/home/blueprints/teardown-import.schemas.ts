@@ -65,6 +65,8 @@ export const RESERVED_TEARDOWN_SLUGS = [
   "slugs",
   "options",
   "mine",
+  /** `POST /blueprints/teardowns/uploads` — the staging route for an uploaded document or CAD file. */
+  "uploads",
 ] as const;
 
 export const TEARDOWN_MANUFACTURING_METHODS = [

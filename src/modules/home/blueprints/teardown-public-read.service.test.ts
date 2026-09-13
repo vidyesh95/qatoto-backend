@@ -341,6 +341,16 @@ function buildDocumentRow(overrides: Record<string, unknown> = {}): Record<strin
     kind: "schematic",
     title: "Controller schematic",
     url: "/dummy/documents/controller-schematic.pdf",
+    /*
+     * ⚠️ THE FIXTURES CARRY `source` BECAUSE THE COLUMN'S DEFAULT LIVES IN POSTGRES, NOT HERE.
+     * `teardown_file_source` defaults to `pasted_link` on the table; a row built in TypeScript gets
+     * no default at all, so an omitted `source` reaches the serializer as `undefined` and its
+     * `never` arm throws. That is the arm working — a row with no source is not renderable, and
+     * these fixtures stand in for rows the database would never produce.
+     */
+    source: "pasted_link",
+    objectStorageKey: null,
+    contentSha256: null,
     byteSize: 240_000,
     pageCount: 4,
     ...overrides,
@@ -355,6 +365,9 @@ function buildManufacturingFileRow(overrides: Record<string, unknown> = {}): Rec
     kind: "step",
     title: "Housing STEP",
     url: "/dummy/manufacturing/housing.step",
+    source: "pasted_link",
+    objectStorageKey: null,
+    contentSha256: null,
     byteSize: 980_000,
     ...overrides,
   };
@@ -663,6 +676,39 @@ describe("the quarantine withholding", () => {
     });
     expect(result.value.provenance.kind).toBe("community_reverse_engineered");
     expect(result.value.viewCount).toBe(4210);
+  });
+
+  /**
+   * ⚠️ AN UPLOADED FILE'S ADDRESS IS A ROUTE ON THIS SERVER, COMPUTED, NEVER THE STORED VALUE. What
+   * is stored is an object key; a presigned URL expires in 300 seconds, so persisting one would
+   * store a dead link. Serving a route instead is what lets the download re-check the READABLE gate
+   * per request — which is what turns a quarantine from "we stop advertising it" into a real
+   * withholding, since the file is no longer reachable at any address a reader saved.
+   */
+  it("serves an uploaded file as a route on this server, and a pasted one as its own link", async () => {
+    databaseState.teardownRows = [buildTeardownRow()];
+    seedFullTree();
+    databaseState.childRowsByTable.teardown_document = [
+      buildDocumentRow({
+        id: "doc_uploaded",
+        source: "uploaded",
+        url: null,
+        objectStorageKey: `teardowns/user_1/uploads/${"a".repeat(64)}.pdf`,
+        contentSha256: "a".repeat(64),
+      }),
+      buildDocumentRow({ id: "doc_pasted", position: 1 }),
+    ];
+    const { getPublicTeardownBySlug } = await importService();
+
+    const result = await getPublicTeardownBySlug("solar-cold-storage-controller-teardown");
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const [uploaded, pasted] = result.value.documents;
+    expect(uploaded?.url).toBe("/blueprints/teardowns/solar-cold-storage-controller-teardown/documents/doc_uploaded");
+    // ⚠️ AND THE OBJECT KEY NEVER REACHES THE WIRE. It names the bucket layout, which is ours.
+    expect(JSON.stringify(result.value)).not.toContain("teardowns/user_1/uploads");
+    expect(pasted?.url).toBe("/dummy/documents/controller-schematic.pdf");
   });
 
   /** A `flagged` teardown is listed AND served whole — flagging is not quarantining. */

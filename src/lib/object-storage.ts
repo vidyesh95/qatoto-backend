@@ -11,7 +11,8 @@ import type { Result } from "#src/types/index.js";
 
 /**
  * Object storage for documents, backed by Backblaze B2 over its S3-compatible API.
- * Today its only caller is the §10 research-paper library.
+ * It began as the §10 research-paper library's store and now backs five families: papers,
+ * commerce documents, video documents, product documents and teardown files.
  *
  * WHY A SECOND STORAGE MODULE ALONGSIDE `src/lib/cloudinary.ts`. Cloudinary is an
  * IMAGE pipeline in this codebase — every family but one passes `resource_type: "image"`,
@@ -52,6 +53,7 @@ const COMMERCE_DOCUMENT_KEY_PREFIX = "commerce-organizations";
 const DATA_EXPORT_KEY_PREFIX = "data-exports";
 const VIDEO_DOCUMENT_KEY_PREFIX = "videos";
 const PRODUCT_DOCUMENT_KEY_PREFIX = "products";
+const TEARDOWN_FILE_KEY_PREFIX = "teardowns";
 
 export type ObjectStorageError =
   | { type: "NOT_CONFIGURED" }
@@ -85,6 +87,17 @@ export const VIDEO_DOCUMENT_URL_TTL_SECONDS = 300;
  * turns "this listing was unpublished" into "this link still works for an hour".
  */
 export const PRODUCT_DOCUMENT_URL_TTL_SECONDS = 300;
+
+/**
+ * 300 seconds, matching every other private download on this platform.
+ *
+ * ⚠️ A TEARDOWN FILE IS REACHED BY ANONYMOUS VISITORS, which it shares with a video document and
+ * NOT with a research paper. Do not tune this longer for convenience: the presign is a bearer
+ * capability minted on a route the open internet can call, and a longer window is a longer window
+ * for a leaked URL to be worth passing around. The route re-checks the READABLE gate on every
+ * request, so a short TTL costs a redirect, not a failure.
+ */
+export const TEARDOWN_FILE_URL_TTL_SECONDS = 300;
 /**
  * A subject-access archive's DOWNLOAD LINK. Same five minutes as its neighbours, and for a
  * sharper reason: this object is every piece of personal data we hold about one person, so
@@ -199,6 +212,31 @@ export function productDocumentObjectKey(productId: string, contentSha256: strin
     encodeURIComponent(productId),
     "documents",
     `${contentSha256}.pdf`,
+  ].join("/");
+}
+
+/**
+ * Where one uploaded teardown document or fabrication file lives.
+ *
+ * CONTENT-ADDRESSED ON THE UPLOADER AND THE BYTES, which is what makes the upload route idempotent
+ * without an idempotency key: the same author re-uploading the same file converges on the same
+ * object and the same row. Keyed per uploader rather than globally for `paperObjectKey`'s stated
+ * reason — two authors uploading the same datasheet each hold their own object, so one author's
+ * erasure cannot delete bytes another author's teardown is serving.
+ *
+ * ⚠️ THE EXTENSION IS THE VALIDATED FORMAT, NEVER THE CLIENT'S FILENAME. The key is a path segment
+ * this function owns; a filename is a value a client chose.
+ */
+export function teardownFileObjectKey(
+  uploadedByUserId: string,
+  contentSha256: string,
+  format: string,
+): string {
+  return [
+    TEARDOWN_FILE_KEY_PREFIX,
+    encodeURIComponent(uploadedByUserId),
+    "uploads",
+    `${contentSha256}.${format}`,
   ].join("/");
 }
 
@@ -393,6 +431,96 @@ export async function presignProductDocumentDownload(
   objectKey: string,
 ): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, ObjectStorageError>> {
   return presignPrivateObjectDownload(objectKey, PRODUCT_DOCUMENT_URL_TTL_SECONDS);
+}
+
+/**
+ * Stores an uploaded teardown document or fabrication file.
+ *
+ * The buffer MUST already have been validated by `teardown-file-bytes.ts` and hashed by the caller
+ * (§1.1) — this layer trusts it, and says so in the same words `cloudinary.ts` uses for the raw
+ * model path: the storage layer asks no questions.
+ *
+ * ⚠️ `ContentType` IS THE FORMAT WE DETECTED, NEVER THE CLIENT'S CLAIM, and everything that is not
+ * a PDF is `application/octet-stream`. No registered media type covers STEP, and guessing one
+ * invites a browser to sniff the bytes and decide for itself what to do with them — which is the
+ * whole failure this pinning exists to prevent.
+ *
+ * ⚠️ `ContentDisposition: attachment` IS SET AT PUT TIME rather than on the link, so the object
+ * cannot be coaxed into rendering inline even if a presigned URL escapes. Combined with the bucket
+ * being private and on a different origin, that takes PDF active content out of the same-origin
+ * threat model: a script inside a PDF rendered from the storage host reaches no Qatoto cookie,
+ * session or `localStorage`.
+ */
+export async function uploadTeardownFile(input: {
+  readonly uploadedByUserId: string;
+  readonly contentSha256: string;
+  readonly format: string;
+  readonly fileBytes: Buffer;
+  /** Used only for the download filename. Sanitized here, never trusted. */
+  readonly downloadFileName: string;
+}): Promise<Result<{ objectKey: string }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  const objectKey = teardownFileObjectKey(
+    input.uploadedByUserId,
+    input.contentSha256,
+    input.format,
+  );
+
+  try {
+    await storage.client.send(
+      new PutObjectCommand({
+        Bucket: storage.bucketName,
+        Key: objectKey,
+        Body: input.fileBytes,
+        ContentType: input.format === "pdf" ? "application/pdf" : "application/octet-stream",
+        // ⚠️ `sanitizePrivateFileName`, NOT `sanitizeDownloadFileName` — the latter appends `.pdf`.
+        ContentDisposition: `attachment; filename="${sanitizePrivateFileName(input.downloadFileName)}"`,
+        ChecksumSHA256: Buffer.from(input.contentSha256, "hex").toString("base64"),
+      }),
+    );
+    return { success: true, value: { objectKey } };
+  } catch (uploadError: unknown) {
+    return { success: false, error: { type: "UPLOAD_FAILED", cause: describeCause(uploadError) } };
+  }
+}
+
+/** Deletes an uploaded teardown file's bytes. Idempotent: `DeleteObject` succeeds on an absent key. */
+export async function deleteTeardownFile(
+  objectKey: string,
+): Promise<Result<{ deleted: boolean }, ObjectStorageError>> {
+  const storage = ensureConfigured();
+  if (!storage) return { success: false, error: { type: "NOT_CONFIGURED" } };
+
+  try {
+    await storage.client.send(
+      new DeleteObjectCommand({ Bucket: storage.bucketName, Key: objectKey }),
+    );
+    return { success: true, value: { deleted: true } };
+  } catch (deleteError: unknown) {
+    return { success: false, error: { type: "DELETE_FAILED", cause: describeCause(deleteError) } };
+  }
+}
+
+/**
+ * Mints a short-lived download URL for an uploaded teardown file.
+ *
+ * ⚠️ AUTHORIZATION HAPPENS BEFORE THIS IS CALLED, and it carries the weight it carries on
+ * `presignVideoDocumentDownload` rather than on the paper one: this route is deliberately open to
+ * anonymous visitors, so the ONLY thing between the public and these bytes is the controller's
+ * re-check of the teardown's READABLE gate. A presigned URL is a bearer capability and does not
+ * know whether the teardown it belongs to is quarantined.
+ *
+ * ⚠️ AND THAT IS WHAT MAKES A QUARANTINE A REAL WITHHOLDING FOR THE FIRST TIME. A pasted link
+ * points at somebody else's host and stays live for anyone who saved it, so withholding one only
+ * ever meant "we stop advertising it". An uploaded file's only address is a route that refuses to
+ * mint this presign, so a link saved yesterday is dead the moment the quarantine lands.
+ */
+export async function presignTeardownFileDownload(
+  objectKey: string,
+): Promise<Result<{ downloadUrl: string; expiresInSeconds: number }, ObjectStorageError>> {
+  return presignPrivateObjectDownload(objectKey, TEARDOWN_FILE_URL_TTL_SECONDS);
 }
 
 /**
