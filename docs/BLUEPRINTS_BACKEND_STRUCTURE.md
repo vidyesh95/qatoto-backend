@@ -310,6 +310,8 @@ pnpm db:verify-teardown-constraints        # 94 assertions in one rolled-back tr
 pnpm db:verify-case-study-constraints      # 46
 pnpm db:verify-showcase-launch-constraints # 91
 pnpm db:verify-blueprint-hero-constraints  # 27
+pnpm db:verify-blueprint-engagement-constraints # 33
+pnpm db:reconcile-blueprint-stats          # counter drift; -- --fix repairs
 pnpm db:smoke-teardown-authoring           # submit → duplicate refusal → publish → public read
 pnpm db:smoke-case-study-authoring         # 16, and a byte sweep for the withheld company name
 pnpm db:smoke-showcase-authoring           # 20, upload-before-submit and the stats tripwire
