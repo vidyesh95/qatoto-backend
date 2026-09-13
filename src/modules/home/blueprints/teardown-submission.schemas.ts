@@ -6,11 +6,19 @@ import {
   createAssetUrlSchema,
   createExternalUrlSchema,
 } from "#src/modules/home/blueprints/blueprint-url.schemas.js";
+import {
+  MAX_SUBMITTED_ASSEMBLY_STEPS,
+  MAX_SUBMITTED_FASTENERS,
+  SubmittedAssemblySchema,
+  SubmittedAssemblyStepSchema,
+  SubmittedFastenerSchema,
+} from "#src/modules/home/blueprints/teardown-assembly.schemas.js";
 import { TEARDOWN_UPLOAD_FORMATS } from "#src/modules/home/blueprints/teardown-file-bytes.js";
 import {
   CompositionElementSchema,
   MaterialSchema,
   ProvenanceSchema,
+  refineTeardownCrossSectionRules,
   TEARDOWN_DOCUMENT_KINDS,
   TEARDOWN_MANUFACTURING_FILE_KINDS,
 } from "#src/modules/home/blueprints/teardown-import.schemas.js";
@@ -187,6 +195,23 @@ export const TeardownSubmissionSchema = z
     parts: z.array(SubmittedPartSchema).max(40),
     documents: z.array(SubmittedFileSchema).max(8),
     manufacturingFiles: z.array(SubmittedFileSchema).max(8),
+    /**
+     * ⚠️ THE GEOMETRY, AND IT ARRIVES ON THE SUBMIT PATH RATHER THAN A MODERATOR'S. §3.4's rule is
+     * about WHO may supply a field: "a part's `manufacturingMethod`, a node name or a `.glb` are
+     * facts about the physical unit, and a moderator who never held it would be fabricating them."
+     * The author is the person who held it, and this is the only route they have — so that
+     * paragraph requires this shape rather than forbidding it.
+     *
+     * `.default` on all three, so a wizard that has not shipped its geometry step yet keeps
+     * submitting exactly as it does today. A v1 or v2 document reads as a teardown with no
+     * assembly, which is what it is.
+     */
+    assembly: SubmittedAssemblySchema.nullable().default(null),
+    assemblySteps: z
+      .array(SubmittedAssemblyStepSchema)
+      .max(MAX_SUBMITTED_ASSEMBLY_STEPS)
+      .default([]),
+    fasteners: z.array(SubmittedFastenerSchema).max(MAX_SUBMITTED_FASTENERS).default([]),
     walkthroughVideo: SubmittedWalkthroughVideoSchema.nullable(),
     /** Twelve, matching `teardown_tags_ck` — the cap the destination column already carries. */
     tags: z.array(z.string().min(1).max(40)).max(12),
@@ -224,7 +249,19 @@ export const TeardownSubmissionSchema = z
         message: "A survey cannot be dated in the future.",
       });
     }
-  });
+  })
+  /**
+   * ⚠️ THE SIX CROSS-ROW RULES, SHARED WITH THE SEED'S GATE RATHER THAN RESTATED HERE.
+   * `refineTeardownCrossSectionRules`' own comment says it was exported as a function "so the
+   * authoring gate can apply the same rules to a different field set" — this is that caller.
+   *
+   * None of the six can live anywhere else: each spans SIBLING ROWS, which no per-object schema
+   * sees and no CHECK can read. A part's parent must be in the same assembly, the layer/axis
+   * pairing is all-or-nothing, step numbers are dense from 1, part ids are unique, and a material's
+   * part must exist. The alternative to checking them here is a 23505 or a 23514 raised inside the
+   * publish transaction, hours later, naming a constraint rather than a field.
+   */
+  .superRefine(refineTeardownCrossSectionRules);
 
 export type TeardownSubmissionInput = z.infer<typeof TeardownSubmissionSchema>;
 

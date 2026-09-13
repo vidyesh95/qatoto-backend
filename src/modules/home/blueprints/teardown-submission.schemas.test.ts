@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_SUBMITTED_ASSEMBLY_PARTS,
+  MAX_SUBMITTED_ASSEMBLY_STEPS,
+  MAX_SUBMITTED_FASTENERS,
+} from "#src/modules/home/blueprints/teardown-assembly.schemas.js";
+import {
   TEARDOWN_DOCUMENT_KINDS,
   TEARDOWN_MANUFACTURING_FILE_KINDS,
 } from "#src/modules/home/blueprints/teardown-import.schemas.js";
@@ -446,5 +451,91 @@ describe("TeardownModerationDecisionSchema", () => {
     });
 
     expect(parsed.success).toBe(false);
+  });
+});
+
+/**
+ * ⚠️ THE BODY BUDGET, DERIVED HERE BECAUSE THE BUILD GATE CANNOT SEE THIS ROUTE.
+ *
+ * `json-body-budget.test.ts` asserts that no route's cap is below what its own schema can produce,
+ * and it is the reason a cap is "a derived fact rather than a guess". It cannot derive this one:
+ * `estimateBodyBytes` does not traverse `ZodEffects`, and `TeardownSubmissionSchema` ends in two
+ * `.superRefine` calls — so it reports EIGHT BYTES for the largest body on this surface and passes
+ * the route vacuously. That was already true before the assembly arm existed; the arm is what makes
+ * it matter, because a 64-part assembly is the first thing on this document that could approach the
+ * ceiling.
+ *
+ * So the worst case is CONSTRUCTED and measured. If a future field pushes it over, this fails with
+ * a number rather than a 413 an author cannot act on.
+ */
+describe("the submission document's worst-case size", () => {
+  const LONG_FORM_BODY_BYTES = 128 * 1024;
+
+  function buildMaximalPart(index: number): Record<string, unknown> {
+    const longest = "x".repeat(120);
+    return {
+      id: `${longest.slice(0, 110)}-${String(index).padStart(4, "0")}`,
+      label: longest,
+      parentPartId: null,
+      material: longest,
+      manufacturingMethod: "cnc_milled",
+      explosionDirection: [1.123456789, 2.123456789, 3.123456789],
+      explosionDistanceMm: 123.456789,
+      layerIndex: 9999,
+      stressRating: 0.987654321,
+      calloutText: "y".repeat(400),
+      nodeName: longest,
+    };
+  }
+
+  it("fits inside longFormBody with a full assembly, its steps and its fasteners", () => {
+    const maximal = {
+      ...buildValidSubmission(),
+      assembly: {
+        kind: "composite",
+        explosionAxis: [1, 1, 1],
+        model: { modelUploadId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301" },
+        parts: Array.from({ length: MAX_SUBMITTED_ASSEMBLY_PARTS }, (_unused, index) => buildMaximalPart(index)),
+      },
+      assemblySteps: Array.from({ length: MAX_SUBMITTED_ASSEMBLY_STEPS }, (_unused, index) => ({
+        stepNumber: index + 1,
+        title: "t".repeat(120),
+        description: "d".repeat(600),
+        focusedPartId: null,
+      })),
+      fasteners: Array.from({ length: MAX_SUBMITTED_FASTENERS }, () => ({
+        standardCode: "s".repeat(60),
+        sizeLabel: "M3 x 12",
+        drive: "torx",
+        quantity: 99,
+        supplier: null,
+      })),
+    };
+
+    const serializedBytes = Buffer.byteLength(JSON.stringify(maximal), "utf8");
+
+    expect(
+      serializedBytes,
+      `a maximal submission is ${String(serializedBytes)}B against a ${String(LONG_FORM_BODY_BYTES)}B cap`,
+    ).toBeLessThan(LONG_FORM_BODY_BYTES);
+  });
+
+  /**
+   * ⚠️ AND UNDER THE COLUMN'S OWN CEILING TOO. `teardown_submission_document_ck` bounds
+   * `document_json` at 262,144 CHARACTERS — a second, independent limit, and the one that would
+   * refuse the write as a 23514 after the request had already been accepted.
+   */
+  it("fits inside the stored document CHECK as well", () => {
+    const maximal = {
+      ...buildValidSubmission(),
+      assembly: {
+        kind: "composite",
+        explosionAxis: [1, 1, 1],
+        model: { modelUploadId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301" },
+        parts: Array.from({ length: MAX_SUBMITTED_ASSEMBLY_PARTS }, (_unused, index) => buildMaximalPart(index)),
+      },
+    };
+
+    expect(JSON.stringify(maximal).length).toBeLessThan(262_144);
   });
 });

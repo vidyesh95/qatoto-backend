@@ -207,7 +207,7 @@ const ManufacturingFileSchema = z
   })
   .strict();
 
-const FastenerSchema = z
+export const FastenerSchema = z
   .object({
     standardCode: z.string().min(1).max(80).nullable(),
     sizeLabel: z.string().min(1).max(80),
@@ -228,7 +228,7 @@ const FastenerSchema = z
   })
   .strict();
 
-const AssemblyStepSchema = z
+export const AssemblyStepSchema = z
   .object({
     stepNumber: z.number().int().positive(),
     title: z.string().min(1).max(200),
@@ -237,19 +237,19 @@ const AssemblyStepSchema = z
   })
   .strict();
 
-const ThreeComponentVectorSchema = z.tuple([z.number(), z.number(), z.number()]);
+export const ThreeComponentVectorSchema = z.tuple([z.number(), z.number(), z.number()]);
 
 /** A direction of `[0,0,0]` explodes nothing, which differs from stating no direction at all. */
-const NonZeroVectorSchema = ThreeComponentVectorSchema.refine(
+export const NonZeroVectorSchema = ThreeComponentVectorSchema.refine(
   (vector) => vector.some((component) => component !== 0),
   { message: "A direction vector may not be the zero vector." },
 );
 
-const ModelFileSchema = z
+export const ModelFileSchema = z
   .object({ url: AssetUrlSchema, byteSize: z.number().int().positive() })
   .strict();
 
-const PartBaseShape = {
+export const PartBaseShape = {
   id: z.string().min(1).max(120),
   label: z.string().min(1).max(120),
   parentPartId: z.string().min(1).max(120).nullable(),
@@ -264,11 +264,11 @@ const PartBaseShape = {
   calloutText: z.string().min(1).max(400).nullable(),
 };
 
-const CompositePartSchema = z
+export const CompositePartSchema = z
   .object({ ...PartBaseShape, nodeName: z.string().min(1).max(120) })
   .strict();
 
-const IndividualPartSchema = z
+export const IndividualPartSchema = z
   .object({
     ...PartBaseShape,
     model: ModelFileSchema,
@@ -282,7 +282,7 @@ const IndividualPartSchema = z
   })
   .strict();
 
-const AssemblySchema = z.discriminatedUnion("kind", [
+export const AssemblySchema = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("composite"),
@@ -504,8 +504,34 @@ export const TeardownImportDocumentShape = z
  * a different field set. Its parameter type is inferred from the shape above — never hand-written,
  * or the two drift and the refinement starts reading fields the document no longer has.
  */
+type TeardownImportDocument = z.infer<typeof TeardownImportDocumentShape>;
+
+/**
+ * The fields the five cross-row rules actually read, and nothing else.
+ *
+ * ⚠️ EVERY MEMBER IS DERIVED FROM THE IMPORT SHAPE RATHER THAN RETYPED, so the two cannot drift in
+ * their FIELD TYPES — which is the same rule the rest of this file follows. What it deliberately
+ * does not derive is the field SELECTION: narrowing is the point, because the authoring gate's
+ * documents carry no `model` and its materials carry no `id`, and demanding them would make the
+ * shared function unusable by the caller it was exported for.
+ */
+export interface TeardownCrossSectionSubject {
+  readonly assembly: {
+    readonly explosionAxis: NonNullable<TeardownImportDocument["assembly"]>["explosionAxis"];
+    readonly parts: readonly Pick<
+      NonNullable<TeardownImportDocument["assembly"]>["parts"][number],
+      "id" | "parentPartId" | "layerIndex"
+    >[];
+  } | null;
+  readonly assemblySteps: readonly Pick<
+    TeardownImportDocument["assemblySteps"][number],
+    "stepNumber" | "focusedPartId"
+  >[];
+  readonly materials: readonly Pick<TeardownImportDocument["materials"][number], "partId">[];
+}
+
 export function refineTeardownCrossSectionRules(
-  teardown: z.infer<typeof TeardownImportDocumentShape>,
+  teardown: TeardownCrossSectionSubject,
   context: z.core.$RefinementCtx,
 ): void {
   const parts = teardown.assembly?.parts ?? [];
@@ -577,13 +603,40 @@ export function refineTeardownCrossSectionRules(
     }
   });
 
-  // 5. A material's part, likewise.
+  /*
+   * 5. PART IDS ARE UNIQUE WITHIN AN ASSEMBLY.
+   *
+   * ⚠️ A GENUINE GAP UNTIL THE AUTHORING GATE MADE IT REACHABLE. `teardown_part`'s primary key is
+   * `(assembly_id, id)`, so a duplicate was always refused — but as a 23505 raised INSIDE the
+   * publish transaction, hours after the author left, with nothing to tell them which id collided.
+   * The seed was the only writer, so a fixture bug was a developer's problem; a public route makes
+   * it a stranger's, and the boundary is where it belongs.
+   */
+  const seenPartIds = new Set<string>();
+  for (const [index, part] of parts.entries()) {
+    if (seenPartIds.has(part.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["assembly", "parts", index, "id"],
+        message: `Part id ${part.id} is used more than once in this assembly.`,
+      });
+    }
+    seenPartIds.add(part.id);
+  }
+
+  // 6. A material's part, likewise.
   teardown.materials.forEach((material, index) => {
     if (material.partId !== null && !partIds.has(material.partId)) {
+      /*
+       * ⚠️ THE INDEX, NOT `material.id`. The authoring gate's materials have no id — the server
+       * mints those, because `teardown_material.id` is a global primary key with no default — so
+       * naming one here would have been the single field that kept this function from being shared.
+       * The index is already in scope and is already what `path` points at.
+       */
       context.addIssue({
         code: "custom",
         path: ["materials", index, "partId"],
-        message: `Material ${material.id} names a part that is not in this assembly.`,
+        message: `The material at position ${String(index)} names a part that is not in this assembly.`,
       });
     }
   });
